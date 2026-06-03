@@ -2,8 +2,16 @@
   "$schema": "./node_modules/@effect/language-service/schema.json",
   "extends": "@repo/typescript-config/base.json",
   "compilerOptions": {
+    "composite": true,
+    "exactOptionalPropertyTypes": true,
+    "incremental": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
     "rootDir": "src",
     "outDir": "dist",
+    "rewriteRelativeImportExtensions": true,
+    "sourceMap": true,
+    "verbatimModuleSyntax": true,
     "plugins": [
       {
         "name": "@effect/language-service"

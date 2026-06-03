@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
+    "prepare": "effect-language-service patch",
     "check-types": "tsc --noEmit"
   },
   "devDependencies": {
