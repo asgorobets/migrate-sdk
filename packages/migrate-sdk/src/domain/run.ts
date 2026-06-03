@@ -1,12 +1,16 @@
+import { Schema } from "effect";
 import type { MigrationDefinition } from "./definition.ts";
 import type { DestinationCommand } from "./destination.ts";
 import type {
   MigrationDefinitionId,
   MigrationDefinitionIdInput,
-  MigrationRunId,
   SourceCursor,
 } from "./ids.ts";
-import { toMigrationDefinitionId } from "./ids.ts";
+import {
+  MigrationDefinitionId as MigrationDefinitionIdSchema,
+  MigrationRunId,
+  toMigrationDefinitionId,
+} from "./ids.ts";
 import type { RunMode, RunModeInput } from "./run-mode.ts";
 import { makeRunMode } from "./run-mode.ts";
 
@@ -60,13 +64,14 @@ export const makeRunRequest = <
     : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
 });
 
-export interface MigrationRunState {
-  readonly definitionIds: readonly MigrationDefinitionId[];
-  readonly finishedAt?: Date;
-  readonly runId: MigrationRunId;
-  readonly startedAt: Date;
-  readonly status: "running" | "succeeded" | "failed";
-}
+export const MigrationRunState = Schema.Struct({
+  definitionIds: Schema.Array(MigrationDefinitionIdSchema),
+  finishedAt: Schema.optional(Schema.Date),
+  runId: MigrationRunId,
+  startedAt: Schema.Date,
+  status: Schema.Literals(["running", "succeeded", "failed"]),
+});
+export type MigrationRunState = typeof MigrationRunState.Type;
 
 export interface MigrationRunSummary {
   readonly definitions: readonly MigrationDefinitionRunSummary[];

@@ -8,8 +8,11 @@ import {
   InMemoryDestinationPlugin,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
+  MigrationDefinitionLock,
   MigrationItemState,
+  MigrationRunState,
   type MigrationRunSummary,
+  MigrationStore,
   type RunMigrationError,
   runMigration,
   runMigrations,
@@ -48,6 +51,84 @@ interface StructuralSkipItem {
   readonly _tag: "SkipItem";
   readonly reason: string;
 }
+
+const roundTripRunState = (runState: MigrationRunState) =>
+  Effect.gen(function* () {
+    const encoded = yield* Schema.encodeEffect(MigrationRunState)(runState);
+
+    return yield* Schema.decodeUnknownEffect(MigrationRunState)(encoded);
+  });
+
+const roundTripDefinitionLock = (lock: MigrationDefinitionLock) =>
+  Effect.gen(function* () {
+    const encoded = yield* Schema.encodeEffect(MigrationDefinitionLock)(lock);
+
+    return yield* Schema.decodeUnknownEffect(MigrationDefinitionLock)(encoded);
+  });
+
+describe("MigrationStore durable records", () => {
+  it.effect("schema-round-trips beginRun state", () =>
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const runState = yield* store.beginRun([
+        toMigrationDefinitionId("articles"),
+      ]);
+
+      const decoded = yield* roundTripRunState(runState);
+
+      expect(decoded).toEqual(runState);
+    }).pipe(Effect.provide(InMemoryMigrationStore.layer()))
+  );
+
+  it.effect("schema-round-trips completeRun state", () =>
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const runState = yield* store.beginRun([
+        toMigrationDefinitionId("articles"),
+      ]);
+
+      const completed = yield* store.completeRun(runState.runId);
+      const decoded = yield* roundTripRunState(completed);
+
+      expect(completed.status).toBe("succeeded");
+      expect(completed.finishedAt).toBeInstanceOf(Date);
+      expect(decoded).toEqual(completed);
+    }).pipe(Effect.provide(InMemoryMigrationStore.layer()))
+  );
+
+  it.effect("schema-round-trips failRun state", () =>
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const runState = yield* store.beginRun([
+        toMigrationDefinitionId("articles"),
+      ]);
+
+      const failed = yield* store.failRun(runState.runId);
+      const decoded = yield* roundTripRunState(failed);
+
+      expect(failed.status).toBe("failed");
+      expect(failed.finishedAt).toBeInstanceOf(Date);
+      expect(decoded).toEqual(failed);
+    }).pipe(Effect.provide(InMemoryMigrationStore.layer()))
+  );
+
+  it.effect("schema-round-trips acquired definition locks", () =>
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const lock = yield* store.acquireDefinitionLock(
+        toMigrationDefinitionId("articles"),
+        toMigrationRunId("run-1"),
+        1000
+      );
+
+      const decoded = yield* roundTripDefinitionLock(lock);
+
+      expect(lock.token).toBe("lock-1");
+      expect(lock.expiresAt).toBeInstanceOf(Date);
+      expect(decoded).toEqual(lock);
+    }).pipe(Effect.provide(InMemoryMigrationStore.layer()))
+  );
+});
 
 describe("runMigration", () => {
   it("keeps item-level pipeline error types out of public run errors", () => {

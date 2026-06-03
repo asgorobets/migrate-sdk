@@ -1,9 +1,10 @@
-import type { MigrationDefinitionId, MigrationRunId } from "./ids.ts";
+import { Schema } from "effect";
+import { MigrationDefinitionId, MigrationRunId } from "./ids.ts";
 
-export interface MigrationDefinitionLock {
-  readonly definitionId: MigrationDefinitionId;
-  readonly ownerRunId: MigrationRunId;
-  readonly token: string;
-  readonly expiresAt: Date;
-}
-
+export const MigrationDefinitionLock = Schema.Struct({
+  definitionId: MigrationDefinitionId,
+  expiresAt: Schema.Date,
+  ownerRunId: MigrationRunId,
+  token: Schema.String,
+});
+export type MigrationDefinitionLock = typeof MigrationDefinitionLock.Type;
