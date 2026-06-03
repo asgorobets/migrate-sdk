@@ -27,28 +27,87 @@ This POC should exercise cursor windows, definition locks, run modes, skip item 
 import { Effect, Exit, Layer, Schema } from "effect";
 import * as Context from "effect/Context";
 
-export type MigrationDefinitionId = string;
+export const MigrationDefinitionId = Schema.String.pipe(
+  Schema.brand("MigrationDefinitionId")
+);
+export type MigrationDefinitionId = typeof MigrationDefinitionId.Type;
+export type MigrationDefinitionIdInput = string | MigrationDefinitionId;
 
-export type SourceIdentity = string;
-export type SourceVersion = string;
+export const MigrationRunId = Schema.String.pipe(Schema.brand("MigrationRunId"));
+export type MigrationRunId = typeof MigrationRunId.Type;
+export type MigrationRunIdInput = string | MigrationRunId;
+
+export const SourceIdentity = Schema.String.pipe(Schema.brand("SourceIdentity"));
+export type SourceIdentity = typeof SourceIdentity.Type;
+export type SourceIdentityInput = string | SourceIdentity;
+
+export const SourceVersion = Schema.String.pipe(Schema.brand("SourceVersion"));
+export type SourceVersion = typeof SourceVersion.Type;
+export type SourceVersionInput = string | SourceVersion;
+
 export type SourceCursor = unknown;
-export type DestinationIdentity = string;
-export type DestinationVersion = string;
 
-export interface SourceEnvelope<A> {
+export const DestinationIdentity = Schema.String.pipe(
+  Schema.brand("DestinationIdentity")
+);
+export type DestinationIdentity = typeof DestinationIdentity.Type;
+export type DestinationIdentityInput = string | DestinationIdentity;
+
+export const DestinationVersion = Schema.String.pipe(
+  Schema.brand("DestinationVersion")
+);
+export type DestinationVersion = typeof DestinationVersion.Type;
+export type DestinationVersionInput = string | DestinationVersion;
+
+export const toMigrationDefinitionId = (
+  value: MigrationDefinitionIdInput
+): MigrationDefinitionId => MigrationDefinitionId.make(value);
+
+export const toSourceIdentity = (
+  value: SourceIdentityInput
+): SourceIdentity => SourceIdentity.make(value);
+
+export const toSourceVersion = (value: SourceVersionInput): SourceVersion =>
+  SourceVersion.make(value);
+
+export const toDestinationIdentity = (
+  value: DestinationIdentityInput
+): DestinationIdentity => DestinationIdentity.make(value);
+
+export const toDestinationVersion = (
+  value: DestinationVersionInput
+): DestinationVersion => DestinationVersion.make(value);
+
+export interface SourceItem<A> {
   readonly identity: SourceIdentity;
   readonly version?: SourceVersion;
   readonly item: A;
 }
 
+export interface SourceItemInput<A> {
+  readonly identity: SourceIdentityInput;
+  readonly version?: SourceVersionInput;
+  readonly item: A;
+}
+
 export interface SourceReadResult<A> {
-  readonly items: ReadonlyArray<SourceEnvelope<A>>;
+  readonly items: ReadonlyArray<SourceItem<A>>;
   readonly nextCursor?: SourceCursor;
+}
+
+export interface DestinationCommand {
+  readonly kind: string;
 }
 
 export interface DestinationCommandResult {
   readonly destinationIdentity: DestinationIdentity;
   readonly destinationVersion?: DestinationVersion;
+  readonly metadata?: Record<string, unknown>;
+}
+
+export interface DestinationCommandResultInput {
+  readonly destinationIdentity: DestinationIdentityInput;
+  readonly destinationVersion?: DestinationVersionInput;
   readonly metadata?: Record<string, unknown>;
 }
 
@@ -96,19 +155,13 @@ Destination commands should use plain `Schema.Struct` variants with `kind`, then
 const UpsertEntry = Schema.Struct({
   kind: Schema.Literal("UpsertEntry"),
   contentType: Schema.String,
-  fields: Schema.Record({
-    key: Schema.String,
-    value: Schema.Unknown,
-  }),
+  fields: Schema.Record(Schema.String, Schema.Unknown),
 });
 
 const UpdateAndPublishEntry = Schema.Struct({
   kind: Schema.Literal("UpdateAndPublishEntry"),
   uid: Schema.String,
-  fields: Schema.Record({
-    key: Schema.String,
-    value: Schema.Unknown,
-  }),
+  fields: Schema.Record(Schema.String, Schema.Unknown),
   expectedVersion: Schema.optional(DestinationVersion),
   locale: Schema.optional(Schema.String),
 });
@@ -167,7 +220,7 @@ type MigrationItemState =
 
 Migration item state should not store source item payload snapshots by default. Payloads can be large or sensitive, and the source system remains the source of truth. Retrying failed, skipped, needs-update, or single-item work uses `SourcePlugin.readByIdentity`.
 
-Plugin APIs should expose plugin-specific typed errors. The runner normalizes those errors into durable migration item error records for storage and display.
+Plugin APIs should expose plugin-specific typed Effect errors, preferably with `Schema.TaggedErrorClass` and `Schema.Defect` for unknown causes from external systems. The runner normalizes those errors into durable migration item error records for storage and display.
 
 ```ts
 interface MigrationItemError {
@@ -184,33 +237,38 @@ Source cursor reads are discovery. If `SourcePlugin.read(cursor)` fails, the mig
 
 ## Plugin Services
 
-`SourcePlugin` and `DestinationPlugin` are generic runtime service boundaries. Concrete plugins expose configured layers that implement these tags.
+`SourcePlugin` and `DestinationPlugin` are runtime service boundaries. The Effect Context tags are not generic at runtime, so the service values carry the generic shape and the runner narrows them at the migration definition boundary.
 
 ```ts
-export class SourcePlugin<A> extends Context.Service<
-  SourcePlugin<A>,
-  {
-    readonly lookupStrategy: SourceLookupStrategy;
+export interface SourcePlugin<A> {
+  readonly lookupStrategy: SourceLookupStrategy;
 
-    readonly read: (
-      cursor: SourceCursor | null
-    ) => Effect.Effect<SourceReadResult<A>, SourcePluginError>;
+  readonly read: (
+    cursor: SourceCursor | null
+  ) => Effect.Effect<SourceReadResult<A>, SourcePluginError>;
 
-    readonly readByIdentity: (
-      identity: SourceIdentity
-    ) => Effect.Effect<SourceEnvelope<A> | null, SourcePluginError>;
-  }
->()("@migrate-sdk/SourcePlugin") {}
+  readonly readByIdentity: (
+    identity: SourceIdentity
+  ) => Effect.Effect<SourceItem<A> | null, SourcePluginError>;
+}
 
-export class DestinationPlugin<C> extends Context.Service<
-  DestinationPlugin<C>,
-  {
-    readonly execute: (
-      command: C,
-      context: DestinationCommandContext
-    ) => Effect.Effect<DestinationCommandResult, DestinationPluginError>;
-  }
->()("@migrate-sdk/DestinationPlugin") {}
+export type AnySourcePlugin = SourcePlugin<unknown>;
+
+export const SourcePlugin =
+  Context.Service<AnySourcePlugin>("@migrate-sdk/SourcePlugin");
+
+export const getSourcePlugin = <A>() =>
+  Effect.map(SourcePlugin, (source) => source as SourcePlugin<A>);
+
+export interface DestinationPlugin {
+  readonly execute: (
+    command: DestinationCommand,
+    context: DestinationCommandContext
+  ) => Effect.Effect<DestinationCommandResult, DestinationPluginError>;
+}
+
+export const DestinationPlugin =
+  Context.Service<DestinationPlugin>("@migrate-sdk/DestinationPlugin");
 ```
 
 Example implementation layers:
@@ -436,11 +494,11 @@ export class SkipItem extends Schema.TaggedErrorClass<SkipItem>()(
   {
     reason: Schema.String,
   }
-) {
-  static make = (reason: string) => new SkipItem({ reason });
-}
+) {}
 
-export const skipItem = (reason: string) => SkipItem.make(reason);
+export const makeSkipItem = (reason: string) => new SkipItem({ reason });
+
+export const skipItem = makeSkipItem;
 ```
 
 Pipeline helper:
@@ -544,15 +602,29 @@ const sourceItem = yield* lookupWithRetry;
 A migration definition is an executable runtime object. It may be written by hand or generated in TypeScript.
 
 ```ts
-export interface MigrationDefinition<Source, Command, PipelineRequirements = never> {
+export interface ConfiguredSourcePlugin<Source> {
+  readonly layer: Layer.Layer<AnySourcePlugin>;
+  readonly sourceSchema?: Schema.Schema<Source>;
+}
+
+export interface ConfiguredDestinationPlugin<Command extends DestinationCommand> {
+  readonly layer: Layer.Layer<DestinationPlugin>;
+  readonly commandSchema: Schema.Schema<Command>;
+}
+
+export interface MigrationDefinition<
+  Source,
+  Command extends DestinationCommand,
+  PipelineRequirements = never
+> {
   readonly id: MigrationDefinitionId;
 
-  readonly source: Layer.Layer<SourcePlugin<Source>>;
-  readonly destination: Layer.Layer<DestinationPlugin<Command>>;
+  readonly source: ConfiguredSourcePlugin<Source>;
+  readonly destination: ConfiguredDestinationPlugin<Command>;
   readonly store: Layer.Layer<MigrationStore>;
 
   readonly pipeline: (
-    source: SourceEnvelope<Source>,
+    source: SourceItem<Source>,
     context: PipelineContext
   ) => Effect.Effect<Command, PipelineError | SkipItem, PipelineRequirements>;
 
@@ -564,6 +636,36 @@ export interface MigrationDefinition<Source, Command, PipelineRequirements = nev
 
   readonly dependsOn?: ReadonlyArray<MigrationDefinitionId>;
 }
+
+export interface MigrationDefinitionInput<
+  Source,
+  Command extends DestinationCommand,
+  PipelineRequirements = never
+> extends Omit<
+    MigrationDefinition<Source, Command, PipelineRequirements>,
+    "id" | "dependsOn"
+  > {
+  readonly id: MigrationDefinitionIdInput;
+  readonly dependsOn?: ReadonlyArray<MigrationDefinitionIdInput>;
+}
+
+export const defineMigration = <
+  Source,
+  Command extends DestinationCommand,
+  PipelineRequirements = never
+>(
+  definition: MigrationDefinitionInput<Source, Command, PipelineRequirements>
+): MigrationDefinition<Source, Command, PipelineRequirements> => {
+  const { id, dependsOn, ...rest } = definition;
+
+  return {
+    ...rest,
+    id: toMigrationDefinitionId(id),
+    ...(dependsOn === undefined
+      ? {}
+      : { dependsOn: dependsOn.map(toMigrationDefinitionId) }),
+  };
+};
 ```
 
 Example:
@@ -572,15 +674,17 @@ Example:
 const articlesMigration = {
   id: "articles",
 
-  source: SqlSourcePlugin.layer({
+  source: SqlSourcePlugin.plugin({
     table: "articles",
+    schema: SqlArticleRow,
     identity: ["id"],
     version: "updated_at",
     cursor: ["updated_at", "id"],
   }),
 
-  destination: ContentStackDestinationPlugin.layer({
+  destination: ContentStackDestinationPlugin.plugin({
     contentType: "article",
+    commandSchema: ContentStackCommand,
   }),
 
   store: SqlMigrationStore.layer({
@@ -591,14 +695,18 @@ const articlesMigration = {
 
   pipeline: Effect.fn("articles.pipeline")(function* (source) {
     return {
-      title: source.item.title,
-      body: source.item.body,
-      slug: source.item.slug,
+      kind: "UpsertEntry" as const,
+      contentType: "article",
+      fields: {
+        title: source.item.title,
+        body: source.item.body,
+        slug: source.item.slug,
+      },
     };
   }),
 
   dependsOn: ["authors"],
-} satisfies MigrationDefinition<SqlArticleRow, ContentStackArticleInput>;
+} satisfies MigrationDefinition<SqlArticleRow, ContentStackCommand>;
 ```
 
 ## Schemas and Inference
@@ -609,15 +717,15 @@ Effect Schema is the canonical v1 schema mechanism. Source plugins expose or use
 const articles = defineMigration({
   id: "articles",
 
-  source: SqlSourcePlugin.layer({
+  source: SqlSourcePlugin.plugin({
     table: "articles",
     schema: SqlArticleRow,
     identity: ["id"],
     version: "updated_at",
   }),
 
-  destination: ContentStackDestinationPlugin.layer({
-    commandSchema: ContentStackArticleCommand,
+  destination: ContentStackDestinationPlugin.plugin({
+    commandSchema: ContentStackCommand,
   }),
 
   pipeline: Effect.fn("articles.pipeline")(function* (source) {
@@ -687,8 +795,8 @@ const runMigrationDefinition = <S, D, R>(
   definition: MigrationDefinition<S, D, R>
 ) =>
   Effect.gen(function* () {
-    const source = yield* SourcePlugin<S>;
-    const destination = yield* DestinationPlugin<D>;
+    const source = yield* getSourcePlugin<S>();
+    const destination = yield* DestinationPlugin;
     const store = yield* MigrationStore;
 
     const cursor = yield* store.getSourceCursor(definition.id);
@@ -966,7 +1074,7 @@ type WorkItemPayload<Source> =
     }
   | {
       readonly kind: "SourceSnapshot";
-      readonly source: SourceEnvelope<Source>;
+      readonly source: SourceItem<Source>;
       readonly capturedAt: Date;
     };
 ```
