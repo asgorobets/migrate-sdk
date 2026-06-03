@@ -21,6 +21,8 @@ Serializable `MigrationSpec` documents are reserved for future YAML, database, U
 
 Destination behavior is represented as destination-specific commands rather than generic core `create` or `update` operations. This lets plugins model operations such as upsert, update, publish, update-and-publish, or future stubbing without forcing every destination system into the same lifecycle.
 
+Public and persisted data uses domain-friendly discriminators such as `kind` and `status`, not Effect's internal `_tag` convention. Effect `_tag` remains appropriate for Effect-native typed errors such as `SkipItem`, where APIs like `Effect.catchTag` provide useful ergonomics. Public examples should use helpers such as `skipItem(...)` so users do not author `_tag` directly.
+
 The migration store owns durable item state, run state, source cursors, and migration definition locks. Source and destination plugins do not own migration progress.
 
 ## Consequences
@@ -30,3 +32,4 @@ The migration store owns durable item state, run state, source cursors, and migr
 - Future DSL or UI support will need a compile step from migration specs to migration definitions.
 - Destination plugins carry more responsibility for destination-specific command semantics.
 - The core runner can stay focused on orchestration, state, locks, retries, and item outcomes.
+- Public command and state shapes remain friendly to JSON, YAML, CLI output, and future UI workflows.

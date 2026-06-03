@@ -58,11 +58,20 @@ The durable state for one migration run.
 **Migration Run Summary**:
 The structured result returned after a migration run completes or fails.
 
+**Execution Start Result**:
+The result of starting execution, either a completed summary or a run id for later observation.
+
 **Run Mode**:
 The runtime mode that controls which migration item states are reprocessed.
 
 **Run Request**:
 The invocation object that starts a migration run from the SDK, CLI, or another host.
+
+**Execution Adapter**:
+The runtime strategy that executes migration definitions.
+
+**Migration Reference Lookup**:
+A pipeline capability for reading destination identities from other migration definitions' item states.
 
 **Transformation Pipeline**:
 The typed transformation from one source item into one destination command.
@@ -112,8 +121,9 @@ A normalized error record stored for a failed migration item state.
 - A **Source Cursor Window** may return a next **Source Cursor**.
 - A **Source Cursor** is committed after a cursor window is processed, even when some source items in the window fail.
 - A **Migration Item State** can record a source identity, destination identity, migration status, observed source version, and failure metadata.
-- A **Migration Item State** is modeled as tagged variants by status.
+- A **Migration Item State** is modeled as discriminated variants by status.
 - A **Migration Item State** does not store source item payloads by default.
+- Public and persisted migration data uses domain-friendly discriminators such as `kind` and `status`; Effect `_tag` is reserved for Effect-native errors or internals and hidden from public authoring examples through helpers.
 - A **Migration Item Error** normalizes source, pipeline, destination, or store errors for durable storage.
 - A **Migration Store** error fails the migration run instead of becoming a migration item failure.
 - A **Source Plugin** cursor read error fails the migration definition run.
@@ -141,7 +151,8 @@ A normalized error record stored for a failed migration item state.
 - A **Migration Run** executes ordered **Migration Definitions** sequentially in the first version.
 - A **Migration Run** continues processing source items after an item failure in the first version.
 - A **Migration Run** is marked failed when one or more source items fail, even if other items complete.
-- A **Migration Run** returns a **Migration Run Summary** for SDK callers and CLI rendering.
+- A completed **Migration Run** produces a **Migration Run Summary** for SDK callers and CLI rendering.
+- An **Execution Adapter** may return an **Execution Start Result** before the migration run is complete.
 - A **Migration Run** treats migrated and skipped item states as terminal for a given source version.
 - A **Migration Run** retries failed item states on rerun.
 - A **Migration Run** requires an explicit run mode to reprocess unchanged skipped items when skip logic changes.
@@ -151,6 +162,9 @@ A normalized error record stored for a failed migration item state.
 - A skipped **Run Mode** reprocesses skipped item states regardless of source version.
 - A **Run Request** supplies migration definitions, run mode, optional source cursor override, and optional migration definition selection.
 - A **Run Request** that selects migration definitions also includes their required dependencies.
+- An **Execution Adapter** may execute migration definitions inline, inline with bounded parallelism, or through a durable queue.
+- An **Execution Adapter** may be provided by users when they need custom scheduling or parallelization.
+- A **Migration Reference Lookup** reads migrated destination identities from dependency migration definitions.
 - A **Transformation Pipeline** transforms exactly one **Source Item** into at most one **Destination Command** in the first version.
 - A **Destination Command** maps back to exactly one **Source Item** in the first version.
 - A **Destination Plugin** returns a **Destination Identity** and may return a **Destination Version**.

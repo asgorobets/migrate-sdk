@@ -24,7 +24,7 @@ This POC should exercise cursor windows, definition locks, run modes, skip item 
 ## Core Runtime Shape
 
 ```ts
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Exit, Layer, Schema } from "effect";
 import * as Context from "effect/Context";
 
 export type MigrationDefinitionId = string;
@@ -82,7 +82,47 @@ type MigrationItemOutcome =
 
 `unchanged` is a run outcome, not a persisted migration item status. The durable item state remains the prior terminal state, such as `migrated` or `skipped`.
 
-Migration item state should be modeled as tagged variants by status rather than one loose interface with many optional fields.
+## Discriminator Convention
+
+Public and persisted data should use domain-friendly discriminators:
+
+- `kind` for public command and request/result variants.
+- `status` for persisted state.
+- Effect `_tag` only for Effect-native errors or internals where APIs like `Effect.catchTag` are useful.
+
+Destination commands should use plain `Schema.Struct` variants with `kind`, then `Schema.Union`. They do not need `Schema.TaggedClass`.
+
+```ts
+const UpsertEntry = Schema.Struct({
+  kind: Schema.Literal("UpsertEntry"),
+  contentType: Schema.String,
+  fields: Schema.Record({
+    key: Schema.String,
+    value: Schema.Unknown,
+  }),
+});
+
+const UpdateAndPublishEntry = Schema.Struct({
+  kind: Schema.Literal("UpdateAndPublishEntry"),
+  uid: Schema.String,
+  fields: Schema.Record({
+    key: Schema.String,
+    value: Schema.Unknown,
+  }),
+  expectedVersion: Schema.optional(DestinationVersion),
+  locale: Schema.optional(Schema.String),
+});
+
+const ContentStackCommand = Schema.Union([
+  UpsertEntry,
+  UpdateAndPublishEntry,
+]);
+```
+
+`SkipItem` is the exception because it is an Effect-native typed error that benefits from `Effect.catchTag`.
+Public examples should still use helper constructors such as `skipItem(...)` so `_tag` never needs to be authored by users.
+
+Migration item state should be modeled as discriminated variants by status rather than one loose interface with many optional fields.
 
 ```ts
 interface MigrationItemStateBase {
@@ -197,23 +237,23 @@ Destination plugins execute commands, not generic create/update methods. This le
 ```ts
 type ContentStackCommand =
   | {
-      readonly _tag: "UpsertEntry";
+      readonly kind: "UpsertEntry";
       readonly contentType: string;
       readonly fields: Record<string, unknown>;
     }
   | {
-      readonly _tag: "UpdateEntry";
+      readonly kind: "UpdateEntry";
       readonly uid: string;
       readonly fields: Record<string, unknown>;
       readonly expectedVersion?: DestinationVersion;
     }
   | {
-      readonly _tag: "PublishEntry";
+      readonly kind: "PublishEntry";
       readonly uid: string;
       readonly locale?: string;
     }
   | {
-      readonly _tag: "UpdateAndPublishEntry";
+      readonly kind: "UpdateAndPublishEntry";
       readonly uid: string;
       readonly fields: Record<string, unknown>;
       readonly expectedVersion?: DestinationVersion;
@@ -228,7 +268,7 @@ const execute = Effect.fn("ContentStackDestination.execute")(function* (
   command: ContentStackCommand,
   context: DestinationCommandContext
 ) {
-  switch (command._tag) {
+  switch (command.kind) {
     case "UpdateAndPublishEntry": {
       const updated = yield* updateEntry({
         uid: command.uid,
@@ -396,7 +436,11 @@ export class SkipItem extends Schema.TaggedErrorClass<SkipItem>()(
   {
     reason: Schema.String,
   }
-) {}
+) {
+  static make = (reason: string) => new SkipItem({ reason });
+}
+
+export const skipItem = (reason: string) => SkipItem.make(reason);
 ```
 
 Pipeline helper:
@@ -406,9 +450,7 @@ const requireGroup = Effect.fn("offers.requireGroup")(function* (
   offer: SqlOfferRow
 ) {
   if (offer.groupId == null) {
-    yield* new SkipItem({
-      reason: "Offer is not assigned to a group",
-    });
+    yield* skipItem("Offer is not assigned to a group");
   }
 
   return offer.groupId;
@@ -581,7 +623,7 @@ const articles = defineMigration({
   pipeline: Effect.fn("articles.pipeline")(function* (source) {
     // source.item is inferred from SqlArticleRow
     return {
-      _tag: "UpsertEntry" as const,
+      kind: "UpsertEntry" as const,
       contentType: "article",
       fields: {
         title: source.item.title,
@@ -605,7 +647,7 @@ pipeline: Effect.fn("articles.pipeline")(function* (source, context) {
 
   if (context.previousState?.status === "needs-update") {
     return {
-      _tag: "UpdateAndPublishEntry" as const,
+      kind: "UpdateAndPublishEntry" as const,
       uid: context.previousState.destinationIdentity,
       fields,
       expectedVersion: context.previousState.destinationVersion,
@@ -613,7 +655,7 @@ pipeline: Effect.fn("articles.pipeline")(function* (source, context) {
   }
 
   return {
-    _tag: "UpsertEntry" as const,
+    kind: "UpsertEntry" as const,
     contentType: "article",
     fields,
   };
@@ -662,7 +704,7 @@ const runMigrationDefinition = <S, D, R>(
         store,
       }).pipe(Effect.exit);
 
-      if (itemResult._tag === "Failure") {
+      if (Exit.isFailure(itemResult)) {
         failedCount += 1;
       }
     }
@@ -785,10 +827,10 @@ The run request is the shared invocation object for SDK, CLI, serverless, or ano
 
 ```ts
 type RunMode =
-  | { readonly _tag: "normal" }
-  | { readonly _tag: "failed" }
-  | { readonly _tag: "skipped" }
-  | { readonly _tag: "item"; readonly sourceIdentity: SourceIdentity };
+  | { readonly kind: "normal" }
+  | { readonly kind: "failed" }
+  | { readonly kind: "skipped" }
+  | { readonly kind: "item"; readonly sourceIdentity: SourceIdentity };
 
 interface RunRequest {
   readonly definitions: ReadonlyArray<MigrationDefinition<any, any, any>>;
@@ -809,13 +851,13 @@ yield* runMigrations({
 
 yield* runMigrations({
   definitions: migrations,
-  mode: { _tag: "failed" },
+  mode: { kind: "failed" },
 });
 
 yield* runMigrations({
   definitions: migrations,
   mode: {
-    _tag: "item",
+    kind: "item",
     sourceIdentity: "article:123",
   },
 });
@@ -823,7 +865,7 @@ yield* runMigrations({
 
 ## Migration Run Summary
 
-`runMigrations(request)` returns a structured summary for SDK callers, CLI rendering, and tests.
+A completed migration run produces a structured summary for SDK callers, CLI rendering, and tests.
 
 ```ts
 interface MigrationRunSummary {
@@ -847,6 +889,232 @@ interface MigrationDefinitionRunSummary {
   readonly cursor?: SourceCursor;
 }
 ```
+
+Inline execution can return a completed summary immediately. Durable execution may only return a run id and let callers observe the run later.
+
+```ts
+type ExecutionStartResult =
+  | {
+      readonly kind: "Completed";
+      readonly summary: MigrationRunSummary;
+    }
+  | {
+      readonly kind: "Started";
+      readonly runId: MigrationRunId;
+    };
+```
+
+Durable run summaries are derived from persisted run state and item outcomes.
+
+## Execution Adapter Seam
+
+Execution is a runtime strategy. The first implementation should use an inline adapter, but execution adapters are a supported extension point. Users may provide their own adapter when they know how to schedule, partition, batch, queue, or parallelize a migration better than the built-in adapters.
+
+The adapter owns scheduling:
+
+- sequential versus parallel execution
+- in-process versus queued execution
+- partitioning
+- worker fan-out
+- serverless continuation
+- timeout handling
+
+The adapter should preserve core migration semantics:
+
+- source identity and source version handling
+- migration item state statuses
+- destination command result persistence
+- dependency ordering unless it explicitly takes responsibility for equivalent safety
+- lock or claim safety rules
+
+```txt
+InlineExecutionAdapter:
+  read cursor window
+  process source items in-process
+  execute destination commands
+  persist item state
+
+InlineParallelExecutionAdapter:
+  read cursor window
+  process source items in-process with bounded concurrency
+  execute destination commands with bounded concurrency
+  persist item state
+
+DurableExecutionAdapter:
+  read cursor window
+  enqueue migration work items
+  workers process work items
+  persist item state
+```
+
+The inline adapter can gain bounded concurrency without changing migration definitions:
+
+```ts
+yield* Effect.forEach(result.items, processSourceItem, {
+  concurrency: definition.concurrency ?? 1,
+});
+```
+
+Durable execution needs a work item payload policy. Identity-only work items are small and fresh but require `readByIdentity`; source snapshots avoid expensive re-lookup but can be large or sensitive.
+
+```ts
+type WorkItemPayload<Source> =
+  | {
+      readonly kind: "IdentityOnly";
+      readonly sourceIdentity: SourceIdentity;
+      readonly discoveredSourceVersion?: SourceVersion;
+    }
+  | {
+      readonly kind: "SourceSnapshot";
+      readonly source: SourceEnvelope<Source>;
+      readonly capturedAt: Date;
+    };
+```
+
+Source snapshots are execution queue payloads, not migration item state. They should have retention, encryption, and expiry policies if implemented.
+
+Future durable execution should split the current definition-level lock into:
+
+```txt
+Discovery lock:
+  one scanner advances the source cursor for a migration definition
+
+Item claim:
+  one worker owns a source identity for a short lease
+```
+
+V1 should still use the simpler definition-level lock.
+
+Execution adapter shape:
+
+```ts
+interface ExecutionAdapter {
+  readonly start: (
+    request: RunRequest,
+    context: ExecutionContext
+  ) => Effect.Effect<ExecutionStartResult, ExecutionError>;
+
+  readonly getRunSummary?: (
+    runId: MigrationRunId
+  ) => Effect.Effect<MigrationRunSummary, ExecutionError>;
+}
+
+interface ExecutionContext {
+  readonly clock: Clock.Clock;
+  readonly random: Random.Random;
+  readonly logger: Logger;
+}
+```
+
+Default usage:
+
+```ts
+yield* runMigrations({
+  definitions,
+  mode: { kind: "normal" },
+});
+```
+
+Inline adapters can return:
+
+```ts
+{
+  kind: "Completed",
+  summary,
+}
+```
+
+Durable adapters can return:
+
+```ts
+{
+  kind: "Started",
+  runId,
+}
+```
+
+The SDK or CLI can then support fire-and-forget, wait/poll, and status commands.
+
+Custom adapter usage:
+
+```ts
+yield* runMigrations({
+  definitions,
+  mode: { kind: "normal" },
+  execution: CustomParallelAdapter,
+});
+```
+
+Custom partitioned adapter example:
+
+```ts
+const PartitionedAdapter = makePartitionedExecutionAdapter({
+  partitions: [
+    { cursor: { shard: "A" } },
+    { cursor: { shard: "B" } },
+    { cursor: { shard: "C" } },
+  ],
+  concurrency: 3,
+});
+```
+
+Custom serverless adapter example:
+
+```ts
+const VercelDurableAdapter = makeDurableExecutionAdapter({
+  enqueue: VercelQueue.enqueue,
+  maxDuration: "50 seconds",
+  payloadPolicy: "source-snapshot",
+});
+```
+
+## Migration Reference Lookup
+
+Complex migrations across multiple destination systems should be modeled as separate migration definitions per identity boundary, then stitched by another migration definition.
+
+Example:
+
+```txt
+migrate-companies-to-ct
+migrate-customers-to-ct
+migrate-users-to-clerk
+stitch-ct-customers-to-clerk-users
+```
+
+The stitch migration depends on prior migrations and reads their item states through a migration reference lookup capability.
+
+```ts
+const stitchCustomers = defineMigration({
+  id: "stitch-ct-customers-to-clerk-users",
+  dependsOn: ["migrate-customers-to-ct", "migrate-users-to-clerk"],
+
+  source: MagentoCustomersSource.layer(magentoConfig),
+  destination: CommerceToolsCustomerDestination.layer(ctConfig),
+  store: SqlMigrationStore.layer(storeConfig),
+
+  pipeline: Effect.fn("stitch.pipeline")(function* (source) {
+    const references = yield* MigrationReferenceLookup;
+
+    const ctCustomer = yield* references.requireMigrated({
+      definitionId: "migrate-customers-to-ct",
+      sourceIdentity: source.identity,
+    });
+
+    const clerkUser = yield* references.requireMigrated({
+      definitionId: "migrate-users-to-clerk",
+      sourceIdentity: source.identity,
+    });
+
+    return {
+      kind: "LinkCustomerToUser" as const,
+      customerId: ctCustomer.destinationIdentity,
+      clerkUserId: clerkUser.destinationIdentity,
+    };
+  }),
+});
+```
+
+This keeps each migration definition focused on one destination identity boundary while still allowing cross-system stitching.
 
 ## Definition Locks
 
