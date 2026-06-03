@@ -10,25 +10,48 @@ import { toMigrationDefinitionId } from "./ids.ts";
 import type { RunMode, RunModeInput } from "./run-mode.ts";
 import { makeRunMode } from "./run-mode.ts";
 
-export interface RunRequest {
-  readonly definitions: ReadonlyArray<
-    MigrationDefinition<any, DestinationCommand>
-  >;
+export type AnyMigrationDefinition = MigrationDefinition<
+  // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous run requests.
+  any,
+  DestinationCommand,
+  // biome-ignore lint/suspicious/noExplicitAny: Pipeline error is re-extracted by MigrationDefinitionPipelineError.
+  any
+>;
+
+export type MigrationDefinitionPipelineError<Definition> =
+  Definition extends MigrationDefinition<
+    infer _Source,
+    infer _Command,
+    infer PipelineError
+  >
+    ? PipelineError
+    : never;
+
+export interface RunRequest<
+  Definitions extends
+    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
+> {
+  readonly cursor?: SourceCursor;
+  readonly definitionIds?: readonly MigrationDefinitionId[];
+  readonly definitions: Definitions;
   readonly mode?: RunMode;
-  readonly cursor?: SourceCursor;
-  readonly definitionIds?: ReadonlyArray<MigrationDefinitionId>;
 }
 
-export interface RunRequestInput {
-  readonly definitions: ReadonlyArray<
-    MigrationDefinition<any, DestinationCommand>
-  >;
+export interface RunRequestInput<
+  Definitions extends
+    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
+> {
+  readonly cursor?: SourceCursor;
+  readonly definitionIds?: readonly MigrationDefinitionIdInput[];
+  readonly definitions: Definitions;
   readonly mode?: RunModeInput;
-  readonly cursor?: SourceCursor;
-  readonly definitionIds?: ReadonlyArray<MigrationDefinitionIdInput>;
 }
 
-export const makeRunRequest = (input: RunRequestInput): RunRequest => ({
+export const makeRunRequest = <
+  Definitions extends readonly AnyMigrationDefinition[],
+>(
+  input: RunRequestInput<Definitions>
+): RunRequest<Definitions> => ({
   definitions: input.definitions,
   ...(input.mode === undefined ? {} : { mode: makeRunMode(input.mode) }),
   ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
@@ -38,24 +61,22 @@ export const makeRunRequest = (input: RunRequestInput): RunRequest => ({
 });
 
 export interface MigrationRunState {
-  readonly runId: MigrationRunId;
-  readonly definitionIds: ReadonlyArray<MigrationDefinitionId>;
-  readonly status: "running" | "succeeded" | "failed";
-  readonly startedAt: Date;
+  readonly definitionIds: readonly MigrationDefinitionId[];
   readonly finishedAt?: Date;
+  readonly runId: MigrationRunId;
+  readonly startedAt: Date;
+  readonly status: "running" | "succeeded" | "failed";
 }
 
 export interface MigrationRunSummary {
-  readonly runId: MigrationRunId;
-  readonly status: "succeeded" | "failed";
-  readonly startedAt: Date;
+  readonly definitions: readonly MigrationDefinitionRunSummary[];
   readonly finishedAt: Date;
-  readonly definitions: ReadonlyArray<MigrationDefinitionRunSummary>;
+  readonly runId: MigrationRunId;
+  readonly startedAt: Date;
+  readonly status: "succeeded" | "failed";
 }
 
 export interface MigrationDefinitionRunSummary {
-  readonly definitionId: MigrationDefinitionId;
-  readonly status: "succeeded" | "failed" | "skipped";
   readonly counts: {
     readonly migrated: number;
     readonly skipped: number;
@@ -64,6 +85,8 @@ export interface MigrationDefinitionRunSummary {
     readonly needsUpdate: number;
   };
   readonly cursor?: SourceCursor;
+  readonly definitionId: MigrationDefinitionId;
+  readonly status: "succeeded" | "failed" | "skipped";
 }
 
 export type ExecutionStartResult =

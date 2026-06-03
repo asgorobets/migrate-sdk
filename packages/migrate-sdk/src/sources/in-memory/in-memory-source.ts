@@ -9,8 +9,8 @@ import type {
 } from "../../domain/source.ts";
 import { makeSourceItem } from "../../domain/source.ts";
 import {
-  SourcePlugin,
   type AnySourcePlugin,
+  SourcePlugin,
 } from "../../services/source-plugin.ts";
 
 export const InMemorySourceCursor = Schema.Struct({
@@ -19,13 +19,12 @@ export const InMemorySourceCursor = Schema.Struct({
 
 export type InMemorySourceCursor = typeof InMemorySourceCursor.Type;
 
-const decodeInMemorySourceCursor = Schema.decodeUnknownEffect(
-  InMemorySourceCursor
-);
+const decodeInMemorySourceCursor =
+  Schema.decodeUnknownEffect(InMemorySourceCursor);
 
 export interface InMemorySourceOptions<A> {
-  readonly items: ReadonlyArray<SourceItemInput<A>>;
-  readonly windowSize?: number;
+  readonly batchSize?: number;
+  readonly items: readonly SourceItemInput<A>[];
   readonly lookupStrategy?: SourceLookupStrategy;
   readonly sourceSchema?: Schema.Schema<A>;
 }
@@ -39,17 +38,30 @@ const invalidCursorError = (
     cause: { cursor, error: cause },
   });
 
+const invalidBatchSizeError = (batchSize: number): SourcePluginError =>
+  new SourcePluginError({
+    message: "In-memory source batchSize must be a positive integer",
+    cause: { batchSize },
+  });
+
 const makeLayer = <A>(
   options: InMemorySourceOptions<A>
 ): Layer.Layer<AnySourcePlugin> =>
   Layer.sync(SourcePlugin, (): SourcePlugin<A> => {
-    const items: ReadonlyArray<SourceItem<A>> = options.items.map(makeSourceItem);
-    const windowSize = options.windowSize ?? items.length;
+    const items: readonly SourceItem<A>[] = options.items.map(makeSourceItem);
+    const batchSize = options.batchSize ?? items.length;
     const lookupStrategy = options.lookupStrategy ?? "direct";
 
     const read = Effect.fn("InMemorySource.read")(function* (
       cursor: SourceCursor | null
     ) {
+      if (
+        options.batchSize !== undefined &&
+        (!Number.isInteger(options.batchSize) || options.batchSize <= 0)
+      ) {
+        return yield* invalidBatchSizeError(options.batchSize);
+      }
+
       const offset =
         cursor === null
           ? 0
@@ -59,7 +71,7 @@ const makeLayer = <A>(
             );
 
       return yield* Effect.sync(() => {
-        const nextOffset = offset + windowSize;
+        const nextOffset = offset + batchSize;
         const windowItems = items.slice(offset, nextOffset);
 
         return {
@@ -75,12 +87,13 @@ const makeLayer = <A>(
       });
     });
 
-    const readByIdentity = Effect.fn("InMemorySource.readByIdentity")((
-      identity: SourceIdentity
-    ): Effect.Effect<SourceItem<A> | null, SourcePluginError> =>
-      Effect.sync(
-        () => items.find((item) => item.identity === identity) ?? null
-      )
+    const readByIdentity = Effect.fn("InMemorySource.readByIdentity")(
+      (
+        identity: SourceIdentity
+      ): Effect.Effect<SourceItem<A> | null, SourcePluginError> =>
+        Effect.sync(
+          () => items.find((item) => item.identity === identity) ?? null
+        )
     );
 
     return {
