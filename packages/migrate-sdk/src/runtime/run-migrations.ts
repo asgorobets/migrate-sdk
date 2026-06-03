@@ -1,7 +1,11 @@
 import { Effect, Layer } from "effect";
 import type { MigrationDefinition } from "../domain/definition.ts";
 import type { DestinationCommand } from "../domain/destination.ts";
-import { MigrationRuntimeError, SourcePluginError } from "../domain/errors.ts";
+import {
+  MigrationRuntimeError,
+  type MigrationStoreError,
+  SourcePluginError,
+} from "../domain/errors.ts";
 import type {
   MigrationDefinitionId,
   MigrationRunId,
@@ -27,14 +31,11 @@ import {
   type SourcePlugin,
 } from "../services/source-plugin.ts";
 import { normalizeItemError } from "./item-error.ts";
-import {
-  type ProcessSourceItemError,
-  processSourceItem,
-} from "./process-source-item.ts";
+import { processSourceItem } from "./process-source-item.ts";
 
 export type RunMigrationDefinitionError =
   | SourcePluginError
-  | ProcessSourceItemError;
+  | MigrationStoreError;
 
 export type RunMigrationError =
   | MigrationRuntimeError
@@ -44,6 +45,18 @@ const emptyRunError = new MigrationRuntimeError({
   message: "Run request must include at least one Migration Definition",
 });
 
+const missingDefinitionError = (definitionId: MigrationDefinitionId) =>
+  new MigrationRuntimeError({
+    message: "Migration Definition was not found",
+    cause: { definitionId },
+  });
+
+const dependencyCycleError = (definitionId: MigrationDefinitionId) =>
+  new MigrationRuntimeError({
+    message: "Migration Definition dependency cycle detected",
+    cause: { definitionId },
+  });
+
 const emptyCounts = {
   migrated: 0,
   skipped: 0,
@@ -51,6 +64,8 @@ const emptyCounts = {
   unchanged: 0,
   needsUpdate: 0,
 };
+
+const definitionLockTtlMs = 60_000;
 
 interface MutableDefinitionCounts {
   failed: number;
@@ -66,6 +81,87 @@ const runStatusForDefinitions = (
   definitions.some((definition) => definition.status === "failed")
     ? "failed"
     : "succeeded";
+
+const failRunAndRethrow = <Error>(
+  store: typeof MigrationStore.Service,
+  runId: MigrationRunId,
+  error: Error
+): Effect.Effect<never, Error | MigrationStoreError> =>
+  Effect.gen(function* () {
+    yield* store.failRun(runId);
+    return yield* Effect.fail(error);
+  });
+
+type OrderedDefinitionsResult =
+  | {
+      readonly definitions: readonly AnyMigrationDefinition[];
+      readonly kind: "ordered";
+    }
+  | {
+      readonly error: MigrationRuntimeError;
+      readonly kind: "failed";
+    };
+
+const orderDefinitions = (
+  definitions: readonly AnyMigrationDefinition[],
+  selectedDefinitionIds: readonly MigrationDefinitionId[] | undefined
+): OrderedDefinitionsResult => {
+  const definitionsById = new Map(
+    definitions.map((definition) => [definition.id, definition])
+  );
+  const orderedDefinitions: AnyMigrationDefinition[] = [];
+  const activeDefinitionIds = new Set<MigrationDefinitionId>();
+  const visitedDefinitionIds = new Set<MigrationDefinitionId>();
+  const rootDefinitionIds =
+    selectedDefinitionIds === undefined
+      ? definitions.map((definition) => definition.id)
+      : selectedDefinitionIds;
+
+  const visit = (
+    definitionId: MigrationDefinitionId
+  ): MigrationRuntimeError | null => {
+    if (visitedDefinitionIds.has(definitionId)) {
+      return null;
+    }
+
+    if (activeDefinitionIds.has(definitionId)) {
+      return dependencyCycleError(definitionId);
+    }
+
+    const definition = definitionsById.get(definitionId);
+
+    if (definition === undefined) {
+      return missingDefinitionError(definitionId);
+    }
+
+    activeDefinitionIds.add(definitionId);
+
+    for (const dependencyId of definition.dependsOn ?? []) {
+      const error = visit(dependencyId);
+
+      if (error !== null) {
+        activeDefinitionIds.delete(definitionId);
+        return error;
+      }
+    }
+
+    activeDefinitionIds.delete(definitionId);
+    visitedDefinitionIds.add(definitionId);
+    orderedDefinitions.push(definition);
+
+    return null;
+  };
+
+  for (const definitionId of rootDefinitionIds) {
+    const error = visit(definitionId);
+
+    if (error !== null) {
+      return { kind: "failed", error };
+    }
+  }
+
+  return { kind: "ordered", definitions: orderedDefinitions };
+};
 
 const isTargetedMode = (mode: RunMode): boolean => mode.kind !== "normal";
 
@@ -338,43 +434,57 @@ const runMigrationDefinition = <
   const program = Effect.gen(function* () {
     const source = yield* getSourcePlugin<Source>();
     const store = yield* MigrationStore;
-    const counts = { ...emptyCounts };
-    const itemStates = yield* store.listItemStates(definition.id);
 
-    const attemptedSourceIdentities = yield* processTargetedSourceIdentities({
-      counts,
-      definition,
-      itemStates,
-      mode,
-      runId,
-      source,
-      store,
-    });
+    return yield* Effect.acquireUseRelease(
+      store.acquireDefinitionLock(definition.id, runId, definitionLockTtlMs),
+      () =>
+        Effect.gen(function* () {
+          const counts = { ...emptyCounts };
+          const itemStates = yield* store.listItemStates(definition.id);
 
-    if (isTargetedMode(mode)) {
-      return {
-        definitionId: definition.id,
-        status:
-          counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
-        counts,
-      };
-    }
+          const attemptedSourceIdentities =
+            yield* processTargetedSourceIdentities({
+              counts,
+              definition,
+              itemStates,
+              mode,
+              runId,
+              source,
+              store,
+            });
 
-    const committedCursor = yield* processCursorDiscovery({
-      counts,
-      definition,
-      excludedSourceIdentities: attemptedSourceIdentities,
-      runId,
-      source,
-      store,
-    });
+          if (isTargetedMode(mode)) {
+            return {
+              definitionId: definition.id,
+              status:
+                counts.failed > 0
+                  ? ("failed" as const)
+                  : ("succeeded" as const),
+              counts,
+            };
+          }
 
-    return {
-      definitionId: definition.id,
-      status: counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
-      counts,
-      ...(committedCursor === undefined ? {} : { cursor: committedCursor }),
-    };
+          const committedCursor = yield* processCursorDiscovery({
+            counts,
+            definition,
+            excludedSourceIdentities: attemptedSourceIdentities,
+            runId,
+            source,
+            store,
+          });
+
+          return {
+            definitionId: definition.id,
+            status:
+              counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
+            counts,
+            ...(committedCursor === undefined
+              ? {}
+              : { cursor: committedCursor }),
+          };
+        }),
+      (lock) => store.releaseDefinitionLock(lock)
+    );
   });
   const layer = Layer.mergeAll(
     definition.source.layer,
@@ -397,21 +507,44 @@ export const runMigrations = <
     return Effect.fail(emptyRunError);
   }
 
-  const definitionIds = request.definitions.map((definition) => definition.id);
+  const orderedDefinitions = orderDefinitions(
+    request.definitions,
+    request.definitionIds
+  );
+
+  if (orderedDefinitions.kind === "failed") {
+    return Effect.fail(orderedDefinitions.error);
+  }
+
+  const firstOrderedDefinition = orderedDefinitions.definitions[0];
+
+  if (firstOrderedDefinition === undefined) {
+    return Effect.fail(emptyRunError);
+  }
+
+  const definitionIds = orderedDefinitions.definitions.map(
+    (definition) => definition.id
+  );
 
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
     const runState = yield* store.beginRun(definitionIds);
-    const definitionSummaries: MigrationDefinitionRunSummary[] = [];
+    const definitionSummaries = yield* Effect.gen(function* () {
+      const summaries: MigrationDefinitionRunSummary[] = [];
 
-    for (const definition of request.definitions) {
-      const summary = yield* runMigrationDefinition(
-        definition,
-        runState.runId,
-        request.mode ?? normalRunMode
-      );
-      definitionSummaries.push(summary);
-    }
+      for (const definition of orderedDefinitions.definitions) {
+        const summary = yield* runMigrationDefinition(
+          definition,
+          runState.runId,
+          request.mode ?? normalRunMode
+        );
+        summaries.push(summary);
+      }
+
+      return summaries;
+    }).pipe(
+      Effect.catch((error) => failRunAndRethrow(store, runState.runId, error))
+    );
 
     const runStatus = runStatusForDefinitions(definitionSummaries);
     const completedRun =
@@ -428,7 +561,7 @@ export const runMigrations = <
     };
   });
 
-  return program.pipe(Effect.provide(firstDefinition.store));
+  return program.pipe(Effect.provide(firstOrderedDefinition.store));
 };
 
 export const runMigration = <
@@ -445,6 +578,8 @@ export const runMigration = <
       definition,
       runState.runId,
       normalRunMode
+    ).pipe(
+      Effect.catch((error) => failRunAndRethrow(store, runState.runId, error))
     );
     const completedRun =
       summary.status === "failed"

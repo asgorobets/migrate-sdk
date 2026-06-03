@@ -1,6 +1,6 @@
 # Run multiple Migration Definitions with locks
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -12,13 +12,13 @@ Support Run Requests that include multiple Migration Definitions. The runner sho
 
 ## Acceptance criteria
 
-- [ ] The runner can execute multiple Migration Definitions in dependency order.
-- [ ] Selecting specific Migration Definitions includes required dependencies automatically.
-- [ ] Missing dependencies fail before any Migration Definition executes.
-- [ ] Dependency cycles fail before any Migration Definition executes.
-- [ ] The MigrationStore acquires and releases a Migration Definition Lock around each definition run.
-- [ ] Concurrent lock ownership for the same Migration Definition is rejected.
-- [ ] Tests verify dependency expansion, topological ordering, missing dependency rejection, cycle rejection, and lock behavior.
+- [x] The runner can execute multiple Migration Definitions in dependency order.
+- [x] Selecting specific Migration Definitions includes required dependencies automatically.
+- [x] Missing dependencies fail before any Migration Definition executes.
+- [x] Dependency cycles fail before any Migration Definition executes.
+- [x] The MigrationStore acquires and releases a Migration Definition Lock around each definition run.
+- [x] Concurrent lock ownership for the same Migration Definition is rejected.
+- [x] Tests verify dependency expansion, topological ordering, missing dependency rejection, cycle rejection, and lock behavior.
 
 ## Blocked by
 

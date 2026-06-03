@@ -1677,4 +1677,465 @@ describe("runMigration", () => {
       );
     })
   );
+
+  it.effect(
+    "expands selected Migration Definitions and executes dependencies first",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const executionOrder: string[] = [];
+
+        const authors = defineMigration({
+          id: "authors",
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.sync(() => {
+              executionOrder.push(`authors:${source.identity}`);
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "author",
+                fields: {
+                  name: source.item.name,
+                },
+              };
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          dependsOn: ["authors"],
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Dependent article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.sync(() => {
+              executionOrder.push(`articles:${source.identity}`);
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(
+          summary.definitions.map((definition) => definition.definitionId)
+        ).toEqual(["authors", "articles"]);
+        expect(executionOrder).toEqual([
+          "authors:author-1",
+          "articles:article-1",
+        ]);
+        expect(
+          destinationState.executions.map(
+            (execution) => execution.context.definitionId
+          )
+        ).toEqual(["authors", "articles"]);
+      })
+  );
+
+  it.effect("uses the selected Migration Definition Store for run state", () =>
+    Effect.gen(function* () {
+      const unselectedStoreState = InMemoryMigrationStore.makeState();
+      const selectedStoreState = InMemoryMigrationStore.makeState();
+
+      const unselected = defineMigration({
+        id: "unselected",
+        source: InMemorySourcePlugin.make({
+          items: [
+            {
+              identity: "unselected-1",
+              version: "source-version-1",
+              item: { title: "Unselected" },
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+        }),
+        store: InMemoryMigrationStore.layer(unselectedStoreState),
+        pipeline: (source) =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "unselected",
+            fields: {
+              title: source.item.title,
+            },
+          }),
+      });
+      const selected = defineMigration({
+        id: "selected",
+        source: InMemorySourcePlugin.make({
+          items: [
+            {
+              identity: "selected-1",
+              version: "source-version-1",
+              item: { title: "Selected" },
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+        }),
+        store: InMemoryMigrationStore.layer(selectedStoreState),
+        pipeline: (source) =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "selected",
+            fields: {
+              title: source.item.title,
+            },
+          }),
+      });
+
+      const summary = yield* runMigrations({
+        definitions: [unselected, selected],
+        definitionIds: ["selected"],
+      });
+
+      expect(
+        summary.definitions.map((definition) => definition.definitionId)
+      ).toEqual(["selected"]);
+      expect(unselectedStoreState.runStates.size).toBe(0);
+      expect(selectedStoreState.runStates.size).toBe(1);
+    })
+  );
+
+  it.effect(
+    "rejects missing Migration Definition dependencies before execution",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const pipelineCalls: string[] = [];
+
+        const articles = defineMigration({
+          id: "articles",
+          dependsOn: ["authors"],
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Article with missing dependency" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.sync(() => {
+              pipelineCalls.push(source.identity);
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              };
+            }),
+        });
+
+        const error = yield* Effect.flip(
+          runMigrations({ definitions: [articles] })
+        );
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationRuntimeError",
+            message: "Migration Definition was not found",
+          })
+        );
+        expect(destinationState.executions).toEqual([]);
+        expect(pipelineCalls).toEqual([]);
+        expect(storeState.runStates.size).toBe(0);
+      })
+  );
+
+  it.effect(
+    "rejects Migration Definition dependency cycles before execution",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const pipelineCalls: string[] = [];
+
+        const authors = defineMigration({
+          id: "authors",
+          dependsOn: ["articles"],
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.sync(() => {
+              pipelineCalls.push(source.identity);
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "author",
+                fields: {
+                  name: source.item.name,
+                },
+              };
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          dependsOn: ["authors"],
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Cyclic article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.sync(() => {
+              pipelineCalls.push(source.identity);
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              };
+            }),
+        });
+
+        const error = yield* Effect.flip(
+          runMigrations({ definitions: [articles, authors] })
+        );
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationRuntimeError",
+            message: "Migration Definition dependency cycle detected",
+          })
+        );
+        expect(destinationState.executions).toEqual([]);
+        expect(pipelineCalls).toEqual([]);
+        expect(storeState.runStates.size).toBe(0);
+      })
+  );
+
+  it.effect(
+    "acquires and releases a Migration Definition Lock around each definition run",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const lockObservations: string[] = [];
+
+        const observeLock = (definitionId: "authors" | "articles") => {
+          const lock = storeState.definitionLocks.get(
+            toMigrationDefinitionId(definitionId)
+          );
+
+          lockObservations.push(
+            `${definitionId}:${lock?.ownerRunId ?? "none"}`
+          );
+        };
+
+        const authors = defineMigration({
+          id: "authors",
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.sync(() => {
+              observeLock("authors");
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "author",
+                fields: {
+                  name: source.item.name,
+                },
+              };
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          dependsOn: ["authors"],
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Locked article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.sync(() => {
+              observeLock("articles");
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [articles, authors],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(lockObservations).toEqual(["authors:run-1", "articles:run-1"]);
+        expect(storeState.definitionLocks.size).toBe(0);
+      })
+  );
+
+  it.effect(
+    "rejects concurrent Migration Definition Lock ownership before execution",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const pipelineCalls: string[] = [];
+
+        storeState.definitionLocks.set(toMigrationDefinitionId("articles"), {
+          definitionId: toMigrationDefinitionId("articles"),
+          expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+          ownerRunId: toMigrationRunId("run-other"),
+          token: "lock-other",
+        });
+
+        const definition = defineMigration({
+          id: "articles",
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Locked article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.sync(() => {
+              pipelineCalls.push(source.identity);
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              };
+            }),
+        });
+
+        const error = yield* Effect.flip(runMigration(definition));
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationStoreError",
+            message: "Migration definition is already locked",
+          })
+        );
+        expect(destinationState.executions).toEqual([]);
+        expect(pipelineCalls).toEqual([]);
+        expect(
+          storeState.definitionLocks.get(toMigrationDefinitionId("articles"))
+        ).toEqual(
+          expect.objectContaining({
+            ownerRunId: "run-other",
+            token: "lock-other",
+          })
+        );
+        expect(storeState.runStates.get(toMigrationRunId("run-1"))).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            finishedAt: expect.any(Date),
+          })
+        );
+      })
+  );
 });
