@@ -1,6 +1,6 @@
 # Apply source and destination retry wrappers
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -12,13 +12,13 @@ Add optional retry wrappers selected by the Migration Definition for Source Curs
 
 ## Acceptance criteria
 
-- [ ] Migration Definitions can provide a Source Cursor Retry Strategy.
-- [ ] Migration Definitions can provide a Source Lookup Retry Strategy.
-- [ ] Migration Definitions can provide a Destination Retry Strategy.
-- [ ] Source cursor reads are wrapped by the Source Cursor Retry Strategy when configured.
-- [ ] Source identity lookups are wrapped by the Source Lookup Retry Strategy when configured.
-- [ ] Destination Command execution is wrapped by the Destination Retry Strategy when configured.
-- [ ] Tests verify retries with deterministic counters or schedules, not real-time delays.
+- [x] Migration Definitions can provide a Source Cursor Retry Strategy.
+- [x] Migration Definitions can provide a Source Lookup Retry Strategy.
+- [x] Migration Definitions can provide a Destination Retry Strategy.
+- [x] Source cursor reads are wrapped by the Source Cursor Retry Strategy when configured.
+- [x] Source identity lookups are wrapped by the Source Lookup Retry Strategy when configured.
+- [x] Destination Command execution is wrapped by the Destination Retry Strategy when configured.
+- [x] Tests verify retries with deterministic counters or schedules, not real-time delays.
 
 ## Blocked by
 

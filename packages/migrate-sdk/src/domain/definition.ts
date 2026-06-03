@@ -3,7 +3,11 @@ import type { DestinationPlugin } from "../services/destination-plugin.ts";
 import type { MigrationStore } from "../services/migration-store.ts";
 import type { AnySourcePlugin } from "../services/source-plugin.ts";
 import type { DestinationCommand } from "./destination.ts";
-import type { DestinationPluginError, SkipItem } from "./errors.ts";
+import type {
+  DestinationPluginError,
+  SkipItem,
+  SourcePluginError,
+} from "./errors.ts";
 import {
   type MigrationDefinitionId,
   type MigrationDefinitionIdInput,
@@ -24,6 +28,14 @@ export interface ConfiguredDestinationPlugin<
   readonly layer: Layer.Layer<DestinationPlugin>;
 }
 
+export type DestinationRetryStrategy = <A>(
+  effect: Effect.Effect<A, DestinationPluginError>
+) => Effect.Effect<A, DestinationPluginError>;
+
+export type SourceRetryStrategy = <A>(
+  effect: Effect.Effect<A, SourcePluginError>
+) => Effect.Effect<A, SourcePluginError>;
+
 export interface MigrationDefinition<
   Source,
   Command extends DestinationCommand,
@@ -31,15 +43,15 @@ export interface MigrationDefinition<
 > {
   readonly dependsOn?: readonly MigrationDefinitionId[];
   readonly destination: ConfiguredDestinationPlugin<Command>;
-  readonly destinationRetry?: <A>(
-    effect: Effect.Effect<A, DestinationPluginError>
-  ) => Effect.Effect<A, DestinationPluginError>;
+  readonly destinationRetry?: DestinationRetryStrategy;
   readonly id: MigrationDefinitionId;
   readonly pipeline: (
     source: SourceItem<Source>,
     context: PipelineContext
   ) => Effect.Effect<Command, PipelineError | SkipItem>;
   readonly source: ConfiguredSourcePlugin<Source>;
+  readonly sourceCursorRetry?: SourceRetryStrategy;
+  readonly sourceLookupRetry?: SourceRetryStrategy;
   readonly store: Layer.Layer<MigrationStore>;
 }
 

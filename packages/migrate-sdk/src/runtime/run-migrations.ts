@@ -317,7 +317,12 @@ const processTargetedSourceIdentities = <
         itemStates.find(
           (itemState) => itemState.sourceIdentity === sourceIdentity
         ) ?? null;
-      const lookup = yield* source.readByIdentity(sourceIdentity).pipe(
+      const readByIdentity = source.readByIdentity(sourceIdentity);
+      const readByIdentityWithRetry =
+        definition.sourceLookupRetry === undefined
+          ? readByIdentity
+          : definition.sourceLookupRetry(readByIdentity);
+      const lookup = yield* readByIdentityWithRetry.pipe(
         Effect.map((sourceItem) =>
           sourceItem === null
             ? ({
@@ -391,7 +396,12 @@ const processCursorDiscovery = <
     let committedCursor: SourceCursor | undefined;
 
     while (true) {
-      const readResult = yield* source.read(cursor);
+      const read = source.read(cursor);
+      const readWithRetry =
+        definition.sourceCursorRetry === undefined
+          ? read
+          : definition.sourceCursorRetry(read);
+      const readResult = yield* readWithRetry;
 
       for (const sourceItem of readResult.items) {
         if (excludedSourceIdentities.includes(sourceItem.identity)) {

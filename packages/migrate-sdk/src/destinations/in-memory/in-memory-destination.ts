@@ -3,8 +3,8 @@ import type { ConfiguredDestinationPlugin } from "../../domain/definition.ts";
 import type {
   DestinationCommand,
   DestinationCommandContext,
-  DestinationCommandResultInput,
   DestinationCommandResult,
+  DestinationCommandResultInput,
 } from "../../domain/destination.ts";
 import { makeDestinationCommandResult } from "../../domain/destination.ts";
 import { DestinationPluginError } from "../../domain/errors.ts";
@@ -21,23 +21,35 @@ export interface InMemoryDestinationExecution<C extends DestinationCommand> {
 }
 
 export interface InMemoryDestinationState<C extends DestinationCommand> {
-  readonly executions: Array<InMemoryDestinationExecution<C>>;
+  executeAttempts: number;
+  readonly executions: InMemoryDestinationExecution<C>[];
 }
 
 export interface InMemoryDestinationOptions<C extends DestinationCommand> {
   readonly commandSchema: NoServiceSchema<C>;
-  readonly state?: InMemoryDestinationState<C>;
   readonly execute?: (
     command: C,
     context: DestinationCommandContext
   ) => DestinationCommandResultInput;
+  readonly state?: InMemoryDestinationState<C>;
+  readonly transientFailures?: InMemoryDestinationTransientFailures;
+}
+
+export interface InMemoryDestinationTransientFailures {
+  readonly execute?: number;
 }
 
 const makeState = <
   C extends DestinationCommand,
 >(): InMemoryDestinationState<C> => ({
+  executeAttempts: 0,
   executions: [],
 });
+
+const transientDestinationError = (): DestinationPluginError =>
+  new DestinationPluginError({
+    message: "In-memory destination execute failed transiently",
+  });
 
 const makeLayer = <C extends DestinationCommand>(
   options: InMemoryDestinationOptions<C>
@@ -45,36 +57,45 @@ const makeLayer = <C extends DestinationCommand>(
   Layer.sync(DestinationPlugin, (): DestinationPlugin => {
     const state = options.state ?? makeState<C>();
     const decodeCommand = Schema.decodeUnknownEffect(options.commandSchema);
+    let remainingExecuteFailures = options.transientFailures?.execute ?? 0;
 
-    const execute = Effect.fn("InMemoryDestination.execute")((
-      command: DestinationCommand,
-      context: DestinationCommandContext
-    ): Effect.Effect<DestinationCommandResult, DestinationPluginError> =>
-      Effect.gen(function* () {
-        const typedCommand = yield* decodeCommand(command).pipe(
-          Effect.mapError(
-            (cause) =>
-              new DestinationPluginError({
-                message: "Destination command did not match command schema",
-                cause,
-              })
-          )
-        );
+    const execute = Effect.fn("InMemoryDestination.execute")(
+      (
+        command: DestinationCommand,
+        context: DestinationCommandContext
+      ): Effect.Effect<DestinationCommandResult, DestinationPluginError> =>
+        Effect.gen(function* () {
+          state.executeAttempts += 1;
 
-        const result = makeDestinationCommandResult(
-          options.execute?.(typedCommand, context) ?? {
-            destinationIdentity: `destination:${context.sourceIdentity}`,
+          const typedCommand = yield* decodeCommand(command).pipe(
+            Effect.mapError(
+              (cause) =>
+                new DestinationPluginError({
+                  message: "Destination command did not match command schema",
+                  cause,
+                })
+            )
+          );
+
+          if (remainingExecuteFailures > 0) {
+            remainingExecuteFailures -= 1;
+            return yield* transientDestinationError();
           }
-        );
 
-        state.executions.push({
-          command: typedCommand,
-          context,
-          result,
-        });
+          const result = makeDestinationCommandResult(
+            options.execute?.(typedCommand, context) ?? {
+              destinationIdentity: `destination:${context.sourceIdentity}`,
+            }
+          );
 
-        return result;
-      })
+          state.executions.push({
+            command: typedCommand,
+            context,
+            result,
+          });
+
+          return result;
+        })
     );
 
     return { execute };

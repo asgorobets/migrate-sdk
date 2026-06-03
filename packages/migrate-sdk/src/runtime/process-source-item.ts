@@ -218,9 +218,14 @@ export const processSourceItem = <
       ...(previousState === null ? {} : { previousState }),
     };
 
-    const destinationOutcome: DestinationOutcome = yield* destination
-      .execute(command, destinationContext)
-      .pipe(
+    const executeDestination = destination.execute(command, destinationContext);
+    const executeDestinationWithRetry =
+      definition.destinationRetry === undefined
+        ? executeDestination
+        : definition.destinationRetry(executeDestination);
+
+    const destinationOutcome: DestinationOutcome =
+      yield* executeDestinationWithRetry.pipe(
         Effect.map(
           (result): DestinationOutcome => ({
             kind: "succeeded",

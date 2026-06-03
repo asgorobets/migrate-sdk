@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Schedule, Schema } from "effect";
 import { expectTypeOf } from "vitest";
 import {
   DestinationPlugin,
@@ -618,6 +618,182 @@ describe("runMigration", () => {
           })
         );
       })
+  );
+
+  it.effect("wraps Destination Command execution with Destination Retry", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const storeState = InMemoryMigrationStore.makeState();
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          items: [
+            {
+              identity: "article-1",
+              version: "source-version-1",
+              item: { title: "Retryable article" },
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+          transientFailures: { execute: 1 },
+          execute: (_command, context) => ({
+            destinationIdentity: `entry-${context.sourceIdentity}`,
+          }),
+        }),
+        destinationRetry: (effect) =>
+          effect.pipe(Effect.retry(Schedule.recurs(1))),
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: () =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "article",
+            fields: {},
+          }),
+      });
+
+      const summary = yield* runMigration(definition);
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 1,
+        skipped: 0,
+        failed: 0,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(destinationState.executeAttempts).toBe(2);
+      expect(
+        destinationState.executions.map(
+          (execution) => execution.context.sourceIdentity
+        )
+      ).toEqual(["article-1"]);
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        )
+      ).toEqual(
+        expect.objectContaining({
+          status: "migrated",
+          destinationIdentity: "entry-article-1",
+        })
+      );
+    })
+  );
+
+  it.effect("wraps Source Cursor reads with Source Cursor Retry", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const sourceState = InMemorySourcePlugin.makeState();
+      const storeState = InMemoryMigrationStore.makeState();
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          state: sourceState,
+          transientFailures: { read: 1 },
+          items: [
+            {
+              identity: "article-1",
+              version: "source-version-1",
+              item: { title: "Retryable article" },
+            },
+          ],
+        }),
+        sourceCursorRetry: (effect) =>
+          effect.pipe(Effect.retry(Schedule.recurs(1))),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: () =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "article",
+            fields: {},
+          }),
+      });
+
+      const summary = yield* runMigration(definition);
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 1,
+        skipped: 0,
+        failed: 0,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(sourceState.readAttempts).toBe(2);
+      expect(
+        destinationState.executions.map(
+          (execution) => execution.context.sourceIdentity
+        )
+      ).toEqual(["article-1"]);
+    })
+  );
+
+  it.effect("wraps Source Identity lookups with Source Lookup Retry", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const sourceState = InMemorySourcePlugin.makeState();
+      const storeState = InMemoryMigrationStore.makeState();
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          state: sourceState,
+          transientFailures: { readByIdentity: 1 },
+          items: [
+            {
+              identity: "article-1",
+              version: "source-version-1",
+              item: { title: "Retryable article" },
+            },
+          ],
+        }),
+        sourceLookupRetry: (effect) =>
+          effect.pipe(Effect.retry(Schedule.recurs(1))),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: () =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "article",
+            fields: {},
+          }),
+      });
+
+      const summary = yield* runMigrations({
+        definitions: [definition],
+        mode: { kind: "item", sourceIdentity: "article-1" },
+      });
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 1,
+        skipped: 0,
+        failed: 0,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(sourceState.readByIdentityAttempts).toBe(2);
+      expect(
+        destinationState.executions.map(
+          (execution) => execution.context.sourceIdentity
+        )
+      ).toEqual(["article-1"]);
+    })
   );
 
   it.effect("rejects non-positive in-memory Source batch sizes", () =>

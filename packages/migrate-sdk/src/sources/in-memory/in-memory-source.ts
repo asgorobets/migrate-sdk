@@ -27,7 +27,24 @@ export interface InMemorySourceOptions<A> {
   readonly items: readonly SourceItemInput<A>[];
   readonly lookupStrategy?: SourceLookupStrategy;
   readonly sourceSchema?: Schema.Schema<A>;
+  readonly state?: InMemorySourceState;
+  readonly transientFailures?: InMemorySourceTransientFailures;
 }
+
+export interface InMemorySourceState {
+  readAttempts: number;
+  readByIdentityAttempts: number;
+}
+
+export interface InMemorySourceTransientFailures {
+  readonly read?: number;
+  readonly readByIdentity?: number;
+}
+
+const makeState = (): InMemorySourceState => ({
+  readAttempts: 0,
+  readByIdentityAttempts: 0,
+});
 
 const invalidCursorError = (
   cursor: SourceCursor,
@@ -44,6 +61,11 @@ const invalidBatchSizeError = (batchSize: number): SourcePluginError =>
     cause: { batchSize },
   });
 
+const transientSourceError = (operation: string): SourcePluginError =>
+  new SourcePluginError({
+    message: `In-memory source ${operation} failed transiently`,
+  });
+
 const makeLayer = <A>(
   options: InMemorySourceOptions<A>
 ): Layer.Layer<AnySourcePlugin> =>
@@ -51,10 +73,21 @@ const makeLayer = <A>(
     const items: readonly SourceItem<A>[] = options.items.map(makeSourceItem);
     const batchSize = options.batchSize ?? items.length;
     const lookupStrategy = options.lookupStrategy ?? "direct";
+    const state = options.state ?? makeState();
+    let remainingReadFailures = options.transientFailures?.read ?? 0;
+    let remainingReadByIdentityFailures =
+      options.transientFailures?.readByIdentity ?? 0;
 
     const read = Effect.fn("InMemorySource.read")(function* (
       cursor: SourceCursor | null
     ) {
+      state.readAttempts += 1;
+
+      if (remainingReadFailures > 0) {
+        remainingReadFailures -= 1;
+        return yield* transientSourceError("read");
+      }
+
       if (
         options.batchSize !== undefined &&
         (!Number.isInteger(options.batchSize) || options.batchSize <= 0)
@@ -88,12 +121,18 @@ const makeLayer = <A>(
     });
 
     const readByIdentity = Effect.fn("InMemorySource.readByIdentity")(
-      (
-        identity: SourceIdentity
-      ): Effect.Effect<SourceItem<A> | null, SourcePluginError> =>
-        Effect.sync(
+      function* (identity: SourceIdentity) {
+        state.readByIdentityAttempts += 1;
+
+        if (remainingReadByIdentityFailures > 0) {
+          remainingReadByIdentityFailures -= 1;
+          return yield* transientSourceError("readByIdentity");
+        }
+
+        return yield* Effect.sync(
           () => items.find((item) => item.identity === identity) ?? null
-        )
+        );
+      }
     );
 
     return {
@@ -115,4 +154,5 @@ const make = <A>(
 export const InMemorySourcePlugin = {
   layer: makeLayer,
   make,
+  makeState,
 } as const;
