@@ -1,15 +1,19 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import { expectTypeOf } from "vitest";
 import {
+  DestinationPlugin,
+  DestinationPluginError,
   defineMigration,
   InMemoryDestinationPlugin,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
+  MigrationItemState,
   type MigrationRunSummary,
   type RunMigrationError,
   runMigration,
   runMigrations,
+  skipItem,
   toDestinationIdentity,
   toDestinationVersion,
   toMigrationDefinitionId,
@@ -34,8 +38,19 @@ interface OtherPipelineTestError {
   readonly _tag: "OtherPipelineTestError";
 }
 
+interface PipelineFailureTestError {
+  readonly _tag: "PipelineFailureTestError";
+  readonly code: string;
+  readonly message: string;
+}
+
+interface StructuralSkipItem {
+  readonly _tag: "SkipItem";
+  readonly reason: string;
+}
+
 describe("runMigration", () => {
-  it("preserves pipeline error types in the public run APIs", () => {
+  it("keeps item-level pipeline error types out of public run errors", () => {
     const pipelineTestError: PipelineTestError = { _tag: "PipelineTestError" };
     const definition = defineMigration({
       id: "articles",
@@ -78,16 +93,11 @@ describe("runMigration", () => {
     });
 
     expectTypeOf(runMigration(definition)).toEqualTypeOf<
-      Effect.Effect<MigrationRunSummary, RunMigrationError<PipelineTestError>>
+      Effect.Effect<MigrationRunSummary, RunMigrationError>
     >();
     expectTypeOf(
       runMigrations({ definitions: [definition, otherDefinition] })
-    ).toEqualTypeOf<
-      Effect.Effect<
-        MigrationRunSummary,
-        RunMigrationError<PipelineTestError | OtherPipelineTestError>
-      >
-    >();
+    ).toEqualTypeOf<Effect.Effect<MigrationRunSummary, RunMigrationError>>();
   });
 
   it.effect("runs one Source Item through in-memory runtime", () =>
@@ -166,6 +176,367 @@ describe("runMigration", () => {
         })
       );
     })
+  );
+
+  it.effect(
+    "persists skipped Source Items without executing a Destination Command",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+
+        const definition = defineMigration({
+          id: "articles",
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: {
+                  publish: false,
+                  title: "Draft article",
+                },
+              },
+              {
+                identity: "article-2",
+                version: "source-version-1",
+                item: {
+                  publish: true,
+                  title: "Published article",
+                },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.gen(function* () {
+              if (!source.item.publish) {
+                return yield* skipItem("Article is not published");
+              }
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 1,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(
+          destinationState.executions.map(
+            (execution) => execution.context.sourceIdentity
+          )
+        ).toEqual(["article-2"]);
+
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "skipped",
+            sourceVersion: "source-version-1",
+            skipReason: "Article is not published",
+            lastRunId: summary.runId,
+          })
+        );
+      })
+  );
+
+  it.effect("recognizes structurally tagged Skip Item errors", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const storeState = InMemoryMigrationStore.makeState();
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          items: [
+            {
+              identity: "article-1",
+              version: "source-version-1",
+              item: { title: "Draft article" },
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: (): Effect.Effect<UpsertEntryCommand, StructuralSkipItem> =>
+          Effect.fail({
+            _tag: "SkipItem",
+            reason: "Structurally tagged skip",
+          }),
+      });
+
+      const summary = yield* runMigration(definition);
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 0,
+        skipped: 1,
+        failed: 0,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(destinationState.executions).toEqual([]);
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        )
+      ).toEqual(
+        expect.objectContaining({
+          status: "skipped",
+          skipReason: "Structurally tagged skip",
+        })
+      );
+    })
+  );
+
+  it.effect(
+    "persists pipeline failures and continues processing Source Items",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const pipelineError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          message: "Article cannot be transformed",
+          code: "missing-title",
+        };
+
+        const definition = defineMigration({
+          id: "articles",
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: null,
+                },
+              },
+              {
+                identity: "article-2",
+                version: "source-version-1",
+                item: {
+                  title: "Published article",
+                },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            source.identity === "article-1"
+              ? Effect.fail(pipelineError)
+              : Effect.succeed({
+                  kind: "UpsertEntry" as const,
+                  contentType: "article",
+                  fields: {
+                    title: source.item.title,
+                  },
+                }),
+        });
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("failed");
+        expect(summary.definitions[0]?.status).toBe("failed");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 1,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(
+          destinationState.executions.map(
+            (execution) => execution.context.sourceIdentity
+          )
+        ).toEqual(["article-2"]);
+
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            sourceVersion: "source-version-1",
+            lastRunId: summary.runId,
+            error: {
+              kind: "pipeline",
+              errorTag: "PipelineFailureTestError",
+              message: "Article cannot be transformed",
+              cause: pipelineError,
+            },
+          })
+        );
+        const failedState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+        if (failedState === undefined) {
+          throw new Error("Expected failed item state to be persisted");
+        }
+        const encodedState =
+          yield* Schema.encodeEffect(MigrationItemState)(failedState);
+        const decodedState =
+          yield* Schema.decodeUnknownEffect(MigrationItemState)(encodedState);
+        expect(decodedState).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            sourceVersion: "source-version-1",
+            lastRunId: summary.runId,
+            error: expect.objectContaining({
+              kind: "pipeline",
+              errorTag: "PipelineFailureTestError",
+              message: "Article cannot be transformed",
+            }),
+          })
+        );
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-2")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            lastRunId: summary.runId,
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "persists destination failures and continues processing Source Items",
+    () =>
+      Effect.gen(function* () {
+        const destinationExecutions: string[] = [];
+        const storeState = InMemoryMigrationStore.makeState();
+
+        const definition = defineMigration({
+          id: "articles",
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Invalid article",
+                },
+              },
+              {
+                identity: "article-2",
+                version: "source-version-1",
+                item: {
+                  title: "Published article",
+                },
+              },
+            ],
+          }),
+          destination: {
+            commandSchema: UpsertEntryCommand,
+            layer: Layer.sync(DestinationPlugin, () => ({
+              execute: (_command, context) => {
+                if (context.sourceIdentity === "article-1") {
+                  return Effect.fail(
+                    new DestinationPluginError({
+                      message: "Destination command failed",
+                      cause: new Error("Destination write failed"),
+                    })
+                  );
+                }
+
+                destinationExecutions.push(context.sourceIdentity);
+
+                return Effect.succeed({
+                  destinationIdentity: toDestinationIdentity(
+                    `entry-${context.sourceIdentity}`
+                  ),
+                });
+              },
+            })),
+          },
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "article",
+              fields: {
+                title: source.item.title,
+              },
+            }),
+        });
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("failed");
+        expect(summary.definitions[0]?.status).toBe("failed");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 1,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(destinationExecutions).toEqual(["article-2"]);
+
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            sourceVersion: "source-version-1",
+            lastRunId: summary.runId,
+            error: expect.objectContaining({
+              kind: "destination",
+              errorTag: "DestinationPluginError",
+              message: "Destination command failed",
+              cause: expect.objectContaining({
+                _tag: "DestinationPluginError",
+                message: "Destination command failed",
+              }),
+            }),
+          })
+        );
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-2")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            lastRunId: summary.runId,
+          })
+        );
+      })
   );
 
   it.effect("rejects non-positive in-memory Source batch sizes", () =>

@@ -1,6 +1,6 @@
 # Persist Skip Item and item failures
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -12,14 +12,14 @@ Add item outcome handling for Skip Item and item-level failures. A pipeline shou
 
 ## Acceptance criteria
 
-- [ ] Skip Item is implemented as an Effect-native typed error with a public helper for pipeline authors.
-- [ ] A skipped Source Item persists skipped Migration Item State with a skip reason.
-- [ ] The DestinationPlugin is not called when the pipeline skips a Source Item.
-- [ ] Pipeline failures are normalized into failed Migration Item State.
-- [ ] DestinationPlugin failures are normalized into failed Migration Item State.
-- [ ] The runner continues processing remaining Source Items after item-level failures.
-- [ ] A run with one or more item failures returns a failed Migration Run Summary.
-- [ ] Tests verify skip behavior, failed item persistence, continue-after-failure behavior, and failed summary status.
+- [x] Skip Item is implemented as an Effect-native typed error with a public helper for pipeline authors.
+- [x] A skipped Source Item persists skipped Migration Item State with a skip reason.
+- [x] The DestinationPlugin is not called when the pipeline skips a Source Item.
+- [x] Pipeline failures are normalized into failed Migration Item State.
+- [x] DestinationPlugin failures are normalized into failed Migration Item State.
+- [x] The runner continues processing remaining Source Items after item-level failures.
+- [x] A run with one or more item failures returns a failed Migration Run Summary.
+- [x] Tests verify skip behavior, failed item persistence, continue-after-failure behavior, and failed summary status.
 
 ## Blocked by
 

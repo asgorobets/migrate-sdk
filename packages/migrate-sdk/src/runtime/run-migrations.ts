@@ -3,13 +3,11 @@ import type { MigrationDefinition } from "../domain/definition.ts";
 import type { DestinationCommand } from "../domain/destination.ts";
 import {
   MigrationRuntimeError,
-  type MigrationStoreError,
   type SourcePluginError,
 } from "../domain/errors.ts";
 import type { MigrationRunId, SourceCursor } from "../domain/ids.ts";
 import type {
   AnyMigrationDefinition,
-  MigrationDefinitionPipelineError,
   MigrationDefinitionRunSummary,
   MigrationRunSummary,
   RunRequestInput,
@@ -22,14 +20,13 @@ import {
   processSourceItem,
 } from "./process-source-item.ts";
 
-export type RunMigrationDefinitionError<PipelineError> =
+export type RunMigrationDefinitionError =
   | SourcePluginError
-  | ProcessSourceItemError<PipelineError>;
+  | ProcessSourceItemError;
 
-export type RunMigrationError<PipelineError> =
+export type RunMigrationError =
   | MigrationRuntimeError
-  | MigrationStoreError
-  | RunMigrationDefinitionError<PipelineError>;
+  | RunMigrationDefinitionError;
 
 const emptyRunError = new MigrationRuntimeError({
   message: "Run request must include at least one Migration Definition",
@@ -43,6 +40,13 @@ const emptyCounts = {
   needsUpdate: 0,
 };
 
+const runStatusForDefinitions = (
+  definitions: readonly MigrationDefinitionRunSummary[]
+): MigrationRunSummary["status"] =>
+  definitions.some((definition) => definition.status === "failed")
+    ? "failed"
+    : "succeeded";
+
 const runMigrationDefinition = <
   Source,
   Command extends DestinationCommand,
@@ -52,7 +56,7 @@ const runMigrationDefinition = <
   runId: MigrationRunId
 ): Effect.Effect<
   MigrationDefinitionRunSummary,
-  RunMigrationDefinitionError<PipelineError>
+  RunMigrationDefinitionError
 > => {
   const program = Effect.gen(function* () {
     const source = yield* getSourcePlugin<Source>();
@@ -112,7 +116,7 @@ const runMigrationDefinition = <
 
     return {
       definitionId: definition.id,
-      status: "succeeded" as const,
+      status: counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
       counts,
       ...(committedCursor === undefined ? {} : { cursor: committedCursor }),
     };
@@ -130,10 +134,7 @@ export const runMigrations = <
   Definitions extends readonly AnyMigrationDefinition[],
 >(
   input: RunRequestInput<Definitions>
-): Effect.Effect<
-  MigrationRunSummary,
-  RunMigrationError<MigrationDefinitionPipelineError<Definitions[number]>>
-> => {
+): Effect.Effect<MigrationRunSummary, RunMigrationError> => {
   const request = makeRunRequest(input);
   const firstDefinition = request.definitions[0];
 
@@ -153,11 +154,15 @@ export const runMigrations = <
       definitionSummaries.push(summary);
     }
 
-    const completedRun = yield* store.completeRun(runState.runId);
+    const runStatus = runStatusForDefinitions(definitionSummaries);
+    const completedRun =
+      runStatus === "failed"
+        ? yield* store.failRun(runState.runId)
+        : yield* store.completeRun(runState.runId);
 
     return {
       runId: runState.runId,
-      status: "succeeded" as const,
+      status: runStatus,
       startedAt: runState.startedAt,
       finishedAt: completedRun.finishedAt ?? new Date(),
       definitions: definitionSummaries,
@@ -173,16 +178,22 @@ export const runMigration = <
   PipelineError,
 >(
   definition: MigrationDefinition<Source, Command, PipelineError>
-): Effect.Effect<MigrationRunSummary, RunMigrationError<PipelineError>> => {
+): Effect.Effect<MigrationRunSummary, RunMigrationError> => {
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
     const runState = yield* store.beginRun([definition.id]);
     const summary = yield* runMigrationDefinition(definition, runState.runId);
-    const completedRun = yield* store.completeRun(runState.runId);
+    const completedRun =
+      summary.status === "failed"
+        ? yield* store.failRun(runState.runId)
+        : yield* store.completeRun(runState.runId);
+
+    const runStatus: MigrationRunSummary["status"] =
+      summary.status === "failed" ? "failed" : "succeeded";
 
     return {
       runId: runState.runId,
-      status: "succeeded" as const,
+      status: runStatus,
       startedAt: runState.startedAt,
       finishedAt: completedRun.finishedAt ?? new Date(),
       definitions: [summary],

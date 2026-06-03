@@ -3,7 +3,7 @@ import type { DestinationPlugin } from "../services/destination-plugin.ts";
 import type { MigrationStore } from "../services/migration-store.ts";
 import type { AnySourcePlugin } from "../services/source-plugin.ts";
 import type { DestinationCommand } from "./destination.ts";
-import type { DestinationPluginError } from "./errors.ts";
+import type { DestinationPluginError, SkipItem } from "./errors.ts";
 import {
   type MigrationDefinitionId,
   type MigrationDefinitionIdInput,
@@ -38,7 +38,7 @@ export interface MigrationDefinition<
   readonly pipeline: (
     source: SourceItem<Source>,
     context: PipelineContext
-  ) => Effect.Effect<Command, PipelineError>;
+  ) => Effect.Effect<Command, PipelineError | SkipItem>;
   readonly source: ConfiguredSourcePlugin<Source>;
   readonly store: Layer.Layer<MigrationStore>;
 }
