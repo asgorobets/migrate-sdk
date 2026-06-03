@@ -1,17 +1,17 @@
 import type { Effect } from "effect";
-import * as Context from "effect/Context";
+import { Service } from "effect/Context";
 import type { MigrationStoreError } from "../domain/errors.ts";
-import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type {
   MigrationDefinitionId,
   MigrationRunId,
   SourceCursor,
   SourceIdentity,
 } from "../domain/ids.ts";
+import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type { MigrationRunState } from "../domain/run.ts";
 import type { MigrationItemState } from "../domain/state.ts";
 
-export class MigrationStore extends Context.Service<
+export class MigrationStore extends Service<
   MigrationStore,
   {
     readonly getSourceCursor: (
@@ -28,12 +28,16 @@ export class MigrationStore extends Context.Service<
       identity: SourceIdentity
     ) => Effect.Effect<MigrationItemState | null, MigrationStoreError>;
 
+    readonly listItemStates: (
+      definitionId: MigrationDefinitionId
+    ) => Effect.Effect<readonly MigrationItemState[], MigrationStoreError>;
+
     readonly upsertItemState: (
       state: MigrationItemState
     ) => Effect.Effect<void, MigrationStoreError>;
 
     readonly beginRun: (
-      definitionIds: ReadonlyArray<MigrationDefinitionId>
+      definitionIds: readonly MigrationDefinitionId[]
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
     readonly completeRun: (
@@ -55,4 +59,3 @@ export class MigrationStore extends Context.Service<
     ) => Effect.Effect<void, MigrationStoreError>;
   }
 >()("@migrate-sdk/MigrationStore") {}
-

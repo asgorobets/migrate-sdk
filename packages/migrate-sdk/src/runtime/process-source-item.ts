@@ -13,7 +13,6 @@ import type {
   FailedItemState,
   MigratedItemState,
   MigrationItemError,
-  MigrationItemErrorKind,
   MigrationItemOutcome,
   MigrationItemState,
   MigrationItemStateBase,
@@ -21,6 +20,7 @@ import type {
 } from "../domain/state.ts";
 import { DestinationPlugin } from "../services/destination-plugin.ts";
 import { MigrationStore } from "../services/migration-store.ts";
+import { normalizeItemError } from "./item-error.ts";
 
 export interface ProcessSourceItemOptions<
   Source,
@@ -28,6 +28,7 @@ export interface ProcessSourceItemOptions<
   PipelineError,
 > {
   readonly definition: MigrationDefinition<Source, Command, PipelineError>;
+  readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
   readonly sourceItem: SourceItem<Source>;
 }
@@ -62,51 +63,6 @@ const isSkipItem = (error: unknown): error is SkipItem =>
   Predicate.isTagged(error, "SkipItem") &&
   "reason" in error &&
   typeof error.reason === "string";
-
-const errorTag = (error: unknown, fallback: string): string => {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "_tag" in error &&
-    typeof error._tag === "string"
-  ) {
-    return error._tag;
-  }
-
-  if (error instanceof Error && error.name.length > 0) {
-    return error.name;
-  }
-
-  return fallback;
-};
-
-const errorMessage = (error: unknown): string => {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string" &&
-    error.message.length > 0
-  ) {
-    return error.message;
-  }
-
-  if (error instanceof Error && error.message.length > 0) {
-    return error.message;
-  }
-
-  return String(error);
-};
-
-const normalizeItemError = (
-  kind: MigrationItemErrorKind,
-  error: unknown
-): MigrationItemError => ({
-  kind,
-  errorTag: errorTag(error, `${kind}-error`),
-  message: errorMessage(error),
-  cause: error,
-});
 
 const makeItemStateBase = <Source>(
   definitionId: MigrationDefinitionId,
@@ -172,6 +128,7 @@ export const processSourceItem = <
   PipelineError,
 >({
   definition,
+  reprocessUnchangedTerminal = false,
   runId,
   sourceItem,
 }: ProcessSourceItemOptions<Source, Command, PipelineError>): Effect.Effect<
@@ -187,7 +144,10 @@ export const processSourceItem = <
       sourceItem.identity
     );
 
-    if (isUnchangedTerminalState(previousState, sourceItem)) {
+    if (
+      !reprocessUnchangedTerminal &&
+      isUnchangedTerminalState(previousState, sourceItem)
+    ) {
       return "unchanged" as const;
     }
 

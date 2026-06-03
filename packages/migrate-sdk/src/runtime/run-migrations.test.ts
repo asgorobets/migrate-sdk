@@ -16,6 +16,8 @@ import {
   type RunMigrationError,
   runMigration,
   runMigrations,
+  SourcePlugin,
+  SourcePluginError,
   skipItem,
   toDestinationIdentity,
   toDestinationVersion,
@@ -564,13 +566,11 @@ describe("runMigration", () => {
             })),
           },
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: (source) =>
+          pipeline: () =>
             Effect.succeed({
               kind: "UpsertEntry" as const,
               contentType: "article",
-              fields: {
-                title: source.item.title,
-              },
+              fields: {},
             }),
         });
 
@@ -746,6 +746,732 @@ describe("runMigration", () => {
         },
       ]);
     })
+  );
+
+  it.effect("advances Source Cursors after windows with item failures", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const storeState = InMemoryMigrationStore.makeState();
+      const pipelineError: PipelineFailureTestError = {
+        _tag: "PipelineFailureTestError",
+        message: "Article cannot be transformed",
+        code: "missing-title",
+      };
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          batchSize: 2,
+          items: [
+            {
+              identity: "article-1",
+              version: "source-version-1",
+              item: { title: null },
+            },
+            {
+              identity: "article-2",
+              version: "source-version-1",
+              item: { title: "Article 2" },
+            },
+            {
+              identity: "article-3",
+              version: "source-version-1",
+              item: { title: "Article 3" },
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: (source) =>
+          source.identity === "article-1"
+            ? Effect.fail(pipelineError)
+            : Effect.succeed({
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              }),
+      });
+
+      const summary = yield* runMigration(definition);
+
+      expect(summary.status).toBe("failed");
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 2,
+        skipped: 0,
+        failed: 1,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(summary.definitions[0]?.cursor).toEqual({ offset: 2 });
+      expect(
+        destinationState.executions.map(
+          (execution) => execution.context.sourceIdentity
+        )
+      ).toEqual(["article-2", "article-3"]);
+      expect(storeState.sourceCursorCommits).toEqual([
+        {
+          definitionId: definition.id,
+          cursor: { offset: 2 },
+        },
+      ]);
+    })
+  );
+
+  it.effect(
+    "processes failed backlog before cursor discovery in normal mode",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+
+        const definition = defineMigration({
+          id: "articles",
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-failed",
+                version: "source-version-2",
+                item: { title: "Recovered article" },
+              },
+              {
+                identity: "article-new",
+                version: "source-version-1",
+                item: { title: "New article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: () =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "article",
+              fields: {},
+            }),
+        });
+
+        storeState.sourceCursors.set(definition.id, { offset: 1 });
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-failed"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: toSourceIdentity("article-failed"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            lastRunId: toMigrationRunId("run-previous"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "failed",
+            error: {
+              kind: "pipeline",
+              errorTag: "PipelineFailureTestError",
+              message: "Article could not be transformed",
+            },
+          }
+        );
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 2,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(
+          destinationState.executions.map(
+            (execution) => execution.context.sourceIdentity
+          )
+        ).toEqual(["article-failed", "article-new"]);
+      })
+  );
+
+  it.effect(
+    "processes needs-update backlog before cursor discovery in normal mode",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+
+        const definition = defineMigration({
+          id: "articles",
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-needs-update",
+                version: "source-version-1",
+                item: { title: "Reserved article" },
+              },
+              {
+                identity: "article-new",
+                version: "source-version-1",
+                item: { title: "New article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: () =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "article",
+              fields: {},
+            }),
+        });
+
+        storeState.sourceCursors.set(definition.id, { offset: 1 });
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey(
+            "articles",
+            "article-needs-update"
+          ),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: toSourceIdentity("article-needs-update"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            lastRunId: toMigrationRunId("run-previous"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "needs-update",
+            destinationIdentity: toDestinationIdentity(
+              "entry-article-needs-update"
+            ),
+            reason: "Destination stub must be completed",
+          }
+        );
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 2,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(
+          destinationState.executions.map(
+            (execution) => execution.context.sourceIdentity
+          )
+        ).toEqual(["article-needs-update", "article-new"]);
+        expect(destinationState.executions[0]?.context.previousState).toEqual(
+          expect.objectContaining({
+            status: "needs-update",
+            reason: "Destination stub must be completed",
+          })
+        );
+      })
+  );
+
+  it.effect("processes only failed Migration Item States in failed mode", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const storeState = InMemoryMigrationStore.makeState();
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          items: [
+            {
+              identity: "article-failed",
+              version: "source-version-1",
+              item: { title: "Recovered article" },
+            },
+            {
+              identity: "article-needs-update",
+              version: "source-version-1",
+              item: { title: "Reserved article" },
+            },
+            {
+              identity: "article-new",
+              version: "source-version-1",
+              item: { title: "New article" },
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: (source) =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "article",
+            fields: {
+              title: source.item.title,
+            },
+          }),
+      });
+
+      storeState.itemStates.set(
+        InMemoryMigrationStore.itemStateKey("articles", "article-failed"),
+        {
+          definitionId: toMigrationDefinitionId("articles"),
+          sourceIdentity: toSourceIdentity("article-failed"),
+          sourceVersion: toSourceVersion("source-version-1"),
+          lastRunId: toMigrationRunId("run-previous"),
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          status: "failed",
+          error: {
+            kind: "destination",
+            errorTag: "DestinationPluginError",
+            message: "Destination command failed",
+          },
+        }
+      );
+      storeState.itemStates.set(
+        InMemoryMigrationStore.itemStateKey("articles", "article-needs-update"),
+        {
+          definitionId: toMigrationDefinitionId("articles"),
+          sourceIdentity: toSourceIdentity("article-needs-update"),
+          sourceVersion: toSourceVersion("source-version-1"),
+          lastRunId: toMigrationRunId("run-previous"),
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          status: "needs-update",
+          destinationIdentity: toDestinationIdentity(
+            "entry-article-needs-update"
+          ),
+          reason: "Destination stub must be completed",
+        }
+      );
+
+      const summary = yield* runMigrations({
+        definitions: [definition],
+        mode: { kind: "failed" },
+      });
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 1,
+        skipped: 0,
+        failed: 0,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(
+        destinationState.executions.map(
+          (execution) => execution.context.sourceIdentity
+        )
+      ).toEqual(["article-failed"]);
+      expect(storeState.sourceCursorCommits).toEqual([]);
+    })
+  );
+
+  it.effect("reprocesses skipped Migration Item States in skipped mode", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const storeState = InMemoryMigrationStore.makeState();
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          items: [
+            {
+              identity: "article-skipped",
+              version: "source-version-1",
+              item: { title: "Previously skipped article" },
+            },
+            {
+              identity: "article-new",
+              version: "source-version-1",
+              item: { title: "New article" },
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: (source) =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "article",
+            fields: {
+              title: source.item.title,
+            },
+          }),
+      });
+
+      storeState.itemStates.set(
+        InMemoryMigrationStore.itemStateKey("articles", "article-skipped"),
+        {
+          definitionId: toMigrationDefinitionId("articles"),
+          sourceIdentity: toSourceIdentity("article-skipped"),
+          sourceVersion: toSourceVersion("source-version-1"),
+          lastRunId: toMigrationRunId("run-previous"),
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          status: "skipped",
+          skipReason: "Draft article",
+        }
+      );
+
+      const summary = yield* runMigrations({
+        definitions: [definition],
+        mode: { kind: "skipped" },
+      });
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 1,
+        skipped: 0,
+        failed: 0,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(
+        destinationState.executions.map(
+          (execution) => execution.context.sourceIdentity
+        )
+      ).toEqual(["article-skipped"]);
+      expect(storeState.sourceCursorCommits).toEqual([]);
+    })
+  );
+
+  it.effect("processes exactly one Source Identity in item mode", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const storeState = InMemoryMigrationStore.makeState();
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          items: [
+            {
+              identity: "article-target",
+              version: "source-version-1",
+              item: { title: "Target article" },
+            },
+            {
+              identity: "article-new",
+              version: "source-version-1",
+              item: { title: "New article" },
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: (source) =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "article",
+            fields: {
+              title: source.item.title,
+            },
+          }),
+      });
+
+      storeState.itemStates.set(
+        InMemoryMigrationStore.itemStateKey("articles", "article-target"),
+        {
+          definitionId: toMigrationDefinitionId("articles"),
+          sourceIdentity: toSourceIdentity("article-target"),
+          sourceVersion: toSourceVersion("source-version-1"),
+          lastRunId: toMigrationRunId("run-previous"),
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          status: "migrated",
+          destinationIdentity: toDestinationIdentity("entry-article-target"),
+        }
+      );
+
+      const summary = yield* runMigrations({
+        definitions: [definition],
+        mode: { kind: "item", sourceIdentity: "article-target" },
+      });
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 1,
+        skipped: 0,
+        failed: 0,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(
+        destinationState.executions.map(
+          (execution) => execution.context.sourceIdentity
+        )
+      ).toEqual(["article-target"]);
+      expect(storeState.sourceCursorCommits).toEqual([]);
+    })
+  );
+
+  it.effect(
+    "records Source identity lookup failures for known Migration Item States",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const sourceError = new SourcePluginError({
+          message: "Source identity lookup failed",
+          cause: new Error("Source system unavailable"),
+        });
+
+        const definition = defineMigration({
+          id: "articles",
+          source: {
+            layer: Layer.sync(SourcePlugin, () => ({
+              lookupStrategy: "direct" as const,
+              read: () => Effect.succeed({ items: [] }),
+              readByIdentity: () => Effect.fail(sourceError),
+            })),
+          },
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: () =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "article",
+              fields: {},
+            }),
+        });
+
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-failed"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: toSourceIdentity("article-failed"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            lastRunId: toMigrationRunId("run-previous"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "failed",
+            error: {
+              kind: "pipeline",
+              errorTag: "PipelineFailureTestError",
+              message: "Article could not be transformed",
+            },
+          }
+        );
+
+        const summary = yield* runMigrations({
+          definitions: [definition],
+          mode: { kind: "failed" },
+        });
+
+        expect(summary.status).toBe("failed");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 0,
+          skipped: 0,
+          failed: 1,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(destinationState.executions).toEqual([]);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-failed")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            lastRunId: summary.runId,
+            error: expect.objectContaining({
+              kind: "source",
+              errorTag: "SourcePluginError",
+              message: "Source identity lookup failed",
+            }),
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "preserves Destination Identity when a migrated item lookup fails",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const sourceError = new SourcePluginError({
+          message: "Source identity lookup failed",
+          cause: new Error("Source system unavailable"),
+        });
+
+        const definition = defineMigration({
+          id: "articles",
+          source: {
+            layer: Layer.sync(SourcePlugin, () => ({
+              lookupStrategy: "direct" as const,
+              read: () => Effect.succeed({ items: [] }),
+              readByIdentity: () => Effect.fail(sourceError),
+            })),
+          },
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: () =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "article",
+              fields: {},
+            }),
+        });
+
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-migrated"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: toSourceIdentity("article-migrated"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            lastRunId: toMigrationRunId("run-previous"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "migrated",
+            destinationIdentity: toDestinationIdentity(
+              "entry-article-migrated"
+            ),
+            destinationVersion: toDestinationVersion("destination-version-1"),
+          }
+        );
+
+        const summary = yield* runMigrations({
+          definitions: [definition],
+          mode: { kind: "item", sourceIdentity: "article-migrated" },
+        });
+
+        expect(summary.status).toBe("failed");
+        expect(destinationState.executions).toEqual([]);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-migrated")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            destinationIdentity: "entry-article-migrated",
+            destinationVersion: "destination-version-1",
+            error: expect.objectContaining({
+              kind: "source",
+              errorTag: "SourcePluginError",
+              message: "Source identity lookup failed",
+            }),
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "does not rediscover attempted backlog Source Identities in normal mode",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const sourceError = new SourcePluginError({
+          message: "Source identity lookup failed",
+          cause: new Error("Source system unavailable"),
+        });
+
+        const definition = defineMigration({
+          id: "articles",
+          source: {
+            layer: Layer.sync(SourcePlugin, () => ({
+              lookupStrategy: "direct" as const,
+              read: () =>
+                Effect.succeed({
+                  items: [
+                    {
+                      identity: toSourceIdentity("article-failed"),
+                      version: toSourceVersion("source-version-2"),
+                      item: { title: "Rediscovered article" },
+                    },
+                    {
+                      identity: toSourceIdentity("article-new"),
+                      version: toSourceVersion("source-version-1"),
+                      item: { title: "New article" },
+                    },
+                  ],
+                }),
+              readByIdentity: () => Effect.fail(sourceError),
+            })),
+          },
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: () =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "article",
+              fields: {},
+            }),
+        });
+
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-failed"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: toSourceIdentity("article-failed"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            lastRunId: toMigrationRunId("run-previous"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "failed",
+            error: {
+              kind: "pipeline",
+              errorTag: "PipelineFailureTestError",
+              message: "Article could not be transformed",
+            },
+          }
+        );
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("failed");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 1,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(
+          destinationState.executions.map(
+            (execution) => execution.context.sourceIdentity
+          )
+        ).toEqual(["article-new"]);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-failed")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            sourceVersion: "source-version-1",
+            error: expect.objectContaining({
+              kind: "source",
+              errorTag: "SourcePluginError",
+              message: "Source identity lookup failed",
+            }),
+          })
+        );
+      })
   );
 
   it.effect("does not reprocess unchanged terminal Source Items", () =>

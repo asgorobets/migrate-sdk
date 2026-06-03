@@ -1,6 +1,6 @@
 # Implement Run Modes over Migration Item State
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -12,14 +12,14 @@ Implement normal, failed, skipped, and item Run Modes over durable Migration Ite
 
 ## Acceptance criteria
 
-- [ ] Normal Run Mode processes failed backlog before cursor discovery.
-- [ ] Normal Run Mode processes needs-update backlog before cursor discovery.
-- [ ] Failed Run Mode processes only failed Migration Item States.
-- [ ] Skipped Run Mode processes skipped Migration Item States regardless of Source Version.
-- [ ] Item Run Mode processes exactly one Source Identity regardless of current state.
-- [ ] Targeted modes use SourcePlugin.readByIdentity.
-- [ ] Source identity lookup failures for known items can be recorded as item failures.
-- [ ] Tests verify normal backlog behavior, failed mode, skipped mode, and item mode.
+- [x] Normal Run Mode processes failed backlog before cursor discovery.
+- [x] Normal Run Mode processes needs-update backlog before cursor discovery.
+- [x] Failed Run Mode processes only failed Migration Item States.
+- [x] Skipped Run Mode processes skipped Migration Item States regardless of Source Version.
+- [x] Item Run Mode processes exactly one Source Identity regardless of current state.
+- [x] Targeted modes use SourcePlugin.readByIdentity.
+- [x] Source identity lookup failures for known items can be recorded as item failures.
+- [x] Tests verify normal backlog behavior, failed mode, skipped mode, and item mode.
 
 ## Blocked by
 

@@ -1,6 +1,6 @@
 # Process cursor windows and Source Version changes
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -14,13 +14,13 @@ This slice proves incremental discovery semantics without introducing external s
 
 ## Acceptance criteria
 
-- [ ] The in-memory SourcePlugin can return Source Items in deterministic cursor windows.
-- [ ] The runner loops cursor windows until discovery is complete.
-- [ ] The MigrationStore records the committed Source Cursor after each processed Source Cursor Window.
-- [ ] Unchanged migrated and skipped Migration Item States are not reprocessed in normal mode.
-- [ ] Changed Source Version causes the Source Item to be processed again.
-- [ ] Cursor advancement continues even when a processed window contains item-level failures covered by later behavior.
-- [ ] Tests verify cursor looping, cursor commits, unchanged detection, and Source Version reprocessing.
+- [x] The in-memory SourcePlugin can return Source Items in deterministic cursor windows.
+- [x] The runner loops cursor windows until discovery is complete.
+- [x] The MigrationStore records the committed Source Cursor after each processed Source Cursor Window.
+- [x] Unchanged migrated and skipped Migration Item States are not reprocessed in normal mode.
+- [x] Changed Source Version causes the Source Item to be processed again.
+- [x] Cursor advancement continues even when a processed window contains item-level failures covered by later behavior.
+- [x] Tests verify cursor looping, cursor commits, unchanged detection, and Source Version reprocessing.
 
 ## Blocked by
 

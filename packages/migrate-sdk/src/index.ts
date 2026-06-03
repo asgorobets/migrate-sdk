@@ -13,10 +13,8 @@ export * from "./services/destination-plugin.ts";
 export * from "./services/migration-store.ts";
 export * from "./services/source-plugin.ts";
 
-export * from "./runtime/process-source-item.ts";
 export * from "./runtime/run-migrations.ts";
 
 export * from "./sources/in-memory/index.ts";
 export * from "./destinations/in-memory/index.ts";
 export * from "./stores/in-memory/index.ts";
-
