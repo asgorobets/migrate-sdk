@@ -4,7 +4,6 @@ import type { DestinationCommand } from "./destination.ts";
 import type {
   MigrationDefinitionId,
   MigrationDefinitionIdInput,
-  SourceCursor,
 } from "./ids.ts";
 import {
   MigrationDefinitionId as MigrationDefinitionIdSchema,
@@ -35,7 +34,6 @@ export interface RunRequest<
   Definitions extends
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
 > {
-  readonly cursor?: SourceCursor;
   readonly definitionIds?: readonly MigrationDefinitionId[];
   readonly definitions: Definitions;
   readonly mode?: RunMode;
@@ -45,7 +43,6 @@ export interface RunRequestInput<
   Definitions extends
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
 > {
-  readonly cursor?: SourceCursor;
   readonly definitionIds?: readonly MigrationDefinitionIdInput[];
   readonly definitions: Definitions;
   readonly mode?: RunModeInput;
@@ -58,7 +55,6 @@ export const makeRunRequest = <
 ): RunRequest<Definitions> => ({
   definitions: input.definitions,
   ...(input.mode === undefined ? {} : { mode: makeRunMode(input.mode) }),
-  ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
   ...(input.definitionIds === undefined
     ? {}
     : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
@@ -89,7 +85,6 @@ export interface MigrationDefinitionRunSummary {
     readonly unchanged: number;
     readonly needsUpdate: number;
   };
-  readonly cursor?: SourceCursor;
   readonly definitionId: MigrationDefinitionId;
   readonly status: "succeeded" | "failed" | "skipped";
 }

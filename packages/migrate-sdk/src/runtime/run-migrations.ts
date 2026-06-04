@@ -474,7 +474,7 @@ const runMigrationDefinition = <
             };
           }
 
-          const committedCursor = yield* processCursorDiscovery({
+          yield* processCursorDiscovery({
             counts,
             definition,
             excludedSourceIdentities: attemptedSourceIdentities,
@@ -488,9 +488,6 @@ const runMigrationDefinition = <
             status:
               counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
             counts,
-            ...(committedCursor === undefined
-              ? {}
-              : { cursor: committedCursor }),
           };
         }),
       (lock) => store.releaseDefinitionLock(lock)

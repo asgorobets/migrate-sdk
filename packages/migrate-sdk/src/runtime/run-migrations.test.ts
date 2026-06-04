@@ -984,12 +984,14 @@ describe("runMigration", () => {
         unchanged: 0,
         needsUpdate: 0,
       });
-      expect(summary.definitions[0]?.cursor).toEqual({ offset: 2 });
       expect(
         destinationState.executions.map(
           (execution) => execution.context.sourceIdentity
         )
       ).toEqual(["article-2", "article-3"]);
+      expect(storeState.sourceCursors.get(definition.id)).toEqual({
+        offset: 2,
+      });
       expect(storeState.sourceCursorCommits).toEqual([
         {
           definitionId: definition.id,

@@ -1,6 +1,6 @@
 # Expose SDK entrypoint and runnable in-memory example
 
-Status: ready-for-agent
+Status: done
 
 ## Parent
 
@@ -12,12 +12,12 @@ Finalize the first POC as a usable SDK surface. Export the runtime API from the 
 
 ## Acceptance criteria
 
-- [ ] The package entrypoint exports the public runtime API for the POC.
-- [ ] The starter Effect example is replaced or updated to demonstrate the in-memory migration runtime.
-- [ ] A developer can run the package dev script and see a completed in-memory Migration Run.
-- [ ] The example uses public helpers and domain terminology from the docs.
-- [ ] The example does not rely on external systems.
-- [ ] Type checking passes for the package.
+- [x] The package entrypoint exports the public runtime API for the POC.
+- [x] The starter Effect example is replaced or updated to demonstrate the in-memory migration runtime.
+- [x] A developer can run the package dev script and see a completed in-memory Migration Run.
+- [x] The example uses public helpers and domain terminology from the docs.
+- [x] The example does not rely on external systems.
+- [x] Type checking passes for the package.
 
 ## Blocked by
 
