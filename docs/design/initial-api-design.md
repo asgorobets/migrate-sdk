@@ -27,7 +27,7 @@ This POC should exercise cursor windows, definition locks, run modes, skip item 
 import { Effect, Exit, Layer, Schema } from "effect";
 import * as Context from "effect/Context";
 
-export const MigrationDefinitionId = Schema.String.pipe(
+export const MigrationDefinitionId = Schema.NonEmptyString.pipe(
   Schema.brand("MigrationDefinitionId")
 );
 export type MigrationDefinitionId = typeof MigrationDefinitionId.Type;
@@ -37,7 +37,9 @@ export const MigrationRunId = Schema.String.pipe(Schema.brand("MigrationRunId"))
 export type MigrationRunId = typeof MigrationRunId.Type;
 export type MigrationRunIdInput = string | MigrationRunId;
 
-export const SourceIdentity = Schema.String.pipe(Schema.brand("SourceIdentity"));
+export const SourceIdentity = Schema.NonEmptyString.pipe(
+  Schema.brand("SourceIdentity")
+);
 export type SourceIdentity = typeof SourceIdentity.Type;
 export type SourceIdentityInput = string | SourceIdentity;
 
@@ -45,7 +47,11 @@ export const SourceVersion = Schema.String.pipe(Schema.brand("SourceVersion"));
 export type SourceVersion = typeof SourceVersion.Type;
 export type SourceVersionInput = string | SourceVersion;
 
-export type SourceCursor = unknown;
+export const EncodedSourceCursor = Schema.String.pipe(
+  Schema.brand("EncodedSourceCursor")
+);
+export type EncodedSourceCursor = typeof EncodedSourceCursor.Type;
+export type EncodedSourceCursorInput = string | EncodedSourceCursor;
 
 export const DestinationIdentity = Schema.String.pipe(
   Schema.brand("DestinationIdentity")
@@ -70,6 +76,10 @@ export const toSourceIdentity = (
 export const toSourceVersion = (value: SourceVersionInput): SourceVersion =>
   SourceVersion.make(value);
 
+export const toEncodedSourceCursor = (
+  value: EncodedSourceCursorInput
+): EncodedSourceCursor => EncodedSourceCursor.make(value);
+
 export const toDestinationIdentity = (
   value: DestinationIdentityInput
 ): DestinationIdentity => DestinationIdentity.make(value);
@@ -90,9 +100,9 @@ export interface SourceItemInput<A> {
   readonly item: A;
 }
 
-export interface SourceReadResult<A> {
+export interface SourceReadResult<A, Cursor> {
   readonly items: ReadonlyArray<SourceItem<A>>;
-  readonly nextCursor?: SourceCursor;
+  readonly nextCursor?: Cursor;
 }
 
 export interface DestinationCommand {
@@ -240,25 +250,36 @@ Source cursor reads are discovery. If `SourcePlugin.read(cursor)` fails, the mig
 `SourcePlugin` and `DestinationPlugin` are runtime service boundaries. The Effect Context tags are not generic at runtime, so the service values carry the generic shape and the runner narrows them at the migration definition boundary.
 
 ```ts
-export interface SourcePlugin<A> {
+export interface SourcePlugin<A, Cursor> {
+  readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly lookupStrategy: SourceLookupStrategy;
 
   readonly read: (
-    cursor: SourceCursor | null
-  ) => Effect.Effect<SourceReadResult<A>, SourcePluginError>;
+    cursor: Cursor | null
+  ) => Effect.Effect<SourceReadResult<A, Cursor>, SourcePluginError>;
 
   readonly readByIdentity: (
     identity: SourceIdentity
   ) => Effect.Effect<SourceItem<A> | null, SourcePluginError>;
 }
 
-export type AnySourcePlugin = SourcePlugin<unknown>;
+export type AnySourcePlugin = SourcePlugin<any, any>;
 
 export const SourcePlugin =
   Context.Service<AnySourcePlugin>("@migrate-sdk/SourcePlugin");
 
-export const getSourcePlugin = <A>() =>
-  Effect.map(SourcePlugin, (source) => source as SourcePlugin<A>);
+export const getSourcePlugin = <A, Cursor>() =>
+  Effect.map(SourcePlugin, (source) => source as SourcePlugin<A, Cursor>);
+
+export interface SourcePluginImplementation<Source, Cursor> {
+  readonly lookupStrategy: SourceLookupStrategy;
+  readonly read: (
+    cursor: Cursor | null
+  ) => Effect.Effect<SourceReadResult<Source, Cursor>, SourcePluginError>;
+  readonly readByIdentity: (
+    identity: SourceIdentity
+  ) => Effect.Effect<SourceItem<Source> | null, SourcePluginError>;
+}
 
 export interface DestinationPlugin {
   readonly execute: (
@@ -363,9 +384,15 @@ type SourceLookupStrategy = "direct" | "scan";
 SQL source example:
 
 ```ts
+const SqlArticleCursor = Schema.Struct({
+  updatedAt: Schema.String,
+  id: Schema.String,
+});
+type SqlArticleCursor = typeof SqlArticleCursor.Type;
+
 const read = Effect.fn("SqlSource.read")(function* (
-  cursor: SourceCursor | null
-): Effect.Effect<SourceReadResult<SqlArticleRow>, SqlSourceError> {
+  cursor: SqlArticleCursor | null
+): Effect.Effect<SourceReadResult<SqlArticleRow, SqlArticleCursor>, SqlSourceError> {
   const rows = yield* queryArticles({
     after: cursor,
     limit: 500,
@@ -395,9 +422,14 @@ const read = Effect.fn("SqlSource.read")(function* (
 Paginated API source example:
 
 ```ts
+const OrdersApiCursor = Schema.Struct({
+  pageToken: Schema.String,
+});
+type OrdersApiCursor = typeof OrdersApiCursor.Type;
+
 const read = Effect.fn("OrdersApiSource.read")(function* (
-  cursor: SourceCursor | null
-): Effect.Effect<SourceReadResult<ApiOrder>, OrdersApiError> {
+  cursor: OrdersApiCursor | null
+): Effect.Effect<SourceReadResult<ApiOrder, OrdersApiCursor>, OrdersApiError> {
   const response = yield* ordersApi.listOrders({
     pageToken: cursor?.pageToken,
     limit: 100,
@@ -426,11 +458,11 @@ export class MigrationStore extends Context.Service<
   {
     readonly getSourceCursor: (
       definitionId: MigrationDefinitionId
-    ) => Effect.Effect<SourceCursor | null, MigrationStoreError>;
+    ) => Effect.Effect<EncodedSourceCursor | null, MigrationStoreError>;
 
     readonly setSourceCursor: (
       definitionId: MigrationDefinitionId,
-      cursor: SourceCursor
+      cursor: EncodedSourceCursor
     ) => Effect.Effect<void, MigrationStoreError>;
 
     readonly getItemState: (
@@ -438,31 +470,34 @@ export class MigrationStore extends Context.Service<
       identity: SourceIdentity
     ) => Effect.Effect<MigrationItemState | null, MigrationStoreError>;
 
+    readonly listItemStates: (
+      definitionId: MigrationDefinitionId
+    ) => Effect.Effect<readonly MigrationItemState[], MigrationStoreError>;
+
     readonly upsertItemState: (
       state: MigrationItemState
     ) => Effect.Effect<void, MigrationStoreError>;
 
+    readonly createRunId: Effect.Effect<MigrationRunId, MigrationStoreError>;
+
     readonly beginRun: (
+      runId: MigrationRunId,
       definitionIds: ReadonlyArray<MigrationDefinitionId>
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
     readonly completeRun: (
-      runId: string
-    ) => Effect.Effect<void, MigrationStoreError>;
+      runId: MigrationRunId,
+      definitionIds: ReadonlyArray<MigrationDefinitionId>
+    ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
     readonly failRun: (
-      runId: string
-    ) => Effect.Effect<void, MigrationStoreError>;
+      runId: MigrationRunId,
+      definitionIds: ReadonlyArray<MigrationDefinitionId>
+    ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
     readonly acquireDefinitionLock: (
       definitionId: MigrationDefinitionId,
-      ownerRunId: string,
-      ttlMs: number
-    ) => Effect.Effect<MigrationDefinitionLock, MigrationStoreError>;
-
-    readonly refreshDefinitionLock: (
-      lock: MigrationDefinitionLock,
-      ttlMs: number
+      ownerRunId: MigrationRunId
     ) => Effect.Effect<MigrationDefinitionLock, MigrationStoreError>;
 
     readonly releaseDefinitionLock: (
@@ -471,6 +506,17 @@ export class MigrationStore extends Context.Service<
   }
 >()("@migrate-sdk/MigrationStore") {}
 ```
+
+`beginRun`, `completeRun`, and `failRun` update the latest run state for each
+definition id in the run. A multi-definition run still has one shared
+`MigrationRunId`; the durable latest-state records are keyed by
+`MigrationDefinitionId`.
+
+All selected and dependency-expanded migration definitions in one run must use
+the same `MigrationStore` layer instance. This keeps definition locks, run
+state, item state, and cursors in the same durability boundary. Callers that
+want several definitions to share a durable backend should hoist one store layer
+and pass that same value to each definition.
 
 Example implementation layers:
 
@@ -482,7 +528,35 @@ const sqlStoreLayer = SqlMigrationStore.layer({
 const fileStoreLayer = FileMigrationStore.layer({
   directory: ".migration-state",
 });
+
+const articlesMigration = defineMigration({
+  id: "articles",
+  store: fileStoreLayer,
+  // ...
+});
+
+const authorsMigration = defineMigration({
+  id: "authors",
+  store: fileStoreLayer,
+  // ...
+});
+
+const explicitNodeFileStoreLayer = FileMigrationStore.layer({
+  directory: ".migration-state",
+  platform: FileMigrationStorePlatform.node,
+});
+
+const applicationProvidedFileStoreLayer =
+  FileMigrationStore.layerWithoutPlatform({
+    directory: ".migration-state",
+  });
 ```
+
+`FileMigrationStore.layer` bundles the Node platform by default. Advanced callers
+can pass any platform layer that provides Effect's `FileSystem` and `Path`
+services; they do not need to provide a full runtime layer.
+`FileMigrationStore.layerWithoutPlatform` is available when the application
+already provides those minimum services at its runtime boundary.
 
 ## Skip Item
 
@@ -601,11 +675,38 @@ const sourceItem = yield* lookupWithRetry;
 
 A migration definition is an executable runtime object. It may be written by hand or generated in TypeScript.
 
+`Schema.Codec<Cursor, unknown, never, never>` means the source plugin provides an
+Effect schema that can both decode unknown persisted cursor data into the
+runtime `Cursor` type and encode a runtime `Cursor` back for storage. This is
+why cursor schema lives with the source plugin: the runner only needs the codec
+to validate stored cursor data and serialize the next cursor through
+`Schema.fromJsonString`, `Schema.decodeUnknownEffect`, and `Schema.encodeEffect`.
+
 ```ts
-export interface ConfiguredSourcePlugin<Source> {
+export interface ConfiguredSourcePlugin<Source, Cursor> {
   readonly layer: Layer.Layer<AnySourcePlugin>;
   readonly sourceSchema?: Schema.Schema<Source>;
 }
+
+export interface SourcePluginInput<Source, Cursor>
+  extends SourcePluginImplementation<Source, Cursor> {
+  readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
+  readonly sourceSchema?: Schema.Schema<Source>;
+}
+
+export const defineSourcePlugin = <Source, Cursor>(
+  input: SourcePluginInput<Source, Cursor>
+): ConfiguredSourcePlugin<Source, Cursor> => ({
+  layer: Layer.sync(SourcePlugin, () => ({
+    cursorSchema: input.cursorSchema,
+    lookupStrategy: input.lookupStrategy,
+    read: input.read,
+    readByIdentity: input.readByIdentity,
+  })),
+  ...(input.sourceSchema === undefined
+    ? {}
+    : { sourceSchema: input.sourceSchema }),
+});
 
 export interface ConfiguredDestinationPlugin<Command extends DestinationCommand> {
   readonly layer: Layer.Layer<DestinationPlugin>;
@@ -615,20 +716,19 @@ export interface ConfiguredDestinationPlugin<Command extends DestinationCommand>
 export interface MigrationDefinition<
   Source,
   Command extends DestinationCommand,
-  PipelineRequirements = never
+  PipelineError = never,
+  Cursor = unknown
 > {
   readonly id: MigrationDefinitionId;
 
-  readonly source: ConfiguredSourcePlugin<Source>;
+  readonly source: ConfiguredSourcePlugin<Source, Cursor>;
   readonly destination: ConfiguredDestinationPlugin<Command>;
-  readonly store: Layer.Layer<MigrationStore>;
+  readonly store: Layer.Layer<MigrationStore, MigrationStoreError>;
 
   readonly pipeline: (
     source: SourceItem<Source>,
     context: PipelineContext
-  ) => Effect.Effect<Command, PipelineError | SkipItem, PipelineRequirements>;
-
-  readonly pipelineLayer?: Layer.Layer<PipelineRequirements>;
+  ) => Effect.Effect<Command, PipelineError | SkipItem>;
 
   readonly sourceCursorRetry?: SourceRetryStrategy;
   readonly sourceLookupRetry?: SourceRetryStrategy;
@@ -640,9 +740,10 @@ export interface MigrationDefinition<
 export interface MigrationDefinitionInput<
   Source,
   Command extends DestinationCommand,
-  PipelineRequirements = never
+  PipelineError = never,
+  Cursor = unknown
 > extends Omit<
-    MigrationDefinition<Source, Command, PipelineRequirements>,
+    MigrationDefinition<Source, Command, PipelineError, Cursor>,
     "id" | "dependsOn"
   > {
   readonly id: MigrationDefinitionIdInput;
@@ -652,10 +753,11 @@ export interface MigrationDefinitionInput<
 export const defineMigration = <
   Source,
   Command extends DestinationCommand,
-  PipelineRequirements = never
+  PipelineError = never,
+  Cursor = unknown
 >(
-  definition: MigrationDefinitionInput<Source, Command, PipelineRequirements>
-): MigrationDefinition<Source, Command, PipelineRequirements> => {
+  definition: MigrationDefinitionInput<Source, Command, PipelineError, Cursor>
+): MigrationDefinition<Source, Command, PipelineError, Cursor> => {
   const { id, dependsOn, ...rest } = definition;
 
   return {
@@ -778,7 +880,7 @@ const contentTypes = ["author", "article", "category"] as const;
 export const migrations = contentTypes.map((contentType) =>
   defineMigration({
     id: contentType,
-    source: SqlSourcePlugin.layer({ table: contentType }),
+    source: SqlSourcePlugin.plugin({ table: contentType }),
     destination: ContentStackDestinationPlugin.layer({ contentType }),
     store: SqlMigrationStore.layer({ tablePrefix: "migrate_sdk" }),
     pipeline: makePipelineFor(contentType),
@@ -788,18 +890,22 @@ export const migrations = contentTypes.map((contentType) =>
 
 ## Runner Sketch
 
-The runner provides source, destination, store, and optional pipeline layers once per migration definition.
+The runner provides source, destination, and store layers once per migration definition.
 
 ```ts
-const runMigrationDefinition = <S, D, R>(
-  definition: MigrationDefinition<S, D, R>
-) =>
-  Effect.gen(function* () {
-    const source = yield* getSourcePlugin<S>();
-    const destination = yield* DestinationPlugin;
+const runMigrationDefinition = <S, Command extends DestinationCommand, PipelineError, Cursor>(
+  definition: MigrationDefinition<S, Command, PipelineError, Cursor>,
+  runId: MigrationRunId
+) => {
+  const program = Effect.gen(function* () {
+    const source = yield* getSourcePlugin<S, Cursor>();
     const store = yield* MigrationStore;
 
-    const cursor = yield* store.getSourceCursor(definition.id);
+    const storedCursor = yield* store.getSourceCursor(definition.id);
+    const cursor =
+      storedCursor === null
+        ? null
+        : yield* decodeSourceCursor(source.cursorSchema, storedCursor);
     const result = yield* source.read(cursor);
 
     let failedCount = 0;
@@ -807,9 +913,8 @@ const runMigrationDefinition = <S, D, R>(
     for (const sourceItem of result.items) {
       const itemResult = yield* processSourceItem({
         definition,
+        runId,
         sourceItem,
-        destination,
-        store,
       }).pipe(Effect.exit);
 
       if (Exit.isFailure(itemResult)) {
@@ -822,16 +927,22 @@ const runMigrationDefinition = <S, D, R>(
     }
 
     if (result.nextCursor !== undefined) {
-      yield* store.setSourceCursor(definition.id, result.nextCursor);
+      const encodedCursor = yield* encodeSourceCursor(
+        source.cursorSchema,
+        result.nextCursor
+      );
+      yield* store.setSourceCursor(definition.id, encodedCursor);
     }
-  }).pipe(
-    Effect.provide(definition.source),
-    Effect.provide(definition.destination),
-    Effect.provide(definition.store),
-    definition.pipelineLayer
-      ? Effect.provide(definition.pipelineLayer)
-      : (effect) => effect
+  });
+
+  const layer = Layer.mergeAll(
+    definition.source.layer,
+    definition.destination.layer,
+    definition.store
   );
+
+  return program.pipe(Effect.provide(layer));
+};
 ```
 
 Production runner shape should loop cursor windows:
@@ -839,13 +950,21 @@ Production runner shape should loop cursor windows:
 ```ts
 const processCursorWindows = Effect.fn("processCursorWindows")(function* <
   S,
-  D,
-  R,
->(definition: MigrationDefinition<S, D, R>) {
-  const source = yield* SourcePlugin<S>;
+  Command extends DestinationCommand,
+  PipelineError,
+  Cursor,
+>(
+  definition: MigrationDefinition<S, Command, PipelineError, Cursor>,
+  runId: MigrationRunId
+) {
+  const source = yield* getSourcePlugin<S, Cursor>();
   const store = yield* MigrationStore;
 
-  let cursor = yield* store.getSourceCursor(definition.id);
+  const storedCursor = yield* store.getSourceCursor(definition.id);
+  let cursor =
+    storedCursor === null
+      ? null
+      : yield* decodeSourceCursor(source.cursorSchema, storedCursor);
 
   while (true) {
     const result = yield* source.read(cursor);
@@ -855,7 +974,9 @@ const processCursorWindows = Effect.fn("processCursorWindows")(function* <
     }
 
     for (const sourceItem of result.items) {
-      yield* processSourceItem({ definition, sourceItem }).pipe(Effect.exit);
+      yield* processSourceItem({ definition, runId, sourceItem }).pipe(
+        Effect.exit
+      );
     }
 
     if (result.nextCursor === undefined) {
@@ -863,7 +984,11 @@ const processCursorWindows = Effect.fn("processCursorWindows")(function* <
     }
 
     cursor = result.nextCursor;
-    yield* store.setSourceCursor(definition.id, cursor);
+    const encodedCursor = yield* encodeSourceCursor(
+      source.cursorSchema,
+      cursor
+    );
+    yield* store.setSourceCursor(definition.id, encodedCursor);
   }
 });
 ```
@@ -878,10 +1003,22 @@ const runMigrations = (
 ) =>
   Effect.gen(function* () {
     const ordered = topologicalSort(definitions);
+    const store = yield* MigrationStore;
+    const runId = yield* store.createRunId;
+    const definitionIds = ordered.map((definition) => definition.id);
 
-    for (const definition of ordered) {
-      yield* runMigrationDefinition(definition);
-    }
+    return yield* Effect.acquireUseRelease(
+      acquireDefinitionLocks(store, runId, definitionIds),
+      () =>
+        Effect.gen(function* () {
+          yield* store.beginRun(runId, definitionIds);
+
+          for (const definition of ordered) {
+            yield* runMigrationDefinition(definition, runId);
+          }
+        }),
+      (locks) => releaseDefinitionLocks(store, locks)
+    );
   });
 
 const runMigration = (definition: MigrationDefinition<any, any, any>) =>
@@ -893,7 +1030,8 @@ First version behavior:
 - Accept many migration definitions.
 - Order them by declared dependencies.
 - Execute ordered definitions sequentially.
-- Acquire a migration definition lock before executing each definition.
+- Create one run id and acquire all ordered migration definition locks before
+  executing any definition.
 - Reject concurrent execution of the same migration definition.
 - Continue after item failures.
 - Mark the run failed if any item failed.
@@ -943,7 +1081,6 @@ type RunMode =
 interface RunRequest {
   readonly definitions: ReadonlyArray<MigrationDefinition<any, any, any>>;
   readonly mode?: RunMode;
-  readonly cursor?: SourceCursor;
   readonly definitionIds?: ReadonlyArray<MigrationDefinitionId>;
 }
 ```
@@ -994,7 +1131,6 @@ interface MigrationDefinitionRunSummary {
     readonly unchanged: number;
     readonly needsUpdate: number;
   };
-  readonly cursor?: SourceCursor;
 }
 ```
 
@@ -1232,25 +1368,33 @@ The lock is part of the `MigrationStore` service contract, but the storage shape
 
 ```ts
 interface MigrationDefinitionLock {
+  readonly createdAt: Date;
   readonly definitionId: MigrationDefinitionId;
-  readonly ownerRunId: string;
+  readonly ownerRunId: MigrationRunId;
   readonly token: string;
-  readonly expiresAt: Date;
 }
 ```
+
+Durable lock records do not auto-expire. If a runner abandons a lock, an
+operator must use an explicit force-unlock workflow with the lock token. This is
+safer than allowing a stalled runner and a new runner to write migration state
+and destination side effects concurrently.
 
 Runner behavior:
 
 ```txt
-begin migration run
+create migration run id
+acquire all ordered migration definition locks using a deterministic lock order
+begin migration run for every locked definition
 for each ordered migration definition:
-  acquire definition lock
   execute migration definition
-  release definition lock
 complete migration run
+release all definition locks
 ```
 
-Locks should be leases, not permanent flags. A TTL prevents abandoned CLI or serverless runs from blocking the migration forever. Long-running migrations can refresh the lease while processing.
+Locks are durable and do not expire automatically in V1. A future force-unlock
+operation can break an abandoned lock explicitly, using the stored lock token as
+operator-facing evidence.
 
 SQL implementation sketch:
 
@@ -1259,26 +1403,30 @@ CREATE TABLE migration_definition_locks (
   definition_id text PRIMARY KEY,
   owner_run_id text NOT NULL,
   token text NOT NULL,
-  expires_at timestamptz NOT NULL,
   acquired_at timestamptz NOT NULL
 );
 ```
 
-Acquire can be implemented as an atomic insert or an update of an expired lock. Refresh and release should match both `definition_id` and `token`, so an old runner cannot release a newer runner's lock after its lease expired.
+Acquire can be implemented as an atomic insert. Release should match both
+`definition_id` and `token`, so one runner cannot release another runner's lock.
+If a live lock exists with a different token, release must fail through the
+`MigrationStoreError` channel. Abandoned locks require an explicit force-unlock
+operation.
 
 KV implementation sketch:
 
 ```txt
-SET migration-lock:<definitionId> <ownerRunId>:<token> NX PX <ttl>
+SET migration-lock:<definitionId> <ownerRunId>:<token> NX
 ```
 
 File implementation sketch:
 
 ```txt
-.migration-state/locks/<definitionId>.lock
+.migration-state/locks/<definitionId>.json
 ```
 
-Use exclusive creation plus expiry metadata. This is acceptable for local development, but SQL/KV stores are better for distributed runners.
+Use exclusive creation. This is acceptable for local development, but SQL/KV
+stores are better for distributed runners.
 
 ## Future Migration Spec
 

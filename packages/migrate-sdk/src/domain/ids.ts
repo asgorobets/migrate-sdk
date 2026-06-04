@@ -1,16 +1,20 @@
 import { Schema } from "effect";
 
-export const MigrationDefinitionId = Schema.String.pipe(
+export const MigrationDefinitionId = Schema.NonEmptyString.pipe(
   Schema.brand("MigrationDefinitionId")
 );
 export type MigrationDefinitionId = typeof MigrationDefinitionId.Type;
 export type MigrationDefinitionIdInput = string | MigrationDefinitionId;
 
-export const MigrationRunId = Schema.String.pipe(Schema.brand("MigrationRunId"));
+export const MigrationRunId = Schema.String.pipe(
+  Schema.brand("MigrationRunId")
+);
 export type MigrationRunId = typeof MigrationRunId.Type;
 export type MigrationRunIdInput = string | MigrationRunId;
 
-export const SourceIdentity = Schema.String.pipe(Schema.brand("SourceIdentity"));
+export const SourceIdentity = Schema.NonEmptyString.pipe(
+  Schema.brand("SourceIdentity")
+);
 export type SourceIdentity = typeof SourceIdentity.Type;
 export type SourceIdentityInput = string | SourceIdentity;
 
@@ -18,7 +22,11 @@ export const SourceVersion = Schema.String.pipe(Schema.brand("SourceVersion"));
 export type SourceVersion = typeof SourceVersion.Type;
 export type SourceVersionInput = string | SourceVersion;
 
-export type SourceCursor = unknown;
+export const EncodedSourceCursor = Schema.String.pipe(
+  Schema.brand("EncodedSourceCursor")
+);
+export type EncodedSourceCursor = typeof EncodedSourceCursor.Type;
+export type EncodedSourceCursorInput = string | EncodedSourceCursor;
 
 export const DestinationIdentity = Schema.String.pipe(
   Schema.brand("DestinationIdentity")
@@ -39,12 +47,15 @@ export const toMigrationDefinitionId = (
 export const toMigrationRunId = (value: MigrationRunIdInput): MigrationRunId =>
   MigrationRunId.make(value);
 
-export const toSourceIdentity = (
-  value: SourceIdentityInput
-): SourceIdentity => SourceIdentity.make(value);
+export const toSourceIdentity = (value: SourceIdentityInput): SourceIdentity =>
+  SourceIdentity.make(value);
 
 export const toSourceVersion = (value: SourceVersionInput): SourceVersion =>
   SourceVersion.make(value);
+
+export const toEncodedSourceCursor = (
+  value: EncodedSourceCursorInput
+): EncodedSourceCursor => EncodedSourceCursor.make(value);
 
 export const toDestinationIdentity = (
   value: DestinationIdentityInput

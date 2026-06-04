@@ -1,23 +1,22 @@
 import {
-  toSourceIdentity,
-  toSourceVersion,
-  type SourceCursor,
   type SourceIdentity,
   type SourceIdentityInput,
   type SourceVersion,
   type SourceVersionInput,
+  toSourceIdentity,
+  toSourceVersion,
 } from "./ids.ts";
 
 export interface SourceItem<A> {
   readonly identity: SourceIdentity;
-  readonly version?: SourceVersion;
   readonly item: A;
+  readonly version?: SourceVersion;
 }
 
 export interface SourceItemInput<A> {
   readonly identity: SourceIdentityInput;
-  readonly version?: SourceVersionInput;
   readonly item: A;
+  readonly version?: SourceVersionInput;
 }
 
 export const makeSourceItem = <A>(
@@ -30,9 +29,9 @@ export const makeSourceItem = <A>(
   item: input.item,
 });
 
-export interface SourceReadResult<A> {
-  readonly items: ReadonlyArray<SourceItem<A>>;
-  readonly nextCursor?: SourceCursor;
+export interface SourceReadResult<A, Cursor> {
+  readonly items: readonly SourceItem<A>[];
+  readonly nextCursor?: Cursor;
 }
 
 export type SourceLookupStrategy = "direct" | "scan";

@@ -18,6 +18,8 @@ export type AnyMigrationDefinition = MigrationDefinition<
   any,
   DestinationCommand,
   // biome-ignore lint/suspicious/noExplicitAny: Pipeline error is re-extracted by MigrationDefinitionPipelineError.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Cursor is existential across heterogeneous run requests.
   any
 >;
 
@@ -25,7 +27,8 @@ export type MigrationDefinitionPipelineError<Definition> =
   Definition extends MigrationDefinition<
     infer _Source,
     infer _Command,
-    infer PipelineError
+    infer PipelineError,
+    infer _Cursor
   >
     ? PipelineError
     : never;

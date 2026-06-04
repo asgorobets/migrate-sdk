@@ -26,8 +26,14 @@ export interface ProcessSourceItemOptions<
   Source,
   Command extends DestinationCommand,
   PipelineError,
+  Cursor = unknown,
 > {
-  readonly definition: MigrationDefinition<Source, Command, PipelineError>;
+  readonly definition: MigrationDefinition<
+    Source,
+    Command,
+    PipelineError,
+    Cursor
+  >;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
   readonly sourceItem: SourceItem<Source>;

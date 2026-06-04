@@ -16,6 +16,9 @@ The observed version or fingerprint of a source item at read time.
 **Source Cursor**:
 A source plugin position marker for selecting source items during incremental reads.
 
+**Encoded Source Cursor**:
+The durable string form of a source cursor after schema encoding.
+
 **Source Cursor Window**:
 One batch of source items read from a source cursor.
 
@@ -41,7 +44,7 @@ The pluggable durable backend for a migration definition.
 The configured workflow that connects a source plugin, transformation pipeline, destination plugin, and migration store.
 
 **Migration Definition Lock**:
-A lease that prevents multiple runners from executing the same migration definition concurrently.
+A durable ownership record that prevents multiple runners from executing the same migration definition concurrently.
 
 **Migration Spec**:
 A serializable description of a migration workflow that can be compiled into a migration definition.
@@ -103,6 +106,9 @@ The Effect retry wrapper selected by a migration definition for source identity 
 **Source Item Schema**:
 The Effect schema used by a source plugin to validate and infer source items.
 
+**Source Cursor Schema**:
+The Effect codec used by a source plugin to validate, encode, and decode source cursors.
+
 **Destination Command Schema**:
 The Effect schema used by a destination plugin to validate and infer destination commands.
 
@@ -118,6 +124,8 @@ A normalized error record stored for a failed migration item state.
 - A **Source Item** must have a **Source Identity**.
 - A **Source Item** may have a **Source Version** supplied by a source field, source metadata, or a hash of the item contents.
 - A **Source Cursor** selects which source items to inspect during a migration run.
+- A **Source Cursor** shape is owned by the **Source Plugin** and must be described by a **Source Cursor Schema**.
+- An **Encoded Source Cursor** is the only cursor form persisted by a **Migration Store**.
 - A **Source Cursor Window** may return a next **Source Cursor**.
 - A **Source Cursor** is committed after a cursor window is processed, even when some source items in the window fail.
 - A **Migration Item State** can record a source identity, destination identity, migration status, observed source version, and failure metadata.
@@ -134,7 +142,7 @@ A normalized error record stored for a failed migration item state.
 - A **Source Plugin** exposes or uses a **Source Item Schema**.
 - A **Source Lookup Strategy** may be direct or scan-based.
 - A **Migration Definition** may select separate **Source Cursor Retry Strategy** and **Source Lookup Retry Strategy** wrappers.
-- A **Migration Store** records **Migration Item State**, **Migration Run State**, and the last successful **Source Cursor** for a **Migration Definition**.
+- A **Migration Store** records **Migration Item State**, the latest **Migration Run State**, and the last successful **Source Cursor** for each **Migration Definition**.
 - A **Migration Store** may be backed by SQL, key/value storage, files, or another durable system.
 - A **Migration Definition** uses one public **Migration Store** service.
 - A **Destination Plugin** executes **Destination Commands** and returns destination identity metadata that can be recorded in **Migration Item State**.
@@ -143,6 +151,10 @@ A normalized error record stored for a failed migration item state.
 - A **Migration Definition** is executable and may contain layers and effects.
 - A **Migration Definition Lock** is acquired through the **Migration Store** before a migration definition is executed.
 - A **Migration Definition Lock** prevents concurrent runners from executing the same **Migration Definition** in the first version.
+- A **Migration Definition Lock** does not expire automatically in durable stores; abandoned locks require an explicit force-unlock workflow.
+- A **Migration Run** that includes multiple **Migration Definitions** acquires the full set of definition locks before executing any definition.
+- A **Migration Run** that includes multiple **Migration Definitions** requires every selected or dependency-expanded definition to use the same **Migration Store** layer.
+- Overlapping **Migration Runs** are rejected when any requested **Migration Definition** is already locked.
 - A **Migration Spec** is serializable and cannot contain arbitrary effects directly.
 - A **Migration Spec** can be compiled through a plugin registry into a **Migration Definition**.
 - A **Plugin Registry** supports future DSL or low-code workflows and is not required for the first code path.
@@ -160,7 +172,7 @@ A normalized error record stored for a failed migration item state.
 - A normal **Run Mode** processes failed and needs-update backlog before source cursor discovery.
 - A failed **Run Mode** reprocesses only failed item states.
 - A skipped **Run Mode** reprocesses skipped item states regardless of source version.
-- A **Run Request** supplies migration definitions, run mode, optional source cursor override, and optional migration definition selection.
+- A **Run Request** supplies migration definitions, run mode, and optional migration definition selection.
 - A **Run Request** that selects migration definitions also includes their required dependencies.
 - An **Execution Adapter** may execute migration definitions inline, inline with bounded parallelism, or through a durable queue.
 - An **Execution Adapter** may be provided by users when they need custom scheduling or parallelization.

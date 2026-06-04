@@ -1,10 +1,10 @@
 import { Effect, Layer } from "effect";
 import { MigrationStoreError } from "../../domain/errors.ts";
 import type {
+  EncodedSourceCursor,
   MigrationDefinitionId,
   MigrationDefinitionIdInput,
   MigrationRunId,
-  SourceCursor,
   SourceIdentity,
   SourceIdentityInput,
 } from "../../domain/ids.ts";
@@ -21,14 +21,14 @@ import { MigrationStore } from "../../services/migration-store.ts";
 export interface InMemoryMigrationStoreState {
   readonly definitionLocks: Map<MigrationDefinitionId, MigrationDefinitionLock>;
   readonly itemStates: Map<string, MigrationItemState>;
+  readonly latestRunStates: Map<MigrationDefinitionId, MigrationRunState>;
   nextLockNumber: number;
   nextRunNumber: number;
-  readonly runStates: Map<MigrationRunId, MigrationRunState>;
   readonly sourceCursorCommits: {
     readonly definitionId: MigrationDefinitionId;
-    readonly cursor: SourceCursor;
+    readonly cursor: EncodedSourceCursor;
   }[];
-  readonly sourceCursors: Map<MigrationDefinitionId, SourceCursor>;
+  readonly sourceCursors: Map<MigrationDefinitionId, EncodedSourceCursor>;
 }
 
 const itemStateKey = (
@@ -39,7 +39,7 @@ const itemStateKey = (
 
 const makeState = (): InMemoryMigrationStoreState => ({
   itemStates: new Map(),
-  runStates: new Map(),
+  latestRunStates: new Map(),
   sourceCursors: new Map(),
   sourceCursorCommits: [],
   definitionLocks: new Map(),
@@ -53,6 +53,39 @@ const storeError = (message: string, cause?: unknown): MigrationStoreError =>
     ...(cause === undefined ? {} : { cause }),
   });
 
+const lockOwnershipError = (
+  lock: MigrationDefinitionLock,
+  current: MigrationDefinitionLock
+): MigrationStoreError =>
+  storeError("Migration definition lock is owned by another runner", {
+    currentOwnerRunId: current.ownerRunId,
+    currentToken: current.token,
+    definitionId: lock.definitionId,
+    releaseOwnerRunId: lock.ownerRunId,
+    releaseToken: lock.token,
+  });
+
+const readRunState = (
+  state: InMemoryMigrationStoreState,
+  runId: MigrationRunId,
+  definitionIds: readonly MigrationDefinitionId[]
+): Effect.Effect<MigrationRunState, MigrationStoreError> =>
+  Effect.gen(function* () {
+    const runStates = definitionIds.map((definitionId) =>
+      state.latestRunStates.get(definitionId)
+    );
+    const current = runStates[0];
+
+    if (
+      current === undefined ||
+      runStates.some((runState) => runState?.runId !== runId)
+    ) {
+      return yield* storeError("Migration run was not found", runId);
+    }
+
+    return current;
+  });
+
 const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
   Layer.sync(MigrationStore, () => {
     const getSourceCursor = Effect.fn("InMemoryMigrationStore.getSourceCursor")(
@@ -61,7 +94,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
     );
 
     const setSourceCursor = Effect.fn("InMemoryMigrationStore.setSourceCursor")(
-      (definitionId: MigrationDefinitionId, cursor: SourceCursor) =>
+      (definitionId: MigrationDefinitionId, cursor: EncodedSourceCursor) =>
         Effect.sync(() => {
           state.sourceCursors.set(definitionId, cursor);
           state.sourceCursorCommits.push({ definitionId, cursor });
@@ -95,59 +128,68 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         })
     );
 
+    const createRunId = Effect.sync(() => {
+      const runId = MigrationRunIdSchema.make(`run-${state.nextRunNumber}`);
+      state.nextRunNumber += 1;
+
+      return runId;
+    });
+
     const beginRun = Effect.fn("InMemoryMigrationStore.beginRun")(
-      (definitionIds: readonly MigrationDefinitionId[]) =>
+      (
+        runId: MigrationRunId,
+        definitionIds: readonly MigrationDefinitionId[]
+      ) =>
         Effect.sync(() => {
           const runState: MigrationRunState = {
-            runId: MigrationRunIdSchema.make(`run-${state.nextRunNumber}`),
+            runId,
             definitionIds,
             status: "running",
             startedAt: new Date(),
           };
 
-          state.nextRunNumber += 1;
-          state.runStates.set(runState.runId, runState);
+          for (const definitionId of definitionIds) {
+            state.latestRunStates.set(definitionId, runState);
+          }
 
           return runState;
         })
     );
 
     const completeRun = Effect.fn("InMemoryMigrationStore.completeRun")(
-      function* (runId: MigrationRunId) {
-        const current = state.runStates.get(runId);
-
-        if (current === undefined) {
-          return yield* storeError("Migration run was not found", runId);
-        }
-
+      function* (
+        runId: MigrationRunId,
+        definitionIds: readonly MigrationDefinitionId[]
+      ) {
+        const current = yield* readRunState(state, runId, definitionIds);
         const completed: MigrationRunState = {
           ...current,
           status: "succeeded",
           finishedAt: new Date(),
         };
 
-        state.runStates.set(runId, completed);
+        for (const definitionId of definitionIds) {
+          state.latestRunStates.set(definitionId, completed);
+        }
 
         return completed;
       }
     );
 
     const failRun = Effect.fn("InMemoryMigrationStore.failRun")(function* (
-      runId: MigrationRunId
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[]
     ) {
-      const current = state.runStates.get(runId);
-
-      if (current === undefined) {
-        return yield* storeError("Migration run was not found", runId);
-      }
-
+      const current = yield* readRunState(state, runId, definitionIds);
       const failed: MigrationRunState = {
         ...current,
         status: "failed",
         finishedAt: new Date(),
       };
 
-      state.runStates.set(runId, failed);
+      for (const definitionId of definitionIds) {
+        state.latestRunStates.set(definitionId, failed);
+      }
 
       return failed;
     });
@@ -156,13 +198,11 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       "InMemoryMigrationStore.acquireDefinitionLock"
     )(function* (
       definitionId: MigrationDefinitionId,
-      ownerRunId: MigrationRunId,
-      ttlMs: number
+      ownerRunId: MigrationRunId
     ) {
-      const now = Date.now();
       const current = state.definitionLocks.get(definitionId);
 
-      if (current !== undefined && current.expiresAt.getTime() > now) {
+      if (current !== undefined) {
         return yield* storeError(
           "Migration definition is already locked",
           definitionId
@@ -170,10 +210,10 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       }
 
       const lock: MigrationDefinitionLock = {
+        createdAt: new Date(),
         definitionId,
         ownerRunId,
         token: `lock-${state.nextLockNumber}`,
-        expiresAt: new Date(now + ttlMs),
       };
 
       state.nextLockNumber += 1;
@@ -184,15 +224,27 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
 
     const releaseDefinitionLock = Effect.fn(
       "InMemoryMigrationStore.releaseDefinitionLock"
-    )((lock: MigrationDefinitionLock) =>
-      Effect.sync(() => {
+    )(function* (lock: MigrationDefinitionLock) {
+      const current = yield* Effect.sync(() =>
+        state.definitionLocks.get(lock.definitionId)
+      );
+
+      if (current === undefined) {
+        return;
+      }
+
+      if (current.token !== lock.token) {
+        return yield* lockOwnershipError(lock, current);
+      }
+
+      yield* Effect.sync(() => {
         const current = state.definitionLocks.get(lock.definitionId);
 
         if (current?.token === lock.token) {
           state.definitionLocks.delete(lock.definitionId);
         }
-      })
-    );
+      });
+    });
 
     return {
       getSourceCursor,
@@ -200,6 +252,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       getItemState,
       listItemStates,
       upsertItemState,
+      createRunId,
       beginRun,
       completeRun,
       failRun,

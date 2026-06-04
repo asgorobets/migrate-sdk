@@ -2,9 +2,9 @@ import type { Effect } from "effect";
 import { Service } from "effect/Context";
 import type { MigrationStoreError } from "../domain/errors.ts";
 import type {
+  EncodedSourceCursor,
   MigrationDefinitionId,
   MigrationRunId,
-  SourceCursor,
   SourceIdentity,
 } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
@@ -16,11 +16,11 @@ export class MigrationStore extends Service<
   {
     readonly getSourceCursor: (
       definitionId: MigrationDefinitionId
-    ) => Effect.Effect<SourceCursor | null, MigrationStoreError>;
+    ) => Effect.Effect<EncodedSourceCursor | null, MigrationStoreError>;
 
     readonly setSourceCursor: (
       definitionId: MigrationDefinitionId,
-      cursor: SourceCursor
+      cursor: EncodedSourceCursor
     ) => Effect.Effect<void, MigrationStoreError>;
 
     readonly getItemState: (
@@ -36,22 +36,26 @@ export class MigrationStore extends Service<
       state: MigrationItemState
     ) => Effect.Effect<void, MigrationStoreError>;
 
+    readonly createRunId: Effect.Effect<MigrationRunId, MigrationStoreError>;
+
     readonly beginRun: (
+      runId: MigrationRunId,
       definitionIds: readonly MigrationDefinitionId[]
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
     readonly completeRun: (
-      runId: MigrationRunId
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[]
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
     readonly failRun: (
-      runId: MigrationRunId
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[]
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
     readonly acquireDefinitionLock: (
       definitionId: MigrationDefinitionId,
-      ownerRunId: MigrationRunId,
-      ttlMs: number
+      ownerRunId: MigrationRunId
     ) => Effect.Effect<MigrationDefinitionLock, MigrationStoreError>;
 
     readonly releaseDefinitionLock: (

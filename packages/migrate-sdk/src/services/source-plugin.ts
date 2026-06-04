@@ -1,27 +1,30 @@
-import { Effect } from "effect";
-import * as Context from "effect/Context";
+import { Effect, type Schema } from "effect";
+import { Service } from "effect/Context";
 import type { SourcePluginError } from "../domain/errors.ts";
-import type { SourceCursor, SourceIdentity } from "../domain/ids.ts";
+import type { SourceIdentity } from "../domain/ids.ts";
 import type {
   SourceItem,
   SourceLookupStrategy,
   SourceReadResult,
 } from "../domain/source.ts";
 
-export interface SourcePlugin<A> {
+export interface SourcePlugin<A, Cursor> {
+  readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
-    cursor: SourceCursor | null
-  ) => Effect.Effect<SourceReadResult<A>, SourcePluginError>;
+    cursor: Cursor | null
+  ) => Effect.Effect<SourceReadResult<A, Cursor>, SourcePluginError>;
   readonly readByIdentity: (
     identity: SourceIdentity
   ) => Effect.Effect<SourceItem<A> | null, SourcePluginError>;
 }
 
-export type AnySourcePlugin = SourcePlugin<unknown>;
+// biome-ignore lint/suspicious/noExplicitAny: Source and cursor are existential at the service boundary.
+export type AnySourcePlugin = SourcePlugin<any, any>;
 
-export const SourcePlugin =
-  Context.Service<AnySourcePlugin>("@migrate-sdk/SourcePlugin");
+export const SourcePlugin = Service<AnySourcePlugin>(
+  "@migrate-sdk/SourcePlugin"
+);
 
-export const getSourcePlugin = <A>() =>
-  Effect.map(SourcePlugin, (source) => source as SourcePlugin<A>);
+export const getSourcePlugin = <A, Cursor>() =>
+  Effect.map(SourcePlugin, (source) => source as SourcePlugin<A, Cursor>);

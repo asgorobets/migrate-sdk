@@ -5,22 +5,28 @@ import {
   DestinationPlugin,
   DestinationPluginError,
   defineMigration,
+  defineSourcePlugin,
   InMemoryDestinationPlugin,
   InMemoryMigrationStore,
+  InMemorySourceCursor,
   InMemorySourcePlugin,
   MigrationDefinitionLock,
+  type MigrationDefinitionLockType,
   MigrationItemState,
   MigrationRunState,
   type MigrationRunSummary,
   MigrationStore,
+  MigrationStoreError,
   type RunMigrationError,
   runMigration,
   runMigrations,
   SourcePlugin,
   SourcePluginError,
+  type SourcePluginImplementation,
   skipItem,
   toDestinationIdentity,
   toDestinationVersion,
+  toEncodedSourceCursor,
   toMigrationDefinitionId,
   toMigrationRunId,
   toSourceIdentity,
@@ -54,6 +60,9 @@ interface StructuralSkipItem {
   readonly reason: string;
 }
 
+const encodedInMemoryCursor = (offset: number) =>
+  toEncodedSourceCursor(JSON.stringify({ offset }));
+
 const roundTripRunState = (runState: MigrationRunState) =>
   Effect.gen(function* () {
     const encoded = yield* Schema.encodeEffect(MigrationRunState)(runState);
@@ -68,11 +77,48 @@ const roundTripDefinitionLock = (lock: MigrationDefinitionLock) =>
     return yield* Schema.decodeUnknownEffect(MigrationDefinitionLock)(encoded);
   });
 
+const releaseFailingStoreLayer = (
+  state: ReturnType<typeof InMemoryMigrationStore.makeState>,
+  error: MigrationStoreError,
+  onRelease?: (lock: MigrationDefinitionLockType) => void
+) =>
+  Layer.effect(
+    MigrationStore,
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+
+      return {
+        ...store,
+        releaseDefinitionLock: (lock: MigrationDefinitionLockType) =>
+          Effect.sync(() => {
+            onRelease?.(lock);
+          }).pipe(Effect.andThen(Effect.fail(error))),
+      };
+    })
+  ).pipe(Layer.provide(InMemoryMigrationStore.layer(state)));
+
+const failRunFailingStoreLayer = (
+  state: ReturnType<typeof InMemoryMigrationStore.makeState>,
+  error: MigrationStoreError
+) =>
+  Layer.effect(
+    MigrationStore,
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+
+      return {
+        ...store,
+        failRun: () => Effect.fail(error),
+      };
+    })
+  ).pipe(Layer.provide(InMemoryMigrationStore.layer(state)));
+
 describe("MigrationStore durable records", () => {
   it.effect("schema-round-trips beginRun state", () =>
     Effect.gen(function* () {
       const store = yield* MigrationStore;
-      const runState = yield* store.beginRun([
+      const runId = yield* store.createRunId;
+      const runState = yield* store.beginRun(runId, [
         toMigrationDefinitionId("articles"),
       ]);
 
@@ -85,11 +131,14 @@ describe("MigrationStore durable records", () => {
   it.effect("schema-round-trips completeRun state", () =>
     Effect.gen(function* () {
       const store = yield* MigrationStore;
-      const runState = yield* store.beginRun([
+      const runId = yield* store.createRunId;
+      const runState = yield* store.beginRun(runId, [
         toMigrationDefinitionId("articles"),
       ]);
 
-      const completed = yield* store.completeRun(runState.runId);
+      const completed = yield* store.completeRun(runState.runId, [
+        toMigrationDefinitionId("articles"),
+      ]);
       const decoded = yield* roundTripRunState(completed);
 
       expect(completed.status).toBe("succeeded");
@@ -101,11 +150,14 @@ describe("MigrationStore durable records", () => {
   it.effect("schema-round-trips failRun state", () =>
     Effect.gen(function* () {
       const store = yield* MigrationStore;
-      const runState = yield* store.beginRun([
+      const runId = yield* store.createRunId;
+      const runState = yield* store.beginRun(runId, [
         toMigrationDefinitionId("articles"),
       ]);
 
-      const failed = yield* store.failRun(runState.runId);
+      const failed = yield* store.failRun(runState.runId, [
+        toMigrationDefinitionId("articles"),
+      ]);
       const decoded = yield* roundTripRunState(failed);
 
       expect(failed.status).toBe("failed");
@@ -119,22 +171,57 @@ describe("MigrationStore durable records", () => {
       const store = yield* MigrationStore;
       const lock = yield* store.acquireDefinitionLock(
         toMigrationDefinitionId("articles"),
-        toMigrationRunId("run-1"),
-        1000
+        toMigrationRunId("run-1")
       );
 
       const decoded = yield* roundTripDefinitionLock(lock);
 
       expect(lock.token).toBe("lock-1");
-      expect(lock.expiresAt).toBeInstanceOf(Date);
+      expect(lock.createdAt).toBeInstanceOf(Date);
       expect(decoded).toEqual(lock);
     }).pipe(Effect.provide(InMemoryMigrationStore.layer()))
+  );
+
+  it.effect("rejects releasing a definition lock with a mismatched token", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const definitionId = toMigrationDefinitionId("articles");
+      const lock = yield* Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        return yield* store.acquireDefinitionLock(
+          definitionId,
+          toMigrationRunId("run-1")
+        );
+      }).pipe(Effect.provide(InMemoryMigrationStore.layer(storeState)));
+
+      const error = yield* Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        return yield* Effect.flip(
+          store.releaseDefinitionLock({
+            ...lock,
+            ownerRunId: toMigrationRunId("run-2"),
+            token: "lock-other",
+          })
+        );
+      }).pipe(Effect.provide(InMemoryMigrationStore.layer(storeState)));
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          message: "Migration definition lock is owned by another runner",
+        })
+      );
+      expect(storeState.definitionLocks.get(definitionId)).toEqual(lock);
+    })
   );
 });
 
 describe("runMigration", () => {
   it("keeps item-level pipeline error types out of public run errors", () => {
     const pipelineTestError: PipelineTestError = { _tag: "PipelineTestError" };
+    const store = InMemoryMigrationStore.layer();
     const definition = defineMigration({
       id: "articles",
       source: InMemorySourcePlugin.make({
@@ -149,7 +236,7 @@ describe("runMigration", () => {
       destination: InMemoryDestinationPlugin.make({
         commandSchema: UpsertEntryCommand,
       }),
-      store: InMemoryMigrationStore.layer(),
+      store,
       pipeline: (): Effect.Effect<UpsertEntryCommand, PipelineTestError> =>
         Effect.fail(pipelineTestError),
     });
@@ -170,7 +257,7 @@ describe("runMigration", () => {
       destination: InMemoryDestinationPlugin.make({
         commandSchema: UpsertEntryCommand,
       }),
-      store: InMemoryMigrationStore.layer(),
+      store,
       pipeline: (): Effect.Effect<UpsertEntryCommand, OtherPipelineTestError> =>
         Effect.fail(otherPipelineTestError),
     });
@@ -182,6 +269,75 @@ describe("runMigration", () => {
       runMigrations({ definitions: [definition, otherDefinition] })
     ).toEqualTypeOf<Effect.Effect<MigrationRunSummary, RunMigrationError>>();
   });
+
+  it.effect("returns typed runtime errors for invalid Run Request input", () =>
+    Effect.gen(function* () {
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          items: [
+            {
+              identity: "article-1",
+              version: "source-version-1",
+              item: { title: "Invalid request article" },
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+        }),
+        store: InMemoryMigrationStore.layer(),
+        pipeline: (source) =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "article",
+            fields: {
+              title: source.item.title,
+            },
+          }),
+      });
+
+      const error = yield* Effect.flip(
+        runMigrations({ definitions: [definition], definitionIds: [""] })
+      );
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationRuntimeError",
+          message: "Run request contains invalid input",
+        })
+      );
+    })
+  );
+
+  it.effect(
+    "keeps configured Source Cursor schema bound to the source layer",
+    () =>
+      Effect.gen(function* () {
+        const cursorSchema = Schema.Number;
+        const implementationWithConflictingSchema = {
+          cursorSchema: Schema.String,
+          lookupStrategy: "scan" as const,
+          read: () =>
+            Effect.succeed({
+              items: [],
+            }),
+          readByIdentity: () => Effect.succeed(null),
+        };
+        const source = defineSourcePlugin<{ readonly title: string }, number>({
+          cursorSchema,
+          make: () =>
+            implementationWithConflictingSchema as unknown as SourcePluginImplementation<
+              { readonly title: string },
+              number
+            >,
+        });
+
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+        expect(plugin.cursorSchema).toBe(cursorSchema);
+      })
+  );
 
   it.effect("runs one Source Item through in-memory runtime", () =>
     Effect.gen(function* () {
@@ -908,17 +1064,17 @@ describe("runMigration", () => {
         "article-4",
         "article-5",
       ]);
-      expect(storeState.sourceCursors.get(definition.id)).toEqual({
-        offset: 4,
-      });
+      expect(storeState.sourceCursors.get(definition.id)).toEqual(
+        encodedInMemoryCursor(4)
+      );
       expect(storeState.sourceCursorCommits).toEqual([
         {
           definitionId: definition.id,
-          cursor: { offset: 2 },
+          cursor: encodedInMemoryCursor(2),
         },
         {
           definitionId: definition.id,
-          cursor: { offset: 4 },
+          cursor: encodedInMemoryCursor(4),
         },
       ]);
     })
@@ -989,13 +1145,13 @@ describe("runMigration", () => {
           (execution) => execution.context.sourceIdentity
         )
       ).toEqual(["article-2", "article-3"]);
-      expect(storeState.sourceCursors.get(definition.id)).toEqual({
-        offset: 2,
-      });
+      expect(storeState.sourceCursors.get(definition.id)).toEqual(
+        encodedInMemoryCursor(2)
+      );
       expect(storeState.sourceCursorCommits).toEqual([
         {
           definitionId: definition.id,
-          cursor: { offset: 2 },
+          cursor: encodedInMemoryCursor(2),
         },
       ]);
     })
@@ -1038,7 +1194,7 @@ describe("runMigration", () => {
             }),
         });
 
-        storeState.sourceCursors.set(definition.id, { offset: 1 });
+        storeState.sourceCursors.set(definition.id, encodedInMemoryCursor(1));
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey("articles", "article-failed"),
           {
@@ -1111,7 +1267,7 @@ describe("runMigration", () => {
             }),
         });
 
-        storeState.sourceCursors.set(definition.id, { offset: 1 });
+        storeState.sourceCursors.set(definition.id, encodedInMemoryCursor(1));
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey(
             "articles",
@@ -1409,13 +1565,12 @@ describe("runMigration", () => {
 
         const definition = defineMigration({
           id: "articles",
-          source: {
-            layer: Layer.sync(SourcePlugin, () => ({
-              lookupStrategy: "direct" as const,
-              read: () => Effect.succeed({ items: [] }),
-              readByIdentity: () => Effect.fail(sourceError),
-            })),
-          },
+          source: defineSourcePlugin({
+            cursorSchema: InMemorySourceCursor,
+            lookupStrategy: "direct",
+            read: () => Effect.succeed({ items: [] }),
+            readByIdentity: () => Effect.fail(sourceError),
+          }),
           destination: InMemoryDestinationPlugin.make({
             commandSchema: UpsertEntryCommand,
             state: destinationState,
@@ -1492,13 +1647,12 @@ describe("runMigration", () => {
 
         const definition = defineMigration({
           id: "articles",
-          source: {
-            layer: Layer.sync(SourcePlugin, () => ({
-              lookupStrategy: "direct" as const,
-              read: () => Effect.succeed({ items: [] }),
-              readByIdentity: () => Effect.fail(sourceError),
-            })),
-          },
+          source: defineSourcePlugin({
+            cursorSchema: InMemorySourceCursor,
+            lookupStrategy: "direct",
+            read: () => Effect.succeed({ items: [] }),
+            readByIdentity: () => Effect.fail(sourceError),
+          }),
           destination: InMemoryDestinationPlugin.make({
             commandSchema: UpsertEntryCommand,
             state: destinationState,
@@ -1568,27 +1722,26 @@ describe("runMigration", () => {
 
         const definition = defineMigration({
           id: "articles",
-          source: {
-            layer: Layer.sync(SourcePlugin, () => ({
-              lookupStrategy: "direct" as const,
-              read: () =>
-                Effect.succeed({
-                  items: [
-                    {
-                      identity: toSourceIdentity("article-failed"),
-                      version: toSourceVersion("source-version-2"),
-                      item: { title: "Rediscovered article" },
-                    },
-                    {
-                      identity: toSourceIdentity("article-new"),
-                      version: toSourceVersion("source-version-1"),
-                      item: { title: "New article" },
-                    },
-                  ],
-                }),
-              readByIdentity: () => Effect.fail(sourceError),
-            })),
-          },
+          source: defineSourcePlugin({
+            cursorSchema: InMemorySourceCursor,
+            lookupStrategy: "direct",
+            read: () =>
+              Effect.succeed({
+                items: [
+                  {
+                    identity: toSourceIdentity("article-failed"),
+                    version: toSourceVersion("source-version-2"),
+                    item: { title: "Rediscovered article" },
+                  },
+                  {
+                    identity: toSourceIdentity("article-new"),
+                    version: toSourceVersion("source-version-1"),
+                    item: { title: "New article" },
+                  },
+                ],
+              }),
+            readByIdentity: () => Effect.fail(sourceError),
+          }),
           destination: InMemoryDestinationPlugin.make({
             commandSchema: UpsertEntryCommand,
             state: destinationState,
@@ -1863,6 +2016,7 @@ describe("runMigration", () => {
         const destinationState =
           InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
         const executionOrder: string[] = [];
 
         const authors = defineMigration({
@@ -1880,7 +2034,7 @@ describe("runMigration", () => {
             commandSchema: UpsertEntryCommand,
             state: destinationState,
           }),
-          store: InMemoryMigrationStore.layer(storeState),
+          store,
           pipeline: (source) =>
             Effect.sync(() => {
               executionOrder.push(`authors:${source.identity}`);
@@ -1910,7 +2064,7 @@ describe("runMigration", () => {
             commandSchema: UpsertEntryCommand,
             state: destinationState,
           }),
-          store: InMemoryMigrationStore.layer(storeState),
+          store,
           pipeline: (source) =>
             Effect.sync(() => {
               executionOrder.push(`articles:${source.identity}`);
@@ -2008,9 +2162,108 @@ describe("runMigration", () => {
       expect(
         summary.definitions.map((definition) => definition.definitionId)
       ).toEqual(["selected"]);
-      expect(unselectedStoreState.runStates.size).toBe(0);
-      expect(selectedStoreState.runStates.size).toBe(1);
+      expect(unselectedStoreState.latestRunStates.size).toBe(0);
+      expect(
+        selectedStoreState.latestRunStates.get(
+          toMigrationDefinitionId("selected")
+        )
+      ).toEqual(
+        expect.objectContaining({
+          status: "succeeded",
+        })
+      );
     })
+  );
+
+  it.effect(
+    "rejects selected Migration Definitions that do not share a Migration Store",
+    () =>
+      Effect.gen(function* () {
+        const authorsStoreState = InMemoryMigrationStore.makeState();
+        const articlesStoreState = InMemoryMigrationStore.makeState();
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const pipelineCalls: string[] = [];
+
+        const authors = defineMigration({
+          id: "authors",
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(authorsStoreState),
+          pipeline: (source) =>
+            Effect.sync(() => {
+              pipelineCalls.push(source.identity);
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "author",
+                fields: {
+                  name: source.item.name,
+                },
+              };
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          dependsOn: ["authors"],
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Split store article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(articlesStoreState),
+          pipeline: (source) =>
+            Effect.sync(() => {
+              pipelineCalls.push(source.identity);
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              };
+            }),
+        });
+
+        const error = yield* Effect.flip(
+          runMigrations({
+            definitions: [articles, authors],
+            definitionIds: ["articles"],
+          })
+        );
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationRuntimeError",
+            message:
+              "Migration Definitions in the same run must use the same Migration Store",
+          })
+        );
+        expect(destinationState.executions).toEqual([]);
+        expect(pipelineCalls).toEqual([]);
+        expect(authorsStoreState.latestRunStates.size).toBe(0);
+        expect(articlesStoreState.latestRunStates.size).toBe(0);
+      })
   );
 
   it.effect(
@@ -2020,6 +2273,7 @@ describe("runMigration", () => {
         const destinationState =
           InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];
 
         const articles = defineMigration({
@@ -2038,7 +2292,7 @@ describe("runMigration", () => {
             commandSchema: UpsertEntryCommand,
             state: destinationState,
           }),
-          store: InMemoryMigrationStore.layer(storeState),
+          store,
           pipeline: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity);
@@ -2065,7 +2319,7 @@ describe("runMigration", () => {
         );
         expect(destinationState.executions).toEqual([]);
         expect(pipelineCalls).toEqual([]);
-        expect(storeState.runStates.size).toBe(0);
+        expect(storeState.latestRunStates.size).toBe(0);
       })
   );
 
@@ -2076,6 +2330,7 @@ describe("runMigration", () => {
         const destinationState =
           InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];
 
         const authors = defineMigration({
@@ -2094,7 +2349,7 @@ describe("runMigration", () => {
             commandSchema: UpsertEntryCommand,
             state: destinationState,
           }),
-          store: InMemoryMigrationStore.layer(storeState),
+          store,
           pipeline: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity);
@@ -2124,7 +2379,7 @@ describe("runMigration", () => {
             commandSchema: UpsertEntryCommand,
             state: destinationState,
           }),
-          store: InMemoryMigrationStore.layer(storeState),
+          store,
           pipeline: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity);
@@ -2151,27 +2406,30 @@ describe("runMigration", () => {
         );
         expect(destinationState.executions).toEqual([]);
         expect(pipelineCalls).toEqual([]);
-        expect(storeState.runStates.size).toBe(0);
+        expect(storeState.latestRunStates.size).toBe(0);
       })
   );
 
   it.effect(
-    "acquires and releases a Migration Definition Lock around each definition run",
+    "acquires and releases the full Migration Definition Lock set around the run",
     () =>
       Effect.gen(function* () {
         const destinationState =
           InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
         const lockObservations: string[] = [];
 
-        const observeLock = (definitionId: "authors" | "articles") => {
-          const lock = storeState.definitionLocks.get(
-            toMigrationDefinitionId(definitionId)
-          );
+        const observeLocks = (phase: "authors" | "articles") => {
+          for (const definitionId of ["authors", "articles"] as const) {
+            const lock = storeState.definitionLocks.get(
+              toMigrationDefinitionId(definitionId)
+            );
 
-          lockObservations.push(
-            `${definitionId}:${lock?.ownerRunId ?? "none"}`
-          );
+            lockObservations.push(
+              `${phase}:${definitionId}:${lock?.ownerRunId ?? "none"}`
+            );
+          }
         };
 
         const authors = defineMigration({
@@ -2189,10 +2447,10 @@ describe("runMigration", () => {
             commandSchema: UpsertEntryCommand,
             state: destinationState,
           }),
-          store: InMemoryMigrationStore.layer(storeState),
+          store,
           pipeline: (source) =>
             Effect.sync(() => {
-              observeLock("authors");
+              observeLocks("authors");
 
               return {
                 kind: "UpsertEntry" as const,
@@ -2219,10 +2477,10 @@ describe("runMigration", () => {
             commandSchema: UpsertEntryCommand,
             state: destinationState,
           }),
-          store: InMemoryMigrationStore.layer(storeState),
+          store,
           pipeline: (source) =>
             Effect.sync(() => {
-              observeLock("articles");
+              observeLocks("articles");
 
               return {
                 kind: "UpsertEntry" as const,
@@ -2239,8 +2497,246 @@ describe("runMigration", () => {
         });
 
         expect(summary.status).toBe("succeeded");
-        expect(lockObservations).toEqual(["authors:run-1", "articles:run-1"]);
+        expect(lockObservations).toEqual([
+          "authors:authors:run-1",
+          "authors:articles:run-1",
+          "articles:authors:run-1",
+          "articles:articles:run-1",
+        ]);
         expect(storeState.definitionLocks.size).toBe(0);
+      })
+  );
+
+  it.effect("preserves the primary error when failRun cleanup fails", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const storeState = InMemoryMigrationStore.makeState();
+      const sourceError = new SourcePluginError({
+        message: "Source read failed",
+      });
+      const failRunError = new MigrationStoreError({
+        message: "Unable to mark failed run",
+      });
+
+      const definition = defineMigration({
+        id: "articles",
+        source: defineSourcePlugin({
+          cursorSchema: InMemorySourceCursor,
+          lookupStrategy: "scan",
+          read: () => Effect.fail(sourceError),
+          readByIdentity: () => Effect.succeed(null),
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: failRunFailingStoreLayer(storeState, failRunError),
+        pipeline: () =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "article",
+            fields: {},
+          }),
+      });
+
+      const error = yield* Effect.flip(runMigration(definition));
+      const cause = error.cause as
+        | {
+            readonly failRunError?: unknown;
+            readonly primaryError?: unknown;
+          }
+        | undefined;
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          message: "Unable to mark Migration Run failed",
+        })
+      );
+      expect(cause?.primaryError).toBe(sourceError);
+      expect(cause?.failRunError).toBe(failRunError);
+      expect(destinationState.executions).toEqual([]);
+      expect(storeState.definitionLocks.size).toBe(0);
+    })
+  );
+
+  it.effect("surfaces Migration Definition Lock release failures", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const storeState = InMemoryMigrationStore.makeState();
+      const releaseError = new MigrationStoreError({
+        message: "Unable to release Migration Definition Lock",
+        cause: { definitionId: "articles" },
+      });
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          items: [
+            {
+              identity: "article-1",
+              version: "source-version-1",
+              item: { title: "Release failure article" },
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: releaseFailingStoreLayer(storeState, releaseError),
+        pipeline: (source) =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "article",
+            fields: {
+              title: source.item.title,
+            },
+          }),
+      });
+
+      const error = yield* Effect.flip(runMigration(definition));
+      const cause = error.cause as
+        | {
+            readonly releaseFailures?: readonly {
+              readonly definitionId: string;
+              readonly error: unknown;
+              readonly token: string;
+            }[];
+          }
+        | undefined;
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          message: "Unable to release Migration Definition Lock set",
+        })
+      );
+      expect(cause?.releaseFailures).toEqual([
+        expect.objectContaining({
+          definitionId: toMigrationDefinitionId("articles"),
+          error: releaseError,
+          token: "lock-1",
+        }),
+      ]);
+      expect(destinationState.executions).toHaveLength(1);
+      expect(storeState.definitionLocks.size).toBe(1);
+      expect(
+        storeState.latestRunStates.get(toMigrationDefinitionId("articles"))
+      ).toEqual(
+        expect.objectContaining({
+          status: "succeeded",
+        })
+      );
+    })
+  );
+
+  it.effect(
+    "attempts every Migration Definition Lock release when cleanup fails",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const releaseError = new MigrationStoreError({
+          message: "Unable to release Migration Definition Lock",
+        });
+        const releasedDefinitionIds: string[] = [];
+        const store = releaseFailingStoreLayer(
+          storeState,
+          releaseError,
+          (lock) => {
+            releasedDefinitionIds.push(lock.definitionId);
+          }
+        );
+
+        const authors = defineMigration({
+          id: "authors",
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store,
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: {
+                name: source.item.name,
+              },
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          dependsOn: ["authors"],
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Cleanup article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store,
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "article",
+              fields: {
+                title: source.item.title,
+              },
+            }),
+        });
+
+        const error = yield* Effect.flip(
+          runMigrations({ definitions: [articles, authors] })
+        );
+        const cause = error.cause as
+          | {
+              readonly releaseFailures?: readonly {
+                readonly definitionId: string;
+                readonly error: unknown;
+              }[];
+            }
+          | undefined;
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationStoreError",
+            message: "Unable to release Migration Definition Lock set",
+          })
+        );
+        expect(releasedDefinitionIds).toEqual([
+          toMigrationDefinitionId("authors"),
+          toMigrationDefinitionId("articles"),
+        ]);
+        expect(cause?.releaseFailures).toEqual([
+          expect.objectContaining({
+            definitionId: toMigrationDefinitionId("authors"),
+            error: releaseError,
+          }),
+          expect.objectContaining({
+            definitionId: toMigrationDefinitionId("articles"),
+            error: releaseError,
+          }),
+        ]);
+        expect(storeState.definitionLocks.size).toBe(2);
       })
   );
 
@@ -2251,11 +2747,12 @@ describe("runMigration", () => {
         const destinationState =
           InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];
 
         storeState.definitionLocks.set(toMigrationDefinitionId("articles"), {
           definitionId: toMigrationDefinitionId("articles"),
-          expiresAt: new Date("2099-01-01T00:00:00.000Z"),
+          createdAt: new Date("2026-01-01T00:00:00.000Z"),
           ownerRunId: toMigrationRunId("run-other"),
           token: "lock-other",
         });
@@ -2275,7 +2772,7 @@ describe("runMigration", () => {
             commandSchema: UpsertEntryCommand,
             state: destinationState,
           }),
-          store: InMemoryMigrationStore.layer(storeState),
+          store,
           pipeline: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity);
@@ -2308,11 +2805,110 @@ describe("runMigration", () => {
             token: "lock-other",
           })
         );
-        expect(storeState.runStates.get(toMigrationRunId("run-1"))).toEqual(
+        expect(storeState.latestRunStates.size).toBe(0);
+      })
+  );
+
+  it.effect(
+    "rejects overlapping lock sets before executing earlier definitions",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const pipelineCalls: string[] = [];
+
+        storeState.definitionLocks.set(toMigrationDefinitionId("authors"), {
+          definitionId: toMigrationDefinitionId("authors"),
+          createdAt: new Date("2026-01-01T00:00:00.000Z"),
+          ownerRunId: toMigrationRunId("run-other"),
+          token: "lock-other",
+        });
+
+        const authors = defineMigration({
+          id: "authors",
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store,
+          pipeline: (source) =>
+            Effect.sync(() => {
+              pipelineCalls.push(source.identity);
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "author",
+                fields: {
+                  name: source.item.name,
+                },
+              };
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          dependsOn: ["authors"],
+          source: InMemorySourcePlugin.make({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Locked article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store,
+          pipeline: (source) =>
+            Effect.sync(() => {
+              pipelineCalls.push(source.identity);
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              };
+            }),
+        });
+
+        const error = yield* Effect.flip(
+          runMigrations({ definitions: [articles, authors] })
+        );
+
+        expect(error).toEqual(
           expect.objectContaining({
-            status: "failed",
-            finishedAt: expect.any(Date),
+            _tag: "MigrationStoreError",
+            message: "Migration definition is already locked",
           })
+        );
+        expect(destinationState.executions).toEqual([]);
+        expect(pipelineCalls).toEqual([]);
+        expect(storeState.latestRunStates.size).toBe(0);
+        expect(storeState.definitionLocks).toEqual(
+          new Map([
+            [
+              toMigrationDefinitionId("authors"),
+              expect.objectContaining({
+                ownerRunId: toMigrationRunId("run-other"),
+                token: "lock-other",
+              }),
+            ],
+          ])
         );
       })
   );

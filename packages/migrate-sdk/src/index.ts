@@ -1,12 +1,18 @@
+// biome-ignore-all assist/source/organizeImports: Public SDK entrypoint is grouped by domain for readability.
+// biome-ignore-all lint/performance/noBarrelFile: Public package entrypoint intentionally re-exports the SDK surface.
+
 export type {
   ConfiguredDestinationPlugin,
   ConfiguredSourcePlugin,
   DestinationRetryStrategy,
   MigrationDefinition,
   MigrationDefinitionInput,
+  SourcePluginFactoryInput,
+  SourcePluginImplementation,
+  SourcePluginInput,
   SourceRetryStrategy,
 } from "./domain/definition.ts";
-export { defineMigration } from "./domain/definition.ts";
+export { defineMigration, defineSourcePlugin } from "./domain/definition.ts";
 
 export type {
   DestinationCommand,
@@ -29,21 +35,23 @@ export {
 export type {
   DestinationIdentityInput,
   DestinationVersionInput,
+  EncodedSourceCursorInput,
   MigrationDefinitionIdInput,
   MigrationRunIdInput,
-  SourceCursor,
   SourceIdentityInput,
   SourceVersionInput,
 } from "./domain/ids.ts";
 export {
   DestinationIdentity,
   DestinationVersion,
+  EncodedSourceCursor,
   MigrationDefinitionId,
   MigrationRunId,
   SourceIdentity,
   SourceVersion,
   toDestinationIdentity,
   toDestinationVersion,
+  toEncodedSourceCursor,
   toMigrationDefinitionId,
   toMigrationRunId,
   toSourceIdentity,
@@ -103,9 +111,7 @@ export { SourcePlugin } from "./services/source-plugin.ts";
 export { runMigration, runMigrations } from "./runtime/run-migrations.ts";
 export type { RunMigrationError } from "./runtime/run-migrations.ts";
 
-export {
-  InMemoryDestinationPlugin,
-} from "./destinations/in-memory/in-memory-destination.ts";
+export { InMemoryDestinationPlugin } from "./destinations/in-memory/in-memory-destination.ts";
 export type {
   InMemoryDestinationExecution,
   InMemoryDestinationOptions,
@@ -114,7 +120,9 @@ export type {
 } from "./destinations/in-memory/in-memory-destination.ts";
 
 export { InMemorySourcePlugin } from "./sources/in-memory/in-memory-source.ts";
+export { InMemorySourceCursor } from "./sources/in-memory/in-memory-source.ts";
 export type {
+  InMemorySourceCursor as InMemorySourceCursorType,
   InMemorySourceOptions,
   InMemorySourceState,
   InMemorySourceTransientFailures,
@@ -122,3 +130,12 @@ export type {
 
 export { InMemoryMigrationStore } from "./stores/in-memory/in-memory-migration-store.ts";
 export type { InMemoryMigrationStoreState } from "./stores/in-memory/in-memory-migration-store.ts";
+
+export {
+  FileMigrationStore,
+  FileMigrationStorePlatform,
+} from "./stores/file/file-migration-store.ts";
+export type {
+  FileMigrationStoreOptions,
+  FileMigrationStorePlatform as FileMigrationStorePlatformType,
+} from "./stores/file/file-migration-store.ts";
