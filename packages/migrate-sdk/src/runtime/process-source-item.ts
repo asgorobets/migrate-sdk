@@ -1,4 +1,4 @@
-import { Effect, Predicate } from "effect";
+import { Effect, Predicate, Schema } from "effect";
 import type { MigrationDefinition } from "../domain/definition.ts";
 import type {
   DestinationCommand,
@@ -20,7 +20,10 @@ import type {
 } from "../domain/state.ts";
 import { DestinationPlugin } from "../services/destination-plugin.ts";
 import { MigrationStore } from "../services/migration-store.ts";
-import { normalizeItemError } from "./item-error.ts";
+import {
+  normalizeItemError,
+  normalizeSourcePayloadSchemaError,
+} from "./item-error.ts";
 
 export interface ProcessSourceItemOptions<
   Source,
@@ -36,6 +39,7 @@ export interface ProcessSourceItemOptions<
   >;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
+  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
   readonly sourceItem: SourceItem<Source>;
 }
 
@@ -77,9 +81,7 @@ const makeItemStateBase = <Source>(
 ): MigrationItemStateBase => ({
   definitionId,
   sourceIdentity: sourceItem.identity,
-  ...(sourceItem.version === undefined
-    ? {}
-    : { sourceVersion: sourceItem.version }),
+  sourceVersion: sourceItem.version,
   lastRunId: runId,
   updatedAt: new Date(),
 });
@@ -95,13 +97,40 @@ const makeSkippedItemState = <Source>(
   skipReason: reason,
 });
 
+const previousDestinationIdentity = (
+  previousState: MigrationItemState | null
+) =>
+  previousState !== null &&
+  (previousState.status === "migrated" ||
+    previousState.status === "failed" ||
+    previousState.status === "needs-update")
+    ? previousState.destinationIdentity
+    : undefined;
+
+const previousDestinationVersion = (
+  previousState: MigrationItemState | null
+) =>
+  previousState !== null &&
+  (previousState.status === "migrated" ||
+    previousState.status === "failed" ||
+    previousState.status === "needs-update")
+    ? previousState.destinationVersion
+    : undefined;
+
 const makeFailedItemState = <Source>(
   definitionId: MigrationDefinitionId,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>,
-  error: MigrationItemError
+  error: MigrationItemError,
+  previousState: MigrationItemState | null = null
 ): FailedItemState => ({
   ...makeItemStateBase(definitionId, runId, sourceItem),
+  ...(previousDestinationIdentity(previousState) === undefined
+    ? {}
+    : { destinationIdentity: previousDestinationIdentity(previousState) }),
+  ...(previousDestinationVersion(previousState) === undefined
+    ? {}
+    : { destinationVersion: previousDestinationVersion(previousState) }),
   status: "failed",
   error,
 });
@@ -128,6 +157,21 @@ const isUnchangedTerminalState = <Source>(
     previousState?.status === "skipped") &&
   previousState.sourceVersion === sourceItem.version;
 
+const decodeSourceItem = <Source>(
+  sourceSchema: Schema.Codec<Source, unknown, never, never>,
+  sourceItem: SourceItem<Source>
+) =>
+  Schema.decodeUnknownEffect(sourceSchema, { errors: "all" })(
+    sourceItem.item
+  ).pipe(
+    Effect.map(
+      (item): SourceItem<Source> => ({
+        ...sourceItem,
+        item,
+      })
+    )
+  );
+
 export const processSourceItem = <
   Source,
   Command extends DestinationCommand,
@@ -136,6 +180,7 @@ export const processSourceItem = <
   definition,
   reprocessUnchangedTerminal = false,
   runId,
+  sourceSchema,
   sourceItem,
 }: ProcessSourceItemOptions<Source, Command, PipelineError>): Effect.Effect<
   MigrationItemOutcome,
@@ -149,10 +194,32 @@ export const processSourceItem = <
       definition.id,
       sourceItem.identity
     );
+    const decodedSourceItem = yield* decodeSourceItem(
+      sourceSchema,
+      sourceItem
+    ).pipe(
+      Effect.catch((error) =>
+        store
+          .upsertItemState(
+            makeFailedItemState(
+              definition.id,
+              runId,
+              sourceItem,
+              normalizeSourcePayloadSchemaError(error),
+              previousState
+            )
+          )
+          .pipe(Effect.andThen(Effect.succeed(null)))
+      )
+    );
+
+    if (decodedSourceItem === null) {
+      return "failed" as const;
+    }
 
     if (
       !reprocessUnchangedTerminal &&
-      isUnchangedTerminalState(previousState, sourceItem)
+      isUnchangedTerminalState(previousState, decodedSourceItem)
     ) {
       return "unchanged" as const;
     }
@@ -164,7 +231,7 @@ export const processSourceItem = <
     };
 
     const pipelineOutcome: PipelineOutcome<Command> = yield* definition
-      .pipeline(sourceItem, pipelineContext)
+      .pipeline(decodedSourceItem, pipelineContext)
       .pipe(
         Effect.map(
           (command): PipelineOutcome<Command> => ({
@@ -191,7 +258,7 @@ export const processSourceItem = <
         makeSkippedItemState(
           definition.id,
           runId,
-          sourceItem,
+          decodedSourceItem,
           pipelineOutcome.reason
         )
       );
@@ -204,8 +271,9 @@ export const processSourceItem = <
         makeFailedItemState(
           definition.id,
           runId,
-          sourceItem,
-          pipelineOutcome.error
+          decodedSourceItem,
+          pipelineOutcome.error,
+          previousState
         )
       );
 
@@ -217,10 +285,8 @@ export const processSourceItem = <
     const destinationContext: DestinationCommandContext = {
       definitionId: definition.id,
       runId,
-      sourceIdentity: sourceItem.identity,
-      ...(sourceItem.version === undefined
-        ? {}
-        : { sourceVersion: sourceItem.version }),
+      sourceIdentity: decodedSourceItem.identity,
+      sourceVersion: decodedSourceItem.version,
       ...(previousState === null ? {} : { previousState }),
     };
 
@@ -251,8 +317,9 @@ export const processSourceItem = <
         makeFailedItemState(
           definition.id,
           runId,
-          sourceItem,
-          destinationOutcome.error
+          decodedSourceItem,
+          destinationOutcome.error,
+          previousState
         )
       );
 
@@ -262,7 +329,7 @@ export const processSourceItem = <
     const { result } = destinationOutcome;
 
     yield* store.upsertItemState(
-      makeMigratedItemState(definition.id, runId, sourceItem, result)
+      makeMigratedItemState(definition.id, runId, decodedSourceItem, result)
     );
 
     return "migrated" as const;

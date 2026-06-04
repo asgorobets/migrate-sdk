@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "tsx src/dev.ts",
     "dev:file-store": "tsx src/dev.ts file-store",
+    "dev:nested-article": "tsx src/dev.ts nested-article",
     "prepare": "effect-language-service patch",
     "check-types": "tsc --noEmit",
     "test": "vitest run",

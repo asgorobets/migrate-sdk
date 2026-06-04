@@ -4,6 +4,10 @@ import {
   formatMigrationRunSummary,
   runInMemoryExample,
 } from "./examples/in-memory-runtime.ts";
+import {
+  formatNestedArticleSchemaExampleResult,
+  runNestedArticleSchemaExample,
+} from "./examples/nested-article-schema.ts";
 
 describe("in-memory runtime example", () => {
   it.effect("runs a complete Migration Run without external systems", () =>
@@ -25,5 +29,32 @@ describe("in-memory runtime example", () => {
       expect(output).toContain("status: succeeded");
       expect(output).toContain("articles");
     })
+  );
+
+  it.effect(
+    "runs a nested article Source Payload Schema example with typed pipeline fields",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* runNestedArticleSchemaExample();
+        const output = formatNestedArticleSchemaExampleResult(result);
+
+        expect(result.summary.status).toBe("succeeded");
+        expect(result.commandFields).toEqual([
+          {
+            authorDisplayName: "Ada Lovelace",
+            locale: "en-US",
+            readingTimeMinutes: 7,
+            seoDescription: "A realistic source payload with nested fields",
+            seoTitle: "Schema-first migrations",
+            slug: "schema-first-migrations",
+            tagLabels: ["Effect", "Schemas"],
+            title: "Schema-first migrations",
+            views: 1280,
+          },
+        ]);
+        expect(output).toContain("Nested Article Source Schema Example");
+        expect(output).toContain("author: Ada Lovelace");
+        expect(output).toContain("tags: Effect, Schemas");
+      })
   );
 });

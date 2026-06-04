@@ -13,11 +13,13 @@ import {
   type EncodedSourceCursor as EncodedSourceCursorType,
   type MigrationDefinitionId,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
+  MigrationDefinitionLockToken as MigrationDefinitionLockTokenSchema,
   type MigrationRunId,
   MigrationRunId as MigrationRunIdSchema,
   type SourceIdentity,
   SourceIdentity as SourceIdentitySchema,
   SourceVersion as SourceVersionSchema,
+  toMigrationDefinitionLockToken,
 } from "../../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../../domain/lock.ts";
 import type { MigrationRunState } from "../../domain/run.ts";
@@ -67,7 +69,7 @@ const PersistedMigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionIdSchema,
   lastRunId: MigrationRunIdSchema,
   sourceIdentity: SourceIdentitySchema,
-  sourceVersion: Schema.optional(SourceVersionSchema),
+  sourceVersion: SourceVersionSchema,
   updatedAt: Schema.DateFromString,
 } as const;
 
@@ -117,7 +119,7 @@ const PersistedMigrationDefinitionLock = Schema.Struct({
   createdAt: Schema.DateFromString,
   definitionId: MigrationDefinitionIdSchema,
   ownerRunId: MigrationRunIdSchema,
-  token: Schema.String,
+  token: MigrationDefinitionLockTokenSchema,
 });
 
 const MigrationDefinitionLockRecord = Schema.Struct({
@@ -616,7 +618,7 @@ const makeLayerWithoutPlatform = (
           createdAt: new Date(),
           definitionId,
           ownerRunId,
-          token: `lock-${randomUUID()}`,
+          token: toMigrationDefinitionLockToken(`lock-${randomUUID()}`),
         };
         const lockPath = paths.lock(definitionId);
         const encodedLock = yield* encodeRecord(

@@ -11,6 +11,7 @@ import type {
 export interface SourcePlugin<A, Cursor> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly lookupStrategy: SourceLookupStrategy;
+  readonly sourceSchema: Schema.Codec<A, unknown, never, never>;
   readonly read: (
     cursor: Cursor | null
   ) => Effect.Effect<SourceReadResult<A, Cursor>, SourcePluginError>;

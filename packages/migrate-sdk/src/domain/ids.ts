@@ -6,7 +6,7 @@ export const MigrationDefinitionId = Schema.NonEmptyString.pipe(
 export type MigrationDefinitionId = typeof MigrationDefinitionId.Type;
 export type MigrationDefinitionIdInput = string | MigrationDefinitionId;
 
-export const MigrationRunId = Schema.String.pipe(
+export const MigrationRunId = Schema.NonEmptyString.pipe(
   Schema.brand("MigrationRunId")
 );
 export type MigrationRunId = typeof MigrationRunId.Type;
@@ -18,7 +18,9 @@ export const SourceIdentity = Schema.NonEmptyString.pipe(
 export type SourceIdentity = typeof SourceIdentity.Type;
 export type SourceIdentityInput = string | SourceIdentity;
 
-export const SourceVersion = Schema.String.pipe(Schema.brand("SourceVersion"));
+export const SourceVersion = Schema.NonEmptyString.pipe(
+  Schema.brand("SourceVersion")
+);
 export type SourceVersion = typeof SourceVersion.Type;
 export type SourceVersionInput = string | SourceVersion;
 
@@ -28,17 +30,26 @@ export const EncodedSourceCursor = Schema.String.pipe(
 export type EncodedSourceCursor = typeof EncodedSourceCursor.Type;
 export type EncodedSourceCursorInput = string | EncodedSourceCursor;
 
-export const DestinationIdentity = Schema.String.pipe(
+export const DestinationIdentity = Schema.NonEmptyString.pipe(
   Schema.brand("DestinationIdentity")
 );
 export type DestinationIdentity = typeof DestinationIdentity.Type;
 export type DestinationIdentityInput = string | DestinationIdentity;
 
-export const DestinationVersion = Schema.String.pipe(
+export const DestinationVersion = Schema.NonEmptyString.pipe(
   Schema.brand("DestinationVersion")
 );
 export type DestinationVersion = typeof DestinationVersion.Type;
 export type DestinationVersionInput = string | DestinationVersion;
+
+export const MigrationDefinitionLockToken = Schema.NonEmptyString.pipe(
+  Schema.brand("MigrationDefinitionLockToken")
+);
+export type MigrationDefinitionLockToken =
+  typeof MigrationDefinitionLockToken.Type;
+export type MigrationDefinitionLockTokenInput =
+  | string
+  | MigrationDefinitionLockToken;
 
 export const toMigrationDefinitionId = (
   value: MigrationDefinitionIdInput
@@ -64,3 +75,7 @@ export const toDestinationIdentity = (
 export const toDestinationVersion = (
   value: DestinationVersionInput
 ): DestinationVersion => DestinationVersion.make(value);
+
+export const toMigrationDefinitionLockToken = (
+  value: MigrationDefinitionLockTokenInput
+): MigrationDefinitionLockToken => MigrationDefinitionLockToken.make(value);

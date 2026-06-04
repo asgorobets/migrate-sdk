@@ -381,14 +381,12 @@ const makeSourceLookupFailedItemState = (
   definitionId: MigrationDefinitionId,
   runId: MigrationRunId,
   sourceIdentity: SourceIdentity,
-  previousState: MigrationItemState | null,
+  previousState: MigrationItemState,
   error: unknown
 ): FailedItemState => ({
   definitionId,
   sourceIdentity,
-  ...(previousState?.sourceVersion === undefined
-    ? {}
-    : { sourceVersion: previousState.sourceVersion }),
+  sourceVersion: previousState.sourceVersion,
   ...(previousDestinationIdentity(previousState) === undefined
     ? {}
     : { destinationIdentity: previousDestinationIdentity(previousState) }),
@@ -506,6 +504,10 @@ const processTargetedSourceIdentities = <
       );
 
       if (lookup.kind === "failed" || lookup.kind === "missing") {
+        if (previousState === null) {
+          return yield* lookup.error;
+        }
+
         yield* store.upsertItemState(
           makeSourceLookupFailedItemState(
             definition.id,
@@ -523,6 +525,7 @@ const processTargetedSourceIdentities = <
         definition,
         reprocessUnchangedTerminal: shouldReprocessUnchangedTerminal(mode),
         runId,
+        sourceSchema: source.sourceSchema,
         sourceItem: lookup.sourceItem,
       });
 
@@ -588,6 +591,7 @@ const processCursorDiscovery = <
         const outcome = yield* processSourceItem({
           definition,
           runId,
+          sourceSchema: source.sourceSchema,
           sourceItem,
         });
 

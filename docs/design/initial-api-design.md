@@ -682,16 +682,22 @@ why cursor schema lives with the source plugin: the runner only needs the codec
 to validate stored cursor data and serialize the next cursor through
 `Schema.fromJsonString`, `Schema.decodeUnknownEffect`, and `Schema.encodeEffect`.
 
+`Schema.Codec<Source, unknown, never, never>` means the configured source plugin
+also provides a service-free Effect schema for decoding raw source payloads into
+the runtime `Source` type. The core SDK requires this Effect codec on configured
+source plugins; future adapter packages may derive it from source-native schemas
+before they produce the configured source plugin.
+
 ```ts
 export interface ConfiguredSourcePlugin<Source, Cursor> {
   readonly layer: Layer.Layer<AnySourcePlugin>;
-  readonly sourceSchema?: Schema.Schema<Source>;
+  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
 }
 
 export interface SourcePluginInput<Source, Cursor>
   extends SourcePluginImplementation<Source, Cursor> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
-  readonly sourceSchema?: Schema.Schema<Source>;
+  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
 }
 
 export const defineSourcePlugin = <Source, Cursor>(
@@ -699,13 +705,12 @@ export const defineSourcePlugin = <Source, Cursor>(
 ): ConfiguredSourcePlugin<Source, Cursor> => ({
   layer: Layer.sync(SourcePlugin, () => ({
     cursorSchema: input.cursorSchema,
+    sourceSchema: input.sourceSchema,
     lookupStrategy: input.lookupStrategy,
     read: input.read,
     readByIdentity: input.readByIdentity,
   })),
-  ...(input.sourceSchema === undefined
-    ? {}
-    : { sourceSchema: input.sourceSchema }),
+  sourceSchema: input.sourceSchema,
 });
 
 export interface ConfiguredDestinationPlugin<Command extends DestinationCommand> {
@@ -813,7 +818,9 @@ const articlesMigration = {
 
 ## Schemas and Inference
 
-Effect Schema is the canonical v1 schema mechanism. Source plugins expose or use source item schemas, and destination plugins expose or use destination command schemas. Migration definitions connect them through typed pipelines.
+Effect Schema is the canonical v1 schema mechanism. Source plugins expose a
+Source Payload Schema, and destination plugins expose or use destination command
+schemas. Migration definitions connect them through typed pipelines.
 
 ```ts
 const articles = defineMigration({
@@ -914,6 +921,7 @@ const runMigrationDefinition = <S, Command extends DestinationCommand, PipelineE
       const itemResult = yield* processSourceItem({
         definition,
         runId,
+        sourceSchema: source.sourceSchema,
         sourceItem,
       }).pipe(Effect.exit);
 
@@ -974,9 +982,12 @@ const processCursorWindows = Effect.fn("processCursorWindows")(function* <
     }
 
     for (const sourceItem of result.items) {
-      yield* processSourceItem({ definition, runId, sourceItem }).pipe(
-        Effect.exit
-      );
+      yield* processSourceItem({
+        definition,
+        runId,
+        sourceSchema: source.sourceSchema,
+        sourceItem,
+      }).pipe(Effect.exit);
     }
 
     if (result.nextCursor === undefined) {
@@ -994,6 +1005,13 @@ const processCursorWindows = Effect.fn("processCursorWindows")(function* <
 ```
 
 The next cursor is committed after a cursor window is processed, even when some items in that window failed. Failed items are retried from migration item state backlog using `readByIdentity`, so a permanently bad item does not pin cursor advancement forever.
+
+`processSourceItem` decodes `sourceItem.item` with the runtime Source Payload
+Schema before unchanged-terminal checks, transformation pipeline execution, and
+destination command execution. A valid source item envelope with an invalid
+payload becomes a failed migration item state with source error details, while
+source cursor read failures before items are emitted remain run-level source
+plugin failures.
 
 Many-definition runner:
 

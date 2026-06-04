@@ -9,6 +9,7 @@ import {
   InMemoryDestinationPlugin,
   InMemoryMigrationStore,
   InMemorySourceCursor,
+  type InMemorySourceOptions,
   InMemorySourcePlugin,
   MigrationDefinitionLock,
   type MigrationDefinitionLockType,
@@ -28,6 +29,7 @@ import {
   toDestinationVersion,
   toEncodedSourceCursor,
   toMigrationDefinitionId,
+  toMigrationDefinitionLockToken,
   toMigrationRunId,
   toSourceIdentity,
   toSourceVersion,
@@ -40,6 +42,45 @@ const UpsertEntryCommand = Schema.Struct({
 });
 
 type UpsertEntryCommand = typeof UpsertEntryCommand.Type;
+
+const ArticleSource = Schema.Struct({
+  title: Schema.String,
+  publish: Schema.optional(Schema.Boolean),
+});
+type ArticleSource = typeof ArticleSource.Type;
+
+const ArticleStatsSource = Schema.Struct({
+  title: Schema.Trim,
+  views: Schema.NumberFromString,
+});
+type ArticleStatsSource = typeof ArticleStatsSource.Type;
+
+const ManyFieldSource = Schema.Struct({
+  a: Schema.String,
+  b: Schema.String,
+  c: Schema.String,
+  d: Schema.String,
+  e: Schema.String,
+  f: Schema.String,
+});
+type ManyFieldSource = typeof ManyFieldSource.Type;
+
+const asArticleSource = (item: unknown): ArticleSource => item as ArticleSource;
+
+const asArticleStatsSource = (item: unknown): ArticleStatsSource =>
+  item as ArticleStatsSource;
+
+const asManyFieldSource = (item: unknown): ManyFieldSource =>
+  item as ManyFieldSource;
+
+const makeTestInMemorySource = <A>(
+  options: Omit<InMemorySourceOptions<A>, "sourceSchema"> &
+    Partial<Pick<InMemorySourceOptions<A>, "sourceSchema">>
+) =>
+  InMemorySourcePlugin.make({
+    sourceSchema: Schema.Unknown as Schema.Codec<A, unknown, never, never>,
+    ...options,
+  });
 
 interface PipelineTestError {
   readonly _tag: "PipelineTestError";
@@ -202,7 +243,7 @@ describe("MigrationStore durable records", () => {
           store.releaseDefinitionLock({
             ...lock,
             ownerRunId: toMigrationRunId("run-2"),
-            token: "lock-other",
+            token: toMigrationDefinitionLockToken("lock-other"),
           })
         );
       }).pipe(Effect.provide(InMemoryMigrationStore.layer(storeState)));
@@ -224,7 +265,7 @@ describe("runMigration", () => {
     const store = InMemoryMigrationStore.layer();
     const definition = defineMigration({
       id: "articles",
-      source: InMemorySourcePlugin.make({
+      source: makeTestInMemorySource({
         items: [
           {
             identity: "article-1",
@@ -245,7 +286,7 @@ describe("runMigration", () => {
     };
     const otherDefinition = defineMigration({
       id: "articles-copy",
-      source: InMemorySourcePlugin.make({
+      source: makeTestInMemorySource({
         items: [
           {
             identity: "article-1",
@@ -274,7 +315,7 @@ describe("runMigration", () => {
     Effect.gen(function* () {
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           items: [
             {
               identity: "article-1",
@@ -326,6 +367,7 @@ describe("runMigration", () => {
         };
         const source = defineSourcePlugin<{ readonly title: string }, number>({
           cursorSchema,
+          sourceSchema: Schema.Struct({ title: Schema.String }),
           make: () =>
             implementationWithConflictingSchema as unknown as SourcePluginImplementation<
               { readonly title: string },
@@ -336,6 +378,7 @@ describe("runMigration", () => {
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
         expect(plugin.cursorSchema).toBe(cursorSchema);
+        expect(plugin.sourceSchema).toBe(source.sourceSchema);
       })
   );
 
@@ -347,7 +390,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           items: [
             {
               identity: "article-1",
@@ -427,7 +470,7 @@ describe("runMigration", () => {
 
         const definition = defineMigration({
           id: "articles",
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-1",
@@ -507,7 +550,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           items: [
             {
               identity: "article-1",
@@ -567,7 +610,7 @@ describe("runMigration", () => {
 
         const definition = defineMigration({
           id: "articles",
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-1",
@@ -632,7 +675,6 @@ describe("runMigration", () => {
               kind: "pipeline",
               errorTag: "PipelineFailureTestError",
               message: "Article cannot be transformed",
-              cause: pipelineError,
             },
           })
         );
@@ -680,7 +722,7 @@ describe("runMigration", () => {
 
         const definition = defineMigration({
           id: "articles",
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-1",
@@ -756,10 +798,6 @@ describe("runMigration", () => {
               kind: "destination",
               errorTag: "DestinationPluginError",
               message: "Destination command failed",
-              cause: expect.objectContaining({
-                _tag: "DestinationPluginError",
-                message: "Destination command failed",
-              }),
             }),
           })
         );
@@ -784,7 +822,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           items: [
             {
               identity: "article-1",
@@ -850,7 +888,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           state: sourceState,
           transientFailures: { read: 1 },
           items: [
@@ -904,7 +942,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           state: sourceState,
           transientFailures: { readByIdentity: 1 },
           items: [
@@ -952,11 +990,368 @@ describe("runMigration", () => {
     })
   );
 
+  it.effect(
+    "records cursor-discovered source payload validation failures as durable item failures",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const pipelineCalls: string[] = [];
+
+        const definition = defineMigration({
+          id: "articles",
+          source: InMemorySourcePlugin.make<ArticleSource>({
+            sourceSchema: ArticleSource,
+            items: [
+              {
+                identity: "article-invalid",
+                version: "source-version-1",
+                item: asArticleSource({ title: null }),
+              },
+              {
+                identity: "article-valid",
+                version: "source-version-1",
+                item: { title: "Valid article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.sync(() => {
+              pipelineCalls.push(source.identity);
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("failed");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 1,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(pipelineCalls).toEqual(["article-valid"]);
+        expect(
+          destinationState.executions.map(
+            (execution) => execution.context.sourceIdentity
+          )
+        ).toEqual(["article-valid"]);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-invalid")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            sourceVersion: "source-version-1",
+            error: expect.objectContaining({
+              kind: "source",
+              errorTag: "SourcePayloadSchemaError",
+              message: "Source payload did not match Source Payload Schema",
+              details: expect.arrayContaining([
+                expect.objectContaining({
+                  path: "title",
+                  message: expect.stringContaining("Expected string"),
+                }),
+              ]),
+            }),
+          })
+        );
+      })
+  );
+
+  it.effect("validates source payloads before unchanged detection", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const storeState = InMemoryMigrationStore.makeState();
+      const pipelineCalls: string[] = [];
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make<ArticleSource>({
+          sourceSchema: ArticleSource,
+          items: [
+            {
+              identity: "article-unchanged-invalid",
+              version: "source-version-1",
+              item: asArticleSource({ title: null }),
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: (source) =>
+          Effect.sync(() => {
+            pipelineCalls.push(source.identity);
+
+            return {
+              kind: "UpsertEntry" as const,
+              contentType: "article",
+              fields: {},
+            };
+          }),
+      });
+
+      storeState.itemStates.set(
+        InMemoryMigrationStore.itemStateKey(
+          "articles",
+          "article-unchanged-invalid"
+        ),
+        {
+          definitionId: toMigrationDefinitionId("articles"),
+          sourceIdentity: toSourceIdentity("article-unchanged-invalid"),
+          sourceVersion: toSourceVersion("source-version-1"),
+          lastRunId: toMigrationRunId("run-previous"),
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          status: "migrated",
+          destinationIdentity: toDestinationIdentity(
+            "entry-article-unchanged-invalid"
+          ),
+          destinationVersion: toDestinationVersion("destination-version-1"),
+        }
+      );
+
+      const summary = yield* runMigration(definition);
+
+      expect(summary.status).toBe("failed");
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 0,
+        skipped: 0,
+        failed: 1,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(pipelineCalls).toEqual([]);
+      expect(destinationState.executions).toEqual([]);
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey(
+            "articles",
+            "article-unchanged-invalid"
+          )
+        )
+      ).toEqual(
+        expect.objectContaining({
+          status: "failed",
+          lastRunId: summary.runId,
+          sourceVersion: "source-version-1",
+          destinationIdentity: "entry-article-unchanged-invalid",
+          destinationVersion: "destination-version-1",
+          error: expect.objectContaining({
+            kind: "source",
+            errorTag: "SourcePayloadSchemaError",
+          }),
+        })
+      );
+    })
+  );
+
+  it.effect("bounds persisted source payload schema error details", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const storeState = InMemoryMigrationStore.makeState();
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make<ManyFieldSource>({
+          sourceSchema: ManyFieldSource,
+          items: [
+            {
+              identity: "article-many-errors",
+              version: "source-version-1",
+              item: asManyFieldSource({}),
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: () =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "article",
+            fields: {},
+          }),
+      });
+
+      yield* runMigration(definition);
+
+      const itemState = storeState.itemStates.get(
+        InMemoryMigrationStore.itemStateKey("articles", "article-many-errors")
+      );
+
+      expect(itemState).toEqual(
+        expect.objectContaining({
+          status: "failed",
+          error: expect.objectContaining({
+            kind: "source",
+            errorTag: "SourcePayloadSchemaError",
+            details: expect.arrayContaining([
+              expect.objectContaining({
+                message: "1 additional schema issue(s) omitted",
+              }),
+            ]),
+          }),
+        })
+      );
+      if (itemState?.status !== "failed") {
+        throw new Error("Expected failed item state to be persisted");
+      }
+      expect(itemState.error.details).toHaveLength(6);
+    })
+  );
+
+  it.effect("validates targeted source identity lookup payloads", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const storeState = InMemoryMigrationStore.makeState();
+      const pipelineCalls: string[] = [];
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make<ArticleSource>({
+          sourceSchema: ArticleSource,
+          items: [
+            {
+              identity: "article-target-invalid",
+              version: "source-version-1",
+              item: asArticleSource({ title: null }),
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: (source) =>
+          Effect.sync(() => {
+            pipelineCalls.push(source.identity);
+
+            return {
+              kind: "UpsertEntry" as const,
+              contentType: "article",
+              fields: {},
+            };
+          }),
+      });
+
+      const summary = yield* runMigrations({
+        definitions: [definition],
+        mode: { kind: "item", sourceIdentity: "article-target-invalid" },
+      });
+
+      expect(summary.status).toBe("failed");
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 0,
+        skipped: 0,
+        failed: 1,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(pipelineCalls).toEqual([]);
+      expect(destinationState.executions).toEqual([]);
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey(
+            "articles",
+            "article-target-invalid"
+          )
+        )
+      ).toEqual(
+        expect.objectContaining({
+          status: "failed",
+          sourceVersion: "source-version-1",
+          error: expect.objectContaining({
+            kind: "source",
+            errorTag: "SourcePayloadSchemaError",
+          }),
+        })
+      );
+    })
+  );
+
+  it.effect("passes decoded source payloads to the transformation pipeline", () =>
+    Effect.gen(function* () {
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const storeState = InMemoryMigrationStore.makeState();
+      const decodedPayloads: ArticleStatsSource[] = [];
+
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make<ArticleStatsSource>({
+          sourceSchema: ArticleStatsSource,
+          items: [
+            {
+              identity: "article-stats",
+              version: "source-version-1",
+              item: asArticleStatsSource({
+                title: "  Decoded article  ",
+                views: "42",
+              }),
+            },
+          ],
+        }),
+        destination: InMemoryDestinationPlugin.make({
+          commandSchema: UpsertEntryCommand,
+          state: destinationState,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: (source) =>
+          Effect.sync(() => {
+            decodedPayloads.push(source.item);
+
+            return {
+              kind: "UpsertEntry" as const,
+              contentType: "article",
+              fields: {
+                title: source.item.title,
+                views: source.item.views,
+              },
+            };
+          }),
+      });
+
+      const summary = yield* runMigration(definition);
+
+      expect(summary.status).toBe("succeeded");
+      expect(decodedPayloads).toEqual([{ title: "Decoded article", views: 42 }]);
+      expect(destinationState.executions[0]?.command.fields).toEqual({
+        title: "Decoded article",
+        views: 42,
+      });
+    })
+  );
+
   it.effect("rejects non-positive in-memory Source batch sizes", () =>
     Effect.gen(function* () {
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           batchSize: 0,
           items: [
             {
@@ -999,7 +1394,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           batchSize: 2,
           items: [
             {
@@ -1093,7 +1488,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           batchSize: 2,
           items: [
             {
@@ -1167,7 +1562,7 @@ describe("runMigration", () => {
 
         const definition = defineMigration({
           id: "articles",
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-failed",
@@ -1240,7 +1635,7 @@ describe("runMigration", () => {
 
         const definition = defineMigration({
           id: "articles",
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-needs-update",
@@ -1319,7 +1714,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           items: [
             {
               identity: "article-failed",
@@ -1415,7 +1810,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           items: [
             {
               identity: "article-skipped",
@@ -1487,7 +1882,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           items: [
             {
               identity: "article-target",
@@ -1567,6 +1962,7 @@ describe("runMigration", () => {
           id: "articles",
           source: defineSourcePlugin({
             cursorSchema: InMemorySourceCursor,
+            sourceSchema: Schema.Unknown,
             lookupStrategy: "direct",
             read: () => Effect.succeed({ items: [] }),
             readByIdentity: () => Effect.fail(sourceError),
@@ -1649,6 +2045,7 @@ describe("runMigration", () => {
           id: "articles",
           source: defineSourcePlugin({
             cursorSchema: InMemorySourceCursor,
+            sourceSchema: Schema.Unknown,
             lookupStrategy: "direct",
             read: () => Effect.succeed({ items: [] }),
             readByIdentity: () => Effect.fail(sourceError),
@@ -1724,6 +2121,7 @@ describe("runMigration", () => {
           id: "articles",
           source: defineSourcePlugin({
             cursorSchema: InMemorySourceCursor,
+            sourceSchema: Schema.Unknown,
             lookupStrategy: "direct",
             read: () =>
               Effect.succeed({
@@ -1814,7 +2212,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           items: [
             {
               identity: "article-1",
@@ -1929,7 +2327,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           items: [
             {
               identity: "article-1",
@@ -2021,7 +2419,7 @@ describe("runMigration", () => {
 
         const authors = defineMigration({
           id: "authors",
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "author-1",
@@ -2051,7 +2449,7 @@ describe("runMigration", () => {
         const articles = defineMigration({
           id: "articles",
           dependsOn: ["authors"],
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-1",
@@ -2107,7 +2505,7 @@ describe("runMigration", () => {
 
       const unselected = defineMigration({
         id: "unselected",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           items: [
             {
               identity: "unselected-1",
@@ -2131,7 +2529,7 @@ describe("runMigration", () => {
       });
       const selected = defineMigration({
         id: "selected",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           items: [
             {
               identity: "selected-1",
@@ -2187,7 +2585,7 @@ describe("runMigration", () => {
 
         const authors = defineMigration({
           id: "authors",
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "author-1",
@@ -2217,7 +2615,7 @@ describe("runMigration", () => {
         const articles = defineMigration({
           id: "articles",
           dependsOn: ["authors"],
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-1",
@@ -2279,7 +2677,7 @@ describe("runMigration", () => {
         const articles = defineMigration({
           id: "articles",
           dependsOn: ["authors"],
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-1",
@@ -2336,7 +2734,7 @@ describe("runMigration", () => {
         const authors = defineMigration({
           id: "authors",
           dependsOn: ["articles"],
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "author-1",
@@ -2366,7 +2764,7 @@ describe("runMigration", () => {
         const articles = defineMigration({
           id: "articles",
           dependsOn: ["authors"],
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-1",
@@ -2434,7 +2832,7 @@ describe("runMigration", () => {
 
         const authors = defineMigration({
           id: "authors",
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "author-1",
@@ -2464,7 +2862,7 @@ describe("runMigration", () => {
         const articles = defineMigration({
           id: "articles",
           dependsOn: ["authors"],
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-1",
@@ -2523,6 +2921,7 @@ describe("runMigration", () => {
         id: "articles",
         source: defineSourcePlugin({
           cursorSchema: InMemorySourceCursor,
+          sourceSchema: Schema.Unknown,
           lookupStrategy: "scan",
           read: () => Effect.fail(sourceError),
           readByIdentity: () => Effect.succeed(null),
@@ -2573,7 +2972,7 @@ describe("runMigration", () => {
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: makeTestInMemorySource({
           items: [
             {
               identity: "article-1",
@@ -2654,7 +3053,7 @@ describe("runMigration", () => {
 
         const authors = defineMigration({
           id: "authors",
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "author-1",
@@ -2680,7 +3079,7 @@ describe("runMigration", () => {
         const articles = defineMigration({
           id: "articles",
           dependsOn: ["authors"],
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-1",
@@ -2754,12 +3153,12 @@ describe("runMigration", () => {
           definitionId: toMigrationDefinitionId("articles"),
           createdAt: new Date("2026-01-01T00:00:00.000Z"),
           ownerRunId: toMigrationRunId("run-other"),
-          token: "lock-other",
+          token: toMigrationDefinitionLockToken("lock-other"),
         });
 
         const definition = defineMigration({
           id: "articles",
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-1",
@@ -2823,12 +3222,12 @@ describe("runMigration", () => {
           definitionId: toMigrationDefinitionId("authors"),
           createdAt: new Date("2026-01-01T00:00:00.000Z"),
           ownerRunId: toMigrationRunId("run-other"),
-          token: "lock-other",
+          token: toMigrationDefinitionLockToken("lock-other"),
         });
 
         const authors = defineMigration({
           id: "authors",
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "author-1",
@@ -2858,7 +3257,7 @@ describe("runMigration", () => {
         const articles = defineMigration({
           id: "articles",
           dependsOn: ["authors"],
-          source: InMemorySourcePlugin.make({
+          source: makeTestInMemorySource({
             items: [
               {
                 identity: "article-1",

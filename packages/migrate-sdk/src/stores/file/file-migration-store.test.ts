@@ -18,6 +18,7 @@ import {
   skipItem,
   toEncodedSourceCursor,
   toMigrationDefinitionId,
+  toMigrationDefinitionLockToken,
   toSourceIdentity,
 } from "../../index.ts";
 
@@ -28,6 +29,12 @@ const UpsertEntryCommand = Schema.Struct({
 });
 
 type UpsertEntryCommand = typeof UpsertEntryCommand.Type;
+
+const ArticleSource = Schema.Struct({
+  publish: Schema.optional(Schema.Boolean),
+  title: Schema.String,
+});
+type ArticleSource = typeof ArticleSource.Type;
 
 const encodedInMemoryCursor = (offset: number) =>
   toEncodedSourceCursor(JSON.stringify({ offset }));
@@ -106,7 +113,8 @@ const makeArticlesMigration = (options: {
 }) =>
   defineMigration({
     id: "articles",
-    source: InMemorySourcePlugin.make({
+    source: InMemorySourcePlugin.make<ArticleSource>({
+      sourceSchema: ArticleSource,
       items: options.items,
     }),
     destination: InMemoryDestinationPlugin.make({
@@ -205,7 +213,8 @@ describe("FileMigrationStore", () => {
           InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
         const definition = defineMigration({
           id: "articles",
-          source: InMemorySourcePlugin.make({
+          source: InMemorySourcePlugin.make<ArticleSource>({
+            sourceSchema: ArticleSource,
             batchSize: 1,
             items: [
               {
@@ -375,6 +384,7 @@ describe("FileMigrationStore", () => {
           id: "articles",
           source: defineSourcePlugin({
             cursorSchema: InMemorySourceCursor,
+            sourceSchema: Schema.Unknown,
             lookupStrategy: "scan",
             read: () => Effect.fail(sourceError),
             readByIdentity: () => Effect.succeed(null),
@@ -512,7 +522,7 @@ describe("FileMigrationStore", () => {
           return yield* Effect.flip(
             store.releaseDefinitionLock({
               ...lock,
-              token: "lock-other",
+              token: toMigrationDefinitionLockToken("lock-other"),
             })
           );
         }).pipe(Effect.provide(fileStoreLayer(directory)));

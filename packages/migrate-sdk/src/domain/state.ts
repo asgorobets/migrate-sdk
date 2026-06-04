@@ -12,7 +12,7 @@ const MigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionId,
   lastRunId: MigrationRunId,
   sourceIdentity: SourceIdentity,
-  sourceVersion: Schema.optional(SourceVersion),
+  sourceVersion: SourceVersion,
   updatedAt: Schema.Date,
 } as const;
 
@@ -23,11 +23,17 @@ export const MigrationItemErrorKind = Schema.Literals([
 ]);
 export type MigrationItemErrorKind = typeof MigrationItemErrorKind.Type;
 
+export const MigrationItemErrorDetail = Schema.Struct({
+  path: Schema.optional(Schema.String),
+  message: Schema.String,
+});
+export type MigrationItemErrorDetail = typeof MigrationItemErrorDetail.Type;
+
 export const MigrationItemError = Schema.Struct({
   kind: MigrationItemErrorKind,
   errorTag: Schema.String,
   message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  details: Schema.optional(Schema.Array(MigrationItemErrorDetail)),
 });
 export type MigrationItemError = typeof MigrationItemError.Type;
 
@@ -76,7 +82,7 @@ export interface MigrationItemStateBase {
   readonly definitionId: MigrationDefinitionId;
   readonly lastRunId: MigrationRunId;
   readonly sourceIdentity: SourceIdentity;
-  readonly sourceVersion?: SourceVersion;
+  readonly sourceVersion: SourceVersion;
   readonly updatedAt: Date;
 }
 

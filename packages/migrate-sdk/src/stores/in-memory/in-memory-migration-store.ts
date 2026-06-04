@@ -11,6 +11,7 @@ import type {
 import {
   MigrationRunId as MigrationRunIdSchema,
   toMigrationDefinitionId,
+  toMigrationDefinitionLockToken,
   toSourceIdentity,
 } from "../../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../../domain/lock.ts";
@@ -213,7 +214,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         createdAt: new Date(),
         definitionId,
         ownerRunId,
-        token: `lock-${state.nextLockNumber}`,
+        token: toMigrationDefinitionLockToken(`lock-${state.nextLockNumber}`),
       };
 
       state.nextLockNumber += 1;

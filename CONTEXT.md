@@ -103,8 +103,8 @@ The Effect retry wrapper selected by a migration definition for source cursor re
 **Source Lookup Retry Strategy**:
 The Effect retry wrapper selected by a migration definition for source identity lookups.
 
-**Source Item Schema**:
-The Effect schema used by a source plugin to validate and infer source items.
+**Source Payload Schema**:
+The Effect schema used by a source plugin to validate and infer source item payloads.
 
 **Source Cursor Schema**:
 The Effect codec used by a source plugin to validate, encode, and decode source cursors.
@@ -118,28 +118,36 @@ A typed pipeline error that records a source item as skipped without calling the
 **Migration Item Error**:
 A normalized error record stored for a failed migration item state.
 
+**Migration Item Error Detail**:
+Durable structured detail for inspecting a migration item error after the run has ended.
+
 ## Relationships
 
 - A **Source Item** has exactly one **Migration Item State** for a given migration definition.
 - A **Source Item** must have a **Source Identity**.
-- A **Source Item** may have a **Source Version** supplied by a source field, source metadata, or a hash of the item contents.
+- A **Source Item** must have a **Source Version** supplied by a source field, source metadata, or a hash of the item contents.
 - A **Source Cursor** selects which source items to inspect during a migration run.
 - A **Source Cursor** shape is owned by the **Source Plugin** and must be described by a **Source Cursor Schema**.
 - An **Encoded Source Cursor** is the only cursor form persisted by a **Migration Store**.
 - A **Source Cursor Window** may return a next **Source Cursor**.
 - A **Source Cursor** is committed after a cursor window is processed, even when some source items in the window fail.
-- A **Migration Item State** can record a source identity, destination identity, migration status, observed source version, and failure metadata.
+- A **Migration Item State** records source identity, observed source version, migration status, and may record destination identity or failure metadata.
 - A **Migration Item State** is modeled as discriminated variants by status.
 - A **Migration Item State** does not store source item payloads by default.
 - Public and persisted migration data uses domain-friendly discriminators such as `kind` and `status`; Effect `_tag` is reserved for Effect-native errors or internals and hidden from public authoring examples through helpers.
 - A **Migration Item Error** normalizes source, pipeline, destination, or store errors for durable storage.
+- A **Migration Item Error** may include **Migration Item Error Details** so future inspection can explain failures without rerunning the migration.
+- Live error causes are useful for logging, but durable **Migration Item Error** records do not persist raw causes.
 - A **Migration Store** error fails the migration run instead of becoming a migration item failure.
 - A **Source Plugin** cursor read error fails the migration definition run.
 - A **Source Plugin** identity lookup error can become a migration item failure when the source identity is already known.
 - A **Migration Item Outcome** may be unchanged even though unchanged is not persisted as a **Migration Item State** status.
 - A **Source Plugin** emits **Source Items**; it does not own **Migration Item State**.
 - A **Source Plugin** reads source items by cursor and by source identity.
-- A **Source Plugin** exposes or uses a **Source Item Schema**.
+- A **Source Plugin** must expose a **Source Payload Schema**.
+- A **Source Payload Schema** may be supplied directly by a user or derived by a source plugin from a source-native schema.
+- A **Migration Run** decodes each source item payload with the **Source Payload Schema** before unchanged-terminal checks, transformation pipeline execution, and destination command execution.
+- A source item with a valid identity and version but invalid payload becomes a failed **Migration Item State** with durable **Migration Item Error Details**.
 - A **Source Lookup Strategy** may be direct or scan-based.
 - A **Migration Definition** may select separate **Source Cursor Retry Strategy** and **Source Lookup Retry Strategy** wrappers.
 - A **Migration Store** records **Migration Item State**, the latest **Migration Run State**, and the last successful **Source Cursor** for each **Migration Definition**.
@@ -179,7 +187,7 @@ A normalized error record stored for a failed migration item state.
 - A **Migration Reference Lookup** reads migrated destination identities from dependency migration definitions.
 - A **Transformation Pipeline** transforms exactly one **Source Item** into at most one **Destination Command** in the first version.
 - A **Destination Command** maps back to exactly one **Source Item** in the first version.
-- A **Destination Plugin** returns a **Destination Identity** and may return a **Destination Version**.
+- A **Destination Plugin** returns a non-empty **Destination Identity** and may return a non-empty **Destination Version**.
 - A **Destination Stub** is incomplete and must be updated by a later migration run.
 - A **Needs Update** item state is not terminal and must be reprocessed even when source version is unchanged.
 - A **Destination Plugin** may classify retryable errors, but a **Migration Definition** selects the **Destination Retry Strategy**.
@@ -202,3 +210,4 @@ A normalized error record stored for a failed migration item state.
 - "destination item" was used for pipeline output, but rejected because pipeline output may be an operation such as update, publish, or update-and-publish — resolved: use **Destination Command**.
 - Hashing the entire source item was considered as an identity strategy — resolved: content hashes are usually **Source Version**, not **Source Identity**.
 - "highwater mark" was used for incremental source selection — resolved: use **Source Cursor**.
+- "source schema" and "source item schema" were used ambiguously — resolved: use **Source Payload Schema** for the schema that validates `SourceItem.item`, not source identity or source version.

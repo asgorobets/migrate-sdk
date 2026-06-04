@@ -31,7 +31,7 @@ const configuredSourcePluginTypeId: unique symbol = Symbol.for(
 
 export interface ConfiguredSourcePlugin<Source, Cursor> {
   readonly layer: Layer.Layer<AnySourcePlugin>;
-  readonly sourceSchema?: Schema.Schema<Source>;
+  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
   readonly [configuredSourcePluginTypeId]: {
     readonly cursor: Cursor;
     readonly source: Source;
@@ -51,13 +51,13 @@ export interface SourcePluginImplementation<Source, Cursor> {
 export interface SourcePluginInput<Source, Cursor>
   extends SourcePluginImplementation<Source, Cursor> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
-  readonly sourceSchema?: Schema.Schema<Source>;
+  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
 }
 
 export interface SourcePluginFactoryInput<Source, Cursor> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly make: () => SourcePluginImplementation<Source, Cursor>;
-  readonly sourceSchema?: Schema.Schema<Source>;
+  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
 }
 
 export const defineSourcePlugin = <Source, Cursor>(
@@ -81,11 +81,10 @@ export const defineSourcePlugin = <Source, Cursor>(
       (): SourcePlugin<Source, Cursor> => ({
         ...makeImplementation(),
         cursorSchema: input.cursorSchema,
+        sourceSchema: input.sourceSchema,
       })
     ),
-    ...(input.sourceSchema === undefined
-      ? {}
-      : { sourceSchema: input.sourceSchema }),
+    sourceSchema: input.sourceSchema,
   };
 };
 

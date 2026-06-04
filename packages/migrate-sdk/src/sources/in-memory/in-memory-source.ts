@@ -27,7 +27,7 @@ export interface InMemorySourceOptions<A> {
   readonly batchSize?: number;
   readonly items: readonly SourceItemInput<A>[];
   readonly lookupStrategy?: SourceLookupStrategy;
-  readonly sourceSchema?: Schema.Schema<A>;
+  readonly sourceSchema: Schema.Codec<A, unknown, never, never>;
   readonly state?: InMemorySourceState;
   readonly transientFailures?: InMemorySourceTransientFailures;
 }
@@ -134,6 +134,7 @@ const makeLayer = <A>(
     SourcePlugin,
     (): SourcePlugin<A, InMemorySourceCursor> => ({
       cursorSchema: InMemorySourceCursor,
+      sourceSchema: options.sourceSchema,
       ...makeImplementation(options),
     })
   );
@@ -144,9 +145,7 @@ const make = <A>(
   defineSourcePlugin({
     cursorSchema: InMemorySourceCursor,
     make: () => makeImplementation(options),
-    ...(options.sourceSchema === undefined
-      ? {}
-      : { sourceSchema: options.sourceSchema }),
+    sourceSchema: options.sourceSchema,
   });
 
 export const InMemorySourcePlugin = {
