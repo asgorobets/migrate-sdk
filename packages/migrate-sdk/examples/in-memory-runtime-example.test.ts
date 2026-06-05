@@ -3,15 +3,15 @@ import { Effect } from "effect";
 import {
   formatCircularBookAuthorStubsExampleResult,
   runCircularBookAuthorStubsExample,
-} from "./examples/circular-book-author-stubs.ts";
+} from "./circular-book-author-stubs.ts";
 import {
   formatMigrationRunSummary,
   runInMemoryExample,
-} from "./examples/in-memory-runtime.ts";
+} from "./in-memory-runtime.ts";
 import {
   formatNestedArticleSchemaExampleResult,
   runNestedArticleSchemaExample,
-} from "./examples/nested-article-schema.ts";
+} from "./nested-article-schema.ts";
 
 describe("in-memory runtime example", () => {
   it.effect("runs a complete Migration Run without external systems", () =>

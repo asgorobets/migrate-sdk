@@ -1,14 +1,16 @@
 import { Effect, Schema } from "effect";
 import {
   defineMigration,
-  InMemoryDestinationPlugin,
-  type InMemoryEntryCommand,
-  InMemoryMigrationStore,
-  InMemorySourcePlugin,
   type MigrationRunSummary,
   runMigration,
   type SourceItemInput,
-} from "../index.ts";
+} from "migrate-sdk";
+import {
+  InMemoryDestinationPlugin,
+  type InMemoryEntryCommand,
+} from "migrate-sdk/destinations/in-memory";
+import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
 
 const ArticleLocale = Schema.Literals(["en-US", "fr-FR"]);

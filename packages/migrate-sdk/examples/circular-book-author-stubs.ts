@@ -1,17 +1,19 @@
 import { Effect, Schema } from "effect";
 import {
   defineMigration,
-  type InMemoryDestinationExecution,
-  InMemoryDestinationPlugin,
-  type InMemoryEntryCommand,
-  InMemoryMigrationStore,
-  InMemorySourcePlugin,
   type MigrationItemState,
   MigrationReferenceLookup,
   type MigrationRunSummary,
   runMigrations,
   type SourceItemInput,
-} from "../index.ts";
+} from "migrate-sdk";
+import {
+  type InMemoryDestinationExecution,
+  InMemoryDestinationPlugin,
+  type InMemoryEntryCommand,
+} from "migrate-sdk/destinations/in-memory";
+import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
 
 const Money = Schema.Struct({

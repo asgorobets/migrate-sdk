@@ -4,9 +4,10 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
+import { CsvSourcePlugin } from "migrate-sdk/sources/csv";
 import { toSourceIdentity } from "../../domain/ids.ts";
 import { SourcePlugin } from "../../services/source-plugin.ts";
-import { CsvParserCore, CsvSourcePlugin } from "./csv-source.ts";
+import { CsvParserCore } from "./csv-source.ts";
 
 const CsvArticleSource = Schema.Struct({
   id: Schema.String,

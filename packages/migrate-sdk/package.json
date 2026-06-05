@@ -3,16 +3,24 @@
   "version": "0.0.0",
   "type": "module",
   "private": true,
+  "sideEffects": [],
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./destinations/in-memory": "./src/destinations/in-memory/index.ts",
+    "./internal/*": null,
+    "./sources/csv": "./src/sources/csv/index.ts",
+    "./sources/in-memory": "./src/sources/in-memory/index.ts",
+    "./stores/file": "./src/stores/file/index.ts",
+    "./stores/in-memory": "./src/stores/in-memory/index.ts",
+    "./*/internal/*": null
   },
   "scripts": {
-    "dev": "tsx src/dev.ts",
-    "dev:circular-stubs": "tsx src/dev.ts circular-stubs",
-    "dev:file-store": "tsx src/dev.ts file-store",
-    "dev:nested-article": "tsx src/dev.ts nested-article",
+    "dev": "tsx examples/dev.ts",
+    "dev:circular-stubs": "tsx examples/dev.ts circular-stubs",
+    "dev:file-store": "tsx examples/dev.ts file-store",
+    "dev:nested-article": "tsx examples/dev.ts nested-article",
     "prepare": "effect-language-service patch",
-    "check-types": "tsc --noEmit",
+    "check-types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.check.json",
     "test": "vitest run",
     "test:watch": "vitest"
   },

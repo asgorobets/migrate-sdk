@@ -3,15 +3,17 @@ import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import {
   defineMigration,
-  FileMigrationStore,
-  InMemoryDestinationPlugin,
-  type InMemoryEntryCommand,
-  InMemorySourcePlugin,
   type MigrationRunSummary,
   runMigration,
   type SourceItemInput,
   skipItem,
-} from "../index.ts";
+} from "migrate-sdk";
+import {
+  InMemoryDestinationPlugin,
+  type InMemoryEntryCommand,
+} from "migrate-sdk/destinations/in-memory";
+import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
+import { FileMigrationStore } from "migrate-sdk/stores/file";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
 
 const Article = Schema.Struct({
@@ -49,15 +51,8 @@ const getDefaultStoreDirectory = Effect.fn("getDefaultStoreDirectory")(
     const modulePath = yield* path
       .fromFileUrl(new URL(import.meta.url))
       .pipe(Effect.orDie);
-    const repoRoot = path.resolve(path.dirname(modulePath), "../../../..");
 
-    return path.join(
-      repoRoot,
-      "packages",
-      "migrate-sdk",
-      "examples",
-      ".migration-state"
-    );
+    return path.join(path.dirname(modulePath), ".migration-state");
   }
 );
 

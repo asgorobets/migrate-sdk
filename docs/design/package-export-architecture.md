@@ -1,11 +1,11 @@
 # Package Export Architecture
 
-Status: follow-up after CSV source plugin tracer bullet
+Status: implemented for current first-party plugin and store subpaths
 
 Audience: maintainers shaping the public SDK surface.
 
-This document captures the package and export architecture to refactor toward
-after the CSV source plugin proves the first real plugin shape.
+This document captures the package and export architecture used after the CSV
+source plugin proved the first real plugin shape.
 
 ## Reference Pattern
 
@@ -21,7 +21,7 @@ For `migrate-sdk`, the equivalent is one installable package for the migration
 runtime, domain types, stores, and first-party plugins while the dependency
 graph allows it.
 
-## Target Shape
+## Current Shape
 
 The SDK package remains:
 
@@ -41,6 +41,11 @@ Each public feature folder owns an `index.ts` entrypoint. Private implementation
 helpers should live under local `internal/` folders or remain unexported from
 the feature entrypoint.
 
+Runnable examples live outside `src/` under `packages/migrate-sdk/examples/` so
+the library source tree contains only package implementation and public
+entrypoints. The library `tsconfig.json` remains scoped to publishable source
+files; examples and tests are typechecked through `tsconfig.check.json`.
+
 ## Public Imports
 
 The default entrypoint stays the ergonomic public surface:
@@ -59,21 +64,21 @@ import { FileMigrationStore } from "migrate-sdk/stores/file";
 
 These subpaths still point into the same package.
 
-## Export Map Direction
+## Export Map
 
-After the CSV source plugin lands, refactor `packages/migrate-sdk/package.json`
-toward a curated export map:
+`packages/migrate-sdk/package.json` uses a curated export map:
 
 ```json
 {
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
-    "./sources/csv": "./src/sources/csv/index.ts",
     "./destinations/in-memory": "./src/destinations/in-memory/index.ts",
+    "./internal/*": null,
+    "./sources/csv": "./src/sources/csv/index.ts",
+    "./sources/in-memory": "./src/sources/in-memory/index.ts",
     "./stores/file": "./src/stores/file/index.ts",
     "./stores/in-memory": "./src/stores/in-memory/index.ts",
-    "./internal/*": null,
     "./*/internal/*": null
   }
 }
@@ -99,12 +104,17 @@ Examples that may justify a separate package later:
 
 CSV does not cross that line. It belongs in the main `migrate-sdk` package.
 
-## Follow-Up Scope
+## Compatibility Rules
 
-Do this refactor after the CSV source plugin tracer bullet:
+Keep the public surface compatible for the SDK's two core audiences:
 
-- add public `index.ts` files for plugin/store feature folders
-- add curated package subpath exports
-- block `internal/*` package imports
-- keep the root `src/index.ts` explicit and user-oriented
-- avoid export-surface tests; verify through examples and behavior tests
+- Migration authors get the ergonomic root entrypoint:
+  `import { defineMigration, runMigration } from "migrate-sdk"`.
+- Plugin authors continue to get definition helpers, service tags, domain types,
+  and typed errors from the root entrypoint.
+- First-party plugins and stores also expose focused subpaths, such as
+  `migrate-sdk/sources/csv` and `migrate-sdk/stores/file`.
+- Feature entrypoints should explicitly re-export their public API rather than
+  using wildcard barrels.
+- Avoid export-surface tests; verify the public shape through examples,
+  behavior tests, and typecheck.

@@ -1,14 +1,14 @@
 import { Effect, Schema } from "effect";
 import {
   defineMigration,
-  InMemoryDestinationPlugin,
-  InMemoryMigrationStore,
-  InMemorySourcePlugin,
   type MigrationRunSummary,
   runMigration,
   type SourceItemInput,
   skipItem,
-} from "../index.ts";
+} from "migrate-sdk";
+import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
+import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 
 const Article = Schema.Struct({
   publish: Schema.Boolean,

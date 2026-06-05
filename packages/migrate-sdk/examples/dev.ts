@@ -4,19 +4,19 @@ import { Console, Effect, Layer } from "effect";
 import {
   formatCircularBookAuthorStubsExampleResult,
   runCircularBookAuthorStubsExample,
-} from "./examples/circular-book-author-stubs.ts";
+} from "./circular-book-author-stubs.ts";
 import {
   formatFileStoreExampleResult,
   runFileStoreExample,
-} from "./examples/file-store-runtime.ts";
+} from "./file-store-runtime.ts";
 import {
   formatMigrationRunSummary,
   runInMemoryExample,
-} from "./examples/in-memory-runtime.ts";
+} from "./in-memory-runtime.ts";
 import {
   formatNestedArticleSchemaExampleResult,
   runNestedArticleSchemaExample,
-} from "./examples/nested-article-schema.ts";
+} from "./nested-article-schema.ts";
 
 const example = process.argv[2] ?? "in-memory";
 const shouldReset = process.argv.includes("--reset");

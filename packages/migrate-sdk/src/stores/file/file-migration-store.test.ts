@@ -4,16 +4,18 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
+import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
+import {
+  InMemorySourceCursor,
+  InMemorySourcePlugin,
+} from "migrate-sdk/sources/in-memory";
+import { FileMigrationStore } from "migrate-sdk/stores/file";
 import {
   type DestinationCommandContext,
   type DestinationCommandResultInput,
   defineDestinationCommands,
   defineMigration,
   defineSourcePlugin,
-  FileMigrationStore,
-  InMemoryDestinationPlugin,
-  InMemorySourceCursor,
-  InMemorySourcePlugin,
   MigrationStore,
   runMigration,
   runMigrations,
