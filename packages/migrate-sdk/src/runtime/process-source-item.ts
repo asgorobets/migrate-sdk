@@ -369,10 +369,10 @@ export const processSourceItem = <
     };
 
     const destinationOutcome = yield* executeDestinationCommandPlan({
+      commandDefinitions: definition.destination.commandDefinitions,
       context: destinationContext,
       destination,
       destinationRetry: definition.destinationRetry,
-      identityCommandKinds: definition.destination.identityCommandKinds,
       plan: pipelineOutcome.plan,
     });
 

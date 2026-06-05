@@ -4,11 +4,15 @@ import { expectTypeOf } from "vitest";
 import {
   type DestinationCommandContext,
   type DestinationCommandResultInput,
+  type DestinationCommandSchema,
   DestinationPlugin,
   DestinationPluginError,
+  defineDestinationCommands,
   defineMigration,
   defineSourcePlugin,
+  type InMemoryDestinationOptions,
   InMemoryDestinationPlugin,
+  type InMemoryEntryCommand,
   InMemoryMigrationStore,
   InMemorySourceCursor,
   type InMemorySourceOptions,
@@ -54,6 +58,47 @@ const PublishEntryCommand = Schema.Struct({
 
 const EntryCommand = Schema.Union([UpsertEntryCommand, PublishEntryCommand]);
 
+const UpsertEntryCommands = defineDestinationCommands({
+  UpsertEntry: {
+    identity: true,
+    schema: UpsertEntryCommand,
+  },
+});
+
+const EntryCommands = defineDestinationCommands({
+  UpsertEntry: {
+    identity: true,
+    schema: UpsertEntryCommand,
+  },
+  PublishEntry: {
+    identity: false,
+    schema: PublishEntryCommand,
+  },
+});
+
+const MultiIdentityEntryCommands = defineDestinationCommands({
+  UpsertEntry: {
+    identity: true,
+    schema: UpsertEntryCommand,
+  },
+  PublishEntry: {
+    identity: true,
+    schema: PublishEntryCommand,
+  },
+});
+
+expectTypeOf<DestinationCommandSchema<UpsertEntryCommand>>().toEqualTypeOf<
+  Schema.Codec<UpsertEntryCommand, UpsertEntryCommand, never, never>
+>();
+
+defineDestinationCommands({
+  UpsertEntry: {
+    identity: true,
+    // @ts-expect-error command definition keys must match their schema kind.
+    schema: PublishEntryCommand,
+  },
+});
+
 type EntryCommand = typeof EntryCommand.Type;
 
 const ArticleSource = Schema.Struct({
@@ -61,6 +106,46 @@ const ArticleSource = Schema.Struct({
   publish: Schema.optional(Schema.Boolean),
 });
 type ArticleSource = typeof ArticleSource.Type;
+
+const ArticleEntryFields = Schema.Struct({
+  title: Schema.String,
+});
+const ArticleStatsEntryFields = Schema.Struct({
+  title: Schema.String,
+  views: Schema.Number,
+});
+const DecodingArticleEntryFields = Schema.Struct({
+  views: Schema.NumberFromString,
+});
+interface ArticleEntrySchemas {
+  readonly article: typeof ArticleEntryFields;
+}
+interface ArticleStatsEntrySchemas {
+  readonly article: typeof ArticleStatsEntryFields;
+}
+type ArticleEntryCommand = InMemoryEntryCommand<ArticleEntrySchemas>;
+type ArticleStatsEntryCommand = InMemoryEntryCommand<ArticleStatsEntrySchemas>;
+const ArticleEntryDestinationForTypes = InMemoryDestinationPlugin.makeEntries({
+  schemas: {
+    article: ArticleEntryFields,
+  },
+});
+ArticleEntryDestinationForTypes.commands.upsertEntry("article", {
+  title: "Typed article",
+});
+ArticleEntryDestinationForTypes.commands.publishEntry("article");
+// @ts-expect-error content types must be configured at destination creation.
+ArticleEntryDestinationForTypes.commands.publishEntry("offer");
+ArticleEntryDestinationForTypes.commands.upsertEntry("article", {
+  // @ts-expect-error upsert fields must match the configured content type schema.
+  headline: "Wrong field",
+});
+InMemoryDestinationPlugin.makeEntries({
+  schemas: {
+    // @ts-expect-error destination entry schemas validate pipeline values without decoding.
+    article: DecodingArticleEntryFields,
+  },
+});
 
 const ArticleStatsSource = Schema.Struct({
   title: Schema.Trim,
@@ -92,6 +177,54 @@ const makeTestInMemorySource = <A>(
 ) =>
   InMemorySourcePlugin.make({
     sourceSchema: Schema.Unknown as Schema.Codec<A, unknown, never, never>,
+    ...options,
+  });
+
+type TestDestinationOptions<C extends { readonly kind: string }> = Omit<
+  Partial<InMemoryDestinationOptions<C>>,
+  "commandDefinitions"
+>;
+
+const executeTestUpsertEntryCommand = (
+  _command: UpsertEntryCommand,
+  context: DestinationCommandContext
+): DestinationCommandResultInput => ({
+  destinationIdentity: `entry-${context.sourceIdentity}`,
+  destinationVersion: "destination-version-1",
+});
+
+const executeTestEntryCommand = (
+  command: EntryCommand,
+  context: DestinationCommandContext
+): DestinationCommandResultInput =>
+  command.kind === "UpsertEntry"
+    ? executeTestUpsertEntryCommand(command, context)
+    : {};
+
+const makeTestUpsertEntryDestination = (
+  options: TestDestinationOptions<UpsertEntryCommand> = {}
+) =>
+  InMemoryDestinationPlugin.make({
+    commandDefinitions: UpsertEntryCommands,
+    execute: executeTestUpsertEntryCommand,
+    ...options,
+  });
+
+const makeTestEntryDestination = (
+  options: TestDestinationOptions<EntryCommand> = {}
+) =>
+  InMemoryDestinationPlugin.make({
+    commandDefinitions: EntryCommands,
+    execute: executeTestEntryCommand,
+    ...options,
+  });
+
+const makeTestMultiIdentityEntryDestination = (
+  options: TestDestinationOptions<EntryCommand> = {}
+) =>
+  InMemoryDestinationPlugin.make({
+    commandDefinitions: MultiIdentityEntryCommands,
+    execute: executeTestEntryCommand,
     ...options,
   });
 
@@ -170,10 +303,10 @@ const failRunFailingStoreLayer = (
 const makePublishFailingDestination = (
   attempts: EntryCommand[]
 ): {
-  readonly commandSchema: typeof EntryCommand;
+  readonly commandDefinitions: typeof EntryCommands;
   readonly layer: Layer.Layer<DestinationPlugin>;
 } => ({
-  commandSchema: EntryCommand,
+  commandDefinitions: EntryCommands,
   layer: Layer.sync(DestinationPlugin, () => ({
     execute: (command, context) =>
       Effect.gen(function* () {
@@ -215,10 +348,10 @@ const makeEffectEntryDestination = (
     context: DestinationCommandContext
   ) => Effect.Effect<DestinationCommandResultInput, DestinationPluginError>
 ): {
-  readonly commandSchema: typeof EntryCommand;
+  readonly commandDefinitions: typeof EntryCommands;
   readonly layer: Layer.Layer<DestinationPlugin>;
 } => ({
-  commandSchema: EntryCommand,
+  commandDefinitions: EntryCommands,
   layer: Layer.sync(DestinationPlugin, () => ({
     execute: (command, context) =>
       Effect.gen(function* () {
@@ -360,9 +493,7 @@ describe("runMigration", () => {
           },
         ],
       }),
-      destination: InMemoryDestinationPlugin.make({
-        commandSchema: UpsertEntryCommand,
-      }),
+      destination: makeTestUpsertEntryDestination({}),
       store,
       pipeline: (): Effect.Effect<UpsertEntryCommand, PipelineTestError> =>
         Effect.fail(pipelineTestError),
@@ -381,9 +512,7 @@ describe("runMigration", () => {
           },
         ],
       }),
-      destination: InMemoryDestinationPlugin.make({
-        commandSchema: UpsertEntryCommand,
-      }),
+      destination: makeTestUpsertEntryDestination({}),
       store,
       pipeline: (): Effect.Effect<UpsertEntryCommand, OtherPipelineTestError> =>
         Effect.fail(otherPipelineTestError),
@@ -410,9 +539,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
-        }),
+        destination: makeTestUpsertEntryDestination({}),
         store: InMemoryMigrationStore.layer(),
         pipeline: (source) =>
           Effect.succeed({
@@ -487,8 +614,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
           execute: (_command, context) => ({
             destinationIdentity: `entry-${context.sourceIdentity}`,
@@ -576,8 +702,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(storeState),
@@ -645,8 +770,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
@@ -714,8 +838,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(storeState),
@@ -827,7 +950,7 @@ describe("runMigration", () => {
             ],
           }),
           destination: {
-            commandSchema: UpsertEntryCommand,
+            commandDefinitions: UpsertEntryCommands,
             layer: Layer.sync(DestinationPlugin, () => ({
               execute: (_command, context) => {
                 if (context.sourceIdentity === "article-1") {
@@ -917,8 +1040,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
           transientFailures: { execute: 1 },
           execute: (_command, context) => ({
@@ -987,8 +1109,7 @@ describe("runMigration", () => {
         }),
         sourceCursorRetry: (effect) =>
           effect.pipe(Effect.retry(Schedule.recurs(1))),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
@@ -1041,8 +1162,7 @@ describe("runMigration", () => {
         }),
         sourceLookupRetry: (effect) =>
           effect.pipe(Effect.retry(Schedule.recurs(1))),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
@@ -1102,8 +1222,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(storeState),
@@ -1180,8 +1299,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
@@ -1269,8 +1387,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
@@ -1328,8 +1445,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
@@ -1404,8 +1520,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(storeState),
@@ -1437,6 +1552,70 @@ describe("runMigration", () => {
       })
   );
 
+  it.effect(
+    "accepts decoded source values through in-memory entry command factories",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<ArticleStatsEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const destination = InMemoryDestinationPlugin.makeEntries({
+          schemas: {
+            article: ArticleStatsEntryFields,
+          },
+          state: destinationState,
+        });
+
+        const definition = defineMigration({
+          id: "articles",
+          source: InMemorySourcePlugin.make<ArticleStatsSource>({
+            sourceSchema: ArticleStatsSource,
+            items: [
+              {
+                identity: "article-stats",
+                version: "source-version-1",
+                item: asArticleStatsSource({
+                  title: "  Decoded article  ",
+                  views: "42",
+                }),
+              },
+            ],
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.succeed(
+              destination.commands.upsertEntry("article", {
+                title: source.item.title,
+                views: source.item.views,
+              })
+            ),
+        });
+
+        const summary = yield* runMigration(definition);
+        const firstExecution = destinationState.executions[0];
+
+        expect(summary.status).toBe("succeeded");
+        expect(firstExecution?.command.kind).toBe("UpsertEntry");
+        expect(
+          firstExecution?.command.kind === "UpsertEntry"
+            ? firstExecution.command.fields
+            : undefined
+        ).toEqual({
+          title: "Decoded article",
+          views: 42,
+        });
+        expect(destinationState.entries.get("article:article-stats")).toEqual(
+          expect.objectContaining({
+            fields: {
+              title: "Decoded article",
+              views: 42,
+            },
+          })
+        );
+      })
+  );
+
   it.effect("rejects non-positive in-memory Source batch sizes", () =>
     Effect.gen(function* () {
       const definition = defineMigration({
@@ -1451,9 +1630,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
-        }),
+        destination: makeTestUpsertEntryDestination({}),
         store: InMemoryMigrationStore.layer(),
         pipeline: (source) =>
           Effect.succeed({
@@ -1514,8 +1691,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
@@ -1598,8 +1774,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
@@ -1666,8 +1841,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(storeState),
@@ -1739,8 +1913,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(storeState),
@@ -1823,8 +1996,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
@@ -1914,8 +2086,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
@@ -1986,8 +2157,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
@@ -2057,8 +2227,7 @@ describe("runMigration", () => {
             read: () => Effect.succeed({ items: [] }),
             readByIdentity: () => Effect.fail(sourceError),
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(storeState),
@@ -2140,8 +2309,7 @@ describe("runMigration", () => {
             read: () => Effect.succeed({ items: [] }),
             readByIdentity: () => Effect.fail(sourceError),
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(storeState),
@@ -2230,8 +2398,7 @@ describe("runMigration", () => {
               }),
             readByIdentity: () => Effect.fail(sourceError),
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(storeState),
@@ -2321,8 +2488,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
@@ -2426,8 +2592,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
           execute: (_command, context) => ({
             destinationIdentity: `entry-${context.sourceIdentity}`,
@@ -2518,8 +2683,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -2548,8 +2712,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -2608,8 +2771,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -2634,8 +2796,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -2820,8 +2981,7 @@ describe("runMigration", () => {
           source: makeTestInMemorySource({
             items: [],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -2843,8 +3003,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -2912,8 +3071,7 @@ describe("runMigration", () => {
           source: makeTestInMemorySource({
             items: [],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(authorsStoreState),
@@ -2935,8 +3093,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(articlesStoreState),
@@ -2999,8 +3156,7 @@ describe("runMigration", () => {
       const store = InMemoryMigrationStore.layer(storeState);
       const destinationState =
         InMemoryDestinationPlugin.makeState<EntryCommand>();
-      const destination = InMemoryDestinationPlugin.make({
-        commandSchema: EntryCommand,
+      const destination = makeTestEntryDestination({
         state: destinationState,
         execute: (command, context) =>
           command.kind === "UpsertEntry"
@@ -3122,8 +3278,7 @@ describe("runMigration", () => {
         const stubLockObservations: string[] = [];
         const destinationState =
           InMemoryDestinationPlugin.makeState<EntryCommand>();
-        const destination = InMemoryDestinationPlugin.make({
-          commandSchema: EntryCommand,
+        const destination = makeTestEntryDestination({
           state: destinationState,
           execute: (command, context) => {
             if (context.definitionId === toMigrationDefinitionId("authors")) {
@@ -3290,8 +3445,7 @@ describe("runMigration", () => {
         const stubLockObservations: string[] = [];
         const destinationState =
           InMemoryDestinationPlugin.makeState<EntryCommand>();
-        const destination = InMemoryDestinationPlugin.make({
-          commandSchema: EntryCommand,
+        const destination = makeTestEntryDestination({
           state: destinationState,
           execute: (command, context) => {
             if (context.definitionId === toMigrationDefinitionId("authors")) {
@@ -3457,8 +3611,7 @@ describe("runMigration", () => {
         const stubLockObservations: string[] = [];
         const destinationState =
           InMemoryDestinationPlugin.makeState<EntryCommand>();
-        const destination = InMemoryDestinationPlugin.make({
-          commandSchema: EntryCommand,
+        const destination = makeTestEntryDestination({
           state: destinationState,
           execute: (command, context) => {
             if (context.definitionId === toMigrationDefinitionId("authors")) {
@@ -3930,8 +4083,7 @@ describe("runMigration", () => {
           source: makeTestInMemorySource({
             items: [],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -3947,8 +4099,7 @@ describe("runMigration", () => {
           source: makeTestInMemorySource({
             items: [],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -3970,8 +4121,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -4008,12 +4158,18 @@ describe("runMigration", () => {
   );
 
   it.effect(
-    "persists the latest identity-bearing result from a Destination Command Plan",
+    "persists the identity-bearing result from a Destination Command Plan",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const destinationState =
-          InMemoryDestinationPlugin.makeState<EntryCommand>();
+          InMemoryDestinationPlugin.makeState<ArticleEntryCommand>();
+        const destination = InMemoryDestinationPlugin.makeEntries({
+          schemas: {
+            article: ArticleEntryFields,
+          },
+          state: destinationState,
+        });
         const definition = defineMigration({
           id: "articles",
           source: makeTestInMemorySource({
@@ -4025,31 +4181,14 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: EntryCommand,
-            state: destinationState,
-            execute: (command, context) =>
-              command.kind === "UpsertEntry"
-                ? {
-                    destinationIdentity: `entry-${context.sourceIdentity}`,
-                    destinationVersion: "draft-version-1",
-                  }
-                : {},
-          }),
+          destination,
           store: InMemoryMigrationStore.layer(storeState),
           pipeline: (source) =>
             Effect.succeed([
-              {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              },
-              {
-                kind: "PublishEntry" as const,
-                contentType: "article",
-              },
+              destination.commands.upsertEntry("article", {
+                title: source.item.title,
+              }),
+              destination.commands.publishEntry("article"),
             ]),
         });
 
@@ -4066,11 +4205,139 @@ describe("runMigration", () => {
         ).toEqual(
           expect.objectContaining({
             status: "migrated",
-            destinationIdentity: "entry-article-1",
-            destinationVersion: "draft-version-1",
+            destinationIdentity: "entry:article:article-1",
+            destinationVersion: "version:1",
           })
         );
       })
+  );
+
+  it.effect(
+    "publishes in-memory entries without returning another identity",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<ArticleEntryCommand>();
+        const destination = InMemoryDestinationPlugin.makeEntries({
+          schemas: {
+            article: ArticleEntryFields,
+          },
+          state: destinationState,
+        });
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Published by default article" },
+              },
+            ],
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.succeed([
+              destination.commands.upsertEntry("article", {
+                title: source.item.title,
+              }),
+              destination.commands.publishEntry("article"),
+            ]),
+        });
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("succeeded");
+        expect(
+          destinationState.executions.map((execution) => ({
+            kind: execution.command.kind,
+            result: execution.result,
+          }))
+        ).toEqual([
+          {
+            kind: "UpsertEntry",
+            result: {
+              destinationIdentity: "entry:article:article-1",
+              destinationVersion: "version:1",
+            },
+          },
+          {
+            kind: "PublishEntry",
+            result: {},
+          },
+        ]);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            destinationIdentity: "entry:article:article-1",
+            destinationVersion: "version:1",
+          })
+        );
+        expect(destinationState.entries.get("article:article-1")).toEqual(
+          expect.objectContaining({
+            contentType: "article",
+            fields: {
+              title: "Published by default article",
+            },
+            published: true,
+          })
+        );
+      })
+  );
+
+  it.effect("fails publishing an in-memory entry before it is upserted", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<ArticleEntryCommand>();
+      const destination = InMemoryDestinationPlugin.makeEntries({
+        schemas: {
+          article: ArticleEntryFields,
+        },
+        state: destinationState,
+      });
+      const definition = defineMigration({
+        id: "articles",
+        source: makeTestInMemorySource({
+          items: [
+            {
+              identity: "article-1",
+              version: "source-version-1",
+              item: { title: "Publish-only article" },
+            },
+          ],
+        }),
+        destination,
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: () =>
+          Effect.succeed(destination.commands.publishEntry("article")),
+      });
+
+      const summary = yield* runMigration(definition);
+
+      expect(summary.status).toBe("failed");
+      expect(destinationState.executeAttempts).toBe(1);
+      expect(destinationState.executions).toEqual([]);
+      expect(destinationState.entries.size).toBe(0);
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        )
+      ).toEqual(
+        expect.objectContaining({
+          status: "failed",
+          error: expect.objectContaining({
+            message: "Cannot publish an in-memory entry before it is upserted",
+          }),
+        })
+      );
+    })
   );
 
   it.effect(
@@ -4106,8 +4373,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(storeState),
@@ -4158,8 +4424,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: EntryCommand,
+          destination: makeTestEntryDestination({
             state: destinationState,
             execute: (command, context) =>
               command.kind === "UpsertEntry"
@@ -4232,9 +4497,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: EntryCommand,
-            identityCommandKinds: ["UpsertEntry", "PublishEntry"],
+          destination: makeTestMultiIdentityEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(storeState),
@@ -4283,7 +4546,7 @@ describe("runMigration", () => {
         const attempts: EntryCommand["kind"][] = [];
         let publishFailures = 1;
         const destination = {
-          commandSchema: EntryCommand,
+          commandDefinitions: EntryCommands,
           layer: Layer.sync(DestinationPlugin, () => ({
             execute: (command, context) =>
               Effect.gen(function* () {
@@ -4391,9 +4654,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
-        }),
+        destination: makeTestUpsertEntryDestination({}),
         store: InMemoryMigrationStore.layer(unselectedStoreState),
         pipeline: (source) =>
           Effect.succeed({
@@ -4415,9 +4676,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
-        }),
+        destination: makeTestUpsertEntryDestination({}),
         store: InMemoryMigrationStore.layer(selectedStoreState),
         pipeline: (source) =>
           Effect.succeed({
@@ -4471,8 +4730,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(authorsStoreState),
@@ -4501,8 +4759,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: InMemoryMigrationStore.layer(articlesStoreState),
@@ -4563,8 +4820,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -4620,8 +4876,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -4650,8 +4905,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -4718,8 +4972,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -4748,8 +5001,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -4803,8 +5055,7 @@ describe("runMigration", () => {
           read: () => Effect.fail(sourceError),
           readByIdentity: () => Effect.succeed(null),
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: failRunFailingStoreLayer(storeState, failRunError),
@@ -4858,8 +5109,7 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
+        destination: makeTestUpsertEntryDestination({
           state: destinationState,
         }),
         store: releaseFailingStoreLayer(storeState, releaseError),
@@ -4939,8 +5189,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -4965,8 +5214,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -5044,8 +5292,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -5113,8 +5360,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,
@@ -5143,8 +5389,7 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store,

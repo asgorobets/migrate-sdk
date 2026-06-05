@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect";
 import {
   defineMigration,
   InMemoryDestinationPlugin,
+  type InMemoryEntryCommand,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
   type MigrationRunSummary,
@@ -45,27 +46,26 @@ const NestedArticle = Schema.Struct({
 
 type NestedArticle = typeof NestedArticle.Type;
 
-const UpsertArticleCommand = Schema.Struct({
-  contentType: Schema.Literal("article"),
-  fields: Schema.Struct({
-    authorDisplayName: Schema.String,
-    locale: ArticleLocale,
-    readingTimeMinutes: Schema.Number,
-    seoDescription: Schema.optional(Schema.String),
-    seoTitle: Schema.String,
-    slug: Schema.String,
-    tagLabels: Schema.Array(Schema.String),
-    title: Schema.String,
-    views: Schema.Number,
-  }),
-  kind: Schema.Literal("UpsertArticle"),
+const ArticleEntryFields = Schema.Struct({
+  authorDisplayName: Schema.String,
+  locale: ArticleLocale,
+  readingTimeMinutes: Schema.Number,
+  seoDescription: Schema.optional(Schema.String),
+  seoTitle: Schema.String,
+  slug: Schema.String,
+  tagLabels: Schema.Array(Schema.String),
+  title: Schema.String,
+  views: Schema.Number,
 });
 
-type UpsertArticleCommand = typeof UpsertArticleCommand.Type;
-type UpsertArticleFields = UpsertArticleCommand["fields"];
+interface ArticleEntrySchemas {
+  readonly article: typeof ArticleEntryFields;
+}
+type ArticleEntryCommand = InMemoryEntryCommand<ArticleEntrySchemas>;
+type ArticleEntryFields = typeof ArticleEntryFields.Type;
 
 export interface NestedArticleSchemaExampleResult {
-  readonly commandFields: readonly UpsertArticleFields[];
+  readonly commandFields: readonly ArticleEntryFields[];
   readonly summary: MigrationRunSummary;
 }
 
@@ -102,7 +102,13 @@ export const runNestedArticleSchemaExample = Effect.fn(
   "runNestedArticleSchemaExample"
 )(function* () {
   const destinationState =
-    InMemoryDestinationPlugin.makeState<UpsertArticleCommand>();
+    InMemoryDestinationPlugin.makeState<ArticleEntryCommand>();
+  const destination = InMemoryDestinationPlugin.makeEntries({
+    schemas: {
+      article: ArticleEntryFields,
+    },
+    state: destinationState,
+  });
 
   const migration = defineMigration({
     id: "nested-articles",
@@ -110,14 +116,7 @@ export const runNestedArticleSchemaExample = Effect.fn(
       items: sourceItems,
       sourceSchema: NestedArticle,
     }),
-    destination: InMemoryDestinationPlugin.make({
-      commandSchema: UpsertArticleCommand,
-      execute: (_command, context) => ({
-        destinationIdentity: `entry-${context.sourceIdentity}`,
-        destinationVersion: "destination-version-1",
-      }),
-      state: destinationState,
-    }),
+    destination,
     store: InMemoryMigrationStore.layer(),
     pipeline: Effect.fn("nestedArticles.pipeline")(function* (source) {
       const article: NestedArticle = source.item;
@@ -126,29 +125,25 @@ export const runNestedArticleSchemaExample = Effect.fn(
       const views: number = article.metrics.views;
       const readingTimeMinutes: number = article.metrics.readingTimeMinutes;
 
-      return {
-        contentType: "article" as const,
-        fields: {
-          authorDisplayName,
-          locale: article.locale,
-          readingTimeMinutes,
-          seoDescription: article.seo.description,
-          seoTitle: article.seo.title,
-          slug: article.slug,
-          tagLabels,
-          title: article.title,
-          views,
-        },
-        kind: "UpsertArticle" as const,
-      };
+      return destination.commands.upsertEntry("article", {
+        authorDisplayName,
+        locale: article.locale,
+        readingTimeMinutes,
+        seoDescription: article.seo.description,
+        seoTitle: article.seo.title,
+        slug: article.slug,
+        tagLabels,
+        title: article.title,
+        views,
+      });
     }),
   });
 
   const summary = yield* runMigration(migration);
 
   return {
-    commandFields: destinationState.executions.map(
-      (execution) => execution.command.fields
+    commandFields: destinationState.executions.flatMap((execution) =>
+      execution.command.kind === "UpsertEntry" ? [execution.command.fields] : []
     ),
     summary,
   } satisfies NestedArticleSchemaExampleResult;

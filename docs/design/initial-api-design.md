@@ -109,14 +109,34 @@ export interface DestinationCommand {
   readonly kind: string;
 }
 
+export type DestinationCommandSchema<Command extends DestinationCommand> =
+  Schema.Codec<Command, Command, never, never>;
+
+export interface DestinationCommandDefinition<
+  Command extends DestinationCommand,
+> {
+  readonly identity?: boolean;
+  readonly schema: DestinationCommandSchema<Command>;
+}
+
+export interface DefinedDestinationCommands<
+  Command extends DestinationCommand,
+> {
+  readonly commandSchema: DestinationCommandSchema<Command>;
+  readonly definitions: Readonly<
+    Record<string, DestinationCommandDefinition<DestinationCommand>>
+  >;
+  readonly identityCommandKinds: readonly Command["kind"][];
+}
+
 export interface DestinationCommandResult {
-  readonly destinationIdentity: DestinationIdentity;
+  readonly destinationIdentity?: DestinationIdentity;
   readonly destinationVersion?: DestinationVersion;
   readonly metadata?: Record<string, unknown>;
 }
 
 export interface DestinationCommandResultInput {
-  readonly destinationIdentity: DestinationIdentityInput;
+  readonly destinationIdentity?: DestinationIdentityInput;
   readonly destinationVersion?: DestinationVersionInput;
   readonly metadata?: Record<string, unknown>;
 }
@@ -292,22 +312,26 @@ export const DestinationPlugin =
   Context.Service<DestinationPlugin>("@migrate-sdk/DestinationPlugin");
 ```
 
-Example implementation layers:
+Example configured plugins:
 
 ```ts
-const sqlSourceLayer = SqlSourcePlugin.layer({
+const sqlSource = SqlSourcePlugin.plugin({
   table: "articles",
   identity: ["id"],
   version: "updated_at",
   cursor: ["updated_at", "id"],
 });
 
-const contentStackDestinationLayer = ContentStackDestinationPlugin.layer({
-  contentType: "article",
+const contentStackDestination = ContentStackDestinationPlugin.plugin({
+  schemas: {
+    article: ArticleEntryFields,
+  },
 });
 ```
 
-The runner should provide these layers per migration definition. Do not provide every source plugin globally under the same `SourcePlugin` tag.
+Configured plugins hide their Effect layers from migration authors. The runner
+provides those layers per migration definition. Do not provide every source
+plugin globally under the same `SourcePlugin` tag.
 
 Destination versions are useful for optimistic concurrency and race detection. For example, a ContentStack destination plugin can return the entry UID as `destinationIdentity` and the entry version or ETag as `destinationVersion`. A later update can use that version to avoid overwriting another runner's write if two migration runners race on the same destination item.
 
@@ -714,8 +738,8 @@ export const defineSourcePlugin = <Source, Cursor>(
 });
 
 export interface ConfiguredDestinationPlugin<Command extends DestinationCommand> {
+  readonly commandDefinitions: DefinedDestinationCommands<Command>;
   readonly layer: Layer.Layer<DestinationPlugin>;
-  readonly commandSchema: Schema.Schema<Command>;
 }
 
 export interface MigrationDefinition<
@@ -778,6 +802,18 @@ export const defineMigration = <
 Example:
 
 ```ts
+const ArticleEntryFields = Schema.Struct({
+  body: Schema.String,
+  slug: Schema.String,
+  title: Schema.String,
+});
+
+const contentstack = ContentStackDestinationPlugin.plugin({
+  schemas: {
+    article: ArticleEntryFields,
+  },
+});
+
 const articlesMigration = {
   id: "articles",
 
@@ -789,10 +825,7 @@ const articlesMigration = {
     cursor: ["updated_at", "id"],
   }),
 
-  destination: ContentStackDestinationPlugin.plugin({
-    contentType: "article",
-    commandSchema: ContentStackCommand,
-  }),
+  destination: contentstack,
 
   store: SqlMigrationStore.layer({
     tablePrefix: "migrate_sdk",
@@ -801,15 +834,11 @@ const articlesMigration = {
   destinationRetry: contentStackRetry,
 
   pipeline: Effect.fn("articles.pipeline")(function* (source) {
-    return {
-      kind: "UpsertEntry" as const,
-      contentType: "article",
-      fields: {
-        title: source.item.title,
-        body: source.item.body,
-        slug: source.item.slug,
-      },
-    };
+    return contentstack.commands.upsertEntry("article", {
+      body: source.item.body,
+      slug: source.item.slug,
+      title: source.item.title,
+    });
   }),
 
   dependsOn: ["authors"],
@@ -822,7 +851,156 @@ Effect Schema is the canonical v1 schema mechanism. Source plugins expose a
 Source Payload Schema, and destination plugins expose or use destination command
 schemas. Migration definitions connect them through typed pipelines.
 
+Source Payload Schemas live at the external-source boundary, so they may decode
+source-native raw values into pipeline-facing values. A CSV source can turn text
+fields into richer TypeScript values before the pipeline runs:
+
 ```ts
+const CsvArticleSource = Schema.Struct({
+  title: Schema.Trim,
+  views: Schema.NumberFromString,
+});
+
+type CsvArticleSource = typeof CsvArticleSource.Type;
+
+const csvSource = CsvSourcePlugin.plugin({
+  sourceSchema: CsvArticleSource,
+});
+
+const csvArticlePipeline = Effect.fn("articles.pipeline")(function* (
+  sourceItem: SourceItem<CsvArticleSource>
+) {
+  return {
+    title: sourceItem.item.title,
+    // string, already trimmed
+    views: sourceItem.item.views,
+    // number, decoded from the CSV string
+  };
+});
+```
+
+Rich sources do not need decoding when their values already have the desired
+pipeline-facing shape:
+
+```ts
+const JsonArticleSource = Schema.Struct({
+  title: Schema.String,
+  views: Schema.Number,
+});
+```
+
+Destination schemas are the opposite boundary. They validate command values the
+pipeline already produced; they do not translate source-native representations.
+Destination-specific schemas must have the same TypeScript shape on both sides,
+and the destination plugin performs any destination-native encoding internally:
+
+```ts
+const ArticleEntryFields = Schema.Struct({
+  title: Schema.String,
+  views: Schema.Number,
+});
+
+const contentful = ContentfulDestinationPlugin.plugin({
+  schemas: {
+    article: ArticleEntryFields,
+  },
+});
+
+const articlePipeline = Effect.fn("articles.pipeline")(function* (
+  sourceItem: SourceItem<CsvArticleSource>
+) {
+  return contentful.commands.upsertEntry("article", {
+    title: sourceItem.item.title,
+    views: sourceItem.item.views,
+  });
+});
+```
+
+Destination field schemas should not use decoding schemas such as
+`Schema.NumberFromString`. That conversion belongs to the source plugin when the
+source representation is a string.
+
+The in-memory destination is currently doing two jobs. Its CMS-like prebuilt
+plugin usage path is `InMemoryDestinationPlugin.makeEntries(...)`: configure
+entry field schemas once, then use the returned command factories in the
+pipeline. This mirrors the shape expected from destination packages such as
+Contentful:
+
+```ts
+const ArticleEntryFields = Schema.Struct({
+  title: Schema.String,
+  views: Schema.Number,
+});
+
+const destination = InMemoryDestinationPlugin.makeEntries({
+  schemas: {
+    article: ArticleEntryFields,
+  },
+});
+
+const articles = defineMigration({
+  id: "articles",
+  source: CsvSourcePlugin.plugin({
+    sourceSchema: CsvArticleSource,
+  }),
+  destination,
+  store: InMemoryMigrationStore.layer(),
+  pipeline: Effect.fn("articles.pipeline")(function* (source) {
+    return destination.commands.upsertEntry("article", {
+      title: source.item.title,
+      views: source.item.views,
+    });
+  }),
+});
+```
+
+`InMemoryDestinationPlugin.make(...)` remains the lower-level custom/test
+destination path for cases that are not entry/CMS-shaped. It still requires
+registered command definitions and an explicit executor, so tests do not need to
+bypass the same runtime command validation real plugins use:
+
+```ts
+const SearchIndexCommand = Schema.Struct({
+  kind: Schema.Literal("IndexRecord"),
+  record: Schema.Struct({
+    body: Schema.String,
+    objectId: Schema.String,
+  }),
+});
+
+type SearchIndexCommand = typeof SearchIndexCommand.Type;
+
+const SearchIndexCommands = defineDestinationCommands({
+  IndexRecord: {
+    identity: true,
+    schema: SearchIndexCommand,
+  },
+});
+
+const searchIndexDestination = InMemoryDestinationPlugin.make({
+  commandDefinitions: SearchIndexCommands,
+  execute: (command, context) => ({
+    destinationIdentity: `search:${context.sourceIdentity}`,
+    metadata: {
+      indexedObjectId: command.record.objectId,
+    },
+  }),
+});
+```
+
+This lower-level factory is useful while the SDK uses the in-memory destination
+as a test plugin. A later API split should make that explicit, for example by
+keeping the CMS-shaped demo as an in-memory entry destination and moving the
+generic test factory behind a name that says test/custom rather than prebuilt
+plugin usage.
+
+```ts
+const contentstack = ContentStackDestinationPlugin.plugin({
+  schemas: {
+    article: ArticleEntryFields,
+  },
+});
+
 const articles = defineMigration({
   id: "articles",
 
@@ -833,19 +1011,13 @@ const articles = defineMigration({
     version: "updated_at",
   }),
 
-  destination: ContentStackDestinationPlugin.plugin({
-    commandSchema: ContentStackCommand,
-  }),
+  destination: contentstack,
 
   pipeline: Effect.fn("articles.pipeline")(function* (source) {
     // source.item is inferred from SqlArticleRow
-    return {
-      kind: "UpsertEntry" as const,
-      contentType: "article",
-      fields: {
-        title: source.item.title,
-      },
-    };
+    return contentstack.commands.upsertEntry("article", {
+      title: source.item.title,
+    });
   }),
 });
 ```
@@ -855,7 +1027,10 @@ Future plugins may generate schemas from external systems, such as ContentStack 
 Pipeline context can use previous item state to select a different destination command for first migration versus update or stub completion:
 
 ```ts
-pipeline: Effect.fn("articles.pipeline")(function* (source, context) {
+const articlePipeline = Effect.fn("articles.pipeline")(function* (
+  source,
+  context
+) {
   const fields = {
     title: source.item.title,
     body: source.item.body,
@@ -863,19 +1038,14 @@ pipeline: Effect.fn("articles.pipeline")(function* (source, context) {
   };
 
   if (context.previousState?.status === "needs-update") {
-    return {
-      kind: "UpdateAndPublishEntry" as const,
-      uid: context.previousState.destinationIdentity,
-      fields,
+    return contentstack.commands.updateAndPublishEntry("article", {
       expectedVersion: context.previousState.destinationVersion,
-    };
+      fields,
+      uid: context.previousState.destinationIdentity,
+    });
   }
 
-  return {
-    kind: "UpsertEntry" as const,
-    contentType: "article",
-    fields,
-  };
+  return contentstack.commands.upsertEntry("article", fields);
 });
 ```
 
@@ -884,15 +1054,21 @@ Dynamic TypeScript registration is still a migration definition:
 ```ts
 const contentTypes = ["author", "article", "category"] as const;
 
-export const migrations = contentTypes.map((contentType) =>
-  defineMigration({
+export const migrations = contentTypes.map((contentType) => {
+  const destination = ContentStackDestinationPlugin.plugin({
+    schemas: {
+      [contentType]: contentTypeSchemas[contentType],
+    },
+  });
+
+  return defineMigration({
     id: contentType,
     source: SqlSourcePlugin.plugin({ table: contentType }),
-    destination: ContentStackDestinationPlugin.layer({ contentType }),
+    destination,
     store: SqlMigrationStore.layer({ tablePrefix: "migrate_sdk" }),
-    pipeline: makePipelineFor(contentType),
-  })
-);
+    pipeline: makePipelineFor(contentType, destination.commands),
+  });
+});
 ```
 
 ## Runner Sketch

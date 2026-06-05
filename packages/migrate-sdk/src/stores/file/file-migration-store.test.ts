@@ -5,6 +5,9 @@ import { Effect, Layer, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import {
+  type DestinationCommandContext,
+  type DestinationCommandResultInput,
+  defineDestinationCommands,
   defineMigration,
   defineSourcePlugin,
   FileMigrationStore,
@@ -29,6 +32,34 @@ const UpsertEntryCommand = Schema.Struct({
 });
 
 type UpsertEntryCommand = typeof UpsertEntryCommand.Type;
+
+const UpsertEntryCommands = defineDestinationCommands({
+  UpsertEntry: {
+    identity: true,
+    schema: UpsertEntryCommand,
+  },
+});
+
+const executeTestUpsertEntryCommand = (
+  _command: UpsertEntryCommand,
+  context: DestinationCommandContext
+): DestinationCommandResultInput => ({
+  destinationIdentity: `entry-${context.sourceIdentity}`,
+  destinationVersion: "destination-version-1",
+});
+
+const makeTestUpsertEntryDestination = (
+  options: {
+    readonly state?: ReturnType<
+      typeof InMemoryDestinationPlugin.makeState<UpsertEntryCommand>
+    >;
+  } = {}
+) =>
+  InMemoryDestinationPlugin.make({
+    commandDefinitions: UpsertEntryCommands,
+    execute: executeTestUpsertEntryCommand,
+    ...(options.state === undefined ? {} : { state: options.state }),
+  });
 
 const ArticleSource = Schema.Struct({
   publish: Schema.optional(Schema.Boolean),
@@ -117,8 +148,7 @@ const makeArticlesMigration = (options: {
       sourceSchema: ArticleSource,
       items: options.items,
     }),
-    destination: InMemoryDestinationPlugin.make({
-      commandSchema: UpsertEntryCommand,
+    destination: makeTestUpsertEntryDestination({
       state: options.destinationState,
     }),
     store: fileStoreLayer(options.directory),
@@ -229,8 +259,7 @@ describe("FileMigrationStore", () => {
               },
             ],
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: fileStoreLayer(directory),
@@ -389,8 +418,7 @@ describe("FileMigrationStore", () => {
             read: () => Effect.fail(sourceError),
             readByIdentity: () => Effect.succeed(null),
           }),
-          destination: InMemoryDestinationPlugin.make({
-            commandSchema: UpsertEntryCommand,
+          destination: makeTestUpsertEntryDestination({
             state: destinationState,
           }),
           store: fileStoreLayer(directory),

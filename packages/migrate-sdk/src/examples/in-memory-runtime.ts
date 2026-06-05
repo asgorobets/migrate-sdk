@@ -4,10 +4,10 @@ import {
   InMemoryDestinationPlugin,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
-  runMigration,
-  skipItem,
   type MigrationRunSummary,
+  runMigration,
   type SourceItemInput,
+  skipItem,
 } from "../index.ts";
 
 const Article = Schema.Struct({
@@ -17,13 +17,9 @@ const Article = Schema.Struct({
 
 type Article = typeof Article.Type;
 
-const UpsertEntryCommand = Schema.Struct({
-  kind: Schema.Literal("UpsertEntry"),
-  contentType: Schema.String,
-  fields: Schema.Record(Schema.String, Schema.Unknown),
+const ArticleEntryFields = Schema.Struct({
+  title: Schema.String,
 });
-
-type UpsertEntryCommand = typeof UpsertEntryCommand.Type;
 
 const sourceItems = [
   {
@@ -52,35 +48,32 @@ const sourceItems = [
   },
 ] satisfies readonly SourceItemInput<Article>[];
 
-const makeArticlesMigration = () =>
-  defineMigration({
+const makeArticlesMigration = () => {
+  const destination = InMemoryDestinationPlugin.makeEntries({
+    schemas: {
+      article: ArticleEntryFields,
+    },
+  });
+
+  return defineMigration({
     id: "articles",
     source: InMemorySourcePlugin.make({
       items: sourceItems,
       sourceSchema: Article,
     }),
-    destination: InMemoryDestinationPlugin.make({
-      commandSchema: UpsertEntryCommand,
-      execute: (_command, context) => ({
-        destinationIdentity: `entry-${context.sourceIdentity}`,
-        destinationVersion: "destination-version-1",
-      }),
-    }),
+    destination,
     store: InMemoryMigrationStore.layer(),
     pipeline: Effect.fn("articles.pipeline")(function* (source) {
       if (!source.item.publish) {
         return yield* skipItem("Article is not published");
       }
 
-      return {
-        kind: "UpsertEntry" as const,
-        contentType: "article",
-        fields: {
-          title: source.item.title,
-        },
-      };
+      return destination.commands.upsertEntry("article", {
+        title: source.item.title,
+      });
     }),
   });
+};
 
 export const runInMemoryExample = Effect.fn("runInMemoryExample")(function* () {
   return yield* runMigration(makeArticlesMigration());

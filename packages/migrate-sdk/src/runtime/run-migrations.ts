@@ -584,6 +584,7 @@ const executeStubPlan = <Command extends DestinationCommand, PipelineError>(
       const destination = yield* DestinationPlugin;
 
       return yield* executeDestinationCommandPlan({
+        commandDefinitions: definition.destination.commandDefinitions,
         context: {
           definitionId: definition.id,
           runId,
@@ -592,7 +593,6 @@ const executeStubPlan = <Command extends DestinationCommand, PipelineError>(
         },
         destination,
         destinationRetry: definition.destinationRetry,
-        identityCommandKinds: definition.destination.identityCommandKinds,
         plan,
       });
     }).pipe(Effect.provide(definition.destination.layer));

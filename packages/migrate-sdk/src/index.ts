@@ -15,13 +15,19 @@ export type {
 export { defineMigration, defineSourcePlugin } from "./domain/definition.ts";
 
 export type {
+  DefinedDestinationCommands,
   DestinationCommand,
   DestinationCommandContext,
+  DestinationCommandDefinition,
   DestinationCommandPlan,
   DestinationCommandResult,
   DestinationCommandResultInput,
+  DestinationCommandSchema,
 } from "./domain/destination.ts";
-export { makeDestinationCommandResult } from "./domain/destination.ts";
+export {
+  defineDestinationCommands,
+  makeDestinationCommandResult,
+} from "./domain/destination.ts";
 
 export {
   DestinationPluginError,
@@ -123,10 +129,20 @@ export type { RunMigrationError } from "./runtime/run-migrations.ts";
 
 export { InMemoryDestinationPlugin } from "./destinations/in-memory/in-memory-destination.ts";
 export type {
+  InMemoryEntryCommand,
+  InMemoryEntryDestination,
+  InMemoryEntryDestinationCommands,
+  InMemoryEntryDestinationOptions,
+  InMemoryEntryFieldSchema,
+  InMemoryEntryFieldSchemas,
+  InMemoryPublishEntryCommand,
+  InMemoryDestinationEntry,
   InMemoryDestinationExecution,
+  InMemoryDestinationExecute,
   InMemoryDestinationOptions,
   InMemoryDestinationState,
   InMemoryDestinationTransientFailures,
+  InMemoryUpsertEntryCommand,
 } from "./destinations/in-memory/in-memory-destination.ts";
 
 export { InMemorySourcePlugin } from "./sources/in-memory/in-memory-source.ts";

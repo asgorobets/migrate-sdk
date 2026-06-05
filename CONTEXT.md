@@ -82,6 +82,15 @@ The typed transformation from one source item into destination commands.
 **Destination Command**:
 The typed command produced by a transformation pipeline and executed by a destination plugin.
 
+**Destination Command Definition**:
+A destination-owned definition that validates a destination command kind and classifies whether it is identity-bearing or side-effect-only. Normal migration pipelines should use destination-owned command factories rather than constructing command definition records directly.
+
+**Destination Command Schema**:
+A no-service Effect schema for a destination command. It validates pipeline-facing command values and must have the same encoded and decoded TypeScript shape.
+
+**Destination Entry Field Schema**:
+A destination-owned Effect schema for pipeline-facing entry fields. It validates already-decoded values and must have the same encoded and decoded TypeScript shape.
+
 **Destination Command Plan**:
 An ordered set of destination commands produced for one source item.
 
@@ -110,13 +119,10 @@ The Effect retry wrapper selected by a migration definition for source cursor re
 The Effect retry wrapper selected by a migration definition for source identity lookups.
 
 **Source Payload Schema**:
-The Effect schema used by a source plugin to validate and infer source item payloads.
+The Effect schema used by a source plugin to validate, decode, and infer source item payloads from source-native values into pipeline-facing values.
 
 **Source Cursor Schema**:
 The Effect codec used by a source plugin to validate, encode, and decode source cursors.
-
-**Destination Command Schema**:
-The Effect schema used by a destination plugin to validate and infer destination commands.
 
 **Skip Item**:
 A typed pipeline error that records a source item as skipped without calling the destination plugin.
@@ -151,6 +157,7 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A **Source Plugin** emits **Source Items**; it does not own **Migration Item State**.
 - A **Source Plugin** reads source items by cursor and by source identity.
 - A **Source Plugin** must expose a **Source Payload Schema**.
+- A **Source Payload Schema** may decode source-native raw values, such as CSV strings, into the pipeline-facing TypeScript values the transformation pipeline receives.
 - A **Source Payload Schema** may be supplied directly by a user or derived by a source plugin from a source-native schema.
 - A **Migration Run** decodes each source item payload with the **Source Payload Schema** before unchanged-terminal checks, transformation pipeline execution, and destination command execution.
 - A source item with a valid identity and version but invalid payload becomes a failed **Migration Item State** with durable **Migration Item Error Details**.
@@ -207,6 +214,13 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A **Migration Reference Lookup** may return a **Needs Update** item state as a usable reference because the **Destination Identity** already exists.
 - A **Transformation Pipeline** transforms exactly one **Source Item** into one **Destination Command Plan**.
 - A **Destination Command Plan** may contain one or more ordered **Destination Commands**.
+- A **Destination Plugin** owns the **Destination Command Definitions** for the command kinds it accepts.
+- A **Destination Command Definition** classifies its command kind as identity-bearing or side-effect-only.
+- A **Destination Command Schema** validates already-decoded command values and must not change value representation between its encoded and decoded sides.
+- A **Destination Entry Field Schema** validates pipeline-produced values; source plugins decode external raw data before the pipeline, and destination plugins encode to destination-native payloads internally.
+- A **Destination Entry Field Schema** must not change value representation between its encoded and decoded sides.
+- A **Destination Plugin** may expose command factories such as `destination.commands.upsertEntry(...)` so pipelines do not construct raw command objects.
+- Destination-specific schemas should be configured once when creating a **Destination Plugin**; command factories enforce the relevant configured schema for the command being created.
 - A **Destination Command** maps back to exactly one **Source Item** through its **Destination Command Plan**.
 - A **Destination Retry Strategy** wraps each **Destination Command** execution in a **Destination Command Plan** independently.
 - A **Destination Command Result** may include a non-empty **Destination Identity** and a non-empty **Destination Version**.

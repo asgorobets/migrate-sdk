@@ -90,14 +90,14 @@ describe("in-memory runtime example", () => {
           needsUpdate: 0,
         });
         expect(result.bookEntryFields?.authorEntries).toEqual([
-          "entry:authors:author:maya-chen",
+          "entry:author:author:maya-chen",
         ]);
         expect(result.bookEntryFields?.authorReferenceStatuses).toEqual([
           "needs-update",
         ]);
         expect(result.authorEntryFields?.popularBookEntries).toEqual([
-          "entry:books:book:effectful-architecture",
-          "entry:books:book:future-catalog",
+          "entry:book:book:effectful-architecture",
+          "entry:book:book:future-catalog",
         ]);
         expect(result.authorEntryFields?.popularBookReferenceStatuses).toEqual([
           "migrated",
@@ -108,7 +108,7 @@ describe("in-memory runtime example", () => {
             definitionId: "books",
             sourceIdentity: "book:future-catalog",
             status: "needs-update",
-            destinationIdentity: "entry:books:book:future-catalog",
+            destinationIdentity: "entry:book:book:future-catalog",
           })
         );
         expect(result.authorState).toEqual(
@@ -117,7 +117,7 @@ describe("in-memory runtime example", () => {
             sourceIdentity: "author:maya-chen",
             sourceVersion: "author-version-1",
             status: "migrated",
-            destinationIdentity: "entry:authors:author:maya-chen",
+            destinationIdentity: "entry:author:author:maya-chen",
           })
         );
         expect(output).toContain("Circular Book and Author Stub Example");

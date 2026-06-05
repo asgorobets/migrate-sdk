@@ -8,6 +8,7 @@ import {
   SourcePlugin as SourcePluginService,
 } from "../services/source-plugin.ts";
 import type {
+  DefinedDestinationCommands,
   DestinationCommand,
   DestinationCommandPlan,
 } from "./destination.ts";
@@ -97,8 +98,7 @@ export const defineSourcePlugin = <Source, Cursor>(
 export interface ConfiguredDestinationPlugin<
   Command extends DestinationCommand,
 > {
-  readonly commandSchema: Schema.Schema<Command>;
-  readonly identityCommandKinds?: readonly Command["kind"][];
+  readonly commandDefinitions: DefinedDestinationCommands<Command>;
   readonly layer: Layer.Layer<DestinationPlugin>;
 }
 

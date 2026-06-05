@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import type { DestinationRetryStrategy } from "../domain/definition.ts";
 import type {
+  DefinedDestinationCommands,
   DestinationCommand,
   DestinationCommandContext,
   DestinationCommandPlan,
@@ -97,18 +98,13 @@ const validateNonEmptyCommandPlan = (
       }
     : null;
 
-const validateIdentityCommandKinds = <Command extends DestinationCommand>(
+const validateIdentityCommandDefinitions = <Command extends DestinationCommand>(
   commands: readonly Command[],
-  identityCommandKinds?: readonly Command["kind"][] | undefined
+  commandDefinitions: DefinedDestinationCommands<Command>
 ): DestinationCommandPlanFailure | null => {
-  if (identityCommandKinds === undefined) {
-    return null;
-  }
-
-  const identityKinds = new Set<string>(identityCommandKinds);
   const planIdentityKinds = commands
     .map((command) => command.kind)
-    .filter((kind) => identityKinds.has(kind));
+    .filter((kind) => commandDefinitions.definitions[kind]?.identity === true);
 
   return planIdentityKinds.length > 1
     ? {
@@ -214,16 +210,16 @@ const commandPlanSuccess = (
 export const executeDestinationCommandPlan = <
   Command extends DestinationCommand,
 >({
+  commandDefinitions,
   context,
   destination,
   destinationRetry,
-  identityCommandKinds,
   plan,
 }: {
+  readonly commandDefinitions: DefinedDestinationCommands<Command>;
   readonly context: DestinationCommandContext;
   readonly destination: DestinationPlugin;
   readonly destinationRetry?: DestinationRetryStrategy | undefined;
-  readonly identityCommandKinds?: readonly Command["kind"][] | undefined;
   readonly plan: DestinationCommandPlan<Command>;
 }): Effect.Effect<DestinationCommandPlanOutcome> =>
   Effect.gen(function* () {
@@ -235,9 +231,9 @@ export const executeDestinationCommandPlan = <
       return emptyPlanValidationFailure;
     }
 
-    const staticValidationFailure = validateIdentityCommandKinds(
+    const staticValidationFailure = validateIdentityCommandDefinitions(
       commands,
-      identityCommandKinds
+      commandDefinitions
     );
 
     if (staticValidationFailure !== null) {
