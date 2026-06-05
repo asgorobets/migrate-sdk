@@ -1,6 +1,6 @@
 # Prebuilt Plugin Usage API
 
-Audience: migration authors consuming packaged plugins.
+Audience: migration authors consuming first-party SDK plugins.
 
 This document covers plugin usage, not plugin implementation. Source and
 destination plugin authoring are separate audiences:
@@ -8,9 +8,15 @@ destination plugin authoring are separate audiences:
 - [Source Plugin Authoring API](./source-plugin-authoring-api.md)
 - [Destination Plugin Authoring API](./destination-plugin-authoring-api.md)
 
-Packaged plugins should feel like typed helpers that return configured plugin
+First-party plugins ship from the same `migrate-sdk` package as the core
+runtime. They should still feel like typed helpers that return configured plugin
 values. Migration authors should not need to work with raw Effect service tags
 or arbitrary destination command records.
+
+Plugins should be exported through clean public modules so callers import only
+what they need. Subpath exports are allowed when they help tree-shaking or keep
+heavy optional dependencies away from the default entrypoint, but they should
+still belong to the same package while the SDK is small enough to support that.
 
 ## Usage Shape
 
@@ -19,8 +25,13 @@ Payload Schema defines the pipeline-facing item shape:
 
 ```ts
 const source = CsvSourcePlugin.plugin({
-  file: "articles.csv",
-  identity: "id",
+  path: "articles.csv",
+  platform: csvPlatform,
+  dialect: { kind: "standard" },
+  emptyRows: { kind: "skip" },
+  headers: { kind: "from-row", rowIndex: 0 },
+  identity: { kind: "columns", columns: ["id"] },
+  version: { kind: "row-hash" },
   sourceSchema: CsvArticleSource,
 });
 ```
@@ -41,7 +52,7 @@ const command = destination.commands.upsertEntry("article", {
 });
 ```
 
-The destination package owns supported command kinds. Migration authors should
+The destination plugin owns supported command kinds. Migration authors should
 not supply arbitrary command kind strings or hand-built command definition
 records for normal migrations.
 
@@ -109,7 +120,7 @@ const articles = defineMigration({
 });
 ```
 
-This mirrors the shape expected from real CMS destination packages such as
+This mirrors the shape expected from real CMS destination plugins such as
 Contentful: schemas are passed once at plugin creation, then pipelines call
 destination-owned command factories.
 
@@ -181,7 +192,7 @@ export const migrations = contentTypes.map((contentType) => {
 });
 ```
 
-Future adapter packages may generate Effect schemas from external systems such
-as CMS content-type configuration, JSON Schema, or Standard Schema. The
-configured plugin boundary should still expose the final Effect schemas used by
-the runner.
+Future adapters may generate Effect schemas from external systems such as CMS
+content-type configuration, JSON Schema, or Standard Schema. The configured
+plugin boundary should still expose the final Effect schemas used by the
+runner.

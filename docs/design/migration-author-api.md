@@ -8,7 +8,7 @@ and Effect layers are hidden behind configured plugin values.
 
 Start here when writing SDK code directly. Use
 [Prebuilt Plugin Usage API](./prebuilt-plugin-usage-api.md) when the question is
-how a packaged source or destination plugin should feel to its consumers.
+how an SDK-provided source or destination plugin should feel to its consumers.
 
 ## Authoring Model
 

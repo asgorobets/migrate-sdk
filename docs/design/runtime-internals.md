@@ -124,6 +124,18 @@ Live Effect causes are useful for logging, but durable migration item error
 records should store normalized, inspectable error details rather than raw
 causes.
 
+## Orphan Cleanup Direction
+
+Ordinary migration reruns must not implicitly delete destination content when a
+source item disappears. Source plugins report the current source truth through
+`readByIdentity`; they do not own rollback or dangling-destination cleanup
+semantics.
+
+Future orphan cleanup belongs to an explicit SDK or CLI command that compares
+durable migration item mappings against the current source and removes
+destinations whose Source Identity no longer exists. This is an architecture
+concern across all source plugins, not a CSV source-plugin concern.
+
 ## Multi-Definition Runs
 
 `runMigrations` accepts multiple definitions. It expands selected definition ids

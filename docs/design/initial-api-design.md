@@ -10,8 +10,12 @@ documents as the canonical design entry points:
 - [Destination Plugin Authoring API](./destination-plugin-authoring-api.md) -
   for people implementing destination plugins and command factories.
 - [Prebuilt Plugin Usage API](./prebuilt-plugin-usage-api.md) - for migration
-  authors consuming packaged plugins such as CSV, Contentful, or the in-memory
-  demo plugins.
+  authors consuming SDK-provided plugins such as CSV, Contentful, or the
+  in-memory demo plugins.
+- [CSV Source Plugin Design](./csv-source-plugin.md) - plugin-specific
+  decisions for the first real source plugin tracer bullet.
+- [Package Export Architecture](./package-export-architecture.md) - the
+  Effect-inspired one-package export shape to refactor toward after CSV.
 - [Runtime Internals](./runtime-internals.md) - for maintainers working on the
   runner, store, locks, state transitions, reference lookup, and future
   execution adapters.
@@ -20,6 +24,13 @@ documents as the canonical design entry points:
 
 The repo-level language source remains [CONTEXT.md](../../CONTEXT.md). The
 design docs should link back to that glossary instead of duplicating every term.
+
+The SDK should remain one installable package for core runtime APIs and
+first-party source/destination plugins as long as possible. Keep plugin modules
+internally clean and tree-shakable through explicit public exports; split
+packages only when a platform implementation or hard dependency boundary makes
+that necessary. The target export layout is captured in
+[Package Export Architecture](./package-export-architecture.md).
 
 Schema ownership is split by boundary:
 

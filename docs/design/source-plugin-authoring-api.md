@@ -163,26 +163,28 @@ The runner uses the cursor schema to validate stored cursor data and encode the
 next cursor for storage. The migration store only sees an encoded durable cursor
 string; cursor object semantics remain source-owned.
 
-## Plugin Package Shape
+## Plugin Module Shape
 
-A packaged source plugin should expose a narrow factory that returns a
+A first-party source plugin should expose a narrow factory that returns a
 configured source plugin. The factory can accept plugin-specific config while
-hiding Effect layers and service tags from migration authors.
+hiding raw Effect service tags from migration authors. Platform-backed plugins
+may accept an explicit platform layer, such as `FileSystem | Path`, instead of
+importing a host runtime directly. First-party plugins live in the same
+`migrate-sdk` package as the runtime unless a real platform or dependency
+boundary forces a split.
 
 ```ts
 export const CsvSourcePlugin = {
-  plugin: (options: CsvSourceOptions) =>
-    defineSourcePlugin({
-      cursorSchema: CsvCursor,
-      sourceSchema: options.sourceSchema,
-      make: () => makeCsvSourceImplementation(options),
-    }),
+  plugin: (options: CsvSourceOptions) => ({
+    layer: makeCsvSourceLayer(options).pipe(Layer.provide(options.platform)),
+    sourceSchema: options.sourceSchema,
+  }),
 };
 ```
 
-Source plugin packages may derive an Effect schema from source-native metadata
-or require callers to pass one. Either way, the configured source plugin must
-carry the final Effect `sourceSchema`.
+Source plugin modules may derive an Effect schema from source-native metadata or
+require callers to pass one. Either way, the configured source plugin must carry
+the final Effect `sourceSchema`.
 
 ## Error Boundary
 

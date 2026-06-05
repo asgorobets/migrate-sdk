@@ -180,8 +180,8 @@ how those effects are retried.
 
 ## Configured Destination Plugin
 
-A destination package should return a configured plugin with command definitions
-and a layer:
+A first-party destination plugin module should return a configured plugin with
+command definitions and a layer:
 
 ```ts
 interface ConfiguredDestinationPlugin<
@@ -192,7 +192,7 @@ interface ConfiguredDestinationPlugin<
 }
 ```
 
-Package-specific factories may attach typed command factories alongside the
+Plugin-specific factories may attach typed command factories alongside the
 configured plugin:
 
 ```ts

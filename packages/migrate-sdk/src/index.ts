@@ -154,6 +154,21 @@ export type {
   InMemorySourceTransientFailures,
 } from "./sources/in-memory/in-memory-source.ts";
 
+export {
+  CsvSourceCursor,
+  CsvSourcePlugin,
+} from "./sources/csv/csv-source.ts";
+export type {
+  CsvDialect,
+  CsvEmptyRows,
+  CsvHeaders,
+  CsvIdentity,
+  CsvSourceCursor as CsvSourceCursorType,
+  CsvSourceOptions,
+  CsvSourcePlatform,
+  CsvVersion,
+} from "./sources/csv/csv-source.ts";
+
 export { InMemoryMigrationStore } from "./stores/in-memory/in-memory-migration-store.ts";
 export type { InMemoryMigrationStoreState } from "./stores/in-memory/in-memory-migration-store.ts";
 
