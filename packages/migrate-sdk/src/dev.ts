@@ -2,6 +2,10 @@ import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSyst
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
 import { Console, Effect, Layer } from "effect";
 import {
+  formatCircularBookAuthorStubsExampleResult,
+  runCircularBookAuthorStubsExample,
+} from "./examples/circular-book-author-stubs.ts";
+import {
   formatFileStoreExampleResult,
   runFileStoreExample,
 } from "./examples/file-store-runtime.ts";
@@ -29,6 +33,12 @@ const makeProgram = () => {
   if (example === "nested-article") {
     return runNestedArticleSchemaExample().pipe(
       Effect.map(formatNestedArticleSchemaExampleResult)
+    );
+  }
+
+  if (example === "circular-stubs") {
+    return runCircularBookAuthorStubsExample().pipe(
+      Effect.map(formatCircularBookAuthorStubsExampleResult)
     );
   }
 

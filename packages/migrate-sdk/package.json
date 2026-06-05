@@ -8,6 +8,7 @@
   },
   "scripts": {
     "dev": "tsx src/dev.ts",
+    "dev:circular-stubs": "tsx src/dev.ts circular-stubs",
     "dev:file-store": "tsx src/dev.ts file-store",
     "dev:nested-article": "tsx src/dev.ts nested-article",
     "prepare": "effect-language-service patch",

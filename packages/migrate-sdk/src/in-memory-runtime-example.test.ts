@@ -1,6 +1,10 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import {
+  formatCircularBookAuthorStubsExampleResult,
+  runCircularBookAuthorStubsExample,
+} from "./examples/circular-book-author-stubs.ts";
+import {
   formatMigrationRunSummary,
   runInMemoryExample,
 } from "./examples/in-memory-runtime.ts";
@@ -55,6 +59,70 @@ describe("in-memory runtime example", () => {
         expect(output).toContain("Nested Article Source Schema Example");
         expect(output).toContain("author: Ada Lovelace");
         expect(output).toContain("tags: Effect, Schemas");
+      })
+  );
+
+  it.effect(
+    "runs a circular Book and Author migration through lookup-created stubs",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* runCircularBookAuthorStubsExample();
+        const output = formatCircularBookAuthorStubsExampleResult(result);
+
+        expect(result.summary.status).toBe("succeeded");
+        expect(
+          result.summary.definitions.map(
+            (definition) => definition.definitionId
+          )
+        ).toEqual(["books", "authors"]);
+        expect(result.summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(result.summary.definitions[1]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(result.bookEntryFields?.authorEntries).toEqual([
+          "entry:authors:author:maya-chen",
+        ]);
+        expect(result.bookEntryFields?.authorReferenceStatuses).toEqual([
+          "needs-update",
+        ]);
+        expect(result.authorEntryFields?.popularBookEntries).toEqual([
+          "entry:books:book:effectful-architecture",
+          "entry:books:book:future-catalog",
+        ]);
+        expect(result.authorEntryFields?.popularBookReferenceStatuses).toEqual([
+          "migrated",
+          "needs-update",
+        ]);
+        expect(result.bookStubState).toEqual(
+          expect.objectContaining({
+            definitionId: "books",
+            sourceIdentity: "book:future-catalog",
+            status: "needs-update",
+            destinationIdentity: "entry:books:book:future-catalog",
+          })
+        );
+        expect(result.authorState).toEqual(
+          expect.objectContaining({
+            definitionId: "authors",
+            sourceIdentity: "author:maya-chen",
+            sourceVersion: "author-version-1",
+            status: "migrated",
+            destinationIdentity: "entry:authors:author:maya-chen",
+          })
+        );
+        expect(output).toContain("Circular Book and Author Stub Example");
+        expect(output).toContain("future book stub status: needs-update");
+        expect(output).toContain("author final status: migrated");
       })
   );
 });
