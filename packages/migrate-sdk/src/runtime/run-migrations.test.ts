@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schedule, Schema } from "effect";
+import { Deferred, Effect, Fiber, Layer, Schedule, Schema } from "effect";
 import { expectTypeOf } from "vitest";
 import {
+  type DestinationCommandContext,
+  type DestinationCommandResultInput,
   DestinationPlugin,
   DestinationPluginError,
   defineMigration,
@@ -14,10 +16,12 @@ import {
   MigrationDefinitionLock,
   type MigrationDefinitionLockType,
   MigrationItemState,
+  MigrationReferenceLookup,
   MigrationRunState,
   type MigrationRunSummary,
   MigrationStore,
   MigrationStoreError,
+  makeDestinationCommandResult,
   type RunMigrationError,
   runMigration,
   runMigrations,
@@ -42,6 +46,15 @@ const UpsertEntryCommand = Schema.Struct({
 });
 
 type UpsertEntryCommand = typeof UpsertEntryCommand.Type;
+
+const PublishEntryCommand = Schema.Struct({
+  kind: Schema.Literal("PublishEntry"),
+  contentType: Schema.String,
+});
+
+const EntryCommand = Schema.Union([UpsertEntryCommand, PublishEntryCommand]);
+
+type EntryCommand = typeof EntryCommand.Type;
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -153,6 +166,79 @@ const failRunFailingStoreLayer = (
       };
     })
   ).pipe(Layer.provide(InMemoryMigrationStore.layer(state)));
+
+const makePublishFailingDestination = (
+  attempts: EntryCommand[]
+): {
+  readonly commandSchema: typeof EntryCommand;
+  readonly layer: Layer.Layer<DestinationPlugin>;
+} => ({
+  commandSchema: EntryCommand,
+  layer: Layer.sync(DestinationPlugin, () => ({
+    execute: (command, context) =>
+      Effect.gen(function* () {
+        const typedCommand = yield* Schema.decodeUnknownEffect(EntryCommand)(
+          command
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new DestinationPluginError({
+                message: "Destination command did not match command schema",
+                cause,
+              })
+          )
+        );
+
+        attempts.push(typedCommand);
+
+        if (typedCommand.kind === "PublishEntry") {
+          return yield* new DestinationPluginError({
+            message: "Publish failed",
+          });
+        }
+
+        return {
+          destinationIdentity: toDestinationIdentity(
+            `entry-${context.sourceIdentity}`
+          ),
+          destinationVersion: toDestinationVersion(
+            `version-${attempts.length}`
+          ),
+        };
+      }),
+  })),
+});
+
+const makeEffectEntryDestination = (
+  execute: (
+    command: EntryCommand,
+    context: DestinationCommandContext
+  ) => Effect.Effect<DestinationCommandResultInput, DestinationPluginError>
+): {
+  readonly commandSchema: typeof EntryCommand;
+  readonly layer: Layer.Layer<DestinationPlugin>;
+} => ({
+  commandSchema: EntryCommand,
+  layer: Layer.sync(DestinationPlugin, () => ({
+    execute: (command, context) =>
+      Effect.gen(function* () {
+        const typedCommand = yield* Schema.decodeUnknownEffect(EntryCommand)(
+          command
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new DestinationPluginError({
+                message: "Destination command did not match command schema",
+                cause,
+              })
+          )
+        );
+        const result = yield* execute(typedCommand, context);
+
+        return makeDestinationCommandResult(result);
+      }),
+  })),
+});
 
 describe("MigrationStore durable records", () => {
   it.effect("schema-round-trips beginRun state", () =>
@@ -1294,57 +1380,61 @@ describe("runMigration", () => {
     })
   );
 
-  it.effect("passes decoded source payloads to the transformation pipeline", () =>
-    Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
-      const storeState = InMemoryMigrationStore.makeState();
-      const decodedPayloads: ArticleStatsSource[] = [];
+  it.effect(
+    "passes decoded source payloads to the transformation pipeline",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const decodedPayloads: ArticleStatsSource[] = [];
 
-      const definition = defineMigration({
-        id: "articles",
-        source: InMemorySourcePlugin.make<ArticleStatsSource>({
-          sourceSchema: ArticleStatsSource,
-          items: [
-            {
-              identity: "article-stats",
-              version: "source-version-1",
-              item: asArticleStatsSource({
-                title: "  Decoded article  ",
-                views: "42",
-              }),
-            },
-          ],
-        }),
-        destination: InMemoryDestinationPlugin.make({
-          commandSchema: UpsertEntryCommand,
-          state: destinationState,
-        }),
-        store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source) =>
-          Effect.sync(() => {
-            decodedPayloads.push(source.item);
-
-            return {
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {
-                title: source.item.title,
-                views: source.item.views,
+        const definition = defineMigration({
+          id: "articles",
+          source: InMemorySourcePlugin.make<ArticleStatsSource>({
+            sourceSchema: ArticleStatsSource,
+            items: [
+              {
+                identity: "article-stats",
+                version: "source-version-1",
+                item: asArticleStatsSource({
+                  title: "  Decoded article  ",
+                  views: "42",
+                }),
               },
-            };
+            ],
           }),
-      });
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.sync(() => {
+              decodedPayloads.push(source.item);
 
-      const summary = yield* runMigration(definition);
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                  views: source.item.views,
+                },
+              };
+            }),
+        });
 
-      expect(summary.status).toBe("succeeded");
-      expect(decodedPayloads).toEqual([{ title: "Decoded article", views: 42 }]);
-      expect(destinationState.executions[0]?.command.fields).toEqual({
-        title: "Decoded article",
-        views: 42,
-      });
-    })
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("succeeded");
+        expect(decodedPayloads).toEqual([
+          { title: "Decoded article", views: 42 },
+        ]);
+        expect(destinationState.executions[0]?.command.fields).toEqual({
+          title: "Decoded article",
+          views: 42,
+        });
+      })
   );
 
   it.effect("rejects non-positive in-memory Source batch sizes", () =>
@@ -2495,6 +2585,1793 @@ describe("runMigration", () => {
             (execution) => execution.context.definitionId
           )
         ).toEqual(["authors", "articles"]);
+      })
+  );
+
+  it.effect(
+    "summarizes selected dependencies once when also explicitly selected",
+    () =>
+      Effect.gen(function* () {
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+
+        const authors = defineMigration({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store,
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: {
+                name: source.item.name,
+              },
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          dependsOn: ["authors"],
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Dependent article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store,
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "article",
+              fields: {
+                title: source.item.title,
+              },
+            }),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [articles, authors],
+          definitionIds: ["articles", "authors"],
+        });
+
+        expect(
+          summary.definitions.map((definition) => definition.definitionId)
+        ).toEqual(["authors", "articles"]);
+        expect(summary.definitions).toHaveLength(2);
+        expect(
+          destinationState.executions.map(
+            (execution) => execution.context.definitionId
+          )
+        ).toEqual(["authors", "articles"]);
+      })
+  );
+
+  it.effect(
+    "fails the caller item when lookup stub creation partially succeeds then fails",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const destinationAttempts: EntryCommand[] = [];
+        const destination = makePublishFailingDestination(destinationAttempts);
+
+        const authors = defineMigration({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [],
+          }),
+          destination,
+          store,
+          stub: ({ sourceIdentity }) =>
+            Effect.succeed([
+              {
+                kind: "UpsertEntry" as const,
+                contentType: "author",
+                fields: {
+                  title: `Stub ${sourceIdentity}`,
+                },
+              },
+              {
+                kind: "PublishEntry" as const,
+                contentType: "author",
+              },
+            ]),
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: source.item as Record<string, unknown>,
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Article with missing author" },
+              },
+            ],
+          }),
+          destination,
+          store,
+          pipeline: (source) =>
+            Effect.gen(function* () {
+              const references = yield* MigrationReferenceLookup;
+              const author = yield* references.lookup({
+                definitionId: "authors",
+                sourceIdentity: "author-1",
+                stub: true,
+              });
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                  author: author?.destinationIdentity,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+        });
+
+        expect(summary.status).toBe("failed");
+        expect(
+          summary.definitions.map((definition) => definition.definitionId)
+        ).toEqual(["articles"]);
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 0,
+          skipped: 0,
+          failed: 1,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(destinationAttempts).toEqual([
+          expect.objectContaining({
+            kind: "UpsertEntry",
+            contentType: "author",
+          }),
+          expect.objectContaining({
+            kind: "PublishEntry",
+            contentType: "author",
+          }),
+        ]);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("authors", "author-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            destinationIdentity: "entry-author-1",
+            destinationVersion: "version-1",
+            error: expect.objectContaining({
+              kind: "destination",
+              message: "Publish failed",
+            }),
+          })
+        );
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            error: expect.objectContaining({
+              kind: "pipeline",
+            }),
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "looks up migrated references without requiring declared dependencies",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("authors", "author-1"),
+          {
+            definitionId: toMigrationDefinitionId("authors"),
+            sourceIdentity: toSourceIdentity("author-1"),
+            sourceVersion: toSourceVersion("author-version-1"),
+            destinationIdentity: toDestinationIdentity("author-entry-1"),
+            destinationVersion: toDestinationVersion("author-destination-1"),
+            lastRunId: toMigrationRunId("run-authors"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "migrated",
+          }
+        );
+
+        const authors = defineMigration({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store,
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: source.item as Record<string, unknown>,
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Article with migrated author" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store,
+          pipeline: (source) =>
+            Effect.gen(function* () {
+              const references = yield* MigrationReferenceLookup;
+              const author = yield* references.lookup({
+                definitionId: "authors",
+                sourceIdentity: "author-1",
+              });
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                  author: author?.destinationIdentity,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(
+          summary.definitions.map((definition) => definition.definitionId)
+        ).toEqual(["articles"]);
+        expect(destinationState.executions).toHaveLength(1);
+        expect(destinationState.executions[0]?.command.fields).toEqual({
+          title: "Article with migrated author",
+          author: "author-entry-1",
+        });
+      })
+  );
+
+  it.effect(
+    "looks up migrated references from the referenced Migration Definition Store",
+    () =>
+      Effect.gen(function* () {
+        const authorsStoreState = InMemoryMigrationStore.makeState();
+        const articlesStoreState = InMemoryMigrationStore.makeState();
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+
+        authorsStoreState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("authors", "author-1"),
+          {
+            definitionId: toMigrationDefinitionId("authors"),
+            sourceIdentity: toSourceIdentity("author-1"),
+            sourceVersion: toSourceVersion("author-version-1"),
+            destinationIdentity: toDestinationIdentity("author-entry-1"),
+            destinationVersion: toDestinationVersion("author-destination-1"),
+            lastRunId: toMigrationRunId("run-authors"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "migrated",
+          }
+        );
+
+        const authors = defineMigration({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(authorsStoreState),
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: source.item as Record<string, unknown>,
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Article with target-store author" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(articlesStoreState),
+          pipeline: (source) =>
+            Effect.gen(function* () {
+              const references = yield* MigrationReferenceLookup;
+              const author = yield* references.lookup({
+                definitionId: "authors",
+                sourceIdentity: "author-1",
+              });
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                  author: author?.destinationIdentity,
+                  authorVersion: author?.destinationVersion,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(
+          summary.definitions.map((definition) => definition.definitionId)
+        ).toEqual(["articles"]);
+        expect(destinationState.executions).toHaveLength(1);
+        expect(destinationState.executions[0]?.command.fields).toEqual({
+          title: "Article with target-store author",
+          author: "author-entry-1",
+          authorVersion: "author-destination-1",
+        });
+        expect(
+          articlesStoreState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("authors", "author-1")
+          )
+        ).toBeUndefined();
+        expect(
+          authorsStoreState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("authors", "author-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            destinationIdentity: "author-entry-1",
+          })
+        );
+      })
+  );
+
+  it.effect("creates lookup stubs as needs-update references", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const store = InMemoryMigrationStore.layer(storeState);
+      const destinationState =
+        InMemoryDestinationPlugin.makeState<EntryCommand>();
+      const destination = InMemoryDestinationPlugin.make({
+        commandSchema: EntryCommand,
+        state: destinationState,
+        execute: (command, context) =>
+          command.kind === "UpsertEntry"
+            ? {
+                destinationIdentity: `entry-${context.sourceIdentity}`,
+                destinationVersion: "stub-version-1",
+              }
+            : {},
+      });
+
+      const authors = defineMigration({
+        id: "authors",
+        source: makeTestInMemorySource({
+          items: [],
+        }),
+        destination,
+        store,
+        stub: ({ sourceIdentity }) =>
+          Effect.succeed([
+            {
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: {
+                title: `Stub ${sourceIdentity}`,
+              },
+            },
+            {
+              kind: "PublishEntry" as const,
+              contentType: "author",
+            },
+          ]),
+        pipeline: (source) =>
+          Effect.succeed({
+            kind: "UpsertEntry" as const,
+            contentType: "author",
+            fields: source.item as Record<string, unknown>,
+          }),
+      });
+      const articles = defineMigration({
+        id: "articles",
+        source: makeTestInMemorySource({
+          items: [
+            {
+              identity: "article-1",
+              version: "source-version-1",
+              item: { title: "Article with stub author" },
+            },
+          ],
+        }),
+        destination,
+        store,
+        pipeline: (source) =>
+          Effect.gen(function* () {
+            const references = yield* MigrationReferenceLookup;
+            const author = yield* references.lookup({
+              definitionId: "authors",
+              sourceIdentity: "author-1",
+              stub: true,
+            });
+
+            return {
+              kind: "UpsertEntry" as const,
+              contentType: "article",
+              fields: {
+                title: source.item.title,
+                author: author?.destinationIdentity,
+                authorStatus: author?.status,
+              },
+            };
+          }),
+      });
+
+      const summary = yield* runMigrations({
+        definitions: [articles, authors],
+        definitionIds: ["articles"],
+      });
+
+      expect(summary.status).toBe("succeeded");
+      expect(
+        destinationState.executions.map((execution) => [
+          execution.context.definitionId,
+          execution.command.kind,
+        ])
+      ).toEqual([
+        ["authors", "UpsertEntry"],
+        ["authors", "PublishEntry"],
+        ["articles", "UpsertEntry"],
+      ]);
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("authors", "author-1")
+        )
+      ).toEqual(
+        expect.objectContaining({
+          status: "needs-update",
+          destinationIdentity: "entry-author-1",
+          destinationVersion: "stub-version-1",
+        })
+      );
+      expect(
+        destinationState.executions[2]?.command.kind === "UpsertEntry"
+          ? destinationState.executions[2].command.fields
+          : undefined
+      ).toEqual({
+        title: "Article with stub author",
+        author: "entry-author-1",
+        authorStatus: "needs-update",
+      });
+    })
+  );
+
+  it.effect(
+    "creates lookup stubs in the referenced Migration Definition Store",
+    () =>
+      Effect.gen(function* () {
+        const authorsStoreState = InMemoryMigrationStore.makeState();
+        const articlesStoreState = InMemoryMigrationStore.makeState();
+        authorsStoreState.nextRunNumber = 41;
+        const stubLockObservations: string[] = [];
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<EntryCommand>();
+        const destination = InMemoryDestinationPlugin.make({
+          commandSchema: EntryCommand,
+          state: destinationState,
+          execute: (command, context) => {
+            if (context.definitionId === toMigrationDefinitionId("authors")) {
+              const lock = authorsStoreState.definitionLocks.get(
+                toMigrationDefinitionId("authors")
+              );
+
+              stubLockObservations.push(
+                `${command.kind}:${lock?.ownerRunId ?? "none"}`
+              );
+            }
+
+            return command.kind === "UpsertEntry"
+              ? {
+                  destinationIdentity: `entry-${context.sourceIdentity}`,
+                  destinationVersion: "stub-version-1",
+                }
+              : {};
+          },
+        });
+
+        const authors = defineMigration({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [],
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(authorsStoreState),
+          stub: ({ sourceIdentity }) =>
+            Effect.succeed([
+              {
+                kind: "UpsertEntry" as const,
+                contentType: "author",
+                fields: {
+                  title: `Stub ${sourceIdentity}`,
+                },
+              },
+              {
+                kind: "PublishEntry" as const,
+                contentType: "author",
+              },
+            ]),
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: source.item as Record<string, unknown>,
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Article with target-owned stub author" },
+              },
+            ],
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(articlesStoreState),
+          pipeline: (source) =>
+            Effect.gen(function* () {
+              const references = yield* MigrationReferenceLookup;
+              const author = yield* references.lookup({
+                definitionId: "authors",
+                sourceIdentity: "author-1",
+                stub: true,
+              });
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                  author: author?.destinationIdentity,
+                  authorStatus: author?.status,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(
+          summary.definitions.map((definition) => definition.definitionId)
+        ).toEqual(["articles"]);
+        expect(
+          destinationState.executions.map((execution) => [
+            execution.context.definitionId,
+            execution.context.runId,
+            execution.command.kind,
+          ])
+        ).toEqual([
+          ["authors", "run-41", "UpsertEntry"],
+          ["authors", "run-41", "PublishEntry"],
+          ["articles", "run-1", "UpsertEntry"],
+        ]);
+        expect(stubLockObservations).toEqual([
+          "UpsertEntry:run-41",
+          "PublishEntry:run-41",
+        ]);
+        expect(authorsStoreState.definitionLocks.size).toBe(0);
+        expect(
+          authorsStoreState.latestRunStates.get(
+            toMigrationDefinitionId("authors")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            runId: toMigrationRunId("run-41"),
+            status: "succeeded",
+          })
+        );
+        expect(
+          authorsStoreState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("authors", "author-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "needs-update",
+            lastRunId: "run-41",
+            destinationIdentity: "entry-author-1",
+            destinationVersion: "stub-version-1",
+          })
+        );
+        expect(
+          articlesStoreState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("authors", "author-1")
+          )
+        ).toBeUndefined();
+        expect(
+          articlesStoreState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            destinationIdentity: "entry-article-1",
+          })
+        );
+        expect(
+          destinationState.executions[2]?.command.kind === "UpsertEntry"
+            ? destinationState.executions[2].command.fields
+            : undefined
+        ).toEqual({
+          title: "Article with target-owned stub author",
+          author: "entry-author-1",
+          authorStatus: "needs-update",
+        });
+      })
+  );
+
+  it.effect(
+    "uses the active referenced Migration Definition run for lookup stubs",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const stubLockObservations: string[] = [];
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<EntryCommand>();
+        const destination = InMemoryDestinationPlugin.make({
+          commandSchema: EntryCommand,
+          state: destinationState,
+          execute: (command, context) => {
+            if (context.definitionId === toMigrationDefinitionId("authors")) {
+              const lock = storeState.definitionLocks.get(
+                toMigrationDefinitionId("authors")
+              );
+
+              stubLockObservations.push(
+                `${command.kind}:${lock?.ownerRunId ?? "none"}`
+              );
+            }
+
+            return command.kind === "UpsertEntry"
+              ? {
+                  destinationIdentity: `entry-${context.sourceIdentity}`,
+                  destinationVersion: "stub-version-1",
+                }
+              : {};
+          },
+        });
+
+        const authors = defineMigration({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [],
+          }),
+          destination,
+          store,
+          stub: ({ sourceIdentity }) =>
+            Effect.succeed([
+              {
+                kind: "UpsertEntry" as const,
+                contentType: "author",
+                fields: {
+                  title: `Stub ${sourceIdentity}`,
+                },
+              },
+              {
+                kind: "PublishEntry" as const,
+                contentType: "author",
+              },
+            ]),
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: source.item as Record<string, unknown>,
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          dependsOn: ["authors"],
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Article with active author stub" },
+              },
+            ],
+          }),
+          destination,
+          store,
+          pipeline: (source) =>
+            Effect.gen(function* () {
+              const references = yield* MigrationReferenceLookup;
+              const author = yield* references.lookup({
+                definitionId: "authors",
+                sourceIdentity: "author-1",
+                stub: true,
+              });
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                  author: author?.destinationIdentity,
+                  authorStatus: author?.status,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(
+          summary.definitions.map((definition) => definition.definitionId)
+        ).toEqual(["authors", "articles"]);
+        expect(summary.definitions[0]).toEqual(
+          expect.objectContaining({
+            definitionId: toMigrationDefinitionId("authors"),
+            counts: {
+              migrated: 0,
+              skipped: 0,
+              failed: 0,
+              unchanged: 0,
+              needsUpdate: 0,
+            },
+          })
+        );
+        expect(summary.definitions[1]).toEqual(
+          expect.objectContaining({
+            definitionId: toMigrationDefinitionId("articles"),
+            counts: {
+              migrated: 1,
+              skipped: 0,
+              failed: 0,
+              unchanged: 0,
+              needsUpdate: 0,
+            },
+          })
+        );
+        expect(
+          destinationState.executions.map((execution) => [
+            execution.context.definitionId,
+            execution.context.runId,
+            execution.command.kind,
+          ])
+        ).toEqual([
+          ["authors", "run-1", "UpsertEntry"],
+          ["authors", "run-1", "PublishEntry"],
+          ["articles", "run-1", "UpsertEntry"],
+        ]);
+        expect(stubLockObservations).toEqual([
+          "UpsertEntry:run-1",
+          "PublishEntry:run-1",
+        ]);
+        expect(storeState.definitionLocks.size).toBe(0);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("authors", "author-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "needs-update",
+            lastRunId: "run-1",
+            destinationIdentity: "entry-author-1",
+          })
+        );
+        expect(
+          storeState.latestRunStates.get(toMigrationDefinitionId("authors"))
+        ).toEqual(
+          expect.objectContaining({
+            runId: toMigrationRunId("run-1"),
+            status: "succeeded",
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "reuses the referenced Migration Definition run for multiple lookup stubs",
+    () =>
+      Effect.gen(function* () {
+        const authorsStoreState = InMemoryMigrationStore.makeState();
+        const articlesStoreState = InMemoryMigrationStore.makeState();
+        authorsStoreState.nextRunNumber = 41;
+        const stubLockObservations: string[] = [];
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<EntryCommand>();
+        const destination = InMemoryDestinationPlugin.make({
+          commandSchema: EntryCommand,
+          state: destinationState,
+          execute: (command, context) => {
+            if (context.definitionId === toMigrationDefinitionId("authors")) {
+              const lock = authorsStoreState.definitionLocks.get(
+                toMigrationDefinitionId("authors")
+              );
+
+              stubLockObservations.push(
+                `${context.sourceIdentity}:${command.kind}:${lock?.ownerRunId ?? "none"}`
+              );
+            }
+
+            return command.kind === "UpsertEntry"
+              ? {
+                  destinationIdentity: `entry-${context.sourceIdentity}`,
+                  destinationVersion: "stub-version-1",
+                }
+              : {};
+          },
+        });
+
+        const authors = defineMigration({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [],
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(authorsStoreState),
+          stub: ({ sourceIdentity }) =>
+            Effect.succeed([
+              {
+                kind: "UpsertEntry" as const,
+                contentType: "author",
+                fields: {
+                  title: `Stub ${sourceIdentity}`,
+                },
+              },
+              {
+                kind: "PublishEntry" as const,
+                contentType: "author",
+              },
+            ]),
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: source.item as Record<string, unknown>,
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "First article",
+                  authorIdentity: "author-1",
+                },
+              },
+              {
+                identity: "article-2",
+                version: "source-version-1",
+                item: {
+                  title: "Second article",
+                  authorIdentity: "author-2",
+                },
+              },
+            ],
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(articlesStoreState),
+          pipeline: (source) =>
+            Effect.gen(function* () {
+              const references = yield* MigrationReferenceLookup;
+              const item = source.item as {
+                readonly authorIdentity: string;
+                readonly title: string;
+              };
+              const author = yield* references.lookup({
+                definitionId: "authors",
+                sourceIdentity: item.authorIdentity,
+                stub: true,
+              });
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: item.title,
+                  author: author?.destinationIdentity,
+                  authorStatus: author?.status,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(
+          destinationState.executions
+            .filter(
+              (execution) =>
+                execution.context.definitionId ===
+                toMigrationDefinitionId("authors")
+            )
+            .map((execution) => [
+              execution.context.sourceIdentity,
+              execution.context.runId,
+              execution.command.kind,
+            ])
+        ).toEqual([
+          ["author-1", "run-41", "UpsertEntry"],
+          ["author-1", "run-41", "PublishEntry"],
+          ["author-2", "run-41", "UpsertEntry"],
+          ["author-2", "run-41", "PublishEntry"],
+        ]);
+        expect(stubLockObservations).toEqual([
+          "author-1:UpsertEntry:run-41",
+          "author-1:PublishEntry:run-41",
+          "author-2:UpsertEntry:run-41",
+          "author-2:PublishEntry:run-41",
+        ]);
+        expect(
+          authorsStoreState.latestRunStates.get(
+            toMigrationDefinitionId("authors")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            runId: toMigrationRunId("run-41"),
+            status: "succeeded",
+          })
+        );
+        expect(authorsStoreState.definitionLocks.size).toBe(0);
+        expect(
+          authorsStoreState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("authors", "author-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "needs-update",
+            lastRunId: "run-41",
+            destinationIdentity: "entry-author-1",
+          })
+        );
+        expect(
+          authorsStoreState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("authors", "author-2")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "needs-update",
+            lastRunId: "run-41",
+            destinationIdentity: "entry-author-2",
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "deduplicates concurrent lookup stubs for the same Source Identity",
+    () =>
+      Effect.gen(function* () {
+        const authorsStoreState = InMemoryMigrationStore.makeState();
+        const articlesStoreState = InMemoryMigrationStore.makeState();
+        authorsStoreState.nextRunNumber = 41;
+        let stubPlanCalls = 0;
+        const destinationAttempts: Array<{
+          readonly command: EntryCommand;
+          readonly definitionId: string;
+          readonly runId: string;
+          readonly sourceIdentity: string;
+        }> = [];
+        const firstStubStarted = yield* Deferred.make<void>();
+        const releaseStub = yield* Deferred.make<void>();
+        const destination = makeEffectEntryDestination((command, context) =>
+          Effect.gen(function* () {
+            destinationAttempts.push({
+              command,
+              definitionId: context.definitionId,
+              runId: context.runId,
+              sourceIdentity: context.sourceIdentity,
+            });
+
+            if (
+              context.definitionId === toMigrationDefinitionId("authors") &&
+              command.kind === "UpsertEntry"
+            ) {
+              yield* Deferred.succeed(firstStubStarted, undefined);
+              yield* Deferred.await(releaseStub);
+            }
+
+            return command.kind === "UpsertEntry"
+              ? {
+                  destinationIdentity: `entry-${context.sourceIdentity}`,
+                  destinationVersion: "stub-version-1",
+                }
+              : {};
+          })
+        );
+
+        const authors = defineMigration({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [],
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(authorsStoreState),
+          stub: ({ sourceIdentity }) =>
+            Effect.sync(() => {
+              stubPlanCalls += 1;
+
+              return [
+                {
+                  kind: "UpsertEntry" as const,
+                  contentType: "author",
+                  fields: {
+                    title: `Stub ${sourceIdentity}`,
+                  },
+                },
+                {
+                  kind: "PublishEntry" as const,
+                  contentType: "author",
+                },
+              ];
+            }),
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: source.item as Record<string, unknown>,
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Article with duplicate author lookups" },
+              },
+            ],
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(articlesStoreState),
+          pipeline: (source) =>
+            Effect.gen(function* () {
+              const references = yield* MigrationReferenceLookup;
+              yield* Effect.gen(function* () {
+                yield* Deferred.await(firstStubStarted);
+                yield* Effect.yieldNow;
+                yield* Effect.yieldNow;
+                yield* Deferred.succeed(releaseStub, undefined);
+              }).pipe(Effect.forkChild);
+              const [firstAuthor, secondAuthor] = yield* Effect.all(
+                [
+                  references.lookup({
+                    definitionId: "authors",
+                    sourceIdentity: "author-1",
+                    stub: true,
+                  }),
+                  references.lookup({
+                    definitionId: "authors",
+                    sourceIdentity: "author-1",
+                    stub: true,
+                  }),
+                ],
+                { concurrency: "unbounded" }
+              );
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                  firstAuthor: firstAuthor?.destinationIdentity,
+                  secondAuthor: secondAuthor?.destinationIdentity,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(stubPlanCalls).toBe(1);
+        expect(
+          destinationAttempts
+            .filter(
+              (attempt) =>
+                attempt.definitionId === toMigrationDefinitionId("authors")
+            )
+            .map((attempt) => [
+              attempt.sourceIdentity,
+              attempt.runId,
+              attempt.command.kind,
+            ])
+        ).toEqual([
+          ["author-1", "run-41", "UpsertEntry"],
+          ["author-1", "run-41", "PublishEntry"],
+        ]);
+        expect(destinationAttempts.at(-1)).toEqual(
+          expect.objectContaining({
+            definitionId: "articles",
+            sourceIdentity: "article-1",
+          })
+        );
+        expect(
+          authorsStoreState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("authors", "author-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "needs-update",
+            lastRunId: "run-41",
+            destinationIdentity: "entry-author-1",
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "releases a target stub lock when the parent run is interrupted",
+    () =>
+      Effect.gen(function* () {
+        const authorsStoreState = InMemoryMigrationStore.makeState();
+        const articlesStoreState = InMemoryMigrationStore.makeState();
+        authorsStoreState.nextRunNumber = 41;
+        const stubStarted = yield* Deferred.make<void>();
+        const destination = makeEffectEntryDestination((command, context) =>
+          Effect.gen(function* () {
+            if (
+              context.definitionId === toMigrationDefinitionId("authors") &&
+              command.kind === "UpsertEntry"
+            ) {
+              yield* Deferred.succeed(stubStarted, undefined);
+              return yield* Effect.never;
+            }
+
+            return command.kind === "UpsertEntry"
+              ? {
+                  destinationIdentity: `entry-${context.sourceIdentity}`,
+                  destinationVersion: "stub-version-1",
+                }
+              : {};
+          })
+        );
+
+        const authors = defineMigration({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [],
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(authorsStoreState),
+          stub: ({ sourceIdentity }) =>
+            Effect.succeed([
+              {
+                kind: "UpsertEntry" as const,
+                contentType: "author",
+                fields: {
+                  title: `Stub ${sourceIdentity}`,
+                },
+              },
+            ]),
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: source.item as Record<string, unknown>,
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Interrupted stub article" },
+              },
+            ],
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(articlesStoreState),
+          pipeline: (source) =>
+            Effect.gen(function* () {
+              const references = yield* MigrationReferenceLookup;
+              const author = yield* references.lookup({
+                definitionId: "authors",
+                sourceIdentity: "author-1",
+                stub: true,
+              });
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                  author: author?.destinationIdentity,
+                },
+              };
+            }),
+        });
+
+        const fiber = yield* runMigrations({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+        }).pipe(Effect.forkChild({ startImmediately: true }));
+
+        yield* Deferred.await(stubStarted);
+        expect(authorsStoreState.definitionLocks.size).toBe(1);
+
+        yield* Fiber.interrupt(fiber);
+
+        expect(authorsStoreState.definitionLocks.size).toBe(0);
+        expect(articlesStoreState.definitionLocks.size).toBe(0);
+        expect(
+          authorsStoreState.latestRunStates.get(
+            toMigrationDefinitionId("authors")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            runId: toMigrationRunId("run-41"),
+            status: "failed",
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "uses the first migrated reference from ordered Migration Definition lookups",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+
+        for (const [definitionId, destinationIdentity] of [
+          ["staff-authors", "staff-entry-1"],
+          ["guest-authors", "guest-entry-1"],
+        ] as const) {
+          storeState.itemStates.set(
+            InMemoryMigrationStore.itemStateKey(definitionId, "author-1"),
+            {
+              definitionId: toMigrationDefinitionId(definitionId),
+              sourceIdentity: toSourceIdentity("author-1"),
+              sourceVersion: toSourceVersion("author-version-1"),
+              destinationIdentity: toDestinationIdentity(destinationIdentity),
+              lastRunId: toMigrationRunId(`run-${definitionId}`),
+              updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+              status: "migrated",
+            }
+          );
+        }
+
+        const staffAuthors = defineMigration({
+          id: "staff-authors",
+          source: makeTestInMemorySource({
+            items: [],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store,
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: source.item as Record<string, unknown>,
+            }),
+        });
+        const guestAuthors = defineMigration({
+          id: "guest-authors",
+          source: makeTestInMemorySource({
+            items: [],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store,
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: source.item as Record<string, unknown>,
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Article with polymorphic author" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store,
+          pipeline: (source) =>
+            Effect.gen(function* () {
+              const references = yield* MigrationReferenceLookup;
+              const author = yield* references.lookup({
+                definitionIds: ["staff-authors", "guest-authors"],
+                sourceIdentity: "author-1",
+              });
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                  author: author?.destinationIdentity,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [articles, guestAuthors, staffAuthors],
+          definitionIds: ["articles"],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(destinationState.executions[0]?.command.fields).toEqual({
+          title: "Article with polymorphic author",
+          author: "staff-entry-1",
+        });
+      })
+  );
+
+  it.effect(
+    "persists the latest identity-bearing result from a Destination Command Plan",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<EntryCommand>();
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Published article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: EntryCommand,
+            state: destinationState,
+            execute: (command, context) =>
+              command.kind === "UpsertEntry"
+                ? {
+                    destinationIdentity: `entry-${context.sourceIdentity}`,
+                    destinationVersion: "draft-version-1",
+                  }
+                : {},
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.succeed([
+              {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              },
+              {
+                kind: "PublishEntry" as const,
+                contentType: "article",
+              },
+            ]),
+        });
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("succeeded");
+        expect(
+          destinationState.executions.map((execution) => execution.command.kind)
+        ).toEqual(["UpsertEntry", "PublishEntry"]);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            destinationIdentity: "entry-article-1",
+            destinationVersion: "draft-version-1",
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "fails an empty Destination Command Plan before preserving a previous identity",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: toSourceIdentity("article-1"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            destinationIdentity: toDestinationIdentity(
+              "entry-article-previous"
+            ),
+            destinationVersion: toDestinationVersion("previous-version-1"),
+            lastRunId: toMigrationRunId("run-previous"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "migrated",
+          }
+        );
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Empty plan article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: UpsertEntryCommand,
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: () => Effect.succeed([]),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [definition],
+          mode: { kind: "item", sourceIdentity: "article-1" },
+        });
+
+        expect(summary.status).toBe("failed");
+        expect(destinationState.executions).toEqual([]);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            destinationIdentity: "entry-article-previous",
+            destinationVersion: "previous-version-1",
+            error: expect.objectContaining({
+              kind: "destination",
+              message:
+                "Destination Command Plan must contain at least one Destination Command",
+            }),
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "fails a Destination Command Plan that produces multiple destination identities",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<EntryCommand>();
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Multi identity article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: EntryCommand,
+            state: destinationState,
+            execute: (command, context) =>
+              command.kind === "UpsertEntry"
+                ? {
+                    destinationIdentity: `entry-${context.sourceIdentity}`,
+                    destinationVersion: "entry-version-1",
+                  }
+                : {
+                    destinationIdentity: `published-${context.sourceIdentity}`,
+                    destinationVersion: "published-version-1",
+                  },
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.succeed([
+              {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              },
+              {
+                kind: "PublishEntry" as const,
+                contentType: "article",
+              },
+            ]),
+        });
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("failed");
+        expect(
+          destinationState.executions.map((execution) => execution.command.kind)
+        ).toEqual(["UpsertEntry", "PublishEntry"]);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            destinationIdentity: "entry-article-1",
+            destinationVersion: "entry-version-1",
+            error: expect.objectContaining({
+              kind: "destination",
+              message:
+                "Destination Command Plan produced more than one Destination Identity",
+            }),
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "rejects statically known multi-identity Destination Command Plans before execution",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const destinationState =
+          InMemoryDestinationPlugin.makeState<EntryCommand>();
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Static multi identity article" },
+              },
+            ],
+          }),
+          destination: InMemoryDestinationPlugin.make({
+            commandSchema: EntryCommand,
+            identityCommandKinds: ["UpsertEntry", "PublishEntry"],
+            state: destinationState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.succeed([
+              {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              },
+              {
+                kind: "PublishEntry" as const,
+                contentType: "article",
+              },
+            ]),
+        });
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("failed");
+        expect(destinationState.executions).toEqual([]);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            error: expect.objectContaining({
+              kind: "destination",
+              message:
+                "Destination Command Plan contains more than one identity-bearing Destination Command",
+            }),
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "applies Destination Retry to each Destination Command independently",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const attempts: EntryCommand["kind"][] = [];
+        let publishFailures = 1;
+        const destination = {
+          commandSchema: EntryCommand,
+          layer: Layer.sync(DestinationPlugin, () => ({
+            execute: (command, context) =>
+              Effect.gen(function* () {
+                const typedCommand = yield* Schema.decodeUnknownEffect(
+                  EntryCommand
+                )(command).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new DestinationPluginError({
+                        message:
+                          "Destination command did not match command schema",
+                        cause,
+                      })
+                  )
+                );
+
+                attempts.push(typedCommand.kind);
+
+                if (
+                  typedCommand.kind === "PublishEntry" &&
+                  publishFailures > 0
+                ) {
+                  publishFailures -= 1;
+
+                  return yield* new DestinationPluginError({
+                    message: "Publish failed transiently",
+                  });
+                }
+
+                return typedCommand.kind === "UpsertEntry"
+                  ? {
+                      destinationIdentity: toDestinationIdentity(
+                        `entry-${context.sourceIdentity}`
+                      ),
+                    }
+                  : {};
+              }),
+          })),
+        };
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identity: "article-1",
+                version: "source-version-1",
+                item: { title: "Retry publish article" },
+              },
+            ],
+          }),
+          destination,
+          destinationRetry: (effect) =>
+            effect.pipe(Effect.retry(Schedule.recurs(1))),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (source) =>
+            Effect.succeed([
+              {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              },
+              {
+                kind: "PublishEntry" as const,
+                contentType: "article",
+              },
+            ]),
+        });
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("succeeded");
+        expect(attempts).toEqual([
+          "UpsertEntry",
+          "PublishEntry",
+          "PublishEntry",
+        ]);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            destinationIdentity: "entry-article-1",
+          })
+        );
       })
   );
 

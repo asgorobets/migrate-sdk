@@ -17,6 +17,7 @@ export { defineMigration, defineSourcePlugin } from "./domain/definition.ts";
 export type {
   DestinationCommand,
   DestinationCommandContext,
+  DestinationCommandPlan,
   DestinationCommandResult,
   DestinationCommandResultInput,
 } from "./domain/destination.ts";
@@ -25,6 +26,7 @@ export { makeDestinationCommandResult } from "./domain/destination.ts";
 export {
   DestinationPluginError,
   makeSkipItem,
+  MigrationReferenceLookupError,
   MigrationRuntimeError,
   MigrationStoreError,
   skipItem,
@@ -107,6 +109,11 @@ export type {
 } from "./domain/state.ts";
 
 export { DestinationPlugin } from "./services/destination-plugin.ts";
+export { MigrationReferenceLookup } from "./services/migration-reference-lookup.ts";
+export type {
+  MigrationReference,
+  MigrationReferenceLookupInput,
+} from "./services/migration-reference-lookup.ts";
 export { MigrationStore } from "./services/migration-store.ts";
 export type { AnySourcePlugin } from "./services/source-plugin.ts";
 export { SourcePlugin } from "./services/source-plugin.ts";

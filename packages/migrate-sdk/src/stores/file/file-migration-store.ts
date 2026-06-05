@@ -69,12 +69,16 @@ const PersistedMigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionIdSchema,
   lastRunId: MigrationRunIdSchema,
   sourceIdentity: SourceIdentitySchema,
-  sourceVersion: SourceVersionSchema,
   updatedAt: Schema.DateFromString,
+} as const;
+
+const PersistedObservedSourceVersionFields = {
+  sourceVersion: SourceVersionSchema,
 } as const;
 
 const PersistedMigratedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
+  ...PersistedObservedSourceVersionFields,
   destinationIdentity: DestinationIdentitySchema,
   destinationVersion: Schema.optional(DestinationVersionSchema),
   status: Schema.Literal("migrated"),
@@ -82,12 +86,14 @@ const PersistedMigratedItemState = Schema.Struct({
 
 const PersistedSkippedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
+  ...PersistedObservedSourceVersionFields,
   skipReason: Schema.String,
   status: Schema.Literal("skipped"),
 });
 
 const PersistedFailedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
+  sourceVersion: Schema.optional(SourceVersionSchema),
   destinationIdentity: Schema.optional(DestinationIdentitySchema),
   destinationVersion: Schema.optional(DestinationVersionSchema),
   error: MigrationItemError,
@@ -96,6 +102,7 @@ const PersistedFailedItemState = Schema.Struct({
 
 const PersistedNeedsUpdateItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
+  sourceVersion: Schema.optional(SourceVersionSchema),
   destinationIdentity: DestinationIdentitySchema,
   destinationVersion: Schema.optional(DestinationVersionSchema),
   reason: Schema.String,

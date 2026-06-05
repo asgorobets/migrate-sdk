@@ -12,8 +12,11 @@ const MigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionId,
   lastRunId: MigrationRunId,
   sourceIdentity: SourceIdentity,
-  sourceVersion: SourceVersion,
   updatedAt: Schema.Date,
+} as const;
+
+const ObservedSourceVersionFields = {
+  sourceVersion: SourceVersion,
 } as const;
 
 export const MigrationItemErrorKind = Schema.Literals([
@@ -39,6 +42,7 @@ export type MigrationItemError = typeof MigrationItemError.Type;
 
 export const MigratedItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
+  ...ObservedSourceVersionFields,
   destinationIdentity: DestinationIdentity,
   destinationVersion: Schema.optional(DestinationVersion),
   status: Schema.Literal("migrated"),
@@ -47,6 +51,7 @@ export type MigratedItemState = typeof MigratedItemState.Type;
 
 export const SkippedItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
+  ...ObservedSourceVersionFields,
   skipReason: Schema.String,
   status: Schema.Literal("skipped"),
 });
@@ -54,6 +59,7 @@ export type SkippedItemState = typeof SkippedItemState.Type;
 
 export const FailedItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
+  sourceVersion: Schema.optional(SourceVersion),
   destinationIdentity: Schema.optional(DestinationIdentity),
   destinationVersion: Schema.optional(DestinationVersion),
   error: MigrationItemError,
@@ -63,6 +69,7 @@ export type FailedItemState = typeof FailedItemState.Type;
 
 export const NeedsUpdateItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
+  sourceVersion: Schema.optional(SourceVersion),
   destinationIdentity: DestinationIdentity,
   destinationVersion: Schema.optional(DestinationVersion),
   reason: Schema.String,
@@ -82,7 +89,7 @@ export interface MigrationItemStateBase {
   readonly definitionId: MigrationDefinitionId;
   readonly lastRunId: MigrationRunId;
   readonly sourceIdentity: SourceIdentity;
-  readonly sourceVersion: SourceVersion;
+  readonly sourceVersion?: SourceVersion;
   readonly updatedAt: Date;
 }
 

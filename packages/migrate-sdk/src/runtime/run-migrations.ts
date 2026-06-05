@@ -1,12 +1,16 @@
-import { Effect, Exit, Layer, Schema } from "effect";
+import { Deferred, Effect, Exit, Layer, Predicate, Schema } from "effect";
 import type { MigrationDefinition } from "../domain/definition.ts";
 import type { DestinationCommand } from "../domain/destination.ts";
 import {
+  MigrationReferenceLookupError,
   MigrationRuntimeError,
   MigrationStoreError,
+  type SkipItem,
   SourcePluginError,
 } from "../domain/errors.ts";
 import type {
+  DestinationIdentity,
+  DestinationVersion,
   MigrationDefinitionId,
   MigrationRunId,
   SourceIdentity,
@@ -16,6 +20,7 @@ import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type {
   AnyMigrationDefinition,
   MigrationDefinitionRunSummary,
+  MigrationRunState,
   MigrationRunSummary,
   RunRequestInput,
 } from "../domain/run.ts";
@@ -23,15 +28,24 @@ import { makeRunRequest } from "../domain/run.ts";
 import { normalRunMode, type RunMode } from "../domain/run-mode.ts";
 import type {
   FailedItemState,
+  MigrationItemError,
   MigrationItemOutcome,
   MigrationItemState,
+  NeedsUpdateItemState,
 } from "../domain/state.ts";
+import { DestinationPlugin } from "../services/destination-plugin.ts";
+import type { MigrationReference } from "../services/migration-reference-lookup.ts";
 import { MigrationStore } from "../services/migration-store.ts";
 import {
   getSourcePlugin,
   type SourcePlugin,
 } from "../services/source-plugin.ts";
+import { executeDestinationCommandPlan } from "./destination-command-plan.ts";
 import { normalizeItemError } from "./item-error.ts";
+import {
+  type CreateMigrationReferenceStub,
+  makeMigrationReferenceLookupLayer,
+} from "./migration-reference-lookup-layer.ts";
 import { processSourceItem } from "./process-source-item.ts";
 
 export type RunMigrationDefinitionError =
@@ -90,6 +104,12 @@ interface LockReleaseFailure {
   readonly lock: MigrationDefinitionLock;
 }
 
+interface StubRunFinalizationFailure {
+  readonly definitionId: MigrationDefinitionId;
+  readonly error: MigrationStoreError;
+  readonly runId: MigrationRunId;
+}
+
 const lockReleaseFailureError = (
   failures: readonly LockReleaseFailure[],
   primaryExit?: Exit.Exit<unknown, unknown>
@@ -106,6 +126,16 @@ const lockReleaseFailureError = (
       ...(primaryExit !== undefined && Exit.isFailure(primaryExit)
         ? { primaryCause: primaryExit.cause }
         : {}),
+    },
+  });
+
+const stubRunScopeFinalizationError = (
+  failures: readonly StubRunFinalizationFailure[]
+) =>
+  new MigrationStoreError({
+    message: "Unable to finalize Destination Stub Migration Run set",
+    cause: {
+      failures,
     },
   });
 
@@ -197,6 +227,51 @@ const acquireDefinitionLocks = (
     }
 
     return locks;
+  });
+
+interface MigrationRunBodyResult<A> {
+  readonly status: MigrationRunSummary["status"];
+  readonly value: A;
+}
+
+interface MigrationRunExecutionResult<A> extends MigrationRunBodyResult<A> {
+  readonly completedRun: MigrationRunState;
+  readonly runState: MigrationRunState;
+}
+
+const executeMigrationRun = <A, E>(
+  store: typeof MigrationStore.Service,
+  definitionIds: readonly MigrationDefinitionId[],
+  body: (
+    runId: MigrationRunId
+  ) => Effect.Effect<MigrationRunBodyResult<A>, E | MigrationStoreError>
+): Effect.Effect<MigrationRunExecutionResult<A>, E | MigrationStoreError> =>
+  Effect.gen(function* () {
+    const runId = yield* store.createRunId;
+
+    return yield* Effect.acquireUseRelease(
+      acquireDefinitionLocks(store, runId, definitionIds),
+      () =>
+        Effect.gen(function* () {
+          const runState = yield* store.beginRun(runId, definitionIds);
+          const bodyResult = yield* body(runState.runId).pipe(
+            Effect.catch((error) =>
+              failRunAndRethrow(store, runState.runId, definitionIds, error)
+            )
+          );
+          const completedRun =
+            bodyResult.status === "failed"
+              ? yield* store.failRun(runState.runId, definitionIds)
+              : yield* store.completeRun(runState.runId, definitionIds);
+
+          return {
+            ...bodyResult,
+            completedRun,
+            runState,
+          };
+        }),
+      (locks, exit) => releaseDefinitionLocks(store, locks, exit)
+    );
   });
 
 const encodeSourceCursor = <Cursor>(
@@ -377,6 +452,180 @@ const previousDestinationVersion = (
     ? previousState.destinationVersion
     : undefined;
 
+const stubNotConfiguredError = (definitionId: MigrationDefinitionId) =>
+  new MigrationReferenceLookupError({
+    message: "Migration Definition does not define Destination Stub creation",
+    cause: { definitionId },
+  });
+
+const stubPlanMissingIdentityError = (definitionId: MigrationDefinitionId) =>
+  new MigrationReferenceLookupError({
+    message:
+      "Destination Stub command plan did not produce a Destination Identity",
+    cause: { definitionId },
+  });
+
+const stubCreationFailedError = (
+  definitionId: MigrationDefinitionId,
+  sourceIdentity: SourceIdentity
+) =>
+  new MigrationReferenceLookupError({
+    message: "Destination Stub creation failed",
+    cause: { definitionId, sourceIdentity },
+  });
+
+const isSkipItem = (error: unknown): error is SkipItem =>
+  Predicate.isTagged(error, "SkipItem");
+
+const makeFailedStubReferenceState = ({
+  definitionId,
+  destinationIdentity,
+  destinationVersion,
+  error,
+  previousState,
+  runId,
+  sourceIdentity,
+}: {
+  readonly definitionId: MigrationDefinitionId;
+  readonly destinationIdentity?: DestinationIdentity;
+  readonly destinationVersion?: DestinationVersion;
+  readonly error: MigrationItemError;
+  readonly previousState: MigrationItemState | null;
+  readonly runId: MigrationRunId;
+  readonly sourceIdentity: SourceIdentity;
+}): FailedItemState => ({
+  definitionId,
+  sourceIdentity,
+  ...(previousState?.sourceVersion === undefined
+    ? {}
+    : { sourceVersion: previousState.sourceVersion }),
+  ...((destinationIdentity ?? previousDestinationIdentity(previousState)) ===
+  undefined
+    ? {}
+    : {
+        destinationIdentity:
+          destinationIdentity ?? previousDestinationIdentity(previousState),
+      }),
+  ...((destinationVersion ?? previousDestinationVersion(previousState)) ===
+  undefined
+    ? {}
+    : {
+        destinationVersion:
+          destinationVersion ?? previousDestinationVersion(previousState),
+      }),
+  lastRunId: runId,
+  updatedAt: new Date(),
+  status: "failed",
+  error,
+});
+
+const makeNeedsUpdateStubReferenceState = ({
+  definitionId,
+  destinationIdentity,
+  destinationVersion,
+  previousState,
+  runId,
+  sourceIdentity,
+}: {
+  readonly definitionId: MigrationDefinitionId;
+  readonly destinationIdentity: DestinationIdentity;
+  readonly destinationVersion?: DestinationVersion;
+  readonly previousState: MigrationItemState | null;
+  readonly runId: MigrationRunId;
+  readonly sourceIdentity: SourceIdentity;
+}): NeedsUpdateItemState => ({
+  definitionId,
+  sourceIdentity,
+  ...(previousState?.sourceVersion === undefined
+    ? {}
+    : { sourceVersion: previousState.sourceVersion }),
+  destinationIdentity,
+  ...(destinationVersion === undefined ? {} : { destinationVersion }),
+  lastRunId: runId,
+  updatedAt: new Date(),
+  reason: "Destination Stub requires update",
+  status: "needs-update",
+});
+
+const executeStubPlan = <Command extends DestinationCommand, PipelineError>(
+  definition: MigrationDefinition<unknown, Command, PipelineError, unknown>,
+  runId: MigrationRunId,
+  sourceIdentity: SourceIdentity,
+  previousState: MigrationItemState | null
+) =>
+  Effect.gen(function* () {
+    if (definition.stub === undefined) {
+      return yield* stubNotConfiguredError(definition.id);
+    }
+
+    const plan = yield* definition
+      .stub(
+        { sourceIdentity },
+        {
+          definitionId: definition.id,
+          runId,
+        }
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          isSkipItem(error)
+            ? new MigrationReferenceLookupError({
+                message: "Destination Stub creation skipped",
+                cause: error,
+              })
+            : new MigrationReferenceLookupError({
+                message: "Destination Stub command plan creation failed",
+                cause: error,
+              })
+        )
+      );
+
+    const outcome = yield* Effect.gen(function* () {
+      const destination = yield* DestinationPlugin;
+
+      return yield* executeDestinationCommandPlan({
+        context: {
+          definitionId: definition.id,
+          runId,
+          sourceIdentity,
+          ...(previousState === null ? {} : { previousState }),
+        },
+        destination,
+        destinationRetry: definition.destinationRetry,
+        identityCommandKinds: definition.destination.identityCommandKinds,
+        plan,
+      });
+    }).pipe(Effect.provide(definition.destination.layer));
+
+    if (outcome.kind === "failed") {
+      return {
+        kind: "failed" as const,
+        ...(outcome.destinationIdentity === undefined
+          ? {}
+          : { destinationIdentity: outcome.destinationIdentity }),
+        ...(outcome.destinationVersion === undefined
+          ? {}
+          : { destinationVersion: outcome.destinationVersion }),
+        error: outcome.error,
+      };
+    }
+
+    const destinationIdentity =
+      outcome.destinationIdentity ?? previousDestinationIdentity(previousState);
+
+    if (destinationIdentity === undefined) {
+      return yield* stubPlanMissingIdentityError(definition.id);
+    }
+
+    return {
+      kind: "succeeded" as const,
+      destinationIdentity,
+      ...(outcome.destinationVersion === undefined
+        ? {}
+        : { destinationVersion: outcome.destinationVersion }),
+    };
+  });
+
 const makeSourceLookupFailedItemState = (
   definitionId: MigrationDefinitionId,
   runId: MigrationRunId,
@@ -386,7 +635,9 @@ const makeSourceLookupFailedItemState = (
 ): FailedItemState => ({
   definitionId,
   sourceIdentity,
-  sourceVersion: previousState.sourceVersion,
+  ...(previousState.sourceVersion === undefined
+    ? {}
+    : { sourceVersion: previousState.sourceVersion }),
   ...(previousDestinationIdentity(previousState) === undefined
     ? {}
     : { destinationIdentity: previousDestinationIdentity(previousState) }),
@@ -614,6 +865,330 @@ const processCursorDiscovery = <
     return committedCursor;
   });
 
+const processStubSourceIdentity = ({
+  definition,
+  runId,
+  sourceIdentity,
+  store,
+}: {
+  readonly definition: AnyMigrationDefinition;
+  readonly runId: MigrationRunId;
+  readonly sourceIdentity: SourceIdentity;
+  readonly store: typeof MigrationStore.Service;
+}): Effect.Effect<
+  MigrationReference,
+  MigrationReferenceLookupError | MigrationStoreError
+> =>
+  Effect.gen(function* () {
+    const previousState = yield* store.getItemState(
+      definition.id,
+      sourceIdentity
+    );
+    const stubOutcome = yield* executeStubPlan(
+      definition,
+      runId,
+      sourceIdentity,
+      previousState
+    );
+
+    if (stubOutcome.kind === "failed") {
+      yield* store.upsertItemState(
+        makeFailedStubReferenceState({
+          definitionId: definition.id,
+          ...(stubOutcome.destinationIdentity === undefined
+            ? {}
+            : { destinationIdentity: stubOutcome.destinationIdentity }),
+          ...(stubOutcome.destinationVersion === undefined
+            ? {}
+            : { destinationVersion: stubOutcome.destinationVersion }),
+          error: stubOutcome.error,
+          previousState,
+          runId,
+          sourceIdentity,
+        })
+      );
+
+      return yield* stubCreationFailedError(definition.id, sourceIdentity);
+    }
+
+    const state = makeNeedsUpdateStubReferenceState({
+      definitionId: definition.id,
+      destinationIdentity: stubOutcome.destinationIdentity,
+      ...(stubOutcome.destinationVersion === undefined
+        ? {}
+        : { destinationVersion: stubOutcome.destinationVersion }),
+      previousState,
+      runId,
+      sourceIdentity,
+    });
+    yield* store.upsertItemState(state);
+
+    return {
+      definitionId: state.definitionId,
+      destinationIdentity: state.destinationIdentity,
+      ...(state.destinationVersion === undefined
+        ? {}
+        : { destinationVersion: state.destinationVersion }),
+      sourceIdentity: state.sourceIdentity,
+      status: state.status,
+    } satisfies MigrationReference;
+  });
+
+type StubReferenceError = MigrationReferenceLookupError | MigrationStoreError;
+
+interface StubDefinitionRunLease {
+  readonly definitionId: MigrationDefinitionId;
+  failed: boolean;
+  readonly locks: readonly MigrationDefinitionLock[];
+  readonly ownsLifecycle: boolean;
+  readonly runId: MigrationRunId;
+  readonly store: typeof MigrationStore.Service;
+}
+
+interface ActiveStubRunScope {
+  readonly definitionIds: readonly MigrationDefinitionId[];
+  readonly runId: MigrationRunId;
+  readonly store: typeof MigrationStore.Service;
+}
+
+interface StubRunScope {
+  readonly createStubReference: CreateMigrationReferenceStub;
+  readonly finalize: (
+    primaryExit: Exit.Exit<unknown, unknown>
+  ) => Effect.Effect<void, MigrationStoreError>;
+}
+
+const stubReferenceKey = (
+  definitionId: MigrationDefinitionId,
+  sourceIdentity: SourceIdentity
+) => `${definitionId}\u0000${sourceIdentity}`;
+
+const startStubDefinitionRun = (
+  definition: AnyMigrationDefinition
+): Effect.Effect<StubDefinitionRunLease, MigrationStoreError> =>
+  Effect.gen(function* () {
+    const store = yield* MigrationStore;
+    const runId = yield* store.createRunId;
+    const locks = yield* acquireDefinitionLocks(store, runId, [definition.id]);
+    const runState = yield* store
+      .beginRun(runId, [definition.id])
+      .pipe(
+        Effect.catch((error) =>
+          releaseDefinitionLocks(store, locks, Exit.fail(error)).pipe(
+            Effect.flatMap(() => Effect.fail(error))
+          )
+        )
+      );
+
+    return {
+      definitionId: definition.id,
+      failed: false,
+      locks,
+      ownsLifecycle: true,
+      runId: runState.runId,
+      store,
+    };
+  }).pipe(Effect.provide(definition.store));
+
+const finishStubDefinitionRun = (
+  lease: StubDefinitionRunLease,
+  primaryExit: Exit.Exit<unknown, unknown>
+): Effect.Effect<void, MigrationStoreError> =>
+  Effect.gen(function* () {
+    if (!lease.ownsLifecycle) {
+      return;
+    }
+
+    const shouldFailRun = lease.failed || Exit.isFailure(primaryExit);
+    const finalizedRunExit = yield* Effect.exit(
+      shouldFailRun
+        ? lease.store.failRun(lease.runId, [lease.definitionId])
+        : lease.store.completeRun(lease.runId, [lease.definitionId])
+    );
+
+    yield* releaseDefinitionLocks(
+      lease.store,
+      lease.locks,
+      Exit.isFailure(finalizedRunExit) ? finalizedRunExit : primaryExit
+    );
+
+    yield* finalizedRunExit;
+  });
+
+const makeStubRunScope = (activeRun: ActiveStubRunScope): StubRunScope => {
+  const leases = new Map<MigrationDefinitionId, StubDefinitionRunLease>();
+  const leaseRequests = new Map<
+    MigrationDefinitionId,
+    Deferred.Deferred<StubDefinitionRunLease, MigrationStoreError>
+  >();
+  const stubRequests = new Map<
+    string,
+    Deferred.Deferred<MigrationReference, StubReferenceError>
+  >();
+
+  for (const definitionId of activeRun.definitionIds) {
+    leases.set(definitionId, {
+      definitionId,
+      failed: false,
+      locks: [],
+      ownsLifecycle: false,
+      runId: activeRun.runId,
+      store: activeRun.store,
+    });
+  }
+
+  const getStubDefinitionRun = (
+    definition: AnyMigrationDefinition
+  ): Effect.Effect<StubDefinitionRunLease, MigrationStoreError> =>
+    Effect.gen(function* () {
+      const activeLease = leases.get(definition.id);
+
+      if (activeLease !== undefined) {
+        return activeLease;
+      }
+
+      const request = yield* Effect.sync(() => {
+        const existing = leaseRequests.get(definition.id);
+
+        if (existing !== undefined) {
+          return {
+            deferred: existing,
+            owner: false,
+          } as const;
+        }
+
+        const deferred = Deferred.makeUnsafe<
+          StubDefinitionRunLease,
+          MigrationStoreError
+        >();
+        leaseRequests.set(definition.id, deferred);
+
+        return {
+          deferred,
+          owner: true,
+        } as const;
+      });
+
+      if (!request.owner) {
+        return yield* Deferred.await(request.deferred);
+      }
+
+      const leaseExit = yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const exit = yield* Effect.exit(
+            startStubDefinitionRun(definition).pipe(
+              Effect.tap((lease) =>
+                Effect.sync(() => {
+                  leases.set(definition.id, lease);
+                })
+              )
+            )
+          );
+          yield* Deferred.done(request.deferred, exit);
+          return exit;
+        })
+      );
+      return yield* leaseExit;
+    });
+
+  const createStubReference: CreateMigrationReferenceStub = ({
+    definition,
+    sourceIdentity,
+  }) =>
+    Effect.gen(function* () {
+      const key = stubReferenceKey(definition.id, sourceIdentity);
+      const request = yield* Effect.sync(() => {
+        const existing = stubRequests.get(key);
+
+        if (existing !== undefined) {
+          return {
+            deferred: existing,
+            owner: false,
+          } as const;
+        }
+
+        const deferred = Deferred.makeUnsafe<
+          MigrationReference,
+          StubReferenceError
+        >();
+        stubRequests.set(key, deferred);
+
+        return {
+          deferred,
+          owner: true,
+        } as const;
+      });
+
+      if (!request.owner) {
+        return yield* Deferred.await(request.deferred);
+      }
+
+      const referenceExit = yield* Effect.exit(
+        Effect.gen(function* () {
+          const lease = yield* getStubDefinitionRun(definition);
+          const reference = yield* processStubSourceIdentity({
+            definition,
+            runId: lease.runId,
+            sourceIdentity,
+            store: lease.store,
+          }).pipe(
+            Effect.tapError(() =>
+              Effect.sync(() => {
+                lease.failed = true;
+              })
+            )
+          );
+
+          return reference;
+        })
+      );
+
+      yield* Deferred.done(request.deferred, referenceExit);
+
+      return yield* referenceExit;
+    });
+
+  const finalize = (
+    primaryExit: Exit.Exit<unknown, unknown>
+  ): Effect.Effect<void, MigrationStoreError> =>
+    Effect.gen(function* () {
+      const failures: StubRunFinalizationFailure[] = [];
+
+      for (const lease of [...leases.values()].reverse()) {
+        yield* finishStubDefinitionRun(lease, primaryExit).pipe(
+          Effect.catch((error) =>
+            Effect.sync(() => {
+              failures.push({
+                definitionId: lease.definitionId,
+                error,
+                runId: lease.runId,
+              });
+            })
+          )
+        );
+      }
+
+      if (failures.length > 0) {
+        return yield* stubRunScopeFinalizationError(failures);
+      }
+    });
+
+  return {
+    createStubReference,
+    finalize,
+  };
+};
+
+const withStubRunScope = <A, E>(
+  activeRun: ActiveStubRunScope,
+  body: (scope: StubRunScope) => Effect.Effect<A, E>
+): Effect.Effect<A, E | MigrationStoreError> =>
+  Effect.acquireUseRelease(
+    Effect.sync(() => makeStubRunScope(activeRun)),
+    body,
+    (scope, exit) => scope.finalize(exit)
+  );
+
 const runMigrationDefinition = <
   Source,
   Command extends DestinationCommand,
@@ -621,8 +1196,10 @@ const runMigrationDefinition = <
   Cursor,
 >(
   definition: MigrationDefinition<Source, Command, PipelineError, Cursor>,
+  definitions: readonly AnyMigrationDefinition[],
   runId: MigrationRunId,
-  mode: RunMode
+  mode: RunMode,
+  createStubReference: CreateMigrationReferenceStub
 ): Effect.Effect<
   MigrationDefinitionRunSummary,
   RunMigrationDefinitionError
@@ -668,10 +1245,15 @@ const runMigrationDefinition = <
       counts,
     };
   });
+  const lookupLayer = makeMigrationReferenceLookupLayer({
+    createStubReference,
+    definitions,
+  });
   const layer = Layer.mergeAll(
     definition.source.layer,
     definition.destination.layer,
-    definition.store
+    definition.store,
+    lookupLayer
   );
 
   return program.pipe(Effect.provide(layer));
@@ -725,48 +1307,44 @@ export const runMigrations = <
 
       const program = Effect.gen(function* () {
         const store = yield* MigrationStore;
-        const runId = yield* store.createRunId;
 
-        return yield* Effect.acquireUseRelease(
-          acquireDefinitionLocks(store, runId, definitionIds),
-          () =>
-            Effect.gen(function* () {
-              const runState = yield* store.beginRun(runId, definitionIds);
-              const definitionSummaries = yield* Effect.gen(function* () {
+        const run = yield* executeMigrationRun(store, definitionIds, (runId) =>
+          withStubRunScope(
+            {
+              definitionIds,
+              runId,
+              store,
+            },
+            (stubRunScope) =>
+              Effect.gen(function* () {
                 const summaries: MigrationDefinitionRunSummary[] = [];
 
                 for (const definition of orderedDefinitions.definitions) {
                   const summary = yield* runMigrationDefinition(
                     definition,
-                    runState.runId,
-                    request.mode ?? normalRunMode
+                    request.definitions,
+                    runId,
+                    request.mode ?? normalRunMode,
+                    stubRunScope.createStubReference
                   );
                   summaries.push(summary);
                 }
 
-                return summaries;
-              }).pipe(
-                Effect.catch((error) =>
-                  failRunAndRethrow(store, runState.runId, definitionIds, error)
-                )
-              );
-
-              const runStatus = runStatusForDefinitions(definitionSummaries);
-              const completedRun =
-                runStatus === "failed"
-                  ? yield* store.failRun(runState.runId, definitionIds)
-                  : yield* store.completeRun(runState.runId, definitionIds);
-
-              return {
-                runId: runState.runId,
-                status: runStatus,
-                startedAt: runState.startedAt,
-                finishedAt: completedRun.finishedAt ?? new Date(),
-                definitions: definitionSummaries,
-              };
-            }),
-          (locks, exit) => releaseDefinitionLocks(store, locks, exit)
+                return {
+                  status: runStatusForDefinitions(summaries),
+                  value: summaries,
+                };
+              })
+          )
         );
+
+        return {
+          runId: run.runState.runId,
+          status: run.status,
+          startedAt: run.runState.startedAt,
+          finishedAt: run.completedRun.finishedAt ?? new Date(),
+          definitions: run.value,
+        };
       });
 
       return program.pipe(Effect.provide(firstOrderedDefinition.store));
@@ -785,40 +1363,40 @@ export const runMigration = <
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
     const definitionIds = [definition.id];
-    const runId = yield* store.createRunId;
 
-    return yield* Effect.acquireUseRelease(
-      acquireDefinitionLocks(store, runId, definitionIds),
-      () =>
-        Effect.gen(function* () {
-          const runState = yield* store.beginRun(runId, definitionIds);
-          const summary = yield* runMigrationDefinition(
-            definition,
-            runState.runId,
-            normalRunMode
-          ).pipe(
-            Effect.catch((error) =>
-              failRunAndRethrow(store, runState.runId, definitionIds, error)
-            )
-          );
-          const completedRun =
-            summary.status === "failed"
-              ? yield* store.failRun(runState.runId, definitionIds)
-              : yield* store.completeRun(runState.runId, definitionIds);
+    const run = yield* executeMigrationRun(store, definitionIds, (runId) => {
+      const activeRun = {
+        definitionIds,
+        runId,
+        store,
+      };
 
-          const runStatus: MigrationRunSummary["status"] =
-            summary.status === "failed" ? "failed" : "succeeded";
+      return withStubRunScope(activeRun, (stubRunScope) =>
+        runMigrationDefinition(
+          definition,
+          [definition],
+          runId,
+          normalRunMode,
+          stubRunScope.createStubReference
+        ).pipe(
+          Effect.map((summary) => ({
+            status:
+              summary.status === "failed"
+                ? ("failed" as const)
+                : ("succeeded" as const),
+            value: [summary],
+          }))
+        )
+      );
+    });
 
-          return {
-            runId: runState.runId,
-            status: runStatus,
-            startedAt: runState.startedAt,
-            finishedAt: completedRun.finishedAt ?? new Date(),
-            definitions: [summary],
-          };
-        }),
-      (locks, exit) => releaseDefinitionLocks(store, locks, exit)
-    );
+    return {
+      runId: run.runState.runId,
+      status: run.status,
+      startedAt: run.runState.startedAt,
+      finishedAt: run.completedRun.finishedAt ?? new Date(),
+      definitions: run.value,
+    };
   });
 
   return program.pipe(Effect.provide(definition.store));

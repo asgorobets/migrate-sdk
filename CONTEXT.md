@@ -74,13 +74,19 @@ The invocation object that starts a migration run from the SDK, CLI, or another 
 The runtime strategy that executes migration definitions.
 
 **Migration Reference Lookup**:
-A pipeline capability for reading destination identities from other migration definitions' item states.
+A pipeline capability for reading migrated destination identities from migration item states.
 
 **Transformation Pipeline**:
-The typed transformation from one source item into one destination command.
+The typed transformation from one source item into destination commands.
 
 **Destination Command**:
 The typed command produced by a transformation pipeline and executed by a destination plugin.
+
+**Destination Command Plan**:
+An ordered set of destination commands produced for one source item.
+
+**Destination Command Result**:
+The result of executing a destination command.
 
 **Destination Identity**:
 The stable identity of a destination item created or updated by a destination plugin.
@@ -131,7 +137,7 @@ Durable structured detail for inspecting a migration item error after the run ha
 - An **Encoded Source Cursor** is the only cursor form persisted by a **Migration Store**.
 - A **Source Cursor Window** may return a next **Source Cursor**.
 - A **Source Cursor** is committed after a cursor window is processed, even when some source items in the window fail.
-- A **Migration Item State** records source identity, observed source version, migration status, and may record destination identity or failure metadata.
+- A **Migration Item State** records source identity, migration status, and may record observed source version, destination identity, or failure metadata.
 - A **Migration Item State** is modeled as discriminated variants by status.
 - A **Migration Item State** does not store source item payloads by default.
 - Public and persisted migration data uses domain-friendly discriminators such as `kind` and `status`; Effect `_tag` is reserved for Effect-native errors or internals and hidden from public authoring examples through helpers.
@@ -153,7 +159,7 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A **Migration Store** records **Migration Item State**, the latest **Migration Run State**, and the last successful **Source Cursor** for each **Migration Definition**.
 - A **Migration Store** may be backed by SQL, key/value storage, files, or another durable system.
 - A **Migration Definition** uses one public **Migration Store** service.
-- A **Destination Plugin** executes **Destination Commands** and returns destination identity metadata that can be recorded in **Migration Item State**.
+- A **Destination Plugin** executes **Destination Commands** and returns **Destination Command Results**.
 - A **Destination Plugin** exposes or uses a **Destination Command Schema**.
 - A **Migration Definition** declares the source, pipeline, destination, migration store, and dependencies for a migration workflow.
 - A **Migration Definition** is executable and may contain layers and effects.
@@ -184,10 +190,34 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A **Run Request** that selects migration definitions also includes their required dependencies.
 - An **Execution Adapter** may execute migration definitions inline, inline with bounded parallelism, or through a durable queue.
 - An **Execution Adapter** may be provided by users when they need custom scheduling or parallelization.
-- A **Migration Reference Lookup** reads migrated destination identities from dependency migration definitions.
-- A **Transformation Pipeline** transforms exactly one **Source Item** into at most one **Destination Command** in the first version.
-- A **Destination Command** maps back to exactly one **Source Item** in the first version.
-- A **Destination Plugin** returns a non-empty **Destination Identity** and may return a non-empty **Destination Version**.
+- A **Migration Reference Lookup** reads migrated destination identities from **Migration Item State** in a **Migration Store**.
+- A **Migration Reference Lookup** reads and writes referenced **Migration Item State** through the referenced **Migration Definition's Migration Store**.
+- A **Migration Reference Lookup** may target a **Migration Definition** that is not a declared dependency.
+- A **Migration Reference Lookup** may target one **Migration Definition** or an ordered list of **Migration Definitions**.
+- A **Migration Reference Lookup** over multiple **Migration Definitions** returns the first migrated reference found in lookup order.
+- A declared dependency gives same-run ordering and locking guarantees for reference lookup, but is not required to perform a reference lookup.
+- A missing migrated reference may be handled as no value or as an item-level pipeline failure by the **Transformation Pipeline**.
+- A missing migrated reference may create a **Destination Stub** when the **Migration Reference Lookup** is configured to allow stubs.
+- A referenced **Migration Definition** owns how its **Destination Stubs** are created.
+- A referenced **Migration Definition** creates **Destination Stubs** from a **Source Identity**, not from the full referenced **Source Item** payload.
+- A referenced **Migration Definition** creates **Destination Stubs** by producing a **Destination Command Plan**.
+- A **Migration Reference Lookup** over multiple **Migration Definitions** must select one referenced **Migration Definition** to create a **Destination Stub** when no migrated reference is found.
+- A **Migration Reference Lookup** that creates a **Destination Stub** records **Needs Update** item state for the stubbed reference.
+- A **Needs Update** item state created by **Migration Reference Lookup** may not have an observed source version yet.
+- A **Migration Reference Lookup** may return a **Needs Update** item state as a usable reference because the **Destination Identity** already exists.
+- A **Transformation Pipeline** transforms exactly one **Source Item** into one **Destination Command Plan**.
+- A **Destination Command Plan** may contain one or more ordered **Destination Commands**.
+- A **Destination Command** maps back to exactly one **Source Item** through its **Destination Command Plan**.
+- A **Destination Retry Strategy** wraps each **Destination Command** execution in a **Destination Command Plan** independently.
+- A **Destination Command Result** may include a non-empty **Destination Identity** and a non-empty **Destination Version**.
+- A side-effect-only **Destination Command Result** may omit **Destination Identity**.
+- A **Migration Item State** records one primary **Destination Identity** for a **Source Item**.
+- A **Destination Command Plan** that records a migrated or needs-update **Migration Item State** must produce or preserve one primary **Destination Identity**.
+- A **Destination Command Plan** must not produce more than one identity-bearing **Destination Command Result**.
+- A **Destination Command Plan** with more than one identity-bearing command or result fails the **Source Item**.
+- Side-effect-only **Destination Command Results** do not replace the primary **Destination Identity** recorded in **Migration Item State**.
+- If a **Destination Command Plan** partially succeeds and then fails, the **Migration Item State** is failed and preserves the latest known primary **Destination Identity** and **Destination Version**.
+- A workflow that creates multiple durable destination identities should use multiple **Migration Definitions** stitched through **Migration Reference Lookup**.
 - A **Destination Stub** is incomplete and must be updated by a later migration run.
 - A **Needs Update** item state is not terminal and must be reprocessed even when source version is unchanged.
 - A **Destination Plugin** may classify retryable errors, but a **Migration Definition** selects the **Destination Retry Strategy**.
@@ -211,3 +241,4 @@ Durable structured detail for inspecting a migration item error after the run ha
 - Hashing the entire source item was considered as an identity strategy — resolved: content hashes are usually **Source Version**, not **Source Identity**.
 - "highwater mark" was used for incremental source selection — resolved: use **Source Cursor**.
 - "source schema" and "source item schema" were used ambiguously — resolved: use **Source Payload Schema** for the schema that validates `SourceItem.item`, not source identity or source version.
+- Drupal-style `migration`, `source`, `stub_id`, and `no_stub` lookup option names were considered — resolved: use framework terms such as **Migration Definition**, **Source Identity**, and **Destination Stub** in the TypeScript API while preserving Drupal-inspired lookup semantics.

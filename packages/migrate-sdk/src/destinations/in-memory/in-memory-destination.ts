@@ -31,6 +31,7 @@ export interface InMemoryDestinationOptions<C extends DestinationCommand> {
     command: C,
     context: DestinationCommandContext
   ) => DestinationCommandResultInput;
+  readonly identityCommandKinds?: readonly C["kind"][];
   readonly state?: InMemoryDestinationState<C>;
   readonly transientFailures?: InMemoryDestinationTransientFailures;
 }
@@ -105,6 +106,9 @@ const make = <C extends DestinationCommand>(
   options: InMemoryDestinationOptions<C>
 ): ConfiguredDestinationPlugin<C> => ({
   commandSchema: options.commandSchema,
+  ...(options.identityCommandKinds === undefined
+    ? {}
+    : { identityCommandKinds: options.identityCommandKinds }),
   layer: makeLayer(options),
 });
 

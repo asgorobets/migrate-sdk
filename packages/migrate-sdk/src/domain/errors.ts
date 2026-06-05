@@ -20,6 +20,11 @@ export class MigrationStoreError extends Schema.TaggedErrorClass<MigrationStoreE
   ErrorFields
 ) {}
 
+export class MigrationReferenceLookupError extends Schema.TaggedErrorClass<MigrationReferenceLookupError>()(
+  "MigrationReferenceLookupError",
+  ErrorFields
+) {}
+
 export class MigrationRuntimeError extends Schema.TaggedErrorClass<MigrationRuntimeError>()(
   "MigrationRuntimeError",
   ErrorFields

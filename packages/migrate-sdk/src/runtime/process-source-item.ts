@@ -3,10 +3,18 @@ import type { MigrationDefinition } from "../domain/definition.ts";
 import type {
   DestinationCommand,
   DestinationCommandContext,
-  DestinationCommandResult,
+  DestinationCommandPlan,
 } from "../domain/destination.ts";
-import type { MigrationStoreError, SkipItem } from "../domain/errors.ts";
-import type { MigrationDefinitionId, MigrationRunId } from "../domain/ids.ts";
+import type { DestinationPluginError, SkipItem } from "../domain/errors.ts";
+import {
+  DestinationPluginError as DestinationPluginErrorClass,
+  type MigrationStoreError,
+} from "../domain/errors.ts";
+import type {
+  MigrationDefinitionId,
+  MigrationRunId,
+  SourceVersion,
+} from "../domain/ids.ts";
 import type { PipelineContext } from "../domain/pipeline.ts";
 import type { SourceItem } from "../domain/source.ts";
 import type {
@@ -19,7 +27,9 @@ import type {
   SkippedItemState,
 } from "../domain/state.ts";
 import { DestinationPlugin } from "../services/destination-plugin.ts";
+import type { MigrationReferenceLookup } from "../services/migration-reference-lookup.ts";
 import { MigrationStore } from "../services/migration-store.ts";
+import { executeDestinationCommandPlan } from "./destination-command-plan.ts";
 import {
   normalizeItemError,
   normalizeSourcePayloadSchemaError,
@@ -39,8 +49,8 @@ export interface ProcessSourceItemOptions<
   >;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
-  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
   readonly sourceItem: SourceItem<Source>;
+  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
 }
 
 export type ProcessSourceItemError = MigrationStoreError;
@@ -48,21 +58,11 @@ export type ProcessSourceItemError = MigrationStoreError;
 type PipelineOutcome<Command extends DestinationCommand> =
   | {
       readonly kind: "command";
-      readonly command: Command;
+      readonly plan: DestinationCommandPlan<Command>;
     }
   | {
       readonly kind: "skipped";
       readonly reason: string;
-    }
-  | {
-      readonly kind: "failed";
-      readonly error: MigrationItemError;
-    };
-
-type DestinationOutcome =
-  | {
-      readonly kind: "succeeded";
-      readonly result: DestinationCommandResult;
     }
   | {
       readonly kind: "failed";
@@ -74,11 +74,14 @@ const isSkipItem = (error: unknown): error is SkipItem =>
   "reason" in error &&
   typeof error.reason === "string";
 
+const isMigrationStoreError = (error: unknown): error is MigrationStoreError =>
+  Predicate.isTagged(error, "MigrationStoreError");
+
 const makeItemStateBase = <Source>(
   definitionId: MigrationDefinitionId,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>
-): MigrationItemStateBase => ({
+): MigrationItemStateBase & { readonly sourceVersion: SourceVersion } => ({
   definitionId,
   sourceIdentity: sourceItem.identity,
   sourceVersion: sourceItem.version,
@@ -122,15 +125,29 @@ const makeFailedItemState = <Source>(
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>,
   error: MigrationItemError,
-  previousState: MigrationItemState | null = null
+  previousState: MigrationItemState | null = null,
+  latestDestination?: {
+    readonly destinationIdentity?: FailedItemState["destinationIdentity"];
+    readonly destinationVersion?: FailedItemState["destinationVersion"];
+  }
 ): FailedItemState => ({
   ...makeItemStateBase(definitionId, runId, sourceItem),
-  ...(previousDestinationIdentity(previousState) === undefined
+  ...((latestDestination?.destinationIdentity ??
+    previousDestinationIdentity(previousState)) === undefined
     ? {}
-    : { destinationIdentity: previousDestinationIdentity(previousState) }),
-  ...(previousDestinationVersion(previousState) === undefined
+    : {
+        destinationIdentity:
+          latestDestination?.destinationIdentity ??
+          previousDestinationIdentity(previousState),
+      }),
+  ...((latestDestination?.destinationVersion ??
+    previousDestinationVersion(previousState)) === undefined
     ? {}
-    : { destinationVersion: previousDestinationVersion(previousState) }),
+    : {
+        destinationVersion:
+          latestDestination?.destinationVersion ??
+          previousDestinationVersion(previousState),
+      }),
   status: "failed",
   error,
 });
@@ -139,7 +156,10 @@ const makeMigratedItemState = <Source>(
   definitionId: MigrationDefinitionId,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>,
-  result: DestinationCommandResult
+  result: {
+    readonly destinationIdentity: MigratedItemState["destinationIdentity"];
+    readonly destinationVersion?: MigratedItemState["destinationVersion"];
+  }
 ): MigratedItemState => ({
   ...makeItemStateBase(definitionId, runId, sourceItem),
   status: "migrated",
@@ -148,6 +168,81 @@ const makeMigratedItemState = <Source>(
     ? {}
     : { destinationVersion: result.destinationVersion }),
 });
+
+const missingDestinationIdentityError = (): DestinationPluginError =>
+  new DestinationPluginErrorClass({
+    message: "Destination Command Plan did not produce a Destination Identity",
+  });
+
+const persistMissingDestinationIdentityFailure = <Source>({
+  decodedSourceItem,
+  definitionId,
+  previousState,
+  runId,
+  store,
+}: {
+  readonly decodedSourceItem: SourceItem<Source>;
+  readonly definitionId: MigrationDefinitionId;
+  readonly previousState: MigrationItemState | null;
+  readonly runId: MigrationRunId;
+  readonly store: typeof MigrationStore.Service;
+}) =>
+  store.upsertItemState(
+    makeFailedItemState(
+      definitionId,
+      runId,
+      decodedSourceItem,
+      normalizeItemError("destination", missingDestinationIdentityError()),
+      previousState
+    )
+  );
+
+const persistNonCommandPipelineOutcome = <
+  Source,
+  Command extends DestinationCommand,
+>({
+  decodedSourceItem,
+  definitionId,
+  outcome,
+  previousState,
+  runId,
+  store,
+}: {
+  readonly decodedSourceItem: SourceItem<Source>;
+  readonly definitionId: MigrationDefinitionId;
+  readonly outcome: Exclude<
+    PipelineOutcome<Command>,
+    { readonly kind: "command" }
+  >;
+  readonly previousState: MigrationItemState | null;
+  readonly runId: MigrationRunId;
+  readonly store: typeof MigrationStore.Service;
+}) => {
+  if (outcome.kind === "skipped") {
+    return store
+      .upsertItemState(
+        makeSkippedItemState(
+          definitionId,
+          runId,
+          decodedSourceItem,
+          outcome.reason
+        )
+      )
+      .pipe(Effect.as("skipped" as const));
+  }
+
+  return store
+    .upsertItemState(
+      makeFailedItemState(
+        definitionId,
+        runId,
+        decodedSourceItem,
+        outcome.error,
+        previousState
+      )
+    )
+    .pipe(Effect.as("failed" as const));
+};
 
 const isUnchangedTerminalState = <Source>(
   previousState: MigrationItemState | null,
@@ -185,7 +280,7 @@ export const processSourceItem = <
 }: ProcessSourceItemOptions<Source, Command, PipelineError>): Effect.Effect<
   MigrationItemOutcome,
   ProcessSourceItemError,
-  DestinationPlugin | MigrationStore
+  DestinationPlugin | MigrationReferenceLookup | MigrationStore
 > =>
   Effect.gen(function* () {
     const destination = yield* DestinationPlugin;
@@ -234,9 +329,9 @@ export const processSourceItem = <
       .pipeline(decodedSourceItem, pipelineContext)
       .pipe(
         Effect.map(
-          (command): PipelineOutcome<Command> => ({
+          (plan): PipelineOutcome<Command> => ({
             kind: "command",
-            command,
+            plan,
           })
         ),
         Effect.catchIf(isSkipItem, (skip) =>
@@ -245,6 +340,7 @@ export const processSourceItem = <
             reason: skip.reason,
           } satisfies PipelineOutcome<Command>)
         ),
+        Effect.catchIf(isMigrationStoreError, (error) => Effect.fail(error)),
         Effect.catch((error) =>
           Effect.succeed({
             kind: "failed",
@@ -253,34 +349,16 @@ export const processSourceItem = <
         )
       );
 
-    if (pipelineOutcome.kind === "skipped") {
-      yield* store.upsertItemState(
-        makeSkippedItemState(
-          definition.id,
-          runId,
-          decodedSourceItem,
-          pipelineOutcome.reason
-        )
-      );
-
-      return "skipped" as const;
+    if (pipelineOutcome.kind !== "command") {
+      return yield* persistNonCommandPipelineOutcome({
+        decodedSourceItem,
+        definitionId: definition.id,
+        outcome: pipelineOutcome,
+        previousState,
+        runId,
+        store,
+      });
     }
-
-    if (pipelineOutcome.kind === "failed") {
-      yield* store.upsertItemState(
-        makeFailedItemState(
-          definition.id,
-          runId,
-          decodedSourceItem,
-          pipelineOutcome.error,
-          previousState
-        )
-      );
-
-      return "failed" as const;
-    }
-
-    const command = pipelineOutcome.command;
 
     const destinationContext: DestinationCommandContext = {
       definitionId: definition.id,
@@ -290,27 +368,13 @@ export const processSourceItem = <
       ...(previousState === null ? {} : { previousState }),
     };
 
-    const executeDestination = destination.execute(command, destinationContext);
-    const executeDestinationWithRetry =
-      definition.destinationRetry === undefined
-        ? executeDestination
-        : definition.destinationRetry(executeDestination);
-
-    const destinationOutcome: DestinationOutcome =
-      yield* executeDestinationWithRetry.pipe(
-        Effect.map(
-          (result): DestinationOutcome => ({
-            kind: "succeeded",
-            result,
-          })
-        ),
-        Effect.catch((error) =>
-          Effect.succeed({
-            kind: "failed",
-            error: normalizeItemError("destination", error),
-          } satisfies DestinationOutcome)
-        )
-      );
+    const destinationOutcome = yield* executeDestinationCommandPlan({
+      context: destinationContext,
+      destination,
+      destinationRetry: definition.destinationRetry,
+      identityCommandKinds: definition.destination.identityCommandKinds,
+      plan: pipelineOutcome.plan,
+    });
 
     if (destinationOutcome.kind === "failed") {
       yield* store.upsertItemState(
@@ -319,17 +383,38 @@ export const processSourceItem = <
           runId,
           decodedSourceItem,
           destinationOutcome.error,
-          previousState
+          previousState,
+          destinationOutcome
         )
       );
 
       return "failed" as const;
     }
 
-    const { result } = destinationOutcome;
+    const destinationIdentity =
+      destinationOutcome.destinationIdentity ??
+      previousDestinationIdentity(previousState);
+    const destinationVersion =
+      destinationOutcome.destinationVersion ??
+      previousDestinationVersion(previousState);
+
+    if (destinationIdentity === undefined) {
+      yield* persistMissingDestinationIdentityFailure({
+        decodedSourceItem,
+        definitionId: definition.id,
+        previousState,
+        runId,
+        store,
+      });
+
+      return "failed" as const;
+    }
 
     yield* store.upsertItemState(
-      makeMigratedItemState(definition.id, runId, decodedSourceItem, result)
+      makeMigratedItemState(definition.id, runId, decodedSourceItem, {
+        destinationIdentity,
+        ...(destinationVersion === undefined ? {} : { destinationVersion }),
+      })
     );
 
     return "migrated" as const;

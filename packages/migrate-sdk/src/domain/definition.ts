@@ -1,12 +1,16 @@
 import { type Effect, Layer, type Schema } from "effect";
 import type { DestinationPlugin } from "../services/destination-plugin.ts";
+import type { MigrationReferenceLookup } from "../services/migration-reference-lookup.ts";
 import type { MigrationStore } from "../services/migration-store.ts";
 import {
   type AnySourcePlugin,
   type SourcePlugin,
   SourcePlugin as SourcePluginService,
 } from "../services/source-plugin.ts";
-import type { DestinationCommand } from "./destination.ts";
+import type {
+  DestinationCommand,
+  DestinationCommandPlan,
+} from "./destination.ts";
 import type {
   DestinationPluginError,
   MigrationStoreError,
@@ -16,6 +20,8 @@ import type {
 import {
   type MigrationDefinitionId,
   type MigrationDefinitionIdInput,
+  type MigrationRunId,
+  type SourceIdentity,
   toMigrationDefinitionId,
 } from "./ids.ts";
 import type { PipelineContext } from "./pipeline.ts";
@@ -92,6 +98,7 @@ export interface ConfiguredDestinationPlugin<
   Command extends DestinationCommand,
 > {
   readonly commandSchema: Schema.Schema<Command>;
+  readonly identityCommandKinds?: readonly Command["kind"][];
   readonly layer: Layer.Layer<DestinationPlugin>;
 }
 
@@ -102,6 +109,15 @@ export type DestinationRetryStrategy = <A>(
 export type SourceRetryStrategy = <A>(
   effect: Effect.Effect<A, SourcePluginError>
 ) => Effect.Effect<A, SourcePluginError>;
+
+export interface DestinationStubInput {
+  readonly sourceIdentity: SourceIdentity;
+}
+
+export interface DestinationStubContext {
+  readonly definitionId: MigrationDefinitionId;
+  readonly runId: MigrationRunId;
+}
 
 export interface MigrationDefinition<
   Source,
@@ -116,11 +132,19 @@ export interface MigrationDefinition<
   readonly pipeline: (
     source: SourceItem<Source>,
     context: PipelineContext
-  ) => Effect.Effect<Command, PipelineError | SkipItem>;
+  ) => Effect.Effect<
+    DestinationCommandPlan<Command>,
+    PipelineError | SkipItem,
+    MigrationReferenceLookup
+  >;
   readonly source: ConfiguredSourcePlugin<Source, Cursor>;
   readonly sourceCursorRetry?: SourceRetryStrategy;
   readonly sourceLookupRetry?: SourceRetryStrategy;
   readonly store: Layer.Layer<MigrationStore, MigrationStoreError>;
+  readonly stub?: (
+    input: DestinationStubInput,
+    context: DestinationStubContext
+  ) => Effect.Effect<DestinationCommandPlan<Command>, PipelineError | SkipItem>;
 }
 
 export interface MigrationDefinitionInput<
