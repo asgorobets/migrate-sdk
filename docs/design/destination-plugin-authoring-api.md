@@ -82,7 +82,7 @@ Migration authors should normally call destination-owned command factories
 instead of constructing arbitrary command records.
 
 ```ts
-const contentful = ContentfulDestinationPlugin.plugin({
+const contentful = ContentfulDestinationPlugin.make({
   schemas: {
     article: ArticleEntryFields,
   },

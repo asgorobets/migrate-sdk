@@ -10,7 +10,6 @@ export type {
   CsvEmptyRows,
   CsvHeaders,
   CsvIdentity,
-  CsvSourceCursor as CsvSourceCursorType,
   CsvSourceOptions,
   CsvSourcePlatform,
   CsvVersion,

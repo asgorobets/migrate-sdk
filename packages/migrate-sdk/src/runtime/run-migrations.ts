@@ -1,6 +1,9 @@
 import { Deferred, Effect, Exit, Layer, Predicate, Schema } from "effect";
 import type { MigrationDefinition } from "../domain/definition.ts";
-import type { DestinationCommand } from "../domain/destination.ts";
+import type {
+  DestinationCommand,
+  DestinationCommandPlan,
+} from "../domain/destination.ts";
 import {
   MigrationReferenceLookupError,
   MigrationRuntimeError,
@@ -554,31 +557,43 @@ const executeStubPlan = <Command extends DestinationCommand, PipelineError>(
   previousState: MigrationItemState | null
 ) =>
   Effect.gen(function* () {
-    if (definition.stub === undefined) {
+    const stub = definition.stub;
+
+    if (stub === undefined) {
       return yield* stubNotConfiguredError(definition.id);
     }
 
-    const plan = yield* definition
-      .stub(
-        { sourceIdentity },
-        {
-          definitionId: definition.id,
-          runId,
-        }
+    const plan = yield* Effect.try({
+      try: () =>
+        stub(
+          { sourceIdentity },
+          {
+            definitionId: definition.id,
+            runId,
+          }
+        ),
+      catch: (error) => error as PipelineError | SkipItem,
+    }).pipe(
+      Effect.flatMap((planOrEffect) =>
+        Effect.isEffect(planOrEffect)
+          ? (planOrEffect as Effect.Effect<
+              DestinationCommandPlan<Command>,
+              PipelineError | SkipItem
+            >)
+          : Effect.succeed(planOrEffect)
+      ),
+      Effect.mapError((error) =>
+        isSkipItem(error)
+          ? new MigrationReferenceLookupError({
+              message: "Destination Stub creation skipped",
+              cause: error,
+            })
+          : new MigrationReferenceLookupError({
+              message: "Destination Stub command plan creation failed",
+              cause: error,
+            })
       )
-      .pipe(
-        Effect.mapError((error) =>
-          isSkipItem(error)
-            ? new MigrationReferenceLookupError({
-                message: "Destination Stub creation skipped",
-                cause: error,
-              })
-            : new MigrationReferenceLookupError({
-                message: "Destination Stub command plan creation failed",
-                cause: error,
-              })
-        )
-      );
+    );
 
     const outcome = yield* Effect.gen(function* () {
       const destination = yield* DestinationPlugin;

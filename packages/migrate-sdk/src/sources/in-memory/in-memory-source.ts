@@ -1,21 +1,16 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, type Layer, Schema } from "effect";
 import {
   type ConfiguredSourcePlugin,
   defineSourcePlugin,
   type SourcePluginImplementation,
 } from "../../domain/definition.ts";
 import { SourcePluginError } from "../../domain/errors.ts";
-import type { SourceIdentity } from "../../domain/ids.ts";
+import type { SourceIdentityInput } from "../../domain/ids.ts";
 import type {
-  SourceItem,
   SourceItemInput,
   SourceLookupStrategy,
 } from "../../domain/source.ts";
-import { makeSourceItem } from "../../domain/source.ts";
-import {
-  type AnySourcePlugin,
-  SourcePlugin,
-} from "../../services/source-plugin.ts";
+import type { AnySourcePlugin } from "../../services/source-plugin.ts";
 
 export const InMemorySourceCursor = Schema.Struct({
   offset: Schema.Int,
@@ -61,7 +56,7 @@ const transientSourceError = (operation: string): SourcePluginError =>
 const makeImplementation = <A>(
   options: InMemorySourceOptions<A>
 ): SourcePluginImplementation<A, InMemorySourceCursor> => {
-  const items: readonly SourceItem<A>[] = options.items.map(makeSourceItem);
+  const items = options.items;
   const batchSize = options.batchSize ?? items.length;
   const lookupStrategy = options.lookupStrategy ?? "direct";
   const state = options.state ?? makeState();
@@ -106,7 +101,7 @@ const makeImplementation = <A>(
   });
 
   const readByIdentity = Effect.fn("InMemorySource.readByIdentity")(function* (
-    identity: SourceIdentity
+    identity: SourceIdentityInput
   ) {
     state.readByIdentityAttempts += 1;
 
@@ -129,15 +124,7 @@ const makeImplementation = <A>(
 
 const makeLayer = <A>(
   options: InMemorySourceOptions<A>
-): Layer.Layer<AnySourcePlugin> =>
-  Layer.sync(
-    SourcePlugin,
-    (): SourcePlugin<A, InMemorySourceCursor> => ({
-      cursorSchema: InMemorySourceCursor,
-      sourceSchema: options.sourceSchema,
-      ...makeImplementation(options),
-    })
-  );
+): Layer.Layer<AnySourcePlugin> => make(options).layer;
 
 const make = <A>(
   options: InMemorySourceOptions<A>

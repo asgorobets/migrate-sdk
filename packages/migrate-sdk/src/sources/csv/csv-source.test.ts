@@ -15,8 +15,6 @@ const CsvArticleSource = Schema.Struct({
   views: Schema.NumberFromString,
 });
 
-type CsvArticleSource = typeof CsvArticleSource.Type;
-
 const CsvBookstoreCatalogRowSource = Schema.Struct({
   attributes_json: Schema.String,
   book_id: Schema.String,
@@ -36,8 +34,6 @@ const CsvBookstoreCatalogRowSource = Schema.Struct({
   title: Schema.String,
   variant_sku: Schema.String,
 });
-
-type CsvBookstoreCatalogRowSource = typeof CsvBookstoreCatalogRowSource.Type;
 
 const sha256HexPattern = /^[a-f0-9]{64}$/;
 
@@ -222,7 +218,7 @@ describe("CsvSourcePlugin", () => {
       const fixturePath = yield* path.fromFileUrl(
         new URL("./fixtures/bookstore-book-catalog.csv", import.meta.url)
       );
-      const source = CsvSourcePlugin.plugin<CsvBookstoreCatalogRowSource>({
+      const source = CsvSourcePlugin.make({
         ...bookstoreCatalogOptions,
         path: fixturePath,
         platform: testPlatformLayer,
@@ -267,7 +263,7 @@ describe("CsvSourcePlugin", () => {
       const filePath = path.join(directory, "articles.csv");
       yield* fs.writeFileString(filePath, "id,title,views\n42,Hello,7\n");
 
-      const source = CsvSourcePlugin.plugin<CsvArticleSource>({
+      const source = CsvSourcePlugin.make({
         ...csvOptions,
         path: filePath,
         platform: testPlatformLayer,

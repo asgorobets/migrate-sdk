@@ -39,7 +39,7 @@ export interface InMemoryDestinationEntry {
   readonly sourceIdentity: SourceIdentity;
 }
 
-export interface InMemoryDestinationState<C extends DestinationCommand> {
+interface InMemoryDestinationState<C extends DestinationCommand> {
   readonly entries: Map<string, InMemoryDestinationEntry>;
   entryVersionCounter: number;
   executeAttempts: number;
@@ -56,12 +56,23 @@ export type InMemoryDestinationExecute<C extends DestinationCommand> = (
 export interface InMemoryDestinationOptions<C extends DestinationCommand> {
   readonly commandDefinitions: DefinedDestinationCommands<C>;
   readonly execute: InMemoryDestinationExecute<C>;
-  readonly state?: InMemoryDestinationState<C>;
   readonly transientFailures?: InMemoryDestinationTransientFailures;
 }
 
 export interface InMemoryDestinationTransientFailures {
   readonly execute?: number;
+}
+
+export interface InMemoryDestinationInspection<C extends DestinationCommand> {
+  readonly entries: () => ReadonlyMap<string, InMemoryDestinationEntry>;
+  readonly entry: (key: string) => InMemoryDestinationEntry | undefined;
+  readonly executeAttempts: () => number;
+  readonly executions: () => readonly InMemoryDestinationExecution<C>[];
+}
+
+export interface InMemoryDestinationFixture<C extends DestinationCommand>
+  extends InMemoryDestinationInspection<C> {
+  readonly destination: ConfiguredDestinationPlugin<C>;
 }
 
 export type InMemoryEntryFieldSchema<Fields extends object = object> =
@@ -138,7 +149,6 @@ export interface InMemoryEntryDestinationOptions<
   Schemas extends InMemoryEntryFieldSchemas<Schemas>,
 > {
   readonly schemas: Schemas;
-  readonly state?: InMemoryDestinationState<InMemoryEntryCommand<Schemas>>;
   readonly transientFailures?: InMemoryDestinationTransientFailures;
 }
 
@@ -148,6 +158,12 @@ export type InMemoryEntryDestination<
   readonly commands: InMemoryEntryDestinationCommands<Schemas>;
 };
 
+export interface InMemoryEntryDestinationFixture<
+  Schemas extends InMemoryEntryFieldSchemas<Schemas>,
+> extends InMemoryDestinationInspection<InMemoryEntryCommand<Schemas>> {
+  readonly destination: InMemoryEntryDestination<Schemas>;
+}
+
 const makeState = <
   C extends DestinationCommand,
 >(): InMemoryDestinationState<C> => ({
@@ -155,6 +171,26 @@ const makeState = <
   entryVersionCounter: 0,
   executeAttempts: 0,
   executions: [],
+});
+
+interface InMemoryDestinationInternalOptions<C extends DestinationCommand>
+  extends InMemoryDestinationOptions<C> {
+  readonly state?: InMemoryDestinationState<C>;
+}
+
+interface InMemoryEntryDestinationInternalOptions<
+  Schemas extends InMemoryEntryFieldSchemas<Schemas>,
+> extends InMemoryEntryDestinationOptions<Schemas> {
+  readonly state?: InMemoryDestinationState<InMemoryEntryCommand<Schemas>>;
+}
+
+const makeInspection = <C extends DestinationCommand>(
+  state: InMemoryDestinationState<C>
+): InMemoryDestinationInspection<C> => ({
+  entries: () => state.entries,
+  entry: (key) => state.entries.get(key),
+  executeAttempts: () => state.executeAttempts,
+  executions: () => state.executions,
 });
 
 const nonEmptySchemaUnion = <C extends DestinationCommand>(
@@ -202,8 +238,8 @@ const missingEntryPublishError = (
     },
   });
 
-const makeLayer = <C extends DestinationCommand>(
-  options: InMemoryDestinationOptions<C>
+const makeLayerWithState = <C extends DestinationCommand>(
+  options: InMemoryDestinationInternalOptions<C>
 ): Layer.Layer<DestinationPlugin> =>
   Layer.sync(DestinationPlugin, (): DestinationPlugin => {
     const state = options.state ?? makeState<C>();
@@ -254,15 +290,40 @@ const makeLayer = <C extends DestinationCommand>(
     return { execute };
   });
 
-const make = <C extends DestinationCommand>(
+const makeLayer = <C extends DestinationCommand>(
   options: InMemoryDestinationOptions<C>
+): Layer.Layer<DestinationPlugin> => makeLayerWithState(options);
+
+const makeWithState = <C extends DestinationCommand>(
+  options: InMemoryDestinationInternalOptions<C>
 ): ConfiguredDestinationPlugin<C> => ({
   commandDefinitions: options.commandDefinitions,
-  layer: makeLayer(options),
+  layer: makeLayerWithState(options),
 });
 
-const makeEntries = <const Schemas extends InMemoryEntryFieldSchemas<Schemas>>(
-  options: InMemoryEntryDestinationOptions<Schemas>
+const make = <C extends DestinationCommand>(
+  options: InMemoryDestinationOptions<C>
+): ConfiguredDestinationPlugin<C> => makeWithState(options);
+
+const fixture = <C extends DestinationCommand>(
+  options: InMemoryDestinationOptions<C>
+): InMemoryDestinationFixture<C> => {
+  const state = makeState<C>();
+  const destination = makeWithState({
+    ...options,
+    state,
+  });
+
+  return {
+    destination,
+    ...makeInspection(state),
+  };
+};
+
+const makeEntriesWithState = <
+  const Schemas extends InMemoryEntryFieldSchemas<Schemas>,
+>(
+  options: InMemoryEntryDestinationInternalOptions<Schemas>
 ): InMemoryEntryDestination<Schemas> => {
   const state = options.state ?? makeState<InMemoryEntryCommand<Schemas>>();
   const schemaEntries = Object.entries(options.schemas) as unknown as readonly [
@@ -343,7 +404,7 @@ const makeEntries = <const Schemas extends InMemoryEntryFieldSchemas<Schemas>>(
 
       return { destinationIdentity, destinationVersion };
     });
-  const configured = make({
+  const configured = makeWithState({
     commandDefinitions,
     execute,
     state,
@@ -376,9 +437,31 @@ const makeEntries = <const Schemas extends InMemoryEntryFieldSchemas<Schemas>>(
   };
 };
 
+const makeEntries = <const Schemas extends InMemoryEntryFieldSchemas<Schemas>>(
+  options: InMemoryEntryDestinationOptions<Schemas>
+): InMemoryEntryDestination<Schemas> => makeEntriesWithState(options);
+
+const fixtureEntries = <
+  const Schemas extends InMemoryEntryFieldSchemas<Schemas>,
+>(
+  options: InMemoryEntryDestinationOptions<Schemas>
+): InMemoryEntryDestinationFixture<Schemas> => {
+  const state = makeState<InMemoryEntryCommand<Schemas>>();
+  const destination = makeEntriesWithState({
+    ...options,
+    state,
+  });
+
+  return {
+    destination,
+    ...makeInspection(state),
+  };
+};
+
 export const InMemoryDestinationPlugin = {
+  fixture,
+  fixtureEntries,
   make,
   makeEntries,
-  makeState,
   layer: makeLayer,
 } as const;

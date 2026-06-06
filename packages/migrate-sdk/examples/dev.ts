@@ -1,6 +1,8 @@
 import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSystem";
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
 import { Console, Effect, Layer } from "effect";
+import { formatApiSourceExampleResult } from "./api-source/format.ts";
+import { runApiSourceExampleWithInspection } from "./api-source/inspection.ts";
 import {
   formatCircularBookAuthorStubsExampleResult,
   runCircularBookAuthorStubsExample,
@@ -33,6 +35,12 @@ const makeProgram = () => {
   if (example === "nested-article") {
     return runNestedArticleSchemaExample().pipe(
       Effect.map(formatNestedArticleSchemaExampleResult)
+    );
+  }
+
+  if (example === "api-source") {
+    return runApiSourceExampleWithInspection().pipe(
+      Effect.map(formatApiSourceExampleResult)
     );
   }
 

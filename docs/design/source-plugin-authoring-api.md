@@ -24,10 +24,20 @@ interface SourcePluginInput<Source, Cursor> {
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
-  ) => Effect.Effect<SourceReadResult<Source, Cursor>, SourcePluginError>;
+  ) => Effect.Effect<SourceReadResultInput<Source, Cursor>, SourcePluginError>;
   readonly readByIdentity: (
-    identity: SourceIdentity
-  ) => Effect.Effect<SourceItem<Source> | null, SourcePluginError>;
+    identity: SourceIdentityInput
+  ) => Effect.Effect<SourceItemInput<Source> | null, SourcePluginError>;
+}
+
+interface SourcePluginImplementation<Source, Cursor> {
+  readonly lookupStrategy: SourceLookupStrategy;
+  readonly read: (
+    cursor: Cursor | null
+  ) => Effect.Effect<SourceReadResultInput<Source, Cursor>, SourcePluginError>;
+  readonly readByIdentity: (
+    identity: SourceIdentityInput
+  ) => Effect.Effect<SourceItemInput<Source> | null, SourcePluginError>;
 }
 ```
 
@@ -45,6 +55,106 @@ interface SourcePluginFactoryInput<Source, Cursor> {
 The runner provides the configured source layer per migration definition. Do not
 register every source plugin globally under the shared `SourcePlugin` tag.
 
+## Effect-Native API Source Plugins
+
+`defineSourcePlugin` is already Effect-native: source reads and identity lookups
+return `Effect` values, so plugin authors can compose services, layers, retries,
+HTTP clients, timeouts, and bounded concurrency inside the source plugin without
+a second Effect-specific factory.
+
+The runnable `examples/api-source/` example is split by audience:
+
+```txt
+examples/api-source/
+  json-placeholder-api.ts            # API service interface + live adapter
+  json-placeholder-api-scripted.ts   # deterministic adapter for tests
+  json-placeholder-source.ts         # source plugin factory
+  migration.ts                       # migration author wiring
+  inspection.ts                      # test/dev state capture
+  format.ts                          # CLI-friendly output formatting
+```
+
+Migration authors should mostly see the migration wiring:
+
+```ts
+const destination = InMemoryDestinationPlugin.makeEntries({
+  schemas: {
+    post: Schema.Struct({
+      authorId: Schema.Number,
+      body: Schema.String,
+      title: Schema.String,
+    }),
+  },
+});
+
+const source = JsonPlaceholderPostSourcePlugin.make();
+
+const migration = defineMigration({
+  id: "jsonplaceholder-posts",
+  source,
+  destination,
+  store,
+  pipeline: (sourceItem) =>
+    destination.commands.upsertEntry("post", {
+      authorId: sourceItem.item.userId,
+      body: sourceItem.item.body,
+      title: sourceItem.item.title,
+    }),
+});
+```
+
+Plugin authors put source cursor logic and source item construction behind the
+source plugin factory:
+
+```ts
+export const JsonPlaceholderPostSourcePlugin = {
+  make: (options?: JsonPlaceholderPostSourceOptions) => {
+    const apiLayer = options?.apiLayer ?? JsonPlaceholderApi.live();
+
+    return defineSourcePlugin({
+      cursorSchema: JsonPlaceholderPostCursor,
+      sourceSchema: JsonPlaceholderPost,
+      lookupStrategy: "direct",
+      read: Effect.fn("JsonPlaceholderPostSource.read")((cursor) =>
+        withApiLayer(apiLayer, readPostPage(cursor))
+      ),
+      readByIdentity: Effect.fn("JsonPlaceholderPostSource.readByIdentity")(
+        (identity) => withApiLayer(apiLayer, readPostByIdentity(identity))
+      ),
+    });
+  },
+};
+```
+
+The example keeps fixture-based destination inspection and command field
+extraction in `inspection.ts`. That module exists for tests and live-run output;
+it is not the authoring API we want migration authors to copy.
+
+The JSONPlaceholder source keeps retry policy, timeout, page size, max post
+count, and detail concurrency as defaults inside the source plugin. Its public
+options only expose the API layer override used by tests and live diagnostics.
+
+`defineSourcePlugin` accepts `SourceItemInput` values and normalizes source
+identity and source version into the runtime's branded values. It also normalizes
+`nextCursor: undefined` away before the runtime sees the read result. Cursor
+encoding and decoding still belongs to the configured `cursorSchema`.
+
+The source plugin depends on a small `JsonPlaceholderApi` service with
+`listPostIds()` and `getPost(id)` methods. The live adapter calls the public
+JSONPlaceholder posts API through Effect's `HttpClient`, configures the base URL
+and JSON accept header once, then decodes endpoint responses with
+`HttpClientResponse.schemaBodyJson(...)` before returning decoded values. The API
+service keeps native `HttpClientError` and `SchemaError` failures; the source
+plugin maps them once to `SourcePluginError` at the SDK boundary. The scripted
+adapter simulates rate limits and slow responses so plugin authors can exercise
+retries, exponential backoff, request timeouts, and bounded detail-fetch
+concurrency without depending on a public service to fail.
+
+This helper does not make source plugins streamable. Source implementations may
+use bounded `Effect.forEach` or other Effect composition internally, but each
+runtime read still returns one cursor page. That keeps cursor commits, failed
+item reruns, and durable progress semantics unchanged.
+
 ## Cursor Reads
 
 `read(cursor)` reads one source cursor window and returns the next cursor when
@@ -56,11 +166,7 @@ const SqlArticleCursor = Schema.Struct({
   updatedAt: Schema.String,
 });
 
-type SqlArticleCursor = typeof SqlArticleCursor.Type;
-
-const read = Effect.fn("SqlArticleSource.read")(function* (
-  cursor: SqlArticleCursor | null
-) {
+const read = Effect.fn("SqlArticleSource.read")(function* (cursor) {
   const rows = yield* queryArticles({
     after: cursor,
     limit: 500,
@@ -127,8 +233,6 @@ const CsvArticleSource = Schema.Struct({
   title: Schema.Trim,
   views: Schema.NumberFromString,
 });
-
-type CsvArticleSource = typeof CsvArticleSource.Type;
 ```
 
 The runtime decodes every emitted `sourceItem.item` with `sourceSchema` before
@@ -175,10 +279,12 @@ boundary forces a split.
 
 ```ts
 export const CsvSourcePlugin = {
-  plugin: (options: CsvSourceOptions) => ({
-    layer: makeCsvSourceLayer(options).pipe(Layer.provide(options.platform)),
-    sourceSchema: options.sourceSchema,
-  }),
+  make: (options: CsvSourceOptions) =>
+    defineSourcePlugin({
+      cursorSchema: CsvSourceCursor,
+      make: () => makeCsvSourceImplementation(options),
+      sourceSchema: options.sourceSchema,
+    }),
 };
 ```
 

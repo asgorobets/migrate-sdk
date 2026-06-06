@@ -267,6 +267,26 @@ const decodeSourceItem = <Source>(
     )
   );
 
+const runPipeline = <Source, Command extends DestinationCommand, PipelineError>(
+  definition: MigrationDefinition<Source, Command, PipelineError>,
+  sourceItem: SourceItem<Source>,
+  context: PipelineContext
+) =>
+  Effect.try({
+    try: () => definition.pipeline(sourceItem, context),
+    catch: (error) => error as PipelineError | SkipItem,
+  }).pipe(
+    Effect.flatMap((planOrEffect) =>
+      Effect.isEffect(planOrEffect)
+        ? (planOrEffect as Effect.Effect<
+            DestinationCommandPlan<Command>,
+            PipelineError | SkipItem,
+            MigrationReferenceLookup
+          >)
+        : Effect.succeed(planOrEffect)
+    )
+  );
+
 export const processSourceItem = <
   Source,
   Command extends DestinationCommand,
@@ -325,29 +345,31 @@ export const processSourceItem = <
       ...(previousState === null ? {} : { previousState }),
     };
 
-    const pipelineOutcome: PipelineOutcome<Command> = yield* definition
-      .pipeline(decodedSourceItem, pipelineContext)
-      .pipe(
-        Effect.map(
-          (plan): PipelineOutcome<Command> => ({
-            kind: "command",
-            plan,
-          })
-        ),
-        Effect.catchIf(isSkipItem, (skip) =>
-          Effect.succeed({
-            kind: "skipped",
-            reason: skip.reason,
-          } satisfies PipelineOutcome<Command>)
-        ),
-        Effect.catchIf(isMigrationStoreError, (error) => Effect.fail(error)),
-        Effect.catch((error) =>
-          Effect.succeed({
-            kind: "failed",
-            error: normalizeItemError("pipeline", error),
-          } satisfies PipelineOutcome<Command>)
-        )
-      );
+    const pipelineOutcome: PipelineOutcome<Command> = yield* runPipeline(
+      definition,
+      decodedSourceItem,
+      pipelineContext
+    ).pipe(
+      Effect.map(
+        (plan): PipelineOutcome<Command> => ({
+          kind: "command",
+          plan,
+        })
+      ),
+      Effect.catchIf(isSkipItem, (skip) =>
+        Effect.succeed({
+          kind: "skipped",
+          reason: skip.reason,
+        } satisfies PipelineOutcome<Command>)
+      ),
+      Effect.catchIf(isMigrationStoreError, (error) => Effect.fail(error)),
+      Effect.catch((error) =>
+        Effect.succeed({
+          kind: "failed",
+          error: normalizeItemError("pipeline", error),
+        } satisfies PipelineOutcome<Command>)
+      )
+    );
 
     if (pipelineOutcome.kind !== "command") {
       return yield* persistNonCommandPipelineOutcome({

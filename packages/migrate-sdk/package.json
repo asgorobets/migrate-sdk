@@ -17,6 +17,7 @@
   "scripts": {
     "dev": "tsx examples/dev.ts",
     "dev:circular-stubs": "tsx examples/dev.ts circular-stubs",
+    "dev:api-source": "tsx examples/dev.ts api-source",
     "dev:file-store": "tsx examples/dev.ts file-store",
     "dev:nested-article": "tsx examples/dev.ts nested-article",
     "prepare": "effect-language-service patch",

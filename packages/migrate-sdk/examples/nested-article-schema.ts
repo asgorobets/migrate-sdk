@@ -3,12 +3,8 @@ import {
   defineMigration,
   type MigrationRunSummary,
   runMigration,
-  type SourceItemInput,
 } from "migrate-sdk";
-import {
-  InMemoryDestinationPlugin,
-  type InMemoryEntryCommand,
-} from "migrate-sdk/destinations/in-memory";
+import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
@@ -46,8 +42,6 @@ const NestedArticle = Schema.Struct({
   title: Schema.Trim,
 });
 
-type NestedArticle = typeof NestedArticle.Type;
-
 const ArticleEntryFields = Schema.Struct({
   authorDisplayName: Schema.String,
   locale: ArticleLocale,
@@ -60,14 +54,23 @@ const ArticleEntryFields = Schema.Struct({
   views: Schema.Number,
 });
 
-interface ArticleEntrySchemas {
-  readonly article: typeof ArticleEntryFields;
-}
-type ArticleEntryCommand = InMemoryEntryCommand<ArticleEntrySchemas>;
-type ArticleEntryFields = typeof ArticleEntryFields.Type;
+const makeArticleDestinationFixture = () =>
+  InMemoryDestinationPlugin.fixtureEntries({
+    schemas: {
+      article: ArticleEntryFields,
+    },
+  });
+
+type ArticleDestinationFixture = ReturnType<
+  typeof makeArticleDestinationFixture
+>;
+type ArticleUpsertCommand = Extract<
+  ReturnType<ArticleDestinationFixture["executions"]>[number]["command"],
+  { readonly kind: "UpsertEntry" }
+>;
 
 export interface NestedArticleSchemaExampleResult {
-  readonly commandFields: readonly ArticleEntryFields[];
+  readonly commandFields: readonly ArticleUpsertCommand["fields"][];
   readonly summary: MigrationRunSummary;
 }
 
@@ -98,19 +101,13 @@ const sourceItems = [
       title: "  Schema-first migrations  ",
     },
   },
-] satisfies readonly SourceItemInput<NestedArticle>[];
+] as const;
 
 export const runNestedArticleSchemaExample = Effect.fn(
   "runNestedArticleSchemaExample"
 )(function* () {
-  const destinationState =
-    InMemoryDestinationPlugin.makeState<ArticleEntryCommand>();
-  const destination = InMemoryDestinationPlugin.makeEntries({
-    schemas: {
-      article: ArticleEntryFields,
-    },
-    state: destinationState,
-  });
+  const destinationFixture = makeArticleDestinationFixture();
+  const { destination } = destinationFixture;
 
   const migration = defineMigration({
     id: "nested-articles",
@@ -120,12 +117,12 @@ export const runNestedArticleSchemaExample = Effect.fn(
     }),
     destination,
     store: InMemoryMigrationStore.layer(),
-    pipeline: Effect.fn("nestedArticles.pipeline")(function* (source) {
-      const article: NestedArticle = source.item;
-      const authorDisplayName: string = article.author.displayName;
-      const tagLabels: readonly string[] = article.tags.map((tag) => tag.label);
-      const views: number = article.metrics.views;
-      const readingTimeMinutes: number = article.metrics.readingTimeMinutes;
+    pipeline: (source) => {
+      const article = source.item;
+      const authorDisplayName = article.author.displayName;
+      const tagLabels = article.tags.map((tag) => tag.label);
+      const views = article.metrics.views;
+      const readingTimeMinutes = article.metrics.readingTimeMinutes;
 
       return destination.commands.upsertEntry("article", {
         authorDisplayName,
@@ -138,15 +135,19 @@ export const runNestedArticleSchemaExample = Effect.fn(
         title: article.title,
         views,
       });
-    }),
+    },
   });
 
   const summary = yield* runMigration(migration);
 
   return {
-    commandFields: destinationState.executions.flatMap((execution) =>
-      execution.command.kind === "UpsertEntry" ? [execution.command.fields] : []
-    ),
+    commandFields: destinationFixture
+      .executions()
+      .flatMap((execution) =>
+        execution.command.kind === "UpsertEntry"
+          ? [execution.command.fields]
+          : []
+      ),
     summary,
   } satisfies NestedArticleSchemaExampleResult;
 });

@@ -3,13 +3,14 @@ import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import type { ParseError } from "papaparse";
 import Papa from "papaparse";
-import type {
-  ConfiguredSourcePlugin,
-  SourcePluginImplementation,
+import {
+  type ConfiguredSourcePlugin,
+  defineSourcePlugin,
+  type SourcePluginImplementation,
 } from "../../domain/definition.ts";
 import { SourcePluginError } from "../../domain/errors.ts";
-import type { SourceIdentity } from "../../domain/ids.ts";
-import { makeSourceItem, type SourceItem } from "../../domain/source.ts";
+import type { SourceIdentityInput } from "../../domain/ids.ts";
+import type { SourceItemInput } from "../../domain/source.ts";
 import {
   type AnySourcePlugin,
   SourcePlugin,
@@ -87,7 +88,7 @@ export type CsvSourceCursor = typeof CsvSourceCursor.Type;
 export interface CsvParsedRow {
   readonly lineNumber: number;
   readonly rowIndex: number;
-  readonly sourceItem: SourceItem<Record<string, string>>;
+  readonly sourceItem: SourceItemInput<Record<string, string>>;
 }
 
 export interface CsvParsedDocument {
@@ -613,11 +614,11 @@ const parseDocument = (
         version,
         record
       );
-      const sourceItem = makeSourceItem({
+      const sourceItem = {
         identity,
         item,
         version: sourceVersion,
-      });
+      } satisfies SourceItemInput<Record<string, string>>;
       const parsedRow: CsvParsedRow = {
         lineNumber: record.lineNumber,
         rowIndex: record.rowIndex,
@@ -729,7 +730,7 @@ const makeImplementation = <Source>(
     const shouldAdvanceCursor = startRowIndex < document.nextRowIndex;
 
     return {
-      items: rows.map((row) => row.sourceItem as SourceItem<Source>),
+      items: rows.map((row) => row.sourceItem as SourceItemInput<Source>),
       ...(shouldAdvanceCursor
         ? {
             nextCursor: {
@@ -742,7 +743,7 @@ const makeImplementation = <Source>(
   });
 
   const readByIdentity = Effect.fn("CsvSource.readByIdentity")(function* (
-    identity: SourceIdentity
+    identity: SourceIdentityInput
   ) {
     const document = yield* load();
     const row =
@@ -750,7 +751,7 @@ const makeImplementation = <Source>(
         (candidate) => candidate.sourceItem.identity === identity
       ) ?? null;
 
-    return row === null ? null : (row.sourceItem as SourceItem<Source>);
+    return row === null ? null : (row.sourceItem as SourceItemInput<Source>);
   });
 
   return {
@@ -768,12 +769,13 @@ const makeLayerWithoutPlatform = <Source>(
     Effect.gen(function* () {
       const fs = yield* FileSystem;
       const path = yield* Path;
-
-      return {
+      const configured = defineSourcePlugin({
         cursorSchema: CsvSourceCursor,
+        make: () => makeImplementation(options, fs, path),
         sourceSchema: options.sourceSchema,
-        ...makeImplementation(options, fs, path),
-      };
+      });
+
+      return yield* SourcePlugin.pipe(Effect.provide(configured.layer));
     })
   );
 
@@ -782,7 +784,7 @@ const makeLayer = <Source>(
 ): Layer.Layer<AnySourcePlugin> =>
   makeLayerWithoutPlatform(options).pipe(Layer.provide(options.platform));
 
-const fromPath = <Source>(
+const make = <Source>(
   options: CsvSourceOptions<Source>
 ): ConfiguredSourcePlugin<Source, CsvSourceCursor> =>
   ({
@@ -795,9 +797,5 @@ export const CsvParserCore = {
 } as const;
 
 export const CsvSourcePlugin = {
-  fromPath,
-  layer: makeLayer,
-  layerWithoutPlatform: makeLayerWithoutPlatform,
-  make: fromPath,
-  plugin: fromPath,
+  make,
 } as const;

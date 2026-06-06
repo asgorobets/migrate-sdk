@@ -32,15 +32,12 @@ import {
   InMemorySourcePlugin,
   runMigration,
   skipItem,
-  type SourceItemInput,
 } from "migrate-sdk";
 
 const ArticleSource = Schema.Struct({
   publish: Schema.Boolean,
   title: Schema.String,
 });
-
-type ArticleSource = typeof ArticleSource.Type;
 
 const ArticleEntryFields = Schema.Struct({
   title: Schema.String,
@@ -63,7 +60,7 @@ const sourceItems = [
       title: "Draft article",
     },
   },
-] satisfies readonly SourceItemInput<ArticleSource>[];
+] as const;
 
 const destination = InMemoryDestinationPlugin.makeEntries({
   schemas: {
@@ -125,13 +122,32 @@ command and any number of side-effect-only commands. The runner records the one
 destination identity produced by the plan as the migrated item state.
 
 ```ts
-pipeline: Effect.fn("articles.pipeline")(function* (source) {
-  return [
+const articles = defineMigration({
+  // ...
+  pipeline: (source) => [
     destination.commands.upsertEntry("article", {
       title: source.item.title,
     }),
     destination.commands.publishEntry("article"),
-  ];
+  ],
+});
+```
+
+Use an Effect pipeline when the transformation itself needs Effect services,
+skips, or typed failures:
+
+```ts
+const articles = defineMigration({
+  // ...
+  pipeline: Effect.fn("articles.pipeline")(function* (source) {
+    if (!source.item.publish) {
+      return yield* skipItem("Article is not published");
+    }
+
+    return destination.commands.upsertEntry("article", {
+      title: source.item.title,
+    });
+  }),
 });
 ```
 
@@ -139,16 +155,19 @@ The pipeline receives a `PipelineContext` with the current definition id, run id
 and any previous item state:
 
 ```ts
-pipeline: Effect.fn("articles.pipeline")(function* (source, context) {
-  if (context.previousState?.status === "needs-update") {
+const articles = defineMigration({
+  // ...
+  pipeline: (source, context) => {
+    if (context.previousState?.status === "needs-update") {
+      return destination.commands.upsertEntry("article", {
+        title: source.item.title,
+      });
+    }
+
     return destination.commands.upsertEntry("article", {
       title: source.item.title,
     });
-  }
-
-  return destination.commands.upsertEntry("article", {
-    title: source.item.title,
-  });
+  },
 });
 ```
 

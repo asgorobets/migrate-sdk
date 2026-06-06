@@ -7,12 +7,16 @@ export type {
   DestinationRetryStrategy,
   MigrationDefinition,
   MigrationDefinitionInput,
+  SourceReadResultInput,
   SourcePluginFactoryInput,
   SourcePluginImplementation,
   SourcePluginInput,
   SourceRetryStrategy,
 } from "./domain/definition.ts";
-export { defineMigration, defineSourcePlugin } from "./domain/definition.ts";
+export {
+  defineMigration,
+  defineSourcePlugin,
+} from "./domain/definition.ts";
 
 export type {
   DefinedDestinationCommands,
@@ -70,14 +74,12 @@ export {
 } from "./domain/ids.ts";
 
 export { MigrationDefinitionLock } from "./domain/lock.ts";
-export type { MigrationDefinitionLock as MigrationDefinitionLockType } from "./domain/lock.ts";
 
 export type { PipelineContext } from "./domain/pipeline.ts";
 
 export { MigrationRunState } from "./domain/run.ts";
 export type {
   MigrationDefinitionRunSummary,
-  MigrationRunState as MigrationRunStateType,
   MigrationRunSummary,
   RunRequest,
   RunRequestInput,
@@ -103,15 +105,8 @@ export {
   SkippedItemState,
 } from "./domain/state.ts";
 export type {
-  FailedItemState as FailedItemStateType,
-  MigratedItemState as MigratedItemStateType,
-  MigrationItemError as MigrationItemErrorType,
-  MigrationItemErrorKind as MigrationItemErrorKindType,
   MigrationItemOutcome,
-  MigrationItemState as MigrationItemStateType,
   MigrationItemStateBase,
-  NeedsUpdateItemState as NeedsUpdateItemStateType,
-  SkippedItemState as SkippedItemStateType,
 } from "./domain/state.ts";
 
 export { DestinationPlugin } from "./services/destination-plugin.ts";
@@ -132,6 +127,7 @@ export type {
   InMemoryEntryCommand,
   InMemoryEntryDestination,
   InMemoryEntryDestinationCommands,
+  InMemoryEntryDestinationFixture,
   InMemoryEntryDestinationOptions,
   InMemoryEntryFieldSchema,
   InMemoryEntryFieldSchemas,
@@ -139,8 +135,9 @@ export type {
   InMemoryDestinationEntry,
   InMemoryDestinationExecution,
   InMemoryDestinationExecute,
+  InMemoryDestinationFixture,
+  InMemoryDestinationInspection,
   InMemoryDestinationOptions,
-  InMemoryDestinationState,
   InMemoryDestinationTransientFailures,
   InMemoryUpsertEntryCommand,
 } from "./destinations/in-memory/in-memory-destination.ts";
@@ -148,7 +145,6 @@ export type {
 export { InMemorySourcePlugin } from "./sources/in-memory/in-memory-source.ts";
 export { InMemorySourceCursor } from "./sources/in-memory/in-memory-source.ts";
 export type {
-  InMemorySourceCursor as InMemorySourceCursorType,
   InMemorySourceOptions,
   InMemorySourceState,
   InMemorySourceTransientFailures,
@@ -163,7 +159,6 @@ export type {
   CsvEmptyRows,
   CsvHeaders,
   CsvIdentity,
-  CsvSourceCursor as CsvSourceCursorType,
   CsvSourceOptions,
   CsvSourcePlatform,
   CsvVersion,
@@ -176,7 +171,4 @@ export {
   FileMigrationStore,
   FileMigrationStorePlatform,
 } from "./stores/file/file-migration-store.ts";
-export type {
-  FileMigrationStoreOptions,
-  FileMigrationStorePlatform as FileMigrationStorePlatformType,
-} from "./stores/file/file-migration-store.ts";
+export type { FileMigrationStoreOptions } from "./stores/file/file-migration-store.ts";

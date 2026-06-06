@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Schedule, Schema } from "effect";
 import { expectTypeOf } from "vitest";
 import {
+  type DestinationCommand,
   type DestinationCommandContext,
   type DestinationCommandResultInput,
   type DestinationCommandSchema,
@@ -10,15 +11,18 @@ import {
   defineDestinationCommands,
   defineMigration,
   defineSourcePlugin,
-  type InMemoryDestinationOptions,
+  type InMemoryDestinationEntry,
+  type InMemoryDestinationExecute,
+  type InMemoryDestinationExecution,
+  type InMemoryDestinationInspection,
   InMemoryDestinationPlugin,
+  type InMemoryDestinationTransientFailures,
   type InMemoryEntryCommand,
   InMemoryMigrationStore,
   InMemorySourceCursor,
   type InMemorySourceOptions,
   InMemorySourcePlugin,
   MigrationDefinitionLock,
-  type MigrationDefinitionLockType,
   MigrationItemState,
   MigrationReferenceLookup,
   MigrationRunState,
@@ -180,10 +184,88 @@ const makeTestInMemorySource = <A>(
     ...options,
   });
 
-type TestDestinationOptions<C extends { readonly kind: string }> = Omit<
-  Partial<InMemoryDestinationOptions<C>>,
-  "commandDefinitions"
->;
+interface TestDestinationState<C extends DestinationCommand> {
+  readonly bind: (inspection: InMemoryDestinationInspection<C>) => void;
+  readonly entries: ReadonlyMap<string, InMemoryDestinationEntry>;
+  readonly executeAttempts: number;
+  readonly executions: readonly InMemoryDestinationExecution<C>[];
+  readonly record: (execution: InMemoryDestinationExecution<C>) => void;
+}
+
+const makeTestDestinationState = <
+  C extends DestinationCommand,
+>(): TestDestinationState<C> => {
+  const inspections: InMemoryDestinationInspection<C>[] = [];
+  const executions: InMemoryDestinationExecution<C>[] = [];
+  const boundInspections = () => {
+    if (inspections.length === 0) {
+      throw new Error("Destination fixture was not bound to the test state");
+    }
+
+    return inspections;
+  };
+
+  return {
+    get entries() {
+      const entries = new Map<string, InMemoryDestinationEntry>();
+
+      for (const inspection of boundInspections()) {
+        for (const [key, entry] of inspection.entries()) {
+          entries.set(key, entry);
+        }
+      }
+
+      return entries;
+    },
+    get executeAttempts() {
+      return boundInspections().reduce(
+        (attempts, inspection) => attempts + inspection.executeAttempts(),
+        0
+      );
+    },
+    get executions() {
+      return executions.length === 0
+        ? boundInspections().flatMap((inspection) => [
+            ...inspection.executions(),
+          ])
+        : executions;
+    },
+    bind: (inspection) => {
+      inspections.push(inspection);
+    },
+    record: (execution) => {
+      executions.push(execution);
+    },
+  };
+};
+
+interface TestDestinationOptions<C extends DestinationCommand> {
+  readonly execute?: InMemoryDestinationExecute<C>;
+  readonly state?: TestDestinationState<C>;
+  readonly transientFailures?: InMemoryDestinationTransientFailures;
+}
+
+const trackDestinationExecute =
+  <C extends DestinationCommand>(
+    state: TestDestinationState<C> | undefined,
+    execute: InMemoryDestinationExecute<C>
+  ): InMemoryDestinationExecute<C> =>
+  (command, context) => {
+    const resultInput = execute(command, context);
+    const recordExecution = (input: DestinationCommandResultInput) => {
+      state?.record({
+        command,
+        context,
+        result: makeDestinationCommandResult(input),
+      });
+
+      return input;
+    };
+
+    return Effect.isEffect(resultInput)
+      ? resultInput.pipe(Effect.map(recordExecution))
+      : recordExecution(resultInput);
+  };
 
 const executeTestUpsertEntryCommand = (
   _command: UpsertEntryCommand,
@@ -203,30 +285,57 @@ const executeTestEntryCommand = (
 
 const makeTestUpsertEntryDestination = (
   options: TestDestinationOptions<UpsertEntryCommand> = {}
-) =>
-  InMemoryDestinationPlugin.make({
+) => {
+  const fixture = InMemoryDestinationPlugin.fixture({
     commandDefinitions: UpsertEntryCommands,
-    execute: executeTestUpsertEntryCommand,
-    ...options,
+    execute: trackDestinationExecute(
+      options.state,
+      options.execute ?? executeTestUpsertEntryCommand
+    ),
+    ...(options.transientFailures === undefined
+      ? {}
+      : { transientFailures: options.transientFailures }),
   });
+  options.state?.bind(fixture);
+
+  return fixture.destination;
+};
 
 const makeTestEntryDestination = (
   options: TestDestinationOptions<EntryCommand> = {}
-) =>
-  InMemoryDestinationPlugin.make({
+) => {
+  const fixture = InMemoryDestinationPlugin.fixture({
     commandDefinitions: EntryCommands,
-    execute: executeTestEntryCommand,
-    ...options,
+    execute: trackDestinationExecute(
+      options.state,
+      options.execute ?? executeTestEntryCommand
+    ),
+    ...(options.transientFailures === undefined
+      ? {}
+      : { transientFailures: options.transientFailures }),
   });
+  options.state?.bind(fixture);
+
+  return fixture.destination;
+};
 
 const makeTestMultiIdentityEntryDestination = (
   options: TestDestinationOptions<EntryCommand> = {}
-) =>
-  InMemoryDestinationPlugin.make({
+) => {
+  const fixture = InMemoryDestinationPlugin.fixture({
     commandDefinitions: MultiIdentityEntryCommands,
-    execute: executeTestEntryCommand,
-    ...options,
+    execute: trackDestinationExecute(
+      options.state,
+      options.execute ?? executeTestEntryCommand
+    ),
+    ...(options.transientFailures === undefined
+      ? {}
+      : { transientFailures: options.transientFailures }),
   });
+  options.state?.bind(fixture);
+
+  return fixture.destination;
+};
 
 interface PipelineTestError {
   readonly _tag: "PipelineTestError";
@@ -267,7 +376,7 @@ const roundTripDefinitionLock = (lock: MigrationDefinitionLock) =>
 const releaseFailingStoreLayer = (
   state: ReturnType<typeof InMemoryMigrationStore.makeState>,
   error: MigrationStoreError,
-  onRelease?: (lock: MigrationDefinitionLockType) => void
+  onRelease?: (lock: MigrationDefinitionLock) => void
 ) =>
   Layer.effect(
     MigrationStore,
@@ -276,7 +385,7 @@ const releaseFailingStoreLayer = (
 
       return {
         ...store,
-        releaseDefinitionLock: (lock: MigrationDefinitionLockType) =>
+        releaseDefinitionLock: (lock: MigrationDefinitionLock) =>
           Effect.sync(() => {
             onRelease?.(lock);
           }).pipe(Effect.andThen(Effect.fail(error))),
@@ -578,7 +687,7 @@ describe("runMigration", () => {
             }),
           readByIdentity: () => Effect.succeed(null),
         };
-        const source = defineSourcePlugin<{ readonly title: string }, number>({
+        const source = defineSourcePlugin({
           cursorSchema,
           sourceSchema: Schema.Struct({ title: Schema.String }),
           make: () =>
@@ -597,8 +706,7 @@ describe("runMigration", () => {
 
   it.effect("runs one Source Item through in-memory runtime", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
 
       const definition = defineMigration({
@@ -622,14 +730,13 @@ describe("runMigration", () => {
           }),
         }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source) =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {
-              title: source.item.title,
-            },
-          }),
+        pipeline: (source) => ({
+          kind: "UpsertEntry" as const,
+          contentType: "article",
+          fields: {
+            title: source.item.title,
+          },
+        }),
       });
 
       const summary = yield* runMigration(definition);
@@ -676,8 +783,7 @@ describe("runMigration", () => {
     "persists skipped Source Items without executing a Destination Command",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
 
         const definition = defineMigration({
@@ -755,8 +861,7 @@ describe("runMigration", () => {
 
   it.effect("recognizes structurally tagged Skip Item errors", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
 
       const definition = defineMigration({
@@ -809,8 +914,7 @@ describe("runMigration", () => {
     "persists pipeline failures and continues processing Source Items",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const pipelineError: PipelineFailureTestError = {
           _tag: "PipelineFailureTestError",
@@ -845,13 +949,13 @@ describe("runMigration", () => {
           pipeline: (source) =>
             source.identity === "article-1"
               ? Effect.fail(pipelineError)
-              : Effect.succeed({
+              : {
                   kind: "UpsertEntry" as const,
                   contentType: "article",
                   fields: {
                     title: source.item.title,
                   },
-                }),
+                },
         });
 
         const summary = yield* runMigration(definition);
@@ -1025,8 +1129,7 @@ describe("runMigration", () => {
 
   it.effect("wraps Destination Command execution with Destination Retry", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
 
       const definition = defineMigration({
@@ -1089,8 +1192,7 @@ describe("runMigration", () => {
 
   it.effect("wraps Source Cursor reads with Source Cursor Retry", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const sourceState = InMemorySourcePlugin.makeState();
       const storeState = InMemoryMigrationStore.makeState();
 
@@ -1142,8 +1244,7 @@ describe("runMigration", () => {
 
   it.effect("wraps Source Identity lookups with Source Lookup Retry", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const sourceState = InMemorySourcePlugin.makeState();
       const storeState = InMemoryMigrationStore.makeState();
 
@@ -1200,14 +1301,13 @@ describe("runMigration", () => {
     "records cursor-discovered source payload validation failures as durable item failures",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const pipelineCalls: string[] = [];
 
         const definition = defineMigration({
           id: "articles",
-          source: InMemorySourcePlugin.make<ArticleSource>({
+          source: InMemorySourcePlugin.make({
             sourceSchema: ArticleSource,
             items: [
               {
@@ -1282,14 +1382,13 @@ describe("runMigration", () => {
 
   it.effect("validates source payloads before unchanged detection", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make<ArticleSource>({
+        source: InMemorySourcePlugin.make({
           sourceSchema: ArticleSource,
           items: [
             {
@@ -1371,13 +1470,12 @@ describe("runMigration", () => {
 
   it.effect("bounds persisted source payload schema error details", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make<ManyFieldSource>({
+        source: InMemorySourcePlugin.make({
           sourceSchema: ManyFieldSource,
           items: [
             {
@@ -1428,14 +1526,13 @@ describe("runMigration", () => {
 
   it.effect("validates targeted source identity lookup payloads", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
 
       const definition = defineMigration({
         id: "articles",
-        source: InMemorySourcePlugin.make<ArticleSource>({
+        source: InMemorySourcePlugin.make({
           sourceSchema: ArticleSource,
           items: [
             {
@@ -1500,14 +1597,13 @@ describe("runMigration", () => {
     "passes decoded source payloads to the transformation pipeline",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const decodedPayloads: ArticleStatsSource[] = [];
 
         const definition = defineMigration({
           id: "articles",
-          source: InMemorySourcePlugin.make<ArticleStatsSource>({
+          source: InMemorySourcePlugin.make({
             sourceSchema: ArticleStatsSource,
             items: [
               {
@@ -1557,18 +1653,19 @@ describe("runMigration", () => {
     () =>
       Effect.gen(function* () {
         const destinationState =
-          InMemoryDestinationPlugin.makeState<ArticleStatsEntryCommand>();
+          makeTestDestinationState<ArticleStatsEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
-        const destination = InMemoryDestinationPlugin.makeEntries({
+        const destinationFixture = InMemoryDestinationPlugin.fixtureEntries({
           schemas: {
             article: ArticleStatsEntryFields,
           },
-          state: destinationState,
         });
+        destinationState.bind(destinationFixture);
+        const destination = destinationFixture.destination;
 
         const definition = defineMigration({
           id: "articles",
-          source: InMemorySourcePlugin.make<ArticleStatsSource>({
+          source: InMemorySourcePlugin.make({
             sourceSchema: ArticleStatsSource,
             items: [
               {
@@ -1655,8 +1752,7 @@ describe("runMigration", () => {
 
   it.effect("processes all Source Cursor Windows in one run", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
 
       const definition = defineMigration({
@@ -1743,8 +1839,7 @@ describe("runMigration", () => {
 
   it.effect("advances Source Cursors after windows with item failures", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineError: PipelineFailureTestError = {
         _tag: "PipelineFailureTestError",
@@ -1821,8 +1916,7 @@ describe("runMigration", () => {
     "processes failed backlog before cursor discovery in normal mode",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
 
         const definition = defineMigration({
@@ -1893,8 +1987,7 @@ describe("runMigration", () => {
     "processes needs-update backlog before cursor discovery in normal mode",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
 
         const definition = defineMigration({
@@ -1971,8 +2064,7 @@ describe("runMigration", () => {
 
   it.effect("processes only failed Migration Item States in failed mode", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
 
       const definition = defineMigration({
@@ -2066,8 +2158,7 @@ describe("runMigration", () => {
 
   it.effect("reprocesses skipped Migration Item States in skipped mode", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
 
       const definition = defineMigration({
@@ -2137,8 +2228,7 @@ describe("runMigration", () => {
 
   it.effect("processes exactly one Source Identity in item mode", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
 
       const definition = defineMigration({
@@ -2210,8 +2300,7 @@ describe("runMigration", () => {
     "records Source identity lookup failures for known Migration Item States",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const sourceError = new SourcePluginError({
           message: "Source identity lookup failed",
@@ -2292,8 +2381,7 @@ describe("runMigration", () => {
     "preserves Destination Identity when a migrated item lookup fails",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const sourceError = new SourcePluginError({
           message: "Source identity lookup failed",
@@ -2367,8 +2455,7 @@ describe("runMigration", () => {
     "does not rediscover attempted backlog Source Identities in normal mode",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const sourceError = new SourcePluginError({
           message: "Source identity lookup failed",
@@ -2462,8 +2549,7 @@ describe("runMigration", () => {
 
   it.effect("does not reprocess unchanged terminal Source Items", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
 
@@ -2576,8 +2662,7 @@ describe("runMigration", () => {
 
   it.effect("reprocesses Source Items when Source Version changes", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
 
@@ -2666,8 +2751,7 @@ describe("runMigration", () => {
     "expands selected Migration Definitions and executes dependencies first",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const executionOrder: string[] = [];
@@ -2755,8 +2839,7 @@ describe("runMigration", () => {
     "summarizes selected dependencies once when also explicitly selected",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
 
@@ -2959,8 +3042,7 @@ describe("runMigration", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
 
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey("authors", "author-1"),
@@ -3049,8 +3131,7 @@ describe("runMigration", () => {
       Effect.gen(function* () {
         const authorsStoreState = InMemoryMigrationStore.makeState();
         const articlesStoreState = InMemoryMigrationStore.makeState();
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
 
         authorsStoreState.itemStates.set(
           InMemoryMigrationStore.itemStateKey("authors", "author-1"),
@@ -3154,8 +3235,7 @@ describe("runMigration", () => {
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
       const store = InMemoryMigrationStore.layer(storeState);
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<EntryCommand>();
+      const destinationState = makeTestDestinationState<EntryCommand>();
       const destination = makeTestEntryDestination({
         state: destinationState,
         execute: (command, context) =>
@@ -3276,8 +3356,7 @@ describe("runMigration", () => {
         const articlesStoreState = InMemoryMigrationStore.makeState();
         authorsStoreState.nextRunNumber = 41;
         const stubLockObservations: string[] = [];
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<EntryCommand>();
+        const destinationState = makeTestDestinationState<EntryCommand>();
         const destination = makeTestEntryDestination({
           state: destinationState,
           execute: (command, context) => {
@@ -3443,8 +3522,7 @@ describe("runMigration", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const stubLockObservations: string[] = [];
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<EntryCommand>();
+        const destinationState = makeTestDestinationState<EntryCommand>();
         const destination = makeTestEntryDestination({
           state: destinationState,
           execute: (command, context) => {
@@ -3609,8 +3687,7 @@ describe("runMigration", () => {
         const articlesStoreState = InMemoryMigrationStore.makeState();
         authorsStoreState.nextRunNumber = 41;
         const stubLockObservations: string[] = [];
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<EntryCommand>();
+        const destinationState = makeTestDestinationState<EntryCommand>();
         const destination = makeTestEntryDestination({
           state: destinationState,
           execute: (command, context) => {
@@ -4057,8 +4134,7 @@ describe("runMigration", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
 
         for (const [definitionId, destinationIdentity] of [
           ["staff-authors", "staff-entry-1"],
@@ -4163,13 +4239,14 @@ describe("runMigration", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const destinationState =
-          InMemoryDestinationPlugin.makeState<ArticleEntryCommand>();
-        const destination = InMemoryDestinationPlugin.makeEntries({
+          makeTestDestinationState<ArticleEntryCommand>();
+        const destinationFixture = InMemoryDestinationPlugin.fixtureEntries({
           schemas: {
             article: ArticleEntryFields,
           },
-          state: destinationState,
         });
+        destinationState.bind(destinationFixture);
+        const destination = destinationFixture.destination;
         const definition = defineMigration({
           id: "articles",
           source: makeTestInMemorySource({
@@ -4218,13 +4295,14 @@ describe("runMigration", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const destinationState =
-          InMemoryDestinationPlugin.makeState<ArticleEntryCommand>();
-        const destination = InMemoryDestinationPlugin.makeEntries({
+          makeTestDestinationState<ArticleEntryCommand>();
+        const destinationFixture = InMemoryDestinationPlugin.fixtureEntries({
           schemas: {
             article: ArticleEntryFields,
           },
-          state: destinationState,
         });
+        destinationState.bind(destinationFixture);
+        const destination = destinationFixture.destination;
         const definition = defineMigration({
           id: "articles",
           source: makeTestInMemorySource({
@@ -4294,14 +4372,14 @@ describe("runMigration", () => {
   it.effect("fails publishing an in-memory entry before it is upserted", () =>
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<ArticleEntryCommand>();
-      const destination = InMemoryDestinationPlugin.makeEntries({
+      const destinationState = makeTestDestinationState<ArticleEntryCommand>();
+      const destinationFixture = InMemoryDestinationPlugin.fixtureEntries({
         schemas: {
           article: ArticleEntryFields,
         },
-        state: destinationState,
       });
+      destinationState.bind(destinationFixture);
+      const destination = destinationFixture.destination;
       const definition = defineMigration({
         id: "articles",
         source: makeTestInMemorySource({
@@ -4345,8 +4423,7 @@ describe("runMigration", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey("articles", "article-1"),
           {
@@ -4411,8 +4488,7 @@ describe("runMigration", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<EntryCommand>();
+        const destinationState = makeTestDestinationState<EntryCommand>();
         const definition = defineMigration({
           id: "articles",
           source: makeTestInMemorySource({
@@ -4484,8 +4560,7 @@ describe("runMigration", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<EntryCommand>();
+        const destinationState = makeTestDestinationState<EntryCommand>();
         const definition = defineMigration({
           id: "articles",
           source: makeTestInMemorySource({
@@ -4715,8 +4790,7 @@ describe("runMigration", () => {
       Effect.gen(function* () {
         const authorsStoreState = InMemoryMigrationStore.makeState();
         const articlesStoreState = InMemoryMigrationStore.makeState();
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const pipelineCalls: string[] = [];
 
         const authors = defineMigration({
@@ -4802,8 +4876,7 @@ describe("runMigration", () => {
     "rejects missing Migration Definition dependencies before execution",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];
@@ -4858,8 +4931,7 @@ describe("runMigration", () => {
     "rejects Migration Definition dependency cycles before execution",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];
@@ -4943,8 +5015,7 @@ describe("runMigration", () => {
     "acquires and releases the full Migration Definition Lock set around the run",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const lockObservations: string[] = [];
@@ -5036,8 +5107,7 @@ describe("runMigration", () => {
 
   it.effect("preserves the primary error when failRun cleanup fails", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const sourceError = new SourcePluginError({
         message: "Source read failed",
@@ -5090,8 +5160,7 @@ describe("runMigration", () => {
 
   it.effect("surfaces Migration Definition Lock release failures", () =>
     Effect.gen(function* () {
-      const destinationState =
-        InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const releaseError = new MigrationStoreError({
         message: "Unable to release Migration Definition Lock",
@@ -5163,8 +5232,7 @@ describe("runMigration", () => {
     "attempts every Migration Definition Lock release when cleanup fails",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const releaseError = new MigrationStoreError({
           message: "Unable to release Migration Definition Lock",
@@ -5268,8 +5336,7 @@ describe("runMigration", () => {
     "rejects concurrent Migration Definition Lock ownership before execution",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];
@@ -5336,8 +5403,7 @@ describe("runMigration", () => {
     "rejects overlapping lock sets before executing earlier definitions",
     () =>
       Effect.gen(function* () {
-        const destinationState =
-          InMemoryDestinationPlugin.makeState<UpsertEntryCommand>();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];

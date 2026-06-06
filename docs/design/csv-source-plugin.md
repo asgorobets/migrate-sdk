@@ -22,10 +22,10 @@ Audience: maintainers and migration authors working on `CsvSourcePlugin`.
 
 ## Public API
 
-`CsvSourcePlugin.plugin` configures a path-backed CSV source:
+`CsvSourcePlugin.make` configures a path-backed CSV source:
 
 ```ts
-const source = CsvSourcePlugin.plugin({
+const source = CsvSourcePlugin.make({
   path: "bookstore-book-catalog.csv",
   platform: csvPlatform,
   dialect: { kind: "standard" },

@@ -5,13 +5,9 @@ import {
   defineMigration,
   type MigrationRunSummary,
   runMigration,
-  type SourceItemInput,
   skipItem,
 } from "migrate-sdk";
-import {
-  InMemoryDestinationPlugin,
-  type InMemoryEntryCommand,
-} from "migrate-sdk/destinations/in-memory";
+import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { FileMigrationStore } from "migrate-sdk/stores/file";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
@@ -21,16 +17,9 @@ const Article = Schema.Struct({
   title: Schema.String,
 });
 
-type Article = typeof Article.Type;
-
 const ArticleEntryFields = Schema.Struct({
   title: Schema.String,
 });
-
-interface ArticleEntrySchemas {
-  readonly article: typeof ArticleEntryFields;
-}
-type ArticleEntryCommand = InMemoryEntryCommand<ArticleEntrySchemas>;
 
 export interface RunFileStoreExampleOptions {
   readonly reset?: boolean;
@@ -81,29 +70,19 @@ const sourceItems = [
       title: "Second file-store article",
     },
   },
-] satisfies readonly SourceItemInput<Article>[];
+] as const;
 
-const makeArticlesMigration = (
-  storeDirectory: string,
-  destinationState: ReturnType<
-    typeof InMemoryDestinationPlugin.makeState<ArticleEntryCommand>
-  >
-) => {
-  const destination = InMemoryDestinationPlugin.makeEntries({
+const makeArticlesMigration = (storeDirectory: string) => {
+  const destinationFixture = InMemoryDestinationPlugin.fixtureEntries({
     schemas: {
       article: ArticleEntryFields,
     },
-    state: destinationState,
   });
+  const { destination } = destinationFixture;
 
-  return defineMigration({
-    id: "articles",
-    source: InMemorySourcePlugin.make({
-      items: sourceItems,
-      sourceSchema: Article,
-    }),
+  const migration = defineMigration({
     destination,
-    store: FileMigrationStore.layer({ directory: storeDirectory }),
+    id: "articles",
     pipeline: Effect.fn("fileStoreArticles.pipeline")(function* (source) {
       if (!source.item.publish) {
         return yield* skipItem("Article is not published");
@@ -113,7 +92,14 @@ const makeArticlesMigration = (
         title: source.item.title,
       });
     }),
+    source: InMemorySourcePlugin.make({
+      items: sourceItems,
+      sourceSchema: Article,
+    }),
+    store: FileMigrationStore.layer({ directory: storeDirectory }),
   });
+
+  return { destinationFixture, migration };
 };
 
 export const runFileStoreExample = Effect.fn("runFileStoreExample")(function* (
@@ -130,23 +116,18 @@ export const runFileStoreExample = Effect.fn("runFileStoreExample")(function* (
     yield* fs.remove(storeDirectory, { force: true, recursive: true });
   }
 
-  const firstRunDestinationState =
-    InMemoryDestinationPlugin.makeState<ArticleEntryCommand>();
-  const firstRun = yield* runMigration(
-    makeArticlesMigration(storeDirectory, firstRunDestinationState)
-  );
+  const first = makeArticlesMigration(storeDirectory);
+  const firstRun = yield* runMigration(first.migration);
 
-  const secondRunDestinationState =
-    InMemoryDestinationPlugin.makeState<ArticleEntryCommand>();
-  const secondRun = yield* runMigration(
-    makeArticlesMigration(storeDirectory, secondRunDestinationState)
-  );
+  const second = makeArticlesMigration(storeDirectory);
+  const secondRun = yield* runMigration(second.migration);
 
   return {
     firstRun,
-    firstRunDestinationExecutions: firstRunDestinationState.executions.length,
+    firstRunDestinationExecutions: first.destinationFixture.executions().length,
     secondRun,
-    secondRunDestinationExecutions: secondRunDestinationState.executions.length,
+    secondRunDestinationExecutions:
+      second.destinationFixture.executions().length,
     storeDirectory,
   } satisfies FileStoreExampleResult;
 });

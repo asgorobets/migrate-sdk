@@ -24,7 +24,7 @@ A source plugin factory configures how source data is read and which Source
 Payload Schema defines the pipeline-facing item shape:
 
 ```ts
-const source = CsvSourcePlugin.plugin({
+const source = CsvSourcePlugin.make({
   path: "articles.csv",
   platform: csvPlatform,
   dialect: { kind: "standard" },
@@ -40,7 +40,7 @@ A destination plugin factory configures destination-owned schemas once and
 returns command factories for pipelines:
 
 ```ts
-const destination = ContentfulDestinationPlugin.plugin({
+const destination = ContentfulDestinationPlugin.make({
   schemas: {
     article: ArticleEntryFields,
   },
@@ -78,11 +78,13 @@ The pipeline and destination field schema both see `views` as a number.
 Destination-native encoding belongs inside the destination plugin.
 
 ```ts
-pipeline: Effect.fn("articles.pipeline")(function* (source) {
-  return destination.commands.upsertEntry("article", {
-    title: source.item.title,
-    views: source.item.views,
-  });
+const articles = defineMigration({
+  // ...
+  pipeline: (source) =>
+    destination.commands.upsertEntry("article", {
+      title: source.item.title,
+      views: source.item.views,
+    }),
 });
 ```
 
@@ -108,21 +110,33 @@ const articles = defineMigration({
   source,
   destination,
   store: InMemoryMigrationStore.layer(),
-  pipeline: Effect.fn("articles.pipeline")(function* (source) {
-    return [
-      destination.commands.upsertEntry("article", {
-        title: source.item.title,
-        views: source.item.views,
-      }),
-      destination.commands.publishEntry("article"),
-    ];
-  }),
+  pipeline: (source) => [
+    destination.commands.upsertEntry("article", {
+      title: source.item.title,
+      views: source.item.views,
+    }),
+    destination.commands.publishEntry("article"),
+  ],
 });
 ```
 
 This mirrors the shape expected from real CMS destination plugins such as
 Contentful: schemas are passed once at plugin creation, then pipelines call
 destination-owned command factories.
+
+Tests and examples that need execution inspection should opt into the fixture
+surface instead of changing the configured plugin shape:
+
+```ts
+const fixture = InMemoryDestinationPlugin.fixtureEntries({
+  schemas: {
+    article: ArticleEntryFields,
+  },
+});
+
+const destination = fixture.destination;
+const executions = fixture.executions();
+```
 
 ## Lower-Level Custom Destination
 
@@ -159,7 +173,8 @@ const destination = InMemoryDestinationPlugin.make({
 
 This is not the default prebuilt plugin usage shape. It is useful for tests,
 custom destinations, and examples that need to demonstrate the lower-level
-runtime boundary.
+runtime boundary. Use `InMemoryDestinationPlugin.fixture(...)` when the custom
+destination also needs execution inspection.
 
 ## Dynamic Registration
 
@@ -171,7 +186,7 @@ typed pipelines.
 const contentTypes = ["author", "article", "category"] as const;
 
 export const migrations = contentTypes.map((contentType) => {
-  const destination = ContentfulDestinationPlugin.plugin({
+  const destination = ContentfulDestinationPlugin.make({
     schemas: {
       [contentType]: contentTypeSchemas[contentType],
     },
@@ -179,7 +194,7 @@ export const migrations = contentTypes.map((contentType) => {
 
   return defineMigration({
     id: contentType,
-    source: SqlSourcePlugin.plugin({
+    source: SqlSourcePlugin.make({
       table: contentType,
       sourceSchema: sourceSchemas[contentType],
     }),

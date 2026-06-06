@@ -3,7 +3,6 @@ import {
   defineMigration,
   type MigrationRunSummary,
   runMigration,
-  type SourceItemInput,
   skipItem,
 } from "migrate-sdk";
 import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
@@ -14,8 +13,6 @@ const Article = Schema.Struct({
   publish: Schema.Boolean,
   title: Schema.String,
 });
-
-type Article = typeof Article.Type;
 
 const ArticleEntryFields = Schema.Struct({
   title: Schema.String,
@@ -46,7 +43,7 @@ const sourceItems = [
       title: "Second migration article",
     },
   },
-] satisfies readonly SourceItemInput<Article>[];
+] as const;
 
 const makeArticlesMigration = () => {
   const destination = InMemoryDestinationPlugin.makeEntries({

@@ -5,13 +5,8 @@ import {
   MigrationReferenceLookup,
   type MigrationRunSummary,
   runMigrations,
-  type SourceItemInput,
 } from "migrate-sdk";
-import {
-  type InMemoryDestinationExecution,
-  InMemoryDestinationPlugin,
-  type InMemoryEntryCommand,
-} from "migrate-sdk/destinations/in-memory";
+import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
@@ -32,8 +27,6 @@ const BookSource = Schema.Struct({
   title: Schema.Trim,
 });
 
-type BookSource = typeof BookSource.Type;
-
 const AuthorSource = Schema.Struct({
   biography: Schema.String,
   displayName: Schema.String,
@@ -43,8 +36,6 @@ const AuthorSource = Schema.Struct({
   popularBookIds: Schema.Array(Schema.String),
   specialties: Schema.Array(Schema.String),
 });
-
-type AuthorSource = typeof AuthorSource.Type;
 
 const BookEntryFields = Schema.Struct({
   authorEntries: Schema.Array(Schema.String),
@@ -70,11 +61,21 @@ const AuthorEntryFields = Schema.Struct({
   website: Schema.optional(Schema.String),
 });
 
-interface BookstoreEntrySchemas {
-  readonly author: typeof AuthorEntryFields;
-  readonly book: typeof BookEntryFields;
-}
-type BookstoreCommand = InMemoryEntryCommand<BookstoreEntrySchemas>;
+const makeBookstoreDestinationFixture = () =>
+  InMemoryDestinationPlugin.fixtureEntries({
+    schemas: {
+      author: AuthorEntryFields,
+      book: BookEntryFields,
+    },
+  });
+
+type BookstoreDestinationFixture = ReturnType<
+  typeof makeBookstoreDestinationFixture
+>;
+type BookstoreExecution = ReturnType<
+  BookstoreDestinationFixture["executions"]
+>[number];
+type BookstoreCommand = BookstoreExecution["command"];
 type UpsertBookstoreCommand = Extract<
   BookstoreCommand,
   { readonly kind: "UpsertEntry" }
@@ -87,18 +88,22 @@ type UpsertAuthorEntryCommand = Extract<
   BookstoreCommand,
   { readonly contentType: "author"; readonly kind: "UpsertEntry" }
 >;
-type UpsertBookstoreExecution =
-  InMemoryDestinationExecution<UpsertBookstoreCommand>;
-type BookUpsertExecution = InMemoryDestinationExecution<UpsertBookEntryCommand>;
-type AuthorUpsertExecution =
-  InMemoryDestinationExecution<UpsertAuthorEntryCommand>;
+type UpsertBookstoreExecution = BookstoreExecution & {
+  readonly command: UpsertBookstoreCommand;
+};
+type BookUpsertExecution = BookstoreExecution & {
+  readonly command: UpsertBookEntryCommand;
+};
+type AuthorUpsertExecution = BookstoreExecution & {
+  readonly command: UpsertAuthorEntryCommand;
+};
 
 export interface CircularBookAuthorStubsExampleResult {
   readonly authorEntryFields: UpsertAuthorEntryCommand["fields"] | null;
   readonly authorState: MigrationItemState | null;
   readonly bookEntryFields: UpsertBookEntryCommand["fields"] | null;
   readonly bookStubState: MigrationItemState | null;
-  readonly executions: readonly InMemoryDestinationExecution<BookstoreCommand>[];
+  readonly executions: readonly BookstoreExecution[];
   readonly itemStates: readonly MigrationItemState[];
   readonly summary: MigrationRunSummary;
   readonly upsertExecutions: readonly UpsertBookstoreExecution[];
@@ -122,7 +127,7 @@ const bookSourceItems = [
       title: "  Effectful Architecture  ",
     },
   },
-] satisfies readonly SourceItemInput<BookSource>[];
+] as const;
 
 const authorSourceItems = [
   {
@@ -139,10 +144,10 @@ const authorSourceItems = [
       specialties: ["TypeScript", "Effect", "Content migrations"],
     },
   },
-] satisfies readonly SourceItemInput<AuthorSource>[];
+] as const;
 
 const isUpsertExecution = (
-  execution: InMemoryDestinationExecution<BookstoreCommand>
+  execution: BookstoreExecution
 ): execution is UpsertBookstoreExecution =>
   execution.command.kind === "UpsertEntry";
 
@@ -160,15 +165,8 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
 )(function* () {
   const storeState = InMemoryMigrationStore.makeState();
   const store = InMemoryMigrationStore.layer(storeState);
-  const destinationState =
-    InMemoryDestinationPlugin.makeState<BookstoreCommand>();
-  const destination = InMemoryDestinationPlugin.makeEntries({
-    schemas: {
-      author: AuthorEntryFields,
-      book: BookEntryFields,
-    },
-    state: destinationState,
-  });
+  const destinationFixture = makeBookstoreDestinationFixture();
+  const { destination } = destinationFixture;
 
   const books = defineMigration({
     id: "books",
@@ -182,20 +180,18 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
     // The Author pipeline below uses it for `book:future-catalog`, creating a
     // minimal Book entry until that source item appears in a later run.
     stub: ({ sourceIdentity }) =>
-      Effect.succeed(
-        destination.commands.upsertEntry("book", {
-          authorEntries: [],
-          authorReferenceStatuses: [],
-          categorySlugs: [],
-          format: "unknown",
-          isStub: true,
-          isbn: "pending",
-          listPriceAmount: 0,
-          listPriceCurrency: "USD",
-          publicationYear: 0,
-          title: `Stub book for ${sourceIdentity}`,
-        })
-      ),
+      destination.commands.upsertEntry("book", {
+        authorEntries: [],
+        authorReferenceStatuses: [],
+        categorySlugs: [],
+        format: "unknown",
+        isStub: true,
+        isbn: "pending",
+        listPriceAmount: 0,
+        listPriceCurrency: "USD",
+        publicationYear: 0,
+        title: `Stub book for ${sourceIdentity}`,
+      }),
     pipeline: Effect.fn("books.pipeline")(function* (source) {
       const references = yield* MigrationReferenceLookup;
       const authorReferences = yield* Effect.all(
@@ -242,16 +238,14 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
     // `stub: true`. The Book pipeline above uses it before Authors have run,
     // then this Author migration updates the same destination entry.
     stub: ({ sourceIdentity }) =>
-      Effect.succeed(
-        destination.commands.upsertEntry("author", {
-          biography: "Pending author profile",
-          displayName: `Stub author for ${sourceIdentity}`,
-          isStub: true,
-          popularBookEntries: [],
-          popularBookReferenceStatuses: [],
-          specialties: [],
-        })
-      ),
+      destination.commands.upsertEntry("author", {
+        biography: "Pending author profile",
+        displayName: `Stub author for ${sourceIdentity}`,
+        isStub: true,
+        popularBookEntries: [],
+        popularBookReferenceStatuses: [],
+        specialties: [],
+      }),
     pipeline: Effect.fn("authors.pipeline")(function* (source) {
       const references = yield* MigrationReferenceLookup;
       const popularBookReferences = yield* Effect.all(
@@ -290,8 +284,9 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
     definitions: [books, authors],
     definitionIds: ["books", "authors"],
   });
-  const upsertExecutions =
-    destinationState.executions.filter(isUpsertExecution);
+  const upsertExecutions = destinationFixture
+    .executions()
+    .filter(isUpsertExecution);
 
   return {
     authorEntryFields:
@@ -316,7 +311,7 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
       storeState.itemStates.get(
         InMemoryMigrationStore.itemStateKey("books", "book:future-catalog")
       ) ?? null,
-    executions: destinationState.executions,
+    executions: destinationFixture.executions(),
     itemStates: Array.from(storeState.itemStates.values()),
     summary,
     upsertExecutions,
