@@ -38,7 +38,9 @@ import {
   type RollbackableMigrationItemState,
   type RollbackContext,
   type RollbackMigrationError,
+  type RollbackMigrationOptionsInput,
   RollbackPreflightError,
+  RollbackRequestError,
   type RollbackRunSummary,
   type RunMigrationError,
   rollbackMigration,
@@ -5654,6 +5656,30 @@ describe("rollbackMigration", () => {
       });
 
       expectTypeOf(rollbackMigration(definition)).toEqualTypeOf<
+        Effect.Effect<
+          RollbackRunSummary,
+          DestinationPluginError | MigrationStoreError | RollbackPreflightError
+        >
+      >();
+      expectTypeOf(rollbackMigration(definition, undefined)).toEqualTypeOf<
+        Effect.Effect<
+          RollbackRunSummary,
+          DestinationPluginError | MigrationStoreError | RollbackPreflightError
+        >
+      >();
+      const optionalOptions = undefined as
+        | RollbackMigrationOptionsInput
+        | undefined;
+      expectTypeOf(
+        rollbackMigration(definition, optionalOptions)
+      ).toEqualTypeOf<
+        Effect.Effect<RollbackRunSummary, RollbackMigrationError>
+      >();
+      expectTypeOf(
+        rollbackMigration(definition, {
+          sourceIdentities: ["article-rollback"],
+        })
+      ).toEqualTypeOf<
         Effect.Effect<RollbackRunSummary, RollbackMigrationError>
       >();
 
@@ -5713,6 +5739,513 @@ describe("rollbackMigration", () => {
         })
       );
     })
+  );
+
+  it.effect("rolls back only targeted source identities by direct lookup", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const destinationState = makeTestDestinationState<EntryCommand>();
+      const destination = makeTestEntryDestination({
+        state: destinationState,
+      });
+      const definitionId = toMigrationDefinitionId("articles");
+      const targetedIdentity = toSourceIdentity("article-targeted");
+      const untouchedIdentity = toSourceIdentity("article-untouched");
+      const makeMigratedState = (sourceIdentity: typeof targetedIdentity) => ({
+        definitionId,
+        destinationIdentity: toDestinationIdentity(`entry-${sourceIdentity}`),
+        lastRunId: toMigrationRunId("run-previous"),
+        sourceIdentity,
+        sourceVersion: toSourceVersion("source-version-1"),
+        status: "migrated" as const,
+        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+      });
+      const targetedState = makeMigratedState(targetedIdentity);
+      const untouchedState = makeMigratedState(untouchedIdentity);
+
+      for (const itemState of [targetedState, untouchedState]) {
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey(
+            itemState.definitionId,
+            itemState.sourceIdentity
+          ),
+          itemState
+        );
+      }
+
+      const store = Layer.effect(
+        MigrationStore,
+        Effect.gen(function* () {
+          const baseStore = yield* MigrationStore;
+
+          return {
+            ...baseStore,
+            listItemStates: () =>
+              Effect.fail(
+                new MigrationStoreError({
+                  message:
+                    "Targeted rollback must not scan all Migration Item States",
+                })
+              ),
+          };
+        })
+      ).pipe(Layer.provide(InMemoryMigrationStore.layer(storeState)));
+
+      const definition = defineMigration({
+        id: definitionId,
+        source: makeTestInMemorySource({
+          items: [],
+          sourceSchema: ArticleSource,
+        }),
+        destination,
+        store,
+        pipeline: () => ({
+          contentType: "article",
+          fields: {
+            title: "unused",
+          },
+          kind: "UpsertEntry" as const,
+        }),
+        rollback: () => ({
+          contentType: "article",
+          kind: "PublishEntry" as const,
+        }),
+      });
+
+      const summary = yield* rollbackMigration(definition, {
+        sourceIdentities: ["article-targeted"],
+      });
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions[0]?.counts).toEqual({
+        rolledBack: 1,
+        failed: 0,
+        skipped: 0,
+      });
+      expect(destinationState.executions).toHaveLength(1);
+      expect(destinationState.executions[0]?.context.sourceIdentity).toBe(
+        targetedIdentity
+      );
+      expect(
+        storeState.itemStates.has(
+          InMemoryMigrationStore.itemStateKey(definitionId, targetedIdentity)
+        )
+      ).toBe(false);
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey(definitionId, untouchedIdentity)
+        )
+      ).toEqual(untouchedState);
+    })
+  );
+
+  it.effect(
+    "rejects empty targeted source identity requests before a run",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const definitionId = toMigrationDefinitionId("articles");
+        const definition = defineMigration({
+          id: definitionId,
+          source: makeTestInMemorySource({
+            items: [],
+            sourceSchema: ArticleSource,
+          }),
+          destination: makeTestEntryDestination(),
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: () => ({
+            contentType: "article",
+            fields: {
+              title: "unused",
+            },
+            kind: "UpsertEntry" as const,
+          }),
+          rollback: () => ({
+            contentType: "article",
+            kind: "PublishEntry" as const,
+          }),
+        });
+
+        const error = yield* Effect.flip(
+          rollbackMigration(definition, { sourceIdentities: [] })
+        );
+
+        expect(error).toBeInstanceOf(RollbackRequestError);
+        expect(error).toEqual(
+          expect.objectContaining({
+            message:
+              "Rollback sourceIdentities must include at least one identity",
+          })
+        );
+        expect(storeState.latestRunStates.has(definitionId)).toBe(false);
+      })
+  );
+
+  it.effect(
+    "counts missing and non-rollbackable targeted identities as skipped",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const destinationState = makeTestDestinationState<EntryCommand>();
+        const definitionId = toMigrationDefinitionId("articles");
+        const skippedState = {
+          definitionId,
+          lastRunId: toMigrationRunId("run-previous"),
+          skipReason: "Skipped during forward migration",
+          sourceIdentity: toSourceIdentity("article-skipped"),
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "skipped" as const,
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        };
+        const failedWithoutDestinationState = {
+          definitionId,
+          error: {
+            errorTag: "SourcePluginError",
+            kind: "source" as const,
+            message: "Previous source lookup failed",
+          },
+          lastRunId: toMigrationRunId("run-previous"),
+          sourceIdentity: toSourceIdentity(
+            "article-failed-without-destination"
+          ),
+          status: "failed" as const,
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        };
+
+        for (const itemState of [skippedState, failedWithoutDestinationState]) {
+          storeState.itemStates.set(
+            InMemoryMigrationStore.itemStateKey(
+              itemState.definitionId,
+              itemState.sourceIdentity
+            ),
+            itemState
+          );
+        }
+
+        const definition = defineMigration({
+          id: definitionId,
+          source: makeTestInMemorySource({
+            items: [],
+            sourceSchema: ArticleSource,
+          }),
+          destination: makeTestEntryDestination({
+            state: destinationState,
+          }),
+          store,
+          pipeline: () => ({
+            contentType: "article",
+            fields: {
+              title: "unused",
+            },
+            kind: "UpsertEntry" as const,
+          }),
+          rollback: () => ({
+            contentType: "article",
+            kind: "PublishEntry" as const,
+          }),
+        });
+
+        const summary = yield* rollbackMigration(definition, {
+          sourceIdentities: [
+            "article-missing",
+            "article-skipped",
+            "article-failed-without-destination",
+          ],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          rolledBack: 0,
+          failed: 0,
+          skipped: 3,
+        });
+        expect(destinationState.executeAttempts).toBe(0);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(
+              definitionId,
+              skippedState.sourceIdentity
+            )
+          )
+        ).toEqual(skippedState);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(
+              definitionId,
+              failedWithoutDestinationState.sourceIdentity
+            )
+          )
+        ).toEqual(failedWithoutDestinationState);
+      })
+  );
+
+  it.effect("deduplicates targeted source identities before rollback", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const store = InMemoryMigrationStore.layer(storeState);
+      const destinationState = makeTestDestinationState<EntryCommand>();
+      const definitionId = toMigrationDefinitionId("articles");
+      const makeMigratedState = (identity: string) => ({
+        definitionId,
+        destinationIdentity: toDestinationIdentity(`entry-${identity}`),
+        lastRunId: toMigrationRunId("run-previous"),
+        sourceIdentity: toSourceIdentity(identity),
+        sourceVersion: toSourceVersion("source-version-1"),
+        status: "migrated" as const,
+        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+      });
+
+      for (const itemState of [
+        makeMigratedState("article-1"),
+        makeMigratedState("article-2"),
+      ]) {
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey(
+            itemState.definitionId,
+            itemState.sourceIdentity
+          ),
+          itemState
+        );
+      }
+
+      const definition = defineMigration({
+        id: definitionId,
+        source: makeTestInMemorySource({
+          items: [],
+          sourceSchema: ArticleSource,
+        }),
+        destination: makeTestEntryDestination({
+          state: destinationState,
+        }),
+        store,
+        pipeline: () => ({
+          contentType: "article",
+          fields: {
+            title: "unused",
+          },
+          kind: "UpsertEntry" as const,
+        }),
+        rollback: () => ({
+          contentType: "article",
+          kind: "PublishEntry" as const,
+        }),
+      });
+
+      const summary = yield* rollbackMigration(definition, {
+        sourceIdentities: ["article-2", "article-1", "article-2"],
+      });
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions[0]?.counts).toEqual({
+        rolledBack: 2,
+        failed: 0,
+        skipped: 0,
+      });
+      expect(
+        destinationState.executions.map(
+          (execution) => execution.context.sourceIdentity
+        )
+      ).toEqual(["article-2", "article-1"]);
+    })
+  );
+
+  it.effect(
+    "reports targeted rollback successes, failures, and skips from the requested identities",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const destinationState = makeTestDestinationState<EntryCommand>();
+        const definitionId = toMigrationDefinitionId("articles");
+        const makeMigratedState = (identity: string) => ({
+          definitionId,
+          destinationIdentity: toDestinationIdentity(`entry-${identity}`),
+          lastRunId: toMigrationRunId("run-previous"),
+          sourceIdentity: toSourceIdentity(identity),
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "migrated" as const,
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        });
+        const successState = makeMigratedState("article-success");
+        const rejectedPlanState = makeMigratedState("article-rejected-plan");
+
+        for (const itemState of [successState, rejectedPlanState]) {
+          storeState.itemStates.set(
+            InMemoryMigrationStore.itemStateKey(
+              itemState.definitionId,
+              itemState.sourceIdentity
+            ),
+            itemState
+          );
+        }
+
+        const definition = defineMigration({
+          id: definitionId,
+          source: makeTestInMemorySource({
+            items: [],
+            sourceSchema: ArticleSource,
+          }),
+          destination: makeTestEntryDestination({
+            state: destinationState,
+          }),
+          store,
+          pipeline: () => ({
+            contentType: "article",
+            fields: {
+              title: "unused",
+            },
+            kind: "UpsertEntry" as const,
+          }),
+          rollback: (state) =>
+            state.sourceIdentity === toSourceIdentity("article-rejected-plan")
+              ? {
+                  contentType: "article",
+                  fields: {
+                    title: "must not recreate identity",
+                  },
+                  kind: "UpsertEntry" as const,
+                }
+              : {
+                  contentType: "article",
+                  kind: "PublishEntry" as const,
+                },
+        });
+
+        const summary = yield* rollbackMigration(definition, {
+          sourceIdentities: [
+            "article-success",
+            "article-rejected-plan",
+            "article-missing",
+          ],
+        });
+
+        expect(summary.status).toBe("failed");
+        expect(summary.definitions[0]?.counts).toEqual({
+          rolledBack: 1,
+          failed: 1,
+          skipped: 1,
+        });
+        expect(destinationState.executeAttempts).toBe(1);
+        expect(
+          storeState.itemStates.has(
+            InMemoryMigrationStore.itemStateKey(
+              definitionId,
+              successState.sourceIdentity
+            )
+          )
+        ).toBe(false);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(
+              definitionId,
+              rejectedPlanState.sourceIdentity
+            )
+          )
+        ).toEqual(rejectedPlanState);
+      })
+  );
+
+  it.effect(
+    "preflights missing rollback pipelines against only targeted identities",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const definitionId = toMigrationDefinitionId("articles");
+        const unselectedRollbackableState = {
+          definitionId,
+          destinationIdentity: toDestinationIdentity("entry-unselected"),
+          lastRunId: toMigrationRunId("run-previous"),
+          sourceIdentity: toSourceIdentity("article-unselected"),
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "migrated" as const,
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        };
+        const selectedSkippedState = {
+          definitionId,
+          lastRunId: toMigrationRunId("run-previous"),
+          skipReason: "Not rollbackable",
+          sourceIdentity: toSourceIdentity("article-skipped"),
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "skipped" as const,
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        };
+
+        for (const itemState of [
+          unselectedRollbackableState,
+          selectedSkippedState,
+        ]) {
+          storeState.itemStates.set(
+            InMemoryMigrationStore.itemStateKey(
+              itemState.definitionId,
+              itemState.sourceIdentity
+            ),
+            itemState
+          );
+        }
+
+        const store = Layer.effect(
+          MigrationStore,
+          Effect.gen(function* () {
+            const baseStore = yield* MigrationStore;
+
+            return {
+              ...baseStore,
+              listItemStates: () =>
+                Effect.fail(
+                  new MigrationStoreError({
+                    message:
+                      "Targeted rollback preflight must not scan all Migration Item States",
+                  })
+                ),
+            };
+          })
+        ).pipe(Layer.provide(InMemoryMigrationStore.layer(storeState)));
+
+        const definition = defineMigration({
+          id: definitionId,
+          source: makeTestInMemorySource({
+            items: [],
+            sourceSchema: ArticleSource,
+          }),
+          destination: makeTestEntryDestination(),
+          store,
+          pipeline: () => ({
+            contentType: "article",
+            fields: {
+              title: "unused",
+            },
+            kind: "UpsertEntry" as const,
+          }),
+        });
+
+        const summary = yield* rollbackMigration(definition, {
+          sourceIdentities: ["article-skipped", "article-missing"],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          rolledBack: 0,
+          failed: 0,
+          skipped: 2,
+        });
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(
+              definitionId,
+              unselectedRollbackableState.sourceIdentity
+            )
+          )
+        ).toEqual(unselectedRollbackableState);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(
+              definitionId,
+              selectedSkippedState.sourceIdentity
+            )
+          )
+        ).toEqual(selectedSkippedState);
+      })
   );
 
   it.effect(

@@ -85,7 +85,7 @@ single-definition helper is:
 yield* rollbackMigration(articles);
 ```
 
-Identity-targeted rollback is a planned single-definition helper mode:
+Identity-targeted rollback is an implemented single-definition helper mode:
 
 ```ts
 yield* rollbackMigration(articles, {
@@ -93,11 +93,13 @@ yield* rollbackMigration(articles, {
 });
 ```
 
-`sourceIdentities` should accept one or more source identities for the selected
+`sourceIdentities` accepts one or more source identities for the selected
 definition. An empty `sourceIdentities` array is a request validation failure.
 Omit `sourceIdentities` to rollback all rollbackable states for the definition.
 Duplicate source identities are deduplicated while preserving first occurrence
-order.
+order. Targeted rollback uses direct item-state lookup for each deduplicated
+identity. Missing item state, skipped item state, and failed item state without
+a destination identity count as skipped and remain unchanged.
 
 The first slice is SDK-first. There is no CLI yet, but the request shape should
 support future CLI options such as selected definitions, source identities, and
@@ -289,6 +291,8 @@ The single-definition rollback operation includes:
 
 - `rollbackMigration(definition)` for all rollbackable item states on one
   migration definition
+- `rollbackMigration(definition, { sourceIdentities })` for targeted
+  single-definition rollback by source identity
 - definition lock acquisition and normal migration run lifecycle reuse
 - durable item-state selection without source reads, source identity lookups, or
   source cursor updates
@@ -309,9 +313,6 @@ Remaining rollback execution work:
 
 - `rollbackMigrations` executes selected definitions in reverse dependency
   order and blocks unselected dependents with rollbackable state.
-- Identity-targeted `rollbackMigration` deduplicates identities, rejects an
-  empty identity list, and counts missing or non-rollbackable identities as
-  skipped.
 
 The first rollback implementation should not add CLI commands, dry-run or
 planning mode, store pagination, a terminal rolled-back item state, or a public
