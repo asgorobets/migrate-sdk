@@ -42,7 +42,7 @@ the destination command decoder rejects commands that omit either field.
 Source-to-destination mapping still belongs in the migration pipeline. To force
 a destination-required field to be mapped, make that field required in the
 schema accepted by the command option, or expose an explicit command option for
-that mapping. Do not rely on plugin internals to infer required source mappings
+that mapping. The destination plugin should not infer required source mappings
 that are not represented in the public command schema or options.
 
 ## Command Definitions
@@ -112,8 +112,9 @@ beside the schema that validates their return values.
 
 ## Plugin Definitions
 
-A destination plugin definition groups command definitions and exposes their
-factories as one `commands` object.
+A destination plugin definition owns command groups. A command group owns
+related command definitions and exposes their factories through the configured
+command shape.
 
 ```ts
 const upsertEntry = makeUpsertEntryCommand(
@@ -122,20 +123,48 @@ const upsertEntry = makeUpsertEntryCommand(
 );
 const publishEntry = makePublishEntryCommand(options.contentType);
 
-const ContentfulPlugin = defineDestinationPlugin("contentful").add(
-  upsertEntry,
-  publishEntry
+const ContentfulPlugin = defineDestinationPlugin("contentful").addGroup(
+  defineDestinationCommandGroup("entries")
+    .topLevel()
+    .add(upsertEntry, publishEntry)
 );
 ```
 
-The plugin definition exposes `ContentfulPlugin.commands`, which contains
-`upsertEntry(...)` and `publishEntry(...)`.
+Because the `entries` group is top-level, the plugin definition exposes
+`ContentfulPlugin.commands.upsertEntry(...)` and
+`ContentfulPlugin.commands.publishEntry(...)`.
+
+Larger destinations can organize commands into named groups:
+
+```ts
+const ContentfulPlugin = defineDestinationPlugin("contentful").addGroup(
+  defineDestinationCommandGroup("entries").add(upsertEntry, publishEntry),
+  defineDestinationCommandGroup("assets").add(upsertAsset, publishAsset)
+);
+
+ContentfulPlugin.commands.entries.upsertEntry("entry-1", fields);
+ContentfulPlugin.commands.assets.publishAsset("asset-1");
+```
+
+Named groups keep a multi-entity destination from becoming one flat command
+namespace. Top-level groups keep the same three-layer implementation model while
+preserving a flat public command surface. Direct `.add(...)` remains root-level
+sugar for very small plugin definitions, but first-party plugin modules should
+prefer an explicit top-level group so the same model scales from one command
+group to many.
 
 `defineDestinationPlugin(...)` starts as an empty declaration so authors can add
 commands fluently. A plugin must contain at least one command before it can be
-implemented, and command names must be unique within the plugin. Duplicate
-command names and duplicate factory names are rejected by TypeScript and also
-fail at the `.add(...)` runtime boundary.
+implemented. Command names must be unique across the plugin because command
+execution dispatches by command `kind`. Group names must be unique within the
+plugin. Duplicate command names and group names are rejected by TypeScript and
+also fail at the runtime add boundary.
+
+The public command surface must also be unambiguous. A top-level command factory
+cannot share a name with another top-level command factory or with a named group
+namespace. Named groups may reuse factory names that appear elsewhere because
+the public paths are different, for example `commands.publishEntry(...)` and
+`commands.archives.publishEntry(...)`.
 
 ## Destination Schemas
 
@@ -227,9 +256,10 @@ const ContentfulDestinationPlugin = {
       options.commands.upsertEntry
     );
     const publishEntry = makePublishEntryCommand(options.contentType);
-    const plugin = defineDestinationPlugin("contentful").add(
-      upsertEntry,
-      publishEntry
+    const plugin = defineDestinationPlugin("contentful").addGroup(
+      defineDestinationCommandGroup("entries")
+        .topLevel()
+        .add(upsertEntry, publishEntry)
     );
 
     return plugin
@@ -275,6 +305,24 @@ const ContentfulDestinationPlugin = {
 id, source identity, source version, and previous item state when one exists.
 Handlers return destination identity, version, and metadata for the command they
 executed. Every command in the plugin definition must have exactly one handler.
+
+For named groups, implement handlers through the matching group:
+
+```ts
+plugin.implement((handlers) =>
+  handlers
+    .group("entries", (entries) =>
+      entries
+        .handle("UpsertEntry", handleUpsertEntry)
+        .handle("PublishEntry", handlePublishEntry)
+    )
+    .group("assets", (assets) =>
+      assets
+        .handle("UpsertAsset", handleUpsertAsset)
+        .handle("PublishAsset", handlePublishAsset)
+    )
+);
+```
 
 Handlers should use ordinary Effect services for destination capabilities:
 

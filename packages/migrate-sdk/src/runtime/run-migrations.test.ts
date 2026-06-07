@@ -16,6 +16,7 @@ import {
   DestinationPlugin,
   DestinationPluginError,
   defineDestinationCommand,
+  defineDestinationCommandGroup,
   defineDestinationPlugin,
   defineMigration,
   defineSourcePlugin,
@@ -81,18 +82,23 @@ const identityPublishEntryCommand = defineDestinationCommand("PublishEntry", {
   schema: PublishEntryCommand,
 });
 
-const UpsertEntryPlugin =
-  defineDestinationPlugin("test-upsert-entry").add(upsertEntryCommand);
+const UpsertEntryPlugin = defineDestinationPlugin("test-upsert-entry").addGroup(
+  defineDestinationCommandGroup("entries").topLevel().add(upsertEntryCommand)
+);
 
-const EntryPlugin = defineDestinationPlugin("test-entry")
-  .add(upsertEntryCommand)
-  .add(publishEntryCommand);
+const EntryPlugin = defineDestinationPlugin("test-entry").addGroup(
+  defineDestinationCommandGroup("entries")
+    .topLevel()
+    .add(upsertEntryCommand, publishEntryCommand)
+);
 
 const MultiIdentityEntryPlugin = defineDestinationPlugin(
   "test-multi-identity-entry"
-)
-  .add(upsertEntryCommand)
-  .add(identityPublishEntryCommand);
+).addGroup(
+  defineDestinationCommandGroup("entries")
+    .topLevel()
+    .add(upsertEntryCommand, identityPublishEntryCommand)
+);
 
 expectTypeOf<DestinationCommandSchema<UpsertEntryCommand>>().toEqualTypeOf<
   Schema.Codec<UpsertEntryCommand, UpsertEntryCommand, never, never>
@@ -295,11 +301,11 @@ const makeTestUpsertEntryDestination = (
   options: TestDestinationOptions<UpsertEntryCommand> = {}
 ) => {
   const fixture = InMemoryDestinationTesting.fixture({
+    command: upsertEntryCommand,
     execute: trackDestinationExecute(
       options.state,
       options.execute ?? executeTestUpsertEntryCommand
     ),
-    plugin: UpsertEntryPlugin,
     ...(options.transientFailures === undefined
       ? {}
       : { transientFailures: options.transientFailures }),
@@ -311,38 +317,81 @@ const makeTestUpsertEntryDestination = (
 
 const makeTestEntryDestination = (
   options: TestDestinationOptions<EntryCommand> = {}
-) => {
-  const fixture = InMemoryDestinationTesting.fixture({
-    execute: trackDestinationExecute(
-      options.state,
-      options.execute ?? executeTestEntryCommand
-    ),
-    plugin: EntryPlugin,
-    ...(options.transientFailures === undefined
-      ? {}
-      : { transientFailures: options.transientFailures }),
-  });
-  options.state?.bind(fixture);
-
-  return fixture.destination;
-};
+) => makeTestImplementedEntryDestination(EntryPlugin, options);
 
 const makeTestMultiIdentityEntryDestination = (
   options: TestDestinationOptions<EntryCommand> = {}
-) => {
-  const fixture = InMemoryDestinationTesting.fixture({
-    execute: trackDestinationExecute(
-      options.state,
-      options.execute ?? executeTestEntryCommand
-    ),
-    plugin: MultiIdentityEntryPlugin,
-    ...(options.transientFailures === undefined
-      ? {}
-      : { transientFailures: options.transientFailures }),
-  });
-  options.state?.bind(fixture);
+) => makeTestImplementedEntryDestination(MultiIdentityEntryPlugin, options);
 
-  return fixture.destination;
+const makeTestImplementedEntryDestination = (
+  plugin: typeof EntryPlugin | typeof MultiIdentityEntryPlugin,
+  options: TestDestinationOptions<EntryCommand>
+) => {
+  let executeAttempts = 0;
+  let remainingExecuteFailures = options.transientFailures?.execute ?? 0;
+  const execute = trackDestinationExecute(
+    options.state,
+    options.execute ?? executeTestEntryCommand
+  );
+  const executeWithState = (
+    command: EntryCommand,
+    context: DestinationCommandContext
+  ): Effect.Effect<DestinationCommandResultInput, DestinationPluginError> =>
+    Effect.gen(function* () {
+      if (remainingExecuteFailures > 0) {
+        remainingExecuteFailures -= 1;
+        return yield* new DestinationPluginError({
+          message: "In-memory destination execute failed transiently",
+        });
+      }
+
+      const resultInput = execute(command, context);
+
+      return yield* Effect.isEffect(resultInput)
+        ? resultInput
+        : Effect.succeed(resultInput);
+    });
+  const implementedPlugin = (plugin as typeof EntryPlugin).implement(
+    (handlers) =>
+      handlers
+        .handle("UpsertEntry", ({ command, context }) =>
+          executeWithState(command, context)
+        )
+        .handle("PublishEntry", ({ command, context }) =>
+          executeWithState(command, context)
+        )
+  );
+  const inspection: InMemoryDestinationInspection<EntryCommand> = {
+    entries: () => new Map(),
+    entry: () => undefined,
+    executeAttempts: () => executeAttempts,
+    executions: () => [],
+  };
+  options.state?.bind(inspection);
+
+  return {
+    commandDefinitions: implementedPlugin.commandDefinitions,
+    commands: implementedPlugin.commands,
+    layer: Layer.effect(
+      DestinationPlugin,
+      Effect.gen(function* () {
+        const destinationPlugin = yield* DestinationPlugin;
+
+        return {
+          execute: Effect.fn("TestEntryDestination.execute")(
+            (command, context) =>
+              Effect.sync(() => {
+                executeAttempts += 1;
+              }).pipe(
+                Effect.flatMap(() =>
+                  destinationPlugin.execute(command, context)
+                )
+              )
+          ),
+        };
+      })
+    ).pipe(Layer.provide(implementedPlugin.layer)),
+  };
 };
 
 interface PipelineTestError {

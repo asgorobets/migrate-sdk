@@ -23,6 +23,12 @@ const destinationPluginDefinitionTypeId: unique symbol = Symbol.for(
   "@migrate-sdk/DestinationPluginDefinition"
 );
 
+const destinationCommandGroupDefinitionTypeId: unique symbol = Symbol.for(
+  "@migrate-sdk/DestinationCommandGroupDefinition"
+);
+
+const rootDestinationCommandGroupIdentifier = "@root";
+
 export interface DefinedDestinationCommand<
   Name extends string,
   Command extends DestinationCommand,
@@ -153,6 +159,23 @@ type DestinationPluginCommands<
       UnionToIntersection<DefinedDestinationCommandFactories<Definitions>>
     >;
 
+type DestinationCommandGroupCommands<Group> =
+  Group extends DefinedDestinationCommandGroup<
+    infer Id,
+    infer Definitions,
+    infer TopLevel
+  >
+    ? TopLevel extends true
+      ? DestinationPluginCommands<Definitions>
+      : {
+          readonly [Key in Id]: DestinationPluginCommands<Definitions>;
+        }
+    : never;
+
+type DestinationPluginCommandsFromGroups<Groups> = [Groups] extends [never]
+  ? NoDestinationCommandFactories
+  : Simplify<UnionToIntersection<DestinationCommandGroupCommands<Groups>>>;
+
 type AddedDestinationCommandNames<
   Added extends readonly AnyDefinedDestinationCommand[],
 > = DefinedDestinationCommandName<Added[number]>;
@@ -263,7 +286,293 @@ type NonEmptyDestinationCommandDefinitions = readonly [
   ...AnyDefinedDestinationCommand[],
 ];
 
+export interface DefinedDestinationCommandGroup<
+  Id extends string,
+  Definitions extends AnyDefinedDestinationCommand = never,
+  TopLevel extends boolean = false,
+> extends Pipeable {
+  add<const Added extends NonEmptyDestinationCommandDefinitions>(
+    ...definitions: RejectDuplicateDestinationDefinitions<Definitions, Added>
+  ): DefinedDestinationCommandGroup<Id, Definitions | Added[number], TopLevel>;
+  readonly commands: DestinationPluginCommands<Definitions>;
+  readonly definitions: Readonly<Record<string, Definitions>>;
+  readonly hasCommands: HasDestinationCommands<Definitions>;
+  readonly identifier: Id;
+  readonly isTopLevel: TopLevel;
+  topLevel(): DefinedDestinationCommandGroup<Id, Definitions, true>;
+  readonly [destinationCommandGroupDefinitionTypeId]: {
+    readonly definitions: Definitions;
+    readonly id: Id;
+    readonly topLevel: TopLevel;
+  };
+}
+
+export type AnyDefinedDestinationCommandGroup =
+  | DefinedDestinationCommandGroup<
+      string,
+      AnyDefinedDestinationCommand,
+      boolean
+    >
+  | DefinedDestinationCommandGroup<string, never, boolean>;
+
+type NonEmptyDestinationCommandGroups = readonly [
+  AnyDefinedDestinationCommandGroup,
+  ...AnyDefinedDestinationCommandGroup[],
+];
+
+type DestinationCommandGroupDefinitions<Group> =
+  Group extends DefinedDestinationCommandGroup<
+    infer _Id,
+    infer Definitions,
+    infer _TopLevel
+  >
+    ? Definitions
+    : never;
+
+type DestinationCommandGroupName<Group> =
+  Group extends DefinedDestinationCommandGroup<
+    infer Id,
+    infer _Definitions,
+    infer _TopLevel
+  >
+    ? Id
+    : never;
+
+type DestinationCommandGroupWithName<
+  Groups extends AnyDefinedDestinationCommandGroup,
+  Name extends string,
+> = Extract<Groups, { readonly identifier: Name }>;
+
+type DestinationCommandGroupWithRemainingDefinitions<
+  Groups extends AnyDefinedDestinationCommandGroup,
+  Remaining extends AnyDefinedDestinationCommand,
+> =
+  Groups extends DefinedDestinationCommandGroup<
+    infer _Id,
+    infer Definitions,
+    infer TopLevel
+  >
+    ? TopLevel extends true
+      ? never
+      : [Extract<Remaining, Definitions>] extends [never]
+        ? never
+        : Groups
+    : never;
+
+type DestinationCommandGroupTopLevelDefinitions<Group> =
+  Group extends DefinedDestinationCommandGroup<
+    infer _Id,
+    infer Definitions,
+    infer TopLevel
+  >
+    ? TopLevel extends true
+      ? Definitions
+      : never
+    : never;
+
+type DestinationCommandGroupDefinitionsInAdded<
+  Added extends readonly AnyDefinedDestinationCommandGroup[],
+> = DestinationCommandGroupDefinitions<Added[number]>;
+
+type DestinationCommandGroupSurfaceKeys<Group> =
+  Group extends DefinedDestinationCommandGroup<
+    infer Id,
+    infer Definitions,
+    infer TopLevel
+  >
+    ? TopLevel extends true
+      ? DestinationCommandFactoryNames<Definitions>
+      : Id
+    : never;
+
+type DuplicateDestinationCommandSurfaceKeysInAdded<
+  Added extends readonly AnyDefinedDestinationCommandGroup[],
+  Seen extends string = never,
+> = Added extends readonly [
+  infer Head extends AnyDefinedDestinationCommandGroup,
+  ...infer Tail extends readonly AnyDefinedDestinationCommandGroup[],
+]
+  ? DestinationCommandGroupSurfaceKeys<Head> extends infer Keys extends string
+    ?
+        | Extract<Keys, Seen>
+        | DuplicateDestinationCommandSurfaceKeysInAdded<Tail, Seen | Keys>
+    : never
+  : never;
+
+type DuplicateDestinationCommandSurfaceKeys<
+  Groups extends AnyDefinedDestinationCommandGroup,
+  Added extends readonly AnyDefinedDestinationCommandGroup[],
+> =
+  | Extract<
+      DestinationCommandGroupSurfaceKeys<Groups>,
+      DestinationCommandGroupSurfaceKeys<Added[number]>
+    >
+  | DuplicateDestinationCommandSurfaceKeysInAdded<Added>;
+
+type DuplicateDestinationCommandSurfaceKeyError<Name extends string> =
+  `Duplicate destination command surface: ${Name}`;
+
+type RejectDuplicateDestinationCommandSurfaceKeys<
+  Groups extends AnyDefinedDestinationCommandGroup,
+  Added extends readonly AnyDefinedDestinationCommandGroup[],
+> = [DuplicateDestinationCommandSurfaceKeys<Groups, Added>] extends [never]
+  ? Added
+  : readonly [
+      DuplicateDestinationCommandSurfaceKeyError<
+        DuplicateDestinationCommandSurfaceKeys<Groups, Added>
+      >,
+    ];
+
+type AddedDestinationCommandGroupNames<
+  Added extends readonly AnyDefinedDestinationCommandGroup[],
+> = DestinationCommandGroupName<Added[number]>;
+
+type DuplicateDestinationCommandGroupNamesInAdded<
+  Added extends readonly AnyDefinedDestinationCommandGroup[],
+  Seen extends string = never,
+> = Added extends readonly [
+  infer Head extends AnyDefinedDestinationCommandGroup,
+  ...infer Tail extends readonly AnyDefinedDestinationCommandGroup[],
+]
+  ? DestinationCommandGroupName<Head> extends infer Name extends string
+    ? Name extends Seen
+      ? Name | DuplicateDestinationCommandGroupNamesInAdded<Tail, Seen>
+      : DuplicateDestinationCommandGroupNamesInAdded<Tail, Seen | Name>
+    : never
+  : never;
+
+type DuplicateDestinationCommandGroupNames<
+  Groups extends AnyDefinedDestinationCommandGroup,
+  Added extends readonly AnyDefinedDestinationCommandGroup[],
+> =
+  | Extract<
+      DestinationCommandGroupName<Groups>,
+      AddedDestinationCommandGroupNames<Added>
+    >
+  | DuplicateDestinationCommandGroupNamesInAdded<Added>;
+
+type DuplicateDestinationCommandGroupNameError<Name extends string> =
+  `Duplicate destination command group: ${Name}`;
+
+type RejectDuplicateDestinationCommandGroupNames<
+  Groups extends AnyDefinedDestinationCommandGroup,
+  Added extends readonly AnyDefinedDestinationCommandGroup[],
+> = [DuplicateDestinationCommandGroupNames<Groups, Added>] extends [never]
+  ? Added
+  : readonly [
+      DuplicateDestinationCommandGroupNameError<
+        DuplicateDestinationCommandGroupNames<Groups, Added>
+      >,
+    ];
+
+type DestinationCommandGroupCommandNames<Group> = DefinedDestinationCommandName<
+  DestinationCommandGroupDefinitions<Group>
+>;
+
+type DuplicateDestinationCommandNamesInGroups<
+  Added extends readonly AnyDefinedDestinationCommandGroup[],
+  Seen extends string = never,
+> = Added extends readonly [
+  infer Head extends AnyDefinedDestinationCommandGroup,
+  ...infer Tail extends readonly AnyDefinedDestinationCommandGroup[],
+]
+  ? DestinationCommandGroupCommandNames<Head> extends infer Names extends string
+    ?
+        | Extract<Names, Seen>
+        | DuplicateDestinationCommandNamesInGroups<Tail, Seen | Names>
+    : never
+  : never;
+
+type DuplicateDestinationCommandNamesForGroups<
+  Definitions extends AnyDefinedDestinationCommand,
+  Added extends readonly AnyDefinedDestinationCommandGroup[],
+> =
+  | Extract<
+      DefinedDestinationCommandName<Definitions>,
+      DestinationCommandGroupCommandNames<Added[number]>
+    >
+  | DuplicateDestinationCommandNamesInGroups<Added>;
+
+type RejectDuplicateDestinationCommandNamesForGroups<
+  Definitions extends AnyDefinedDestinationCommand,
+  Added extends readonly AnyDefinedDestinationCommandGroup[],
+> = [DuplicateDestinationCommandNamesForGroups<Definitions, Added>] extends [
+  never,
+]
+  ? Added
+  : readonly [
+      DuplicateDestinationCommandNameError<
+        DuplicateDestinationCommandNamesForGroups<Definitions, Added>
+      >,
+    ];
+
+type RejectDuplicateDestinationCommandGroups<
+  Definitions extends AnyDefinedDestinationCommand,
+  Groups extends AnyDefinedDestinationCommandGroup,
+  Added extends readonly AnyDefinedDestinationCommandGroup[],
+> =
+  RejectDuplicateDestinationCommandGroupNames<
+    Groups,
+    Added
+  > extends infer GroupNameResult extends
+    readonly AnyDefinedDestinationCommandGroup[]
+    ? RejectDuplicateDestinationCommandSurfaceKeys<
+        Groups,
+        GroupNameResult
+      > extends infer SurfaceKeyResult extends
+        readonly AnyDefinedDestinationCommandGroup[]
+      ? RejectDuplicateDestinationCommandNamesForGroups<
+          Definitions,
+          SurfaceKeyResult
+        >
+      : RejectDuplicateDestinationCommandSurfaceKeys<Groups, GroupNameResult>
+    : RejectDuplicateDestinationCommandGroupNames<Groups, Added>;
+
 type NonEmptyString<Value extends string> = Value extends "" ? never : Value;
+
+type PublicDestinationCommandGroupIdentifier<Value extends string> =
+  NonEmptyString<Value> extends never
+    ? never
+    : Value extends typeof rootDestinationCommandGroupIdentifier
+      ? never
+      : Value;
+
+type DuplicateDestinationRootCommandSurfaceNames<
+  Groups extends AnyDefinedDestinationCommandGroup,
+  Added extends readonly AnyDefinedDestinationCommand[],
+> =
+  | Extract<
+      DestinationCommandGroupSurfaceKeys<Groups>,
+      AddedDestinationCommandFactoryNames<Added>
+    >
+  | DuplicateDestinationCommandFactoryNamesInAdded<Added>;
+
+type RejectDuplicateDestinationRootCommandSurfaceNames<
+  Groups extends AnyDefinedDestinationCommandGroup,
+  Added extends readonly AnyDefinedDestinationCommand[],
+> = [DuplicateDestinationRootCommandSurfaceNames<Groups, Added>] extends [never]
+  ? Added
+  : readonly [
+      DuplicateDestinationCommandFactoryNameError<
+        DuplicateDestinationRootCommandSurfaceNames<Groups, Added>
+      >,
+    ];
+
+type RejectDuplicateDestinationRootDefinitions<
+  Definitions extends AnyDefinedDestinationCommand,
+  Groups extends AnyDefinedDestinationCommandGroup,
+  Added extends readonly AnyDefinedDestinationCommand[],
+> =
+  RejectDuplicateDestinationCommandNames<
+    Definitions,
+    Added
+  > extends infer CommandNameResult extends
+    readonly AnyDefinedDestinationCommand[]
+    ? RejectDuplicateDestinationRootCommandSurfaceNames<
+        Groups,
+        CommandNameResult
+      >
+    : RejectDuplicateDestinationCommandNames<Definitions, Added>;
 
 const isRecord = (value: unknown): value is Record<PropertyKey, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -271,6 +580,16 @@ const isRecord = (value: unknown): value is Record<PropertyKey, unknown> =>
 const requireNonEmptyString = (value: unknown, label: string): void => {
   if (typeof value !== "string" || value.length === 0) {
     throw new Error(`${label} must be a non-empty string`);
+  }
+};
+
+const requirePublicDestinationCommandGroupIdentifier = (
+  value: string
+): void => {
+  if (value === rootDestinationCommandGroupIdentifier) {
+    throw new Error(
+      `Destination command group identifier "${rootDestinationCommandGroupIdentifier}" is reserved`
+    );
   }
 };
 
@@ -356,137 +675,41 @@ function requireDefinedDestinationCommand(
   }
 }
 
-export interface ImplementedDestinationPlugin<
-  Command extends DestinationCommand,
-  Commands,
-  R = never,
-> {
-  readonly commandDefinitions: DefinedDestinationCommands<Command>;
-  readonly commands: Commands;
-  readonly layer: Layer.Layer<DestinationPlugin, DestinationPluginError, R>;
-  provide<RProvided, Remainder>(
-    layer: Layer.Layer<RProvided, DestinationPluginError, Remainder>
-  ): ImplementedDestinationPlugin<
-    Command,
-    Commands,
-    Remainder | Exclude<R, RProvided>
-  >;
+function requireDefinedDestinationCommandGroup(
+  group: unknown
+): asserts group is AnyDefinedDestinationCommandGroup {
+  if (
+    !(
+      isRecord(group) &&
+      destinationCommandGroupDefinitionTypeId in group &&
+      typeof group.identifier === "string"
+    )
+  ) {
+    throw new Error("Destination plugin addGroup requires command groups");
+  }
 }
 
-export interface DestinationPluginDefinition<
-  Id extends string,
-  Definitions extends AnyDefinedDestinationCommand = never,
-> extends Pipeable {
-  add<const Added extends NonEmptyDestinationCommandDefinitions>(
-    ...definitions: RejectDuplicateDestinationDefinitions<Definitions, Added>
-  ): DestinationPluginDefinition<Id, Definitions | Added[number]>;
-  readonly commandDefinitions: DestinationPluginCommandDefinitions<Definitions>;
-  readonly commands: DestinationPluginCommands<Definitions>;
-  readonly definitions: Readonly<Record<string, Definitions>>;
-  readonly hasCommands: HasDestinationCommands<Definitions>;
-  readonly identifier: Id;
-  implement<Return>(
-    this: NonEmptyDestinationPluginDefinition<Id, Definitions>,
-    build: (
-      handlers: DestinationPluginHandlersFromPlugin<
-        NonEmptyDestinationPluginDefinition<Id, Definitions>
-      >
-    ) => ValidateDestinationPluginHandlersReturn<Return>
-  ): ImplementedDestinationPlugin<
-    CommandFromDefinitions<Definitions>,
-    DestinationPluginCommands<Definitions>,
-    DestinationPluginHandlersContext<Return>
-  >;
-  readonly [destinationPluginDefinitionTypeId]: {
-    readonly definitions: Definitions;
-    readonly id: Id;
-  };
+function requireDestinationCommandGroupCommands(
+  group: AnyDefinedDestinationCommandGroup
+): void {
+  if (!group.hasCommands) {
+    throw new Error(
+      `Destination command group "${group.identifier}" must define at least one command`
+    );
+  }
 }
 
-export type AnyDestinationPluginDefinition =
-  | DestinationPluginDefinition<string, AnyDefinedDestinationCommand>
-  | DestinationPluginDefinition<string, never>;
-
-export type NonEmptyDestinationPluginDefinition<
-  Id extends string = string,
-  Definitions extends
-    AnyDefinedDestinationCommand = AnyDefinedDestinationCommand,
-> = DestinationPluginDefinition<Id, Definitions> & {
-  readonly commandDefinitions: DefinedDestinationCommands<
-    CommandFromDefinitions<Definitions>
-  >;
-  readonly commands: DestinationPluginCommands<Definitions>;
-  readonly hasCommands: true;
-};
-
-export type AnyNonEmptyDestinationPluginDefinition =
-  NonEmptyDestinationPluginDefinition<string, AnyDefinedDestinationCommand>;
-
-export type DestinationPluginDefinitionDefinitions<Plugin> =
-  Plugin extends DestinationPluginDefinition<infer _Id, infer Definitions>
-    ? Definitions
-    : never;
-
-export type DestinationPluginDefinitionCommand<Plugin> = CommandFromDefinitions<
-  DestinationPluginDefinitionDefinitions<Plugin>
->;
-
-export type DestinationPluginDefinitionCommands<Plugin> =
-  DestinationPluginCommands<DestinationPluginDefinitionDefinitions<Plugin>>;
-
-const makeCommandDefinitions = <
-  Definitions extends AnyDefinedDestinationCommand,
->(
-  definitions: Readonly<Record<string, Definitions>>
-): DefinedDestinationCommands<CommandFromDefinitions<Definitions>> => {
-  const input: Record<
-    string,
-    DestinationCommandDefinition<DestinationCommand>
-  > = {};
-
-  for (const definition of Object.values(definitions)) {
-    input[definition.name] = {
-      ...(definition.identity === undefined
-        ? {}
-        : { identity: definition.identity }),
-      schema: definition.schema,
-    };
-  }
-
-  return makeDefinedDestinationCommands(input) as DefinedDestinationCommands<
-    CommandFromDefinitions<Definitions>
-  >;
-};
-
-const makeCommands = <Definitions extends AnyDefinedDestinationCommand>(
-  definitions: Readonly<Record<string, Definitions>>
-): DestinationPluginCommands<Definitions> => {
-  const commands: Record<string, DestinationCommandFactory> = {};
-
-  for (const definition of Object.values(definitions)) {
-    const factories = definition.make as DestinationCommandFactories;
-
-    for (const [name, factory] of Object.entries(factories)) {
-      if (Object.hasOwn(commands, name)) {
-        throw new Error(`Duplicate destination command factory: ${name}`);
-      }
-
-      commands[name] = factory;
-    }
-  }
-
-  return commands as DestinationPluginCommands<Definitions>;
-};
-
-const destinationPluginDefinitionProto = Object.assign(
+const destinationCommandGroupProto = Object.assign(
   Object.create(PipeablePrototype),
   {
     add(
-      this: AnyDestinationPluginDefinition,
+      this: AnyDefinedDestinationCommandGroup,
       ...toAdd: readonly AnyDefinedDestinationCommand[]
     ) {
       if (toAdd.length === 0) {
-        throw new Error("Destination plugin add requires at least one command");
+        throw new Error(
+          "Destination command group add requires at least one command"
+        );
       }
 
       const definitions: Record<string, AnyDefinedDestinationCommand> = {
@@ -517,8 +740,406 @@ const destinationPluginDefinitionProto = Object.assign(
         definitions[definition.name] = definition;
       }
 
+      return makeDestinationCommandGroup({
+        definitions,
+        identifier: this.identifier,
+        isTopLevel: this.isTopLevel,
+      });
+    },
+    topLevel(this: AnyDefinedDestinationCommandGroup) {
+      return makeDestinationCommandGroup({
+        definitions: this.definitions,
+        identifier: this.identifier,
+        isTopLevel: true,
+      });
+    },
+  }
+);
+
+const makeDestinationCommandGroup = <
+  const Id extends string,
+  Definitions extends AnyDefinedDestinationCommand,
+  const TopLevel extends boolean,
+>(options: {
+  readonly definitions: Readonly<Record<string, Definitions>>;
+  readonly identifier: Id;
+  readonly isTopLevel: TopLevel;
+}): DefinedDestinationCommandGroup<Id, Definitions, TopLevel> => {
+  const hasCommands = Object.keys(options.definitions).length > 0;
+
+  return Object.assign(Object.create(destinationCommandGroupProto), {
+    [destinationCommandGroupDefinitionTypeId]: undefined as never,
+    commands: makeGroupCommands(options.definitions),
+    definitions: options.definitions,
+    hasCommands,
+    identifier: options.identifier,
+    isTopLevel: options.isTopLevel,
+  }) as DefinedDestinationCommandGroup<Id, Definitions, TopLevel>;
+};
+
+export const defineDestinationCommandGroup = <const Id extends string>(
+  identifier: PublicDestinationCommandGroupIdentifier<Id>
+): DefinedDestinationCommandGroup<Id, never, false> => {
+  requireNonEmptyString(identifier, "Destination command group identifier");
+  requirePublicDestinationCommandGroupIdentifier(identifier);
+
+  return makeDestinationCommandGroup({
+    definitions: {},
+    identifier,
+    isTopLevel: false,
+  });
+};
+
+export interface ImplementedDestinationPlugin<
+  Command extends DestinationCommand,
+  Commands,
+  R = never,
+> {
+  readonly commandDefinitions: DefinedDestinationCommands<Command>;
+  readonly commands: Commands;
+  readonly layer: Layer.Layer<DestinationPlugin, DestinationPluginError, R>;
+  provide<RProvided, Remainder>(
+    layer: Layer.Layer<RProvided, DestinationPluginError, Remainder>
+  ): ImplementedDestinationPlugin<
+    Command,
+    Commands,
+    Remainder | Exclude<R, RProvided>
+  >;
+}
+
+export interface DestinationPluginDefinition<
+  Id extends string,
+  Definitions extends AnyDefinedDestinationCommand = never,
+  Groups extends AnyDefinedDestinationCommandGroup = never,
+> extends Pipeable {
+  add<const Added extends NonEmptyDestinationCommandDefinitions>(
+    ...definitions: RejectDuplicateDestinationRootDefinitions<
+      Definitions,
+      Groups,
+      Added
+    >
+  ): DestinationPluginDefinition<
+    Id,
+    Definitions | Added[number],
+    | Groups
+    | DefinedDestinationCommandGroup<
+        typeof rootDestinationCommandGroupIdentifier,
+        Added[number],
+        true
+      >
+  >;
+  addGroup<const Added extends NonEmptyDestinationCommandGroups>(
+    ...groups: RejectDuplicateDestinationCommandGroups<
+      Definitions,
+      Groups,
+      Added
+    >
+  ): DestinationPluginDefinition<
+    Id,
+    Definitions | DestinationCommandGroupDefinitionsInAdded<Added>,
+    Groups | Added[number]
+  >;
+  readonly commandDefinitions: DestinationPluginCommandDefinitions<Definitions>;
+  readonly commands: DestinationPluginCommandsFromGroups<Groups>;
+  readonly definitions: Readonly<Record<string, Definitions>>;
+  readonly groups: Readonly<Record<string, Groups>>;
+  readonly hasCommands: HasDestinationCommands<Definitions>;
+  readonly identifier: Id;
+  implement<Return>(
+    this: NonEmptyDestinationPluginDefinition<Id, Definitions, Groups>,
+    build: (
+      handlers: DestinationPluginHandlersFromPlugin<
+        NonEmptyDestinationPluginDefinition<Id, Definitions, Groups>
+      >
+    ) => ValidateDestinationPluginHandlersReturn<Return>
+  ): ImplementedDestinationPlugin<
+    CommandFromDefinitions<Definitions>,
+    DestinationPluginCommandsFromGroups<Groups>,
+    DestinationPluginHandlersContext<Return>
+  >;
+  readonly [destinationPluginDefinitionTypeId]: {
+    readonly definitions: Definitions;
+    readonly id: Id;
+  };
+}
+
+export interface AnyDestinationPluginDefinition extends Pipeable {
+  readonly commandDefinitions:
+    | DefinedDestinationCommands<DestinationCommand>
+    | undefined;
+  readonly commands: unknown;
+  readonly definitions: Readonly<Record<string, AnyDefinedDestinationCommand>>;
+  readonly groups: Readonly<Record<string, AnyDefinedDestinationCommandGroup>>;
+  readonly hasCommands: boolean;
+  readonly identifier: string;
+  readonly [destinationPluginDefinitionTypeId]: {
+    readonly definitions: AnyDefinedDestinationCommand;
+    readonly id: string;
+  };
+}
+
+export type NonEmptyDestinationPluginDefinition<
+  Id extends string = string,
+  Definitions extends
+    AnyDefinedDestinationCommand = AnyDefinedDestinationCommand,
+  Groups extends
+    AnyDefinedDestinationCommandGroup = AnyDefinedDestinationCommandGroup,
+> = DestinationPluginDefinition<Id, Definitions, Groups> & {
+  readonly commandDefinitions: DefinedDestinationCommands<
+    CommandFromDefinitions<Definitions>
+  >;
+  readonly commands: DestinationPluginCommandsFromGroups<Groups>;
+  readonly hasCommands: true;
+};
+
+export interface AnyNonEmptyDestinationPluginDefinition
+  extends AnyDestinationPluginDefinition {
+  readonly commandDefinitions: DefinedDestinationCommands<DestinationCommand>;
+  readonly hasCommands: true;
+}
+
+export type DestinationPluginDefinitionDefinitions<Plugin> =
+  Plugin extends DestinationPluginDefinition<
+    infer _Id,
+    infer Definitions,
+    infer _Groups
+  >
+    ? Definitions
+    : Plugin extends {
+          readonly definitions: Readonly<Record<string, infer Definitions>>;
+        }
+      ? Definitions extends AnyDefinedDestinationCommand
+        ? Definitions
+        : never
+      : never;
+
+export type DestinationPluginDefinitionGroups<Plugin> =
+  Plugin extends DestinationPluginDefinition<
+    infer _Id,
+    infer _Definitions,
+    infer Groups
+  >
+    ? Groups
+    : Plugin extends {
+          readonly groups: Readonly<Record<string, infer Groups>>;
+        }
+      ? Groups extends AnyDefinedDestinationCommandGroup
+        ? Groups
+        : never
+      : never;
+
+export type DestinationPluginDefinitionCommand<Plugin> = CommandFromDefinitions<
+  DestinationPluginDefinitionDefinitions<Plugin>
+>;
+
+export type DestinationPluginDefinitionCommands<Plugin> =
+  DestinationPluginCommandsFromGroups<
+    DestinationPluginDefinitionGroups<Plugin>
+  >;
+
+type DestinationPluginTopLevelDefinitions<Plugin> =
+  DestinationCommandGroupTopLevelDefinitions<
+    DestinationPluginDefinitionGroups<Plugin>
+  >;
+
+const makeCommandDefinitions = <
+  Definitions extends AnyDefinedDestinationCommand,
+>(
+  definitions: Readonly<Record<string, Definitions>>
+): DefinedDestinationCommands<CommandFromDefinitions<Definitions>> => {
+  const input: Record<
+    string,
+    DestinationCommandDefinition<DestinationCommand>
+  > = {};
+
+  for (const definition of Object.values(definitions)) {
+    input[definition.name] = {
+      ...(definition.identity === undefined
+        ? {}
+        : { identity: definition.identity }),
+      schema: definition.schema,
+    };
+  }
+
+  return makeDefinedDestinationCommands(input) as DefinedDestinationCommands<
+    CommandFromDefinitions<Definitions>
+  >;
+};
+
+const makeGroupCommands = <Definitions extends AnyDefinedDestinationCommand>(
+  definitions: Readonly<Record<string, Definitions>>
+): DestinationPluginCommands<Definitions> => {
+  const commands: Record<string, DestinationCommandFactory> = {};
+
+  for (const definition of Object.values(definitions)) {
+    const factories = definition.make as DestinationCommandFactories;
+
+    for (const [name, factory] of Object.entries(factories)) {
+      if (Object.hasOwn(commands, name)) {
+        throw new Error(`Duplicate destination command factory: ${name}`);
+      }
+
+      commands[name] = factory;
+    }
+  }
+
+  return commands as DestinationPluginCommands<Definitions>;
+};
+
+const makeCommands = <Groups extends AnyDefinedDestinationCommandGroup>(
+  groups: Readonly<Record<string, Groups>>
+): DestinationPluginCommandsFromGroups<Groups> => {
+  const commands: Record<string, unknown> = {};
+
+  for (const group of Object.values(groups)) {
+    if (group.isTopLevel) {
+      for (const [name, factory] of Object.entries(group.commands)) {
+        if (Object.hasOwn(commands, name)) {
+          throw new Error(`Duplicate destination command factory: ${name}`);
+        }
+
+        commands[name] = factory;
+      }
+
+      continue;
+    }
+
+    if (Object.hasOwn(commands, group.identifier)) {
+      throw new Error(
+        `Duplicate destination command namespace: ${group.identifier}`
+      );
+    }
+
+    commands[group.identifier] = group.commands;
+  }
+
+  return commands as DestinationPluginCommandsFromGroups<Groups>;
+};
+
+const destinationCommandSurfaceNames = (
+  groups: Readonly<Record<string, AnyDefinedDestinationCommandGroup>>
+): Set<string> => {
+  const names = new Set<string>();
+
+  for (const group of Object.values(groups)) {
+    if (group.isTopLevel) {
+      for (const name of Object.keys(group.commands)) {
+        names.add(name);
+      }
+
+      continue;
+    }
+
+    names.add(group.identifier);
+  }
+
+  return names;
+};
+
+const destinationPluginDefinitionProto = Object.assign(
+  Object.create(PipeablePrototype),
+  {
+    add(
+      this: AnyDestinationPluginDefinition,
+      ...toAdd: readonly AnyDefinedDestinationCommand[]
+    ) {
+      if (toAdd.length === 0) {
+        throw new Error("Destination plugin add requires at least one command");
+      }
+
+      const definitions: Record<string, AnyDefinedDestinationCommand> = {
+        ...this.definitions,
+      };
+      const groups: Record<string, AnyDefinedDestinationCommandGroup> = {
+        ...this.groups,
+      };
+      const commandSurfaceNames = destinationCommandSurfaceNames(groups);
+
+      for (const definition of toAdd) {
+        requireDefinedDestinationCommand(definition);
+
+        if (Object.hasOwn(definitions, definition.name)) {
+          throw new Error(
+            `Duplicate destination command definition: ${definition.name}`
+          );
+        }
+
+        for (const factoryName of Object.keys(definition.make)) {
+          if (commandSurfaceNames.has(factoryName)) {
+            throw new Error(
+              `Duplicate destination command factory: ${factoryName}`
+            );
+          }
+
+          commandSurfaceNames.add(factoryName);
+        }
+
+        definitions[definition.name] = definition;
+      }
+
+      const rootGroup =
+        groups[rootDestinationCommandGroupIdentifier] ??
+        makeDestinationCommandGroup({
+          definitions: {},
+          identifier: rootDestinationCommandGroupIdentifier,
+          isTopLevel: true,
+        });
+      const addRootDefinitions = rootGroup.add.bind(rootGroup) as unknown as (
+        ...definitions: readonly AnyDefinedDestinationCommand[]
+      ) => AnyDefinedDestinationCommandGroup;
+      groups[rootDestinationCommandGroupIdentifier] = addRootDefinitions(
+        ...toAdd
+      );
+
       return makeDestinationPluginDefinition({
         definitions,
+        groups,
+        identifier: this.identifier,
+      });
+    },
+    addGroup(
+      this: AnyDestinationPluginDefinition,
+      ...toAdd: readonly AnyDefinedDestinationCommandGroup[]
+    ) {
+      if (toAdd.length === 0) {
+        throw new Error(
+          "Destination plugin addGroup requires at least one command group"
+        );
+      }
+
+      const definitions: Record<string, AnyDefinedDestinationCommand> = {
+        ...this.definitions,
+      };
+      const groups: Record<string, AnyDefinedDestinationCommandGroup> = {
+        ...this.groups,
+      };
+
+      for (const group of toAdd) {
+        requireDefinedDestinationCommandGroup(group);
+        requireDestinationCommandGroupCommands(group);
+
+        if (Object.hasOwn(groups, group.identifier)) {
+          throw new Error(
+            `Duplicate destination command group: ${group.identifier}`
+          );
+        }
+
+        for (const definition of Object.values(group.definitions)) {
+          if (Object.hasOwn(definitions, definition.name)) {
+            throw new Error(
+              `Duplicate destination command definition: ${definition.name}`
+            );
+          }
+
+          definitions[definition.name] = definition;
+        }
+
+        groups[group.identifier] = group;
+      }
+
+      return makeDestinationPluginDefinition({
+        definitions,
+        groups,
         identifier: this.identifier,
       });
     },
@@ -560,10 +1181,12 @@ function requireDestinationPluginCommands(
 const makeDestinationPluginDefinition = <
   const Id extends string,
   Definitions extends AnyDefinedDestinationCommand,
+  Groups extends AnyDefinedDestinationCommandGroup,
 >(options: {
   readonly definitions: Readonly<Record<string, Definitions>>;
+  readonly groups: Readonly<Record<string, Groups>>;
   readonly identifier: Id;
-}): DestinationPluginDefinition<Id, Definitions> => {
+}): DestinationPluginDefinition<Id, Definitions, Groups> => {
   const hasCommands = Object.keys(options.definitions).length > 0;
 
   return Object.assign(Object.create(destinationPluginDefinitionProto), {
@@ -571,11 +1194,12 @@ const makeDestinationPluginDefinition = <
     commandDefinitions: hasCommands
       ? makeCommandDefinitions(options.definitions)
       : undefined,
-    commands: makeCommands(options.definitions),
+    commands: makeCommands(options.groups),
     definitions: options.definitions,
+    groups: options.groups,
     hasCommands,
     identifier: options.identifier,
-  }) as DestinationPluginDefinition<Id, Definitions>;
+  }) as DestinationPluginDefinition<Id, Definitions, Groups>;
 };
 
 export const defineDestinationPlugin = <const Id extends string>(
@@ -585,8 +1209,56 @@ export const defineDestinationPlugin = <const Id extends string>(
 
   return makeDestinationPluginDefinition({
     definitions: {},
+    groups: {},
     identifier,
   });
+};
+
+export const makeSingleCommandDestinationPluginDefinition = <
+  const Id extends string,
+  const GroupId extends string,
+  Definition extends AnyDefinedDestinationCommand,
+>(
+  identifier: NonEmptyString<Id>,
+  groupIdentifier: PublicDestinationCommandGroupIdentifier<GroupId>,
+  command: Definition
+): NonEmptyDestinationPluginDefinition<
+  Id,
+  Definition,
+  DefinedDestinationCommandGroup<GroupId, Definition, true>
+> => {
+  requireNonEmptyString(identifier, "Destination plugin identifier");
+  requireNonEmptyString(
+    groupIdentifier,
+    "Destination command group identifier"
+  );
+  requirePublicDestinationCommandGroupIdentifier(groupIdentifier);
+  requireDefinedDestinationCommand(command);
+
+  const definitions: Record<string, Definition> = {};
+  definitions[command.name] = command;
+
+  const group = makeDestinationCommandGroup({
+    definitions,
+    identifier: groupIdentifier,
+    isTopLevel: true,
+  });
+  const groups: Record<string, typeof group> = {};
+  groups[group.identifier] = group;
+
+  const plugin = makeDestinationPluginDefinition({
+    definitions,
+    groups,
+    identifier,
+  });
+
+  // A single branded command makes the plugin non-empty by construction; this
+  // narrows the generic result that TypeScript cannot prove from the record.
+  return plugin as NonEmptyDestinationPluginDefinition<
+    Id,
+    Definition,
+    DefinedDestinationCommandGroup<GroupId, Definition, true>
+  >;
 };
 
 export interface DestinationCommandHandlerContext<
@@ -612,6 +1284,81 @@ export interface DestinationPluginHandlers<
   R,
   Remaining extends AnyDefinedDestinationCommand,
 > extends Pipeable {
+  group<
+    const Name extends DestinationCommandGroupName<
+      DestinationCommandGroupWithRemainingDefinitions<
+        DestinationPluginDefinitionGroups<Plugin>,
+        Remaining
+      >
+    >,
+    Return,
+  >(
+    name: Name,
+    build: (
+      handlers: DestinationCommandGroupHandlers<
+        DestinationCommandGroupWithName<
+          DestinationCommandGroupWithRemainingDefinitions<
+            DestinationPluginDefinitionGroups<Plugin>,
+            Remaining
+          >,
+          Name
+        >,
+        never,
+        Extract<
+          Remaining,
+          DestinationCommandGroupDefinitions<
+            DestinationCommandGroupWithName<
+              DestinationCommandGroupWithRemainingDefinitions<
+                DestinationPluginDefinitionGroups<Plugin>,
+                Remaining
+              >,
+              Name
+            >
+          >
+        >,
+        Plugin
+      >
+    ) => ValidateDestinationCommandGroupHandlersReturn<Return>
+  ): DestinationPluginHandlers<
+    Plugin,
+    R | DestinationCommandGroupHandlersContext<Return>,
+    Exclude<
+      Remaining,
+      DestinationCommandGroupDefinitions<
+        DestinationCommandGroupWithName<
+          DestinationCommandGroupWithRemainingDefinitions<
+            DestinationPluginDefinitionGroups<Plugin>,
+            Remaining
+          >,
+          Name
+        >
+      >
+    >
+  >;
+  handle<
+    const Name extends DefinedDestinationCommandName<
+      Extract<Remaining, DestinationPluginTopLevelDefinitions<Plugin>>
+    >,
+    R1 = never,
+  >(
+    name: Name,
+    handler: DestinationCommandHandler<
+      DefinitionWithName<Remaining, Name>,
+      R1,
+      Plugin
+    >
+  ): DestinationPluginHandlers<Plugin, R | R1, ExcludeName<Remaining, Name>>;
+  readonly handlers: ReadonlyMap<string, DestinationPluginHandlerItem>;
+  readonly plugin: Plugin;
+}
+
+export interface DestinationCommandGroupHandlers<
+  Group extends AnyDefinedDestinationCommandGroup,
+  R,
+  Remaining extends AnyDefinedDestinationCommand,
+  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+> extends Pipeable {
+  readonly group: Group;
   handle<
     const Name extends DefinedDestinationCommandName<Remaining>,
     R1 = never,
@@ -622,7 +1369,12 @@ export interface DestinationPluginHandlers<
       R1,
       Plugin
     >
-  ): DestinationPluginHandlers<Plugin, R | R1, ExcludeName<Remaining, Name>>;
+  ): DestinationCommandGroupHandlers<
+    Group,
+    R | R1,
+    ExcludeName<Remaining, Name>,
+    Plugin
+  >;
   readonly handlers: ReadonlyMap<string, DestinationPluginHandlerItem>;
   readonly plugin: Plugin;
 }
@@ -662,6 +1414,28 @@ export type DestinationPluginHandlersContext<A> =
     ? R
     : never;
 
+export type ValidateDestinationCommandGroupHandlersReturn<A> =
+  A extends DestinationCommandGroupHandlers<
+    infer _Group,
+    infer _R,
+    infer Remaining,
+    infer _Plugin
+  >
+    ? [Remaining] extends [never]
+      ? A
+      : `Destination command not handled: ${DefinedDestinationCommandName<Remaining>}`
+    : "Must return destination command group handlers";
+
+export type DestinationCommandGroupHandlersContext<A> =
+  A extends DestinationCommandGroupHandlers<
+    infer _Group,
+    infer R,
+    infer _Remaining,
+    infer _Plugin
+  >
+    ? R
+    : never;
+
 const destinationPluginHandlersProto = Object.assign(
   Object.create(PipeablePrototype),
   {
@@ -677,10 +1451,81 @@ const destinationPluginHandlersProto = Object.assign(
         AnyNonEmptyDestinationPluginDefinition
       >
     ) {
-      const definition = this.plugin.definitions[name];
+      const definition = Object.values(this.plugin.groups).find(
+        (group) => group.isTopLevel && Object.hasOwn(group.definitions, name)
+      )?.definitions[name];
 
       if (definition === undefined) {
         throw new Error(`Destination command "${name}" is not defined`);
+      }
+
+      if (this.handlers.has(name)) {
+        throw new Error(`Destination command "${name}" already has a handler`);
+      }
+
+      this.handlers.set(name, {
+        definition,
+        handler,
+      });
+
+      return this;
+    },
+    group(
+      this: {
+        readonly handlers: Map<string, DestinationPluginHandlerItem>;
+        readonly plugin: AnyNonEmptyDestinationPluginDefinition;
+      },
+      name: string,
+      build: (
+        handlers: DestinationCommandGroupHandlers<
+          AnyDefinedDestinationCommandGroup,
+          unknown,
+          AnyDefinedDestinationCommand,
+          AnyNonEmptyDestinationPluginDefinition
+        >
+      ) => unknown
+    ) {
+      const group = this.plugin.groups[name];
+
+      if (group === undefined) {
+        throw new Error(`Destination command group "${name}" is not defined`);
+      }
+
+      if (group.isTopLevel) {
+        throw new Error(
+          `Destination command group "${name}" is top-level; use handlers.handle(...)`
+        );
+      }
+
+      build(makeGroupHandlers(this.plugin, group, this.handlers));
+
+      return this;
+    },
+  }
+);
+
+const destinationCommandGroupHandlersProto = Object.assign(
+  Object.create(PipeablePrototype),
+  {
+    handle(
+      this: {
+        readonly group: AnyDefinedDestinationCommandGroup;
+        readonly handlers: Map<string, DestinationPluginHandlerItem>;
+        readonly plugin: AnyNonEmptyDestinationPluginDefinition;
+      },
+      name: string,
+      handler: DestinationCommandHandler<
+        AnyDefinedDestinationCommand,
+        unknown,
+        AnyNonEmptyDestinationPluginDefinition
+      >
+    ) {
+      const definition = this.group.definitions[name];
+
+      if (definition === undefined) {
+        throw new Error(
+          `Destination command "${name}" is not defined in group "${this.group.identifier}"`
+        );
       }
 
       if (this.handlers.has(name)) {
@@ -705,6 +1550,25 @@ const makeHandlers = <Plugin extends AnyNonEmptyDestinationPluginDefinition>(
     plugin,
   });
 
+const makeGroupHandlers = <
+  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+  Group extends AnyDefinedDestinationCommandGroup,
+>(
+  plugin: Plugin,
+  group: Group,
+  handlers: Map<string, DestinationPluginHandlerItem>
+): DestinationCommandGroupHandlers<
+  Group,
+  never,
+  DestinationCommandGroupDefinitions<Group>,
+  Plugin
+> =>
+  Object.assign(Object.create(destinationCommandGroupHandlersProto), {
+    group,
+    handlers,
+    plugin,
+  });
+
 const isDestinationPluginHandlers = (
   value: unknown
 ): value is DestinationPluginHandlers<
@@ -717,7 +1581,7 @@ const isDestinationPluginHandlers = (
   "handlers" in value &&
   (value as { readonly handlers?: unknown }).handlers instanceof Map;
 
-const isDefinedDestinationCommand = (
+export const isDefinedDestinationCommand = (
   definition: unknown
 ): definition is AnyDefinedDestinationCommand =>
   isRecord(definition) && destinationCommandDefinitionTypeId in definition;
@@ -903,16 +1767,15 @@ const makeImplementedDestinationPlugin = <
   readonly plugin: Plugin;
 }): ImplementedDestinationPlugin<
   DestinationPluginDefinitionCommand<Plugin>,
-  DestinationPluginCommands<DestinationPluginDefinitionDefinitions<Plugin>>,
+  DestinationPluginDefinitionCommands<Plugin>,
   R
 > => ({
   commandDefinitions: options.plugin
     .commandDefinitions as DefinedDestinationCommands<
     DestinationPluginDefinitionCommand<Plugin>
   >,
-  commands: options.plugin.commands as DestinationPluginCommands<
-    DestinationPluginDefinitionDefinitions<Plugin>
-  >,
+  commands: options.plugin
+    .commands as DestinationPluginDefinitionCommands<Plugin>,
   layer: options.layer,
   provide: (providedLayer) =>
     makeImplementedDestinationPlugin({
@@ -920,6 +1783,58 @@ const makeImplementedDestinationPlugin = <
       plugin: options.plugin,
     }),
 });
+
+export const makeImplementedSingleCommandDestinationPlugin = <
+  Definition extends AnyDefinedDestinationCommand,
+  Plugin extends NonEmptyDestinationPluginDefinition<
+    string,
+    Definition,
+    DefinedDestinationCommandGroup<string, Definition, true>
+  >,
+  R,
+>(
+  plugin: Plugin,
+  command: Definition,
+  handler: DestinationCommandHandler<Definition, R, Plugin>
+): ImplementedDestinationPlugin<
+  DefinedDestinationCommandCommand<Definition>,
+  DestinationPluginDefinitionCommands<Plugin>,
+  R
+> => {
+  requireDestinationPluginCommands(plugin);
+  requireDefinedDestinationCommand(command);
+
+  if (plugin.definitions[command.name] !== command) {
+    throw new Error(
+      `Destination plugin does not define command: ${command.name}`
+    );
+  }
+
+  return makeImplementedDestinationPlugin({
+    layer: Layer.effect(
+      DestinationPluginService,
+      Effect.gen(function* () {
+        const services = yield* Effect.context<R>();
+        const handlers = new Map<string, DestinationPluginHandlerItem>([
+          [
+            command.name,
+            {
+              definition: command,
+              // The runtime handler map erases the specific command name; the
+              // single-command helper preserves it at the public handler input.
+              handler: handler as DestinationPluginHandlerItem["handler"],
+            },
+          ],
+        ]);
+
+        return {
+          execute: makeExecute(plugin, handlers, services),
+        };
+      })
+    ),
+    plugin,
+  });
+};
 
 export const DestinationPluginBuilder = {
   layer,

@@ -85,8 +85,11 @@ The typed command produced by a transformation pipeline and executed by a destin
 **Destination Command Definition**:
 A destination-owned definition that validates a destination command kind and classifies whether it is identity-bearing or side-effect-only. Normal migration pipelines should use destination-owned command factories rather than constructing command definition records directly.
 
+**Destination Command Group**:
+A destination-owned namespace of destination command definitions. Grouped command factories are exposed under `commands.<group>` unless the group is marked top-level, in which case its factories are exposed directly under `commands`.
+
 **Destination Plugin Definition**:
-A destination-owned group of uniquely named destination command definitions. Plugin definitions may start empty while being built, but must be non-empty before they compile to the runtime destination plugin service.
+A destination-owned set of uniquely named destination command groups and command definitions. Simple plugin definitions may add commands directly as root-level sugar, but plugin definitions must be non-empty before they compile to the runtime destination plugin service.
 
 **Destination Command Schema**:
 A no-service Effect schema for a destination command. It validates pipeline-facing command values and must have the same encoded and decoded TypeScript shape.
@@ -217,10 +220,12 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A **Migration Reference Lookup** may return a **Needs Update** item state as a usable reference because the **Destination Identity** already exists.
 - A **Transformation Pipeline** transforms exactly one **Source Item** into one **Destination Command Plan**.
 - A **Destination Command Plan** may contain one or more ordered **Destination Commands**.
-- A **Destination Plugin** owns the **Destination Command Definitions** for the command kinds it accepts.
+- A **Destination Plugin Definition** owns the **Destination Command Groups** for the command kinds it accepts.
+- A **Destination Command Group** owns related **Destination Command Definitions**.
 - A **Destination Command Definition** classifies its command kind as identity-bearing or side-effect-only.
-- A **Destination Plugin Definition** groups uniquely named **Destination Command Definitions** and may be implemented with command handlers that compile to the runtime **Destination Plugin** service.
-- A **Destination Plugin Definition** must contain at least one **Destination Command Definition** before it can compile to a runtime **Destination Plugin** service.
+- A **Destination Plugin Definition** may expose grouped command factories under `destination.commands.<group>` or top-level command factories directly under `destination.commands`.
+- A **Destination Plugin Definition** may be implemented with command handlers that compile to the runtime **Destination Plugin** service.
+- A **Destination Plugin Definition** must contain at least one **Destination Command Definition** through its **Destination Command Groups** before it can compile to a runtime **Destination Plugin** service.
 - A **Destination Command Schema** validates already-decoded command values and must not change value representation between its encoded and decoded sides.
 - A **Destination Entry Field Schema** validates pipeline-produced values; source plugins decode external raw data before the pipeline, and destination plugins encode to destination-native payloads internally.
 - A **Destination Entry Field Schema** must not change value representation between its encoded and decoded sides.

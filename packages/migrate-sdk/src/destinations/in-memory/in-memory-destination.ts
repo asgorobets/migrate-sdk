@@ -9,13 +9,14 @@ import type {
 import { makeDestinationCommandResult } from "../../domain/destination.ts";
 import {
   type AnyDefinedDestinationCommand,
-  type AnyNonEmptyDestinationPluginDefinition,
-  type DestinationPluginDefinitionCommand,
-  type DestinationPluginDefinitionCommands,
-  type DestinationPluginHandlers,
-  type DestinationPluginHandlersFromPlugin,
+  type DefinedDestinationCommand,
+  type DefinedDestinationCommandCommand,
   defineDestinationCommand,
+  defineDestinationCommandGroup,
   defineDestinationPlugin,
+  isDefinedDestinationCommand,
+  makeImplementedSingleCommandDestinationPlugin,
+  makeSingleCommandDestinationPluginDefinition,
 } from "../../domain/destination-plugin-definition.ts";
 import { DestinationPluginError } from "../../domain/errors.ts";
 import type {
@@ -59,19 +60,21 @@ export type InMemoryDestinationExecute<C extends DestinationCommand> = (
   | Effect.Effect<DestinationCommandResultInput, DestinationPluginError>;
 
 export interface InMemoryDestinationOptions<
-  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+  Definition extends AnyDefinedDestinationCommand,
 > {
+  readonly command: Definition;
   readonly execute: InMemoryDestinationExecute<
-    DestinationPluginDefinitionCommand<Plugin>
+    InMemoryDestinationCommandFromDefinition<Definition>
   >;
-  readonly plugin: Plugin;
   readonly transientFailures?: InMemoryDestinationTransientFailures;
 }
 
 export type InMemoryDestination<
-  Plugin extends AnyNonEmptyDestinationPluginDefinition,
-> = ConfiguredDestinationPlugin<DestinationPluginDefinitionCommand<Plugin>> & {
-  readonly commands: DestinationPluginDefinitionCommands<Plugin>;
+  Definition extends AnyDefinedDestinationCommand,
+> = ConfiguredDestinationPlugin<
+  InMemoryDestinationCommandFromDefinition<Definition>
+> & {
+  readonly commands: InMemoryDestinationFactoriesFromDefinition<Definition>;
 };
 
 export interface InMemoryDestinationTransientFailures {
@@ -86,12 +89,24 @@ export interface InMemoryDestinationInspection<C extends DestinationCommand> {
 }
 
 export interface InMemoryDestinationFixture<
-  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+  Definition extends AnyDefinedDestinationCommand,
 > extends InMemoryDestinationInspection<
-    DestinationPluginDefinitionCommand<Plugin>
+    InMemoryDestinationCommandFromDefinition<Definition>
   > {
-  readonly destination: InMemoryDestination<Plugin>;
+  readonly destination: InMemoryDestination<Definition>;
 }
+
+type InMemoryDestinationCommandFromDefinition<Definition> =
+  DefinedDestinationCommandCommand<Definition>;
+
+type InMemoryDestinationFactoriesFromDefinition<Definition> =
+  Definition extends DefinedDestinationCommand<
+    infer _Name,
+    infer _Command,
+    infer Factories
+  >
+    ? Factories
+    : never;
 
 export type InMemoryEntryFieldSchema<Fields extends object = object> =
   Schema.Codec<Fields, Fields, never, never>;
@@ -265,9 +280,9 @@ const assertTransientFailures = (value: unknown): void => {
 };
 
 const assertInMemoryDestinationOptions = <
-  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+  Definition extends AnyDefinedDestinationCommand,
 >(
-  options: InMemoryDestinationInternalOptions<Plugin>
+  options: InMemoryDestinationInternalOptions<Definition>
 ): void => {
   const input = options as unknown;
 
@@ -275,13 +290,9 @@ const assertInMemoryDestinationOptions = <
     throw new Error("In-memory destination options must be an object");
   }
 
-  if (
-    !isRecord(input.plugin) ||
-    input.plugin.hasCommands !== true ||
-    input.plugin.commandDefinitions === undefined
-  ) {
+  if (!isDefinedDestinationCommand(input.command)) {
     throw new Error(
-      "In-memory destination requires a plugin with at least one command"
+      "In-memory destination requires a destination command definition"
     );
   }
 
@@ -354,10 +365,10 @@ const assertInMemoryEntryDestinationOptions = <
 };
 
 interface InMemoryDestinationInternalOptions<
-  Plugin extends AnyNonEmptyDestinationPluginDefinition,
-> extends InMemoryDestinationOptions<Plugin> {
+  Definition extends AnyDefinedDestinationCommand,
+> extends InMemoryDestinationOptions<Definition> {
   readonly state?: InMemoryDestinationState<
-    DestinationPluginDefinitionCommand<Plugin>
+    InMemoryDestinationCommandFromDefinition<Definition>
   >;
 }
 
@@ -408,47 +419,88 @@ const missingEntryPublishError = (
     },
   });
 
-const addInMemoryDestinationHandlers = <
-  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+type InMemoryRuntimeEntryCommand =
+  | {
+      readonly contentType: string;
+      readonly fields: object;
+      readonly kind: "UpsertEntry";
+    }
+  | {
+      readonly contentType: string;
+      readonly kind: "PublishEntry";
+    };
+
+const makeUpsertEntryCommand = <
+  const ContentType extends string,
+  const Fields extends object,
 >(
-  plugin: Plugin,
-  initialHandlers: DestinationPluginHandlersFromPlugin<Plugin>,
-  execute: (
-    command: DestinationPluginDefinitionCommand<Plugin>,
-    context: DestinationCommandContext
-  ) => Effect.Effect<DestinationCommandResultInput, DestinationPluginError>
-): DestinationPluginHandlers<Plugin, never, never> => {
-  let handlers = initialHandlers as unknown as DestinationPluginHandlers<
-    Plugin,
-    never,
-    AnyDefinedDestinationCommand
-  >;
+  contentType: ContentType,
+  options: InMemoryUpsertEntryCommandOptions<Fields>
+) => {
+  const UpsertEntry = Schema.Struct({
+    contentType: Schema.Literal(contentType),
+    fields: options.fields,
+    kind: Schema.Literal("UpsertEntry"),
+  });
+  type UpsertEntry = typeof UpsertEntry.Type;
 
-  for (const definition of Object.values(plugin.definitions)) {
-    handlers = handlers.handle(definition.name, ({ command, context }) =>
-      execute(command as DestinationPluginDefinitionCommand<Plugin>, context)
-    ) as unknown as DestinationPluginHandlers<
-      Plugin,
-      never,
-      AnyDefinedDestinationCommand
-    >;
-  }
-
-  return handlers as unknown as DestinationPluginHandlers<Plugin, never, never>;
+  return defineDestinationCommand("UpsertEntry", {
+    identity: true,
+    make: {
+      upsertEntry: (fields: Fields): UpsertEntry => ({
+        contentType,
+        fields,
+        kind: "UpsertEntry",
+      }),
+    },
+    schema: UpsertEntry,
+  });
 };
 
-const makeLayerWithState = <
-  Plugin extends AnyNonEmptyDestinationPluginDefinition,
->(
-  options: InMemoryDestinationInternalOptions<Plugin>
-): Layer.Layer<DestinationPlugin, DestinationPluginError> => {
-  assertInMemoryDestinationOptions(options);
+const makePublishEntryCommand = <const ContentType extends string>(
+  contentType: ContentType
+) => {
+  const PublishEntry = Schema.Struct({
+    contentType: Schema.Literal(contentType),
+    kind: Schema.Literal("PublishEntry"),
+  });
+  type PublishEntry = typeof PublishEntry.Type;
 
-  const state =
-    options.state ?? makeState<DestinationPluginDefinitionCommand<Plugin>>();
+  return defineDestinationCommand("PublishEntry", {
+    identity: false,
+    make: {
+      publishEntry: (): PublishEntry => ({
+        contentType,
+        kind: "PublishEntry",
+      }),
+    },
+    schema: PublishEntry,
+  });
+};
+
+const makeOneCommandPluginDefinition = <
+  Definition extends AnyDefinedDestinationCommand,
+>(
+  command: Definition
+) =>
+  makeSingleCommandDestinationPluginDefinition(
+    "in-memory-command",
+    "commands",
+    command
+  );
+
+const makeImplementedOneCommandDestination = <
+  Definition extends AnyDefinedDestinationCommand,
+>(
+  options: InMemoryDestinationInternalOptions<Definition>,
+  state: InMemoryDestinationState<
+    InMemoryDestinationCommandFromDefinition<Definition>
+  >
+) => {
+  const plugin = makeOneCommandPluginDefinition(options.command);
   let remainingExecuteFailures = options.transientFailures?.execute ?? 0;
   const executeWithState = (
-    command: DestinationPluginDefinitionCommand<Plugin>,
+    command: InMemoryDestinationCommandFromDefinition<Definition>,
     context: DestinationCommandContext
   ): Effect.Effect<DestinationCommandResultInput, DestinationPluginError> =>
     Effect.gen(function* () {
@@ -471,12 +523,25 @@ const makeLayerWithState = <
 
       return resultInput;
     });
-  const destinationPlugin = options.plugin.implement((handlers) =>
-    addInMemoryDestinationHandlers(
-      options.plugin,
-      handlers as DestinationPluginHandlersFromPlugin<Plugin>,
-      executeWithState
-    )
+
+  return makeImplementedSingleCommandDestinationPlugin(
+    plugin,
+    options.command,
+    ({ command, context }) => executeWithState(command, context)
+  );
+};
+
+const makeLayerWithState = <Definition extends AnyDefinedDestinationCommand>(
+  options: InMemoryDestinationInternalOptions<Definition>
+): Layer.Layer<DestinationPlugin, DestinationPluginError> => {
+  assertInMemoryDestinationOptions(options);
+
+  const state =
+    options.state ??
+    makeState<InMemoryDestinationCommandFromDefinition<Definition>>();
+  const destinationPlugin = makeImplementedOneCommandDestination(
+    options,
+    state
   );
 
   return Layer.effect(
@@ -497,35 +562,62 @@ const makeLayerWithState = <
   ).pipe(Layer.provide(destinationPlugin.layer));
 };
 
-const makeLayer = <Plugin extends AnyNonEmptyDestinationPluginDefinition>(
-  options: InMemoryDestinationOptions<Plugin>
+const makeLayer = <Definition extends AnyDefinedDestinationCommand>(
+  options: InMemoryDestinationOptions<Definition>
 ): Layer.Layer<DestinationPlugin, DestinationPluginError> =>
   makeLayerWithState(options);
 
-const makeWithState = <Plugin extends AnyNonEmptyDestinationPluginDefinition>(
-  options: InMemoryDestinationInternalOptions<Plugin>
-): InMemoryDestination<Plugin> => {
+const makeWithState = <Definition extends AnyDefinedDestinationCommand>(
+  options: InMemoryDestinationInternalOptions<Definition>
+): InMemoryDestination<Definition> => {
   assertInMemoryDestinationOptions(options);
 
+  const state =
+    options.state ??
+    makeState<InMemoryDestinationCommandFromDefinition<Definition>>();
+  const implementedPlugin = makeImplementedOneCommandDestination(
+    options,
+    state
+  );
+
   return {
-    commandDefinitions: options.plugin
-      .commandDefinitions as ConfiguredDestinationPlugin<
-      DestinationPluginDefinitionCommand<Plugin>
-    >["commandDefinitions"],
-    commands: options.plugin
-      .commands as DestinationPluginDefinitionCommands<Plugin>,
-    layer: makeLayerWithState(options),
+    commandDefinitions:
+      implementedPlugin.commandDefinitions as ConfiguredDestinationPlugin<
+        InMemoryDestinationCommandFromDefinition<Definition>
+      >["commandDefinitions"],
+    commands: options.command
+      .make as InMemoryDestinationFactoriesFromDefinition<Definition>,
+    layer: Layer.effect(
+      DestinationPlugin,
+      Effect.gen(function* () {
+        const destinationPlugin = yield* DestinationPlugin;
+
+        return {
+          execute: Effect.fn("InMemoryDestination.execute")(
+            (command, context) =>
+              Effect.sync(() => {
+                state.executeAttempts += 1;
+              }).pipe(
+                Effect.flatMap(() =>
+                  destinationPlugin.execute(command, context)
+                )
+              )
+          ),
+        };
+      })
+    ).pipe(Layer.provide(implementedPlugin.layer)),
   };
 };
 
-const make = <Plugin extends AnyNonEmptyDestinationPluginDefinition>(
-  options: InMemoryDestinationOptions<Plugin>
-): InMemoryDestination<Plugin> => makeWithState(options);
+const make = <Definition extends AnyDefinedDestinationCommand>(
+  options: InMemoryDestinationOptions<Definition>
+): InMemoryDestination<Definition> => makeWithState(options);
 
-const fixture = <Plugin extends AnyNonEmptyDestinationPluginDefinition>(
-  options: InMemoryDestinationOptions<Plugin>
-): InMemoryDestinationFixture<Plugin> => {
-  const state = makeState<DestinationPluginDefinitionCommand<Plugin>>();
+const fixture = <Definition extends AnyDefinedDestinationCommand>(
+  options: InMemoryDestinationOptions<Definition>
+): InMemoryDestinationFixture<Definition> => {
+  const state =
+    makeState<InMemoryDestinationCommandFromDefinition<Definition>>();
   const destination = makeWithState({
     ...options,
     state,
@@ -547,64 +639,9 @@ const makeEntriesWithState = <
 
   const state =
     options.state ?? makeState<InMemoryEntryCommand<ContentType, Commands>>();
-  const definitions: AnyDefinedDestinationCommand[] = [];
   const upsertEntryOptions = options.commands.upsertEntry;
-
-  if (upsertEntryOptions !== undefined) {
-    const fieldsSchema = upsertEntryOptions.fields as InMemoryEntryFieldSchema;
-    const upsertEntrySchema = Schema.Struct({
-      contentType: Schema.Literal(options.contentType),
-      fields: fieldsSchema,
-      kind: Schema.Literal("UpsertEntry"),
-    });
-    const upsertEntry = defineDestinationCommand("UpsertEntry", {
-      identity: true,
-      make: {
-        upsertEntry: (fields: object) => ({
-          contentType: options.contentType,
-          fields,
-          kind: "UpsertEntry" as const,
-        }),
-      },
-      schema: upsertEntrySchema,
-    });
-
-    definitions.push(upsertEntry);
-  }
-
-  if (options.commands.publishEntry === true) {
-    const publishEntrySchema = Schema.Struct({
-      contentType: Schema.Literal(options.contentType),
-      kind: Schema.Literal("PublishEntry"),
-    });
-    const publishEntry = defineDestinationCommand("PublishEntry", {
-      identity: false,
-      make: {
-        publishEntry: () => ({
-          contentType: options.contentType,
-          kind: "PublishEntry" as const,
-        }),
-      },
-      schema: publishEntrySchema,
-    });
-
-    definitions.push(publishEntry);
-  }
-
-  const [firstDefinition, ...remainingDefinitions] = definitions;
-
-  if (firstDefinition === undefined) {
-    throw new Error(
-      "In-memory entry destination must define at least one command"
-    );
-  }
-
-  const pluginDefinition = defineDestinationPlugin("in-memory-entries").add(
-    firstDefinition,
-    ...remainingDefinitions
-  );
   const execute = (
-    command: InMemoryEntryCommand<ContentType, Commands>,
+    command: InMemoryRuntimeEntryCommand,
     context: DestinationCommandContext
   ): Effect.Effect<DestinationCommandResultInput, DestinationPluginError> =>
     Effect.gen(function* () {
@@ -652,7 +689,7 @@ const makeEntriesWithState = <
     });
   let remainingExecuteFailures = options.transientFailures?.execute ?? 0;
   const executeWithState = (
-    command: InMemoryEntryCommand<ContentType, Commands>,
+    command: InMemoryRuntimeEntryCommand,
     context: DestinationCommandContext
   ): Effect.Effect<DestinationCommandResultInput, DestinationPluginError> =>
     Effect.gen(function* () {
@@ -665,24 +702,82 @@ const makeEntriesWithState = <
       const result = makeDestinationCommandResult(resultInput);
 
       state.executions.push({
-        command,
+        command: command as InMemoryEntryCommand<ContentType, Commands>,
         context,
         result,
       });
 
       return resultInput;
     });
-  const implementedPlugin = pluginDefinition.implement((handlers) =>
-    addInMemoryDestinationHandlers(
-      pluginDefinition,
-      handlers as DestinationPluginHandlersFromPlugin<typeof pluginDefinition>,
-      (command, context) =>
-        executeWithState(
-          command as InMemoryEntryCommand<ContentType, Commands>,
-          context
+  let implementedPlugin: {
+    readonly commandDefinitions: ConfiguredDestinationPlugin<
+      InMemoryEntryCommand<ContentType, Commands>
+    >["commandDefinitions"];
+    readonly commands: unknown;
+    readonly layer: Layer.Layer<DestinationPlugin, DestinationPluginError>;
+  };
+
+  if (
+    upsertEntryOptions !== undefined &&
+    options.commands.publishEntry === true
+  ) {
+    const upsertEntry = makeUpsertEntryCommand(
+      options.contentType,
+      upsertEntryOptions
+    );
+    const publishEntry = makePublishEntryCommand(options.contentType);
+    const pluginDefinition = defineDestinationPlugin(
+      "in-memory-entries"
+    ).addGroup(
+      defineDestinationCommandGroup("entries")
+        .topLevel()
+        .add(upsertEntry, publishEntry)
+    );
+
+    implementedPlugin = pluginDefinition.implement((handlers) =>
+      handlers
+        .handle("UpsertEntry", ({ command, context }) =>
+          executeWithState(command, context)
         )
-    )
-  );
+        .handle("PublishEntry", ({ command, context }) =>
+          executeWithState(command, context)
+        )
+    ) as unknown as typeof implementedPlugin;
+  } else if (upsertEntryOptions !== undefined) {
+    const upsertEntry = makeUpsertEntryCommand(
+      options.contentType,
+      upsertEntryOptions
+    );
+    const pluginDefinition = defineDestinationPlugin(
+      "in-memory-entries"
+    ).addGroup(
+      defineDestinationCommandGroup("entries").topLevel().add(upsertEntry)
+    );
+
+    implementedPlugin = pluginDefinition.implement((handlers) =>
+      handlers.handle("UpsertEntry", ({ command, context }) =>
+        executeWithState(command, context)
+      )
+    ) as unknown as typeof implementedPlugin;
+  } else if (options.commands.publishEntry === true) {
+    const publishEntry = makePublishEntryCommand(options.contentType);
+    const pluginDefinition = defineDestinationPlugin(
+      "in-memory-entries"
+    ).addGroup(
+      defineDestinationCommandGroup("entries").topLevel().add(publishEntry)
+    );
+
+    implementedPlugin = pluginDefinition.implement((handlers) =>
+      handlers.handle("PublishEntry", ({ command, context }) =>
+        executeWithState(command, context)
+      )
+    ) as unknown as typeof implementedPlugin;
+  } else {
+    throw new Error(
+      "In-memory entry destination must define at least one command"
+    );
+  }
+
   const layer = Layer.effect(
     DestinationPlugin,
     Effect.gen(function* () {

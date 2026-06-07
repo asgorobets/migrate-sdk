@@ -6,7 +6,6 @@ import {
   DestinationPlugin,
   DestinationPluginError,
   defineDestinationCommand,
-  defineDestinationPlugin,
   InMemoryDestinationPlugin,
   toMigrationDefinitionId,
   toMigrationRunId,
@@ -41,9 +40,6 @@ const indexRecordCommand = defineDestinationCommand("IndexRecord", {
   },
   schema: IndexRecordCommand,
 });
-
-const SearchIndexPlugin =
-  defineDestinationPlugin("search-index").add(indexRecordCommand);
 
 const commandContext: DestinationCommandContext = {
   definitionId: toMigrationDefinitionId("articles"),
@@ -191,20 +187,31 @@ describe("InMemoryDestinationPlugin.makeEntries", () => {
     expect(() =>
       makeUnsafe({
         execute: () => ({}),
-        plugin: defineDestinationPlugin("empty-runtime-plugin"),
+        command: {},
       })
     ).toThrow(
-      "In-memory destination requires a plugin with at least one command"
+      "In-memory destination requires a destination command definition"
     );
     expect(() =>
       makeUnsafe({
-        plugin: SearchIndexPlugin,
+        execute: () => ({}),
+        command: {
+          name: "IndexRecord",
+          schema: IndexRecordCommand,
+        },
+      })
+    ).toThrow(
+      "In-memory destination requires a destination command definition"
+    );
+    expect(() =>
+      makeUnsafe({
+        command: indexRecordCommand,
       })
     ).toThrow("In-memory destination execute must be a function");
     expect(() =>
       makeUnsafe({
         execute: () => ({}),
-        plugin: SearchIndexPlugin,
+        command: indexRecordCommand,
         transientFailures: {
           execute: 1.5,
         },
@@ -223,7 +230,7 @@ describe("InMemoryDestinationPlugin.makeEntries", () => {
           destinationIdentity: `search:${command.record.objectId}`,
         };
       },
-      plugin: SearchIndexPlugin,
+      command: indexRecordCommand,
     });
     const command = destination.commands.indexRecord({
       objectId: "article-1",

@@ -31,12 +31,14 @@ export type {
 export { makeDestinationCommandResult } from "./domain/destination.ts";
 
 export type {
+  DefinedDestinationCommandGroup,
   DefinedDestinationCommand,
   DestinationCommandHandler,
   DestinationCommandHandlerContext,
 } from "./domain/destination-plugin-definition.ts";
 export {
   defineDestinationCommand,
+  defineDestinationCommandGroup,
   defineDestinationPlugin,
 } from "./domain/destination-plugin-definition.ts";
 

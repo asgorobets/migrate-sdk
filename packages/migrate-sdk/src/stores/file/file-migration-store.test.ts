@@ -20,7 +20,6 @@ import {
   type DestinationCommandContext,
   type DestinationCommandResultInput,
   defineDestinationCommand,
-  defineDestinationPlugin,
   defineMigration,
   defineSourcePlugin,
   MigrationStore,
@@ -47,9 +46,6 @@ const upsertEntryCommand = defineDestinationCommand("UpsertEntry", {
   identity: true,
   schema: UpsertEntryCommand,
 });
-
-const UpsertEntryPlugin =
-  defineDestinationPlugin("test-upsert-entry").add(upsertEntryCommand);
 
 const executeTestUpsertEntryCommand = (
   _command: UpsertEntryCommand,
@@ -142,11 +138,11 @@ const makeTestUpsertEntryDestination = (
   } = {}
 ) => {
   const fixture = InMemoryDestinationTesting.fixture({
+    command: upsertEntryCommand,
     execute: trackDestinationExecute(
       options.state,
       executeTestUpsertEntryCommand
     ),
-    plugin: UpsertEntryPlugin,
   });
   options.state?.bind(fixture);
 
