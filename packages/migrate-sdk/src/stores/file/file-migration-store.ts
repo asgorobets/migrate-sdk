@@ -502,6 +502,11 @@ const makeLayerWithoutPlatform = (
         }
       );
 
+      const deleteItemState = Effect.fn("FileMigrationStore.deleteItemState")(
+        (definitionId: MigrationDefinitionId, identity: SourceIdentity) =>
+          removeFileIfExists(fs, paths.itemState(definitionId, identity))
+      );
+
       const upsertItemState = Effect.fn("FileMigrationStore.upsertItemState")(
         (state: MigrationItemState) =>
           writeRecordAtomic(
@@ -675,6 +680,7 @@ const makeLayerWithoutPlatform = (
         setSourceCursor,
         getItemState,
         listItemStates,
+        deleteItemState,
         upsertItemState,
         createRunId,
         beginRun,

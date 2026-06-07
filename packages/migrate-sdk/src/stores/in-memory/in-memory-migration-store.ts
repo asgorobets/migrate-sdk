@@ -119,6 +119,13 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         )
     );
 
+    const deleteItemState = Effect.fn("InMemoryMigrationStore.deleteItemState")(
+      (definitionId: MigrationDefinitionId, identity: SourceIdentity) =>
+        Effect.sync(() => {
+          state.itemStates.delete(itemStateKey(definitionId, identity));
+        })
+    );
+
     const upsertItemState = Effect.fn("InMemoryMigrationStore.upsertItemState")(
       (itemState: MigrationItemState) =>
         Effect.sync(() => {
@@ -252,6 +259,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       setSourceCursor,
       getItemState,
       listItemStates,
+      deleteItemState,
       upsertItemState,
       createRunId,
       beginRun,

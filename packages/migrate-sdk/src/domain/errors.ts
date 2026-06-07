@@ -30,6 +30,16 @@ export class MigrationRuntimeError extends Schema.TaggedErrorClass<MigrationRunt
   ErrorFields
 ) {}
 
+export class RollbackRequestError extends Schema.TaggedErrorClass<RollbackRequestError>()(
+  "RollbackRequestError",
+  ErrorFields
+) {}
+
+export class RollbackPreflightError extends Schema.TaggedErrorClass<RollbackPreflightError>()(
+  "RollbackPreflightError",
+  ErrorFields
+) {}
+
 export class SkipItem extends Schema.TaggedErrorClass<SkipItem>()("SkipItem", {
   reason: Schema.String,
 }) {}

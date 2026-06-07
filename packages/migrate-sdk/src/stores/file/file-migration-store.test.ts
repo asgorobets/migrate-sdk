@@ -28,10 +28,13 @@ import {
   runMigrations,
   SourcePluginError,
   skipItem,
+  toDestinationIdentity,
   toEncodedSourceCursor,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
+  toMigrationRunId,
   toSourceIdentity,
+  toSourceVersion,
 } from "../../index.ts";
 
 const UpsertEntryCommand = Schema.Struct({
@@ -202,6 +205,26 @@ const rootLatestRunFileExists = (directory: string) =>
     return yield* fs.exists(path.join(directory, "latest-run.json"));
   });
 
+const itemStateFileExists = (
+  directory: string,
+  definitionId: string,
+  sourceIdentity: string
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem;
+    const path = yield* Path;
+
+    return yield* fs.exists(
+      path.join(
+        directory,
+        "definitions",
+        definitionId,
+        "items",
+        `${sourceIdentity}.json`
+      )
+    );
+  });
+
 const writeCorruptItemStateRecord = (directory: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem;
@@ -319,6 +342,47 @@ describe("FileMigrationStore", () => {
           needsUpdate: 0,
         });
         expect(secondDestinationState.executions).toEqual([]);
+      })
+    )
+  );
+
+  it.effect("deletes persisted Migration Item State", () =>
+    withTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("articles");
+        const sourceIdentity = toSourceIdentity("article-delete-file");
+        const itemState = {
+          definitionId,
+          destinationIdentity: toDestinationIdentity("entry-delete-file"),
+          lastRunId: toMigrationRunId("run-delete-file"),
+          sourceIdentity,
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "migrated" as const,
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        };
+
+        yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          yield* store.upsertItemState(itemState);
+          expect(
+            yield* store.getItemState(definitionId, sourceIdentity)
+          ).toEqual(itemState);
+
+          yield* store.deleteItemState(definitionId, sourceIdentity);
+
+          expect(
+            yield* store.getItemState(definitionId, sourceIdentity)
+          ).toBeNull();
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        expect(
+          yield* itemStateFileExists(
+            directory,
+            "articles",
+            "article-delete-file"
+          )
+        ).toBe(false);
       })
     )
   );

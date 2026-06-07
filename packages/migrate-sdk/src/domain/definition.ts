@@ -27,6 +27,7 @@ import {
   toMigrationDefinitionId,
 } from "./ids.ts";
 import type { PipelineContext } from "./pipeline.ts";
+import type { RollbackPipeline } from "./rollback.ts";
 import type {
   SourceItem,
   SourceItemInput,
@@ -152,6 +153,7 @@ export interface MigrationDefinition<
   Command extends DestinationCommand,
   PipelineError = never,
   Cursor = unknown,
+  RollbackPipelineError = PipelineError,
 > {
   readonly dependsOn?: readonly MigrationDefinitionId[];
   readonly destination: ConfiguredDestinationPlugin<Command>;
@@ -167,6 +169,7 @@ export interface MigrationDefinition<
         PipelineError | SkipItem,
         MigrationReferenceLookup
       >;
+  readonly rollback?: RollbackPipeline<Command, RollbackPipelineError>;
   readonly source: ConfiguredSourcePlugin<Source, Cursor>;
   readonly sourceCursorRetry?: SourceRetryStrategy;
   readonly sourceLookupRetry?: SourceRetryStrategy;
@@ -184,8 +187,15 @@ export interface MigrationDefinitionInput<
   Command extends DestinationCommand,
   PipelineError = never,
   Cursor = unknown,
+  RollbackPipelineError = PipelineError,
 > extends Omit<
-    MigrationDefinition<Source, Command, PipelineError, Cursor>,
+    MigrationDefinition<
+      Source,
+      Command,
+      PipelineError,
+      Cursor,
+      RollbackPipelineError
+    >,
     "id" | "dependsOn"
   > {
   readonly dependsOn?: readonly MigrationDefinitionIdInput[];
@@ -197,9 +207,22 @@ export const defineMigration = <
   Command extends DestinationCommand,
   PipelineError = never,
   Cursor = unknown,
+  RollbackPipelineError = PipelineError,
 >(
-  definition: MigrationDefinitionInput<Source, Command, PipelineError, Cursor>
-): MigrationDefinition<Source, Command, PipelineError, Cursor> => {
+  definition: MigrationDefinitionInput<
+    Source,
+    Command,
+    PipelineError,
+    Cursor,
+    RollbackPipelineError
+  >
+): MigrationDefinition<
+  Source,
+  Command,
+  PipelineError,
+  Cursor,
+  RollbackPipelineError
+> => {
   const { id, dependsOn, ...rest } = definition;
 
   return {

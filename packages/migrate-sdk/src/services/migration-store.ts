@@ -32,6 +32,11 @@ export class MigrationStore extends Service<
       definitionId: MigrationDefinitionId
     ) => Effect.Effect<readonly MigrationItemState[], MigrationStoreError>;
 
+    readonly deleteItemState: (
+      definitionId: MigrationDefinitionId,
+      identity: SourceIdentity
+    ) => Effect.Effect<void, MigrationStoreError>;
+
     readonly upsertItemState: (
       state: MigrationItemState
     ) => Effect.Effect<void, MigrationStoreError>;

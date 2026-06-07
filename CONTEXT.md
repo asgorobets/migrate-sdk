@@ -28,6 +28,9 @@ The source plugin's declared cost model for reading a source item by identity.
 **Migration Item State**:
 Durable state for one source item within a migration.
 
+**Rollbackable Migration Item State**:
+A migration item state that records a destination identity and can be passed to a rollback pipeline.
+
 **Migration Item Outcome**:
 The result of processing one source item during a migration run.
 
@@ -61,6 +64,9 @@ The durable state for one migration run.
 **Migration Run Summary**:
 The structured result returned after a migration run completes or fails.
 
+**Rollback Run Summary**:
+The structured result returned after a rollback run completes or fails.
+
 **Execution Start Result**:
 The result of starting execution, either a completed summary or a run id for later observation.
 
@@ -70,6 +76,9 @@ The runtime mode that controls which migration item states are reprocessed.
 **Run Request**:
 The invocation object that starts a migration run from the SDK, CLI, or another host.
 
+**Rollback Request**:
+The invocation object that starts a rollback run from the SDK, CLI, or another host.
+
 **Execution Adapter**:
 The runtime strategy that executes migration definitions.
 
@@ -78,6 +87,9 @@ A pipeline capability for reading migrated destination identities from migration
 
 **Transformation Pipeline**:
 The typed transformation from one source item into destination commands.
+
+**Rollback Pipeline**:
+The typed compensation from a durable migration item state into destination commands that undo destination-side effects.
 
 **Destination Command**:
 The typed command produced by a transformation pipeline and executed by a destination plugin.
@@ -99,6 +111,9 @@ A destination-owned Effect schema for pipeline-facing entry fields. It validates
 
 **Destination Command Plan**:
 An ordered set of destination commands produced for one source item.
+
+**Rollback Command Plan**:
+An ordered set of destination commands produced by a rollback pipeline for one migration item state.
 
 **Destination Command Result**:
 The result of executing a destination command.
@@ -191,6 +206,8 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A **Migration Run** continues processing source items after an item failure in the first version.
 - A **Migration Run** is marked failed when one or more source items fail, even if other items complete.
 - A completed **Migration Run** produces a **Migration Run Summary** for SDK callers and CLI rendering.
+- A completed rollback run produces a **Rollback Run Summary** for SDK callers and CLI rendering.
+- A **Rollback Run Summary** is distinct from a **Migration Run Summary**.
 - An **Execution Adapter** may return an **Execution Start Result** before the migration run is complete.
 - A **Migration Run** treats migrated and skipped item states as terminal for a given source version.
 - A **Migration Run** retries failed item states on rerun.
@@ -200,6 +217,7 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A failed **Run Mode** reprocesses only failed item states.
 - A skipped **Run Mode** reprocesses skipped item states regardless of source version.
 - A **Run Request** supplies migration definitions, run mode, and optional migration definition selection.
+- A **Rollback Request** supplies migration definitions, rollback selection, and optional source identity selection.
 - A **Run Request** that selects migration definitions also includes their required dependencies.
 - An **Execution Adapter** may execute migration definitions inline, inline with bounded parallelism, or through a durable queue.
 - An **Execution Adapter** may be provided by users when they need custom scheduling or parallelization.
@@ -219,6 +237,11 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A **Needs Update** item state created by **Migration Reference Lookup** may not have an observed source version yet.
 - A **Migration Reference Lookup** may return a **Needs Update** item state as a usable reference because the **Destination Identity** already exists.
 - A **Transformation Pipeline** transforms exactly one **Source Item** into one **Destination Command Plan**.
+- A **Rollback Pipeline** transforms exactly one **Rollbackable Migration Item State** into one **Rollback Command Plan**.
+- A **Rollback Pipeline** is explicit compensation, not an inferred inverse of a **Transformation Pipeline** or **Destination Command Plan**.
+- A **Rollback Pipeline** uses durable **Migration Item State** and does not require reading the **Source Item**.
+- A **Rollbackable Migration Item State** is any **Migration Item State** that records a **Destination Identity**.
+- A **Rollback Command Plan** uses the same **Destination Commands**, **Destination Command Definitions**, and **Destination Plugin** as a **Destination Command Plan**.
 - A **Destination Command Plan** may contain one or more ordered **Destination Commands**.
 - A **Destination Plugin Definition** owns the **Destination Command Groups** for the command kinds it accepts.
 - A **Destination Command Group** owns related **Destination Command Definitions**.

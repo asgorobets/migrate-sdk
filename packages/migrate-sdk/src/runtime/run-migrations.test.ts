@@ -642,6 +642,29 @@ describe("MigrationStore durable records", () => {
       expect(storeState.definitionLocks.get(definitionId)).toEqual(lock);
     })
   );
+
+  it.effect("deletes Migration Item State by Source Identity", () =>
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const definitionId = toMigrationDefinitionId("articles");
+      const sourceIdentity = toSourceIdentity("article-delete");
+      const itemState = {
+        definitionId,
+        destinationIdentity: toDestinationIdentity("entry-article-delete"),
+        lastRunId: toMigrationRunId("run-1"),
+        sourceIdentity,
+        sourceVersion: toSourceVersion("source-version-1"),
+        status: "migrated" as const,
+        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+      };
+
+      yield* store.upsertItemState(itemState);
+      yield* store.deleteItemState(definitionId, sourceIdentity);
+
+      const stored = yield* store.getItemState(definitionId, sourceIdentity);
+      expect(stored).toBeNull();
+    }).pipe(Effect.provide(InMemoryMigrationStore.layer()))
+  );
 });
 
 describe("runMigration", () => {

@@ -220,6 +220,9 @@ yield* runMigrations({
 });
 ```
 
+Rollback-capable migrations use a separate rollback operation and rollback
+pipeline. See [Rollback API](./rollback-api.md).
+
 When `definitionIds` is provided, the runner includes required dependencies and
 orders the expanded set before running. Missing dependencies and dependency
 cycles fail before any destination side effects happen.

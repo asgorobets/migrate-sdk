@@ -20,6 +20,8 @@ export type AnyMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Pipeline error is re-extracted by MigrationDefinitionPipelineError.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Cursor is existential across heterogeneous run requests.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Rollback pipeline error is not relevant to forward run requests.
   any
 >;
 
@@ -28,7 +30,8 @@ export type MigrationDefinitionPipelineError<Definition> =
     infer _Source,
     infer _Command,
     infer PipelineError,
-    infer _Cursor
+    infer _Cursor,
+    infer _RollbackPipelineError
   >
     ? PipelineError
     : never;

@@ -48,6 +48,8 @@ export {
   MigrationReferenceLookupError,
   MigrationRuntimeError,
   MigrationStoreError,
+  RollbackPreflightError,
+  RollbackRequestError,
   skipItem,
   SkipItem,
   SourcePluginError,
@@ -93,6 +95,24 @@ export type {
   RunRequest,
   RunRequestInput,
 } from "./domain/run.ts";
+
+export {
+  makeRollbackMigrationOptions,
+  makeRollbackRequest,
+  RollbackContext,
+  RollbackDefinitionRunSummary,
+  RollbackMigrationOptions,
+  RollbackRunSummary,
+} from "./domain/rollback.ts";
+export type {
+  AnyRollbackMigrationDefinition,
+  MigrationDefinitionRollbackPipelineError,
+  RollbackableMigrationItemState,
+  RollbackMigrationOptionsInput,
+  RollbackPipeline,
+  RollbackRequest,
+  RollbackRequestInput,
+} from "./domain/rollback.ts";
 
 export type { RunMode, RunModeInput } from "./domain/run-mode.ts";
 
