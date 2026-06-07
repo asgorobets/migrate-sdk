@@ -1,6 +1,7 @@
 import type { Effect } from "effect";
 import { Service } from "effect/Context";
 import type {
+  DestinationPluginError,
   MigrationReferenceLookupError,
   MigrationStoreError,
 } from "../domain/errors.ts";
@@ -50,7 +51,9 @@ export class MigrationReferenceLookup extends Service<
       input: MigrationReferenceLookupInput
     ) => Effect.Effect<
       MigrationReference | null,
-      MigrationReferenceLookupError | MigrationStoreError
+      | DestinationPluginError
+      | MigrationReferenceLookupError
+      | MigrationStoreError
     >;
   }
 >()("@migrate-sdk/MigrationReferenceLookup") {}

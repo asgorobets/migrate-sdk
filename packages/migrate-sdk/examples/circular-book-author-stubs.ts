@@ -6,7 +6,7 @@ import {
   type MigrationRunSummary,
   runMigrations,
 } from "migrate-sdk";
-import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
+import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
@@ -61,13 +61,28 @@ const AuthorEntryFields = Schema.Struct({
   website: Schema.optional(Schema.String),
 });
 
-const makeBookstoreDestinationFixture = () =>
-  InMemoryDestinationPlugin.fixtureEntries({
-    schemas: {
-      author: AuthorEntryFields,
-      book: BookEntryFields,
+const makeBookstoreDestinationFixture = () => {
+  const author = InMemoryDestinationTesting.fixtureEntries({
+    contentType: "author",
+    commands: {
+      publishEntry: true,
+      upsertEntry: { fields: AuthorEntryFields },
     },
   });
+  const book = InMemoryDestinationTesting.fixtureEntries({
+    contentType: "book",
+    commands: {
+      publishEntry: true,
+      upsertEntry: { fields: BookEntryFields },
+    },
+  });
+
+  return {
+    authorDestination: author.destination,
+    bookDestination: book.destination,
+    executions: () => [...book.executions(), ...author.executions()],
+  };
+};
 
 type BookstoreDestinationFixture = ReturnType<
   typeof makeBookstoreDestinationFixture
@@ -166,7 +181,7 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
   const storeState = InMemoryMigrationStore.makeState();
   const store = InMemoryMigrationStore.layer(storeState);
   const destinationFixture = makeBookstoreDestinationFixture();
-  const { destination } = destinationFixture;
+  const { authorDestination, bookDestination } = destinationFixture;
 
   const books = defineMigration({
     id: "books",
@@ -174,13 +189,13 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
       items: bookSourceItems,
       sourceSchema: BookSource,
     }),
-    destination,
+    destination: bookDestination,
     store,
     // This hook is used when another migration looks up a Book with `stub: true`.
     // The Author pipeline below uses it for `book:future-catalog`, creating a
     // minimal Book entry until that source item appears in a later run.
     stub: ({ sourceIdentity }) =>
-      destination.commands.upsertEntry("book", {
+      bookDestination.commands.upsertEntry({
         authorEntries: [],
         authorReferenceStatuses: [],
         categorySlugs: [],
@@ -205,7 +220,7 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
       );
 
       return [
-        destination.commands.upsertEntry("book", {
+        bookDestination.commands.upsertEntry({
           authorEntries: authorReferences.flatMap((reference) =>
             reference === null ? [] : [reference.destinationIdentity]
           ),
@@ -221,7 +236,7 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
           subtitle: source.item.subtitle,
           title: source.item.title,
         }),
-        destination.commands.publishEntry("book"),
+        bookDestination.commands.publishEntry(),
       ];
     }),
   });
@@ -232,13 +247,13 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
       items: authorSourceItems,
       sourceSchema: AuthorSource,
     }),
-    destination,
+    destination: authorDestination,
     store,
     // This hook is used when another migration looks up an Author with
     // `stub: true`. The Book pipeline above uses it before Authors have run,
     // then this Author migration updates the same destination entry.
     stub: ({ sourceIdentity }) =>
-      destination.commands.upsertEntry("author", {
+      authorDestination.commands.upsertEntry({
         biography: "Pending author profile",
         displayName: `Stub author for ${sourceIdentity}`,
         isStub: true,
@@ -259,7 +274,7 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
       );
 
       return [
-        destination.commands.upsertEntry("author", {
+        authorDestination.commands.upsertEntry({
           biography: source.item.biography,
           displayName: source.item.displayName,
           popularBookEntries: popularBookReferences.flatMap((reference) =>
@@ -271,7 +286,7 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
           specialties: source.item.specialties,
           website: source.item.links.website,
         }),
-        destination.commands.publishEntry("author"),
+        authorDestination.commands.publishEntry(),
       ];
     }),
   });

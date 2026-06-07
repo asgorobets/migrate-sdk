@@ -5,6 +5,7 @@ import type {
   DestinationCommandPlan,
 } from "../domain/destination.ts";
 import {
+  type DestinationPluginError,
   MigrationReferenceLookupError,
   MigrationRuntimeError,
   MigrationStoreError,
@@ -52,6 +53,7 @@ import {
 import { processSourceItem } from "./process-source-item.ts";
 
 export type RunMigrationDefinitionError =
+  | DestinationPluginError
   | SourcePluginError
   | MigrationStoreError;
 
@@ -892,7 +894,7 @@ const processStubSourceIdentity = ({
   readonly store: typeof MigrationStore.Service;
 }): Effect.Effect<
   MigrationReference,
-  MigrationReferenceLookupError | MigrationStoreError
+  DestinationPluginError | MigrationReferenceLookupError | MigrationStoreError
 > =>
   Effect.gen(function* () {
     const previousState = yield* store.getItemState(
@@ -949,7 +951,10 @@ const processStubSourceIdentity = ({
     } satisfies MigrationReference;
   });
 
-type StubReferenceError = MigrationReferenceLookupError | MigrationStoreError;
+type StubReferenceError =
+  | DestinationPluginError
+  | MigrationReferenceLookupError
+  | MigrationStoreError;
 
 interface StubDefinitionRunLease {
   readonly definitionId: MigrationDefinitionId;

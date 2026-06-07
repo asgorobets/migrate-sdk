@@ -4,7 +4,7 @@ import {
   type MigrationRunSummary,
   runMigration,
 } from "migrate-sdk";
-import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
+import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
@@ -55,9 +55,11 @@ const ArticleEntryFields = Schema.Struct({
 });
 
 const makeArticleDestinationFixture = () =>
-  InMemoryDestinationPlugin.fixtureEntries({
-    schemas: {
-      article: ArticleEntryFields,
+  InMemoryDestinationTesting.fixtureEntries({
+    contentType: "article",
+    commands: {
+      publishEntry: true,
+      upsertEntry: { fields: ArticleEntryFields },
     },
   });
 
@@ -124,7 +126,7 @@ export const runNestedArticleSchemaExample = Effect.fn(
       const views = article.metrics.views;
       const readingTimeMinutes = article.metrics.readingTimeMinutes;
 
-      return destination.commands.upsertEntry("article", {
+      return destination.commands.upsertEntry({
         authorDisplayName,
         locale: article.locale,
         readingTimeMinutes,

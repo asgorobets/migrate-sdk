@@ -1,6 +1,6 @@
 import { Effect, type Layer } from "effect";
 import type { MigrationRunSummary } from "migrate-sdk";
-import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
+import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
 import {
   JsonPlaceholderApi,
   type JsonPlaceholderApiState,
@@ -10,9 +10,11 @@ import { JsonPlaceholderPostSourcePlugin } from "./json-placeholder-source.ts";
 import { PostEntryFields, runApiSourceExample } from "./migration.ts";
 
 const makeInspectionFixture = () =>
-  InMemoryDestinationPlugin.fixtureEntries({
-    schemas: {
-      post: PostEntryFields,
+  InMemoryDestinationTesting.fixtureEntries({
+    contentType: "post",
+    commands: {
+      publishEntry: true,
+      upsertEntry: { fields: PostEntryFields },
     },
   });
 

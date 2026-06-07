@@ -1,5 +1,6 @@
 import { Effect, Layer } from "effect";
 import {
+  type DestinationPluginError,
   MigrationReferenceLookupError,
   type MigrationStoreError,
 } from "../domain/errors.ts";
@@ -19,7 +20,7 @@ export type CreateMigrationReferenceStub = (input: {
   readonly sourceIdentity: SourceIdentity;
 }) => Effect.Effect<
   MigrationReference,
-  MigrationReferenceLookupError | MigrationStoreError
+  DestinationPluginError | MigrationReferenceLookupError | MigrationStoreError
 >;
 
 const definitionNotFoundError = (definitionId: MigrationDefinitionId) =>

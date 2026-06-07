@@ -1,17 +1,22 @@
 import { Effect, Layer, Schema } from "effect";
 import type { ConfiguredDestinationPlugin } from "../../domain/definition.ts";
 import type {
-  DefinedDestinationCommands,
   DestinationCommand,
   DestinationCommandContext,
   DestinationCommandResult,
   DestinationCommandResultInput,
-  DestinationCommandSchema,
 } from "../../domain/destination.ts";
+import { makeDestinationCommandResult } from "../../domain/destination.ts";
 import {
-  defineDestinationCommands,
-  makeDestinationCommandResult,
-} from "../../domain/destination.ts";
+  type AnyDefinedDestinationCommand,
+  type AnyNonEmptyDestinationPluginDefinition,
+  type DestinationPluginDefinitionCommand,
+  type DestinationPluginDefinitionCommands,
+  type DestinationPluginHandlers,
+  type DestinationPluginHandlersFromPlugin,
+  defineDestinationCommand,
+  defineDestinationPlugin,
+} from "../../domain/destination-plugin-definition.ts";
 import { DestinationPluginError } from "../../domain/errors.ts";
 import type {
   DestinationIdentity,
@@ -53,11 +58,21 @@ export type InMemoryDestinationExecute<C extends DestinationCommand> = (
   | DestinationCommandResultInput
   | Effect.Effect<DestinationCommandResultInput, DestinationPluginError>;
 
-export interface InMemoryDestinationOptions<C extends DestinationCommand> {
-  readonly commandDefinitions: DefinedDestinationCommands<C>;
-  readonly execute: InMemoryDestinationExecute<C>;
+export interface InMemoryDestinationOptions<
+  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+> {
+  readonly execute: InMemoryDestinationExecute<
+    DestinationPluginDefinitionCommand<Plugin>
+  >;
+  readonly plugin: Plugin;
   readonly transientFailures?: InMemoryDestinationTransientFailures;
 }
+
+export type InMemoryDestination<
+  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+> = ConfiguredDestinationPlugin<DestinationPluginDefinitionCommand<Plugin>> & {
+  readonly commands: DestinationPluginDefinitionCommands<Plugin>;
+};
 
 export interface InMemoryDestinationTransientFailures {
   readonly execute?: number;
@@ -70,98 +85,148 @@ export interface InMemoryDestinationInspection<C extends DestinationCommand> {
   readonly executions: () => readonly InMemoryDestinationExecution<C>[];
 }
 
-export interface InMemoryDestinationFixture<C extends DestinationCommand>
-  extends InMemoryDestinationInspection<C> {
-  readonly destination: ConfiguredDestinationPlugin<C>;
+export interface InMemoryDestinationFixture<
+  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+> extends InMemoryDestinationInspection<
+    DestinationPluginDefinitionCommand<Plugin>
+  > {
+  readonly destination: InMemoryDestination<Plugin>;
 }
 
 export type InMemoryEntryFieldSchema<Fields extends object = object> =
   Schema.Codec<Fields, Fields, never, never>;
 
 type InMemoryEntryFieldSchemaFor<SchemaInput> =
-  SchemaInput extends Schema.Schema<infer Fields>
+  SchemaInput extends Schema.Codec<infer Fields, infer Encoded, never, never>
     ? Fields extends object
-      ? InMemoryEntryFieldSchema<Fields>
+      ? [Fields] extends [Encoded]
+        ? [Encoded] extends [Fields]
+          ? InMemoryEntryFieldSchema<Fields>
+          : never
+        : never
       : never
-    : InMemoryEntryFieldSchema;
+    : never;
 
-type InMemoryEntryFields<SchemaInput> =
-  SchemaInput extends Schema.Schema<infer Fields>
-    ? Fields extends object
-      ? Fields
-      : never
-    : object;
-
-export type InMemoryEntryFieldSchemas<Schemas> = {
-  readonly [ContentType in keyof Schemas]: InMemoryEntryFieldSchemaFor<
-    Schemas[ContentType]
-  >;
-};
-
-type InMemoryEntryContentType<
-  Schemas extends InMemoryEntryFieldSchemas<Schemas>,
-> = Extract<keyof Schemas, string>;
-
-export type InMemoryUpsertEntryCommand<
-  Schemas extends InMemoryEntryFieldSchemas<Schemas>,
-> = {
-  readonly [ContentType in InMemoryEntryContentType<Schemas>]: {
-    readonly contentType: ContentType;
-    readonly fields: InMemoryEntryFields<Schemas[ContentType]>;
-    readonly kind: "UpsertEntry";
-  };
-}[InMemoryEntryContentType<Schemas>];
-
-export type InMemoryPublishEntryCommand<
-  Schemas extends InMemoryEntryFieldSchemas<Schemas>,
-> = {
-  readonly [ContentType in InMemoryEntryContentType<Schemas>]: {
-    readonly contentType: ContentType;
-    readonly kind: "PublishEntry";
-  };
-}[InMemoryEntryContentType<Schemas>];
-
-export type InMemoryEntryCommand<
-  Schemas extends InMemoryEntryFieldSchemas<Schemas>,
-> = InMemoryUpsertEntryCommand<Schemas> | InMemoryPublishEntryCommand<Schemas>;
-
-export interface InMemoryEntryDestinationCommands<
-  Schemas extends InMemoryEntryFieldSchemas<Schemas>,
+export interface InMemoryUpsertEntryCommandOptions<
+  Fields extends object = object,
 > {
-  readonly publishEntry: <
-    ContentType extends InMemoryEntryContentType<Schemas>,
-  >(
-    contentType: ContentType
-  ) => Extract<
-    InMemoryPublishEntryCommand<Schemas>,
-    { readonly contentType: ContentType }
-  >;
-  readonly upsertEntry: <ContentType extends InMemoryEntryContentType<Schemas>>(
-    contentType: ContentType,
-    fields: InMemoryEntryFields<Schemas[ContentType]>
-  ) => Extract<
-    InMemoryUpsertEntryCommand<Schemas>,
-    { readonly contentType: ContentType }
-  >;
+  readonly fields: InMemoryEntryFieldSchema<Fields>;
 }
 
+export type InMemoryPublishEntryCommandOptions = true;
+
+export interface InMemoryEntryDestinationCommandOptions {
+  readonly publishEntry?: InMemoryPublishEntryCommandOptions;
+  readonly upsertEntry?: InMemoryUpsertEntryCommandOptions;
+}
+
+type NonEmptyString<Value extends string> = Value extends "" ? never : Value;
+
+type RequireAtLeastOneEntryCommand<
+  Commands extends InMemoryEntryDestinationCommandOptions,
+> = Commands extends
+  | { readonly publishEntry: InMemoryPublishEntryCommandOptions }
+  | { readonly upsertEntry: InMemoryUpsertEntryCommandOptions }
+  ? Commands
+  : never;
+
+type InMemoryEntryDestinationCommandOptionsFor<
+  Commands extends InMemoryEntryDestinationCommandOptions,
+> = {
+  readonly [Key in keyof Commands]: Key extends "upsertEntry"
+    ? NonNullable<Commands[Key]> extends { readonly fields: infer FieldSchema }
+      ? { readonly fields: InMemoryEntryFieldSchemaFor<FieldSchema> }
+      : never
+    : Key extends "publishEntry"
+      ? InMemoryPublishEntryCommandOptions
+      : never;
+};
+
+type InMemoryEntryFields<CommandOptions> =
+  CommandOptions extends InMemoryUpsertEntryCommandOptions<infer Fields>
+    ? Fields
+    : never;
+
+export type InMemoryUpsertEntryCommand<
+  ContentType extends string,
+  Commands extends InMemoryEntryDestinationCommandOptions,
+> = Commands extends { readonly upsertEntry?: infer CommandOptions }
+  ? NonNullable<CommandOptions> extends InMemoryUpsertEntryCommandOptions
+    ? {
+        readonly contentType: ContentType;
+        readonly fields: InMemoryEntryFields<NonNullable<CommandOptions>>;
+        readonly kind: "UpsertEntry";
+      }
+    : never
+  : never;
+
+export type InMemoryPublishEntryCommand<
+  ContentType extends string,
+  Commands extends InMemoryEntryDestinationCommandOptions,
+> = Commands extends { readonly publishEntry?: infer CommandOptions }
+  ? NonNullable<CommandOptions> extends InMemoryPublishEntryCommandOptions
+    ? {
+        readonly contentType: ContentType;
+        readonly kind: "PublishEntry";
+      }
+    : never
+  : never;
+
+export type InMemoryEntryCommand<
+  ContentType extends string,
+  Commands extends InMemoryEntryDestinationCommandOptions,
+> =
+  | InMemoryUpsertEntryCommand<ContentType, Commands>
+  | InMemoryPublishEntryCommand<ContentType, Commands>;
+
+export type InMemoryEntryDestinationCommands<
+  ContentType extends string,
+  Commands extends InMemoryEntryDestinationCommandOptions,
+> = (Commands extends {
+  readonly upsertEntry: infer CommandOptions extends
+    InMemoryUpsertEntryCommandOptions;
+}
+  ? {
+      readonly upsertEntry: (
+        fields: InMemoryEntryFields<CommandOptions>
+      ) => InMemoryUpsertEntryCommand<ContentType, Commands>;
+    }
+  : Record<never, never>) &
+  (Commands extends {
+    readonly publishEntry: InMemoryPublishEntryCommandOptions;
+  }
+    ? {
+        readonly publishEntry: () => InMemoryPublishEntryCommand<
+          ContentType,
+          Commands
+        >;
+      }
+    : Record<never, never>);
+
 export interface InMemoryEntryDestinationOptions<
-  Schemas extends InMemoryEntryFieldSchemas<Schemas>,
+  ContentType extends string,
+  Commands extends InMemoryEntryDestinationCommandOptions,
 > {
-  readonly schemas: Schemas;
+  readonly commands: RequireAtLeastOneEntryCommand<Commands> &
+    InMemoryEntryDestinationCommandOptionsFor<Commands>;
+  readonly contentType: NonEmptyString<ContentType>;
   readonly transientFailures?: InMemoryDestinationTransientFailures;
 }
 
 export type InMemoryEntryDestination<
-  Schemas extends InMemoryEntryFieldSchemas<Schemas>,
-> = ConfiguredDestinationPlugin<InMemoryEntryCommand<Schemas>> & {
-  readonly commands: InMemoryEntryDestinationCommands<Schemas>;
+  ContentType extends string,
+  Commands extends InMemoryEntryDestinationCommandOptions,
+> = ConfiguredDestinationPlugin<InMemoryEntryCommand<ContentType, Commands>> & {
+  readonly commands: InMemoryEntryDestinationCommands<ContentType, Commands>;
 };
 
 export interface InMemoryEntryDestinationFixture<
-  Schemas extends InMemoryEntryFieldSchemas<Schemas>,
-> extends InMemoryDestinationInspection<InMemoryEntryCommand<Schemas>> {
-  readonly destination: InMemoryEntryDestination<Schemas>;
+  ContentType extends string,
+  Commands extends InMemoryEntryDestinationCommandOptions,
+> extends InMemoryDestinationInspection<
+    InMemoryEntryCommand<ContentType, Commands>
+  > {
+  readonly destination: InMemoryEntryDestination<ContentType, Commands>;
 }
 
 const makeState = <
@@ -173,15 +238,136 @@ const makeState = <
   executions: [],
 });
 
-interface InMemoryDestinationInternalOptions<C extends DestinationCommand>
-  extends InMemoryDestinationOptions<C> {
-  readonly state?: InMemoryDestinationState<C>;
+const isRecord = (value: unknown): value is Record<PropertyKey, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const assertTransientFailures = (value: unknown): void => {
+  if (value === undefined) {
+    return;
+  }
+
+  if (!isRecord(value)) {
+    throw new Error(
+      "In-memory destination transientFailures must be an object"
+    );
+  }
+
+  const execute = value.execute;
+
+  if (
+    execute !== undefined &&
+    (typeof execute !== "number" || !Number.isInteger(execute) || execute < 0)
+  ) {
+    throw new Error(
+      "In-memory destination transientFailures.execute must be a non-negative integer"
+    );
+  }
+};
+
+const assertInMemoryDestinationOptions = <
+  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+>(
+  options: InMemoryDestinationInternalOptions<Plugin>
+): void => {
+  const input = options as unknown;
+
+  if (!isRecord(input)) {
+    throw new Error("In-memory destination options must be an object");
+  }
+
+  if (
+    !isRecord(input.plugin) ||
+    input.plugin.hasCommands !== true ||
+    input.plugin.commandDefinitions === undefined
+  ) {
+    throw new Error(
+      "In-memory destination requires a plugin with at least one command"
+    );
+  }
+
+  if (typeof input.execute !== "function") {
+    throw new Error("In-memory destination execute must be a function");
+  }
+
+  assertTransientFailures(input.transientFailures);
+};
+
+const assertInMemoryEntryDestinationOptions = <
+  ContentType extends string,
+  Commands extends InMemoryEntryDestinationCommandOptions,
+>(
+  options: InMemoryEntryDestinationInternalOptions<ContentType, Commands>
+): void => {
+  const input = options as unknown;
+
+  if (!isRecord(input)) {
+    throw new Error("In-memory entry destination options must be an object");
+  }
+
+  if (typeof input.contentType !== "string" || input.contentType.length === 0) {
+    throw new Error(
+      "In-memory entry destination contentType must be a non-empty string"
+    );
+  }
+
+  if (!isRecord(input.commands)) {
+    throw new Error("In-memory entry destination commands must be an object");
+  }
+
+  for (const commandName of Reflect.ownKeys(input.commands)) {
+    if (commandName !== "publishEntry" && commandName !== "upsertEntry") {
+      throw new Error(
+        `In-memory entry destination command is not supported: ${String(commandName)}`
+      );
+    }
+  }
+
+  if (
+    input.commands.upsertEntry === undefined &&
+    input.commands.publishEntry === undefined
+  ) {
+    throw new Error(
+      "In-memory entry destination must define at least one command"
+    );
+  }
+
+  if (
+    input.commands.publishEntry !== undefined &&
+    input.commands.publishEntry !== true
+  ) {
+    throw new Error("In-memory publishEntry command option must be true");
+  }
+
+  if (input.commands.upsertEntry !== undefined) {
+    if (!isRecord(input.commands.upsertEntry)) {
+      throw new Error(
+        "In-memory upsertEntry command options must be an object"
+      );
+    }
+
+    if (!Schema.isSchema(input.commands.upsertEntry.fields)) {
+      throw new Error("In-memory upsertEntry command requires a fields schema");
+    }
+  }
+
+  assertTransientFailures(input.transientFailures);
+};
+
+interface InMemoryDestinationInternalOptions<
+  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+> extends InMemoryDestinationOptions<Plugin> {
+  readonly state?: InMemoryDestinationState<
+    DestinationPluginDefinitionCommand<Plugin>
+  >;
 }
 
 interface InMemoryEntryDestinationInternalOptions<
-  Schemas extends InMemoryEntryFieldSchemas<Schemas>,
-> extends InMemoryEntryDestinationOptions<Schemas> {
-  readonly state?: InMemoryDestinationState<InMemoryEntryCommand<Schemas>>;
+  ContentType extends string,
+  Commands extends InMemoryEntryDestinationCommandOptions,
+> extends InMemoryEntryDestinationOptions<ContentType, Commands> {
+  readonly state?: InMemoryDestinationState<
+    InMemoryEntryCommand<ContentType, Commands>
+  >;
 }
 
 const makeInspection = <C extends DestinationCommand>(
@@ -192,22 +378,6 @@ const makeInspection = <C extends DestinationCommand>(
   executeAttempts: () => state.executeAttempts,
   executions: () => state.executions,
 });
-
-const nonEmptySchemaUnion = <C extends DestinationCommand>(
-  schemas: readonly DestinationCommandSchema<C>[]
-): DestinationCommandSchema<C> => {
-  const [firstSchema, ...remainingSchemas] = schemas;
-
-  if (firstSchema === undefined) {
-    throw new Error("In-memory destination must define at least one schema");
-  }
-
-  return (
-    remainingSchemas.length === 0
-      ? firstSchema
-      : Schema.Union([firstSchema, ...remainingSchemas])
-  ) as DestinationCommandSchema<C>;
-};
 
 const transientDestinationError = (): DestinationPluginError =>
   new DestinationPluginError({
@@ -238,77 +408,124 @@ const missingEntryPublishError = (
     },
   });
 
-const makeLayerWithState = <C extends DestinationCommand>(
-  options: InMemoryDestinationInternalOptions<C>
-): Layer.Layer<DestinationPlugin> =>
-  Layer.sync(DestinationPlugin, (): DestinationPlugin => {
-    const state = options.state ?? makeState<C>();
-    const decodeCommand = Schema.decodeUnknownEffect(
-      Schema.toType(options.commandDefinitions.commandSchema)
-    );
-    let remainingExecuteFailures = options.transientFailures?.execute ?? 0;
+const addInMemoryDestinationHandlers = <
+  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+>(
+  plugin: Plugin,
+  initialHandlers: DestinationPluginHandlersFromPlugin<Plugin>,
+  execute: (
+    command: DestinationPluginDefinitionCommand<Plugin>,
+    context: DestinationCommandContext
+  ) => Effect.Effect<DestinationCommandResultInput, DestinationPluginError>
+): DestinationPluginHandlers<Plugin, never, never> => {
+  let handlers = initialHandlers as unknown as DestinationPluginHandlers<
+    Plugin,
+    never,
+    AnyDefinedDestinationCommand
+  >;
 
-    const execute = Effect.fn("InMemoryDestination.execute")(
-      (
-        command: DestinationCommand,
-        context: DestinationCommandContext
-      ): Effect.Effect<DestinationCommandResult, DestinationPluginError> =>
-        Effect.gen(function* () {
-          state.executeAttempts += 1;
+  for (const definition of Object.values(plugin.definitions)) {
+    handlers = handlers.handle(definition.name, ({ command, context }) =>
+      execute(command as DestinationPluginDefinitionCommand<Plugin>, context)
+    ) as unknown as DestinationPluginHandlers<
+      Plugin,
+      never,
+      AnyDefinedDestinationCommand
+    >;
+  }
 
-          const typedCommand = yield* decodeCommand(command).pipe(
-            Effect.mapError(
-              (cause) =>
-                new DestinationPluginError({
-                  message: "Destination command did not match command schema",
-                  cause,
-                })
-            )
-          );
+  return handlers as unknown as DestinationPluginHandlers<Plugin, never, never>;
+};
 
-          if (remainingExecuteFailures > 0) {
-            remainingExecuteFailures -= 1;
-            return yield* transientDestinationError();
-          }
+const makeLayerWithState = <
+  Plugin extends AnyNonEmptyDestinationPluginDefinition,
+>(
+  options: InMemoryDestinationInternalOptions<Plugin>
+): Layer.Layer<DestinationPlugin, DestinationPluginError> => {
+  assertInMemoryDestinationOptions(options);
 
-          const executeResult = options.execute(typedCommand, context);
-          const resultInput = yield* Effect.isEffect(executeResult)
-            ? executeResult
-            : Effect.succeed(executeResult);
-          const result = makeDestinationCommandResult(resultInput);
+  const state =
+    options.state ?? makeState<DestinationPluginDefinitionCommand<Plugin>>();
+  let remainingExecuteFailures = options.transientFailures?.execute ?? 0;
+  const executeWithState = (
+    command: DestinationPluginDefinitionCommand<Plugin>,
+    context: DestinationCommandContext
+  ): Effect.Effect<DestinationCommandResultInput, DestinationPluginError> =>
+    Effect.gen(function* () {
+      if (remainingExecuteFailures > 0) {
+        remainingExecuteFailures -= 1;
+        return yield* transientDestinationError();
+      }
 
-          state.executions.push({
-            command: typedCommand,
-            context,
-            result,
-          });
+      const executeResult = options.execute(command, context);
+      const resultInput = yield* Effect.isEffect(executeResult)
+        ? executeResult
+        : Effect.succeed(executeResult);
+      const result = makeDestinationCommandResult(resultInput);
 
-          return result;
-        })
-    );
+      state.executions.push({
+        command,
+        context,
+        result,
+      });
 
-    return { execute };
-  });
+      return resultInput;
+    });
+  const destinationPlugin = options.plugin.implement((handlers) =>
+    addInMemoryDestinationHandlers(
+      options.plugin,
+      handlers as DestinationPluginHandlersFromPlugin<Plugin>,
+      executeWithState
+    )
+  );
 
-const makeLayer = <C extends DestinationCommand>(
-  options: InMemoryDestinationOptions<C>
-): Layer.Layer<DestinationPlugin> => makeLayerWithState(options);
+  return Layer.effect(
+    DestinationPlugin,
+    Effect.gen(function* () {
+      const destinationPlugin = yield* DestinationPlugin;
 
-const makeWithState = <C extends DestinationCommand>(
-  options: InMemoryDestinationInternalOptions<C>
-): ConfiguredDestinationPlugin<C> => ({
-  commandDefinitions: options.commandDefinitions,
-  layer: makeLayerWithState(options),
-});
+      return {
+        execute: Effect.fn("InMemoryDestination.execute")((command, context) =>
+          Effect.sync(() => {
+            state.executeAttempts += 1;
+          }).pipe(
+            Effect.flatMap(() => destinationPlugin.execute(command, context))
+          )
+        ),
+      };
+    })
+  ).pipe(Layer.provide(destinationPlugin.layer));
+};
 
-const make = <C extends DestinationCommand>(
-  options: InMemoryDestinationOptions<C>
-): ConfiguredDestinationPlugin<C> => makeWithState(options);
+const makeLayer = <Plugin extends AnyNonEmptyDestinationPluginDefinition>(
+  options: InMemoryDestinationOptions<Plugin>
+): Layer.Layer<DestinationPlugin, DestinationPluginError> =>
+  makeLayerWithState(options);
 
-const fixture = <C extends DestinationCommand>(
-  options: InMemoryDestinationOptions<C>
-): InMemoryDestinationFixture<C> => {
-  const state = makeState<C>();
+const makeWithState = <Plugin extends AnyNonEmptyDestinationPluginDefinition>(
+  options: InMemoryDestinationInternalOptions<Plugin>
+): InMemoryDestination<Plugin> => {
+  assertInMemoryDestinationOptions(options);
+
+  return {
+    commandDefinitions: options.plugin
+      .commandDefinitions as ConfiguredDestinationPlugin<
+      DestinationPluginDefinitionCommand<Plugin>
+    >["commandDefinitions"],
+    commands: options.plugin
+      .commands as DestinationPluginDefinitionCommands<Plugin>,
+    layer: makeLayerWithState(options),
+  };
+};
+
+const make = <Plugin extends AnyNonEmptyDestinationPluginDefinition>(
+  options: InMemoryDestinationOptions<Plugin>
+): InMemoryDestination<Plugin> => makeWithState(options);
+
+const fixture = <Plugin extends AnyNonEmptyDestinationPluginDefinition>(
+  options: InMemoryDestinationOptions<Plugin>
+): InMemoryDestinationFixture<Plugin> => {
+  const state = makeState<DestinationPluginDefinitionCommand<Plugin>>();
   const destination = makeWithState({
     ...options,
     state,
@@ -321,44 +538,73 @@ const fixture = <C extends DestinationCommand>(
 };
 
 const makeEntriesWithState = <
-  const Schemas extends InMemoryEntryFieldSchemas<Schemas>,
+  const ContentType extends string,
+  const Commands extends InMemoryEntryDestinationCommandOptions,
 >(
-  options: InMemoryEntryDestinationInternalOptions<Schemas>
-): InMemoryEntryDestination<Schemas> => {
-  const state = options.state ?? makeState<InMemoryEntryCommand<Schemas>>();
-  const schemaEntries = Object.entries(options.schemas) as unknown as readonly [
-    InMemoryEntryContentType<Schemas>,
-    InMemoryEntryFieldSchema,
-  ][];
-  const upsertSchemas = schemaEntries.map(([contentType, fields]) =>
-    Schema.Struct({
-      contentType: Schema.Literal(contentType),
-      fields: Schema.toType(fields),
+  options: InMemoryEntryDestinationInternalOptions<ContentType, Commands>
+): InMemoryEntryDestination<ContentType, Commands> => {
+  assertInMemoryEntryDestinationOptions(options);
+
+  const state =
+    options.state ?? makeState<InMemoryEntryCommand<ContentType, Commands>>();
+  const definitions: AnyDefinedDestinationCommand[] = [];
+  const upsertEntryOptions = options.commands.upsertEntry;
+
+  if (upsertEntryOptions !== undefined) {
+    const fieldsSchema = upsertEntryOptions.fields as InMemoryEntryFieldSchema;
+    const upsertEntrySchema = Schema.Struct({
+      contentType: Schema.Literal(options.contentType),
+      fields: fieldsSchema,
       kind: Schema.Literal("UpsertEntry"),
-    })
-  ) as unknown as readonly DestinationCommandSchema<
-    InMemoryUpsertEntryCommand<Schemas>
-  >[];
-  const publishSchemas = schemaEntries.map(([contentType]) =>
-    Schema.Struct({
-      contentType: Schema.Literal(contentType),
-      kind: Schema.Literal("PublishEntry"),
-    })
-  ) as unknown as readonly DestinationCommandSchema<
-    InMemoryPublishEntryCommand<Schemas>
-  >[];
-  const commandDefinitions = defineDestinationCommands({
-    UpsertEntry: {
+    });
+    const upsertEntry = defineDestinationCommand("UpsertEntry", {
       identity: true,
-      schema: nonEmptySchemaUnion(upsertSchemas),
-    },
-    PublishEntry: {
+      make: {
+        upsertEntry: (fields: object) => ({
+          contentType: options.contentType,
+          fields,
+          kind: "UpsertEntry" as const,
+        }),
+      },
+      schema: upsertEntrySchema,
+    });
+
+    definitions.push(upsertEntry);
+  }
+
+  if (options.commands.publishEntry === true) {
+    const publishEntrySchema = Schema.Struct({
+      contentType: Schema.Literal(options.contentType),
+      kind: Schema.Literal("PublishEntry"),
+    });
+    const publishEntry = defineDestinationCommand("PublishEntry", {
       identity: false,
-      schema: nonEmptySchemaUnion(publishSchemas),
-    },
-  });
+      make: {
+        publishEntry: () => ({
+          contentType: options.contentType,
+          kind: "PublishEntry" as const,
+        }),
+      },
+      schema: publishEntrySchema,
+    });
+
+    definitions.push(publishEntry);
+  }
+
+  const [firstDefinition, ...remainingDefinitions] = definitions;
+
+  if (firstDefinition === undefined) {
+    throw new Error(
+      "In-memory entry destination must define at least one command"
+    );
+  }
+
+  const pluginDefinition = defineDestinationPlugin("in-memory-entries").add(
+    firstDefinition,
+    ...remainingDefinitions
+  );
   const execute = (
-    command: InMemoryEntryCommand<Schemas>,
+    command: InMemoryEntryCommand<ContentType, Commands>,
     context: DestinationCommandContext
   ): Effect.Effect<DestinationCommandResultInput, DestinationPluginError> =>
     Effect.gen(function* () {
@@ -404,49 +650,85 @@ const makeEntriesWithState = <
 
       return { destinationIdentity, destinationVersion };
     });
-  const configured = makeWithState({
-    commandDefinitions,
-    execute,
-    state,
-    ...(options.transientFailures === undefined
-      ? {}
-      : { transientFailures: options.transientFailures }),
-  });
+  let remainingExecuteFailures = options.transientFailures?.execute ?? 0;
+  const executeWithState = (
+    command: InMemoryEntryCommand<ContentType, Commands>,
+    context: DestinationCommandContext
+  ): Effect.Effect<DestinationCommandResultInput, DestinationPluginError> =>
+    Effect.gen(function* () {
+      if (remainingExecuteFailures > 0) {
+        remainingExecuteFailures -= 1;
+        return yield* transientDestinationError();
+      }
+
+      const resultInput = yield* execute(command, context);
+      const result = makeDestinationCommandResult(resultInput);
+
+      state.executions.push({
+        command,
+        context,
+        result,
+      });
+
+      return resultInput;
+    });
+  const implementedPlugin = pluginDefinition.implement((handlers) =>
+    addInMemoryDestinationHandlers(
+      pluginDefinition,
+      handlers as DestinationPluginHandlersFromPlugin<typeof pluginDefinition>,
+      (command, context) =>
+        executeWithState(
+          command as InMemoryEntryCommand<ContentType, Commands>,
+          context
+        )
+    )
+  );
+  const layer = Layer.effect(
+    DestinationPlugin,
+    Effect.gen(function* () {
+      const destinationPlugin = yield* DestinationPlugin;
+
+      return {
+        execute: Effect.fn("InMemoryEntryDestination.execute")(
+          (command, context) =>
+            Effect.sync(() => {
+              state.executeAttempts += 1;
+            }).pipe(
+              Effect.flatMap(() => destinationPlugin.execute(command, context))
+            )
+        ),
+      };
+    })
+  ).pipe(Layer.provide(implementedPlugin.layer));
 
   return {
-    ...configured,
-    commands: {
-      publishEntry: (contentType) =>
-        ({
-          contentType,
-          kind: "PublishEntry",
-        }) as Extract<
-          InMemoryPublishEntryCommand<Schemas>,
-          { readonly contentType: typeof contentType }
-        >,
-      upsertEntry: (contentType, fields) =>
-        ({
-          contentType,
-          fields,
-          kind: "UpsertEntry",
-        }) as unknown as Extract<
-          InMemoryUpsertEntryCommand<Schemas>,
-          { readonly contentType: typeof contentType }
-        >,
-    },
+    commandDefinitions:
+      implementedPlugin.commandDefinitions as ConfiguredDestinationPlugin<
+        InMemoryEntryCommand<ContentType, Commands>
+      >["commandDefinitions"],
+    commands: implementedPlugin.commands as InMemoryEntryDestinationCommands<
+      ContentType,
+      Commands
+    >,
+    layer,
   };
 };
 
-const makeEntries = <const Schemas extends InMemoryEntryFieldSchemas<Schemas>>(
-  options: InMemoryEntryDestinationOptions<Schemas>
-): InMemoryEntryDestination<Schemas> => makeEntriesWithState(options);
+const makeEntries = <
+  const ContentType extends string,
+  const Commands extends InMemoryEntryDestinationCommandOptions,
+>(
+  options: InMemoryEntryDestinationOptions<ContentType, Commands>
+): InMemoryEntryDestination<ContentType, Commands> =>
+  makeEntriesWithState(options);
 
 const fixtureEntries = <
-  const Schemas extends InMemoryEntryFieldSchemas<Schemas>,
+  const ContentType extends string,
+  const Commands extends InMemoryEntryDestinationCommandOptions,
 >(
-  options: InMemoryEntryDestinationOptions<Schemas>
-): InMemoryEntryDestinationFixture<Schemas> => {
-  const state = makeState<InMemoryEntryCommand<Schemas>>();
+  options: InMemoryEntryDestinationOptions<ContentType, Commands>
+): InMemoryEntryDestinationFixture<ContentType, Commands> => {
+  const state = makeState<InMemoryEntryCommand<ContentType, Commands>>();
   const destination = makeEntriesWithState({
     ...options,
     state,
@@ -459,9 +741,12 @@ const fixtureEntries = <
 };
 
 export const InMemoryDestinationPlugin = {
+  makeEntries,
+} as const;
+
+export const InMemoryDestinationTesting = {
   fixture,
   fixtureEntries,
-  make,
-  makeEntries,
   layer: makeLayer,
+  make,
 } as const;

@@ -64,7 +64,7 @@ type CommandFromDefinitions<
   Definitions extends DestinationCommandDefinitionsInput,
 > = CommandFromDefinition<Definitions[keyof Definitions]>;
 
-export const defineDestinationCommands = <
+export const makeDefinedDestinationCommands = <
   const Definitions extends DestinationCommandDefinitionsInput,
 >(
   definitions: Definitions & CommandDefinitionsMatchKeys<Definitions>

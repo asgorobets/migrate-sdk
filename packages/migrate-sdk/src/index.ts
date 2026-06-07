@@ -28,10 +28,17 @@ export type {
   DestinationCommandResultInput,
   DestinationCommandSchema,
 } from "./domain/destination.ts";
+export { makeDestinationCommandResult } from "./domain/destination.ts";
+
+export type {
+  DefinedDestinationCommand,
+  DestinationCommandHandler,
+  DestinationCommandHandlerContext,
+} from "./domain/destination-plugin-definition.ts";
 export {
-  defineDestinationCommands,
-  makeDestinationCommandResult,
-} from "./domain/destination.ts";
+  defineDestinationCommand,
+  defineDestinationPlugin,
+} from "./domain/destination-plugin-definition.ts";
 
 export {
   DestinationPluginError,
@@ -116,7 +123,6 @@ export type {
   MigrationReferenceLookupInput,
 } from "./services/migration-reference-lookup.ts";
 export { MigrationStore } from "./services/migration-store.ts";
-export type { AnySourcePlugin } from "./services/source-plugin.ts";
 export { SourcePlugin } from "./services/source-plugin.ts";
 
 export { runMigration, runMigrations } from "./runtime/run-migrations.ts";
@@ -126,20 +132,15 @@ export { InMemoryDestinationPlugin } from "./destinations/in-memory/in-memory-de
 export type {
   InMemoryEntryCommand,
   InMemoryEntryDestination,
+  InMemoryEntryDestinationCommandOptions,
   InMemoryEntryDestinationCommands,
-  InMemoryEntryDestinationFixture,
   InMemoryEntryDestinationOptions,
   InMemoryEntryFieldSchema,
-  InMemoryEntryFieldSchemas,
   InMemoryPublishEntryCommand,
-  InMemoryDestinationEntry,
-  InMemoryDestinationExecution,
-  InMemoryDestinationExecute,
-  InMemoryDestinationFixture,
-  InMemoryDestinationInspection,
-  InMemoryDestinationOptions,
+  InMemoryPublishEntryCommandOptions,
   InMemoryDestinationTransientFailures,
   InMemoryUpsertEntryCommand,
+  InMemoryUpsertEntryCommandOptions,
 } from "./destinations/in-memory/in-memory-destination.ts";
 
 export { InMemorySourcePlugin } from "./sources/in-memory/in-memory-source.ts";

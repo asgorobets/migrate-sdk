@@ -36,17 +36,19 @@ const source = CsvSourcePlugin.make({
 });
 ```
 
-A destination plugin factory configures destination-owned schemas once and
-returns command factories for pipelines:
+A destination plugin factory configures destination-owned command options once
+and returns command factories for pipelines:
 
 ```ts
 const destination = ContentfulDestinationPlugin.make({
-  schemas: {
-    article: ArticleEntryFields,
+  contentType: "article",
+  commands: {
+    publishEntry: true,
+    upsertEntry: { fields: ArticleEntryFields },
   },
 });
 
-const command = destination.commands.upsertEntry("article", {
+const command = destination.commands.upsertEntry("article-1", {
   title: "Schema-first migrations",
   views: 1280,
 });
@@ -81,7 +83,7 @@ Destination-native encoding belongs inside the destination plugin.
 const articles = defineMigration({
   // ...
   pipeline: (source) =>
-    destination.commands.upsertEntry("article", {
+    destination.commands.upsertEntry(source.identity, {
       title: source.item.title,
       views: source.item.views,
     }),
@@ -100,8 +102,10 @@ const ArticleEntryFields = Schema.Struct({
 });
 
 const destination = InMemoryDestinationPlugin.makeEntries({
-  schemas: {
-    article: ArticleEntryFields,
+  contentType: "article",
+  commands: {
+    publishEntry: true,
+    upsertEntry: { fields: ArticleEntryFields },
   },
 });
 
@@ -111,70 +115,18 @@ const articles = defineMigration({
   destination,
   store: InMemoryMigrationStore.layer(),
   pipeline: (source) => [
-    destination.commands.upsertEntry("article", {
+    destination.commands.upsertEntry({
       title: source.item.title,
       views: source.item.views,
     }),
-    destination.commands.publishEntry("article"),
+    destination.commands.publishEntry(),
   ],
 });
 ```
 
 This mirrors the shape expected from real CMS destination plugins such as
-Contentful: schemas are passed once at plugin creation, then pipelines call
-destination-owned command factories.
-
-Tests and examples that need execution inspection should opt into the fixture
-surface instead of changing the configured plugin shape:
-
-```ts
-const fixture = InMemoryDestinationPlugin.fixtureEntries({
-  schemas: {
-    article: ArticleEntryFields,
-  },
-});
-
-const destination = fixture.destination;
-const executions = fixture.executions();
-```
-
-## Lower-Level Custom Destination
-
-`InMemoryDestinationPlugin.make(...)` remains a lower-level custom and test
-destination path. It requires command definitions and an executor, so tests still
-exercise the same runtime command validation as real plugins.
-
-```ts
-const IndexRecordCommand = Schema.Struct({
-  kind: Schema.Literal("IndexRecord"),
-  record: Schema.Struct({
-    objectId: Schema.String,
-    title: Schema.String,
-  }),
-});
-
-const commandDefinitions = defineDestinationCommands({
-  IndexRecord: {
-    identity: true,
-    schema: IndexRecordCommand,
-  },
-});
-
-const destination = InMemoryDestinationPlugin.make({
-  commandDefinitions,
-  execute: (command, context) => ({
-    destinationIdentity: `search:${context.sourceIdentity}`,
-    metadata: {
-      indexedObjectId: command.record.objectId,
-    },
-  }),
-});
-```
-
-This is not the default prebuilt plugin usage shape. It is useful for tests,
-custom destinations, and examples that need to demonstrate the lower-level
-runtime boundary. Use `InMemoryDestinationPlugin.fixture(...)` when the custom
-destination also needs execution inspection.
+Contentful: command options are passed once at plugin creation, then pipelines
+call destination-owned command factories.
 
 ## Dynamic Registration
 
@@ -187,8 +139,10 @@ const contentTypes = ["author", "article", "category"] as const;
 
 export const migrations = contentTypes.map((contentType) => {
   const destination = ContentfulDestinationPlugin.make({
-    schemas: {
-      [contentType]: contentTypeSchemas[contentType],
+    contentType,
+    commands: {
+      publishEntry: true,
+      upsertEntry: { fields: contentTypeSchemas[contentType] },
     },
   });
 
@@ -209,5 +163,5 @@ export const migrations = contentTypes.map((contentType) => {
 
 Future adapters may generate Effect schemas from external systems such as CMS
 content-type configuration, JSON Schema, or Standard Schema. The configured
-plugin boundary should still expose the final Effect schemas used by the
-runner.
+plugin boundary should still pass those schemas through command options so each
+factory receives the right field type.

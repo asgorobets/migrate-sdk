@@ -47,8 +47,10 @@ const sourceItems = [
 
 const makeArticlesMigration = () => {
   const destination = InMemoryDestinationPlugin.makeEntries({
-    schemas: {
-      article: ArticleEntryFields,
+    contentType: "article",
+    commands: {
+      publishEntry: true,
+      upsertEntry: { fields: ArticleEntryFields },
     },
   });
 
@@ -65,9 +67,12 @@ const makeArticlesMigration = () => {
         return yield* skipItem("Article is not published");
       }
 
-      return destination.commands.upsertEntry("article", {
-        title: source.item.title,
-      });
+      return [
+        destination.commands.upsertEntry({
+          title: source.item.title,
+        }),
+        destination.commands.publishEntry(),
+      ];
     }),
   });
 };

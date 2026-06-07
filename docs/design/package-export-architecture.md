@@ -41,6 +41,10 @@ Each public feature folder owns an `index.ts` entrypoint. Private implementation
 helpers should live under local `internal/` folders or remain unexported from
 the feature entrypoint.
 
+Testing helpers, fixtures, and inspection-only types must not be exported from
+the root entrypoint or the normal feature entrypoint. If they are intentionally
+supported, expose them from an explicit testing subpath.
+
 Runnable examples live outside `src/` under `packages/migrate-sdk/examples/` so
 the library source tree contains only package implementation and public
 entrypoints. The library `tsconfig.json` remains scoped to publishable source
@@ -64,6 +68,12 @@ import { FileMigrationStore } from "migrate-sdk/stores/file";
 
 These subpaths still point into the same package.
 
+Testing helpers use explicit testing subpaths:
+
+```ts
+import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
+```
+
 ## Export Map
 
 `packages/migrate-sdk/package.json` uses a curated export map:
@@ -74,6 +84,7 @@ These subpaths still point into the same package.
   "exports": {
     ".": "./src/index.ts",
     "./destinations/in-memory": "./src/destinations/in-memory/index.ts",
+    "./destinations/in-memory/testing": "./src/destinations/in-memory/testing.ts",
     "./internal/*": null,
     "./sources/csv": "./src/sources/csv/index.ts",
     "./sources/in-memory": "./src/sources/in-memory/index.ts",
@@ -114,6 +125,8 @@ Keep the public surface compatible for the SDK's two core audiences:
   and typed errors from the root entrypoint.
 - First-party plugins and stores also expose focused subpaths, such as
   `migrate-sdk/sources/csv` and `migrate-sdk/stores/file`.
+- Testing and inspection helpers use explicit `*/testing` subpaths and stay out
+  of root and normal feature entrypoints.
 - Feature entrypoints should explicitly re-export their public API rather than
   using wildcard barrels.
 - Avoid export-surface tests; verify the public shape through examples,

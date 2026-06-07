@@ -7,7 +7,7 @@ import {
   runMigration,
   skipItem,
 } from "migrate-sdk";
-import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
+import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { FileMigrationStore } from "migrate-sdk/stores/file";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
@@ -73,9 +73,11 @@ const sourceItems = [
 ] as const;
 
 const makeArticlesMigration = (storeDirectory: string) => {
-  const destinationFixture = InMemoryDestinationPlugin.fixtureEntries({
-    schemas: {
-      article: ArticleEntryFields,
+  const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
+    contentType: "article",
+    commands: {
+      publishEntry: true,
+      upsertEntry: { fields: ArticleEntryFields },
     },
   });
   const { destination } = destinationFixture;
@@ -88,7 +90,7 @@ const makeArticlesMigration = (storeDirectory: string) => {
         return yield* skipItem("Article is not published");
       }
 
-      return destination.commands.upsertEntry("article", {
+      return destination.commands.upsertEntry({
         title: source.item.title,
       });
     }),

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Schedule, Schema } from "effect";
+import {
+  type InMemoryDestinationEntry,
+  type InMemoryDestinationExecute,
+  type InMemoryDestinationExecution,
+  type InMemoryDestinationInspection,
+  InMemoryDestinationTesting,
+} from "migrate-sdk/destinations/in-memory/testing";
 import { expectTypeOf } from "vitest";
 import {
   type DestinationCommand,
@@ -8,13 +15,10 @@ import {
   type DestinationCommandSchema,
   DestinationPlugin,
   DestinationPluginError,
-  defineDestinationCommands,
+  defineDestinationCommand,
+  defineDestinationPlugin,
   defineMigration,
   defineSourcePlugin,
-  type InMemoryDestinationEntry,
-  type InMemoryDestinationExecute,
-  type InMemoryDestinationExecution,
-  type InMemoryDestinationInspection,
   InMemoryDestinationPlugin,
   type InMemoryDestinationTransientFailures,
   type InMemoryEntryCommand,
@@ -62,46 +66,37 @@ const PublishEntryCommand = Schema.Struct({
 
 const EntryCommand = Schema.Union([UpsertEntryCommand, PublishEntryCommand]);
 
-const UpsertEntryCommands = defineDestinationCommands({
-  UpsertEntry: {
-    identity: true,
-    schema: UpsertEntryCommand,
-  },
+const upsertEntryCommand = defineDestinationCommand("UpsertEntry", {
+  identity: true,
+  schema: UpsertEntryCommand,
 });
 
-const EntryCommands = defineDestinationCommands({
-  UpsertEntry: {
-    identity: true,
-    schema: UpsertEntryCommand,
-  },
-  PublishEntry: {
-    identity: false,
-    schema: PublishEntryCommand,
-  },
+const publishEntryCommand = defineDestinationCommand("PublishEntry", {
+  identity: false,
+  schema: PublishEntryCommand,
 });
 
-const MultiIdentityEntryCommands = defineDestinationCommands({
-  UpsertEntry: {
-    identity: true,
-    schema: UpsertEntryCommand,
-  },
-  PublishEntry: {
-    identity: true,
-    schema: PublishEntryCommand,
-  },
+const identityPublishEntryCommand = defineDestinationCommand("PublishEntry", {
+  identity: true,
+  schema: PublishEntryCommand,
 });
+
+const UpsertEntryPlugin =
+  defineDestinationPlugin("test-upsert-entry").add(upsertEntryCommand);
+
+const EntryPlugin = defineDestinationPlugin("test-entry")
+  .add(upsertEntryCommand)
+  .add(publishEntryCommand);
+
+const MultiIdentityEntryPlugin = defineDestinationPlugin(
+  "test-multi-identity-entry"
+)
+  .add(upsertEntryCommand)
+  .add(identityPublishEntryCommand);
 
 expectTypeOf<DestinationCommandSchema<UpsertEntryCommand>>().toEqualTypeOf<
   Schema.Codec<UpsertEntryCommand, UpsertEntryCommand, never, never>
 >();
-
-defineDestinationCommands({
-  UpsertEntry: {
-    identity: true,
-    // @ts-expect-error command definition keys must match their schema kind.
-    schema: PublishEntryCommand,
-  },
-});
 
 type EntryCommand = typeof EntryCommand.Type;
 
@@ -121,33 +116,46 @@ const ArticleStatsEntryFields = Schema.Struct({
 const DecodingArticleEntryFields = Schema.Struct({
   views: Schema.NumberFromString,
 });
-interface ArticleEntrySchemas {
-  readonly article: typeof ArticleEntryFields;
+interface ArticleEntryCommands {
+  readonly publishEntry: true;
+  readonly upsertEntry: { readonly fields: typeof ArticleEntryFields };
 }
-interface ArticleStatsEntrySchemas {
-  readonly article: typeof ArticleStatsEntryFields;
+interface ArticleStatsEntryCommands {
+  readonly publishEntry: true;
+  readonly upsertEntry: { readonly fields: typeof ArticleStatsEntryFields };
 }
-type ArticleEntryCommand = InMemoryEntryCommand<ArticleEntrySchemas>;
-type ArticleStatsEntryCommand = InMemoryEntryCommand<ArticleStatsEntrySchemas>;
+type ArticleEntryCommand = InMemoryEntryCommand<
+  "article",
+  ArticleEntryCommands
+>;
+type ArticleStatsEntryCommand = InMemoryEntryCommand<
+  "article",
+  ArticleStatsEntryCommands
+>;
 const ArticleEntryDestinationForTypes = InMemoryDestinationPlugin.makeEntries({
-  schemas: {
-    article: ArticleEntryFields,
+  contentType: "article",
+  commands: {
+    publishEntry: true,
+    upsertEntry: { fields: ArticleEntryFields },
   },
 });
-ArticleEntryDestinationForTypes.commands.upsertEntry("article", {
+ArticleEntryDestinationForTypes.commands.upsertEntry({
   title: "Typed article",
 });
-ArticleEntryDestinationForTypes.commands.publishEntry("article");
-// @ts-expect-error content types must be configured at destination creation.
+ArticleEntryDestinationForTypes.commands.publishEntry();
+// @ts-expect-error command factories close over the configured content type.
 ArticleEntryDestinationForTypes.commands.publishEntry("offer");
-ArticleEntryDestinationForTypes.commands.upsertEntry("article", {
+ArticleEntryDestinationForTypes.commands.upsertEntry({
   // @ts-expect-error upsert fields must match the configured content type schema.
   headline: "Wrong field",
 });
 InMemoryDestinationPlugin.makeEntries({
-  schemas: {
-    // @ts-expect-error destination entry schemas validate pipeline values without decoding.
-    article: DecodingArticleEntryFields,
+  contentType: "article",
+  commands: {
+    upsertEntry: {
+      // @ts-expect-error destination entry schemas validate pipeline values without decoding.
+      fields: DecodingArticleEntryFields,
+    },
   },
 });
 
@@ -286,12 +294,12 @@ const executeTestEntryCommand = (
 const makeTestUpsertEntryDestination = (
   options: TestDestinationOptions<UpsertEntryCommand> = {}
 ) => {
-  const fixture = InMemoryDestinationPlugin.fixture({
-    commandDefinitions: UpsertEntryCommands,
+  const fixture = InMemoryDestinationTesting.fixture({
     execute: trackDestinationExecute(
       options.state,
       options.execute ?? executeTestUpsertEntryCommand
     ),
+    plugin: UpsertEntryPlugin,
     ...(options.transientFailures === undefined
       ? {}
       : { transientFailures: options.transientFailures }),
@@ -304,12 +312,12 @@ const makeTestUpsertEntryDestination = (
 const makeTestEntryDestination = (
   options: TestDestinationOptions<EntryCommand> = {}
 ) => {
-  const fixture = InMemoryDestinationPlugin.fixture({
-    commandDefinitions: EntryCommands,
+  const fixture = InMemoryDestinationTesting.fixture({
     execute: trackDestinationExecute(
       options.state,
       options.execute ?? executeTestEntryCommand
     ),
+    plugin: EntryPlugin,
     ...(options.transientFailures === undefined
       ? {}
       : { transientFailures: options.transientFailures }),
@@ -322,12 +330,12 @@ const makeTestEntryDestination = (
 const makeTestMultiIdentityEntryDestination = (
   options: TestDestinationOptions<EntryCommand> = {}
 ) => {
-  const fixture = InMemoryDestinationPlugin.fixture({
-    commandDefinitions: MultiIdentityEntryCommands,
+  const fixture = InMemoryDestinationTesting.fixture({
     execute: trackDestinationExecute(
       options.state,
       options.execute ?? executeTestEntryCommand
     ),
+    plugin: MultiIdentityEntryPlugin,
     ...(options.transientFailures === undefined
       ? {}
       : { transientFailures: options.transientFailures }),
@@ -412,10 +420,10 @@ const failRunFailingStoreLayer = (
 const makePublishFailingDestination = (
   attempts: EntryCommand[]
 ): {
-  readonly commandDefinitions: typeof EntryCommands;
+  readonly commandDefinitions: typeof EntryPlugin.commandDefinitions;
   readonly layer: Layer.Layer<DestinationPlugin>;
 } => ({
-  commandDefinitions: EntryCommands,
+  commandDefinitions: EntryPlugin.commandDefinitions,
   layer: Layer.sync(DestinationPlugin, () => ({
     execute: (command, context) =>
       Effect.gen(function* () {
@@ -457,10 +465,10 @@ const makeEffectEntryDestination = (
     context: DestinationCommandContext
   ) => Effect.Effect<DestinationCommandResultInput, DestinationPluginError>
 ): {
-  readonly commandDefinitions: typeof EntryCommands;
+  readonly commandDefinitions: typeof EntryPlugin.commandDefinitions;
   readonly layer: Layer.Layer<DestinationPlugin>;
 } => ({
-  commandDefinitions: EntryCommands,
+  commandDefinitions: EntryPlugin.commandDefinitions,
   layer: Layer.sync(DestinationPlugin, () => ({
     execute: (command, context) =>
       Effect.gen(function* () {
@@ -1054,7 +1062,7 @@ describe("runMigration", () => {
             ],
           }),
           destination: {
-            commandDefinitions: UpsertEntryCommands,
+            commandDefinitions: UpsertEntryPlugin.commandDefinitions,
             layer: Layer.sync(DestinationPlugin, () => ({
               execute: (_command, context) => {
                 if (context.sourceIdentity === "article-1") {
@@ -1655,9 +1663,11 @@ describe("runMigration", () => {
         const destinationState =
           makeTestDestinationState<ArticleStatsEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
-        const destinationFixture = InMemoryDestinationPlugin.fixtureEntries({
-          schemas: {
-            article: ArticleStatsEntryFields,
+        const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
+          contentType: "article",
+          commands: {
+            publishEntry: true,
+            upsertEntry: { fields: ArticleStatsEntryFields },
           },
         });
         destinationState.bind(destinationFixture);
@@ -1682,7 +1692,7 @@ describe("runMigration", () => {
           store: InMemoryMigrationStore.layer(storeState),
           pipeline: (source) =>
             Effect.succeed(
-              destination.commands.upsertEntry("article", {
+              destination.commands.upsertEntry({
                 title: source.item.title,
                 views: source.item.views,
               })
@@ -4240,9 +4250,11 @@ describe("runMigration", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const destinationState =
           makeTestDestinationState<ArticleEntryCommand>();
-        const destinationFixture = InMemoryDestinationPlugin.fixtureEntries({
-          schemas: {
-            article: ArticleEntryFields,
+        const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
+          contentType: "article",
+          commands: {
+            publishEntry: true,
+            upsertEntry: { fields: ArticleEntryFields },
           },
         });
         destinationState.bind(destinationFixture);
@@ -4262,10 +4274,10 @@ describe("runMigration", () => {
           store: InMemoryMigrationStore.layer(storeState),
           pipeline: (source) =>
             Effect.succeed([
-              destination.commands.upsertEntry("article", {
+              destination.commands.upsertEntry({
                 title: source.item.title,
               }),
-              destination.commands.publishEntry("article"),
+              destination.commands.publishEntry(),
             ]),
         });
 
@@ -4296,9 +4308,11 @@ describe("runMigration", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const destinationState =
           makeTestDestinationState<ArticleEntryCommand>();
-        const destinationFixture = InMemoryDestinationPlugin.fixtureEntries({
-          schemas: {
-            article: ArticleEntryFields,
+        const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
+          contentType: "article",
+          commands: {
+            publishEntry: true,
+            upsertEntry: { fields: ArticleEntryFields },
           },
         });
         destinationState.bind(destinationFixture);
@@ -4318,10 +4332,10 @@ describe("runMigration", () => {
           store: InMemoryMigrationStore.layer(storeState),
           pipeline: (source) =>
             Effect.succeed([
-              destination.commands.upsertEntry("article", {
+              destination.commands.upsertEntry({
                 title: source.item.title,
               }),
-              destination.commands.publishEntry("article"),
+              destination.commands.publishEntry(),
             ]),
         });
 
@@ -4373,9 +4387,11 @@ describe("runMigration", () => {
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
       const destinationState = makeTestDestinationState<ArticleEntryCommand>();
-      const destinationFixture = InMemoryDestinationPlugin.fixtureEntries({
-        schemas: {
-          article: ArticleEntryFields,
+      const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
+        contentType: "article",
+        commands: {
+          publishEntry: true,
+          upsertEntry: { fields: ArticleEntryFields },
         },
       });
       destinationState.bind(destinationFixture);
@@ -4393,8 +4409,7 @@ describe("runMigration", () => {
         }),
         destination,
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: () =>
-          Effect.succeed(destination.commands.publishEntry("article")),
+        pipeline: () => Effect.succeed(destination.commands.publishEntry()),
       });
 
       const summary = yield* runMigration(definition);
@@ -4621,7 +4636,7 @@ describe("runMigration", () => {
         const attempts: EntryCommand["kind"][] = [];
         let publishFailures = 1;
         const destination = {
-          commandDefinitions: EntryCommands,
+          commandDefinitions: EntryPlugin.commandDefinitions,
           layer: Layer.sync(DestinationPlugin, () => ({
             execute: (command, context) =>
               Effect.gen(function* () {

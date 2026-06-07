@@ -63,8 +63,10 @@ const sourceItems = [
 ] as const;
 
 const destination = InMemoryDestinationPlugin.makeEntries({
-  schemas: {
-    article: ArticleEntryFields,
+  contentType: "article",
+  commands: {
+    publishEntry: true,
+    upsertEntry: { fields: ArticleEntryFields },
   },
 });
 
@@ -81,7 +83,7 @@ const articles = defineMigration({
       return yield* skipItem("Article is not published");
     }
 
-    return destination.commands.upsertEntry("article", {
+    return destination.commands.upsertEntry({
       title: source.item.title,
     });
   }),
@@ -125,10 +127,10 @@ destination identity produced by the plan as the migrated item state.
 const articles = defineMigration({
   // ...
   pipeline: (source) => [
-    destination.commands.upsertEntry("article", {
+    destination.commands.upsertEntry({
       title: source.item.title,
     }),
-    destination.commands.publishEntry("article"),
+    destination.commands.publishEntry(),
   ],
 });
 ```
@@ -144,7 +146,7 @@ const articles = defineMigration({
       return yield* skipItem("Article is not published");
     }
 
-    return destination.commands.upsertEntry("article", {
+    return destination.commands.upsertEntry({
       title: source.item.title,
     });
   }),
@@ -159,12 +161,12 @@ const articles = defineMigration({
   // ...
   pipeline: (source, context) => {
     if (context.previousState?.status === "needs-update") {
-      return destination.commands.upsertEntry("article", {
+      return destination.commands.upsertEntry({
         title: source.item.title,
       });
     }
 
-    return destination.commands.upsertEntry("article", {
+    return destination.commands.upsertEntry({
       title: source.item.title,
     });
   },

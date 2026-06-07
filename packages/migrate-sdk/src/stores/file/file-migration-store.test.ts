@@ -4,12 +4,12 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
+import type { InMemoryDestinationEntry } from "migrate-sdk/destinations/in-memory/testing";
 import {
-  type InMemoryDestinationEntry,
   type InMemoryDestinationExecution,
   type InMemoryDestinationInspection,
-  InMemoryDestinationPlugin,
-} from "migrate-sdk/destinations/in-memory";
+  InMemoryDestinationTesting,
+} from "migrate-sdk/destinations/in-memory/testing";
 import {
   InMemorySourceCursor,
   InMemorySourcePlugin,
@@ -19,7 +19,8 @@ import {
   type DestinationCommand,
   type DestinationCommandContext,
   type DestinationCommandResultInput,
-  defineDestinationCommands,
+  defineDestinationCommand,
+  defineDestinationPlugin,
   defineMigration,
   defineSourcePlugin,
   MigrationStore,
@@ -42,12 +43,13 @@ const UpsertEntryCommand = Schema.Struct({
 
 type UpsertEntryCommand = typeof UpsertEntryCommand.Type;
 
-const UpsertEntryCommands = defineDestinationCommands({
-  UpsertEntry: {
-    identity: true,
-    schema: UpsertEntryCommand,
-  },
+const upsertEntryCommand = defineDestinationCommand("UpsertEntry", {
+  identity: true,
+  schema: UpsertEntryCommand,
 });
+
+const UpsertEntryPlugin =
+  defineDestinationPlugin("test-upsert-entry").add(upsertEntryCommand);
 
 const executeTestUpsertEntryCommand = (
   _command: UpsertEntryCommand,
@@ -139,12 +141,12 @@ const makeTestUpsertEntryDestination = (
     >;
   } = {}
 ) => {
-  const fixture = InMemoryDestinationPlugin.fixture({
-    commandDefinitions: UpsertEntryCommands,
+  const fixture = InMemoryDestinationTesting.fixture({
     execute: trackDestinationExecute(
       options.state,
       executeTestUpsertEntryCommand
     ),
+    plugin: UpsertEntryPlugin,
   });
   options.state?.bind(fixture);
 

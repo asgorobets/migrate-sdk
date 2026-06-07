@@ -127,7 +127,7 @@ export interface ConfiguredDestinationPlugin<
   Command extends DestinationCommand,
 > {
   readonly commandDefinitions: DefinedDestinationCommands<Command>;
-  readonly layer: Layer.Layer<DestinationPlugin>;
+  readonly layer: Layer.Layer<DestinationPlugin, DestinationPluginError>;
 }
 
 export type DestinationRetryStrategy = <A>(

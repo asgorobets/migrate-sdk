@@ -3,20 +3,15 @@
 
 export { InMemoryDestinationPlugin } from "./in-memory-destination.ts";
 export type {
-  InMemoryDestinationEntry,
-  InMemoryDestinationExecute,
-  InMemoryDestinationExecution,
-  InMemoryDestinationFixture,
-  InMemoryDestinationInspection,
-  InMemoryDestinationOptions,
   InMemoryDestinationTransientFailures,
   InMemoryEntryCommand,
   InMemoryEntryDestination,
+  InMemoryEntryDestinationCommandOptions,
   InMemoryEntryDestinationCommands,
-  InMemoryEntryDestinationFixture,
   InMemoryEntryDestinationOptions,
   InMemoryEntryFieldSchema,
-  InMemoryEntryFieldSchemas,
   InMemoryPublishEntryCommand,
+  InMemoryPublishEntryCommandOptions,
   InMemoryUpsertEntryCommand,
+  InMemoryUpsertEntryCommandOptions,
 } from "./in-memory-destination.ts";

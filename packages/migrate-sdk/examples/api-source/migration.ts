@@ -12,8 +12,10 @@ export const PostEntryFields = Schema.Struct({
 
 export const makePostEntryDestination = () =>
   InMemoryDestinationPlugin.makeEntries({
-    schemas: {
-      post: PostEntryFields,
+    contentType: "post",
+    commands: {
+      publishEntry: true,
+      upsertEntry: { fields: PostEntryFields },
     },
   });
 
@@ -40,7 +42,7 @@ export const makeJsonPlaceholderPostsMigration = (
     destination,
     store: InMemoryMigrationStore.layer(),
     pipeline: (source) =>
-      destination.commands.upsertEntry("post", {
+      destination.commands.upsertEntry({
         authorId: source.item.userId,
         body: source.item.body,
         title: source.item.title,

@@ -14,7 +14,6 @@ plugin:
 
 ```ts
 interface ConfiguredSourcePlugin<Source, Cursor> {
-  readonly layer: Layer.Layer<AnySourcePlugin>;
   readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
 }
 
@@ -40,6 +39,10 @@ interface SourcePluginImplementation<Source, Cursor> {
   ) => Effect.Effect<SourceItemInput<Source> | null, SourcePluginError>;
 }
 ```
+
+The configured plugin also carries an SDK-owned source layer used by the runner.
+Plugin authors normally return the configured value from `defineSourcePlugin`
+instead of naming that layer type directly.
 
 Plugins can also use the factory form when each configured plugin needs fresh
 mutable state or client instances:
@@ -70,7 +73,6 @@ examples/api-source/
   json-placeholder-api-scripted.ts   # deterministic adapter for tests
   json-placeholder-source.ts         # source plugin factory
   migration.ts                       # migration author wiring
-  inspection.ts                      # test/dev state capture
   format.ts                          # CLI-friendly output formatting
 ```
 
@@ -78,12 +80,16 @@ Migration authors should mostly see the migration wiring:
 
 ```ts
 const destination = InMemoryDestinationPlugin.makeEntries({
-  schemas: {
-    post: Schema.Struct({
-      authorId: Schema.Number,
-      body: Schema.String,
-      title: Schema.String,
-    }),
+  contentType: "post",
+  commands: {
+    publishEntry: true,
+    upsertEntry: {
+      fields: Schema.Struct({
+        authorId: Schema.Number,
+        body: Schema.String,
+        title: Schema.String,
+      }),
+    },
   },
 });
 
@@ -95,7 +101,7 @@ const migration = defineMigration({
   destination,
   store,
   pipeline: (sourceItem) =>
-    destination.commands.upsertEntry("post", {
+    destination.commands.upsertEntry({
       authorId: sourceItem.item.userId,
       body: sourceItem.item.body,
       title: sourceItem.item.title,
@@ -125,10 +131,6 @@ export const JsonPlaceholderPostSourcePlugin = {
   },
 };
 ```
-
-The example keeps fixture-based destination inspection and command field
-extraction in `inspection.ts`. That module exists for tests and live-run output;
-it is not the authoring API we want migration authors to copy.
 
 The JSONPlaceholder source keeps retry policy, timeout, page size, max post
 count, and detail concurrency as defaults inside the source plugin. Its public
