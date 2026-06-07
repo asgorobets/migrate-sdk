@@ -147,8 +147,15 @@ export type {
 export { MigrationStore } from "./services/migration-store.ts";
 export { SourcePlugin } from "./services/source-plugin.ts";
 
-export { runMigration, runMigrations } from "./runtime/run-migrations.ts";
-export type { RunMigrationError } from "./runtime/run-migrations.ts";
+export {
+  rollbackMigration,
+  runMigration,
+  runMigrations,
+} from "./runtime/run-migrations.ts";
+export type {
+  RollbackMigrationError,
+  RunMigrationError,
+} from "./runtime/run-migrations.ts";
 
 export { InMemoryDestinationPlugin } from "./destinations/in-memory/in-memory-destination.ts";
 export type {

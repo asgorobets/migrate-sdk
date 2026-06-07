@@ -9,6 +9,7 @@ import {
   MigrationReferenceLookupError,
   MigrationRuntimeError,
   MigrationStoreError,
+  RollbackPreflightError,
   type SkipItem,
   SourcePluginError,
 } from "../domain/errors.ts";
@@ -21,6 +22,12 @@ import type {
 } from "../domain/ids.ts";
 import { toEncodedSourceCursor } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
+import type {
+  RollbackableMigrationItemState,
+  RollbackDefinitionRunSummary,
+  RollbackPipeline,
+  RollbackRunSummary,
+} from "../domain/rollback.ts";
 import type {
   AnyMigrationDefinition,
   MigrationDefinitionRunSummary,
@@ -61,6 +68,14 @@ export type RunMigrationError =
   | MigrationRuntimeError
   | RunMigrationDefinitionError;
 
+export type RollbackMigrationDefinitionError =
+  | DestinationPluginError
+  | MigrationStoreError;
+
+export type RollbackMigrationError =
+  | RollbackMigrationDefinitionError
+  | RollbackPreflightError;
+
 const emptyRunError = new MigrationRuntimeError({
   message: "Run request must include at least one Migration Definition",
 });
@@ -91,6 +106,12 @@ const invalidRunRequestError = (cause: unknown) =>
   new MigrationRuntimeError({
     message: "Run request contains invalid input",
     cause,
+  });
+
+const missingRollbackPipelineError = (definitionId: MigrationDefinitionId) =>
+  new RollbackPreflightError({
+    message: "Migration Definition does not define a rollback pipeline",
+    cause: { definitionId },
   });
 
 const failRunFinalizationError = <Error>(
@@ -152,6 +173,12 @@ const emptyCounts = {
   needsUpdate: 0,
 };
 
+const emptyRollbackCounts = {
+  rolledBack: 0,
+  failed: 0,
+  skipped: 0,
+};
+
 interface MutableDefinitionCounts {
   failed: number;
   migrated: number;
@@ -160,9 +187,22 @@ interface MutableDefinitionCounts {
   unchanged: number;
 }
 
+interface MutableRollbackDefinitionCounts {
+  failed: number;
+  rolledBack: number;
+  skipped: number;
+}
+
 const runStatusForDefinitions = (
   definitions: readonly MigrationDefinitionRunSummary[]
 ): MigrationRunSummary["status"] =>
+  definitions.some((definition) => definition.status === "failed")
+    ? "failed"
+    : "succeeded";
+
+const rollbackStatusForDefinitions = (
+  definitions: readonly RollbackDefinitionRunSummary[]
+): RollbackRunSummary["status"] =>
   definitions.some((definition) => definition.status === "failed")
     ? "failed"
     : "succeeded";
@@ -249,7 +289,10 @@ const executeMigrationRun = <A, E>(
   definitionIds: readonly MigrationDefinitionId[],
   body: (
     runId: MigrationRunId
-  ) => Effect.Effect<MigrationRunBodyResult<A>, E | MigrationStoreError>
+  ) => Effect.Effect<MigrationRunBodyResult<A>, E | MigrationStoreError>,
+  beforeBegin?: (
+    runId: MigrationRunId
+  ) => Effect.Effect<void, E | MigrationStoreError>
 ): Effect.Effect<MigrationRunExecutionResult<A>, E | MigrationStoreError> =>
   Effect.gen(function* () {
     const runId = yield* store.createRunId;
@@ -258,6 +301,10 @@ const executeMigrationRun = <A, E>(
       acquireDefinitionLocks(store, runId, definitionIds),
       () =>
         Effect.gen(function* () {
+          if (beforeBegin !== undefined) {
+            yield* beforeBegin(runId);
+          }
+
           const runState = yield* store.beginRun(runId, definitionIds);
           const bodyResult = yield* body(runState.runId).pipe(
             Effect.catch((error) =>
@@ -698,6 +745,125 @@ const addOutcomeToCounts = (
     }
   }
 };
+
+const isRollbackableItemState = (
+  itemState: MigrationItemState
+): itemState is RollbackableMigrationItemState =>
+  itemState.status === "migrated" ||
+  itemState.status === "needs-update" ||
+  (itemState.status === "failed" &&
+    itemState.destinationIdentity !== undefined);
+
+const runRollbackPipeline = <Command extends DestinationCommand, RollbackError>(
+  rollback: RollbackPipeline<Command, RollbackError>,
+  definitionId: MigrationDefinitionId,
+  itemState: RollbackableMigrationItemState,
+  runId: MigrationRunId
+): Effect.Effect<DestinationCommandPlan<Command>, RollbackError> =>
+  Effect.try({
+    try: () =>
+      rollback(itemState, {
+        definitionId,
+        runId,
+      }),
+    catch: (error) => error as RollbackError,
+  }).pipe(
+    Effect.flatMap((planOrEffect) =>
+      Effect.isEffect(planOrEffect)
+        ? (planOrEffect as Effect.Effect<
+            DestinationCommandPlan<Command>,
+            RollbackError
+          >)
+        : Effect.succeed(planOrEffect)
+    )
+  );
+
+const rollbackItemState = <
+  Source,
+  Command extends DestinationCommand,
+  PipelineError,
+  Cursor,
+  RollbackPipelineError,
+>({
+  counts,
+  definition,
+  itemState,
+  runId,
+  store,
+}: {
+  readonly counts: MutableRollbackDefinitionCounts;
+  readonly definition: MigrationDefinition<
+    Source,
+    Command,
+    PipelineError,
+    Cursor,
+    RollbackPipelineError
+  >;
+  readonly itemState: MigrationItemState;
+  readonly runId: MigrationRunId;
+  readonly store: typeof MigrationStore.Service;
+}) =>
+  Effect.gen(function* () {
+    if (!isRollbackableItemState(itemState)) {
+      counts.skipped += 1;
+      return;
+    }
+
+    const rollback = definition.rollback;
+
+    if (rollback === undefined) {
+      return yield* missingRollbackPipelineError(definition.id);
+    }
+
+    const destination = yield* DestinationPlugin;
+
+    const pipelineOutcome = yield* runRollbackPipeline(
+      rollback,
+      definition.id,
+      itemState,
+      runId
+    ).pipe(
+      Effect.map((plan) => ({
+        kind: "command" as const,
+        plan,
+      })),
+      Effect.catch(() =>
+        Effect.succeed({
+          kind: "pipeline-failed" as const,
+        })
+      )
+    );
+
+    if (pipelineOutcome.kind === "pipeline-failed") {
+      counts.failed += 1;
+      return;
+    }
+
+    const destinationOutcome = yield* executeDestinationCommandPlan({
+      commandDefinitions: definition.destination.commandDefinitions,
+      context: {
+        definitionId: definition.id,
+        previousState: itemState,
+        runId,
+        sourceIdentity: itemState.sourceIdentity,
+        ...(itemState.sourceVersion === undefined
+          ? {}
+          : { sourceVersion: itemState.sourceVersion }),
+      },
+      destination,
+      destinationRetry: definition.destinationRetry,
+      plan: pipelineOutcome.plan,
+      rejectIdentityCommands: true,
+    });
+
+    if (destinationOutcome.kind === "failed") {
+      counts.failed += 1;
+      return;
+    }
+
+    yield* store.deleteItemState(definition.id, itemState.sourceIdentity);
+    counts.rolledBack += 1;
+  });
 
 interface ProcessTargetedSourceIdentitiesOptions<
   Source,
@@ -1277,6 +1443,113 @@ const runMigrationDefinition = <
   );
 
   return program.pipe(Effect.provide(layer));
+};
+
+const runRollbackMigrationDefinition = <
+  Source,
+  Command extends DestinationCommand,
+  PipelineError,
+  Cursor,
+  RollbackPipelineError,
+>(
+  definition: MigrationDefinition<
+    Source,
+    Command,
+    PipelineError,
+    Cursor,
+    RollbackPipelineError
+  >,
+  runId: MigrationRunId
+): Effect.Effect<
+  RollbackDefinitionRunSummary,
+  RollbackMigrationDefinitionError | RollbackPreflightError
+> => {
+  const program = Effect.gen(function* () {
+    const store = yield* MigrationStore;
+    const counts = { ...emptyRollbackCounts };
+    const itemStates = yield* store.listItemStates(definition.id);
+
+    for (const itemState of itemStates) {
+      yield* rollbackItemState({
+        counts,
+        definition,
+        itemState,
+        runId,
+        store,
+      });
+    }
+
+    return {
+      counts,
+      definitionId: definition.id,
+      status: counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
+    };
+  });
+
+  const layer = Layer.mergeAll(definition.destination.layer, definition.store);
+
+  return program.pipe(Effect.provide(layer));
+};
+
+const validateRollbackPipelinePreflight = (
+  store: typeof MigrationStore.Service,
+  definition: AnyMigrationDefinition
+): Effect.Effect<void, MigrationStoreError | RollbackPreflightError> =>
+  definition.rollback === undefined
+    ? Effect.gen(function* () {
+        const itemStates = yield* store.listItemStates(definition.id);
+
+        if (itemStates.some(isRollbackableItemState)) {
+          return yield* missingRollbackPipelineError(definition.id);
+        }
+      })
+    : Effect.void;
+
+export const rollbackMigration = <
+  Source,
+  Command extends DestinationCommand,
+  PipelineError,
+  Cursor = unknown,
+  RollbackPipelineError = PipelineError,
+>(
+  definition: MigrationDefinition<
+    Source,
+    Command,
+    PipelineError,
+    Cursor,
+    RollbackPipelineError
+  >
+): Effect.Effect<RollbackRunSummary, RollbackMigrationError> => {
+  const program = Effect.gen(function* () {
+    const store = yield* MigrationStore;
+    const definitionIds = [definition.id];
+    const run = yield* executeMigrationRun(
+      store,
+      definitionIds,
+      (runId) =>
+        runRollbackMigrationDefinition(definition, runId).pipe(
+          Effect.map((summary) => ({
+            status:
+              summary.status === "failed"
+                ? ("failed" as const)
+                : ("succeeded" as const),
+            value: [summary],
+          }))
+        ),
+      () => validateRollbackPipelinePreflight(store, definition)
+    );
+
+    return {
+      kind: "rollback" as const,
+      definitions: run.value,
+      finishedAt: run.completedRun.finishedAt ?? new Date(),
+      runId: run.runState.runId,
+      startedAt: run.runState.startedAt,
+      status: rollbackStatusForDefinitions(run.value),
+    };
+  });
+
+  return program.pipe(Effect.provide(definition.store));
 };
 
 export const runMigrations = <
