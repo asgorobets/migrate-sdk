@@ -106,14 +106,31 @@ support future CLI options such as selected definitions, source identities, and
 forced dependency bypass.
 
 `rollbackMigration(definition)` rolls back all rollbackable states for that
-definition. Advanced multi-definition selection is planned as
-`rollbackMigrations(request)`. It should use the same definition selection
-semantics as `runMigrations`: omitting `definitionIds` selects all provided
-definitions. A future CLI can make per-definition rollback selection a visible
-command surface. Source identity selection should stay off
-`rollbackMigrations`; source identities are per-definition and become ambiguous
-across multiple definitions. If multi-definition identity targeting is needed
-later, it should use an explicit per-definition target shape.
+definition. Multi-definition rollback is exposed as:
+
+```ts
+yield* rollbackMigrations({
+  definitions: [authors, articles],
+});
+```
+
+Optional definition selection is supported:
+
+```ts
+yield* rollbackMigrations({
+  definitions: [authors, articles],
+  definitionIds: ["articles"],
+});
+```
+
+`rollbackMigrations(request)` uses the same definition selection semantics as
+`runMigrations`: omitting `definitionIds` selects all provided definitions, and
+provided definition ids are expanded through their dependencies. Rollback does
+not expand to dependent definitions. A future CLI can make per-definition
+rollback selection a visible command surface. Source identity selection stays
+off `rollbackMigrations`; source identities are per-definition and become
+ambiguous across multiple definitions. If multi-definition identity targeting is
+needed later, it should use an explicit per-definition target shape.
 
 ## Execution Semantics
 
@@ -127,9 +144,9 @@ the rollback run id, the rollbackable state's source identity and source
 version, and sets `previousState` to the rollbackable item state. The rollback
 pipeline remains the primary place to decide which commands to emit.
 
-The first slice locks the selected rollback definitions. Dependency preflight
-may inspect unselected dependent definitions for rollbackable item state, but it
-does not lock those unselected dependents.
+The first slice locks the selected rollback definitions after dependency
+expansion. Dependency preflight may inspect unselected dependent definitions for
+rollbackable item state, but it does not lock those unselected dependents.
 
 Successful rollback requires the entire rollback command plan to succeed. On
 success, the runtime deletes the migration item state through a dedicated
@@ -181,17 +198,19 @@ rollback run fails preflight.
 Unselected dependents with no rollbackable item state do not block rollback.
 Dependent preflight uses the transitive dependent closure, not only direct
 dependents.
-Identity-targeted rollback uses the same definition-level dependency preflight
-in the first slice. It does not attempt per-item dependent reference analysis.
+When dependency preflight is applicable through `rollbackMigrations`, it is
+definition-level. The first slice does not attempt per-item dependent reference
+analysis for identity-targeted single-definition rollback.
 Rollback dependency preflight operates over the definitions supplied to the
 request and follows the same same-store boundary as forward multi-definition
-runs.
-If dependency safety requires inspecting a dependent definition, that definition
-must be present in the request graph. The first SDK slice does not discover
-missing definitions; a future CLI may expand the supplied graph through
-definition discovery.
-Missing dependent definitions fail preflight only when they affect rollback
-safety for the selected definitions.
+runs. Unselected dependents that must be inspected for rollback safety must use
+the selected rollback graph's migration store.
+Callers are responsible for supplying the complete request graph needed for
+dependent safety checks. If a dependent definition is omitted from the request,
+this SDK slice cannot discover it. A future definition registry or CLI discovery
+layer may expand the supplied graph before calling `rollbackMigrations`.
+Missing selected dependencies still fail preflight because those edges are
+visible from the selected definitions' `dependsOn` declarations.
 
 Definitions may remain forward-only. A selected definition without a rollback
 pipeline fails preflight only when rollbackable item state is selected for that
@@ -204,7 +223,7 @@ Dependency cycles are preflight failures, as they are for forward migration
 runs.
 Rollback uses distinct rollback runtime errors for public request and preflight
 failures, such as missing rollback pipelines, unsafe dependents, missing
-dependent definitions, and empty identity selections. Store and destination
+selected dependencies, and empty identity selections. Store and destination
 errors keep their existing lower-level error types.
 
 When multiple selected definitions are valid for rollback, the runtime executes
@@ -309,10 +328,24 @@ The single-definition rollback operation includes:
 - aggregate-only `RollbackRunSummary` counts for `rolledBack`, `failed`, and
   `skipped`
 
-Remaining rollback execution work:
+The multi-definition rollback operation includes:
 
-- `rollbackMigrations` executes selected definitions in reverse dependency
-  order and blocks unselected dependents with rollbackable state.
+- `rollbackMigrations({ definitions, definitionIds })` for selected sets of
+  migration definitions
+- default selection of all provided definitions when `definitionIds` is omitted
+- the same dependency expansion semantics as `runMigrations` for selected
+  definition ids
+- selected definition locks and normal migration run lifecycle reuse
+- reverse dependency-order execution of the selected rollback definitions
+- no silent expansion to dependent definitions
+- transitive dependent preflight over the supplied request graph
+- rollback preflight failure when unselected dependents have rollbackable item
+  state
+- no blocking from unselected dependents that have no rollbackable item state
+- rollback preflight failure for selected or inspected definitions that cross
+  the migration store boundary
+- rollback preflight failure for dependency cycles and missing selected
+  dependencies before durable run creation
 
 The first rollback implementation should not add CLI commands, dry-run or
 planning mode, store pagination, a terminal rolled-back item state, or a public

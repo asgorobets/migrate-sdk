@@ -24,14 +24,19 @@ import type {
 import { toEncodedSourceCursor } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type {
+  AnyRollbackMigrationDefinition,
   RollbackableMigrationItemState,
   RollbackDefinitionRunSummary,
   RollbackMigrationOptions,
   RollbackMigrationOptionsInput,
   RollbackPipeline,
+  RollbackRequestInput,
   RollbackRunSummary,
 } from "../domain/rollback.ts";
-import { makeRollbackMigrationOptions } from "../domain/rollback.ts";
+import {
+  makeRollbackMigrationOptions,
+  makeRollbackRequest,
+} from "../domain/rollback.ts";
 import type {
   AnyMigrationDefinition,
   MigrationDefinitionRunSummary,
@@ -124,6 +129,31 @@ const invalidRollbackRequestError = (cause: unknown) =>
 const missingRollbackPipelineError = (definitionId: MigrationDefinitionId) =>
   new RollbackPreflightError({
     message: "Migration Definition does not define a rollback pipeline",
+    cause: { definitionId },
+  });
+
+const unsafeDependentRollbackError = (
+  definitionId: MigrationDefinitionId,
+  dependentDefinitionId: MigrationDefinitionId
+) =>
+  new RollbackPreflightError({
+    message:
+      "Rollback would leave dependent Migration Definition state rollbackable",
+    cause: { definitionId, dependentDefinitionId },
+  });
+
+const rollbackDependencyStoreError = (
+  definitionId: MigrationDefinitionId,
+  dependentDefinitionId: MigrationDefinitionId
+) =>
+  new RollbackPreflightError({
+    message: "Rollback dependency preflight requires one Migration Store",
+    cause: { definitionId, dependentDefinitionId },
+  });
+
+const rollbackDependencyCycleError = (definitionId: MigrationDefinitionId) =>
+  new RollbackPreflightError({
+    message: "Migration Definition dependency cycle detected",
     cause: { definitionId },
   });
 
@@ -1573,6 +1603,102 @@ const validateRollbackPipelinePreflight = (
       })
     : Effect.void;
 
+const definitionsByDependency = (
+  definitions: readonly AnyMigrationDefinition[]
+): ReadonlyMap<MigrationDefinitionId, readonly AnyMigrationDefinition[]> => {
+  const dependents = new Map<MigrationDefinitionId, AnyMigrationDefinition[]>();
+
+  for (const definition of definitions) {
+    for (const dependencyId of definition.dependsOn ?? []) {
+      const existing = dependents.get(dependencyId);
+
+      if (existing === undefined) {
+        dependents.set(dependencyId, [definition]);
+      } else {
+        existing.push(definition);
+      }
+    }
+  }
+
+  return dependents;
+};
+
+const validateRollbackDependencyPreflight = (
+  store: typeof MigrationStore.Service,
+  definitions: readonly AnyMigrationDefinition[],
+  selectedDefinitions: readonly AnyMigrationDefinition[]
+): Effect.Effect<void, MigrationStoreError | RollbackPreflightError> =>
+  Effect.gen(function* () {
+    const firstSelectedDefinition = selectedDefinitions[0];
+
+    if (firstSelectedDefinition === undefined) {
+      return;
+    }
+
+    const selectedDefinitionIds = new Set(
+      selectedDefinitions.map((definition) => definition.id)
+    );
+    const dependentsByDependency = definitionsByDependency(definitions);
+
+    for (const selectedDefinition of selectedDefinitions) {
+      const visitedDefinitionIds = new Set<MigrationDefinitionId>();
+      const activeDefinitionIds = new Set<MigrationDefinitionId>();
+
+      const visitDependent = (
+        dependentDefinition: AnyMigrationDefinition
+      ): Effect.Effect<void, MigrationStoreError | RollbackPreflightError> =>
+        Effect.gen(function* () {
+          if (visitedDefinitionIds.has(dependentDefinition.id)) {
+            return;
+          }
+
+          if (activeDefinitionIds.has(dependentDefinition.id)) {
+            return yield* rollbackDependencyCycleError(dependentDefinition.id);
+          }
+
+          activeDefinitionIds.add(dependentDefinition.id);
+
+          if (dependentDefinition.store !== firstSelectedDefinition.store) {
+            return yield* rollbackDependencyStoreError(
+              selectedDefinition.id,
+              dependentDefinition.id
+            );
+          }
+
+          if (!selectedDefinitionIds.has(dependentDefinition.id)) {
+            const hasRollbackableState =
+              yield* hasSelectedRollbackableItemState(
+                store,
+                dependentDefinition,
+                {}
+              );
+
+            if (hasRollbackableState) {
+              return yield* unsafeDependentRollbackError(
+                selectedDefinition.id,
+                dependentDefinition.id
+              );
+            }
+          }
+
+          for (const transitiveDependent of dependentsByDependency.get(
+            dependentDefinition.id
+          ) ?? []) {
+            yield* visitDependent(transitiveDependent);
+          }
+
+          activeDefinitionIds.delete(dependentDefinition.id);
+          visitedDefinitionIds.add(dependentDefinition.id);
+        });
+
+      for (const dependentDefinition of dependentsByDependency.get(
+        selectedDefinition.id
+      ) ?? []) {
+        yield* visitDependent(dependentDefinition);
+      }
+    }
+  });
+
 export function rollbackMigration<
   Source,
   Command extends DestinationCommand,
@@ -1662,6 +1788,123 @@ export function rollbackMigration<
     return program.pipe(Effect.provide(definition.store));
   });
 }
+
+export const rollbackMigrations = <
+  Definitions extends readonly AnyRollbackMigrationDefinition[],
+>(
+  input: RollbackRequestInput<Definitions>
+): Effect.Effect<RollbackRunSummary, RollbackMigrationError> => {
+  const requestEffect = Effect.try({
+    try: () => makeRollbackRequest(input),
+    catch: invalidRollbackRequestError,
+  });
+
+  return Effect.flatMap(
+    requestEffect,
+    (request): Effect.Effect<RollbackRunSummary, RollbackMigrationError> => {
+      const orderedDefinitions = orderDefinitions(
+        request.definitions,
+        request.definitionIds
+      );
+
+      if (orderedDefinitions.kind === "failed") {
+        return Effect.fail(
+          new RollbackPreflightError({
+            message: orderedDefinitions.error.message,
+            cause: orderedDefinitions.error.cause,
+          })
+        );
+      }
+
+      const firstOrderedDefinition = orderedDefinitions.definitions[0];
+
+      if (firstOrderedDefinition === undefined) {
+        return Effect.fail(
+          new RollbackRequestError({
+            message:
+              "Rollback request must include at least one Migration Definition",
+          })
+        );
+      }
+
+      const sharedStoreError = validateSharedStore(
+        orderedDefinitions.definitions
+      );
+
+      if (sharedStoreError !== null) {
+        return Effect.fail(
+          new RollbackPreflightError({
+            message: sharedStoreError.message,
+            cause: sharedStoreError.cause,
+          })
+        );
+      }
+
+      const definitionIds = orderedDefinitions.definitions.map(
+        (definition) => definition.id
+      );
+      const rollbackDefinitions = [...orderedDefinitions.definitions].reverse();
+      const options: RollbackMigrationOptions = {};
+
+      const program = Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        const run = yield* executeMigrationRun(
+          store,
+          definitionIds,
+          (runId) =>
+            Effect.gen(function* () {
+              const summaries: RollbackDefinitionRunSummary[] = [];
+
+              for (const definition of rollbackDefinitions) {
+                const summary = yield* runRollbackMigrationDefinition(
+                  definition,
+                  runId,
+                  options
+                );
+                summaries.push(summary);
+              }
+
+              return {
+                status: rollbackStatusForDefinitions(summaries),
+                value: summaries,
+              };
+            }),
+          () =>
+            validateRollbackDependencyPreflight(
+              store,
+              request.definitions,
+              orderedDefinitions.definitions
+            ).pipe(
+              Effect.andThen(
+                Effect.forEach(
+                  rollbackDefinitions,
+                  (definition) =>
+                    validateRollbackPipelinePreflight(
+                      store,
+                      definition,
+                      options
+                    ),
+                  { discard: true }
+                )
+              )
+            )
+        );
+
+        return {
+          kind: "rollback" as const,
+          definitions: run.value,
+          finishedAt: run.completedRun.finishedAt ?? new Date(),
+          runId: run.runState.runId,
+          startedAt: run.runState.startedAt,
+          status: rollbackStatusForDefinitions(run.value),
+        };
+      });
+
+      return program.pipe(Effect.provide(firstOrderedDefinition.store));
+    }
+  );
+};
 
 export const runMigrations = <
   Definitions extends readonly AnyMigrationDefinition[],

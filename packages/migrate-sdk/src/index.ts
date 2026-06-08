@@ -149,6 +149,7 @@ export { SourcePlugin } from "./services/source-plugin.ts";
 
 export {
   rollbackMigration,
+  rollbackMigrations,
   runMigration,
   runMigrations,
 } from "./runtime/run-migrations.ts";
