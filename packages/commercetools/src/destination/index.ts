@@ -3,10 +3,17 @@
 
 export type {
   CommercetoolsDestination,
+  CommercetoolsDestinationBaseOptions,
   CommercetoolsDestinationCommand,
   CommercetoolsDestinationCommands,
+  CommercetoolsDestinationHelpers,
   CommercetoolsDestinationOptions,
+  CommercetoolsDestinationWithProductTypesOptions,
+  CommercetoolsProductAttributeBag,
+  CommercetoolsProductAttributeSchema,
+  CommercetoolsProductAttributeSchemas,
   CommercetoolsProductCommands,
+  CommercetoolsProductHelpers,
   CommercetoolsProductSelector,
   CreateProductDraftCommand as CreateProductDraftCommandType,
   PublishProductCommand as PublishProductCommandType,
