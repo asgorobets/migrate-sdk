@@ -1,0 +1,37 @@
+{
+  "name": "@migrate-sdk/commercetools",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "sideEffects": [],
+  "exports": {
+    ".": "./src/index.ts",
+    "./destination": "./src/destination/index.ts",
+    "./source": "./src/source/index.ts",
+    "./testing": "./src/testing/index.ts",
+    "./internal/*": null,
+    "./*/internal/*": null
+  },
+  "scripts": {
+    "check-types": "tsc --noEmit -p tsconfig.json",
+    "prepare": "effect-language-service patch",
+    "prototype:products": "tsx src/prototypes/product-destination.ts"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.75",
+    "migrate-sdk": "0.0.0"
+  },
+  "devDependencies": {
+    "@effect/language-service": "^0.86.2",
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "^22.15.3",
+    "effect": "4.0.0-beta.75",
+    "migrate-sdk": "workspace:*",
+    "tsx": "^4.22.4",
+    "typescript": "5.9.2"
+  },
+  "dependencies": {
+    "@commercetools/platform-sdk": "^8.27.0",
+    "@commercetools/sdk-client-v2": "^3.5.0"
+  }
+}
