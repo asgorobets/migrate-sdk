@@ -4,15 +4,22 @@ import {
   type MigrationDefinitionId,
   toMigrationDefinitionId,
 } from "../domain/ids.ts";
-import type { MigrationDefinitionRegistry } from "../domain/registry.ts";
+import type {
+  MigrationDefinitionRegistry,
+  MigrationDefinitionRegistryRollbackInput,
+  MigrationDefinitionRegistryRunInput,
+} from "../domain/registry.ts";
 import {
   loadMigrationCliConfig,
   type MigrationCliConfigLoadError,
 } from "./config-loader.ts";
 import {
   renderConfigLoadError,
+  renderPlanningError,
   renderRegistryGraph,
   renderRegistryList,
+  renderRollbackPlan,
+  renderRunPlan,
 } from "./render.ts";
 import { MigrationCliRuntime } from "./runtime.ts";
 
@@ -21,7 +28,7 @@ const config = Flag.string("config").pipe(
   Flag.withDescription("Path to a migrate.config.ts, .mts, .js, or .mjs file")
 );
 
-const migrateBaseCommand = Command.make("migrate-sdk").pipe(
+const migrateBaseCommand = Command.make("migrate").pipe(
   Command.withSharedFlags({ config })
 );
 
@@ -106,7 +113,261 @@ const graphCommand = Command.make(
     })
 ).pipe(Command.withDescription("Inspect Migration Definition dependencies"));
 
+const plan = Flag.boolean("plan").pipe(
+  Flag.withDescription("Print the execution plan without running migrations")
+);
+
+const all = Flag.boolean("all").pipe(
+  Flag.withDescription("Select every registered Migration Definition")
+);
+
+const withDependencies = Flag.boolean("with-dependencies").pipe(
+  Flag.withDescription("Expand required Migration Definition dependencies")
+);
+
+const failed = Flag.boolean("failed").pipe(
+  Flag.withDescription("Plan a rerun of failed items")
+);
+
+const skipped = Flag.boolean("skipped").pipe(
+  Flag.withDescription("Plan a rerun of skipped items")
+);
+
+const ids = Flag.string("ids").pipe(
+  Flag.optional,
+  Flag.withDescription("Comma-separated source identity targets")
+);
+
+const runDefinitions = Argument.string("definition").pipe(Argument.variadic());
+
+const decodeSourceIdentityTarget = (
+  segment: string
+): Effect.Effect<string, CliError.UserError> =>
+  Effect.try({
+    try: () => decodeURIComponent(segment),
+    catch: () => "--ids contains invalid percent encoding",
+  }).pipe(
+    Effect.catch((message) => failReportedCliMessage(message)),
+    Effect.flatMap((decodedSegment) =>
+      decodedSegment.length === 0
+        ? failReportedCliMessage(
+            "--ids must not contain empty source identities"
+          )
+        : Effect.succeed(decodedSegment)
+    )
+  );
+
+const parseSourceIdentityTargets = (
+  input: string
+): Effect.Effect<readonly string[], CliError.UserError> => {
+  const segments = input.split(",");
+
+  if (segments.some((segment) => segment.length === 0)) {
+    return failReportedCliMessage(
+      "--ids must not contain empty comma-separated segments"
+    );
+  }
+
+  return Effect.forEach(segments, decodeSourceIdentityTarget);
+};
+
+const makeRunPlanInput = (input: {
+  readonly all: boolean;
+  readonly definitionIds: readonly string[];
+  readonly mode?: "failed" | "skipped";
+  readonly sourceIdentities?: readonly string[];
+  readonly withDependencies: boolean;
+}): MigrationDefinitionRegistryRunInput => {
+  if (input.all) {
+    return input.definitionIds.length === 0
+      ? {
+          all: true,
+          ...(input.sourceIdentities === undefined
+            ? {}
+            : { sourceIdentities: input.sourceIdentities }),
+          ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
+          withDependencies: input.withDependencies,
+        }
+      : ({
+          all: true,
+          definitionIds: input.definitionIds,
+          ...(input.sourceIdentities === undefined
+            ? {}
+            : { sourceIdentities: input.sourceIdentities }),
+          ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
+          withDependencies: input.withDependencies,
+        } as MigrationDefinitionRegistryRunInput);
+  }
+
+  return input.definitionIds.length === 0
+    ? ({} as MigrationDefinitionRegistryRunInput)
+    : {
+        definitionIds: input.definitionIds as [string, ...string[]],
+        ...(input.sourceIdentities === undefined
+          ? {}
+          : { sourceIdentities: input.sourceIdentities }),
+        ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
+        withDependencies: input.withDependencies,
+      };
+};
+
+const makeRollbackPlanInput = (input: {
+  readonly all: boolean;
+  readonly definitionIds: readonly string[];
+  readonly sourceIdentities?: readonly string[];
+  readonly withDependencies: boolean;
+}): MigrationDefinitionRegistryRollbackInput => {
+  if (input.all) {
+    return input.definitionIds.length === 0
+      ? {
+          all: true,
+          ...(input.sourceIdentities === undefined
+            ? {}
+            : { sourceIdentities: input.sourceIdentities }),
+          withDependencies: input.withDependencies,
+        }
+      : ({
+          all: true,
+          definitionIds: input.definitionIds,
+          ...(input.sourceIdentities === undefined
+            ? {}
+            : { sourceIdentities: input.sourceIdentities }),
+          withDependencies: input.withDependencies,
+        } as MigrationDefinitionRegistryRollbackInput);
+  }
+
+  return input.definitionIds.length === 0
+    ? ({} as MigrationDefinitionRegistryRollbackInput)
+    : {
+        definitionIds: input.definitionIds as [string, ...string[]],
+        ...(input.sourceIdentities === undefined
+          ? {}
+          : { sourceIdentities: input.sourceIdentities }),
+        withDependencies: input.withDependencies,
+      };
+};
+
+const runCommand = Command.make(
+  "run",
+  {
+    all,
+    definitions: runDefinitions,
+    failed,
+    ids,
+    plan,
+    skipped,
+    withDependencies,
+  },
+  (input) =>
+    Effect.gen(function* () {
+      if (!input.plan) {
+        return yield* failReportedCliMessage(
+          "Migration execution is not implemented yet. Pass --plan to inspect the run plan."
+        );
+      }
+
+      if (input.failed && input.skipped) {
+        return yield* failReportedCliMessage(
+          "Run planning cannot combine --failed and --skipped"
+        );
+      }
+
+      const registry = yield* loadConfiguredRegistry;
+      const idsInput = Option.getOrUndefined(input.ids);
+      const sourceIdentities =
+        idsInput === undefined
+          ? undefined
+          : yield* parseSourceIdentityTargets(idsInput);
+      let mode: "failed" | "skipped" | undefined;
+
+      if (input.failed) {
+        mode = "failed";
+      } else if (input.skipped) {
+        mode = "skipped";
+      }
+      const plan = yield* registry
+        .planRun(
+          makeRunPlanInput({
+            all: input.all,
+            definitionIds: input.definitions,
+            ...(mode === undefined ? {} : { mode }),
+            ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
+            withDependencies: input.withDependencies,
+          })
+        )
+        .pipe(
+          Effect.catch((error) =>
+            failReportedCliMessage(
+              renderPlanningError(error, {
+                command: "run",
+                definitionIds: input.definitions,
+                hasTarget: sourceIdentities !== undefined,
+                ...(mode === undefined ? {} : { mode }),
+              })
+            )
+          )
+        );
+
+      yield* Console.log(
+        renderRunPlan(plan, { ...(mode === undefined ? {} : { mode }) })
+      );
+    })
+).pipe(Command.withDescription("Plan or run Migration Definitions"));
+
+const rollbackCommand = Command.make(
+  "rollback",
+  {
+    all,
+    definitions: runDefinitions,
+    ids,
+    plan,
+    withDependencies,
+  },
+  (input) =>
+    Effect.gen(function* () {
+      if (!input.plan) {
+        return yield* failReportedCliMessage(
+          "Migration rollback execution is not implemented yet. Pass --plan to inspect the rollback plan."
+        );
+      }
+
+      const registry = yield* loadConfiguredRegistry;
+      const idsInput = Option.getOrUndefined(input.ids);
+      const sourceIdentities =
+        idsInput === undefined
+          ? undefined
+          : yield* parseSourceIdentityTargets(idsInput);
+      const plan = yield* registry
+        .planRollback(
+          makeRollbackPlanInput({
+            all: input.all,
+            definitionIds: input.definitions,
+            ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
+            withDependencies: input.withDependencies,
+          })
+        )
+        .pipe(
+          Effect.catch((error) =>
+            failReportedCliMessage(
+              renderPlanningError(error, {
+                command: "rollback",
+                definitionIds: input.definitions,
+                hasTarget: sourceIdentities !== undefined,
+              })
+            )
+          )
+        );
+
+      yield* Console.log(renderRollbackPlan(plan));
+    })
+).pipe(Command.withDescription("Plan or rollback Migration Definitions"));
+
 export const migrateCommand = migrateBaseCommand.pipe(
   Command.withDescription("Migration SDK CLI"),
-  Command.withSubcommands([listCommand, graphCommand])
+  Command.withSubcommands([
+    listCommand,
+    graphCommand,
+    runCommand,
+    rollbackCommand,
+  ])
 );

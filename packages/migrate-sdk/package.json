@@ -5,7 +5,7 @@
   "private": true,
   "sideEffects": [],
   "bin": {
-    "migrate-sdk": "./bin/migrate-sdk.mjs"
+    "migrate": "./bin/migrate-sdk.mjs"
   },
   "exports": {
     ".": "./src/index.ts",

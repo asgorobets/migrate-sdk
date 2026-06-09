@@ -127,6 +127,59 @@ const graphConfigSource = (): string => `
   });
 `;
 
+const planConfigSource = (): string => `
+  import { MigrationDefinitionRegistry, toMigrationDefinitionId } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const definition = (id: string, input: Record<string, unknown> = {}) => ({
+    id: toMigrationDefinitionId(id),
+    pipeline: () => {
+      throw new Error(id + " executed");
+    },
+    ...input
+  });
+
+  const authors = definition("authors");
+  const articles = definition("articles", {
+    dependencies: {
+      required: [toMigrationDefinitionId("authors")],
+      optional: [toMigrationDefinitionId("tags")]
+    },
+    rollback: () => ({ kind: "noop" })
+  });
+  const tags = definition("tags", {
+    rollback: () => ({ kind: "noop" })
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [tags, articles, authors] as never
+    })
+  });
+`;
+
+const planNoticeConfigSource = (): string => `
+  import { MigrationDefinitionRegistry, toMigrationDefinitionId } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const definition = (id: string, optional: readonly string[] = []) => ({
+    id: toMigrationDefinitionId(id),
+    dependencies: {
+      required: [],
+      optional: optional.map(toMigrationDefinitionId)
+    }
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [
+        definition("articles", ["tags"]),
+        definition("tags", ["articles"])
+      ] as never
+    })
+  });
+`;
+
 describe("migrate CLI", () => {
   it.effect(
     "lists static registry metadata from an explicit TypeScript config",
@@ -321,6 +374,812 @@ describe("migrate CLI", () => {
       expect(result.stdout).toContain("Migration Dependency Graph");
       expect(result.stdout).toContain("No dependencies.");
       expect(result.stdout).not.toContain("-->");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "renders a run plan with requested and execution order without executing",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          planConfigSource()
+        );
+
+        const result = yield* runCli(
+          [
+            "run",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "--with-dependencies",
+            "articles",
+            "tags",
+          ],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Run plan");
+        expect(result.stdout).toContain("Requested:\narticles\ntags");
+        expect(result.stdout).toContain("Included:\ntags\narticles\nauthors");
+        expect(result.stdout).toContain(
+          "Execution order:\n1. tags\n2. authors\n3. articles"
+        );
+        expect(result.stdout).not.toContain("executed");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders a rollback plan with target ids", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "rollback",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--ids",
+          "article-1,article-2",
+          "tags",
+        ],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Rollback plan");
+      expect(result.stdout).toContain("Requested:\ntags");
+      expect(result.stdout).toContain("Target ids:\narticle-1, article-2");
+      expect(result.stdout).toContain("Included:\ntags");
+      expect(result.stdout).toContain("Execution order:\n1. tags");
+      expect(result.stdout).not.toContain("executed");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "renders rollback requested order separately from execution order",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          planConfigSource()
+        );
+
+        const result = yield* runCli(
+          [
+            "rollback",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "authors",
+            "articles",
+          ],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Requested:\nauthors\narticles");
+        expect(result.stdout).toContain("Included:\narticles\nauthors");
+        expect(result.stdout).toContain(
+          "Execution order:\n1. articles\n2. authors"
+        );
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders run plan notices", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planNoticeConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "articles",
+          "articles",
+          "tags",
+        ],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run plan");
+      expect(result.stdout).toContain("Requested:\narticles\narticles\ntags");
+      expect(result.stdout).toContain(
+        "Notices:\n- Duplicate requested definition ignored: articles"
+      );
+      expect(result.stdout).toContain(
+        "- Ignored optional dependency cycle: articles -> tags -> articles"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "renders missing required dependency suggestions for run plans",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          planConfigSource()
+        );
+
+        const result = yield* runCli(
+          ["run", "--config", "migrate.config.ts", "--plan", "articles"],
+          project
+        );
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain(
+          "Migration Definition selection is missing required dependencies"
+        );
+        expect(result.stderr).toContain(
+          "articles is missing required dependencies: authors"
+        );
+        expect(result.stderr).toContain(
+          "migrate run --plan --with-dependencies articles"
+        );
+        expect(result.stderr).toContain("migrate run --plan authors articles");
+        expect(result.stderr).not.toContain(
+          "MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError"
+        );
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("preserves run mode flags in missing dependency suggestions", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--failed",
+          "articles",
+        ],
+        project
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        "migrate run --plan --failed --with-dependencies articles"
+      );
+      expect(result.stderr).toContain(
+        "migrate run --plan --failed authors articles"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "does not render missing dependency suggestions for targeted plans",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          planConfigSource()
+        );
+
+        const runResult = yield* runCli(
+          [
+            "run",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "--ids",
+            "article-1",
+            "articles",
+          ],
+          project
+        );
+        const rollbackResult = yield* runCli(
+          [
+            "rollback",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "--ids",
+            "article-1",
+            "articles",
+          ],
+          project
+        );
+
+        for (const result of [runResult, rollbackResult]) {
+          expect(result.exitCode).toBe(1);
+          expect(result.stderr).toContain(
+            "Migration Definition selection is missing required dependencies"
+          );
+          expect(result.stderr).toContain(
+            "articles is missing required dependencies: authors"
+          );
+          expect(result.stderr).not.toContain("Try:");
+          expect(result.stderr).not.toContain("--with-dependencies");
+          expect(result.stderr).not.toContain("authors articles");
+        }
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "renders rollback missing dependency suggestions with dependency expansion first",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          planConfigSource()
+        );
+
+        const result = yield* runCli(
+          ["rollback", "--config", "migrate.config.ts", "--plan", "articles"],
+          project
+        );
+        const expansionSuggestion =
+          "migrate rollback --plan --with-dependencies articles";
+        const explicitSuggestion = "migrate rollback --plan authors articles";
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain(
+          "Migration Definition selection is missing required dependencies"
+        );
+        expect(result.stderr.indexOf(expansionSuggestion)).toBeGreaterThan(-1);
+        expect(result.stderr.indexOf(expansionSuggestion)).toBeLessThan(
+          result.stderr.indexOf(explicitSuggestion)
+        );
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders failed and skipped run modes in run plans", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--plan", "--failed", "tags"],
+        project
+      );
+      const skippedResult = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--plan", "--skipped", "tags"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run plan");
+      expect(result.stdout).toContain("Mode:\nfailed");
+      expect(result.stdout).toContain("Execution order:\n1. tags");
+      expect(skippedResult.stderr).toBe("");
+      expect(skippedResult.exitCode).toBe(0);
+      expect(skippedResult.stdout).toContain("Mode:\nskipped");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects generic and conflicting run mode flags", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const genericModeResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--mode",
+          "failed",
+          "tags",
+        ],
+        project
+      );
+      const conflictingModeResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--failed",
+          "--skipped",
+          "tags",
+        ],
+        project
+      );
+
+      expect(genericModeResult.exitCode).toBe(1);
+      expect(genericModeResult.stderr).toContain("Unrecognized flag: --mode");
+      expect(conflictingModeResult.exitCode).toBe(1);
+      expect(conflictingModeResult.stderr).toContain(
+        "Run planning cannot combine --failed and --skipped"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("expands required dependencies only", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--with-dependencies",
+          "articles",
+        ],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Included:\narticles\nauthors");
+      expect(result.stdout).not.toContain("Included:\ntags\narticles\nauthors");
+      expect(result.stdout).toContain(
+        "Execution order:\n1. authors\n2. articles"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "parses encoded target ids and renders duplicate target notices",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          planConfigSource()
+        );
+
+        const result = yield* runCli(
+          [
+            "rollback",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "--ids",
+            "article%2C1,article-2,article%2C1",
+            "tags",
+          ],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Target ids:\narticle,1, article-2");
+        expect(result.stdout).toContain(
+          "Notices:\n- Duplicate target id ignored: article,1"
+        );
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects malformed ids before planning", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const emptySegmentResult = yield* runCli(
+        [
+          "rollback",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--ids",
+          "article-1,,article-2",
+          "tags",
+        ],
+        project
+      );
+      const invalidEncodingResult = yield* runCli(
+        [
+          "rollback",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--ids",
+          "article-%E0%A4%A",
+          "tags",
+        ],
+        project
+      );
+
+      expect(emptySegmentResult.exitCode).toBe(1);
+      expect(emptySegmentResult.stderr).toContain(
+        "--ids must not contain empty comma-separated segments"
+      );
+      expect(emptySegmentResult.stderr).not.toContain(
+        "Migration Definition selection is missing required dependencies"
+      );
+      expect(invalidEncodingResult.exitCode).toBe(1);
+      expect(invalidEncodingResult.stderr).toContain(
+        "--ids contains invalid percent encoding"
+      );
+      expect(invalidEncodingResult.stderr).not.toContain(
+        "Migration Definition selection is missing required dependencies"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders run item target ids", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--ids",
+          "article%2C1",
+          "tags",
+        ],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run plan");
+      expect(result.stdout).toContain("Requested:\ntags");
+      expect(result.stdout).toContain("Target ids:\narticle,1");
+      expect(result.stdout).toContain("Execution order:\n1. tags");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects incompatible run item targeting combinations", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const multipleIdsResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--ids",
+          "article-1,article-2",
+          "tags",
+        ],
+        project
+      );
+      const allResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--all",
+          "--ids",
+          "article-1",
+        ],
+        project
+      );
+      const multipleDefinitionsResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--ids",
+          "article-1",
+          "tags",
+          "authors",
+        ],
+        project
+      );
+      const expandedResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--with-dependencies",
+          "--ids",
+          "article-1",
+          "tags",
+        ],
+        project
+      );
+      const failedResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--failed",
+          "--ids",
+          "article-1",
+          "tags",
+        ],
+        project
+      );
+      const skippedResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--skipped",
+          "--ids",
+          "article-1",
+          "tags",
+        ],
+        project
+      );
+
+      expect(multipleIdsResult.exitCode).toBe(1);
+      expect(multipleIdsResult.stderr).toContain(
+        "Run source identity targeting requires exactly one source identity"
+      );
+      expect(allResult.exitCode).toBe(1);
+      expect(allResult.stderr).toContain(
+        "Run source identity targeting requires exactly one explicit Migration Definition id"
+      );
+      expect(multipleDefinitionsResult.exitCode).toBe(1);
+      expect(multipleDefinitionsResult.stderr).toContain(
+        "Run source identity targeting requires exactly one explicit Migration Definition id"
+      );
+      expect(expandedResult.exitCode).toBe(1);
+      expect(expandedResult.stderr).toContain(
+        "Run source identity targeting cannot expand required dependencies"
+      );
+      expect(failedResult.exitCode).toBe(1);
+      expect(failedResult.stderr).toContain(
+        "Run source identity targeting cannot combine with another run mode"
+      );
+      expect(skippedResult.exitCode).toBe(1);
+      expect(skippedResult.stderr).toContain(
+        "Run source identity targeting cannot combine with another run mode"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects incompatible rollback targeting combinations", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const allResult = yield* runCli(
+        [
+          "rollback",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--all",
+          "--ids",
+          "article-1",
+        ],
+        project
+      );
+      const multipleDefinitionsResult = yield* runCli(
+        [
+          "rollback",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--ids",
+          "article-1",
+          "tags",
+          "authors",
+        ],
+        project
+      );
+      const expandedResult = yield* runCli(
+        [
+          "rollback",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--with-dependencies",
+          "--ids",
+          "article-1",
+          "tags",
+        ],
+        project
+      );
+
+      expect(allResult.exitCode).toBe(1);
+      expect(allResult.stderr).toContain(
+        "Rollback source identity targeting requires exactly one explicit Migration Definition id"
+      );
+      expect(multipleDefinitionsResult.exitCode).toBe(1);
+      expect(multipleDefinitionsResult.stderr).toContain(
+        "Rollback source identity targeting requires exactly one explicit Migration Definition id"
+      );
+      expect(expandedResult.exitCode).toBe(1);
+      expect(expandedResult.stderr).toContain(
+        "Rollback source identity targeting cannot expand required dependencies"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders all-registry plans and rejects omitted scope", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const runAllResult = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--plan", "--all"],
+        project
+      );
+      const rollbackAllResult = yield* runCli(
+        ["rollback", "--config", "migrate.config.ts", "--plan", "--all"],
+        project
+      );
+      const runOmittedScopeResult = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--plan"],
+        project
+      );
+      const rollbackOmittedScopeResult = yield* runCli(
+        ["rollback", "--config", "migrate.config.ts", "--plan"],
+        project
+      );
+
+      expect(runAllResult.stderr).toBe("");
+      expect(runAllResult.exitCode).toBe(0);
+      expect(runAllResult.stdout).toContain("Requested:\nall");
+      expect(runAllResult.stdout).toContain(
+        "Included:\ntags\narticles\nauthors"
+      );
+      expect(runAllResult.stdout).toContain(
+        "Execution order:\n1. tags\n2. authors\n3. articles"
+      );
+      expect(rollbackAllResult.stderr).toBe("");
+      expect(rollbackAllResult.exitCode).toBe(0);
+      expect(rollbackAllResult.stdout).toContain("Requested:\nall");
+      expect(rollbackAllResult.stdout).toContain(
+        "Execution order:\n1. articles\n2. authors\n3. tags"
+      );
+      expect(runOmittedScopeResult.exitCode).toBe(1);
+      expect(runOmittedScopeResult.stderr).toContain(
+        "Registry planning requires all: true or at least one Migration Definition id"
+      );
+      expect(rollbackOmittedScopeResult.exitCode).toBe(1);
+      expect(rollbackOmittedScopeResult.stderr).toContain(
+        "Registry planning requires all: true or at least one Migration Definition id"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects unsupported CLI plan flags", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const jsonResult = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--plan", "--json", "tags"],
+        project
+      );
+      const dependencyAliasResult = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--plan", "-w", "tags"],
+        project
+      );
+      const sourceIdentityResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--source-identity",
+          "article-1",
+          "tags",
+        ],
+        project
+      );
+
+      expect(jsonResult.exitCode).toBe(1);
+      expect(jsonResult.stderr).toContain("Unrecognized flag: --json");
+      expect(dependencyAliasResult.exitCode).toBe(1);
+      expect(dependencyAliasResult.stderr).toContain("Unrecognized flag: -w");
+      expect(sourceIdentityResult.exitCode).toBe(1);
+      expect(sourceIdentityResult.stderr).toContain(
+        "Unrecognized flag: --source-identity"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders migrate as the command name in help", () =>
+    Effect.gen(function* () {
+      const project = yield* makeProject;
+
+      const result = yield* runCli(["--help"], project);
+
+      expect(result.stderr).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("USAGE\n  migrate <subcommand> [flags]");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 

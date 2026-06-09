@@ -767,8 +767,17 @@ describe("MigrationDefinitionRegistry", () => {
     Effect.gen(function* () {
       const articles = makeDefinition({ id: "articles" });
       const authors = makeDefinition({ id: "authors" });
+      const dependentArticles = makeDefinition({
+        id: "dependent-articles",
+        dependencies: {
+          required: ["authors"],
+        },
+      });
       const registry = MigrationDefinitionRegistry.make({
         definitions: [authors, articles] as const,
+      });
+      const dependencyRegistry = MigrationDefinitionRegistry.make({
+        definitions: [authors, dependentArticles] as const,
       });
 
       const multipleRunTargetsError = yield* Effect.flip(
@@ -834,6 +843,51 @@ describe("MigrationDefinitionRegistry", () => {
         })
       );
       expect(rollbackExpandedTargetError).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message:
+            "Rollback source identity targeting cannot expand required dependencies",
+        })
+      );
+
+      const runExpandedTargetError = yield* Effect.flip(
+        dependencyRegistry.run({
+          definitionIds: ["dependent-articles"],
+          sourceIdentities: ["article-1"],
+          withDependencies: true,
+        })
+      );
+      expect(runExpandedTargetError).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message:
+            "Run source identity targeting cannot expand required dependencies",
+        })
+      );
+
+      const runTargetMissingDependencyError = yield* Effect.flip(
+        dependencyRegistry.run({
+          definitionIds: ["dependent-articles"],
+          sourceIdentities: ["article-1"],
+        })
+      );
+      expect(runTargetMissingDependencyError).toEqual(
+        new MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError(
+          {
+            definitionId: toMigrationDefinitionId("dependent-articles"),
+            message:
+              "Migration Definition selection is missing required dependencies",
+            missingDependencyIds: [toMigrationDefinitionId("authors")],
+          }
+        )
+      );
+
+      const rollbackExpandedTargetRunnerError = yield* Effect.flip(
+        dependencyRegistry.rollback({
+          definitionIds: ["dependent-articles"],
+          sourceIdentities: ["article-1"],
+          withDependencies: true,
+        })
+      );
+      expect(rollbackExpandedTargetRunnerError).toEqual(
         new MigrationDefinitionRegistryInvalidSelectionError({
           message:
             "Rollback source identity targeting cannot expand required dependencies",
