@@ -20,9 +20,26 @@ export type {
   NonEmptyBusinessUnitUpdateActions,
 } from "./business-unit-update-builder.ts";
 export type {
+  CustomerUpdateAction,
+  CustomerUpdateActionByName,
+  CustomerUpdateActionInput,
+  CustomerUpdateActionName,
+} from "./customer-actions.ts";
+export type {
+  CustomerUpdateActionBuilder,
+  CustomerUpdateCommandShape,
+  EmptyCustomerUpdateActionBuilder,
+  CustomerUpdateFactory,
+  CustomerUpdateInput,
+  CustomerUpdateWithActionsInput,
+  NonEmptyCustomerUpdateActions,
+} from "./plugin.ts";
+export type {
   CommercetoolsBusinessUnitSelector,
   CommercetoolsBusinessUnitHelpers,
   CommercetoolsBusinessUnitCommands,
+  CommercetoolsCustomerCommands,
+  CommercetoolsCustomerSelector,
   CommercetoolsDestination,
   CommercetoolsDestinationBaseOptions,
   CommercetoolsDestinationCommand,
@@ -33,7 +50,9 @@ export type {
   CommercetoolsDestinationWithProductTypesAndBusinessUnitCustomTypesOptions,
   CommercetoolsDestinationWithProductTypesOptions,
   CreateBusinessUnitDraftCommand as CreateBusinessUnitDraftCommandType,
+  CreateCustomerDraftCommand as CreateCustomerDraftCommandType,
   UpdateBusinessUnitCommand as UpdateBusinessUnitCommandType,
+  UpdateCustomerCommand as UpdateCustomerCommandType,
 } from "./plugin.ts";
 export type {
   CommercetoolsProductAttributeBag,
@@ -59,9 +78,12 @@ export type {
 } from "./product-update-builder.ts";
 export {
   CommercetoolsBusinessUnitSelectorSchema,
+  CommercetoolsCustomerSelectorSchema,
   CommercetoolsDestinationPlugin,
   CreateBusinessUnitDraftCommand,
+  CreateCustomerDraftCommand,
   UpdateBusinessUnitCommand,
+  UpdateCustomerCommand,
 } from "./plugin.ts";
 export {
   CommercetoolsProductSelectorSchema,

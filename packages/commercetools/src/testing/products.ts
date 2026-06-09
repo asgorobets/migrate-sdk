@@ -5,6 +5,11 @@ import type {
   BusinessUnitUpdate,
   BusinessUnitUpdateAction,
   ClientRequest,
+  Customer,
+  CustomerDraft,
+  CustomerSignInResult,
+  CustomerUpdate,
+  CustomerUpdateAction,
   Product,
   ProductData,
   ProductDraft,
@@ -17,6 +22,8 @@ import { ApiRoot as PlatformApiRoot } from "@commercetools/platform-sdk";
 export type RecordedCommercetoolsRequestBody =
   | BusinessUnitDraft
   | BusinessUnitUpdate
+  | CustomerDraft
+  | CustomerUpdate
   | ProductDraft
   | ProductUpdate;
 
@@ -47,6 +54,11 @@ const isBusinessUnitUpdate = (
 ): value is BusinessUnitUpdate =>
   isRecord(value) && "actions" in value && Array.isArray(value.actions);
 
+const isCustomerUpdate = (
+  value: ClientRequest["body"]
+): value is CustomerUpdate =>
+  isRecord(value) && "actions" in value && Array.isArray(value.actions);
+
 const isProductDraft = (value: ClientRequest["body"]): value is ProductDraft =>
   isRecord(value) &&
   "productType" in value &&
@@ -58,6 +70,10 @@ const isBusinessUnitDraft = (
 ): value is BusinessUnitDraft =>
   isRecord(value) && "key" in value && "name" in value && "unitType" in value;
 
+const isCustomerDraft = (
+  value: ClientRequest["body"]
+): value is CustomerDraft => isRecord(value) && "email" in value;
+
 const requestBody = (
   request: ClientRequest
 ): RecordedCommercetoolsRequestBody | undefined => {
@@ -65,7 +81,9 @@ const requestBody = (
     isProductDraft(request.body) ||
     isProductUpdate(request.body) ||
     isBusinessUnitDraft(request.body) ||
-    isBusinessUnitUpdate(request.body)
+    isBusinessUnitUpdate(request.body) ||
+    isCustomerDraft(request.body) ||
+    isCustomerUpdate(request.body)
   ) {
     return request.body;
   }
@@ -288,11 +306,121 @@ const applyRecordedBusinessUnitAction = (
 const isBusinessUnitRequest = (request: ClientRequest): boolean =>
   request.uriTemplate?.includes("business-units") === true;
 
+const recordedCustomer = ({
+  draft,
+  id,
+  version,
+}: {
+  readonly draft: CustomerDraft;
+  readonly id: string;
+  readonly version: number;
+}): Customer => ({
+  addresses: [],
+  authenticationMode: draft.authenticationMode ?? "Password",
+  billingAddressIds: [],
+  createdAt: "2026-01-01T00:00:00.000Z",
+  customerGroupAssignments: [],
+  ...(draft.companyName === undefined
+    ? {}
+    : { companyName: draft.companyName }),
+  ...(draft.customerNumber === undefined
+    ? {}
+    : { customerNumber: draft.customerNumber }),
+  ...(draft.dateOfBirth === undefined
+    ? {}
+    : { dateOfBirth: draft.dateOfBirth }),
+  email: draft.email,
+  ...(draft.externalId === undefined ? {} : { externalId: draft.externalId }),
+  ...(draft.firstName === undefined ? {} : { firstName: draft.firstName }),
+  id,
+  isEmailVerified: draft.isEmailVerified ?? false,
+  ...(draft.key === undefined ? {} : { key: draft.key }),
+  ...(draft.lastName === undefined ? {} : { lastName: draft.lastName }),
+  lastModifiedAt: "2026-01-01T00:00:00.000Z",
+  ...(draft.locale === undefined ? {} : { locale: draft.locale }),
+  ...(draft.middleName === undefined ? {} : { middleName: draft.middleName }),
+  ...(draft.password === undefined ? {} : { password: draft.password }),
+  ...(draft.salutation === undefined ? {} : { salutation: draft.salutation }),
+  shippingAddressIds: [],
+  stores: [],
+  ...(draft.title === undefined ? {} : { title: draft.title }),
+  ...(draft.vatId === undefined ? {} : { vatId: draft.vatId }),
+  version,
+});
+
+const recordedCustomerSignInResult = ({
+  draft,
+  id,
+  version,
+}: {
+  readonly draft: CustomerDraft;
+  readonly id: string;
+  readonly version: number;
+}): CustomerSignInResult => ({
+  customer: recordedCustomer({
+    draft,
+    id,
+    version,
+  }),
+});
+
+const setOptionalCustomerField = <
+  const Field extends keyof CustomerDraft,
+  const Value extends CustomerDraft[Field],
+>(
+  draft: CustomerDraft,
+  field: Field,
+  value: Value | undefined
+): CustomerDraft => {
+  if (value === undefined) {
+    const nextDraft = {
+      ...draft,
+    };
+
+    delete nextDraft[field];
+
+    return nextDraft;
+  }
+
+  return {
+    ...draft,
+    [field]: value,
+  };
+};
+
+const applyRecordedCustomerAction = (
+  draft: CustomerDraft,
+  action: CustomerUpdateAction
+): CustomerDraft => {
+  switch (action.action) {
+    case "changeEmail":
+      return {
+        ...draft,
+        email: action.email,
+      };
+    case "setCompanyName":
+      return setOptionalCustomerField(draft, "companyName", action.companyName);
+    case "setFirstName":
+      return setOptionalCustomerField(draft, "firstName", action.firstName);
+    case "setKey":
+      return setOptionalCustomerField(draft, "key", action.key);
+    case "setLastName":
+      return setOptionalCustomerField(draft, "lastName", action.lastName);
+    default:
+      return draft;
+  }
+};
+
+const isCustomerRequest = (request: ClientRequest): boolean =>
+  request.uriTemplate?.includes("customers") === true;
+
 export const makeRecordingCommercetoolsApiRoot =
   (): RecordingCommercetoolsApiRoot => {
     const requests: RecordedCommercetoolsRequest[] = [];
     let createdBusinessUnitDraft: BusinessUnitDraft | undefined;
     let businessUnitVersion = 0;
+    let createdCustomerDraft: CustomerDraft | undefined;
+    let customerVersion = 0;
     let createdDraft: ProductDraft | undefined;
     let published = false;
     let productVersion = 0;
@@ -323,6 +451,30 @@ export const makeRecordingCommercetoolsApiRoot =
               draft: createdBusinessUnitDraft,
               id: "recording-business-unit-id",
               version: businessUnitVersion,
+            }),
+          });
+        }
+
+        if (isCustomerUpdate(body) && isCustomerRequest(request)) {
+          const draft = createdCustomerDraft;
+
+          if (draft === undefined) {
+            throw new Error(
+              "Recorded customer must be created before updating"
+            );
+          }
+
+          createdCustomerDraft = body.actions.reduce(
+            applyRecordedCustomerAction,
+            draft
+          );
+          customerVersion += 1;
+
+          return Promise.resolve({
+            body: recordedCustomer({
+              draft: createdCustomerDraft,
+              id: "recording-customer-id",
+              version: customerVersion,
             }),
           });
         }
@@ -371,9 +523,22 @@ export const makeRecordingCommercetoolsApiRoot =
           });
         }
 
+        if (isCustomerDraft(body)) {
+          createdCustomerDraft = body;
+          customerVersion = 1;
+
+          return Promise.resolve({
+            body: recordedCustomerSignInResult({
+              draft: createdCustomerDraft,
+              id: "recording-customer-id",
+              version: customerVersion,
+            }),
+          });
+        }
+
         if (!isProductDraft(body)) {
           throw new Error(
-            "Recorded request body must be a product or business unit draft"
+            "Recorded request body must be a product, business unit, or customer draft"
           );
         }
 

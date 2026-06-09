@@ -10,4 +10,6 @@ export type CommercetoolsResourceSelector =
 
 export type CommercetoolsBusinessUnitSelector = CommercetoolsResourceSelector;
 
+export type CommercetoolsCustomerSelector = CommercetoolsResourceSelector;
+
 export type CommercetoolsProductSelector = CommercetoolsResourceSelector;
