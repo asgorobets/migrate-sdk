@@ -100,16 +100,33 @@ export type {
 
 export {
   DuplicateMigrationDefinitionId,
+  MigrationDefinitionDuplicateRequestedDefinitionIgnored,
+  MigrationDefinitionDuplicateTargetIdIgnored,
+  MigrationDefinitionOptionalDependencyCycleIgnored,
+  MigrationDefinitionPlanNotice,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryConstructionError,
   MigrationDefinitionRegistryConstructionIssue,
+  MigrationDefinitionRegistryInvalidSelectionError,
   MigrationDefinitionRegistryLookupError,
+  MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
+  MigrationDefinitionRegistryUnknownDefinitionError,
   MissingRequiredMigrationDefinitionDependency,
   RequiredMigrationDefinitionDependencyCycle,
 } from "./domain/registry.ts";
 export type {
+  MigrationDefinitionDependencyEdge,
+  MigrationDefinitionPlanTarget,
   MigrationDefinitionRegistryEntry,
   MigrationDefinitionRegistryInput,
+  MigrationDefinitionRegistryPlanningError,
+  MigrationDefinitionRegistryRollbackError,
+  MigrationDefinitionRegistryRollbackInput,
+  MigrationDefinitionRegistryRunError,
+  MigrationDefinitionRegistryRunInput,
+  MigrationDefinitionRegistrySelectionInput,
+  MigrationDefinitionRollbackPlan,
+  MigrationDefinitionRunPlan,
 } from "./domain/registry.ts";
 
 export {

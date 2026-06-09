@@ -1827,6 +1827,23 @@ export const rollbackMigrations = <
         );
       }
 
+      const options: RollbackMigrationOptions =
+        request.sourceIdentities === undefined
+          ? {}
+          : { sourceIdentities: request.sourceIdentities };
+
+      if (
+        options.sourceIdentities !== undefined &&
+        orderedDefinitions.definitions.length !== 1
+      ) {
+        return Effect.fail(
+          new RollbackRequestError({
+            message:
+              "Rollback sourceIdentities require exactly one selected Migration Definition",
+          })
+        );
+      }
+
       const sharedStoreError = validateSharedStore(
         orderedDefinitions.definitions
       );
@@ -1844,7 +1861,6 @@ export const rollbackMigrations = <
         (definition) => definition.id
       );
       const rollbackDefinitions = [...orderedDefinitions.definitions].reverse();
-      const options: RollbackMigrationOptions = {};
 
       const program = Effect.gen(function* () {
         const store = yield* MigrationStore;

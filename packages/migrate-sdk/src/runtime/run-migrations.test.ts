@@ -7065,6 +7065,96 @@ describe("rollbackMigrations", () => {
   );
 
   it.effect(
+    "rolls back targeted source identities through multi-definition rollback requests",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const destinationState = makeTestDestinationState<EntryCommand>();
+        const destination = makeTestEntryDestination({
+          state: destinationState,
+        });
+        const definitionId = toMigrationDefinitionId("articles");
+        const targetedIdentity = toSourceIdentity("article-targeted");
+        const untouchedIdentity = toSourceIdentity("article-untouched");
+        const targetedState = {
+          definitionId,
+          destinationIdentity: toDestinationIdentity("entry-targeted"),
+          lastRunId: toMigrationRunId("run-previous"),
+          sourceIdentity: targetedIdentity,
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "migrated" as const,
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        };
+        const untouchedState = {
+          definitionId,
+          destinationIdentity: toDestinationIdentity("entry-untouched"),
+          lastRunId: toMigrationRunId("run-previous"),
+          sourceIdentity: untouchedIdentity,
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "migrated" as const,
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        };
+
+        for (const itemState of [targetedState, untouchedState]) {
+          storeState.itemStates.set(
+            InMemoryMigrationStore.itemStateKey(
+              itemState.definitionId,
+              itemState.sourceIdentity
+            ),
+            itemState
+          );
+        }
+
+        const definition = defineMigration({
+          id: definitionId,
+          source: makeTestInMemorySource({
+            items: [],
+            sourceSchema: ArticleSource,
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: () => ({
+            contentType: "article",
+            fields: {
+              title: "unused",
+            },
+            kind: "UpsertEntry" as const,
+          }),
+          rollback: () => ({
+            contentType: "article",
+            kind: "PublishEntry" as const,
+          }),
+        });
+
+        const summary = yield* rollbackMigrations({
+          definitions: [definition],
+          sourceIdentities: [targetedIdentity],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          rolledBack: 1,
+          failed: 0,
+          skipped: 0,
+        });
+        expect(destinationState.executions).toHaveLength(1);
+        expect(destinationState.executions[0]?.context.sourceIdentity).toBe(
+          targetedIdentity
+        );
+        expect(
+          storeState.itemStates.has(
+            InMemoryMigrationStore.itemStateKey(definitionId, targetedIdentity)
+          )
+        ).toBe(false);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(definitionId, untouchedIdentity)
+          )
+        ).toEqual(untouchedState);
+      })
+  );
+
+  it.effect(
     "fails preflight before creating a run when an unselected dependent has rollbackable state",
     () =>
       Effect.gen(function* () {

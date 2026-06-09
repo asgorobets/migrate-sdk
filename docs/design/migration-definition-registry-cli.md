@@ -134,6 +134,11 @@ Raw `runMigrations` and `rollbackMigrations` remain public lower-level SDK
 primitives. They keep request-scoped validation because callers can bypass the
 registry and pass raw definitions directly.
 
+Registry-backed rollback helpers delegate to `rollbackMigrations` with the full
+registry definition graph and the planned selected definition ids. This keeps
+dependent rollback safety in the existing lower-level preflight, where
+rollbackable durable item state and unselected dependents are visible.
+
 ## Public SDK Shape
 
 ```ts
@@ -247,22 +252,23 @@ is already included by explicit selection or by `all: true`.
 The CLI exposes this as `--with-dependencies` only. The first slice does not add
 a short alias because this flag expands execution scope.
 
-Run input also carries the existing run mode:
+Run input also carries failed/skipped run modes:
 
 ```ts
 type MigrationDefinitionRegistryRunInput =
   MigrationDefinitionRegistrySelectionInput & {
-    readonly mode?: RunModeInput;
+    readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
+    readonly sourceIdentities?: readonly SourceIdentityInput[];
   };
 ```
 
 The CLI does not expose a generic `--mode` flag. It maps explicit run-mode flags
-to `RunModeInput`:
+to registry input:
 
 - no run-mode flag -> normal mode
-- `--failed` -> failed mode
-- `--skipped` -> skipped mode
-- `--ids <identity>` -> item mode for that source identity
+- `--failed` -> `mode: { kind: "failed" }`
+- `--skipped` -> `mode: { kind: "skipped" }`
+- `--ids <identity>` -> `sourceIdentities: [identity]`
 
 Only one run-mode flag may be used at a time. Future modes should follow the
 same flag pattern, for example a future `--needs-update` flag.
@@ -271,33 +277,27 @@ same flag pattern, for example a future `--needs-update` flag.
 types keep the domain term `sourceIdentities`. The first slice exposes only
 `--ids`, with no longer source-identity alias.
 
+Supplying `sourceIdentities` on run input triggers item mode. It is valid only
+with exactly one explicit definition id and exactly one unique source identity.
+It cannot combine with `all: true`, multiple definition ids,
+`withDependencies`, failed mode, or skipped mode.
+Registry-backed run input does not accept `mode: { kind: "item" }`; item mode is
+requested through `sourceIdentities` so the registry can validate definition
+scope and target identity count before delegating to the lower-level runtime.
+
 Rollback identity targeting is allowed only when exactly one definition id is
-requested. The target identity belongs to that requested definition, even if
-`withDependencies` expands the plan for safety.
+requested. The target identity belongs to that requested definition.
 
 ```ts
 type MigrationDefinitionRegistryRollbackInput =
-  | {
-      readonly all: true;
-      readonly withDependencies?: boolean;
-    }
-  | {
-      readonly definitionIds: readonly [MigrationDefinitionIdInput];
-      readonly sourceIdentities?: readonly [
-        SourceIdentityInput,
-        ...SourceIdentityInput[],
-      ];
-      readonly withDependencies?: boolean;
-    }
-  | {
-      readonly definitionIds: readonly [
-        MigrationDefinitionIdInput,
-        MigrationDefinitionIdInput,
-        ...MigrationDefinitionIdInput[],
-      ];
-      readonly withDependencies?: boolean;
-    };
+  MigrationDefinitionRegistrySelectionInput & {
+    readonly sourceIdentities?: readonly SourceIdentityInput[];
+  };
 ```
+
+Supplying `sourceIdentities` on rollback input is valid only with exactly one
+explicit definition id and one or more unique source identities. It rejects
+`all: true`, multiple explicit definition ids, and `withDependencies`.
 
 ## Plans
 
@@ -313,6 +313,7 @@ interface MigrationDefinitionRunPlan {
   readonly executionDefinitionIds: readonly MigrationDefinitionId[];
   readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
   readonly definitions: readonly AnyMigrationDefinition[];
+  readonly target?: MigrationDefinitionPlanTarget;
   readonly notices: readonly MigrationDefinitionPlanNotice[];
   readonly withDependencies: boolean;
 }
@@ -326,12 +327,14 @@ interface MigrationDefinitionRollbackPlan {
   readonly executionDefinitionIds: readonly MigrationDefinitionId[];
   readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
   readonly definitions: readonly AnyRollbackMigrationDefinition[];
-  readonly target?: {
-    readonly definitionId: MigrationDefinitionId;
-    readonly sourceIdentities: readonly SourceIdentity[];
-  };
+  readonly target?: MigrationDefinitionPlanTarget;
   readonly notices: readonly MigrationDefinitionPlanNotice[];
   readonly withDependencies: boolean;
+}
+
+interface MigrationDefinitionPlanTarget {
+  readonly definitionId: MigrationDefinitionId;
+  readonly sourceIdentities: readonly [SourceIdentity, ...SourceIdentity[]];
 }
 
 interface MigrationDefinitionDependencyEdge {
@@ -341,25 +344,33 @@ interface MigrationDefinitionDependencyEdge {
 }
 
 type MigrationDefinitionPlanNotice =
-  | MigrationDefinitionDuplicateRequestedDefinitionIgnoredNotice
-  | MigrationDefinitionDuplicateTargetIdIgnoredNotice
-  | MigrationDefinitionOptionalDependencyCycleIgnoredNotice;
+  | MigrationDefinitionDuplicateRequestedDefinitionIgnored
+  | MigrationDefinitionDuplicateTargetIdIgnored
+  | MigrationDefinitionOptionalDependencyCycleIgnored;
 
-interface MigrationDefinitionDuplicateRequestedDefinitionIgnoredNotice {
+interface MigrationDefinitionDuplicateRequestedDefinitionIgnored {
   readonly _tag: "MigrationDefinitionDuplicateRequestedDefinitionIgnored";
   readonly definitionId: MigrationDefinitionId;
 }
 
-interface MigrationDefinitionDuplicateTargetIdIgnoredNotice {
+interface MigrationDefinitionDuplicateTargetIdIgnored {
   readonly _tag: "MigrationDefinitionDuplicateTargetIdIgnored";
   readonly sourceIdentity: SourceIdentity;
 }
 
-interface MigrationDefinitionOptionalDependencyCycleIgnoredNotice {
+interface MigrationDefinitionOptionalDependencyCycleIgnored {
   readonly _tag: "MigrationDefinitionOptionalDependencyCycleIgnored";
   readonly definitionIds: readonly MigrationDefinitionId[];
   readonly edges: readonly MigrationDefinitionDependencyEdge[];
 }
+
+type MigrationDefinitionRegistryRunError =
+  | MigrationDefinitionRegistryPlanningError
+  | RunMigrationError;
+
+type MigrationDefinitionRegistryRollbackError =
+  | MigrationDefinitionRegistryPlanningError
+  | RollbackMigrationError;
 ```
 
 For run plans, `executionDefinitionIds` are in forward dependency order. For
@@ -367,10 +378,11 @@ rollback plans, `executionDefinitionIds` are in reverse dependency order.
 `optionalDependencyEdges` records optional dependency edges that participated in
 ordering because both sides were already included in the plan.
 
-Optional dependency cycles do not fail planning. When optional edges cannot all
-be satisfied, the planner preserves deterministic registry order for the
-affected definitions and records a
-`MigrationDefinitionOptionalDependencyCycleIgnored` notice.
+Optional dependency cycles do not fail planning. When any optional cycle is
+present, the planner ignores optional ordering for the whole plan, preserves
+required-dependency ordering and registry order for optional relationships, and
+records a `MigrationDefinitionOptionalDependencyCycleIgnored` notice. The plan
+still reports every optional dependency edge whose endpoints are included.
 
 Missing optional dependency ids do not fail planning and do not produce run or
 rollback plan notices. They are registry inspection concerns, not command scope
@@ -392,12 +404,15 @@ interface MigrationDefinitionRegistryConstructionError {
 }
 
 type MigrationDefinitionRegistryConstructionIssue =
-  | MigrationDefinitionRegistryDuplicateDefinitionIdError
-  | MigrationDefinitionRegistryMissingRequiredDependencyError
-  | MigrationDefinitionRegistryRequiredDependencyCycleError;
+  | DuplicateMigrationDefinitionId
+  | MissingRequiredMigrationDefinitionDependency
+  | RequiredMigrationDefinitionDependencyCycle;
 
-type MigrationDefinitionRegistryLookupError =
-  | MigrationDefinitionRegistryUnknownDefinitionError;
+interface MigrationDefinitionRegistryLookupError {
+  readonly _tag: "MigrationDefinitionRegistryLookupError";
+  readonly definitionId: MigrationDefinitionId;
+  readonly message: string;
+}
 
 type MigrationDefinitionRegistryPlanningError =
   | MigrationDefinitionRegistryUnknownDefinitionError
@@ -674,7 +689,6 @@ migrate rollback --all --with-dependencies
 migrate rollback articles --ids article-1
 migrate rollback articles --ids article-1 --plan
 migrate rollback articles --ids article-1,article-2
-migrate rollback articles --with-dependencies --ids article-1,article-2
 ```
 
 `--plan` is a CLI-only execution mode. It resolves command selection and
@@ -832,6 +846,9 @@ migrate rollback authors articles --ids article-1
 # invalid
 
 migrate rollback --all --ids article-1
+# invalid
+
+migrate rollback articles --with-dependencies --ids article-1
 # invalid
 ```
 

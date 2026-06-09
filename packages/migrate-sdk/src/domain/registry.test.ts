@@ -5,21 +5,36 @@ import {
   type ConfiguredSourcePlugin,
   type DestinationCommand,
   defineMigration,
+  InMemoryDestinationPlugin,
+  InMemoryMigrationStore,
+  InMemorySourcePlugin,
   type MigrationDefinitionDependenciesInput,
   type MigrationDefinitionIdInput,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryConstructionError,
+  MigrationDefinitionRegistryInvalidSelectionError,
   MigrationDefinitionRegistryLookupError,
+  MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
+  MigrationDefinitionRegistryUnknownDefinitionError,
   type MigrationStore,
   type MigrationStoreError,
   type RollbackPipeline,
+  RollbackPreflightError,
+  toDestinationIdentity,
   toMigrationDefinitionId,
+  toMigrationRunId,
+  toSourceIdentity,
+  toSourceVersion,
 } from "migrate-sdk";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
 });
 type ArticleSource = typeof ArticleSource.Type;
+
+const ArticleEntryFields = Schema.Struct({
+  title: Schema.String,
+});
 
 interface NoopCommand extends DestinationCommand {
   readonly kind: "Noop";
@@ -49,6 +64,96 @@ const makeDefinition = (input: TestDefinitionInput) =>
     pipeline: () => ({ kind: "Noop" }),
     ...(input.rollback === undefined ? {} : { rollback: input.rollback }),
   });
+
+const makeRollbackSafetyFixture = () => {
+  const authorsId = toMigrationDefinitionId("authors");
+  const articlesId = toMigrationDefinitionId("articles");
+  const storeState = InMemoryMigrationStore.makeState();
+  const store = InMemoryMigrationStore.layer(storeState);
+  const destination = InMemoryDestinationPlugin.makeEntries({
+    contentType: "rollback-safety",
+    commands: {
+      upsertEntry: {
+        fields: ArticleEntryFields,
+      },
+      publishEntry: true,
+    },
+  });
+  const previousRunId = toMigrationRunId("run-previous");
+  const previousDate = new Date("2026-01-01T00:00:00.000Z");
+  const authorState = {
+    definitionId: authorsId,
+    destinationIdentity: toDestinationIdentity("entry-author-1"),
+    lastRunId: previousRunId,
+    sourceIdentity: toSourceIdentity("author-1"),
+    sourceVersion: toSourceVersion("source-version-1"),
+    status: "migrated" as const,
+    updatedAt: previousDate,
+  };
+  const articleState = {
+    definitionId: articlesId,
+    destinationIdentity: toDestinationIdentity("entry-article-1"),
+    lastRunId: previousRunId,
+    sourceIdentity: toSourceIdentity("article-1"),
+    sourceVersion: toSourceVersion("source-version-1"),
+    status: "migrated" as const,
+    updatedAt: previousDate,
+  };
+
+  for (const itemState of [authorState, articleState]) {
+    storeState.itemStates.set(
+      InMemoryMigrationStore.itemStateKey(
+        itemState.definitionId,
+        itemState.sourceIdentity
+      ),
+      itemState
+    );
+  }
+
+  const authors = defineMigration({
+    id: authorsId,
+    source: InMemorySourcePlugin.make({
+      sourceSchema: ArticleSource,
+      items: [],
+    }),
+    destination,
+    store,
+    pipeline: () =>
+      destination.commands.upsertEntry({
+        title: "unused",
+      }),
+    rollback: () => destination.commands.publishEntry(),
+  });
+  const articles = defineMigration({
+    id: articlesId,
+    dependencies: {
+      required: [authorsId],
+    },
+    source: InMemorySourcePlugin.make({
+      sourceSchema: ArticleSource,
+      items: [],
+    }),
+    destination,
+    store,
+    pipeline: () =>
+      destination.commands.upsertEntry({
+        title: "unused",
+      }),
+    rollback: () => destination.commands.publishEntry(),
+  });
+  const registry = MigrationDefinitionRegistry.make({
+    definitions: [authors, articles] as const,
+  });
+
+  return {
+    articleState,
+    articlesId,
+    authorState,
+    authorsId,
+    registry,
+    storeState,
+  };
+};
 
 describe("MigrationDefinitionRegistry", () => {
   it("allows an empty immutable registry", () => {
@@ -265,6 +370,781 @@ describe("MigrationDefinitionRegistry", () => {
             message: "Migration Definition was not found in the registry",
           })
         );
+      })
+  );
+
+  it.effect(
+    "plans a run by expanding required dependencies and recording participating optional edges",
+    () =>
+      Effect.gen(function* () {
+        const authors = makeDefinition({ id: "authors" });
+        const articles = makeDefinition({
+          id: "articles",
+          dependencies: {
+            required: ["authors"],
+            optional: ["tags"],
+          },
+        });
+        const tags = makeDefinition({ id: "tags" });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [tags, articles, authors] as const,
+        });
+
+        const plan = yield* registry.planRun({
+          definitionIds: ["articles", "tags"],
+          withDependencies: true,
+        });
+
+        expect(plan).toEqual({
+          kind: "run",
+          requestedDefinitionIds: [
+            toMigrationDefinitionId("articles"),
+            toMigrationDefinitionId("tags"),
+          ],
+          includedDefinitionIds: [
+            toMigrationDefinitionId("tags"),
+            toMigrationDefinitionId("articles"),
+            toMigrationDefinitionId("authors"),
+          ],
+          executionDefinitionIds: [
+            toMigrationDefinitionId("tags"),
+            toMigrationDefinitionId("authors"),
+            toMigrationDefinitionId("articles"),
+          ],
+          optionalDependencyEdges: [
+            {
+              fromDefinitionId: toMigrationDefinitionId("articles"),
+              toDefinitionId: toMigrationDefinitionId("tags"),
+              kind: "optional",
+            },
+          ],
+          definitions: [tags, authors, articles],
+          notices: [],
+          withDependencies: true,
+        });
+      })
+  );
+
+  it.effect("rejects run planning without an explicit scope", () =>
+    Effect.gen(function* () {
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [makeDefinition({ id: "articles" })],
+      });
+
+      const error = yield* Effect.flip(
+        registry.planRun({} as Parameters<typeof registry.planRun>[0])
+      );
+
+      expect(error).toBeInstanceOf(
+        MigrationDefinitionRegistryInvalidSelectionError
+      );
+      expect(error).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message:
+            "Registry planning requires all: true or at least one Migration Definition id",
+        })
+      );
+    })
+  );
+
+  it.effect("rejects planning with all scope and explicit definitions", () =>
+    Effect.gen(function* () {
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [makeDefinition({ id: "articles" })],
+      });
+
+      const runError = yield* Effect.flip(
+        registry.planRun({
+          all: true,
+          definitionIds: ["articles"],
+        } as Parameters<typeof registry.planRun>[0])
+      );
+      expect(runError).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message:
+            "Registry planning cannot combine all: true with Migration Definition ids",
+        })
+      );
+
+      const rollbackError = yield* Effect.flip(
+        registry.planRollback({
+          all: true,
+          definitionIds: ["articles"],
+        } as Parameters<typeof registry.planRollback>[0])
+      );
+      expect(rollbackError).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message:
+            "Registry planning cannot combine all: true with Migration Definition ids",
+        })
+      );
+    })
+  );
+
+  it.effect(
+    "keeps registry order and records a notice when optional dependencies cycle",
+    () =>
+      Effect.gen(function* () {
+        const tags = makeDefinition({
+          id: "tags",
+          dependencies: {
+            optional: ["categories"],
+          },
+        });
+        const categories = makeDefinition({
+          id: "categories",
+          dependencies: {
+            optional: ["tags"],
+          },
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [tags, categories] as const,
+        });
+
+        const plan = yield* registry.planRun({ all: true });
+
+        expect(plan.executionDefinitionIds).toEqual([
+          toMigrationDefinitionId("tags"),
+          toMigrationDefinitionId("categories"),
+        ]);
+        expect(plan.optionalDependencyEdges).toEqual([
+          {
+            fromDefinitionId: toMigrationDefinitionId("tags"),
+            toDefinitionId: toMigrationDefinitionId("categories"),
+            kind: "optional",
+          },
+          {
+            fromDefinitionId: toMigrationDefinitionId("categories"),
+            toDefinitionId: toMigrationDefinitionId("tags"),
+            kind: "optional",
+          },
+        ]);
+        expect(plan.notices).toEqual([
+          {
+            _tag: "MigrationDefinitionOptionalDependencyCycleIgnored",
+            definitionIds: [
+              toMigrationDefinitionId("tags"),
+              toMigrationDefinitionId("categories"),
+              toMigrationDefinitionId("tags"),
+            ],
+            edges: [
+              {
+                fromDefinitionId: toMigrationDefinitionId("tags"),
+                toDefinitionId: toMigrationDefinitionId("categories"),
+                kind: "optional",
+              },
+              {
+                fromDefinitionId: toMigrationDefinitionId("categories"),
+                toDefinitionId: toMigrationDefinitionId("tags"),
+                kind: "optional",
+              },
+            ],
+          },
+        ]);
+      })
+  );
+
+  it.effect(
+    "degrades all optional ordering when any optional dependency cycle is present",
+    () =>
+      Effect.gen(function* () {
+        const articles = makeDefinition({
+          id: "articles",
+          dependencies: {
+            optional: ["authors"],
+          },
+        });
+        const authors = makeDefinition({ id: "authors" });
+        const tags = makeDefinition({
+          id: "tags",
+          dependencies: {
+            optional: ["categories"],
+          },
+        });
+        const categories = makeDefinition({
+          id: "categories",
+          dependencies: {
+            optional: ["tags"],
+          },
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles, authors, tags, categories] as const,
+        });
+
+        const plan = yield* registry.planRun({ all: true });
+
+        expect(plan.executionDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+          toMigrationDefinitionId("authors"),
+          toMigrationDefinitionId("tags"),
+          toMigrationDefinitionId("categories"),
+        ]);
+        expect(plan.optionalDependencyEdges).toEqual([
+          {
+            fromDefinitionId: toMigrationDefinitionId("articles"),
+            toDefinitionId: toMigrationDefinitionId("authors"),
+            kind: "optional",
+          },
+          {
+            fromDefinitionId: toMigrationDefinitionId("tags"),
+            toDefinitionId: toMigrationDefinitionId("categories"),
+            kind: "optional",
+          },
+          {
+            fromDefinitionId: toMigrationDefinitionId("categories"),
+            toDefinitionId: toMigrationDefinitionId("tags"),
+            kind: "optional",
+          },
+        ]);
+        expect(plan.notices).toEqual([
+          {
+            _tag: "MigrationDefinitionOptionalDependencyCycleIgnored",
+            definitionIds: [
+              toMigrationDefinitionId("tags"),
+              toMigrationDefinitionId("categories"),
+              toMigrationDefinitionId("tags"),
+            ],
+            edges: [
+              {
+                fromDefinitionId: toMigrationDefinitionId("articles"),
+                toDefinitionId: toMigrationDefinitionId("authors"),
+                kind: "optional",
+              },
+              {
+                fromDefinitionId: toMigrationDefinitionId("tags"),
+                toDefinitionId: toMigrationDefinitionId("categories"),
+                kind: "optional",
+              },
+              {
+                fromDefinitionId: toMigrationDefinitionId("categories"),
+                toDefinitionId: toMigrationDefinitionId("tags"),
+                kind: "optional",
+              },
+            ],
+          },
+        ]);
+      })
+  );
+
+  it.effect("plans targeted rollback for one explicit definition", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({
+        id: "articles",
+      });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+
+      const plan = yield* registry.planRollback({
+        definitionIds: ["articles"],
+        sourceIdentities: ["article-1", "article-2"],
+      });
+
+      expect(plan).toEqual({
+        kind: "rollback",
+        requestedDefinitionIds: [toMigrationDefinitionId("articles")],
+        includedDefinitionIds: [toMigrationDefinitionId("articles")],
+        executionDefinitionIds: [toMigrationDefinitionId("articles")],
+        optionalDependencyEdges: [],
+        definitions: [articles],
+        target: {
+          definitionId: toMigrationDefinitionId("articles"),
+          sourceIdentities: [
+            toSourceIdentity("article-1"),
+            toSourceIdentity("article-2"),
+          ],
+        },
+        notices: [],
+        withDependencies: false,
+      });
+    })
+  );
+
+  it.effect(
+    "rejects unknown and missing required dependencies while planning",
+    () =>
+      Effect.gen(function* () {
+        const authors = makeDefinition({ id: "authors" });
+        const articles = makeDefinition({
+          id: "articles",
+          dependencies: {
+            required: ["authors"],
+          },
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [authors, articles] as const,
+        });
+
+        const unknownError = yield* Effect.flip(
+          registry.planRun({ definitionIds: ["missing"] })
+        );
+        expect(unknownError).toEqual(
+          new MigrationDefinitionRegistryUnknownDefinitionError({
+            definitionId: toMigrationDefinitionId("missing"),
+            message: "Migration Definition was not found in the registry",
+          })
+        );
+
+        const dependencyError = yield* Effect.flip(
+          registry.planRun({ definitionIds: ["articles"] })
+        );
+        expect(dependencyError).toEqual(
+          new MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError(
+            {
+              definitionId: toMigrationDefinitionId("articles"),
+              missingDependencyIds: [toMigrationDefinitionId("authors")],
+              message:
+                "Migration Definition selection is missing required dependencies",
+            }
+          )
+        );
+      })
+  );
+
+  it.effect(
+    "preserves duplicate requested ids and deduplicates execution",
+    () =>
+      Effect.gen(function* () {
+        const articles = makeDefinition({ id: "articles" });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles] as const,
+        });
+
+        const plan = yield* registry.planRun({
+          definitionIds: ["articles", "articles"],
+        });
+
+        expect(plan.requestedDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+          toMigrationDefinitionId("articles"),
+        ]);
+        expect(plan.includedDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+        ]);
+        expect(plan.executionDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+        ]);
+        expect(plan.notices).toEqual([
+          {
+            _tag: "MigrationDefinitionDuplicateRequestedDefinitionIgnored",
+            definitionId: toMigrationDefinitionId("articles"),
+          },
+        ]);
+      })
+  );
+
+  it.effect(
+    "plans forward item mode for one explicit definition and deduplicates target ids",
+    () =>
+      Effect.gen(function* () {
+        const articles = makeDefinition({ id: "articles" });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles] as const,
+        });
+
+        const plan = yield* registry.planRun({
+          definitionIds: ["articles"],
+          sourceIdentities: ["article-1", "article-1"],
+        });
+
+        expect(plan.target).toEqual({
+          definitionId: toMigrationDefinitionId("articles"),
+          sourceIdentities: [toSourceIdentity("article-1")],
+        });
+        expect(plan.notices).toEqual([
+          {
+            _tag: "MigrationDefinitionDuplicateTargetIdIgnored",
+            sourceIdentity: toSourceIdentity("article-1"),
+          },
+        ]);
+        expect(plan.executionDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+        ]);
+      })
+  );
+
+  it.effect("rejects invalid source identity targeting combinations", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({ id: "articles" });
+      const authors = makeDefinition({ id: "authors" });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [authors, articles] as const,
+      });
+
+      const multipleRunTargetsError = yield* Effect.flip(
+        registry.planRun({
+          definitionIds: ["articles"],
+          sourceIdentities: ["article-1", "article-2"],
+        })
+      );
+      expect(multipleRunTargetsError).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message:
+            "Run source identity targeting requires exactly one source identity",
+        })
+      );
+
+      const explicitItemModeError = yield* Effect.flip(
+        registry.planRun({
+          all: true,
+          mode: {
+            kind: "item",
+            sourceIdentity: "article-1",
+          },
+        } as unknown as Parameters<typeof registry.planRun>[0])
+      );
+      expect(explicitItemModeError).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message:
+            "Registry run item mode must be requested with sourceIdentities",
+        })
+      );
+
+      const rollbackAllTargetError = yield* Effect.flip(
+        registry.planRollback({
+          all: true,
+          sourceIdentities: ["article-1"],
+        })
+      );
+      expect(rollbackAllTargetError).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message:
+            "Rollback source identity targeting requires exactly one explicit Migration Definition id",
+        })
+      );
+
+      const rollbackMultipleDefinitionTargetError = yield* Effect.flip(
+        registry.planRollback({
+          definitionIds: ["authors", "articles"],
+          sourceIdentities: ["article-1"],
+        })
+      );
+      expect(rollbackMultipleDefinitionTargetError).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message:
+            "Rollback source identity targeting requires exactly one explicit Migration Definition id",
+        })
+      );
+
+      const rollbackExpandedTargetError = yield* Effect.flip(
+        registry.planRollback({
+          definitionIds: ["articles"],
+          sourceIdentities: ["article-1"],
+          withDependencies: true,
+        })
+      );
+      expect(rollbackExpandedTargetError).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message:
+            "Rollback source identity targeting cannot expand required dependencies",
+        })
+      );
+    })
+  );
+
+  it.effect("runs a valid registry plan through the existing runtime", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const destination = InMemoryDestinationPlugin.makeEntries({
+        contentType: "article",
+        commands: {
+          upsertEntry: {
+            fields: ArticleEntryFields,
+          },
+        },
+      });
+      const articles = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          sourceSchema: ArticleSource,
+          items: [
+            {
+              identity: "article-1",
+              version: "source-version-1",
+              item: {
+                title: "Registry run",
+              },
+            },
+          ],
+        }),
+        destination,
+        store: InMemoryMigrationStore.layer(storeState),
+        pipeline: (sourceItem) =>
+          destination.commands.upsertEntry({
+            title: sourceItem.item.title,
+          }),
+      });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+
+      const summary = yield* registry.run({ definitionIds: ["articles"] });
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions).toEqual([
+        {
+          definitionId: toMigrationDefinitionId("articles"),
+          status: "succeeded",
+          counts: {
+            migrated: 1,
+            skipped: 0,
+            failed: 0,
+            unchanged: 0,
+            needsUpdate: 0,
+          },
+        },
+      ]);
+    })
+  );
+
+  it.effect(
+    "rolls back a valid registry plan through the existing runtime",
+    () =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("articles");
+        const sourceIdentity = toSourceIdentity("article-1");
+        const storeState = InMemoryMigrationStore.makeState();
+        const itemStateKey = InMemoryMigrationStore.itemStateKey(
+          definitionId,
+          sourceIdentity
+        );
+        const destination = InMemoryDestinationPlugin.makeEntries({
+          contentType: "article",
+          commands: {
+            upsertEntry: {
+              fields: ArticleEntryFields,
+            },
+            publishEntry: true,
+          },
+        });
+        const articles = defineMigration({
+          id: definitionId,
+          source: InMemorySourcePlugin.make({
+            sourceSchema: ArticleSource,
+            items: [
+              {
+                identity: sourceIdentity,
+                version: "source-version-1",
+                item: {
+                  title: "Registry rollback",
+                },
+              },
+            ],
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(storeState),
+          pipeline: (sourceItem) =>
+            destination.commands.upsertEntry({
+              title: sourceItem.item.title,
+            }),
+          rollback: () => destination.commands.publishEntry(),
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles] as const,
+        });
+
+        yield* registry.run({ definitionIds: ["articles"] });
+        expect(storeState.itemStates.has(itemStateKey)).toBe(true);
+
+        const summary = yield* registry.rollback({
+          definitionIds: ["articles"],
+        });
+
+        expect(summary.kind).toBe("rollback");
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions).toEqual([
+          {
+            definitionId,
+            status: "succeeded",
+            counts: {
+              rolledBack: 1,
+              failed: 0,
+              skipped: 0,
+            },
+          },
+        ]);
+        expect(storeState.itemStates.has(itemStateKey)).toBe(false);
+      })
+  );
+
+  it.effect(
+    "preserves dependent rollback safety when rolling back a selected definition",
+    () =>
+      Effect.gen(function* () {
+        const { articleState, authorState, authorsId, registry, storeState } =
+          makeRollbackSafetyFixture();
+
+        const error = yield* Effect.flip(
+          registry.rollback({
+            definitionIds: [authorsId],
+          })
+        );
+
+        expect(error).toBeInstanceOf(RollbackPreflightError);
+        expect(error).toEqual(
+          expect.objectContaining({
+            message:
+              "Rollback would leave dependent Migration Definition state rollbackable",
+          })
+        );
+        expect(storeState.latestRunStates.size).toBe(0);
+        expect(storeState.definitionLocks.size).toBe(0);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(
+              authorState.definitionId,
+              authorState.sourceIdentity
+            )
+          )
+        ).toEqual(authorState);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(
+              articleState.definitionId,
+              articleState.sourceIdentity
+            )
+          )
+        ).toEqual(articleState);
+      })
+  );
+
+  it.effect(
+    "preserves dependent rollback safety when rolling back targeted source identities",
+    () =>
+      Effect.gen(function* () {
+        const { articleState, authorState, authorsId, registry, storeState } =
+          makeRollbackSafetyFixture();
+
+        const error = yield* Effect.flip(
+          registry.rollback({
+            definitionIds: [authorsId],
+            sourceIdentities: [authorState.sourceIdentity],
+          })
+        );
+
+        expect(error).toBeInstanceOf(RollbackPreflightError);
+        expect(error).toEqual(
+          expect.objectContaining({
+            message:
+              "Rollback would leave dependent Migration Definition state rollbackable",
+          })
+        );
+        expect(storeState.latestRunStates.size).toBe(0);
+        expect(storeState.definitionLocks.size).toBe(0);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(
+              authorState.definitionId,
+              authorState.sourceIdentity
+            )
+          )
+        ).toEqual(authorState);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(
+              articleState.definitionId,
+              articleState.sourceIdentity
+            )
+          )
+        ).toEqual(articleState);
+      })
+  );
+
+  it.effect(
+    "rolls back registry plans in planned optional dependency order",
+    () =>
+      Effect.gen(function* () {
+        const authorsId = toMigrationDefinitionId("authors");
+        const articlesId = toMigrationDefinitionId("articles");
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const destination = InMemoryDestinationPlugin.makeEntries({
+          contentType: "rollback-order",
+          commands: {
+            upsertEntry: {
+              fields: ArticleEntryFields,
+            },
+          },
+        });
+        const previousRunId = toMigrationRunId("run-previous");
+        const previousDate = new Date("2026-01-01T00:00:00.000Z");
+        const authorState = {
+          definitionId: authorsId,
+          destinationIdentity: toDestinationIdentity("entry-author-1"),
+          lastRunId: previousRunId,
+          sourceIdentity: toSourceIdentity("author-1"),
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "migrated" as const,
+          updatedAt: previousDate,
+        };
+        const articleState = {
+          definitionId: articlesId,
+          destinationIdentity: toDestinationIdentity("entry-article-1"),
+          lastRunId: previousRunId,
+          sourceIdentity: toSourceIdentity("article-1"),
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "migrated" as const,
+          updatedAt: previousDate,
+        };
+
+        for (const itemState of [authorState, articleState]) {
+          storeState.itemStates.set(
+            InMemoryMigrationStore.itemStateKey(
+              itemState.definitionId,
+              itemState.sourceIdentity
+            ),
+            itemState
+          );
+        }
+
+        const authors = defineMigration({
+          id: authorsId,
+          source: InMemorySourcePlugin.make({
+            sourceSchema: ArticleSource,
+            items: [],
+          }),
+          destination,
+          store,
+          pipeline: () =>
+            destination.commands.upsertEntry({
+              title: "unused",
+            }),
+          rollback: () =>
+            destination.commands.upsertEntry({
+              title: "author rollback",
+            }),
+        });
+        const articles = defineMigration({
+          id: articlesId,
+          dependencies: {
+            optional: [authorsId],
+          },
+          source: InMemorySourcePlugin.make({
+            sourceSchema: ArticleSource,
+            items: [],
+          }),
+          destination,
+          store,
+          pipeline: () =>
+            destination.commands.upsertEntry({
+              title: "unused",
+            }),
+          rollback: () =>
+            destination.commands.upsertEntry({
+              title: "article rollback",
+            }),
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [authors, articles] as const,
+        });
+
+        const summary = yield* registry.rollback({
+          all: true,
+        });
+
+        expect(
+          summary.definitions.map((definition) => definition.definitionId)
+        ).toEqual([articlesId, authorsId]);
       })
   );
 });

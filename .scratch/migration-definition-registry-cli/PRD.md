@@ -146,7 +146,7 @@ The first slice keeps static inspection separate from runtime status. `list` and
 
 64. As a CLI user, I want rollback `--ids` to require exactly one explicit definition id, so that target ids are interpreted in one definition's source identity namespace.
 
-65. As a CLI user, I want rollback `--ids` to combine with `--with-dependencies`, so that dependency-safe targeted rollback can be planned and executed.
+65. As a CLI user, I want rollback `--ids` not to combine with `--with-dependencies` yet, so that the CLI does not imply cross-definition source identity mapping before that API is designed.
 
 66. As a CLI user, I want `--ids` to accept comma-separated source identities, so that targeted commands remain concise.
 
@@ -200,7 +200,7 @@ The first slice keeps static inspection separate from runtime status. `list` and
 
 - Expose registry planning helpers for run and rollback. Planning returns structured data rather than CLI-formatted text.
 
-- Expose thin registry run and rollback helpers that delegate to existing runtime operations after planning.
+- Expose thin registry run and rollback helpers that delegate to existing runtime operations after planning. Registry-backed rollback helpers preserve lower-level dependent rollback safety by passing the full registry graph and selected definition ids into runtime preflight.
 
 - Require registry-backed execution selection to be either `all: true` or at least one definition id.
 
@@ -220,7 +220,7 @@ The first slice keeps static inspection separate from runtime status. `list` and
 
 - Record optional dependency edges that participated in ordering because both sides were included.
 
-- Preserve deterministic registry order when optional dependency edges cycle.
+- When any optional dependency edge cycle is present, degrade the whole plan to required-dependency ordering and deterministic registry order for optional relationships.
 
 - Add plan notices for ignored optional dependency cycles, duplicate requested definitions, and duplicate target ids.
 
@@ -334,7 +334,7 @@ The first slice keeps static inspection separate from runtime status. `list` and
 
 - For rollback targeting, accept one or more unique parsed source identities with exactly one explicit definition id.
 
-- For rollback targeting, allow combination with required dependency expansion.
+- For rollback targeting, reject combination with required dependency expansion until cross-definition target identity mapping is designed.
 
 - Use Effect CLI primitives for flags, variadic definition id arguments, subcommands, and command-scoped service provisioning.
 
@@ -388,7 +388,7 @@ The first slice keeps static inspection separate from runtime status. `list` and
 
 - Test duplicate requested definition ids are deduplicated and surfaced as notices.
 
-- Test optional dependency cycles preserve deterministic registry order and surface notices.
+- Test optional dependency cycles degrade the whole plan to required-dependency ordering, preserve deterministic registry order for optional relationships, and surface notices.
 
 - Test missing optional dependency ids remain inspection concerns and do not produce run or rollback plan notices.
 

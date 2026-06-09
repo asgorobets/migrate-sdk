@@ -74,13 +74,10 @@ describe("rollback public API", () => {
       definitions,
       definitionIds: ["articles"],
     });
-    const requestWithGlobalSourceIdentities: RollbackRequestInput<
-      typeof definitions
-    > = {
+    const requestWithSourceIdentities = makeRollbackRequest({
       definitions,
-      // @ts-expect-error source identities are per-definition rollbackMigration options, not rollback request fields.
       sourceIdentities: ["article-1"],
-    };
+    });
     const options = makeRollbackMigrationOptions({
       sourceIdentities: ["article-1"],
     });
@@ -90,7 +87,10 @@ describe("rollback public API", () => {
     });
 
     expect(definition.rollback).toBe(rollbackPipeline);
-    expect(requestWithGlobalSourceIdentities.definitions).toBe(definitions);
+    expect(requestWithSourceIdentities.definitions).toBe(definitions);
+    expect(requestWithSourceIdentities.sourceIdentities).toEqual([
+      toSourceIdentity("article-1"),
+    ]);
     expect(request.definitionIds).toEqual([
       toMigrationDefinitionId("articles"),
     ]);

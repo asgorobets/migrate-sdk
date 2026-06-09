@@ -79,6 +79,7 @@ export interface RollbackRequest<
 > {
   readonly definitionIds?: readonly MigrationDefinitionId[];
   readonly definitions: Definitions;
+  readonly sourceIdentities?: readonly [SourceIdentity, ...SourceIdentity[]];
 }
 
 export interface RollbackRequestInput<
@@ -87,18 +88,30 @@ export interface RollbackRequestInput<
 > {
   readonly definitionIds?: readonly MigrationDefinitionIdInput[];
   readonly definitions: Definitions;
+  readonly sourceIdentities?: readonly SourceIdentityInput[];
 }
 
 export const makeRollbackRequest = <
   Definitions extends readonly AnyRollbackMigrationDefinition[],
 >(
   input: RollbackRequestInput<Definitions>
-): RollbackRequest<Definitions> => ({
-  definitions: input.definitions,
-  ...(input.definitionIds === undefined
-    ? {}
-    : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
-});
+): RollbackRequest<Definitions> => {
+  const options = makeRollbackMigrationOptions(
+    input.sourceIdentities === undefined
+      ? {}
+      : { sourceIdentities: input.sourceIdentities }
+  );
+
+  return {
+    definitions: input.definitions,
+    ...(input.definitionIds === undefined
+      ? {}
+      : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
+    ...(options.sourceIdentities === undefined
+      ? {}
+      : { sourceIdentities: options.sourceIdentities }),
+  };
+};
 
 export interface RollbackMigrationOptions {
   readonly sourceIdentities?: readonly [SourceIdentity, ...SourceIdentity[]];
