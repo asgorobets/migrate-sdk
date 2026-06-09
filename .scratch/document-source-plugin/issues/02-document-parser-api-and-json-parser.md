@@ -1,6 +1,6 @@
 # Document Parser API And JSON Parser
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Parent
 
@@ -20,23 +20,23 @@ the JSON root is an array.
 
 ## Acceptance criteria
 
-- [ ] A Document Parser contract exists with required diagnostic name,
+- [x] A Document Parser contract exists with required diagnostic name,
       document schema, and parse operation.
-- [ ] Parser names are diagnostic only and are not used for routing or behavior.
-- [ ] The parser contract returns a readonly document collection.
-- [ ] The JSON parser helper accepts a document schema and string resource.
-- [ ] The JSON parser uses Effect Schema's JSON decoding boundary rather than
+- [x] Parser names are diagnostic only and are not used for routing or behavior.
+- [x] The parser contract returns a readonly document collection.
+- [x] The JSON parser helper accepts a document schema and string resource.
+- [x] The JSON parser uses Effect Schema's JSON decoding boundary rather than
       ad hoc JSON parsing plus separate validation.
-- [ ] JSON parser success returns exactly one parsed document.
-- [ ] A JSON root array is treated as one parsed document, not as multiple
+- [x] JSON parser success returns exactly one parsed document.
+- [x] A JSON root array is treated as one parsed document, not as multiple
       resource documents.
-- [ ] JSON syntax failures and schema decode failures are distinguishable in
+- [x] JSON syntax failures and schema decode failures are distinguishable in
       diagnostics.
-- [ ] Schema decode diagnostics include useful issue messages and paths where
+- [x] Schema decode diagnostics include useful issue messages and paths where
       available.
-- [ ] Parser failures remain parser-local and do not include file, URL, or
+- [x] Parser failures remain parser-local and do not include file, URL, or
       fetcher cursor context.
-- [ ] Tests cover success, root arrays, syntax failures, schema failures,
+- [x] Tests cover success, root arrays, syntax failures, schema failures,
       parser names, and readonly output semantics.
 
 ## Blocked by
