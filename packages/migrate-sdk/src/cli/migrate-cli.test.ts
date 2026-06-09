@@ -180,6 +180,378 @@ const planNoticeConfigSource = (): string => `
   });
 `;
 
+interface CliExecutionProbe {
+  readonly executions: string[];
+  readonly storeState: {
+    readonly definitionLocks: Map<unknown, unknown>;
+    readonly latestRunStates: Map<unknown, unknown>;
+  };
+}
+
+const executionProbeGlobal = "__migrateSdkCliExecutionProbe";
+
+const resetExecutionProbe = () => {
+  delete (globalThis as Record<string, unknown>)[executionProbeGlobal];
+};
+
+const getExecutionProbe = (): CliExecutionProbe => {
+  const probe = (globalThis as Record<string, unknown>)[executionProbeGlobal];
+
+  if (typeof probe !== "object" || probe === null) {
+    throw new Error("CLI execution probe was not initialized");
+  }
+
+  return probe as CliExecutionProbe;
+};
+
+const executionConfigSource = (): string => `
+  import { Schema } from "effect";
+  import {
+    defineMigration,
+    InMemoryDestinationPlugin,
+    InMemoryMigrationStore,
+    InMemorySourcePlugin,
+    MigrationDefinitionRegistry,
+    toMigrationDefinitionId
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntryFields = Schema.Struct({ title: Schema.String });
+  const storeState = InMemoryMigrationStore.makeState();
+  const store = InMemoryMigrationStore.layer(storeState);
+  const destination = InMemoryDestinationPlugin.makeEntries({
+    contentType: "entry",
+    commands: {
+      upsertEntry: {
+        fields: EntryFields
+      }
+    }
+  });
+  const probe = {
+    executions: [],
+    storeState
+  };
+
+  globalThis.${executionProbeGlobal} = probe;
+
+  const definition = (id, title, input = {}) => defineMigration({
+    id: toMigrationDefinitionId(id),
+    source: InMemorySourcePlugin.make({
+      sourceSchema: EntrySource,
+      items: [{
+        identity: id + "-1",
+        version: "source-version-1",
+        item: { title }
+      }]
+    }),
+    destination,
+    store,
+    pipeline: (sourceItem) => {
+      probe.executions.push(id);
+      return destination.commands.upsertEntry({ title: sourceItem.item.title });
+    },
+    ...input
+  });
+
+  const authors = definition("authors", "Author");
+  const articles = definition("articles", "Article", {
+    dependencies: {
+      required: [toMigrationDefinitionId("authors")],
+      optional: [toMigrationDefinitionId("tags")]
+    }
+  });
+  const tags = definition("tags", "Tag");
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [tags, articles, authors]
+    })
+  });
+`;
+
+const modeExecutionConfigSource = (): string => `
+  import { Schema } from "effect";
+  import {
+    defineMigration,
+    InMemoryDestinationPlugin,
+    InMemoryMigrationStore,
+    InMemorySourcePlugin,
+    MigrationDefinitionRegistry,
+    toDestinationIdentity,
+    toMigrationDefinitionId,
+    toMigrationRunId,
+    toSourceIdentity,
+    toSourceVersion
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntryFields = Schema.Struct({ title: Schema.String });
+  const definitionId = toMigrationDefinitionId("articles");
+  const storeState = InMemoryMigrationStore.makeState();
+  const store = InMemoryMigrationStore.layer(storeState);
+  const destination = InMemoryDestinationPlugin.makeEntries({
+    contentType: "entry",
+    commands: {
+      upsertEntry: {
+        fields: EntryFields
+      }
+    }
+  });
+  const probe = {
+    executions: [],
+    storeState
+  };
+
+  globalThis.${executionProbeGlobal} = probe;
+
+  const previousRunId = toMigrationRunId("run-previous");
+  const previousDate = new Date("2026-01-01T00:00:00.000Z");
+
+  storeState.itemStates.set(
+    InMemoryMigrationStore.itemStateKey("articles", "article-failed"),
+    {
+      definitionId,
+      sourceIdentity: toSourceIdentity("article-failed"),
+      sourceVersion: toSourceVersion("source-version-1"),
+      lastRunId: previousRunId,
+      updatedAt: previousDate,
+      status: "failed",
+      error: {
+        kind: "destination",
+        errorTag: "DestinationPluginError",
+        message: "Destination command failed"
+      }
+    }
+  );
+  storeState.itemStates.set(
+    InMemoryMigrationStore.itemStateKey("articles", "article-skipped"),
+    {
+      definitionId,
+      sourceIdentity: toSourceIdentity("article-skipped"),
+      sourceVersion: toSourceVersion("source-version-1"),
+      lastRunId: previousRunId,
+      updatedAt: previousDate,
+      status: "skipped",
+      skipReason: "Draft article"
+    }
+  );
+  storeState.itemStates.set(
+    InMemoryMigrationStore.itemStateKey("articles", "article-target"),
+    {
+      definitionId,
+      destinationIdentity: toDestinationIdentity("entry-article-target"),
+      sourceIdentity: toSourceIdentity("article-target"),
+      sourceVersion: toSourceVersion("source-version-1"),
+      lastRunId: previousRunId,
+      updatedAt: previousDate,
+      status: "migrated"
+    }
+  );
+
+  const articles = defineMigration({
+    id: definitionId,
+    source: InMemorySourcePlugin.make({
+      sourceSchema: EntrySource,
+      items: [
+        {
+          identity: "article-failed",
+          version: "source-version-1",
+          item: { title: "Failed article" }
+        },
+        {
+          identity: "article-skipped",
+          version: "source-version-1",
+          item: { title: "Skipped article" }
+        },
+        {
+          identity: "article-target",
+          version: "source-version-1",
+          item: { title: "Target article" }
+        },
+        {
+          identity: "article-new",
+          version: "source-version-1",
+          item: { title: "New article" }
+        }
+      ]
+    }),
+    destination,
+    store,
+    pipeline: (sourceItem) => {
+      probe.executions.push(String(sourceItem.identity));
+      return destination.commands.upsertEntry({ title: sourceItem.item.title });
+    }
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [articles]
+    })
+  });
+`;
+
+const rollbackExecutionConfigSource = (): string => `
+  import { Schema } from "effect";
+  import {
+    defineMigration,
+    InMemoryMigrationStore,
+    InMemorySourcePlugin,
+    MigrationDefinitionRegistry,
+    toDestinationIdentity,
+    toDestinationVersion,
+    toMigrationDefinitionId,
+    toMigrationRunId,
+    toSourceIdentity,
+    toSourceVersion
+  } from "migrate-sdk";
+  import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntryFields = Schema.Struct({ title: Schema.String });
+  const storeState = InMemoryMigrationStore.makeState();
+  const store = InMemoryMigrationStore.layer(storeState);
+  const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
+    contentType: "entry",
+    commands: {
+      upsertEntry: {
+        fields: EntryFields
+      },
+      publishEntry: true
+    }
+  });
+  const destination = destinationFixture.destination;
+  const seedDestinationEntry = (id, identity) => {
+    destinationFixture.entries().set("entry:" + identity, {
+      contentType: "entry",
+      destinationIdentity: toDestinationIdentity("entry-" + identity),
+      destinationVersion: toDestinationVersion("destination-version-1"),
+      fields: {
+        title: id
+      },
+      published: false,
+      sourceIdentity: toSourceIdentity(identity)
+    });
+  };
+  const probe = {
+    executions: [],
+    storeState
+  };
+
+  globalThis.${executionProbeGlobal} = probe;
+
+  const previousRunId = toMigrationRunId("run-previous");
+  const previousDate = new Date("2026-01-01T00:00:00.000Z");
+  const seedMigratedState = (id, identity) => {
+    const definitionId = toMigrationDefinitionId(id);
+    storeState.itemStates.set(
+      InMemoryMigrationStore.itemStateKey(definitionId, identity),
+      {
+        definitionId,
+        destinationIdentity: toDestinationIdentity("entry-" + identity),
+        sourceIdentity: toSourceIdentity(identity),
+        sourceVersion: toSourceVersion("source-version-1"),
+        lastRunId: previousRunId,
+        updatedAt: previousDate,
+        status: "migrated"
+      }
+    );
+  };
+
+  seedMigratedState("tags", "tags-1");
+  seedMigratedState("authors", "authors-1");
+  seedMigratedState("articles", "articles-1");
+  seedDestinationEntry("tags", "tags-1");
+  seedDestinationEntry("authors", "authors-1");
+  seedDestinationEntry("articles", "articles-1");
+
+  const definition = (id, identity, input = {}) => defineMigration({
+    id: toMigrationDefinitionId(id),
+    source: InMemorySourcePlugin.make({
+      sourceSchema: EntrySource,
+      items: [{
+        identity,
+        version: "source-version-1",
+        item: { title: id }
+      }]
+    }),
+    destination,
+    store,
+    pipeline: (sourceItem) => destination.commands.upsertEntry({
+      title: sourceItem.item.title
+    }),
+    rollback: () => {
+      probe.executions.push("rollback:" + id);
+      return destination.commands.publishEntry();
+    },
+    ...input
+  });
+
+  const authors = definition("authors", "authors-1");
+  const articles = definition("articles", "articles-1", {
+    dependencies: {
+      required: [toMigrationDefinitionId("authors")],
+      optional: [toMigrationDefinitionId("tags")]
+    }
+  });
+  const tags = definition("tags", "tags-1");
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [tags, articles, authors]
+    })
+  });
+`;
+
+const runtimeFailureConfigSource = (): string => `
+  import { Schema } from "effect";
+  import {
+    defineMigration,
+    InMemoryDestinationPlugin,
+    InMemoryMigrationStore,
+    InMemorySourcePlugin,
+    MigrationDefinitionRegistry,
+    toMigrationDefinitionId
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntryFields = Schema.Struct({ title: Schema.String });
+  const destination = InMemoryDestinationPlugin.makeEntries({
+    contentType: "entry",
+    commands: {
+      upsertEntry: {
+        fields: EntryFields
+      }
+    }
+  });
+  const articles = defineMigration({
+    id: toMigrationDefinitionId("articles"),
+    source: InMemorySourcePlugin.make({
+      sourceSchema: EntrySource,
+      batchSize: 0,
+      items: [{
+        identity: "article-1",
+        version: "source-version-1",
+        item: { title: "Article" }
+      }]
+    }),
+    destination,
+    store: InMemoryMigrationStore.layer(),
+    pipeline: (sourceItem) => destination.commands.upsertEntry({
+      title: sourceItem.item.title
+    })
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [articles]
+    })
+  });
+`;
+
 describe("migrate CLI", () => {
   it.effect(
     "lists static registry metadata from an explicit TypeScript config",
@@ -1168,6 +1540,245 @@ describe("migrate CLI", () => {
       expect(sourceIdentityResult.stderr).toContain(
         "Unrecognized flag: --source-identity"
       );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("executes selected run definitions in dependency order", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        executionConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--with-dependencies",
+          "articles",
+          "articles",
+        ],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run completed: succeeded");
+      expect(result.stdout).toContain(
+        "1. authors: succeeded (migrated 1, unchanged 0, skipped 0, failed 0, needs update 0)"
+      );
+      expect(result.stdout).toContain(
+        "2. articles: succeeded (migrated 1, unchanged 0, skipped 0, failed 0, needs update 0)"
+      );
+      expect(result.stdout).not.toContain("tags: succeeded");
+      expect(getExecutionProbe().executions).toEqual(["authors", "articles"]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("executes all run definitions in dependency order", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        executionConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--all"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run completed: succeeded");
+      expect(getExecutionProbe().executions).toEqual([
+        "tags",
+        "authors",
+        "articles",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("executes failed, skipped, and source identity run modes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        modeExecutionConfigSource()
+      );
+
+      const failedResult = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--failed", "articles"],
+        project
+      );
+      const skippedResult = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--skipped", "articles"],
+        project
+      );
+      const itemResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--ids",
+          "article-target",
+          "articles",
+        ],
+        project
+      );
+
+      expect(failedResult.stderr).toBe("");
+      expect(failedResult.exitCode).toBe(0);
+      expect(failedResult.stdout).toContain("Run completed: succeeded");
+      expect(failedResult.stdout).toContain(
+        "1. articles: succeeded (migrated 1, unchanged 0, skipped 0, failed 0, needs update 0)"
+      );
+      expect(skippedResult.stderr).toBe("");
+      expect(skippedResult.exitCode).toBe(0);
+      expect(itemResult.stderr).toBe("");
+      expect(itemResult.exitCode).toBe(0);
+      expect(getExecutionProbe().executions).toEqual([
+        "article-failed",
+        "article-skipped",
+        "article-target",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("executes rollback definitions in reverse dependency order", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        rollbackExecutionConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["rollback", "--config", "migrate.config.ts", "--all"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Rollback completed: succeeded");
+      expect(result.stdout).toContain(
+        "1. articles: succeeded (rolled back 1, skipped 0, failed 0)"
+      );
+      expect(result.stdout).toContain(
+        "2. authors: succeeded (rolled back 1, skipped 0, failed 0)"
+      );
+      expect(result.stdout).toContain(
+        "3. tags: succeeded (rolled back 1, skipped 0, failed 0)"
+      );
+      expect(getExecutionProbe().executions).toEqual([
+        "rollback:articles",
+        "rollback:authors",
+        "rollback:tags",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("executes targeted rollback source identities", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        rollbackExecutionConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "rollback",
+          "--config",
+          "migrate.config.ts",
+          "--ids",
+          "tags-1",
+          "tags",
+        ],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Rollback completed: succeeded");
+      expect(result.stdout).toContain(
+        "1. tags: succeeded (rolled back 1, skipped 0, failed 0)"
+      );
+      expect(result.stdout).not.toContain("authors: succeeded");
+      expect(getExecutionProbe().executions).toEqual(["rollback:tags"]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects invalid execution selections before runtime work", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        executionConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "articles"],
+        project
+      );
+      const probe = getExecutionProbe();
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        "Migration Definition selection is missing required dependencies"
+      );
+      expect(result.stderr).not.toContain("Run completed");
+      expect(probe.executions).toEqual([]);
+      expect(probe.storeState.latestRunStates.size).toBe(0);
+      expect(probe.storeState.definitionLocks.size).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders structured runtime failures", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        runtimeFailureConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "articles"],
+        project
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("SourcePluginError");
+      expect(result.stderr).toContain(
+        "In-memory source batchSize must be a positive integer"
+      );
+      expect(result.stderr).not.toContain("CliError/UserError");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 

@@ -14,27 +14,27 @@ This slice should turn the CLI from an inspection/planning tool into an operator
 
 ## Acceptance criteria
 
-- [ ] `migrate run <definition>` executes the selected migration definition through the registry-backed run helper.
-- [ ] `migrate run <definition...>` executes selected migration definitions in normalized dependency order.
-- [ ] `migrate run --all` executes all registered migration definitions in normalized dependency order.
-- [ ] `migrate rollback <definition>` executes rollback for the selected migration definition through the registry-backed rollback helper.
-- [ ] `migrate rollback <definition...>` executes selected rollback definitions in normalized reverse dependency order.
-- [ ] `migrate rollback --all` executes all registered rollback definitions in normalized reverse dependency order.
-- [ ] Execution commands require explicit scope through `--all` or definition ids.
-- [ ] Execution commands reject invalid selection before runtime execution.
-- [ ] Execution commands share parsing, required dependency policy, run-mode flags, `--ids` behavior, and planning errors with plan mode.
-- [ ] `--with-dependencies` expands required dependencies before execution.
-- [ ] `--with-dependencies` does not expand optional dependencies before execution.
-- [ ] `migrate run <definition> --failed` executes failed mode.
-- [ ] `migrate run <definition> --skipped` executes skipped mode.
-- [ ] `migrate run <definition> --ids <id>` executes item mode.
-- [ ] `migrate rollback <definition> --ids <id[,id...]>` executes targeted rollback.
-- [ ] Duplicate requested definitions do not execute more than once.
-- [ ] Duplicate parsed source identities do not target the same source identity more than once.
-- [ ] Runtime summaries are rendered with concise command output.
-- [ ] Runtime failures are rendered through existing structured errors where possible.
-- [ ] Execution tests verify delegation to existing runtime operations rather than re-testing runtime internals.
-- [ ] Execution tests verify that invalid selection does not acquire locks, create run state, or execute runtime work.
+- [x] `migrate run <definition>` executes the selected migration definition through the registry-backed run helper.
+- [x] `migrate run <definition...>` executes selected migration definitions in normalized dependency order.
+- [x] `migrate run --all` executes all registered migration definitions in normalized dependency order.
+- [x] `migrate rollback <definition>` executes rollback for the selected migration definition through the registry-backed rollback helper.
+- [x] `migrate rollback <definition...>` executes selected rollback definitions in normalized reverse dependency order.
+- [x] `migrate rollback --all` executes all registered rollback definitions in normalized reverse dependency order.
+- [x] Execution commands require explicit scope through `--all` or definition ids.
+- [x] Execution commands reject invalid selection before runtime execution.
+- [x] Execution commands share parsing, required dependency policy, run-mode flags, `--ids` behavior, and planning errors with plan mode.
+- [x] `--with-dependencies` expands required dependencies before execution.
+- [x] `--with-dependencies` does not expand optional dependencies before execution.
+- [x] `migrate run <definition> --failed` executes failed mode.
+- [x] `migrate run <definition> --skipped` executes skipped mode.
+- [x] `migrate run <definition> --ids <id>` executes item mode.
+- [x] `migrate rollback <definition> --ids <id[,id...]>` executes targeted rollback.
+- [x] Duplicate requested definitions do not execute more than once.
+- [x] Duplicate parsed source identities do not target the same source identity more than once.
+- [x] Runtime summaries are rendered with concise command output.
+- [x] Runtime failures are rendered through existing structured errors where possible.
+- [x] Execution tests verify delegation to existing runtime operations rather than re-testing runtime internals.
+- [x] Execution tests verify that invalid selection does not acquire locks, create run state, or execute runtime work.
 
 ## Blocked by
 

@@ -8,6 +8,8 @@ import type {
   MigrationDefinitionRollbackPlan,
   MigrationDefinitionRunPlan,
 } from "../domain/registry.ts";
+import type { RollbackRunSummary } from "../domain/rollback.ts";
+import type { MigrationRunSummary } from "../domain/run.ts";
 
 interface MigrationDefinitionGraphEdge {
   readonly fromDefinitionId: MigrationDefinitionId;
@@ -210,6 +212,46 @@ export const renderRollbackPlan = (
   ].join("\n");
 };
 
+const renderRunDefinitionSummary = (
+  definition: MigrationRunSummary["definitions"][number],
+  index: number
+): string =>
+  `${index + 1}. ${definition.definitionId}: ${definition.status} (migrated ${
+    definition.counts.migrated
+  }, unchanged ${definition.counts.unchanged}, skipped ${
+    definition.counts.skipped
+  }, failed ${definition.counts.failed}, needs update ${
+    definition.counts.needsUpdate
+  })`;
+
+const renderRollbackDefinitionSummary = (
+  definition: RollbackRunSummary["definitions"][number],
+  index: number
+): string =>
+  `${index + 1}. ${definition.definitionId}: ${
+    definition.status
+  } (rolled back ${definition.counts.rolledBack}, skipped ${
+    definition.counts.skipped
+  }, failed ${definition.counts.failed})`;
+
+export const renderRunSummary = (summary: MigrationRunSummary): string =>
+  [
+    `Run completed: ${summary.status}`,
+    `Run id: ${summary.runId}`,
+    "",
+    "Definitions:",
+    ...summary.definitions.map(renderRunDefinitionSummary),
+  ].join("\n");
+
+export const renderRollbackSummary = (summary: RollbackRunSummary): string =>
+  [
+    `Rollback completed: ${summary.status}`,
+    `Run id: ${summary.runId}`,
+    "",
+    "Definitions:",
+    ...summary.definitions.map(renderRollbackDefinitionSummary),
+  ].join("\n");
+
 const formatPlanCommand = (
   command: "rollback" | "run",
   flags: readonly string[],
@@ -287,6 +329,12 @@ export const renderPlanningError = (
     }
   }
 };
+
+export const renderRuntimeError = (error: {
+  readonly _tag: string;
+  readonly message?: string;
+}): string =>
+  error.message === undefined ? error._tag : `${error._tag}: ${error.message}`;
 
 export const renderConfigLoadError = (error: {
   readonly cause?: unknown;

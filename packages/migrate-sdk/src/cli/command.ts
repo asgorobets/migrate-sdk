@@ -6,7 +6,10 @@ import {
 } from "../domain/ids.ts";
 import type {
   MigrationDefinitionRegistry,
+  MigrationDefinitionRegistryPlanningError,
+  MigrationDefinitionRegistryRollbackError,
   MigrationDefinitionRegistryRollbackInput,
+  MigrationDefinitionRegistryRunError,
   MigrationDefinitionRegistryRunInput,
 } from "../domain/registry.ts";
 import {
@@ -19,7 +22,10 @@ import {
   renderRegistryGraph,
   renderRegistryList,
   renderRollbackPlan,
+  renderRollbackSummary,
   renderRunPlan,
+  renderRunSummary,
+  renderRuntimeError,
 } from "./render.ts";
 import { MigrationCliRuntime } from "./runtime.ts";
 
@@ -247,6 +253,53 @@ const makeRollbackPlanInput = (input: {
       };
 };
 
+const isPlanningError = (
+  error:
+    | MigrationDefinitionRegistryRollbackError
+    | MigrationDefinitionRegistryRunError
+): error is MigrationDefinitionRegistryPlanningError => {
+  switch (error._tag) {
+    case "MigrationDefinitionRegistryInvalidSelectionError":
+    case "MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError":
+    case "MigrationDefinitionRegistryUnknownDefinitionError":
+      return true;
+    default:
+      return false;
+  }
+};
+
+const renderRunCommandError = (
+  error: MigrationDefinitionRegistryRunError,
+  input: {
+    readonly definitionIds: readonly string[];
+    readonly hasTarget: boolean;
+    readonly mode?: "failed" | "skipped";
+  }
+): string =>
+  isPlanningError(error)
+    ? renderPlanningError(error, {
+        command: "run",
+        definitionIds: input.definitionIds,
+        hasTarget: input.hasTarget,
+        ...(input.mode === undefined ? {} : { mode: input.mode }),
+      })
+    : renderRuntimeError(error);
+
+const renderRollbackCommandError = (
+  error: MigrationDefinitionRegistryRollbackError,
+  input: {
+    readonly definitionIds: readonly string[];
+    readonly hasTarget: boolean;
+  }
+): string =>
+  isPlanningError(error)
+    ? renderPlanningError(error, {
+        command: "rollback",
+        definitionIds: input.definitionIds,
+        hasTarget: input.hasTarget,
+      })
+    : renderRuntimeError(error);
+
 const runCommand = Command.make(
   "run",
   {
@@ -260,12 +313,6 @@ const runCommand = Command.make(
   },
   (input) =>
     Effect.gen(function* () {
-      if (!input.plan) {
-        return yield* failReportedCliMessage(
-          "Migration execution is not implemented yet. Pass --plan to inspect the run plan."
-        );
-      }
-
       if (input.failed && input.skipped) {
         return yield* failReportedCliMessage(
           "Run planning cannot combine --failed and --skipped"
@@ -285,17 +332,16 @@ const runCommand = Command.make(
       } else if (input.skipped) {
         mode = "skipped";
       }
-      const plan = yield* registry
-        .planRun(
-          makeRunPlanInput({
-            all: input.all,
-            definitionIds: input.definitions,
-            ...(mode === undefined ? {} : { mode }),
-            ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
-            withDependencies: input.withDependencies,
-          })
-        )
-        .pipe(
+      const runInput = makeRunPlanInput({
+        all: input.all,
+        definitionIds: input.definitions,
+        ...(mode === undefined ? {} : { mode }),
+        ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
+        withDependencies: input.withDependencies,
+      });
+
+      if (input.plan) {
+        const plan = yield* registry.planRun(runInput).pipe(
           Effect.catch((error) =>
             failReportedCliMessage(
               renderPlanningError(error, {
@@ -308,9 +354,25 @@ const runCommand = Command.make(
           )
         );
 
-      yield* Console.log(
-        renderRunPlan(plan, { ...(mode === undefined ? {} : { mode }) })
+        yield* Console.log(
+          renderRunPlan(plan, { ...(mode === undefined ? {} : { mode }) })
+        );
+        return;
+      }
+
+      const summary = yield* registry.run(runInput).pipe(
+        Effect.catch((error) =>
+          failReportedCliMessage(
+            renderRunCommandError(error, {
+              definitionIds: input.definitions,
+              hasTarget: sourceIdentities !== undefined,
+              ...(mode === undefined ? {} : { mode }),
+            })
+          )
+        )
       );
+
+      yield* Console.log(renderRunSummary(summary));
     })
 ).pipe(Command.withDescription("Plan or run Migration Definitions"));
 
@@ -325,28 +387,21 @@ const rollbackCommand = Command.make(
   },
   (input) =>
     Effect.gen(function* () {
-      if (!input.plan) {
-        return yield* failReportedCliMessage(
-          "Migration rollback execution is not implemented yet. Pass --plan to inspect the rollback plan."
-        );
-      }
-
       const registry = yield* loadConfiguredRegistry;
       const idsInput = Option.getOrUndefined(input.ids);
       const sourceIdentities =
         idsInput === undefined
           ? undefined
           : yield* parseSourceIdentityTargets(idsInput);
-      const plan = yield* registry
-        .planRollback(
-          makeRollbackPlanInput({
-            all: input.all,
-            definitionIds: input.definitions,
-            ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
-            withDependencies: input.withDependencies,
-          })
-        )
-        .pipe(
+      const rollbackInput = makeRollbackPlanInput({
+        all: input.all,
+        definitionIds: input.definitions,
+        ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
+        withDependencies: input.withDependencies,
+      });
+
+      if (input.plan) {
+        const plan = yield* registry.planRollback(rollbackInput).pipe(
           Effect.catch((error) =>
             failReportedCliMessage(
               renderPlanningError(error, {
@@ -358,7 +413,22 @@ const rollbackCommand = Command.make(
           )
         );
 
-      yield* Console.log(renderRollbackPlan(plan));
+        yield* Console.log(renderRollbackPlan(plan));
+        return;
+      }
+
+      const summary = yield* registry.rollback(rollbackInput).pipe(
+        Effect.catch((error) =>
+          failReportedCliMessage(
+            renderRollbackCommandError(error, {
+              definitionIds: input.definitions,
+              hasTarget: sourceIdentities !== undefined,
+            })
+          )
+        )
+      );
+
+      yield* Console.log(renderRollbackSummary(summary));
     })
 ).pipe(Command.withDescription("Plan or rollback Migration Definitions"));
 
