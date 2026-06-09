@@ -2,14 +2,18 @@ import type {
   ApiRoot,
   ClientRequest,
   Product,
+  ProductData,
   ProductDraft,
   ProductUpdate,
   ProductUpdateAction,
+  ProductVariant,
 } from "@commercetools/platform-sdk";
 import { ApiRoot as PlatformApiRoot } from "@commercetools/platform-sdk";
 
+export type RecordedCommercetoolsRequestBody = ProductDraft | ProductUpdate;
+
 export interface RecordedCommercetoolsRequest {
-  readonly body?: unknown;
+  readonly body?: RecordedCommercetoolsRequestBody;
   readonly method: ClientRequest["method"];
   readonly pathVariables?: ClientRequest["pathVariables"];
   readonly queryParams?: ClientRequest["queryParams"];
@@ -22,24 +26,85 @@ export interface RecordingCommercetoolsApiRoot {
   readonly requests: readonly RecordedCommercetoolsRequest[];
 }
 
+const isRecord = (value: ClientRequest["body"]): value is object =>
+  typeof value === "object" && value !== null;
+
+const isProductUpdate = (
+  value: ClientRequest["body"]
+): value is ProductUpdate =>
+  isRecord(value) && "actions" in value && Array.isArray(value.actions);
+
+const isProductDraft = (value: ClientRequest["body"]): value is ProductDraft =>
+  isRecord(value) &&
+  "productType" in value &&
+  "name" in value &&
+  "slug" in value;
+
+const requestBody = (
+  request: ClientRequest
+): RecordedCommercetoolsRequestBody | undefined => {
+  if (isProductDraft(request.body) || isProductUpdate(request.body)) {
+    return request.body;
+  }
+
+  return undefined;
+};
+
 const recordRequest = (
   request: ClientRequest
-): RecordedCommercetoolsRequest => ({
-  ...(request.body === undefined ? {} : { body: request.body }),
-  method: request.method,
-  ...(request.pathVariables === undefined
+): RecordedCommercetoolsRequest => {
+  const body = requestBody(request);
+
+  return {
+    ...(body === undefined ? {} : { body }),
+    method: request.method,
+    ...(request.pathVariables === undefined
+      ? {}
+      : { pathVariables: request.pathVariables }),
+    ...(request.queryParams === undefined
+      ? {}
+      : { queryParams: request.queryParams }),
+    ...(request.uri === undefined ? {} : { uri: request.uri }),
+    ...(request.uriTemplate === undefined
+      ? {}
+      : { uriTemplate: request.uriTemplate }),
+  };
+};
+
+const productVariant = (draft: ProductDraft): ProductVariant => ({
+  id: 1,
+  ...(draft.masterVariant?.attributes === undefined
     ? {}
-    : { pathVariables: request.pathVariables }),
-  ...(request.queryParams === undefined
+    : { attributes: draft.masterVariant.attributes }),
+  ...(draft.masterVariant?.key === undefined
     ? {}
-    : { queryParams: request.queryParams }),
-  ...(request.uri === undefined ? {} : { uri: request.uri }),
-  ...(request.uriTemplate === undefined
+    : { key: draft.masterVariant.key }),
+  ...(draft.masterVariant?.sku === undefined
     ? {}
-    : { uriTemplate: request.uriTemplate }),
+    : { sku: draft.masterVariant.sku }),
 });
 
-const prototypeProduct = ({
+const productData = (draft: ProductDraft): ProductData => {
+  const masterVariant = productVariant(draft);
+
+  return {
+    attributes: masterVariant.attributes ?? [],
+    categories: [],
+    ...(draft.categoryOrderHints === undefined
+      ? {}
+      : { categoryOrderHints: draft.categoryOrderHints }),
+    ...(draft.description === undefined
+      ? {}
+      : { description: draft.description }),
+    masterVariant,
+    name: draft.name,
+    searchKeywords: {},
+    slug: draft.slug,
+    variants: [],
+  };
+};
+
+const recordedProduct = ({
   draft,
   id,
   published,
@@ -49,37 +114,31 @@ const prototypeProduct = ({
   readonly id: string;
   readonly published: boolean;
   readonly version: number;
-}): Product =>
-  ({
+}): Product => {
+  const data = productData(draft);
+  const productType: Product["productType"] = {
+    id:
+      draft.productType.id ?? draft.productType.key ?? "recording-product-type",
+    typeId: "product-type",
+  };
+
+  return {
     createdAt: "2026-01-01T00:00:00.000Z",
     id,
-    key: draft.key,
+    ...(draft.key === undefined ? {} : { key: draft.key }),
     lastModifiedAt: "2026-01-01T00:00:00.000Z",
     masterData: {
-      current: {
-        categories: draft.categories ?? [],
-        categoryOrderHints: draft.categoryOrderHints ?? {},
-        masterVariant: {},
-        name: draft.name,
-        slug: draft.slug,
-        variants: [],
-      },
+      current: data,
       hasStagedChanges: !published,
       published,
-      staged: {
-        categories: draft.categories ?? [],
-        categoryOrderHints: draft.categoryOrderHints ?? {},
-        masterVariant: {},
-        name: draft.name,
-        slug: draft.slug,
-        variants: [],
-      },
+      staged: data,
     },
-    productType: draft.productType,
+    productType,
     version,
-  }) as unknown as Product;
+  };
+};
 
-const applyPrototypeAction = (
+const applyRecordedProductAction = (
   draft: ProductDraft,
   action: ProductUpdateAction
 ): ProductDraft => {
@@ -119,23 +178,15 @@ export const makeRecordingCommercetoolsApiRoot =
 
         const body = request.body;
 
-        if (
-          typeof body === "object" &&
-          body !== null &&
-          "actions" in body &&
-          Array.isArray((body as ProductUpdate).actions)
-        ) {
+        if (isProductUpdate(body)) {
           const draft = createdDraft;
 
           if (draft === undefined) {
-            throw new Error(
-              "Prototype product must be created before updating"
-            );
+            throw new Error("Recorded product must be created before updating");
           }
 
-          const update = body as ProductUpdate;
-          createdDraft = update.actions.reduce(applyPrototypeAction, draft);
-          published = update.actions.reduce((current, action) => {
+          createdDraft = body.actions.reduce(applyRecordedProductAction, draft);
+          published = body.actions.reduce((current, action) => {
             if (action.action === "publish") {
               return true;
             }
@@ -149,23 +200,29 @@ export const makeRecordingCommercetoolsApiRoot =
           productVersion += 1;
 
           return Promise.resolve({
-            body: prototypeProduct({
+            body: recordedProduct({
               draft: createdDraft,
-              id: "prototype-product-id",
+              id: "recording-product-id",
               published,
               version: productVersion,
             }),
           });
         }
 
-        createdDraft = body as ProductDraft;
+        if (!isProductDraft(body)) {
+          throw new Error(
+            "Recorded product request body must be a product draft"
+          );
+        }
+
+        createdDraft = body;
         published = false;
         productVersion = 1;
 
         return Promise.resolve({
-          body: prototypeProduct({
+          body: recordedProduct({
             draft: createdDraft,
-            id: "prototype-product-id",
+            id: "recording-product-id",
             published: false,
             version: productVersion,
           }),

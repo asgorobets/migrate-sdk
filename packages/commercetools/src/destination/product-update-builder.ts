@@ -33,140 +33,147 @@ export interface ProductUpdateWithActionsInput<
   readonly actions: NonEmptyProductUpdateActions<Action>;
 }
 
-type AppendAction<
-  Actions extends readonly ProductUpdateAction[],
-  Action extends ProductUpdateAction,
-> = readonly [...Actions, Action];
-
-type CommandFromActions<Actions extends readonly ProductUpdateAction[]> =
-  Actions extends readonly [ProductUpdateAction, ...ProductUpdateAction[]]
-    ? () => ProductUpdateCommandShape<Actions[number]>
-    : never;
-
-export interface ProductUpdateActionBuilder<
-  Actions extends readonly ProductUpdateAction[] = readonly [],
+interface ProductUpdateActionMethods<
+  CurrentAction extends ProductUpdateAction = never,
 > {
-  readonly actions: Actions;
   readonly addVariant: (
     input: ProductUpdateActionInput<"addVariant">
   ) => ProductUpdateActionBuilder<
-    AppendAction<Actions, ProductUpdateActionByName<"addVariant">>
+    CurrentAction | ProductUpdateActionByName<"addVariant">
   >;
   readonly changeName: (
     input: ProductUpdateActionInput<"changeName">
   ) => ProductUpdateActionBuilder<
-    AppendAction<Actions, ProductUpdateActionByName<"changeName">>
+    CurrentAction | ProductUpdateActionByName<"changeName">
   >;
   readonly changeSlug: (
     input: ProductUpdateActionInput<"changeSlug">
   ) => ProductUpdateActionBuilder<
-    AppendAction<Actions, ProductUpdateActionByName<"changeSlug">>
+    CurrentAction | ProductUpdateActionByName<"changeSlug">
   >;
-  readonly command: CommandFromActions<Actions>;
   readonly publish: (
     input?: ProductUpdateActionInput<"publish">
   ) => ProductUpdateActionBuilder<
-    AppendAction<Actions, ProductUpdateActionByName<"publish">>
+    CurrentAction | ProductUpdateActionByName<"publish">
   >;
   readonly raw: <const Action extends ProductUpdateAction>(
     action: Action
-  ) => ProductUpdateActionBuilder<AppendAction<Actions, Action>>;
+  ) => ProductUpdateActionBuilder<CurrentAction | Action>;
   readonly setAttribute: (
     input: ProductUpdateActionInput<"setAttribute">
   ) => ProductUpdateActionBuilder<
-    AppendAction<Actions, ProductUpdateActionByName<"setAttribute">>
+    CurrentAction | ProductUpdateActionByName<"setAttribute">
   >;
   readonly setDescription: (
     input: ProductUpdateActionInput<"setDescription">
   ) => ProductUpdateActionBuilder<
-    AppendAction<Actions, ProductUpdateActionByName<"setDescription">>
+    CurrentAction | ProductUpdateActionByName<"setDescription">
   >;
   readonly unpublish: () => ProductUpdateActionBuilder<
-    AppendAction<Actions, ProductUpdateActionByName<"unpublish">>
+    CurrentAction | ProductUpdateActionByName<"unpublish">
   >;
+}
+
+export interface EmptyProductUpdateActionBuilder
+  extends ProductUpdateActionMethods {
+  readonly actions: readonly [];
+}
+
+export interface ProductUpdateActionBuilder<
+  Action extends ProductUpdateAction = ProductUpdateAction,
+> extends ProductUpdateActionMethods<Action> {
+  readonly actions: NonEmptyProductUpdateActions<Action>;
+  readonly command: () => ProductUpdateCommandShape<Action>;
 }
 
 export interface ProductUpdateFactory {
   readonly withActions: <const Action extends ProductUpdateAction>(
     input: ProductUpdateWithActionsInput<Action>
-  ) => ProductUpdateActionBuilder<NonEmptyProductUpdateActions<Action>>;
-  (input: ProductUpdateInput): ProductUpdateActionBuilder;
+  ) => ProductUpdateActionBuilder<Action>;
+  (input: ProductUpdateInput): EmptyProductUpdateActionBuilder;
 }
 
-const productAction = <Name extends ProductUpdateActionName>(
-  name: Name,
-  input: ProductUpdateActionInput<Name>
-): ProductUpdateActionByName<Name> =>
-  ({
-    ...input,
-    action: name,
-  }) as ProductUpdateActionByName<Name>;
+const nonEmptyProductUpdateActions = <Action extends ProductUpdateAction>(
+  actions: readonly Action[]
+): NonEmptyProductUpdateActions<Action> => {
+  const [firstAction, ...remainingActions] = actions;
+
+  if (firstAction === undefined) {
+    throw new Error("Product update requires at least one action");
+  }
+
+  return [firstAction, ...remainingActions];
+};
 
 const makeProductUpdateActionBuilder = <
-  const Actions extends readonly ProductUpdateAction[],
+  CurrentAction extends ProductUpdateAction = never,
 >(
   input: ProductUpdateInput & {
-    readonly actions: Actions;
+    readonly actions: readonly CurrentAction[];
   }
-): ProductUpdateActionBuilder<Actions> => {
+): ProductUpdateActionMethods<CurrentAction> => {
   const append = <const Action extends ProductUpdateAction>(
     action: Action
-  ): ProductUpdateActionBuilder<AppendAction<Actions, Action>> =>
-    makeProductUpdateActionBuilder({
+  ): ProductUpdateActionBuilder<CurrentAction | Action> =>
+    makeProductUpdateActionBuilderWithActions({
       ...input,
-      actions: [...input.actions, action] as AppendAction<Actions, Action>,
+      actions: nonEmptyProductUpdateActions([...input.actions, action]),
     });
 
   return {
-    actions: input.actions,
     addVariant: (actionInput) =>
-      append(productAction("addVariant", actionInput)),
+      append({ ...actionInput, action: "addVariant" }),
     changeName: (actionInput) =>
-      append(productAction("changeName", actionInput)),
+      append({ ...actionInput, action: "changeName" }),
     changeSlug: (actionInput) =>
-      append(productAction("changeSlug", actionInput)),
-    command: (() => {
-      if (input.actions.length === 0) {
-        throw new Error("Product update requires at least one action");
-      }
-
-      return {
-        actions: input.actions as unknown as NonEmptyProductUpdateActions<
-          Actions[number]
-        >,
-        kind: "UpdateProduct",
-        selector: input.selector,
-        version: input.version,
-      };
-    }) as CommandFromActions<Actions>,
+      append({ ...actionInput, action: "changeSlug" }),
     publish: (actionInput = {}) =>
-      append(productAction("publish", actionInput)),
+      append({ ...actionInput, action: "publish" }),
     raw: append,
     setAttribute: (actionInput) =>
-      append(productAction("setAttribute", actionInput)),
+      append({ ...actionInput, action: "setAttribute" }),
     setDescription: (actionInput) =>
-      append(productAction("setDescription", actionInput)),
-    unpublish: () => append(productAction("unpublish", {})),
+      append({ ...actionInput, action: "setDescription" }),
+    unpublish: () => append({ action: "unpublish" }),
   };
 };
 
+const makeProductUpdateActionBuilderWithActions = <
+  Action extends ProductUpdateAction,
+>(
+  input: ProductUpdateInput & {
+    readonly actions: NonEmptyProductUpdateActions<Action>;
+  }
+): ProductUpdateActionBuilder<Action> => ({
+  ...makeProductUpdateActionBuilder(input),
+  actions: input.actions,
+  command: () => ({
+    actions: input.actions,
+    kind: "UpdateProduct",
+    selector: input.selector,
+    version: input.version,
+  }),
+});
+
 export const makeProductUpdate = Object.assign(
-  (input: ProductUpdateInput): ProductUpdateActionBuilder =>
-    makeProductUpdateActionBuilder({
+  (input: ProductUpdateInput): EmptyProductUpdateActionBuilder => ({
+    ...makeProductUpdateActionBuilder({
       ...input,
       actions: [],
     }),
+    actions: [],
+  }),
   {
     withActions: <const Action extends ProductUpdateAction>(
       input: ProductUpdateWithActionsInput<Action>
-    ): ProductUpdateActionBuilder<NonEmptyProductUpdateActions<Action>> => {
+    ): ProductUpdateActionBuilder<Action> => {
       if (input.actions.length === 0) {
         throw new Error("Product update requires at least one action");
       }
 
-      return makeProductUpdateActionBuilder({
+      return makeProductUpdateActionBuilderWithActions({
         ...input,
-        actions: input.actions as NonEmptyProductUpdateActions<Action>,
+        actions: input.actions,
       });
     },
   }

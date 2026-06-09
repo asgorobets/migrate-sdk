@@ -99,105 +99,12 @@ export interface CreateProductDraftCommand {
 
 export interface PublishProductCommand {
   readonly kind: "PublishProduct";
-  readonly scope?: ProductPublishScope;
+  readonly scope?: ProductPublishScope | undefined;
   readonly selector: CommercetoolsProductSelector;
   readonly version: number;
 }
 
 export type UpdateProductCommand = ProductUpdateCommandShape;
-
-const ProductDraftSchema = Schema.Any as Schema.Codec<
-  ProductDraft,
-  ProductDraft,
-  never,
-  never
->;
-
-const ProductSelectorValueSchema = Schema.NonEmptyString as Schema.Codec<
-  string,
-  string,
-  never,
-  never
->;
-
-export const CommercetoolsProductSelectorSchema = Schema.Union([
-  Schema.Struct({
-    id: ProductSelectorValueSchema,
-    kind: Schema.Literal("id"),
-  }),
-  Schema.Struct({
-    key: ProductSelectorValueSchema,
-    kind: Schema.Literal("key"),
-  }),
-]) as unknown as Schema.Codec<
-  CommercetoolsProductSelector,
-  CommercetoolsProductSelector,
-  never,
-  never
->;
-
-const ProductPublishScopeSchema = Schema.optional(
-  Schema.String as unknown as Schema.Codec<
-    ProductPublishScope,
-    ProductPublishScope,
-    never,
-    never
-  >
-);
-
-const ProductUpdateActionSchema = Schema.Any as Schema.Codec<
-  ProductUpdateAction,
-  ProductUpdateAction,
-  never,
-  never
->;
-
-const ProductUpdateActionsSchema = Schema.NonEmptyArray(
-  ProductUpdateActionSchema
-) as unknown as Schema.Codec<
-  NonEmptyProductUpdateActions,
-  NonEmptyProductUpdateActions,
-  never,
-  never
->;
-
-const ProductVersionSchema = Schema.Int.check(
-  Schema.isGreaterThan(0)
-) as Schema.Codec<number, number, never, never>;
-
-export const CreateProductDraftCommand = Schema.Struct({
-  draft: ProductDraftSchema,
-  kind: Schema.Literal("CreateProductDraft"),
-}) as unknown as Schema.Codec<
-  CreateProductDraftCommand,
-  CreateProductDraftCommand,
-  never,
-  never
->;
-
-export const PublishProductCommand = Schema.Struct({
-  kind: Schema.Literal("PublishProduct"),
-  scope: ProductPublishScopeSchema,
-  selector: CommercetoolsProductSelectorSchema,
-  version: ProductVersionSchema,
-}) as unknown as Schema.Codec<
-  PublishProductCommand,
-  PublishProductCommand,
-  never,
-  never
->;
-
-export const UpdateProductCommand = Schema.Struct({
-  actions: ProductUpdateActionsSchema,
-  kind: Schema.Literal("UpdateProduct"),
-  selector: CommercetoolsProductSelectorSchema,
-  version: ProductVersionSchema,
-}) as unknown as Schema.Codec<
-  UpdateProductCommand,
-  UpdateProductCommand,
-  never,
-  never
->;
 
 export type CommercetoolsDestinationCommand =
   | CreateProductDraftCommand
@@ -245,6 +152,240 @@ export interface CommercetoolsDestination<
   readonly commands: CommercetoolsDestinationCommands;
   readonly helpers: CommercetoolsDestinationHelpers<ProductAttributeSchemaRecord>;
 }
+
+type UnknownRecord = Readonly<Record<string, unknown>>;
+
+const isRecord = (value: unknown): value is UnknownRecord =>
+  typeof value === "object" && value !== null;
+
+const isStringRecord = (
+  value: unknown
+): value is Readonly<Record<string, string>> =>
+  isRecord(value) &&
+  Object.values(value).every((item) => typeof item === "string");
+
+const hasOwnField = (value: UnknownRecord, field: string): boolean =>
+  Object.hasOwn(value, field);
+
+const hasStringField = (value: UnknownRecord, field: string): boolean =>
+  typeof value[field] === "string" && value[field] !== "";
+
+const hasIntegerField = (value: UnknownRecord, field: string): boolean =>
+  typeof value[field] === "number" && Number.isInteger(value[field]);
+
+const hasRecordField = (value: UnknownRecord, field: string): boolean =>
+  isRecord(value[field]);
+
+const hasArrayField = (value: UnknownRecord, field: string): boolean =>
+  Array.isArray(value[field]);
+
+const hasVariantSelector = (value: UnknownRecord): boolean =>
+  hasIntegerField(value, "variantId") || hasStringField(value, "sku");
+
+const hasAssetSelector = (value: UnknownRecord): boolean =>
+  hasStringField(value, "assetId") || hasStringField(value, "assetKey");
+
+const isProductTypeResourceIdentifier = (value: unknown): boolean => {
+  if (!isRecord(value) || value.typeId !== "product-type") {
+    return false;
+  }
+
+  const hasId = hasOwnField(value, "id");
+  const hasKey = hasOwnField(value, "key");
+
+  if (hasId === hasKey) {
+    return false;
+  }
+
+  return hasId ? hasStringField(value, "id") : hasStringField(value, "key");
+};
+
+const isProductDraft = (value: unknown): value is ProductDraft =>
+  isRecord(value) &&
+  isProductTypeResourceIdentifier(value.productType) &&
+  isStringRecord(value.name) &&
+  isStringRecord(value.slug);
+
+const isPositiveInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value > 0;
+
+const isProductPublishScope = (value: unknown): value is ProductPublishScope =>
+  typeof value === "string";
+
+type ProductUpdateActionGuard = (value: UnknownRecord) => boolean;
+
+const productUpdateActionGuardsByName = {
+  addAsset: (value) =>
+    hasVariantSelector(value) && hasRecordField(value, "asset"),
+  addExternalImage: (value) =>
+    hasVariantSelector(value) && hasRecordField(value, "image"),
+  addPrice: (value) =>
+    hasVariantSelector(value) && hasRecordField(value, "price"),
+  addToCategory: (value) => hasRecordField(value, "category"),
+  addVariant: () => true,
+  changeAssetName: (value) =>
+    hasVariantSelector(value) &&
+    hasAssetSelector(value) &&
+    hasRecordField(value, "name"),
+  changeAssetOrder: (value) =>
+    hasVariantSelector(value) && hasArrayField(value, "assetOrder"),
+  changeMasterVariant: hasVariantSelector,
+  changeName: (value) => hasRecordField(value, "name"),
+  changePrice: (value) =>
+    hasStringField(value, "priceId") && hasRecordField(value, "price"),
+  changeSlug: (value) => hasRecordField(value, "slug"),
+  moveImageToPosition: (value) =>
+    hasVariantSelector(value) &&
+    hasStringField(value, "imageUrl") &&
+    hasIntegerField(value, "position"),
+  publish: () => true,
+  removeAsset: (value) => hasVariantSelector(value) && hasAssetSelector(value),
+  removeFromCategory: (value) => hasRecordField(value, "category"),
+  removeImage: (value) =>
+    hasVariantSelector(value) && hasStringField(value, "imageUrl"),
+  removePrice: (value) => hasStringField(value, "priceId"),
+  removeVariant: (value) =>
+    hasIntegerField(value, "id") || hasStringField(value, "sku"),
+  revertStagedChanges: () => true,
+  revertStagedVariantChanges: (value) => hasIntegerField(value, "variantId"),
+  setAssetCustomField: (value) =>
+    hasVariantSelector(value) &&
+    hasAssetSelector(value) &&
+    hasStringField(value, "name"),
+  setAssetCustomType: (value) =>
+    hasVariantSelector(value) && hasAssetSelector(value),
+  setAssetDescription: (value) =>
+    hasVariantSelector(value) && hasAssetSelector(value),
+  setAssetKey: (value) =>
+    hasVariantSelector(value) && hasStringField(value, "assetId"),
+  setAssetSources: (value) =>
+    hasVariantSelector(value) &&
+    hasAssetSelector(value) &&
+    hasArrayField(value, "sources"),
+  setAssetTags: (value) => hasVariantSelector(value) && hasAssetSelector(value),
+  setAttribute: (value) =>
+    hasVariantSelector(value) && hasStringField(value, "name"),
+  setAttributeInAllVariants: (value) => hasStringField(value, "name"),
+  setCategoryOrderHint: (value) => hasStringField(value, "categoryId"),
+  setDescription: () => true,
+  setDiscountedPrice: (value) => hasStringField(value, "priceId"),
+  setImageLabel: (value) =>
+    hasVariantSelector(value) && hasStringField(value, "imageUrl"),
+  setKey: () => true,
+  setMetaDescription: () => true,
+  setMetaKeywords: () => true,
+  setMetaTitle: () => true,
+  setPriceKey: (value) => hasStringField(value, "priceId"),
+  setPriceMode: () => true,
+  setPrices: (value) =>
+    hasVariantSelector(value) && hasArrayField(value, "prices"),
+  setProductAttribute: (value) => hasStringField(value, "name"),
+  setProductPriceCustomField: (value) =>
+    hasStringField(value, "priceId") && hasStringField(value, "name"),
+  setProductPriceCustomType: (value) => hasStringField(value, "priceId"),
+  setProductVariantKey: hasVariantSelector,
+  setSearchKeywords: (value) => hasRecordField(value, "searchKeywords"),
+  setSku: (value) => hasIntegerField(value, "variantId"),
+  setTaxCategory: () => true,
+  transitionState: () => true,
+  unpublish: () => true,
+} satisfies Record<ProductUpdateAction["action"], ProductUpdateActionGuard>;
+
+const productUpdateActionGuards = new Map<string, ProductUpdateActionGuard>(
+  Object.entries(productUpdateActionGuardsByName)
+);
+
+const isProductUpdateAction = (
+  value: unknown
+): value is ProductUpdateAction => {
+  if (!isRecord(value) || typeof value.action !== "string") {
+    return false;
+  }
+
+  const guard = productUpdateActionGuards.get(value.action);
+
+  return guard?.(value) === true;
+};
+
+const isProductUpdateActions = (
+  value: unknown
+): value is NonEmptyProductUpdateActions =>
+  Array.isArray(value) &&
+  value.length > 0 &&
+  value.every(isProductUpdateAction);
+
+const NonEmptyStringSchema = Schema.declare<string>(
+  (value): value is string => typeof value === "string" && value !== "",
+  {
+    identifier: "NonEmptyString",
+  }
+);
+
+const ProductDraftSchema = Schema.declare<ProductDraft>(isProductDraft, {
+  identifier: "ProductDraft",
+});
+
+export const CommercetoolsProductSelectorSchema = Schema.Union([
+  Schema.Struct({
+    id: NonEmptyStringSchema,
+    kind: Schema.Literal("id"),
+  }),
+  Schema.Struct({
+    key: NonEmptyStringSchema,
+    kind: Schema.Literal("key"),
+  }),
+]);
+
+const ProductPublishScopeSchema = Schema.optional(
+  Schema.declare<ProductPublishScope>(isProductPublishScope, {
+    identifier: "ProductPublishScope",
+  })
+);
+
+const ProductUpdateActionsSchema = Schema.declare<NonEmptyProductUpdateActions>(
+  isProductUpdateActions,
+  {
+    identifier: "ProductUpdateActions",
+  }
+);
+
+const ProductVersionSchema = Schema.declare<number>(isPositiveInteger, {
+  identifier: "ProductVersion",
+});
+
+export const CreateProductDraftCommand: Schema.Codec<
+  CreateProductDraftCommand,
+  CreateProductDraftCommand,
+  never,
+  never
+> = Schema.Struct({
+  draft: ProductDraftSchema,
+  kind: Schema.Literal("CreateProductDraft"),
+});
+
+export const PublishProductCommand: Schema.Codec<
+  PublishProductCommand,
+  PublishProductCommand,
+  never,
+  never
+> = Schema.Struct({
+  kind: Schema.Literal("PublishProduct"),
+  scope: ProductPublishScopeSchema,
+  selector: CommercetoolsProductSelectorSchema,
+  version: ProductVersionSchema,
+});
+
+export const UpdateProductCommand: Schema.Codec<
+  UpdateProductCommand,
+  UpdateProductCommand,
+  never,
+  never
+> = Schema.Struct({
+  actions: ProductUpdateActionsSchema,
+  kind: Schema.Literal("UpdateProduct"),
+  selector: CommercetoolsProductSelectorSchema,
+  version: ProductVersionSchema,
+});
 
 const createProductDraftCommand = defineDestinationCommand(
   "CreateProductDraft",
@@ -294,7 +435,9 @@ const toDestinationPluginError = (
     message: cause.message,
   });
 
-const productMetadata = (product: Product): Record<string, unknown> => ({
+const productMetadata = (
+  product: Product
+): Record<string, number | string> => ({
   ...(product.key === undefined ? {} : { productKey: product.key }),
   productVersion: product.version,
 });
@@ -312,13 +455,9 @@ const makeProductHelpers = <
     | CommercetoolsProductAttributeSchemasInput<ProductAttributeSchemaRecord>
     | undefined
 ): CommercetoolsProductHelpers<ProductAttributeSchemaRecord> => {
-  const schemas = (productTypes ?? {}) as Readonly<
-    Record<string, CommercetoolsProductAttributeSchema>
-  >;
-
   return {
     attributes: (productTypeKey, input) => {
-      const schema = schemas[productTypeKey];
+      const schema = productTypes?.[productTypeKey];
 
       if (schema === undefined) {
         return Effect.die(
@@ -433,11 +572,11 @@ function make<
         "productTypes" in options ? options.productTypes : undefined
       ),
     },
-  } as CommercetoolsDestination<ProductAttributeSchemaRecord>;
+  };
 }
 
 export const CommercetoolsDestinationPlugin: {
   readonly make: typeof make;
 } = {
   make,
-} as const;
+};

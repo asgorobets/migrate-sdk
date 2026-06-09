@@ -13,9 +13,11 @@
     "./*/internal/*": null
   },
   "scripts": {
-    "check-types": "tsc --noEmit -p tsconfig.json",
+    "check-types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.check.json",
+    "example:products": "tsx examples/product-destination.ts",
     "prepare": "effect-language-service patch",
-    "prototype:products": "tsx src/prototypes/product-destination.ts"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "peerDependencies": {
     "effect": "4.0.0-beta.75",
@@ -23,12 +25,14 @@
   },
   "devDependencies": {
     "@effect/language-service": "^0.86.2",
+    "@effect/vitest": "4.0.0-beta.75",
     "@repo/typescript-config": "workspace:*",
     "@types/node": "^22.15.3",
     "effect": "4.0.0-beta.75",
     "migrate-sdk": "workspace:*",
     "tsx": "^4.22.4",
-    "typescript": "5.9.2"
+    "typescript": "5.9.2",
+    "vitest": "^4.1.8"
   },
   "dependencies": {
     "@commercetools/platform-sdk": "^8.27.0",

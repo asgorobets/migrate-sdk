@@ -95,6 +95,9 @@ importers:
       '@effect/language-service':
         specifier: ^0.86.2
         version: 0.86.2
+      '@effect/vitest':
+        specifier: 4.0.0-beta.75
+        version: 4.0.0-beta.75(effect@4.0.0-beta.75)(vitest@4.1.8(@types/node@22.19.17)(vite@8.0.16(@types/node@22.19.17)(esbuild@0.28.0)(tsx@4.22.4)(yaml@2.9.0)))
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
@@ -113,6 +116,9 @@ importers:
       typescript:
         specifier: 5.9.2
         version: 5.9.2
+      vitest:
+        specifier: ^4.1.8
+        version: 4.1.8(@types/node@22.19.17)(vite@8.0.16(@types/node@22.19.17)(esbuild@0.28.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/migrate-sdk:
     dependencies:
