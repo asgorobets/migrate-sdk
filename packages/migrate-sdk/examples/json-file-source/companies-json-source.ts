@@ -13,9 +13,11 @@ import {
   InMemoryDestinationTesting,
 } from "migrate-sdk/destinations/in-memory/testing";
 import {
-  type JsonFileSourcePlatform,
-  JsonFileSourcePlugin,
-} from "migrate-sdk/sources/json-file";
+  type DocumentFetcherPlatform,
+  DocumentFetchers,
+  DocumentParsers,
+  DocumentSourcePlugin,
+} from "migrate-sdk/sources/document";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 
 const NullableString = Schema.NullOr(Schema.String);
@@ -91,6 +93,17 @@ const nodePlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
 const defaultFilePath = () =>
   fileURLToPath(new URL("./companies.json", import.meta.url));
 
+const companiesDocumentParser = DocumentParsers.json(CompaniesDocument);
+
+const makeCompaniesDocumentFetcher = (options: {
+  readonly filePath?: string | undefined;
+  readonly platform?: DocumentFetcherPlatform | undefined;
+}) =>
+  DocumentFetchers.fileText({
+    path: options.filePath ?? defaultFilePath(),
+    platform: options.platform ?? nodePlatformLayer,
+  });
+
 const makeBusinessUnitDestination = () =>
   InMemoryDestinationTesting.fixtureEntries({
     contentType: "business-unit",
@@ -118,7 +131,7 @@ const makeAddressDestination = () =>
 interface MigrationOptions<Destination> {
   readonly destination?: Destination | undefined;
   readonly filePath?: string | undefined;
-  readonly platform?: JsonFileSourcePlatform | undefined;
+  readonly platform?: DocumentFetcherPlatform | undefined;
   readonly store?: Layer.Layer<MigrationStore> | undefined;
 }
 
@@ -154,14 +167,14 @@ export const makeBusinessUnitsMigration = (
         status: businessUnit.status,
       });
     },
-    source: JsonFileSourcePlugin.make({
-      documentSchema: CompaniesDocument,
-      items: {
-        selector: (document) => document.businessUnits,
+    source: DocumentSourcePlugin.make({
+      fetcher: makeCompaniesDocumentFetcher(options),
+      parser: companiesDocumentParser,
+      selector: {
+        item: (document) => document.businessUnits,
       },
       identity: ({ item }) => item.key,
-      path: options.filePath ?? defaultFilePath(),
-      platform: options.platform ?? nodePlatformLayer,
+      lookup: { kind: "scan" },
       version: { kind: "content-hash" },
     }),
     store: options.store ?? InMemoryMigrationStore.layer(),
@@ -195,15 +208,15 @@ export const makeContactsMigration = (
         role: contact.role,
       });
     },
-    source: JsonFileSourcePlugin.make({
-      documentSchema: CompaniesDocument,
-      items: {
-        parentSelector: (document) => document.businessUnits,
-        selector: (businessUnit) => businessUnit.contacts,
+    source: DocumentSourcePlugin.make({
+      fetcher: makeCompaniesDocumentFetcher(options),
+      parser: companiesDocumentParser,
+      selector: {
+        parent: (document) => document.businessUnits,
+        item: (businessUnit) => businessUnit.contacts,
       },
       identity: ({ item, parent }) => [parent.key, item.key],
-      path: options.filePath ?? defaultFilePath(),
-      platform: options.platform ?? nodePlatformLayer,
+      lookup: { kind: "scan" },
       version: { kind: "content-hash" },
     }),
     store: options.store ?? InMemoryMigrationStore.layer(),
@@ -238,15 +251,15 @@ export const makeAddressesMigration = (
         type: address.type,
       });
     },
-    source: JsonFileSourcePlugin.make({
-      documentSchema: CompaniesDocument,
-      items: {
-        parentSelector: (document) => document.businessUnits,
-        selector: (businessUnit) => businessUnit.addresses,
+    source: DocumentSourcePlugin.make({
+      fetcher: makeCompaniesDocumentFetcher(options),
+      parser: companiesDocumentParser,
+      selector: {
+        parent: (document) => document.businessUnits,
+        item: (businessUnit) => businessUnit.addresses,
       },
       identity: ({ item, parent }) => [parent.key, item.key],
-      path: options.filePath ?? defaultFilePath(),
-      platform: options.platform ?? nodePlatformLayer,
+      lookup: { kind: "scan" },
       version: { kind: "content-hash" },
     }),
     store: options.store ?? InMemoryMigrationStore.layer(),
@@ -264,7 +277,7 @@ export const runCompaniesJsonSourceExample = Effect.fn(
   "runCompaniesJsonSourceExample"
 )(function* (options?: {
   readonly filePath?: string;
-  readonly platform?: JsonFileSourcePlatform;
+  readonly platform?: DocumentFetcherPlatform;
 }) {
   const store = InMemoryMigrationStore.layer();
   const addressDestination = makeAddressDestination();
