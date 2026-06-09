@@ -41,8 +41,10 @@ const BusinessUnitCustomFields = Schema.Struct({
 });
 
 const destination = CommercetoolsDestinationPlugin.make({
-  projectKey,
-  sdkLayer,
+  sdkLayer: CommercetoolsSdk.layerFromApiRoot({
+    apiRoot,
+    projectKey,
+  }),
   customTypes: {
     businessUnits: {
       typeKey: "repoBusinessUnit",

@@ -51,8 +51,10 @@ const BookVariantAttributes = Schema.Struct({
 });
 
 const destination = CommercetoolsDestinationPlugin.make({
-  projectKey,
-  sdkLayer,
+  sdkLayer: CommercetoolsSdk.layerFromApiRoot({
+    apiRoot,
+    projectKey,
+  }),
   productTypes: {
     book: {
       productAttributes: BookProductAttributes,

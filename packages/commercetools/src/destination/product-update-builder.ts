@@ -1,5 +1,5 @@
 import type { ProductUpdateAction } from "@commercetools/platform-sdk";
-import type { CommercetoolsProductSelector } from "../internal/products.ts";
+import type { CommercetoolsProductSelector } from "./selectors.ts";
 
 export type ProductUpdateActionName = ProductUpdateAction["action"];
 

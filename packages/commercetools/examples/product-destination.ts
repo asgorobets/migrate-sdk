@@ -60,11 +60,13 @@ export const runProductDestinationExample = Effect.fn(
 )(function* () {
   const recording = makeRecordingCommercetoolsApiRoot();
   const destination = CommercetoolsDestinationPlugin.make({
-    projectKey: "example-project",
     productTypes: {
       book: BookProductAttributes,
     },
-    sdkLayer: CommercetoolsSdk.layerFromApiRoot(recording.apiRoot),
+    sdkLayer: CommercetoolsSdk.layerFromApiRoot({
+      apiRoot: recording.apiRoot,
+      projectKey: "example-project",
+    }),
   });
   const destinationPlugin = yield* DestinationPlugin.pipe(
     Effect.provide(destination.layer)

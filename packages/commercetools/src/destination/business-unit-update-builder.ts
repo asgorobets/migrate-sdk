@@ -1,5 +1,5 @@
 import type { BusinessUnitUpdateAction } from "@commercetools/platform-sdk";
-import type { CommercetoolsBusinessUnitSelector } from "../internal/business-units.ts";
+import type { CommercetoolsBusinessUnitSelector } from "./selectors.ts";
 
 export type BusinessUnitUpdateActionName = BusinessUnitUpdateAction["action"];
 

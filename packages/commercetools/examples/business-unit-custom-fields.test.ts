@@ -36,8 +36,10 @@ const makeDestination = () => {
         typeKey: "repoBusinessUnit",
       },
     },
-    projectKey: "example-project",
-    sdkLayer: CommercetoolsSdk.layerFromApiRoot(recording.apiRoot),
+    sdkLayer: CommercetoolsSdk.layerFromApiRoot({
+      apiRoot: recording.apiRoot,
+      projectKey: "example-project",
+    }),
   });
 
   return {

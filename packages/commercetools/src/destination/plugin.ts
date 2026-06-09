@@ -2,13 +2,16 @@ import type {
   Attribute,
   BusinessUnit,
   BusinessUnitDraft,
+  BusinessUnitUpdate,
   BusinessUnitUpdateAction,
   Product,
   ProductDraft,
+  ProductPublishAction,
   ProductPublishScope,
+  ProductUpdate,
   ProductUpdateAction,
 } from "@commercetools/platform-sdk";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
   type ConfiguredDestinationPlugin,
   DestinationPluginError,
@@ -16,12 +19,11 @@ import {
   defineDestinationCommandGroup,
   defineDestinationPlugin,
 } from "migrate-sdk";
-import { CommercetoolsBusinessUnits } from "../internal/business-units.ts";
 import {
-  type CommercetoolsProductSelector,
-  CommercetoolsProducts,
-} from "../internal/products.ts";
-import type { CommercetoolsSdkError, CommercetoolsSdkLayer } from "../sdk.ts";
+  CommercetoolsSdk,
+  type CommercetoolsSdkError,
+  type CommercetoolsSdkLayer,
+} from "../sdk.ts";
 import {
   type BusinessUnitUpdateCommandShape,
   type BusinessUnitUpdateFactory,
@@ -40,9 +42,12 @@ import {
   type ProductUpdateCommandShape,
   type ProductUpdateFactory,
 } from "./product-update-builder.ts";
+import type { CommercetoolsProductSelector } from "./selectors.ts";
 
-export type { CommercetoolsBusinessUnitSelector } from "../internal/business-units.ts";
-export type { CommercetoolsProductSelector } from "../internal/products.ts";
+export type {
+  CommercetoolsBusinessUnitSelector,
+  CommercetoolsProductSelector,
+} from "./selectors.ts";
 
 export type CommercetoolsProductAttributeSchema = Schema.Codec<
   object,
@@ -91,7 +96,6 @@ type CommercetoolsProductAttributeSchemasInput<
   CommercetoolsProductAttributeSchemas<NoInfer<ProductAttributeSchemaRecord>>;
 
 export interface CommercetoolsDestinationBaseOptions {
-  readonly projectKey: string;
   readonly sdkLayer: CommercetoolsSdkLayer;
 }
 
@@ -803,13 +807,6 @@ function make<
   ProductAttributeSchemaRecord,
   BusinessUnitCustomFieldSchema
 > {
-  const businessUnitsLayer = CommercetoolsBusinessUnits.layer({
-    projectKey: options.projectKey,
-  }).pipe(Layer.provide(options.sdkLayer));
-  const productsLayer = CommercetoolsProducts.layer({
-    projectKey: options.projectKey,
-  }).pipe(Layer.provide(options.sdkLayer));
-  const destinationLayer = Layer.merge(businessUnitsLayer, productsLayer);
   const implementedPlugin = pluginDefinition
     .implement((handlers) =>
       handlers
@@ -817,9 +814,13 @@ function make<
           businessUnitHandlers
             .handle("CreateBusinessUnitDraft", ({ command }) =>
               Effect.gen(function* () {
-                const businessUnits = yield* CommercetoolsBusinessUnits;
-                const businessUnit = yield* businessUnits
-                  .createBusinessUnitDraft(command.draft)
+                const sdk = yield* CommercetoolsSdk;
+                const businessUnit = yield* sdk
+                  .request("businessUnits.createDraft", (project) =>
+                    project.businessUnits().post({
+                      body: command.draft,
+                    })
+                  )
                   .pipe(Effect.mapError(toDestinationPluginError));
 
                 return {
@@ -831,12 +832,24 @@ function make<
             )
             .handle("UpdateBusinessUnit", ({ command }) =>
               Effect.gen(function* () {
-                const businessUnits = yield* CommercetoolsBusinessUnits;
-                const businessUnit = yield* businessUnits
-                  .updateBusinessUnit({
-                    actions: command.actions,
-                    selector: command.selector,
-                    version: command.version,
+                const sdk = yield* CommercetoolsSdk;
+                const body: BusinessUnitUpdate = {
+                  actions: [...command.actions],
+                  version: command.version,
+                };
+                const businessUnit = yield* sdk
+                  .request("businessUnits.update", (project) => {
+                    const businessUnits = project.businessUnits();
+                    const selectedBusinessUnit =
+                      command.selector.kind === "id"
+                        ? businessUnits.withId({ ID: command.selector.id })
+                        : businessUnits.withKey({
+                            key: command.selector.key,
+                          });
+
+                    return selectedBusinessUnit.post({
+                      body,
+                    });
                   })
                   .pipe(Effect.mapError(toDestinationPluginError));
 
@@ -851,9 +864,16 @@ function make<
           productsHandlers
             .handle("CreateProductDraft", ({ command }) =>
               Effect.gen(function* () {
-                const products = yield* CommercetoolsProducts;
-                const product = yield* products
-                  .createProductDraft(command.draft)
+                const sdk = yield* CommercetoolsSdk;
+                const product = yield* sdk
+                  .request("products.createDraft", (project) =>
+                    project.products().post({
+                      body: {
+                        ...command.draft,
+                        publish: false,
+                      },
+                    })
+                  )
                   .pipe(Effect.mapError(toDestinationPluginError));
 
                 return {
@@ -865,14 +885,28 @@ function make<
             )
             .handle("PublishProduct", ({ command }) =>
               Effect.gen(function* () {
-                const products = yield* CommercetoolsProducts;
-                const product = yield* products
-                  .publishProduct({
-                    selector: command.selector,
-                    version: command.version,
-                    ...(command.scope === undefined
-                      ? {}
-                      : { scope: command.scope }),
+                const sdk = yield* CommercetoolsSdk;
+                const action: ProductPublishAction = {
+                  action: "publish",
+                  ...(command.scope === undefined
+                    ? {}
+                    : { scope: command.scope }),
+                };
+                const body: ProductUpdate = {
+                  actions: [action],
+                  version: command.version,
+                };
+                const product = yield* sdk
+                  .request("products.publish", (project) => {
+                    const products = project.products();
+                    const selectedProduct =
+                      command.selector.kind === "id"
+                        ? products.withId({ ID: command.selector.id })
+                        : products.withKey({ key: command.selector.key });
+
+                    return selectedProduct.post({
+                      body,
+                    });
                   })
                   .pipe(Effect.mapError(toDestinationPluginError));
 
@@ -887,12 +921,22 @@ function make<
             )
             .handle("UpdateProduct", ({ command }) =>
               Effect.gen(function* () {
-                const products = yield* CommercetoolsProducts;
-                const product = yield* products
-                  .updateProduct({
-                    actions: command.actions,
-                    selector: command.selector,
-                    version: command.version,
+                const sdk = yield* CommercetoolsSdk;
+                const body: ProductUpdate = {
+                  actions: [...command.actions],
+                  version: command.version,
+                };
+                const product = yield* sdk
+                  .request("products.update", (project) => {
+                    const products = project.products();
+                    const selectedProduct =
+                      command.selector.kind === "id"
+                        ? products.withId({ ID: command.selector.id })
+                        : products.withKey({ key: command.selector.key });
+
+                    return selectedProduct.post({
+                      body,
+                    });
                   })
                   .pipe(Effect.mapError(toDestinationPluginError));
 
@@ -907,7 +951,7 @@ function make<
             )
         )
     )
-    .provide(destinationLayer);
+    .provide(options.sdkLayer);
 
   return {
     ...implementedPlugin,
