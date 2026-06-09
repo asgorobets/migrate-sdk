@@ -22,6 +22,12 @@ export type AnyMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Cursor is existential across heterogeneous run requests.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Rollback pipeline error is not relevant to forward run requests.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source input is existential across heterogeneous run requests.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source layer error is re-extracted by MigrationDefinitionSourceLayerError.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source requirements are re-extracted by MigrationDefinitionSourceRequirements.
   any
 >;
 
@@ -31,10 +37,49 @@ export type MigrationDefinitionPipelineError<Definition> =
     infer _Command,
     infer PipelineError,
     infer _Cursor,
-    infer _RollbackPipelineError
+    infer _RollbackPipelineError,
+    infer _SourceInput,
+    infer _SourceLayerError,
+    infer _SourceRequirements
   >
     ? PipelineError
     : never;
+
+export type MigrationDefinitionSourceLayerError<Definition> =
+  Definition extends MigrationDefinition<
+    infer _Source,
+    infer _Command,
+    infer _PipelineError,
+    infer _Cursor,
+    infer _RollbackPipelineError,
+    infer _SourceInput,
+    infer SourceLayerError,
+    infer _SourceRequirements
+  >
+    ? SourceLayerError
+    : never;
+
+export type MigrationDefinitionSourceRequirements<Definition> =
+  Definition extends MigrationDefinition<
+    infer _Source,
+    infer _Command,
+    infer _PipelineError,
+    infer _Cursor,
+    infer _RollbackPipelineError,
+    infer _SourceInput,
+    infer _SourceLayerError,
+    infer SourceRequirements
+  >
+    ? SourceRequirements
+    : never;
+
+export type RunRequestSourceLayerError<
+  Definitions extends readonly AnyMigrationDefinition[],
+> = MigrationDefinitionSourceLayerError<Definitions[number]>;
+
+export type RunRequestSourceRequirements<
+  Definitions extends readonly AnyMigrationDefinition[],
+> = MigrationDefinitionSourceRequirements<Definitions[number]>;
 
 export interface RunRequest<
   Definitions extends

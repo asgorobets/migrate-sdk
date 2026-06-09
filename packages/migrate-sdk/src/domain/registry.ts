@@ -21,7 +21,12 @@ import type {
   AnyRollbackMigrationDefinition,
   RollbackRunSummary,
 } from "./rollback.ts";
-import type { AnyMigrationDefinition, MigrationRunSummary } from "./run.ts";
+import type {
+  AnyMigrationDefinition,
+  MigrationRunSummary,
+  RunRequestSourceLayerError,
+  RunRequestSourceRequirements,
+} from "./run.ts";
 import type { RunModeInput } from "./run-mode.ts";
 
 type AnyRollbackMigrationDefinitions =
@@ -1034,16 +1039,21 @@ export class MigrationDefinitionRegistry<
 
   run(
     input: MigrationDefinitionRegistryRunInput
-  ): Effect.Effect<MigrationRunSummary, MigrationDefinitionRegistryRunError> {
+  ): Effect.Effect<
+    MigrationRunSummary,
+    | MigrationDefinitionRegistryRunError
+    | RunRequestSourceLayerError<Definitions>,
+    RunRequestSourceRequirements<Definitions>
+  > {
     return Effect.flatMap(this.planRun(input), (plan) =>
-      runMigrations(
+      runMigrations<Definitions>(
         plan.target === undefined
           ? {
-              definitions: plan.definitions,
+              definitions: plan.definitions as Definitions,
               ...(input.mode === undefined ? {} : { mode: input.mode }),
             }
           : {
-              definitions: plan.definitions,
+              definitions: plan.definitions as Definitions,
               mode: {
                 kind: "item" as const,
                 sourceIdentity: plan.target.sourceIdentities[0],

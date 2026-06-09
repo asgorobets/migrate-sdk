@@ -1,21 +1,29 @@
-import { Effect, type Layer, type Schema } from "effect";
-import type { SqlClient, Statement } from "effect/unstable/sql";
+import { Effect, Layer, type Schema } from "effect";
+import { SqlClient, type Statement } from "effect/unstable/sql";
 import {
   type ConfiguredSourcePlugin,
   defineSourcePlugin,
+  defineSourcePluginLayer,
   type SourcePayloadSchema,
   type SourcePluginImplementation,
+  type SourceReadResultInput,
 } from "../../domain/definition.ts";
+import type { SourcePluginError } from "../../domain/errors.ts";
 import type {
   SourceIdentityInput,
   SourceVersionInput,
 } from "../../domain/ids.ts";
-import type { AnySourcePlugin } from "../../services/source-plugin.ts";
-import { makeSqlSourceNotImplementedError } from "./internal/errors.ts";
+import type { SourceItemInput } from "../../domain/source.ts";
+import {
+  type AnySourcePlugin,
+  SourcePlugin as SourcePluginService,
+} from "../../services/source-plugin.ts";
+import {
+  makeSqlSourceExecutionError,
+  makeSqlSourceMetadataError,
+} from "./internal/errors.ts";
 
 export const SqlSourcePluginName = "sql";
-
-export type SqlSourceClientLayer = Layer.Layer<SqlClient.SqlClient>;
 
 export interface SqlSourceMetadataContext {
   readonly rowIndex: number;
@@ -56,7 +64,6 @@ export type SqlSourceMetadata<Row, Cursor> = (
 
 export interface SqlSourceOptions<Source, Cursor, SourceInput = unknown> {
   readonly batchSize: number;
-  readonly clientLayer: SqlSourceClientLayer;
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly getSourceMetadata: SqlSourceMetadata<SourceInput, Cursor>;
   readonly lookup: SqlSourceLookup<SourceInput>;
@@ -64,18 +71,123 @@ export interface SqlSourceOptions<Source, Cursor, SourceInput = unknown> {
   readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
 }
 
-const makeImplementation = <Source, Cursor, SourceInput>(
-  _options: SqlSourceOptions<Source, Cursor, SourceInput>
-): SourcePluginImplementation<Source, Cursor, SourceInput> => {
-  const read = Effect.fn("SqlSource.read")(function* (_cursor: Cursor | null) {
-    return yield* Effect.fail(makeSqlSourceNotImplementedError("read"));
+const executeStatement = <Row>(
+  operation: "read" | "readByIdentity",
+  statement: Statement.Statement<Row>
+): Effect.Effect<readonly Row[], SourcePluginError> =>
+  statement.pipe(
+    Effect.mapError((cause) => makeSqlSourceExecutionError(operation, cause))
+  );
+
+const extractMetadata = <Source, Cursor, SourceInput>(
+  options: SqlSourceOptions<Source, Cursor, SourceInput>,
+  operation: "read" | "readByIdentity",
+  row: SourceInput,
+  rowIndex: number
+): Effect.Effect<SqlSourceMetadataResult<Cursor>, SourcePluginError> =>
+  Effect.try({
+    try: () => options.getSourceMetadata(row, { rowIndex }),
+    catch: (cause) =>
+      makeSqlSourceMetadataError(
+        operation,
+        rowIndex,
+        "metadata extractor threw",
+        cause
+      ),
   });
 
+const sourceItemFromRow = <Source, Cursor, SourceInput>(
+  options: SqlSourceOptions<Source, Cursor, SourceInput>,
+  operation: "read" | "readByIdentity",
+  row: SourceInput,
+  rowIndex: number
+): Effect.Effect<SourceItemInput<SourceInput>, SourcePluginError> =>
+  extractMetadata(options, operation, row, rowIndex).pipe(
+    Effect.flatMap((metadata) =>
+      metadata.kind === "failure"
+        ? Effect.fail(
+            makeSqlSourceMetadataError(
+              operation,
+              rowIndex,
+              metadata.message,
+              metadata.cause
+            )
+          )
+        : Effect.succeed({
+            identity: metadata.identity,
+            item: row,
+            version: metadata.version,
+          })
+    )
+  );
+
+const readRows = <Source, Cursor, SourceInput>(
+  options: SqlSourceOptions<Source, Cursor, SourceInput>,
+  sql: SqlClient.SqlClient,
+  cursor: Cursor | null
+): Effect.Effect<
+  SourceReadResultInput<SourceInput, Cursor>,
+  SourcePluginError
+> =>
+  Effect.gen(function* () {
+    const rows = yield* executeStatement(
+      "read",
+      options.read(sql, cursor, options.batchSize)
+    );
+    const items: SourceItemInput<SourceInput>[] = [];
+    let nextCursor: Cursor | undefined;
+
+    for (const [rowIndex, row] of rows.entries()) {
+      const metadata = yield* extractMetadata(options, "read", row, rowIndex);
+
+      if (metadata.kind === "failure") {
+        return yield* makeSqlSourceMetadataError(
+          "read",
+          rowIndex,
+          metadata.message,
+          metadata.cause
+        );
+      }
+
+      items.push({
+        identity: metadata.identity,
+        item: row,
+        version: metadata.version,
+      });
+      nextCursor = metadata.cursor;
+    }
+
+    return {
+      items,
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+    };
+  });
+
+const makeImplementation = <Source, Cursor, SourceInput>(
+  options: SqlSourceOptions<Source, Cursor, SourceInput>,
+  sql: SqlClient.SqlClient
+): SourcePluginImplementation<Source, Cursor, SourceInput> => {
+  const read = Effect.fn("SqlSource.read")((cursor: Cursor | null) =>
+    readRows(options, sql, cursor)
+  );
+
   const readByIdentity = Effect.fn("SqlSource.readByIdentity")(function* (
-    _identity: SourceIdentityInput
+    identity: SourceIdentityInput
   ) {
-    return yield* Effect.fail(
-      makeSqlSourceNotImplementedError("readByIdentity")
+    const rows = yield* executeStatement(
+      "readByIdentity",
+      options.lookup(sql, identity)
+    );
+
+    if (rows.length === 0) {
+      return null;
+    }
+
+    return yield* sourceItemFromRow(
+      options,
+      "readByIdentity",
+      rows[0] as SourceInput,
+      0
     );
   });
 
@@ -88,16 +200,34 @@ const makeImplementation = <Source, Cursor, SourceInput>(
 
 const make = <Source, Cursor, SourceInput>(
   options: SqlSourceOptions<Source, Cursor, SourceInput>
-): ConfiguredSourcePlugin<Source, Cursor, SourceInput> =>
-  defineSourcePlugin({
-    cursorSchema: options.cursorSchema,
-    make: () => makeImplementation(options),
+): ConfiguredSourcePlugin<
+  Source,
+  Cursor,
+  SourceInput,
+  never,
+  SqlClient.SqlClient
+> =>
+  defineSourcePluginLayer({
+    layer: Layer.effect(
+      SourcePluginService,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const source = defineSourcePlugin({
+          cursorSchema: options.cursorSchema,
+          make: () => makeImplementation(options, sql),
+          sourceSchema: options.sourceSchema,
+        });
+
+        return yield* SourcePluginService.pipe(Effect.provide(source.layer));
+      })
+    ),
     sourceSchema: options.sourceSchema,
   });
 
 const makeLayer = <Source, Cursor, SourceInput>(
   options: SqlSourceOptions<Source, Cursor, SourceInput>
-): Layer.Layer<AnySourcePlugin> => make(options).layer;
+): Layer.Layer<AnySourcePlugin, never, SqlClient.SqlClient> =>
+  make(options).layer;
 
 export const SqlSourcePlugin = {
   make,

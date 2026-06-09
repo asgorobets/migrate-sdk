@@ -44,12 +44,18 @@ export interface ProcessSourceItemOptions<
   PipelineError,
   Cursor = unknown,
   SourceInput = unknown,
+  SourceLayerError = never,
+  SourceRequirements = never,
 > {
   readonly definition: MigrationDefinition<
     Source,
     Command,
     PipelineError,
-    Cursor
+    Cursor,
+    unknown,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
   >;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
@@ -271,8 +277,25 @@ const decodeSourceItem = <Source, SourceInput>(
     )
   );
 
-const runPipeline = <Source, Command extends DestinationCommand, PipelineError>(
-  definition: MigrationDefinition<Source, Command, PipelineError>,
+const runPipeline = <
+  Source,
+  Command extends DestinationCommand,
+  PipelineError,
+  Cursor = unknown,
+  SourceInput = Source,
+  SourceLayerError = never,
+  SourceRequirements = never,
+>(
+  definition: MigrationDefinition<
+    Source,
+    Command,
+    PipelineError,
+    Cursor,
+    unknown,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
+  >,
   sourceItem: SourceItem<Source>,
   context: PipelineContext
 ) =>
@@ -297,6 +320,8 @@ export const processSourceItem = <
   PipelineError,
   Cursor,
   SourceInput,
+  SourceLayerError,
+  SourceRequirements,
 >({
   definition,
   reprocessUnchangedTerminal = false,
@@ -308,7 +333,9 @@ export const processSourceItem = <
   Command,
   PipelineError,
   Cursor,
-  SourceInput
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements
 >): Effect.Effect<
   MigrationItemOutcome,
   ProcessSourceItemError,

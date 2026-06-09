@@ -21,36 +21,40 @@ Audience: maintainers and migration authors working on `SqlSourcePlugin`.
 - Making raw SQL queries typed through Drizzle. Drizzle-backed sources should be a separate source plugin.
 - Supporting SQL destination writes in this slice.
 
-## Current Scaffold
+## Current Implementation
 
-The current implementation creates the public source folder, package exports,
-and a named plugin surface:
+The current implementation provides the public source folder, package exports,
+a named plugin surface, and the read/lookup happy path:
 
 ```ts
 SqlSourcePlugin.name; // "sql"
 SqlSourcePlugin.make({
+  batchSize,
   cursorSchema,
+  getSourceMetadata,
+  lookup,
+  read,
   sourceSchema,
 });
 ```
 
-`read` and `readByIdentity` intentionally fail with `SourcePluginError` until
-the query contract lands. The scaffold keeps only the stable decisions in code:
-this is a first-party source plugin, it is part of the main SDK package, its
-source payload schema is explicit, and its cursor schema is source-specific.
+The configured source layer requires `SqlClient.SqlClient` unless the migration
+author closes that requirement with `source.provide(sqlClientLayer)`. `read`
+and `readByIdentity` execute configured statement builders, convert rows into
+Source Item inputs through metadata extraction, and normalize SQL execution
+failures into the current `SourcePluginError` boundary.
 
 ## Target Public API
 
-The target raw SQL source should accept an Effect SQL client layer and explicit
-query callbacks:
+The target raw SQL source exposes an Effect SQL `SqlClient` layer requirement
+and accepts explicit query callbacks:
 
 ```ts
 const source = SqlSourcePlugin.make({
-  clientLayer: pgClientLayer,
   batchSize: 500,
   cursorSchema: LegacyArticleCursor,
   sourceSchema: LegacyArticleSource,
-  read: ({ cursor, limit, sql }) =>
+  read: (sql, cursor, limit) =>
     sql`
       select id, updated_at, title, body
       from legacy_articles
@@ -59,7 +63,8 @@ const source = SqlSourcePlugin.make({
       limit ${limit}
     `,
   getSourceMetadata: (row, context) =>
-    Result.ok({
+    ({
+      kind: "success",
       identity: row.id,
       version: row.updated_at,
       cursor: {
@@ -67,19 +72,56 @@ const source = SqlSourcePlugin.make({
         id: row.id,
       },
     }),
-  lookup: ({ identity, sql }) =>
+  lookup: (sql, identity) =>
     sql`
       select id, updated_at, title, body
       from legacy_articles
       where id = ${identity}
     `,
 });
+
+const definition = defineMigration({
+  id: "legacy-articles",
+  source,
+  destination,
+  pipeline,
+  store,
+});
+
+yield* runMigration(definition).pipe(Effect.provide(pgClientLayer));
 ```
 
-The API above is a design target, not the implemented scaffold. The important
-shape is that migration authors supply queries and schemas; the SDK supplies the
-source plugin lifecycle, cursor persistence, row-to-source-item mapping, and
-error mapping.
+If a migration config should own a specific SQL connection, close the source
+requirement on the configured plugin instead:
+
+```ts
+const legacySource = SqlSourcePlugin.make({
+  batchSize: 500,
+  cursorSchema: LegacyArticleCursor,
+  sourceSchema: LegacyArticleSource,
+  read: legacyRead,
+  lookup: legacyLookup,
+  getSourceMetadata: legacyMetadata,
+}).provide(legacyPgClientLayer);
+
+const crmSource = SqlSourcePlugin.make({
+  batchSize: 500,
+  cursorSchema: CrmUserCursor,
+  sourceSchema: CrmUserSource,
+  read: crmRead,
+  lookup: crmLookup,
+  getSourceMetadata: crmMetadata,
+}).provide(crmPgClientLayer);
+```
+
+After `.provide(...)`, the SQL client requirement is erased from that source
+plugin and does not leak into the migration, registry, CLI, or runner types.
+Leaving the source unprovided intentionally exposes the requirement so editors
+and applications can provide one shared app layer at the runner boundary.
+
+The important shape is that migration authors supply queries and schemas; the
+SDK supplies the source plugin lifecycle, cursor persistence,
+row-to-source-item mapping, and error mapping.
 
 Raw SQL v1 requires exactly one public payload schema: `sourceSchema`. Any
 Effect SQL row decoding must be an internal implementation detail or a helper
@@ -126,10 +168,13 @@ Effect programs. `SqlSourcePlugin` owns statement execution so it can preserve
 consistent source diagnostics, SQL error mapping, lookup cardinality checks,
 source metadata extraction, and cursor advancement.
 
-`clientLayer` is required for each raw SQL source configuration. The SQL source
-must not resolve an ambient or global SQL client in v1. If several migrations
-share the same SQL client, callers can wrap `SqlSourcePlugin.make` in their own
-helper.
+`SqlClient.SqlClient` is required by the configured SQL source layer until the
+source plugin itself is provided. The SQL source must not resolve an ambient or
+global SQL client in v1, and it must not own connection pools. Applications can
+provide the SQL client layer at the runner or app composition boundary when
+several migrations should share one database pool, or call
+`source.provide(sqlClientLayer)` when a specific migration source should carry
+its own SQL client dependency.
 
 ## Source Row Contract
 
@@ -242,11 +287,10 @@ const ArticleCursor = Schema.Struct({
 });
 
 SqlSourcePlugin.make({
-  clientLayer,
   batchSize: 500,
   cursorSchema: ArticleCursor,
   sourceSchema: ArticleSource,
-  read: ({ cursor, limit, sql }) =>
+  read: (sql, cursor, limit) =>
     sql`
       select id, updated_at, title, body
       from legacy_articles
@@ -258,14 +302,15 @@ SqlSourcePlugin.make({
       order by updated_at asc, id asc
       limit ${limit}
     `,
-  lookup: ({ identity, sql }) =>
+  lookup: (sql, identity) =>
     sql`
       select id, updated_at, title, body
       from legacy_articles
       where id = ${identity}
     `,
   getSourceMetadata: (row) =>
-    Result.ok({
+    ({
+      kind: "success",
       identity: row.id,
       version: row.updated_at,
       cursor: {
@@ -279,7 +324,7 @@ SqlSourcePlugin.make({
 Avoid offset pagination for durable migration progress:
 
 ```ts
-read: ({ limit, sql }) =>
+read: (sql, _cursor, limit) =>
   sql`
     select id, updated_at, title, body
     from legacy_articles
@@ -345,6 +390,20 @@ SQL, not on `pg`, `mysql2`, SQLite clients, or SDK-owned driver interfaces.
 Applications provide concrete layers such as a Postgres layer, and the plugin
 runs query callbacks in that Effect environment.
 
+There are two supported provision boundaries:
+
+- App-level provision: keep `SqlClient.SqlClient` in the source requirement and
+  provide a shared app layer to `runMigration`, `runMigrations`, or the
+  registry runner.
+- Source-level provision: call `source.provide(sqlClientLayer)` so that the
+  configured source owns that SQL client layer and the migration no longer
+  requires `SqlClient.SqlClient`.
+
+Source-level provision is the configuration shape for CLIs or registries where
+different migration definitions need different SQL clients with the same
+Effect service tag. App-level provision remains the right shape when the
+application wants one memoized database pool shared by multiple definitions.
+
 That boundary buys us:
 
 - Tagged-template SQL construction and parameter binding.
@@ -385,7 +444,7 @@ broader internal location with a real call site proving the need.
 Migration runtime
   -> SourcePlugin.read(cursor)
     -> SqlSourcePlugin implementation
-      -> acquire SqlClient from configured layer
+      -> acquire SqlClient from source-provided or app-provided layer
       -> execute author read query
       -> extract Source Identity, Source Version, and cursor from each row
       -> use each row as the source item payload
@@ -394,7 +453,7 @@ Migration runtime
 Migration runtime
   -> SourcePlugin.readByIdentity(identity)
     -> SqlSourcePlugin implementation
-      -> acquire SqlClient from configured layer
+      -> acquire SqlClient from source-provided or app-provided layer
       -> execute author lookup query
       -> validate zero-or-one row
       -> extract Source Identity and Source Version from the row

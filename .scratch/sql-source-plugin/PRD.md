@@ -20,8 +20,8 @@ Transformation Pipeline begins.
 ## Solution
 
 Implement `SqlSourcePlugin` as a first-party source plugin in the main SDK
-package. The plugin uses Effect SQL `SqlClient` through a required
-`clientLayer`, not concrete database clients and not an SDK-owned driver.
+package. The plugin uses Effect SQL `SqlClient` through an exposed Effect layer
+requirement, not concrete database clients and not an SDK-owned driver.
 
 The raw SQL source API accepts statement-builder callbacks for cursor reads and
 identity lookup. `SqlSourcePlugin` executes those statements, enforces direct
@@ -30,6 +30,12 @@ metadata from read-only SQL rows, and returns Source Items to the existing
 runtime. The SQL row itself is the source-native payload; the runner decodes it
 through the configured Source Payload Schema before invoking the Transformation
 Pipeline.
+
+By default, the configured SQL source exposes `SqlClient.SqlClient` as an Effect
+layer requirement. Migration authors can either leave that requirement visible
+and provide one shared app layer at the runner/registry boundary, or call
+`source.provide(sqlClientLayer)` so a specific source instance owns its SQL
+client layer and no SQL requirement leaks into the migration definition.
 
 The first implementation keeps raw SQL untyped from SQL text. TypeScript row
 typing should come from the encoded/input side of `sourceSchema`, once the core
@@ -47,9 +53,10 @@ user-facing schema.
    so that database drivers, pooling, parameter binding, and dialect behavior
    come from Effect SQL rather than migrate-sdk.
 
-3. As a migration author, I want to provide a `clientLayer` per SQL source, so
-   that each migration definition can explicitly choose the database it reads
-   from.
+3. As a migration author, I want SQL source plugins to require
+   `SqlClient.SqlClient` until I provide them, so that my app can either share
+   one database layer at the runner boundary or close a specific source over
+   its own database layer.
 
 4. As a migration author, I want SQL source configuration to require
    `sourceSchema`, so that the runner validates source payloads before my
@@ -182,8 +189,14 @@ user-facing schema.
 
 - Use Effect SQL `SqlClient` as the database boundary.
 
-- Require `clientLayer` per configured SQL source. Do not use an ambient or
-  global SQL client.
+- Expose `SqlClient.SqlClient` as the configured SQL source layer requirement.
+  Do not use an ambient or global SQL client, and do not hide a concrete
+  database layer inside source options.
+
+- Support `ConfiguredSourcePlugin.provide(layer)` as the source-local provision
+  boundary. Providing a SQL client layer on the configured source erases
+  `SqlClient.SqlClient` from that source's requirements; leaving it unprovided
+  preserves the requirement for app-level provision.
 
 - Do not accept concrete database clients such as Postgres or MySQL clients
   directly in the raw SQL source API.
@@ -304,8 +317,15 @@ user-facing schema.
 - Use a scripted or fake `SqlClient` layer for deterministic source tests rather
   than depending on a real database in the first implementation slice.
 
-- Test that `clientLayer` is required by the API shape and that the source uses
-  the configured layer for read and lookup execution.
+- Test that `SqlClient.SqlClient` is required by the API shape and that the
+  source uses the provided layer for read and lookup execution.
+
+- Test that `source.provide(sqlClientLayer)` erases the SQL client requirement
+  from the configured source and from migrations using that source.
+
+- Test that two configured SQL source instances can be provided with different
+  SQL client layers even though both layers provide the same Effect service
+  tag.
 
 - Test that `batchSize` must be a positive integer.
 

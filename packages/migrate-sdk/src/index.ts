@@ -16,10 +16,7 @@ export type {
   SourcePluginInput,
   SourceRetryStrategy,
 } from "./domain/definition.ts";
-export {
-  defineMigration,
-  defineSourcePlugin,
-} from "./domain/definition.ts";
+export { defineMigration, defineSourcePlugin } from "./domain/definition.ts";
 
 export type {
   DefinedDestinationCommands,
@@ -234,7 +231,6 @@ export {
   SqlSourcePluginName,
 } from "./sources/sql/sql-source.ts";
 export type {
-  SqlSourceClientLayer,
   SqlSourceLookup,
   SqlSourceMetadata,
   SqlSourceMetadataContext,

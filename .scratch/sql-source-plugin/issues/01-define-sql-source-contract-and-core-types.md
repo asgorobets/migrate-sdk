@@ -16,8 +16,9 @@ This slice should also refine the core source schema typing enough that a source
 
 - [x] The source plugin contract can preserve the encoded/source-native input side of the Source Payload Schema while still exposing the decoded Source type to pipelines.
 - [x] Existing in-memory and CSV source plugins continue to compile without changing their public behavior.
-- [x] `SqlSourcePlugin.make` has a typed options contract for `clientLayer`, `batchSize`, `cursorSchema`, `sourceSchema`, `read`, `lookup`, and `getSourceMetadata`.
-- [x] `clientLayer` is required and represents a layer that provides Effect SQL `SqlClient`.
+- [x] `SqlSourcePlugin.make` has a typed options contract for `batchSize`, `cursorSchema`, `sourceSchema`, `read`, `lookup`, and `getSourceMetadata`.
+- [x] `SqlSourcePlugin.make` returns a configured source whose layer requires Effect SQL `SqlClient`.
+- [x] Configured sources expose `.provide(layer)` so source-local dependencies can be closed without leaking into migration requirements.
 - [x] `batchSize` is required at the API boundary.
 - [x] Read and lookup callbacks are typed as SQL statement builders, not arbitrary Effect programs.
 - [x] The row type passed to `getSourceMetadata` comes from the encoded/input side of `sourceSchema`.

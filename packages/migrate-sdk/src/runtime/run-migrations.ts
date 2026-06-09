@@ -43,6 +43,8 @@ import type {
   MigrationRunState,
   MigrationRunSummary,
   RunRequestInput,
+  RunRequestSourceLayerError,
+  RunRequestSourceRequirements,
 } from "../domain/run.ts";
 import { makeRunRequest } from "../domain/run.ts";
 import { normalRunMode, type RunMode } from "../domain/run-mode.ts";
@@ -327,16 +329,16 @@ interface MigrationRunExecutionResult<A> extends MigrationRunBodyResult<A> {
   readonly runState: MigrationRunState;
 }
 
-const executeMigrationRun = <A, E>(
+const executeMigrationRun = <A, E, R = never>(
   store: typeof MigrationStore.Service,
   definitionIds: readonly MigrationDefinitionId[],
   body: (
     runId: MigrationRunId
-  ) => Effect.Effect<MigrationRunBodyResult<A>, E | MigrationStoreError>,
+  ) => Effect.Effect<MigrationRunBodyResult<A>, E | MigrationStoreError, R>,
   beforeBegin?: (
     runId: MigrationRunId
   ) => Effect.Effect<void, E | MigrationStoreError>
-): Effect.Effect<MigrationRunExecutionResult<A>, E | MigrationStoreError> =>
+): Effect.Effect<MigrationRunExecutionResult<A>, E | MigrationStoreError, R> =>
   Effect.gen(function* () {
     const runId = yield* store.createRunId;
 
@@ -643,7 +645,16 @@ const makeNeedsUpdateStubReferenceState = ({
 });
 
 const executeStubPlan = <Command extends DestinationCommand, PipelineError>(
-  definition: MigrationDefinition<unknown, Command, PipelineError, unknown>,
+  definition: MigrationDefinition<
+    unknown,
+    Command,
+    PipelineError,
+    unknown,
+    unknown,
+    unknown,
+    unknown,
+    unknown
+  >,
   runId: MigrationRunId,
   sourceIdentity: SourceIdentity,
   previousState: MigrationItemState | null
@@ -827,6 +838,9 @@ const rollbackItemState = <
   PipelineError,
   Cursor,
   RollbackPipelineError,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements,
 >({
   counts,
   definition,
@@ -840,7 +854,10 @@ const rollbackItemState = <
     Command,
     PipelineError,
     Cursor,
-    RollbackPipelineError
+    RollbackPipelineError,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
   >;
   readonly itemState: MigrationItemState;
   readonly runId: MigrationRunId;
@@ -913,18 +930,25 @@ interface ProcessTargetedSourceIdentitiesOptions<
   Command extends DestinationCommand,
   PipelineError,
   Cursor,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements,
 > {
   readonly counts: MutableDefinitionCounts;
   readonly definition: MigrationDefinition<
     Source,
     Command,
     PipelineError,
-    Cursor
+    Cursor,
+    unknown,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
   >;
   readonly itemStates: readonly MigrationItemState[];
   readonly mode: RunMode;
   readonly runId: MigrationRunId;
-  readonly source: SourcePlugin<Source, Cursor, unknown>;
+  readonly source: SourcePlugin<Source, Cursor, SourceInput>;
   readonly store: typeof MigrationStore.Service;
 }
 
@@ -933,6 +957,9 @@ const processTargetedSourceIdentities = <
   Command extends DestinationCommand,
   PipelineError,
   Cursor,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements,
 >({
   counts,
   definition,
@@ -945,7 +972,10 @@ const processTargetedSourceIdentities = <
   Source,
   Command,
   PipelineError,
-  Cursor
+  Cursor,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements
 >) =>
   Effect.gen(function* () {
     const sourceIdentities = sourceIdentitiesForMode(
@@ -1017,17 +1047,24 @@ interface ProcessCursorDiscoveryOptions<
   Command extends DestinationCommand,
   PipelineError,
   Cursor,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements,
 > {
   readonly counts: MutableDefinitionCounts;
   readonly definition: MigrationDefinition<
     Source,
     Command,
     PipelineError,
-    Cursor
+    Cursor,
+    unknown,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
   >;
   readonly excludedSourceIdentities: readonly SourceIdentity[];
   readonly runId: MigrationRunId;
-  readonly source: SourcePlugin<Source, Cursor, unknown>;
+  readonly source: SourcePlugin<Source, Cursor, SourceInput>;
   readonly store: typeof MigrationStore.Service;
 }
 
@@ -1036,6 +1073,9 @@ const processCursorDiscovery = <
   Command extends DestinationCommand,
   PipelineError,
   Cursor,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements,
 >({
   counts,
   definition,
@@ -1043,7 +1083,15 @@ const processCursorDiscovery = <
   runId,
   source,
   store,
-}: ProcessCursorDiscoveryOptions<Source, Command, PipelineError, Cursor>) =>
+}: ProcessCursorDiscoveryOptions<
+  Source,
+  Command,
+  PipelineError,
+  Cursor,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements
+>) =>
   Effect.gen(function* () {
     const storedCursor = yield* store.getSourceCursor(definition.id);
     let cursor =
@@ -1408,10 +1456,10 @@ const makeStubRunScope = (activeRun: ActiveStubRunScope): StubRunScope => {
   };
 };
 
-const withStubRunScope = <A, E>(
+const withStubRunScope = <A, E, R = never>(
   activeRun: ActiveStubRunScope,
-  body: (scope: StubRunScope) => Effect.Effect<A, E>
-): Effect.Effect<A, E | MigrationStoreError> =>
+  body: (scope: StubRunScope) => Effect.Effect<A, E, R>
+): Effect.Effect<A, E | MigrationStoreError, R> =>
   Effect.acquireUseRelease(
     Effect.sync(() => makeStubRunScope(activeRun)),
     body,
@@ -1423,18 +1471,31 @@ const runMigrationDefinition = <
   Command extends DestinationCommand,
   PipelineError,
   Cursor,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements,
 >(
-  definition: MigrationDefinition<Source, Command, PipelineError, Cursor>,
+  definition: MigrationDefinition<
+    Source,
+    Command,
+    PipelineError,
+    Cursor,
+    unknown,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
+  >,
   definitions: readonly AnyMigrationDefinition[],
   runId: MigrationRunId,
   mode: RunMode,
   createStubReference: CreateMigrationReferenceStub
 ): Effect.Effect<
   MigrationDefinitionRunSummary,
-  RunMigrationDefinitionError
+  RunMigrationDefinitionError | SourceLayerError,
+  SourceRequirements
 > => {
   const program = Effect.gen(function* () {
-    const source = yield* getSourcePlugin<Source, Cursor, unknown>();
+    const source = yield* getSourcePlugin<Source, Cursor, SourceInput>();
     const store = yield* MigrationStore;
 
     const counts = { ...emptyCounts };
@@ -1494,13 +1555,19 @@ const runRollbackMigrationDefinition = <
   PipelineError,
   Cursor,
   RollbackPipelineError,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements,
 >(
   definition: MigrationDefinition<
     Source,
     Command,
     PipelineError,
     Cursor,
-    RollbackPipelineError
+    RollbackPipelineError,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
   >,
   runId: MigrationRunId,
   options: RollbackMigrationOptions
@@ -1705,13 +1772,19 @@ export function rollbackMigration<
   PipelineError,
   Cursor = unknown,
   RollbackPipelineError = PipelineError,
+  SourceInput = Source,
+  SourceLayerError = never,
+  SourceRequirements = never,
 >(
   definition: MigrationDefinition<
     Source,
     Command,
     PipelineError,
     Cursor,
-    RollbackPipelineError
+    RollbackPipelineError,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
   >,
   optionsInput?: undefined
 ): Effect.Effect<
@@ -1724,13 +1797,19 @@ export function rollbackMigration<
   PipelineError,
   Cursor = unknown,
   RollbackPipelineError = PipelineError,
+  SourceInput = Source,
+  SourceLayerError = never,
+  SourceRequirements = never,
 >(
   definition: MigrationDefinition<
     Source,
     Command,
     PipelineError,
     Cursor,
-    RollbackPipelineError
+    RollbackPipelineError,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
   >,
   optionsInput: RollbackMigrationOptionsInput | undefined
 ): Effect.Effect<RollbackRunSummary, RollbackMigrationError>;
@@ -1740,13 +1819,19 @@ export function rollbackMigration<
   PipelineError,
   Cursor = unknown,
   RollbackPipelineError = PipelineError,
+  SourceInput = Source,
+  SourceLayerError = never,
+  SourceRequirements = never,
 >(
   definition: MigrationDefinition<
     Source,
     Command,
     PipelineError,
     Cursor,
-    RollbackPipelineError
+    RollbackPipelineError,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
   >,
   optionsInput: RollbackMigrationOptionsInput = {}
 ): Effect.Effect<RollbackRunSummary, RollbackMigrationError> {
@@ -1926,7 +2011,11 @@ export const runMigrations = <
   Definitions extends readonly AnyMigrationDefinition[],
 >(
   input: RunRequestInput<Definitions>
-): Effect.Effect<MigrationRunSummary, RunMigrationError> => {
+): Effect.Effect<
+  MigrationRunSummary,
+  RunMigrationError | RunRequestSourceLayerError<Definitions>,
+  RunRequestSourceRequirements<Definitions>
+> => {
   const requestEffect = Effect.try({
     try: () => makeRunRequest(input),
     catch: invalidRunRequestError,
@@ -1934,7 +2023,13 @@ export const runMigrations = <
 
   return Effect.flatMap(
     requestEffect,
-    (request): Effect.Effect<MigrationRunSummary, RunMigrationError> => {
+    (
+      request
+    ): Effect.Effect<
+      MigrationRunSummary,
+      RunMigrationError | RunRequestSourceLayerError<Definitions>,
+      RunRequestSourceRequirements<Definitions>
+    > => {
       const firstDefinition = request.definitions[0];
 
       if (firstDefinition === undefined) {
@@ -2020,9 +2115,25 @@ export const runMigration = <
   Command extends DestinationCommand,
   PipelineError,
   Cursor = unknown,
+  SourceInput = Source,
+  SourceLayerError = never,
+  SourceRequirements = never,
 >(
-  definition: MigrationDefinition<Source, Command, PipelineError, Cursor>
-): Effect.Effect<MigrationRunSummary, RunMigrationError> => {
+  definition: MigrationDefinition<
+    Source,
+    Command,
+    PipelineError,
+    Cursor,
+    unknown,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
+  >
+): Effect.Effect<
+  MigrationRunSummary,
+  RunMigrationError | SourceLayerError,
+  SourceRequirements
+> => {
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
     const definitionIds = [definition.id];

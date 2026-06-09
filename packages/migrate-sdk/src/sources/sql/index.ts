@@ -6,7 +6,6 @@ export {
   SqlSourcePluginName,
 } from "./sql-source.ts";
 export type {
-  SqlSourceClientLayer,
   SqlSourceLookup,
   SqlSourceMetadata,
   SqlSourceMetadataContext,
