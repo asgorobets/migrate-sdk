@@ -93,6 +93,34 @@ and keeps invalid executable catalogs from escaping module initialization. CLI
 config loading catches the thrown error and renders all registry construction
 issues at the command boundary.
 
+```ts
+type MigrationDefinitionRegistryConstructionIssue =
+  | {
+      readonly _tag: "DuplicateMigrationDefinitionId";
+      readonly definitionId: MigrationDefinitionId;
+    }
+  | {
+      readonly _tag: "MissingRequiredMigrationDefinitionDependency";
+      readonly definitionId: MigrationDefinitionId;
+      readonly dependencyId: MigrationDefinitionId;
+    }
+  | {
+      readonly _tag: "RequiredMigrationDefinitionDependencyCycle";
+      readonly definitionIds: readonly [
+        MigrationDefinitionId,
+        ...MigrationDefinitionId[],
+      ];
+    };
+
+class MigrationDefinitionRegistryConstructionError extends Error {
+  readonly _tag: "MigrationDefinitionRegistryConstructionError";
+  readonly issues: readonly [
+    MigrationDefinitionRegistryConstructionIssue,
+    ...MigrationDefinitionRegistryConstructionIssue[],
+  ];
+}
+```
+
 It does not acquire locks, read migration stores, initialize source or
 destination layers, inspect rollbackable state, or perform runtime preflight.
 Optional dependencies are ordering preferences when both definitions participate
@@ -165,6 +193,9 @@ class MigrationDefinitionRegistry<
   >;
 }
 ```
+
+`MigrationDefinitionRegistryLookupError` is a typed Effect error with the
+missing `definitionId`.
 
 `list()` is metadata-oriented for CLI and UI rendering:
 

@@ -155,6 +155,7 @@ export interface MigrationDefinition<
   Cursor = unknown,
   RollbackPipelineError = PipelineError,
 > {
+  readonly dependencies?: MigrationDefinitionDependencies;
   readonly dependsOn?: readonly MigrationDefinitionId[];
   readonly destination: ConfiguredDestinationPlugin<Command>;
   readonly destinationRetry?: DestinationRetryStrategy;
@@ -182,6 +183,16 @@ export interface MigrationDefinition<
     | Effect.Effect<DestinationCommandPlan<Command>, PipelineError | SkipItem>;
 }
 
+export interface MigrationDefinitionDependencies {
+  readonly optional: readonly MigrationDefinitionId[];
+  readonly required: readonly MigrationDefinitionId[];
+}
+
+export interface MigrationDefinitionDependenciesInput {
+  readonly optional?: readonly MigrationDefinitionIdInput[];
+  readonly required?: readonly MigrationDefinitionIdInput[];
+}
+
 export interface MigrationDefinitionInput<
   Source,
   Command extends DestinationCommand,
@@ -196,11 +207,32 @@ export interface MigrationDefinitionInput<
       Cursor,
       RollbackPipelineError
     >,
-    "id" | "dependsOn"
+    "dependencies" | "dependsOn" | "id"
   > {
+  readonly dependencies?: MigrationDefinitionDependenciesInput;
   readonly dependsOn?: readonly MigrationDefinitionIdInput[];
   readonly id: MigrationDefinitionIdInput;
 }
+
+const normalizeMigrationDefinitionIds = (
+  values: readonly MigrationDefinitionIdInput[]
+): readonly MigrationDefinitionId[] => {
+  const ids: MigrationDefinitionId[] = [];
+  const seenIds = new Set<MigrationDefinitionId>();
+
+  for (const value of values) {
+    const id = toMigrationDefinitionId(value);
+
+    if (seenIds.has(id)) {
+      continue;
+    }
+
+    seenIds.add(id);
+    ids.push(id);
+  }
+
+  return ids;
+};
 
 export const defineMigration = <
   Source,
@@ -223,13 +255,30 @@ export const defineMigration = <
   Cursor,
   RollbackPipelineError
 > => {
-  const { id, dependsOn, ...rest } = definition;
+  const { dependencies, dependsOn, id, ...rest } = definition;
+  const requiredDependencies = normalizeMigrationDefinitionIds([
+    ...(dependencies?.required ?? []),
+    ...(dependsOn ?? []),
+  ]);
+  const optionalDependencies = normalizeMigrationDefinitionIds(
+    dependencies?.optional ?? []
+  );
+  const hasDependencies =
+    requiredDependencies.length > 0 || optionalDependencies.length > 0;
 
   return {
     ...rest,
     id: toMigrationDefinitionId(id),
-    ...(dependsOn === undefined
+    ...(hasDependencies
+      ? {
+          dependencies: {
+            optional: optionalDependencies,
+            required: requiredDependencies,
+          },
+        }
+      : {}),
+    ...(requiredDependencies.length === 0
       ? {}
-      : { dependsOn: dependsOn.map(toMigrationDefinitionId) }),
+      : { dependsOn: requiredDependencies }),
   };
 };

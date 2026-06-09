@@ -5,6 +5,8 @@ export type {
   ConfiguredDestinationPlugin,
   ConfiguredSourcePlugin,
   DestinationRetryStrategy,
+  MigrationDefinitionDependencies,
+  MigrationDefinitionDependenciesInput,
   MigrationDefinition,
   MigrationDefinitionInput,
   SourceReadResultInput,
@@ -95,6 +97,20 @@ export type {
   RunRequest,
   RunRequestInput,
 } from "./domain/run.ts";
+
+export {
+  DuplicateMigrationDefinitionId,
+  MigrationDefinitionRegistry,
+  MigrationDefinitionRegistryConstructionError,
+  MigrationDefinitionRegistryConstructionIssue,
+  MigrationDefinitionRegistryLookupError,
+  MissingRequiredMigrationDefinitionDependency,
+  RequiredMigrationDefinitionDependencyCycle,
+} from "./domain/registry.ts";
+export type {
+  MigrationDefinitionRegistryEntry,
+  MigrationDefinitionRegistryInput,
+} from "./domain/registry.ts";
 
 export {
   makeRollbackMigrationOptions,
