@@ -924,7 +924,7 @@ interface ProcessTargetedSourceIdentitiesOptions<
   readonly itemStates: readonly MigrationItemState[];
   readonly mode: RunMode;
   readonly runId: MigrationRunId;
-  readonly source: SourcePlugin<Source, Cursor>;
+  readonly source: SourcePlugin<Source, Cursor, unknown>;
   readonly store: typeof MigrationStore.Service;
 }
 
@@ -1027,7 +1027,7 @@ interface ProcessCursorDiscoveryOptions<
   >;
   readonly excludedSourceIdentities: readonly SourceIdentity[];
   readonly runId: MigrationRunId;
-  readonly source: SourcePlugin<Source, Cursor>;
+  readonly source: SourcePlugin<Source, Cursor, unknown>;
   readonly store: typeof MigrationStore.Service;
 }
 
@@ -1434,7 +1434,7 @@ const runMigrationDefinition = <
   RunMigrationDefinitionError
 > => {
   const program = Effect.gen(function* () {
-    const source = yield* getSourcePlugin<Source, Cursor>();
+    const source = yield* getSourcePlugin<Source, Cursor, unknown>();
     const store = yield* MigrationStore;
 
     const counts = { ...emptyCounts };

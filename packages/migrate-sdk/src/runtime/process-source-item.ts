@@ -1,5 +1,8 @@
 import { Effect, Predicate, Schema } from "effect";
-import type { MigrationDefinition } from "../domain/definition.ts";
+import type {
+  MigrationDefinition,
+  SourcePayloadSchema,
+} from "../domain/definition.ts";
 import type {
   DestinationCommand,
   DestinationCommandContext,
@@ -40,6 +43,7 @@ export interface ProcessSourceItemOptions<
   Command extends DestinationCommand,
   PipelineError,
   Cursor = unknown,
+  SourceInput = unknown,
 > {
   readonly definition: MigrationDefinition<
     Source,
@@ -49,8 +53,8 @@ export interface ProcessSourceItemOptions<
   >;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
-  readonly sourceItem: SourceItem<Source>;
-  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
+  readonly sourceItem: SourceItem<SourceInput>;
+  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
 }
 
 export type ProcessSourceItemError = MigrationStoreError;
@@ -252,9 +256,9 @@ const isUnchangedTerminalState = <Source>(
     previousState?.status === "skipped") &&
   previousState.sourceVersion === sourceItem.version;
 
-const decodeSourceItem = <Source>(
-  sourceSchema: Schema.Codec<Source, unknown, never, never>,
-  sourceItem: SourceItem<Source>
+const decodeSourceItem = <Source, SourceInput>(
+  sourceSchema: SourcePayloadSchema<Source, SourceInput>,
+  sourceItem: SourceItem<SourceInput>
 ) =>
   Schema.decodeUnknownEffect(sourceSchema, { errors: "all" })(
     sourceItem.item
@@ -291,13 +295,21 @@ export const processSourceItem = <
   Source,
   Command extends DestinationCommand,
   PipelineError,
+  Cursor,
+  SourceInput,
 >({
   definition,
   reprocessUnchangedTerminal = false,
   runId,
   sourceSchema,
   sourceItem,
-}: ProcessSourceItemOptions<Source, Command, PipelineError>): Effect.Effect<
+}: ProcessSourceItemOptions<
+  Source,
+  Command,
+  PipelineError,
+  Cursor,
+  SourceInput
+>): Effect.Effect<
   MigrationItemOutcome,
   ProcessSourceItemError,
   DestinationPlugin | MigrationReferenceLookup | MigrationStore

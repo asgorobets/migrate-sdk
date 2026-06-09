@@ -9,6 +9,7 @@ export type {
   MigrationDefinitionDependenciesInput,
   MigrationDefinition,
   MigrationDefinitionInput,
+  SourcePayloadSchema,
   SourceReadResultInput,
   SourcePluginFactoryInput,
   SourcePluginImplementation,
@@ -232,7 +233,17 @@ export {
   SqlSourcePlugin,
   SqlSourcePluginName,
 } from "./sources/sql/sql-source.ts";
-export type { SqlSourceOptions } from "./sources/sql/sql-source.ts";
+export type {
+  SqlSourceClientLayer,
+  SqlSourceLookup,
+  SqlSourceMetadata,
+  SqlSourceMetadataContext,
+  SqlSourceMetadataFailure,
+  SqlSourceMetadataResult,
+  SqlSourceMetadataSuccess,
+  SqlSourceOptions,
+  SqlSourceRead,
+} from "./sources/sql/sql-source.ts";
 
 export { InMemoryMigrationStore } from "./stores/in-memory/in-memory-migration-store.ts";
 export type { InMemoryMigrationStoreState } from "./stores/in-memory/in-memory-migration-store.ts";

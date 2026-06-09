@@ -1,6 +1,6 @@
 # Define SQL Source Contract And Core Types
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Parent
 
@@ -14,19 +14,19 @@ This slice should also refine the core source schema typing enough that a source
 
 ## Acceptance criteria
 
-- [ ] The source plugin contract can preserve the encoded/source-native input side of the Source Payload Schema while still exposing the decoded Source type to pipelines.
-- [ ] Existing in-memory and CSV source plugins continue to compile without changing their public behavior.
-- [ ] `SqlSourcePlugin.make` has a typed options contract for `clientLayer`, `batchSize`, `cursorSchema`, `sourceSchema`, `read`, `lookup`, and `getSourceMetadata`.
-- [ ] `clientLayer` is required and represents a layer that provides Effect SQL `SqlClient`.
-- [ ] `batchSize` is required at the API boundary.
-- [ ] Read and lookup callbacks are typed as SQL statement builders, not arbitrary Effect programs.
-- [ ] The row type passed to `getSourceMetadata` comes from the encoded/input side of `sourceSchema`.
-- [ ] Rows passed to `getSourceMetadata` are read-only.
-- [ ] `getSourceMetadata` returns a Result-style success or error value.
-- [ ] Source metadata success values contain Source Identity input, Source Version input, and Source Cursor.
-- [ ] Metadata extraction context includes page-local row index for diagnostics only.
-- [ ] The SQL source remains scaffolded if execution is not implemented in this slice, but the new contract is represented in tests or type assertions.
-- [ ] Public exports and subpath exports expose only the intended SQL source API.
+- [x] The source plugin contract can preserve the encoded/source-native input side of the Source Payload Schema while still exposing the decoded Source type to pipelines.
+- [x] Existing in-memory and CSV source plugins continue to compile without changing their public behavior.
+- [x] `SqlSourcePlugin.make` has a typed options contract for `clientLayer`, `batchSize`, `cursorSchema`, `sourceSchema`, `read`, `lookup`, and `getSourceMetadata`.
+- [x] `clientLayer` is required and represents a layer that provides Effect SQL `SqlClient`.
+- [x] `batchSize` is required at the API boundary.
+- [x] Read and lookup callbacks are typed as SQL statement builders, not arbitrary Effect programs.
+- [x] The row type passed to `getSourceMetadata` comes from the encoded/input side of `sourceSchema`.
+- [x] Rows passed to `getSourceMetadata` are read-only.
+- [x] `getSourceMetadata` returns a Result-style success or error value.
+- [x] Source metadata success values contain Source Identity input, Source Version input, and Source Cursor.
+- [x] Metadata extraction context includes page-local row index for diagnostics only.
+- [x] The SQL source remains scaffolded if execution is not implemented in this slice, but the new contract is represented in tests or type assertions.
+- [x] Public exports and subpath exports expose only the intended SQL source API.
 
 ## Blocked by
 

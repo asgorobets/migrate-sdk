@@ -5,4 +5,14 @@ export {
   SqlSourcePlugin,
   SqlSourcePluginName,
 } from "./sql-source.ts";
-export type { SqlSourceOptions } from "./sql-source.ts";
+export type {
+  SqlSourceClientLayer,
+  SqlSourceLookup,
+  SqlSourceMetadata,
+  SqlSourceMetadataContext,
+  SqlSourceMetadataFailure,
+  SqlSourceMetadataResult,
+  SqlSourceMetadataSuccess,
+  SqlSourceOptions,
+  SqlSourceRead,
+} from "./sql-source.ts";

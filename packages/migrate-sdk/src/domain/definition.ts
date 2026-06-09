@@ -40,47 +40,66 @@ const configuredSourcePluginTypeId: unique symbol = Symbol.for(
   "@migrate-sdk/ConfiguredSourcePlugin"
 );
 
-export interface ConfiguredSourcePlugin<Source, Cursor> {
+export type SourcePayloadSchema<Source, SourceInput = unknown> = Schema.Codec<
+  Source,
+  SourceInput,
+  never,
+  never
+>;
+
+export interface ConfiguredSourcePlugin<Source, Cursor, SourceInput = unknown> {
   readonly layer: Layer.Layer<AnySourcePlugin>;
-  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
+  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
   readonly [configuredSourcePluginTypeId]: {
     readonly cursor: Cursor;
     readonly source: Source;
+    readonly sourceInput: SourceInput;
   };
 }
 
-export interface SourcePluginImplementation<Source, Cursor> {
+export interface SourcePluginImplementation<
+  Source,
+  Cursor,
+  SourceInput = Source,
+> {
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
-  ) => Effect.Effect<SourceReadResultInput<Source, Cursor>, SourcePluginError>;
+  ) => Effect.Effect<
+    SourceReadResultInput<SourceInput, Cursor>,
+    SourcePluginError
+  >;
   readonly readByIdentity: (
     identity: SourceIdentityInput
-  ) => Effect.Effect<SourceItemInput<Source> | null, SourcePluginError>;
+  ) => Effect.Effect<SourceItemInput<SourceInput> | null, SourcePluginError>;
 }
 
-export interface SourcePluginInput<Source, Cursor>
-  extends SourcePluginImplementation<Source, Cursor> {
+export interface SourcePluginInput<Source, Cursor, SourceInput = Source>
+  extends SourcePluginImplementation<Source, Cursor, SourceInput> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
-  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
+  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
 }
 
-export interface SourcePluginFactoryInput<Source, Cursor> {
+export interface SourcePluginFactoryInput<
+  Source,
+  Cursor,
+  SourceInput = Source,
+> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
-  readonly make: () => SourcePluginImplementation<Source, Cursor>;
-  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
+  readonly make: () => SourcePluginImplementation<Source, Cursor, SourceInput>;
+  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
 }
 
-export interface SourceReadResultInput<Source, Cursor> {
-  readonly items: readonly SourceItemInput<Source>[];
+export interface SourceReadResultInput<SourceInput, Cursor> {
+  readonly items: readonly SourceItemInput<SourceInput>[];
   readonly nextCursor?: Cursor | undefined;
 }
 
-export const defineSourcePlugin = <Source, Cursor>(
+export const defineSourcePlugin = <Source, Cursor, SourceInput = Source>(
   input:
-    | SourcePluginFactoryInput<Source, Cursor>
-    | SourcePluginInput<Source, Cursor>
-): ConfiguredSourcePlugin<Source, Cursor> => {
+    | SourcePluginFactoryInput<Source, Cursor, SourceInput>
+    | SourcePluginInput<Source, Cursor, SourceInput>
+): ConfiguredSourcePlugin<Source, Cursor, SourceInput> => {
   const makeImplementation =
     "make" in input
       ? input.make
@@ -92,34 +111,37 @@ export const defineSourcePlugin = <Source, Cursor>(
 
   return {
     [configuredSourcePluginTypeId]: undefined as never,
-    layer: Layer.sync(SourcePluginService, (): SourcePlugin<Source, Cursor> => {
-      const implementation = makeImplementation();
+    layer: Layer.sync(
+      SourcePluginService,
+      (): SourcePlugin<Source, Cursor, SourceInput> => {
+        const implementation = makeImplementation();
 
-      return {
-        cursorSchema: input.cursorSchema,
-        lookupStrategy: implementation.lookupStrategy,
-        read: (cursor) =>
-          implementation
-            .read(cursor)
-            .pipe(Effect.map((result) => normalizeSourceReadResult(result))),
-        readByIdentity: (identity) =>
-          implementation
-            .readByIdentity(identity)
-            .pipe(
-              Effect.map((sourceItem) =>
-                sourceItem === null ? null : makeSourceItem(sourceItem)
-              )
-            ),
-        sourceSchema: input.sourceSchema,
-      };
-    }),
+        return {
+          cursorSchema: input.cursorSchema,
+          lookupStrategy: implementation.lookupStrategy,
+          read: (cursor) =>
+            implementation
+              .read(cursor)
+              .pipe(Effect.map((result) => normalizeSourceReadResult(result))),
+          readByIdentity: (identity) =>
+            implementation
+              .readByIdentity(identity)
+              .pipe(
+                Effect.map((sourceItem) =>
+                  sourceItem === null ? null : makeSourceItem(sourceItem)
+                )
+              ),
+          sourceSchema: input.sourceSchema,
+        };
+      }
+    ),
     sourceSchema: input.sourceSchema,
   };
 };
 
-const normalizeSourceReadResult = <Source, Cursor>(
-  result: SourceReadResultInput<Source, Cursor>
-): SourceReadResult<Source, Cursor> => ({
+const normalizeSourceReadResult = <SourceInput, Cursor>(
+  result: SourceReadResultInput<SourceInput, Cursor>
+): SourceReadResult<SourceInput, Cursor> => ({
   items: result.items.map(makeSourceItem),
   ...(result.nextCursor === undefined ? {} : { nextCursor: result.nextCursor }),
 });
