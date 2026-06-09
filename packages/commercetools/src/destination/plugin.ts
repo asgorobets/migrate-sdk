@@ -11,7 +11,6 @@ import type {
   ProductPublishAction,
   ProductPublishScope,
   ProductUpdate,
-  ProductUpdateAction,
 } from "@commercetools/platform-sdk";
 import { Effect, Schema } from "effect";
 import {
@@ -34,12 +33,7 @@ import {
   makeBusinessUnitCustomFieldsHelper,
 } from "./custom-fields.ts";
 import type { CustomerUpdateAction } from "./customer-actions.ts";
-import {
-  makeProductUpdate,
-  type NonEmptyProductUpdateActions,
-  type ProductUpdateCommandShape,
-  type ProductUpdateFactory,
-} from "./product-update-builder.ts";
+import type { ProductUpdateAction } from "./product-actions.ts";
 import type {
   CommercetoolsBusinessUnitSelector,
   CommercetoolsCustomerSelector,
@@ -256,6 +250,41 @@ export interface PublishProductCommand {
   readonly version: number;
 }
 
+export type NonEmptyProductUpdateActions<
+  Action extends ProductUpdateAction = ProductUpdateAction,
+> = NonEmptyUpdateActions<Action>;
+
+export type ProductUpdateCommandShape<
+  Action extends ProductUpdateAction = ProductUpdateAction,
+> = UpdateCommandShape<"UpdateProduct", CommercetoolsProductSelector, Action>;
+
+export type ProductUpdateInput = UpdateInput<CommercetoolsProductSelector>;
+
+export type ProductUpdateWithActionsInput<
+  Action extends ProductUpdateAction = ProductUpdateAction,
+> = UpdateWithActionsInput<CommercetoolsProductSelector, Action>;
+
+export type EmptyProductUpdateActionBuilder = EmptyUpdateActionBuilder<
+  "UpdateProduct",
+  CommercetoolsProductSelector,
+  ProductUpdateAction
+>;
+
+export type ProductUpdateActionBuilder<
+  Action extends ProductUpdateAction = ProductUpdateAction,
+> = UpdateActionBuilder<
+  "UpdateProduct",
+  CommercetoolsProductSelector,
+  ProductUpdateAction,
+  Action
+>;
+
+export type ProductUpdateFactory = UpdateCommandFactory<
+  "UpdateProduct",
+  CommercetoolsProductSelector,
+  ProductUpdateAction
+>;
+
 export type UpdateProductCommand = ProductUpdateCommandShape;
 
 export type CommercetoolsDestinationCommand =
@@ -354,21 +383,6 @@ const hasOwnField = (value: UnknownRecord, field: string): boolean =>
 const hasStringField = (value: UnknownRecord, field: string): boolean =>
   typeof value[field] === "string" && value[field] !== "";
 
-const hasIntegerField = (value: UnknownRecord, field: string): boolean =>
-  typeof value[field] === "number" && Number.isInteger(value[field]);
-
-const hasRecordField = (value: UnknownRecord, field: string): boolean =>
-  isRecord(value[field]);
-
-const hasArrayField = (value: UnknownRecord, field: string): boolean =>
-  Array.isArray(value[field]);
-
-const hasVariantSelector = (value: UnknownRecord): boolean =>
-  hasIntegerField(value, "variantId") || hasStringField(value, "sku");
-
-const hasAssetSelector = (value: UnknownRecord): boolean =>
-  hasStringField(value, "assetId") || hasStringField(value, "assetKey");
-
 const isProductTypeResourceIdentifier = (value: unknown): boolean => {
   if (!isRecord(value) || value.typeId !== "product-type") {
     return false;
@@ -456,107 +470,10 @@ const isCustomerUpdateActions = (
 ): value is NonEmptyCustomerUpdateActions =>
   isNonEmptySdkUpdateActions<CustomerUpdateAction>(value);
 
-type ProductUpdateActionGuard = (value: UnknownRecord) => boolean;
-
-const productUpdateActionGuardsByName = {
-  addAsset: (value) =>
-    hasVariantSelector(value) && hasRecordField(value, "asset"),
-  addExternalImage: (value) =>
-    hasVariantSelector(value) && hasRecordField(value, "image"),
-  addPrice: (value) =>
-    hasVariantSelector(value) && hasRecordField(value, "price"),
-  addToCategory: (value) => hasRecordField(value, "category"),
-  addVariant: () => true,
-  changeAssetName: (value) =>
-    hasVariantSelector(value) &&
-    hasAssetSelector(value) &&
-    hasRecordField(value, "name"),
-  changeAssetOrder: (value) =>
-    hasVariantSelector(value) && hasArrayField(value, "assetOrder"),
-  changeMasterVariant: hasVariantSelector,
-  changeName: (value) => hasRecordField(value, "name"),
-  changePrice: (value) =>
-    hasStringField(value, "priceId") && hasRecordField(value, "price"),
-  changeSlug: (value) => hasRecordField(value, "slug"),
-  moveImageToPosition: (value) =>
-    hasVariantSelector(value) &&
-    hasStringField(value, "imageUrl") &&
-    hasIntegerField(value, "position"),
-  publish: () => true,
-  removeAsset: (value) => hasVariantSelector(value) && hasAssetSelector(value),
-  removeFromCategory: (value) => hasRecordField(value, "category"),
-  removeImage: (value) =>
-    hasVariantSelector(value) && hasStringField(value, "imageUrl"),
-  removePrice: (value) => hasStringField(value, "priceId"),
-  removeVariant: (value) =>
-    hasIntegerField(value, "id") || hasStringField(value, "sku"),
-  revertStagedChanges: () => true,
-  revertStagedVariantChanges: (value) => hasIntegerField(value, "variantId"),
-  setAssetCustomField: (value) =>
-    hasVariantSelector(value) &&
-    hasAssetSelector(value) &&
-    hasStringField(value, "name"),
-  setAssetCustomType: (value) =>
-    hasVariantSelector(value) && hasAssetSelector(value),
-  setAssetDescription: (value) =>
-    hasVariantSelector(value) && hasAssetSelector(value),
-  setAssetKey: (value) =>
-    hasVariantSelector(value) && hasStringField(value, "assetId"),
-  setAssetSources: (value) =>
-    hasVariantSelector(value) &&
-    hasAssetSelector(value) &&
-    hasArrayField(value, "sources"),
-  setAssetTags: (value) => hasVariantSelector(value) && hasAssetSelector(value),
-  setAttribute: (value) =>
-    hasVariantSelector(value) && hasStringField(value, "name"),
-  setAttributeInAllVariants: (value) => hasStringField(value, "name"),
-  setCategoryOrderHint: (value) => hasStringField(value, "categoryId"),
-  setDescription: () => true,
-  setDiscountedPrice: (value) => hasStringField(value, "priceId"),
-  setImageLabel: (value) =>
-    hasVariantSelector(value) && hasStringField(value, "imageUrl"),
-  setKey: () => true,
-  setMetaDescription: () => true,
-  setMetaKeywords: () => true,
-  setMetaTitle: () => true,
-  setPriceKey: (value) => hasStringField(value, "priceId"),
-  setPriceMode: () => true,
-  setPrices: (value) =>
-    hasVariantSelector(value) && hasArrayField(value, "prices"),
-  setProductAttribute: (value) => hasStringField(value, "name"),
-  setProductPriceCustomField: (value) =>
-    hasStringField(value, "priceId") && hasStringField(value, "name"),
-  setProductPriceCustomType: (value) => hasStringField(value, "priceId"),
-  setProductVariantKey: hasVariantSelector,
-  setSearchKeywords: (value) => hasRecordField(value, "searchKeywords"),
-  setSku: (value) => hasIntegerField(value, "variantId"),
-  setTaxCategory: () => true,
-  transitionState: () => true,
-  unpublish: () => true,
-} satisfies Record<ProductUpdateAction["action"], ProductUpdateActionGuard>;
-
-const productUpdateActionGuards = new Map<string, ProductUpdateActionGuard>(
-  Object.entries(productUpdateActionGuardsByName)
-);
-
-const isProductUpdateAction = (
-  value: unknown
-): value is ProductUpdateAction => {
-  if (!isRecord(value) || typeof value.action !== "string") {
-    return false;
-  }
-
-  const guard = productUpdateActionGuards.get(value.action);
-
-  return guard?.(value) === true;
-};
-
 const isProductUpdateActions = (
   value: unknown
 ): value is NonEmptyProductUpdateActions =>
-  Array.isArray(value) &&
-  value.length > 0 &&
-  value.every(isProductUpdateAction);
+  isNonEmptySdkUpdateActions<ProductUpdateAction>(value);
 
 const NonEmptyStringSchema = Schema.declare<string>(
   (value): value is string => typeof value === "string" && value !== "",
@@ -764,6 +681,15 @@ const makeCustomerUpdate = makeUpdateCommandFactory<
 >({
   kind: "UpdateCustomer",
   label: "Customer update",
+});
+
+const makeProductUpdate = makeUpdateCommandFactory<
+  "UpdateProduct",
+  CommercetoolsProductSelector,
+  ProductUpdateAction
+>({
+  kind: "UpdateProduct",
+  label: "Product update",
 });
 
 const createProductDraftCommand = defineDestinationCommand(

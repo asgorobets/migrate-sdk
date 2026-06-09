@@ -49,10 +49,10 @@ export interface ProductDestinationExampleResult {
   readonly created: DestinationCommandResult;
   readonly productDraftFields: readonly string[];
   readonly productDraftInventoryField: "absent" | "present";
-  readonly rawThenChainedUpdateActionKinds: readonly string[];
   readonly sdkRequests: readonly RecordedCommercetoolsRequest[];
   readonly updateActionKinds: readonly string[];
   readonly updated: DestinationCommandResult;
+  readonly withActionsThenChainedUpdateActionKinds: readonly string[];
 }
 
 export const runProductDestinationExample = Effect.fn(
@@ -98,44 +98,50 @@ export const runProductDestinationExample = Effect.fn(
       },
       version: productVersion,
     })
-    .changeName({
+    .action({
+      action: "changeName",
       name: {
         "en-US": "Example Book Updated",
       },
       staged: true,
     })
-    .changeSlug({
+    .action({
+      action: "changeSlug",
       slug: {
         "en-US": "example-book-updated",
       },
       staged: true,
     })
-    .setDescription({
+    .action({
+      action: "setDescription",
       description: {
         "en-US": "Updated through a chainable SDK-typed action builder.",
       },
       staged: true,
     })
-    .publish()
+    .action({ action: "publish" })
     .command();
 
-  const rawThenChainedUpdateCommand = destination.commands.products.update
-    .withActions({
-      actions: updateCommand.actions,
-      selector: {
-        id: String(created.destinationIdentity),
-        kind: "id",
-      },
-      version: productVersion,
-    })
-    .unpublish()
-    .command();
+  const withActionsThenChainedUpdateCommand =
+    destination.commands.products.update
+      .withActions({
+        actions: updateCommand.actions,
+        selector: {
+          id: String(created.destinationIdentity),
+          kind: "id",
+        },
+        version: productVersion,
+      })
+      .action({ action: "unpublish" })
+      .command();
   const updateActionKinds: ReadonlyArray<
     "changeName" | "changeSlug" | "setDescription" | "publish"
   > = updateCommand.actions.map((action) => action.action);
-  const rawThenChainedUpdateActionKinds: ReadonlyArray<
+  const withActionsThenChainedUpdateActionKinds: ReadonlyArray<
     "changeName" | "changeSlug" | "setDescription" | "publish" | "unpublish"
-  > = rawThenChainedUpdateCommand.actions.map((action) => action.action);
+  > = withActionsThenChainedUpdateCommand.actions.map(
+    (action) => action.action
+  );
 
   const updated = yield* destinationPlugin.execute(
     updateCommand,
@@ -150,7 +156,7 @@ export const runProductDestinationExample = Effect.fn(
     productDraftInventoryField: productDraftFields.includes("inventoryMode")
       ? "present"
       : "absent",
-    rawThenChainedUpdateActionKinds,
+    withActionsThenChainedUpdateActionKinds,
     sdkRequests: recording.requests,
     updateActionKinds,
     updated,

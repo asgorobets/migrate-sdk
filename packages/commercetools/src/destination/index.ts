@@ -30,6 +30,12 @@ export type {
   CustomerUpdateActionName,
 } from "./customer-actions.ts";
 export type {
+  ProductUpdateAction,
+  ProductUpdateActionByName,
+  ProductUpdateActionInput,
+  ProductUpdateActionName,
+} from "./product-actions.ts";
+export type {
   CustomerUpdateActionBuilder,
   CustomerUpdateCommandShape,
   EmptyCustomerUpdateActionBuilder,
@@ -72,14 +78,11 @@ export type {
 export type {
   NonEmptyProductUpdateActions,
   ProductUpdateActionBuilder,
-  ProductUpdateActionByName,
-  ProductUpdateActionInput,
-  ProductUpdateActionName,
   ProductUpdateCommandShape,
   ProductUpdateFactory,
   ProductUpdateInput,
   ProductUpdateWithActionsInput,
-} from "./product-update-builder.ts";
+} from "./plugin.ts";
 export {
   CommercetoolsBusinessUnitSelectorSchema,
   CommercetoolsCustomerSelectorSchema,

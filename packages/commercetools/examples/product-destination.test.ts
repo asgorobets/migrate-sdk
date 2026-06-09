@@ -1,6 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
   CreateProductDraftCommand,
+  type ProductUpdateActionByName,
+  type ProductUpdateFactory,
   UpdateProductCommand,
 } from "@migrate-sdk/commercetools/destination";
 import { Effect, Schema } from "effect";
@@ -9,6 +11,50 @@ import {
   formatProductDestinationExampleResult,
   runProductDestinationExample,
 } from "./product-destination.ts";
+
+const assertProductUpdateActionTypes = () => {
+  const publish: ProductUpdateActionByName<"publish"> = {
+    action: "publish",
+  };
+  const changeName: ProductUpdateActionByName<"changeName"> = {
+    action: "changeName",
+    name: {
+      "en-US": "Example Book Updated",
+    },
+  };
+
+  // @ts-expect-error Product changeName actions require name.
+  const missingName: ProductUpdateActionByName<"changeName"> = {
+    action: "changeName",
+  };
+
+  return [publish, changeName, missingName];
+};
+
+const assertProductUpdateBuilderTypes = (update: ProductUpdateFactory) => {
+  const builder = update({
+    selector: {
+      id: "recording-product-id",
+      kind: "id",
+    },
+    version: 1,
+  });
+
+  builder.action({
+    action: "publish",
+  });
+  builder.action({
+    action: "changeName",
+    name: {
+      "en-US": "Example Book Updated",
+    },
+  });
+
+  // @ts-expect-error The SDK product action union does not include this action.
+  builder.action({ action: "unknownProductAction" });
+  // @ts-expect-error Product changeName actions require name.
+  builder.action({ action: "changeName" });
+};
 
 describe("product destination example", () => {
   it.effect(
@@ -45,7 +91,7 @@ describe("product destination example", () => {
           "setDescription",
           "publish",
         ]);
-        expect(result.rawThenChainedUpdateActionKinds).toEqual([
+        expect(result.withActionsThenChainedUpdateActionKinds).toEqual([
           "changeName",
           "changeSlug",
           "setDescription",
@@ -127,9 +173,14 @@ describe("product destination example", () => {
       })
   );
 
-  it.effect("rejects malformed raw product update actions", () =>
+  it("types product actions from the SDK action union", () => {
+    expect(assertProductUpdateActionTypes).toBeTypeOf("function");
+    expect(assertProductUpdateBuilderTypes).toBeTypeOf("function");
+  });
+
+  it.effect("validates the product update command envelope", () =>
     Effect.gen(function* () {
-      const missingRequiredFieldError = yield* Schema.decodeUnknownEffect(
+      const validAction = yield* Schema.decodeUnknownEffect(
         UpdateProductCommand
       )({
         actions: [
@@ -143,13 +194,15 @@ describe("product destination example", () => {
           kind: "id",
         },
         version: 1,
-      }).pipe(Effect.flip);
-      const unknownActionError = yield* Schema.decodeUnknownEffect(
+      });
+      const missingActionError = yield* Schema.decodeUnknownEffect(
         UpdateProductCommand
       )({
         actions: [
           {
-            action: "unknownProductAction",
+            name: {
+              "en-US": "Example Book Updated",
+            },
           },
         ],
         kind: "UpdateProduct",
@@ -159,9 +212,25 @@ describe("product destination example", () => {
         },
         version: 1,
       }).pipe(Effect.flip);
+      const emptyActionsError = yield* Schema.decodeUnknownEffect(
+        UpdateProductCommand
+      )({
+        actions: [],
+        kind: "UpdateProduct",
+        selector: {
+          id: "recording-product-id",
+          kind: "id",
+        },
+        version: 1,
+      }).pipe(Effect.flip);
 
-      expect(missingRequiredFieldError).toBeDefined();
-      expect(unknownActionError).toBeDefined();
+      expect(validAction.actions).toEqual([
+        {
+          action: "changeName",
+        },
+      ]);
+      expect(missingActionError).toBeDefined();
+      expect(emptyActionsError).toBeDefined();
     })
   );
 });
