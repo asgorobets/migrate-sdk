@@ -46,53 +46,148 @@ query callbacks:
 
 ```ts
 const source = SqlSourcePlugin.make({
-  client: pgClientLayer,
+  clientLayer: pgClientLayer,
+  batchSize: 500,
   cursorSchema: LegacyArticleCursor,
   sourceSchema: LegacyArticleSource,
-  read: ({ cursor, sql }) =>
+  read: ({ cursor, limit, sql }) =>
     sql`
       select id, updated_at, title, body
       from legacy_articles
       where ${cursor === null ? sql`true` : sql`(updated_at, id) > (${cursor.updatedAt}, ${cursor.id})`}
       order by updated_at asc, id asc
-      limit ${500}
+      limit ${limit}
     `,
-  mapRow: (row) => ({
-    identity: row.id,
-    version: row.updated_at,
-    item: row,
-    cursor: {
-      updatedAt: row.updated_at,
-      id: row.id,
-    },
-  }),
+  getSourceMetadata: (row, context) =>
+    Result.ok({
+      identity: row.id,
+      version: row.updated_at,
+      cursor: {
+        updatedAt: row.updated_at,
+        id: row.id,
+      },
+    }),
   lookup: ({ identity, sql }) =>
     sql`
       select id, updated_at, title, body
       from legacy_articles
       where id = ${identity}
-      limit 1
     `,
 });
 ```
 
 The API above is a design target, not the implemented scaffold. The important
 shape is that migration authors supply queries and schemas; the SDK supplies the
-source plugin lifecycle, cursor persistence, row decoding, and error mapping.
+source plugin lifecycle, cursor persistence, row-to-source-item mapping, and
+error mapping.
+
+Raw SQL v1 requires exactly one public payload schema: `sourceSchema`. Any
+Effect SQL row decoding must be an internal implementation detail or a helper
+owned by the SQL source API. It must not become a second required user-facing
+schema option.
+
+The SQL row type should come from the encoded/input side of `sourceSchema`.
+Conceptually:
+
+```ts
+interface SqlSourceOptions<Row, Source, Cursor> {
+  readonly sourceSchema: Schema.Codec<Source, Row, never, never>;
+  readonly getSourceMetadata: (
+    row: Readonly<Row>,
+    context: SqlSourceMetadataContext
+  ) => Result<SqlSourceMetadata<Cursor>, SqlSourceMetadataError>;
+}
+
+interface SqlSourceMetadata<Cursor> {
+  readonly identity: SourceIdentityInput;
+  readonly version: SourceVersionInput;
+  readonly cursor: Cursor;
+}
+
+interface SqlSourceMetadataError {
+  readonly message: string;
+  readonly cause?: unknown;
+}
+```
+
+Migration authors should not need a separate public row schema or manually
+duplicated row type when `sourceSchema` already describes the row entering the
+framework. If metadata columns should not be visible to the pipeline, the
+Source Payload Schema can decode from a wider SQL row into a narrower
+pipeline-facing item.
+
+The current core source contract erases the encoded side as `unknown`:
+`Schema.Codec<Source, unknown, never, never>`. Preserving the source payload
+input type is a framework refinement, not a reason for the raw SQL source to add
+a second required schema.
+
+Read and lookup callbacks are declarative statement builders, not arbitrary
+Effect programs. `SqlSourcePlugin` owns statement execution so it can preserve
+consistent source diagnostics, SQL error mapping, lookup cardinality checks,
+source metadata extraction, and cursor advancement.
+
+`clientLayer` is required for each raw SQL source configuration. The SQL source
+must not resolve an ambient or global SQL client in v1. If several migrations
+share the same SQL client, callers can wrap `SqlSourcePlugin.make` in their own
+helper.
 
 ## Source Row Contract
 
-Raw query rows are external data. The source plugin must decode the `item`
-portion through `sourceSchema` before the pipeline sees it. The plugin should
-also require each row mapping to produce:
+Raw query rows are external data. The SQL source plugin wraps each row in a
+Source Item input, but Source Payload Schema decoding remains owned by the
+migration runner. This keeps SQL aligned with CSV, JSON, API, and other source
+plugins: a source item with a valid identity and version but an invalid payload
+becomes a failed Migration Item State instead of a cursor-read failure.
 
-- `identity`: the durable Source Identity.
-- `version`: the durable Source Version.
-- `item`: the raw row payload decoded by `sourceSchema`.
+The plugin should require a pure source metadata extractor that returns a
+Result-style value with:
+
+- `identity`: the durable Source Identity input.
+- `version`: the durable Source Version input.
 - `cursor`: the next cursor candidate for pagination.
+
+`SqlSourcePlugin` should pass metadata values through the existing source item
+normalization boundary. It should not require authors to construct branded
+`SourceIdentity` or `SourceVersion` values directly.
+
+The extractor receives the SQL row as a read-only value and a small page-local
+context:
+
+```ts
+interface SqlSourceMetadataContext {
+  readonly rowIndex: number;
+}
+```
+
+`rowIndex` is for diagnostics only. The context should not include an operation
+flag, Effect services, or the current input cursor. Metadata extraction should
+not behave differently for read and lookup rows. Expected metadata extraction
+failures should be returned as Result errors rather than thrown exceptions.
+The exact Result implementation is an implementation choice for the SQL source
+slice; the public design requirement is explicit success/error return values
+instead of exception-driven control flow.
+
+The source item payload is the SQL row returned by the statement. Raw SQL v1
+does not expose a separate payload mapper. This keeps the SQL source from
+becoming a transformation pipeline. If a migration needs a different payload
+shape, the author should express that with SQL projection or the Source Payload
+Schema. Effectful enrichment belongs in the Transformation Pipeline, not in SQL
+source row handling. The SQL source treats returned row objects as read-only.
 
 The raw SQL source should not derive identity or version automatically from
 column names. SQL exports vary too much, and the mapping is migration-specific.
+
+If Effect SQL offers useful schema-backed row decoding internally, the SQL
+source may use it as an implementation detail. That must not add a second
+user-facing schema requirement, and it must not change the framework boundary:
+the configured Source Payload Schema is still the public contract the runner
+uses before invoking the transformation pipeline.
+
+`read` and `readByIdentity` are two access paths to the same Source Item
+contract. Raw SQL v1 should therefore use one source metadata extractor for
+both read and lookup results. The SQL projections may include extra fields, but
+they must be compatible with the same extractor and produce the same
+`identity`, `version`, payload, and cursor semantics for a given source item.
 
 ## Cursor Contract
 
@@ -105,19 +200,143 @@ Cursor shape is migration-specific, so authors provide `cursorSchema`. For
 example, a cursor might be `{ updatedAt: string, id: string }`, while another
 source may use `{ id: number }`.
 
-The source plugin should compute `nextCursor` from the last emitted source item.
-An empty window should not advance the cursor.
+Source Version and Source Cursor may share fields, but they are different
+signals: version is for change detection, cursor is for ordering and resume.
+
+Each row's source metadata includes the cursor that resumes after that row. The
+cursor is required for every returned row. The source plugin computes
+`nextCursor` from the last emitted row's cursor. An empty window should not
+advance the cursor.
+
+If source metadata extraction cannot produce a cursor for a read row, the
+cursor read fails as a source plugin failure. SQL v1 should not support
+non-advancing pages that return items.
+
+SQL v1 should not issue `limit + 1` probes to prove more rows exist. Any
+non-empty read result returns `nextCursor` from the last row. An empty read
+result terminates cursor discovery.
+
+Raw SQL v1 should require `batchSize` as the public source option for the
+number of Source Items in one Source Cursor Window. It must be a positive
+integer. The read statement builder receives that value as `limit`, because
+`LIMIT` is the SQL mechanism for applying the configured batch size. The SDK
+cannot safely rewrite arbitrary SQL, so the read statement must apply the
+provided `limit`.
+
+`offset` should not be a first-class v1 API concept. Source position is carried
+by the Source Cursor, normally as a keyset cursor such as `{ updatedAt, id }`.
+
+## Ordering Contract
+
+The read statement must apply deterministic ordering compatible with the cursor
+returned by `getSourceMetadata`. Cursor fields should include a stable
+tie-breaker, usually the source identity, so rows with the same primary ordering
+value do not get skipped or duplicated.
+
+Good keyset pagination:
+
+```ts
+const ArticleCursor = Schema.Struct({
+  updatedAt: Schema.String,
+  id: Schema.String,
+});
+
+SqlSourcePlugin.make({
+  clientLayer,
+  batchSize: 500,
+  cursorSchema: ArticleCursor,
+  sourceSchema: ArticleSource,
+  read: ({ cursor, limit, sql }) =>
+    sql`
+      select id, updated_at, title, body
+      from legacy_articles
+      where ${
+        cursor === null
+          ? sql`true`
+          : sql`(updated_at, id) > (${cursor.updatedAt}, ${cursor.id})`
+      }
+      order by updated_at asc, id asc
+      limit ${limit}
+    `,
+  lookup: ({ identity, sql }) =>
+    sql`
+      select id, updated_at, title, body
+      from legacy_articles
+      where id = ${identity}
+    `,
+  getSourceMetadata: (row) =>
+    Result.ok({
+      identity: row.id,
+      version: row.updated_at,
+      cursor: {
+        updatedAt: row.updated_at,
+        id: row.id,
+      },
+    }),
+});
+```
+
+Avoid offset pagination for durable migration progress:
+
+```ts
+read: ({ limit, sql }) =>
+  sql`
+    select id, updated_at, title, body
+    from legacy_articles
+    order by updated_at asc
+    limit ${limit}
+    offset 500
+  `;
+```
+
+That query does not use the Source Cursor, hard-codes position outside durable
+cursor state, and lacks a stable tie-breaker for rows with the same
+`updated_at`.
 
 ## Lookup Contract
 
-The raw SQL source should prefer direct lookup. The migration runtime uses
-`readByIdentity` to recover source items for dependency stubs and update checks,
-so the SQL source should require a lookup query unless a future explicit
-`lookupStrategy: "scan"` escape hatch is added.
+Raw SQL v1 requires direct lookup. The migration runtime uses `readByIdentity`
+to recover source items for dependency stubs, failed-item reruns, skipped
+reruns, needs-update backlog, update checks, and single-item runs, so the SQL
+source requires a lookup statement builder.
 
-Lookup queries must return zero or one row. Multiple rows for one Source
-Identity should be a source plugin failure because it makes dependency lookup
-ambiguous.
+`SqlSourcePlugin` should declare `lookupStrategy: "direct"` internally and
+should not expose scan lookup in v1. If a source cannot address a Source Item by
+Source Identity, it is not a good fit for durable SQL source reruns yet.
+
+Lookup queries must identify at most one Source Item. Multiple returned rows for
+one Source Identity should be a source plugin failure because it makes
+dependency lookup ambiguous. The SQL source should fail when the executed
+lookup statement actually returns more than one row; it should not try to
+rewrite arbitrary SQL to enforce uniqueness.
+
+The lookup callback should return a SQL statement. It should not perform the
+lookup effect itself.
+
+Lookup results use the same source metadata extractor as cursor-read results.
+This keeps failed-item reruns, skipped reruns, needs-update backlog, and
+single-item runs observing the same Source Item shape as normal cursor
+discovery. The extractor still returns a cursor for lookup rows, but
+`readByIdentity` ignores that cursor because identity lookup does not advance
+source position.
+
+After metadata extraction, lookup must verify that the extracted Source Identity
+matches the requested identity after normal Source Identity input
+normalization. A mismatch is a source plugin failure because the lookup
+statement returned the wrong Source Item.
+
+Cursor reads should reject duplicate Source Identities within one returned
+window after metadata extraction and normal Source Identity input
+normalization. Duplicate detection across different windows is out of scope for
+the SQL source plugin; deterministic SQL ordering and durable item state handle
+the broader migration behavior.
+
+Metadata extraction failures during cursor reads fail the cursor read because
+the runtime may not have a valid Source Identity for the bad row. Metadata
+extraction failures during lookup fail that lookup and may become an item
+failure because the requested Source Identity is already known. Payload schema
+failures remain item-level failures because they occur after identity and
+version are available.
 
 ## Effect SQL Boundary
 
@@ -131,13 +350,19 @@ That boundary buys us:
 - Tagged-template SQL construction and parameter binding.
 - Database-specific statement compilation through the selected Effect driver.
 - Connection acquisition and scoped resource management.
-- Transactions and connection reservation when a future source needs them.
+- Transactions and connection reservation when a future explicit source option
+  needs them.
 - Typed SQL errors that can be mapped to `SourcePluginError`.
 - A path to share SQL infrastructure with a future SQL destination without
   coupling the first source slice to destination semantics.
 
 `SqlClient` does not infer row types from raw SQL text. The source plugin still
 requires explicit `sourceSchema`, `cursorSchema`, and row mapping.
+
+Raw SQL v1 should not wrap reads or lookups in SQL transactions automatically.
+Each operation executes its configured statement normally. Consistent snapshot
+or transaction semantics should be a future explicit option, not a default
+source behavior.
 
 ## Internal Layout
 
@@ -162,8 +387,8 @@ Migration runtime
     -> SqlSourcePlugin implementation
       -> acquire SqlClient from configured layer
       -> execute author read query
-      -> map rows to SourceItem inputs and cursor candidates
-      -> decode item payloads with sourceSchema
+      -> extract Source Identity, Source Version, and cursor from each row
+      -> use each row as the source item payload
       -> return SourceReadResult with nextCursor
 
 Migration runtime
@@ -172,15 +397,12 @@ Migration runtime
       -> acquire SqlClient from configured layer
       -> execute author lookup query
       -> validate zero-or-one row
-      -> map and decode row
+      -> extract Source Identity and Source Version from the row
+      -> use the row as the source item payload
       -> return SourceItem or null
 ```
 
 ## Open Questions
 
-- Whether `mapRow` should receive a row index inside the current page for
-  diagnostics only.
-- Whether query callbacks should return Effect SQL statements directly or an
-  SDK wrapper that can attach operation metadata.
-- Whether scan lookup should be supported in v1 or kept unavailable until a
-  source proves it is necessary.
+No open questions for the v1 raw SQL source API direction are currently
+recorded.

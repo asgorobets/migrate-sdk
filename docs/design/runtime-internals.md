@@ -84,6 +84,12 @@ execution, and destination command execution. A source item with a valid
 identity and version but invalid payload becomes a failed item state with source
 error details.
 
+The current runtime sees source read and lookup failures as `SourcePluginError`.
+A future source contract may keep plugin-specific error channels available to
+source retry strategies before normalizing those errors at the framework
+boundary for run failures, item failures, CLI rendering, and durable item error
+records.
+
 ## Destination Command Plans
 
 The runner normalizes a destination command plan into an array, then validates
