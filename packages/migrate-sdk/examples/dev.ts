@@ -16,6 +16,10 @@ import {
   runInMemoryExample,
 } from "./in-memory-runtime.ts";
 import {
+  formatCompaniesJsonSourceExampleResult,
+  runCompaniesJsonSourceExample,
+} from "./json-file-source/companies-json-source.ts";
+import {
   formatNestedArticleSchemaExampleResult,
   runNestedArticleSchemaExample,
 } from "./nested-article-schema.ts";
@@ -48,6 +52,12 @@ const makeProgram = () => {
     return runCircularBookAuthorStubsExample().pipe(
       Effect.map(formatCircularBookAuthorStubsExampleResult)
     );
+  }
+
+  if (example === "json-file-source") {
+    return runCompaniesJsonSourceExample({
+      platform: nodePlatformLayer,
+    }).pipe(Effect.map(formatCompaniesJsonSourceExampleResult));
   }
 
   return runInMemoryExample().pipe(Effect.map(formatMigrationRunSummary));
