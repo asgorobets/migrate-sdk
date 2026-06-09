@@ -2,7 +2,15 @@ import type { MigrationDefinitionId } from "../domain/ids.ts";
 import type {
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryConstructionIssue,
+  MigrationDefinitionRegistryEntry,
 } from "../domain/registry.ts";
+
+interface MigrationDefinitionGraphEdge {
+  readonly fromDefinitionId: MigrationDefinitionId;
+  readonly kind: "required" | "optional";
+  readonly toDefinitionId: MigrationDefinitionId;
+  readonly unresolved: boolean;
+}
 
 const formatRequiredDependencies = (
   dependencies: readonly MigrationDefinitionId[]
@@ -40,6 +48,59 @@ export const renderRegistryList = (
       )}`,
     ]),
   ].join("\n");
+};
+
+const collectGraphEdges = (
+  entries: readonly MigrationDefinitionRegistryEntry[]
+): readonly MigrationDefinitionGraphEdge[] => {
+  const registeredIds = new Set(entries.map((entry) => entry.id));
+
+  return entries.flatMap((entry) => [
+    ...entry.dependencies.required.map((dependencyId) => ({
+      fromDefinitionId: entry.id,
+      kind: "required" as const,
+      toDefinitionId: dependencyId,
+      unresolved: false,
+    })),
+    ...entry.dependencies.optional.map((dependencyId) => ({
+      fromDefinitionId: entry.id,
+      kind: "optional" as const,
+      toDefinitionId: dependencyId,
+      unresolved: !registeredIds.has(dependencyId),
+    })),
+  ]);
+};
+
+const renderGraphEdge = (edge: MigrationDefinitionGraphEdge): string => {
+  const label =
+    edge.kind === "optional" && edge.unresolved
+      ? "optional unresolved"
+      : edge.kind;
+
+  return `${edge.fromDefinitionId}(${label}) --> ${edge.toDefinitionId}`;
+};
+
+export const renderRegistryGraph = (
+  registry: MigrationDefinitionRegistry,
+  focusedDefinitionId?: MigrationDefinitionId
+): string => {
+  const entries = registry.list();
+  const edges = collectGraphEdges(entries).filter(
+    (edge) =>
+      focusedDefinitionId === undefined ||
+      edge.fromDefinitionId === focusedDefinitionId ||
+      edge.toDefinitionId === focusedDefinitionId
+  );
+  const header =
+    focusedDefinitionId === undefined
+      ? "Migration Dependency Graph"
+      : `Migration Dependency Graph: ${focusedDefinitionId}`;
+
+  if (edges.length === 0) {
+    return [header, "No dependencies."].join("\n");
+  }
+
+  return [header, ...edges.map(renderGraphEdge)].join("\n");
 };
 
 export const renderConfigLoadError = (error: {

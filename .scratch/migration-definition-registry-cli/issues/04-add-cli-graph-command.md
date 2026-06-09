@@ -14,21 +14,21 @@ Graph inspection should stay static and should not run planning, expand dependen
 
 ## Acceptance criteria
 
-- [ ] `migrate graph` renders all registered dependency edges.
-- [ ] Full graph output includes required edges.
-- [ ] Full graph output includes optional edges when the referenced definition is registered.
-- [ ] Full graph output includes unresolved optional edges when the referenced definition is not registered.
-- [ ] `migrate graph <definition>` renders direct outgoing edges from the selected definition to required and optional dependencies.
-- [ ] `migrate graph <definition>` renders direct incoming edges from definitions that declare the selected definition as required or optional.
-- [ ] Focused graph output is one-hop only and does not render transitive closure.
-- [ ] Graph edges are rendered as directional edge-list lines.
-- [ ] Edge labels use `required`, `optional`, and `optional unresolved` wording.
-- [ ] Edge output uses directional arrows and does not use CLI-flag-looking notation.
-- [ ] Graph output supports cycles without failing.
-- [ ] Unknown focused graph definition ids fail with a clear lookup error.
-- [ ] `migrate graph` does not use `--with-dependencies`.
-- [ ] `migrate graph` does not run planning, read stores, initialize plugin layers, or inspect runtime status.
-- [ ] Tests cover full graph, focused graph, incoming edges, outgoing edges, optional edges, unresolved optional edges, and cycles.
+- [x] `migrate graph` renders all registered dependency edges.
+- [x] Full graph output includes required edges.
+- [x] Full graph output includes optional edges when the referenced definition is registered.
+- [x] Full graph output includes unresolved optional edges when the referenced definition is not registered.
+- [x] `migrate graph <definition>` renders direct outgoing edges from the selected definition to required and optional dependencies.
+- [x] `migrate graph <definition>` renders direct incoming edges from definitions that declare the selected definition as required or optional.
+- [x] Focused graph output is one-hop only and does not render transitive closure.
+- [x] Graph edges are rendered as directional edge-list lines.
+- [x] Edge labels use `required`, `optional`, and `optional unresolved` wording.
+- [x] Edge output uses directional arrows and does not use CLI-flag-looking notation.
+- [x] Graph output supports cycles without failing.
+- [x] Unknown focused graph definition ids fail with a clear lookup error.
+- [x] `migrate graph` does not use `--with-dependencies`.
+- [x] `migrate graph` does not run planning, read stores, initialize plugin layers, or inspect runtime status.
+- [x] Tests cover full graph, focused graph, incoming edges, outgoing edges, optional edges, unresolved optional edges, and cycles.
 
 ## Blocked by
 

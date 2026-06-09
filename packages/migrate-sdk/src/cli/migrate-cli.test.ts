@@ -88,6 +88,45 @@ const jsConfigSource = (definitionId: string): string => `
   });
 `;
 
+const graphConfigSource = (): string => `
+  import { MigrationDefinitionRegistry, toMigrationDefinitionId } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const definition = (id: string, input: Record<string, unknown> = {}) => ({
+    id: toMigrationDefinitionId(id),
+    ...input
+  });
+
+  const authors = definition("authors");
+  const articles = definition("articles", {
+    dependencies: {
+      required: [toMigrationDefinitionId("authors")],
+      optional: [
+        toMigrationDefinitionId("images"),
+        toMigrationDefinitionId("article-tags")
+      ]
+    }
+  });
+  const articleTags = definition("article-tags", {
+    dependencies: {
+      required: [],
+      optional: [toMigrationDefinitionId("articles")]
+    }
+  });
+  const comments = definition("comments", {
+    dependencies: {
+      required: [toMigrationDefinitionId("articles")],
+      optional: []
+    }
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [authors, articles, articleTags, comments] as never
+    })
+  });
+`;
+
 describe("migrate CLI", () => {
   it.effect(
     "lists static registry metadata from an explicit TypeScript config",
@@ -138,6 +177,151 @@ describe("migrate CLI", () => {
         expect(result.stdout).toContain("required: authors");
         expect(result.stdout).toContain("optional: images (unresolved)");
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders the full static dependency graph", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        graphConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["graph", "--config", "migrate.config.ts"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Migration Dependency Graph");
+      expect(result.stdout).toContain("articles(required) --> authors");
+      expect(result.stdout).toContain("articles(optional) --> article-tags");
+      expect(result.stdout).toContain(
+        "articles(optional unresolved) --> images"
+      );
+      expect(result.stdout).toContain("comments(required) --> articles");
+      expect(result.stdout).toContain("article-tags(optional) --> articles");
+      expect(result.stdout).not.toContain("--with-dependencies");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders a focused one-hop dependency graph", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        graphConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["graph", "--config", "migrate.config.ts", "comments"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Migration Dependency Graph: comments");
+      expect(result.stdout).toContain("comments(required) --> articles");
+      expect(result.stdout).not.toContain("articles(required) --> authors");
+      expect(result.stdout).not.toContain(
+        "articles(optional) --> article-tags"
+      );
+      expect(result.stdout).not.toContain(
+        "articles(optional unresolved) --> images"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders incoming and outgoing edges for a focused graph", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        graphConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["graph", "--config", "migrate.config.ts", "articles"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("articles(required) --> authors");
+      expect(result.stdout).toContain("articles(optional) --> article-tags");
+      expect(result.stdout).toContain(
+        "articles(optional unresolved) --> images"
+      );
+      expect(result.stdout).toContain("comments(required) --> articles");
+      expect(result.stdout).toContain("article-tags(optional) --> articles");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("fails clearly for an unknown focused graph definition", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        graphConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["graph", "--config", "migrate.config.ts", "missing"],
+        project
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        "Migration Definition was not found in the registry: missing"
+      );
+      expect(result.stderr).not.toContain("CliError/UserError");
+      expect(result.stdout).toBe("");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders an empty dependency graph clearly", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        `
+          import { MigrationDefinitionRegistry, toMigrationDefinitionId } from "migrate-sdk";
+          import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+          export default defineMigrationCliConfig({
+            registry: MigrationDefinitionRegistry.make({
+              definitions: [{ id: toMigrationDefinitionId("standalone") }] as never
+            })
+          });
+        `
+      );
+
+      const result = yield* runCli(
+        ["graph", "--config", "migrate.config.ts"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Migration Dependency Graph");
+      expect(result.stdout).toContain("No dependencies.");
+      expect(result.stdout).not.toContain("-->");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
   it.effect("runs list through the package bin", () =>
