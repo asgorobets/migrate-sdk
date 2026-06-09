@@ -4,8 +4,13 @@
   "type": "module",
   "private": true,
   "sideEffects": [],
+  "bin": {
+    "migrate-sdk": "./bin/migrate-sdk.mjs"
+  },
   "exports": {
     ".": "./src/index.ts",
+    "./cli": "./src/cli/index.ts",
+    "./cli/testing": "./src/cli/testing.ts",
     "./destinations/in-memory": "./src/destinations/in-memory/index.ts",
     "./destinations/in-memory/testing": "./src/destinations/in-memory/testing.ts",
     "./internal/*": null,
@@ -16,6 +21,7 @@
     "./*/internal/*": null
   },
   "scripts": {
+    "cli": "node ./bin/migrate-sdk.mjs",
     "dev": "tsx examples/dev.ts",
     "dev:circular-stubs": "tsx examples/dev.ts circular-stubs",
     "dev:api-source": "tsx examples/dev.ts api-source",
@@ -32,13 +38,13 @@
     "@repo/typescript-config": "workspace:*",
     "@types/node": "^22.15.3",
     "@types/papaparse": "^5.5.2",
-    "tsx": "^4.22.4",
     "typescript": "5.9.2",
     "vitest": "^4.1.8"
   },
   "dependencies": {
     "@effect/platform-node": "4.0.0-beta.75",
     "effect": "4.0.0-beta.75",
-    "papaparse": "^5.5.3"
+    "papaparse": "^5.5.3",
+    "tsx": "^4.22.4"
   }
 }

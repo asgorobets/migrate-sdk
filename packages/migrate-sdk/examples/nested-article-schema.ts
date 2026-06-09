@@ -105,9 +105,7 @@ const sourceItems = [
   },
 ] as const;
 
-export const runNestedArticleSchemaExample = Effect.fn(
-  "runNestedArticleSchemaExample"
-)(function* () {
+export const makeNestedArticleSchemaMigration = () => {
   const destinationFixture = makeArticleDestinationFixture();
   const { destination } = destinationFixture;
 
@@ -140,6 +138,13 @@ export const runNestedArticleSchemaExample = Effect.fn(
     },
   });
 
+  return { destinationFixture, migration };
+};
+
+export const runNestedArticleSchemaExample = Effect.fn(
+  "runNestedArticleSchemaExample"
+)(function* () {
+  const { destinationFixture, migration } = makeNestedArticleSchemaMigration();
   const summary = yield* runMigration(migration);
 
   return {

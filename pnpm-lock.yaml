@@ -94,6 +94,9 @@ importers:
       papaparse:
         specifier: ^5.5.3
         version: 5.5.3
+      tsx:
+        specifier: ^4.22.4
+        version: 4.22.4
     devDependencies:
       '@effect/language-service':
         specifier: ^0.86.2
@@ -110,9 +113,6 @@ importers:
       '@types/papaparse':
         specifier: ^5.5.2
         version: 5.5.2
-      tsx:
-        specifier: ^4.22.4
-        version: 4.22.4
       typescript:
         specifier: 5.9.2
         version: 5.9.2

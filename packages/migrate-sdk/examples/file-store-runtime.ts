@@ -34,6 +34,11 @@ export interface FileStoreExampleResult {
   readonly storeDirectory: string;
 }
 
+export interface MakeFileStoreArticlesMigrationOptions {
+  readonly definitionId?: string;
+  readonly storeDirectory: string;
+}
+
 const getDefaultStoreDirectory = Effect.fn("getDefaultStoreDirectory")(
   function* () {
     const path = yield* Path;
@@ -72,7 +77,10 @@ const sourceItems = [
   },
 ] as const;
 
-const makeArticlesMigration = (storeDirectory: string) => {
+export const makeFileStoreArticlesMigration = ({
+  definitionId = "articles",
+  storeDirectory,
+}: MakeFileStoreArticlesMigrationOptions) => {
   const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
     contentType: "article",
     commands: {
@@ -84,7 +92,7 @@ const makeArticlesMigration = (storeDirectory: string) => {
 
   const migration = defineMigration({
     destination,
-    id: "articles",
+    id: definitionId,
     pipeline: Effect.fn("fileStoreArticles.pipeline")(function* (source) {
       if (!source.item.publish) {
         return yield* skipItem("Article is not published");
@@ -118,10 +126,10 @@ export const runFileStoreExample = Effect.fn("runFileStoreExample")(function* (
     yield* fs.remove(storeDirectory, { force: true, recursive: true });
   }
 
-  const first = makeArticlesMigration(storeDirectory);
+  const first = makeFileStoreArticlesMigration({ storeDirectory });
   const firstRun = yield* runMigration(first.migration);
 
-  const second = makeArticlesMigration(storeDirectory);
+  const second = makeFileStoreArticlesMigration({ storeDirectory });
   const secondRun = yield* runMigration(second.migration);
 
   return {
