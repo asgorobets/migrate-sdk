@@ -228,6 +228,12 @@ export type {
   CsvVersion,
 } from "./sources/csv/csv-source.ts";
 
+export {
+  SqlSourcePlugin,
+  SqlSourcePluginName,
+} from "./sources/sql/sql-source.ts";
+export type { SqlSourceOptions } from "./sources/sql/sql-source.ts";
+
 export { InMemoryMigrationStore } from "./stores/in-memory/in-memory-migration-store.ts";
 export type { InMemoryMigrationStoreState } from "./stores/in-memory/in-memory-migration-store.ts";
 

@@ -146,12 +146,15 @@ export const migrations = contentTypes.map((contentType) => {
     },
   });
 
+  const source = makeSqlSourceForContentType({
+    client: legacySqlLayer,
+    contentType,
+    sourceSchema: sourceSchemas[contentType],
+  });
+
   return defineMigration({
     id: contentType,
-    source: SqlSourcePlugin.make({
-      table: contentType,
-      sourceSchema: sourceSchemas[contentType],
-    }),
+    source,
     destination,
     store: SqlMigrationStore.layer({
       tablePrefix: "migrate_sdk",
@@ -160,6 +163,9 @@ export const migrations = contentTypes.map((contentType) => {
   });
 });
 ```
+
+The raw SQL source API should be designed in the SQL source folder. It should
+use configured query callbacks rather than table-name-only configuration.
 
 Future adapters may generate Effect schemas from external systems such as CMS
 content-type configuration, JSON Schema, or Standard Schema. The configured

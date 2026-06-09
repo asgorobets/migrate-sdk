@@ -16,6 +16,7 @@
     "./internal/*": null,
     "./sources/csv": "./src/sources/csv/index.ts",
     "./sources/in-memory": "./src/sources/in-memory/index.ts",
+    "./sources/sql": "./src/sources/sql/index.ts",
     "./stores/file": "./src/stores/file/index.ts",
     "./stores/in-memory": "./src/stores/in-memory/index.ts",
     "./*/internal/*": null
