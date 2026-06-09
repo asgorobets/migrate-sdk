@@ -1,11 +1,11 @@
 # Commercetools Product Attribute Builders
 
-Status: future state.
+Status: implemented.
 
 Audience: migration authors and maintainers shaping the
 `@migrate-sdk/commercetools` package.
 
-This document captures the intended future shape for schema-backed Product
+This document captures the implemented shape for schema-backed Product
 Attribute helpers. It follows the same builder and projection model as
 [Custom Fields API](./custom-fields.md), but Product Attributes need two helper
 levels because Commercetools distinguishes Product-level Attributes from
@@ -18,20 +18,9 @@ the `Variant` level. Those two levels serialize to the same SDK `Attribute[]`
 shape in drafts, but they do not share a schema and cannot be safely converted
 from one to the other.
 
-The current helper shape accepts one Product Type schema and returns draft
-attributes directly:
-
-```ts
-const attributes = yield* destination.helpers.products.attributes("book", {
-  format: "hardcover",
-  isbn: "9780000000000",
-});
-```
-
-That is useful as a narrow draft helper, but it does not model Product-level
-Attributes, update actions, or unset semantics. The durable API should be a
-builder that projects the same typed field bag into either draft attributes or
-Product update actions.
+The helper shape uses builders instead of destination commands. Builders prepare
+typed SDK values from a schema-backed Attribute bag, then project those values
+into either draft attributes or Product update actions.
 
 ## Configuration
 
@@ -93,14 +82,14 @@ Both helpers expose the same builder shape:
 ```ts
 const productAttributeBuilder = destination.helpers.products
   .productAttributes("book")
-  .withFields({
+  .withAttributes({
     searchable: true,
   })
   .unset("displayFamily");
 
 const variantAttributeBuilder = destination.helpers.products
   .attributes("book")
-  .withFields({
+  .withAttributes({
     format: "hardcover",
     isbn: "9780000000000",
   })
@@ -108,9 +97,10 @@ const variantAttributeBuilder = destination.helpers.products
   .unset("isbn");
 ```
 
-`withFields(...)` validates a partial field bag using the configured schema.
-`set(name, value)` is typed by field name and field value. `unset(name)` records
-removal for update actions and omits that field from draft output.
+`withAttributes(...)` validates a partial Attribute bag using the configured
+schema. `set(name, value)` is typed by field name and field value.
+`unset(name)` records removal for update actions and omits that field from draft
+output.
 
 The builder exposes two projection names:
 
@@ -131,7 +121,7 @@ Product-level draft usage:
 ```ts
 const productAttributes = yield* destination.helpers.products
   .productAttributes("book")
-  .withFields({
+  .withAttributes({
     searchable: true,
   })
   .toDraft();
@@ -150,7 +140,7 @@ Variant-level draft usage:
 ```ts
 const variantAttributes = yield* destination.helpers.products
   .attributes("book")
-  .withFields({
+  .withAttributes({
     format: "hardcover",
     isbn: "9780000000000",
     pages: 320,
@@ -179,7 +169,7 @@ Product-level Attribute actions do not need a variant selector:
 ```ts
 const actions = yield* destination.helpers.products
   .productAttributes("book")
-  .withFields({
+  .withAttributes({
     searchable: true,
   })
   .unset("displayFamily")
@@ -210,7 +200,7 @@ all-variants target:
 ```ts
 const actions = yield* destination.helpers.products
   .attributes("book")
-  .withFields({
+  .withAttributes({
     format: "paperback",
   })
   .unset("isbn")
@@ -240,7 +230,7 @@ For attributes with a `SameForAll` constraint, target all variants explicitly:
 ```ts
 const actions = yield* destination.helpers.products
   .attributes("book")
-  .withFields({
+  .withAttributes({
     format: "ebook",
   })
   .toActions({ allVariants: true, staged: false });
@@ -269,14 +259,14 @@ Draft usage:
 ```ts
 const productAttributes = yield* destination.helpers.products
   .productAttributes("book")
-  .withFields({
+  .withAttributes({
     searchable: true,
   })
   .toDraft();
 
 const masterVariantAttributes = yield* destination.helpers.products
   .attributes("book")
-  .withFields({
+  .withAttributes({
     format: "hardcover",
     isbn: "9780000000000",
     pages: 320,
@@ -298,14 +288,14 @@ Update usage:
 ```ts
 const productAttributeActions = yield* destination.helpers.products
   .productAttributes("book")
-  .withFields({
+  .withAttributes({
     searchable: true,
   })
   .toActions();
 
 const variantAttributeActions = yield* destination.helpers.products
   .attributes("book")
-  .withFields({
+  .withAttributes({
     format: "paperback",
   })
   .toActions({ sku: "book-sku" });
@@ -316,28 +306,6 @@ const command = destination.commands.products.update.withActions({
   actions: [...productAttributeActions, ...variantAttributeActions],
 }).command();
 ```
-
-## Relationship To Current Helper
-
-The current `destination.helpers.products.attributes(productTypeKey, input)`
-shape can remain temporarily as a shorthand for Variant-level draft projection:
-
-```ts
-destination.helpers.products.attributes("book", input);
-```
-
-is equivalent to:
-
-```ts
-destination.helpers.products
-  .attributes("book")
-  .withFields(input)
-  .toDraft();
-```
-
-The builder-first API should become the primary documented path because it
-supports draft projection, update actions, and unset semantics with the same
-typed field bag.
 
 ## Future Extensions
 

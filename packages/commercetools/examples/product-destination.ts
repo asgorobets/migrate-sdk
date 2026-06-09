@@ -17,10 +17,14 @@ import {
 } from "migrate-sdk";
 
 export const BookProductAttributes = Schema.Struct({
+  displayFamily: Schema.optional(Schema.String),
+  searchable: Schema.Boolean,
+});
+
+export const BookVariantAttributes = Schema.Struct({
   format: Schema.Literals(["hardcover", "paperback"]),
   isbn: Schema.NonEmptyString,
   pages: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0))),
-  searchable: Schema.Boolean,
 });
 
 export const bookProductDraft = {
@@ -47,6 +51,7 @@ const destinationContext = {
 export interface ProductDestinationExampleResult {
   readonly attributes: readonly Attribute[];
   readonly created: DestinationCommandResult;
+  readonly productAttributes: readonly Attribute[];
   readonly productDraftFields: readonly string[];
   readonly productDraftInventoryField: "absent" | "present";
   readonly sdkRequests: readonly RecordedCommercetoolsRequest[];
@@ -61,7 +66,10 @@ export const runProductDestinationExample = Effect.fn(
   const recording = makeRecordingCommercetoolsApiRoot();
   const destination = CommercetoolsDestinationPlugin.make({
     productTypes: {
-      book: BookProductAttributes,
+      book: {
+        attributes: BookVariantAttributes,
+        productAttributes: BookProductAttributes,
+      },
     },
     sdkLayer: CommercetoolsSdk.layerFromApiRoot({
       apiRoot: recording.apiRoot,
@@ -71,16 +79,26 @@ export const runProductDestinationExample = Effect.fn(
   const destinationPlugin = yield* DestinationPlugin.pipe(
     Effect.provide(destination.layer)
   );
-  const attributes = yield* destination.helpers.products.attributes("book", {
-    format: "paperback",
-    isbn: "9780135957059",
-    pages: 320,
-    searchable: true,
-  });
+  const productAttributes = yield* destination.helpers.products
+    .productAttributes("book")
+    .withAttributes({
+      displayFamily: "programming",
+      searchable: true,
+    })
+    .toDraft();
+  const attributes = yield* destination.helpers.products
+    .attributes("book")
+    .withAttributes({
+      format: "paperback",
+      isbn: "9780135957059",
+    })
+    .set("pages", 320)
+    .toDraft();
 
   const created = yield* destinationPlugin.execute(
     destination.commands.products.createDraft({
       ...bookProductDraft,
+      attributes: productAttributes,
       masterVariant: {
         attributes,
         sku: "example-book-paperback",
@@ -89,9 +107,24 @@ export const runProductDestinationExample = Effect.fn(
     destinationContext
   );
   const productVersion = Number(created.metadata?.productVersion ?? 1);
+  const productAttributeActions = yield* destination.helpers.products
+    .productAttributes("book")
+    .withAttributes({
+      searchable: false,
+    })
+    .unset("displayFamily")
+    .toActions({ staged: false });
+  const variantAttributeActions = yield* destination.helpers.products
+    .attributes("book")
+    .withAttributes({
+      format: "hardcover",
+    })
+    .unset("isbn")
+    .toActions({ sku: "example-book-paperback", staged: true });
 
-  const updateCommand = destination.commands.products
-    .update({
+  const updateCommand = destination.commands.products.update
+    .withActions({
+      actions: [...productAttributeActions, ...variantAttributeActions],
       selector: {
         id: String(created.destinationIdentity),
         kind: "id",
@@ -135,10 +168,21 @@ export const runProductDestinationExample = Effect.fn(
       .action({ action: "unpublish" })
       .command();
   const updateActionKinds: ReadonlyArray<
-    "changeName" | "changeSlug" | "setDescription" | "publish"
+    | "changeName"
+    | "changeSlug"
+    | "publish"
+    | "setAttribute"
+    | "setDescription"
+    | "setProductAttribute"
   > = updateCommand.actions.map((action) => action.action);
   const withActionsThenChainedUpdateActionKinds: ReadonlyArray<
-    "changeName" | "changeSlug" | "setDescription" | "publish" | "unpublish"
+    | "changeName"
+    | "changeSlug"
+    | "publish"
+    | "setAttribute"
+    | "setDescription"
+    | "setProductAttribute"
+    | "unpublish"
   > = withActionsThenChainedUpdateCommand.actions.map(
     (action) => action.action
   );
@@ -152,6 +196,7 @@ export const runProductDestinationExample = Effect.fn(
   return {
     attributes,
     created,
+    productAttributes,
     productDraftFields,
     productDraftInventoryField: productDraftFields.includes("inventoryMode")
       ? "present"
@@ -171,7 +216,8 @@ export const formatProductDestinationExampleResult = (
     `created: ${result.created.destinationIdentity}`,
     `created version: ${result.created.destinationVersion}`,
     `updated version: ${result.updated.destinationVersion}`,
-    `attributes: ${result.attributes.map((attribute) => attribute.name).join(", ")}`,
+    `product attributes: ${result.productAttributes.map((attribute) => attribute.name).join(", ")}`,
+    `variant attributes: ${result.attributes.map((attribute) => attribute.name).join(", ")}`,
     `update actions: ${result.updateActionKinds.join(", ")}`,
     `recorded SDK requests: ${result.sdkRequests.length}`,
   ].join("\n");

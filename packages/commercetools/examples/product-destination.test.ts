@@ -1,12 +1,18 @@
 import { describe, expect, it } from "@effect/vitest";
+import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
 import {
+  CommercetoolsDestinationPlugin,
+  type CommercetoolsProductHelpers,
   CreateProductDraftCommand,
   type ProductUpdateActionByName,
   type ProductUpdateFactory,
   UpdateProductCommand,
 } from "@migrate-sdk/commercetools/destination";
+import { makeRecordingCommercetoolsApiRoot } from "@migrate-sdk/commercetools/testing";
 import { Effect, Schema } from "effect";
 import {
+  BookProductAttributes,
+  BookVariantAttributes,
   bookProductDraft,
   formatProductDestinationExampleResult,
   runProductDestinationExample,
@@ -56,6 +62,72 @@ const assertProductUpdateBuilderTypes = (update: ProductUpdateFactory) => {
   builder.action({ action: "changeName" });
 };
 
+const assertProductAttributeHelperTypes = (
+  helpers: CommercetoolsProductHelpers<{
+    readonly book: {
+      readonly attributes: typeof BookVariantAttributes;
+      readonly productAttributes: typeof BookProductAttributes;
+    };
+  }>
+) => {
+  helpers.productAttributes("book").withAttributes({
+    searchable: true,
+  });
+  helpers.productAttributes("book").withAttributes({
+    // @ts-expect-error Product-level attributes use the product attribute schema.
+    format: "paperback",
+  });
+  helpers.attributes("book").withAttributes({
+    format: "paperback",
+  });
+  helpers.attributes("book").withAttributes({
+    // @ts-expect-error Variant attributes use the variant attribute schema.
+    searchable: true,
+  });
+  helpers.attributes("book").withAttributes({}).set("pages", 320);
+  helpers.attributes("book").withAttributes({}).set(
+    "pages",
+    // @ts-expect-error pages must match the configured variant attribute schema.
+    "320"
+  );
+  helpers.productAttributes("book").withAttributes({}).unset(
+    // @ts-expect-error unset is restricted to configured product attribute names.
+    "isbn"
+  );
+  const allVariantActions = helpers
+    .attributes("book")
+    .withAttributes({})
+    .toActions({
+      allVariants: true,
+      staged: false,
+    });
+  const skuActions = helpers.attributes("book").withAttributes({}).toActions({
+    sku: "book-sku",
+    staged: true,
+  });
+  const variantIdActions = helpers
+    .attributes("book")
+    .withAttributes({})
+    .toActions({
+      variantId: 1,
+    });
+  const invalidTargetActions = helpers
+    .attributes("book")
+    .withAttributes({})
+    // @ts-expect-error A variant attribute action target must be one target mode.
+    .toActions({
+      allVariants: true,
+      sku: "book-sku",
+    });
+
+  return [
+    allVariantActions,
+    skuActions,
+    variantIdActions,
+    invalidTargetActions,
+  ];
+};
+
 describe("product destination example", () => {
   it.effect(
     "runs create and update product commands with typed attributes",
@@ -82,16 +154,27 @@ describe("product destination example", () => {
           { name: "format", value: "paperback" },
           { name: "isbn", value: "9780135957059" },
           { name: "pages", value: 320 },
+        ]);
+        expect(result.productAttributes).toEqual([
+          { name: "displayFamily", value: "programming" },
           { name: "searchable", value: true },
         ]);
         expect(result.productDraftInventoryField).toBe("absent");
         expect(result.updateActionKinds).toEqual([
+          "setProductAttribute",
+          "setProductAttribute",
+          "setAttribute",
+          "setAttribute",
           "changeName",
           "changeSlug",
           "setDescription",
           "publish",
         ]);
         expect(result.withActionsThenChainedUpdateActionKinds).toEqual([
+          "setProductAttribute",
+          "setProductAttribute",
+          "setAttribute",
+          "setAttribute",
           "changeName",
           "changeSlug",
           "setDescription",
@@ -99,6 +182,7 @@ describe("product destination example", () => {
           "unpublish",
         ]);
         expect(result.sdkRequests).toHaveLength(2);
+        expect(createDraft?.attributes).toEqual(result.productAttributes);
         expect(createDraft?.masterVariant?.attributes).toEqual(
           result.attributes
         );
@@ -106,8 +190,37 @@ describe("product destination example", () => {
         expect(productUpdate?.actions.map((action) => action.action)).toEqual(
           result.updateActionKinds
         );
+        expect(productUpdate?.actions.slice(0, 4)).toEqual([
+          {
+            action: "setProductAttribute",
+            name: "searchable",
+            staged: false,
+            value: false,
+          },
+          {
+            action: "setProductAttribute",
+            name: "displayFamily",
+            staged: false,
+          },
+          {
+            action: "setAttribute",
+            name: "format",
+            sku: "example-book-paperback",
+            staged: true,
+            value: "hardcover",
+          },
+          {
+            action: "setAttribute",
+            name: "isbn",
+            sku: "example-book-paperback",
+            staged: true,
+          },
+        ]);
         expect(output).toContain("Commercetools Product Destination Example");
-        expect(output).toContain("attributes: format, isbn, pages, searchable");
+        expect(output).toContain(
+          "product attributes: displayFamily, searchable"
+        );
+        expect(output).toContain("variant attributes: format, isbn, pages");
       })
   );
 
@@ -176,7 +289,49 @@ describe("product destination example", () => {
   it("types product actions from the SDK action union", () => {
     expect(assertProductUpdateActionTypes).toBeTypeOf("function");
     expect(assertProductUpdateBuilderTypes).toBeTypeOf("function");
+    expect(assertProductAttributeHelperTypes).toBeTypeOf("function");
   });
+
+  it.effect(
+    "rejects attribute values that do not match configured schemas",
+    () =>
+      Effect.gen(function* () {
+        const recording = makeRecordingCommercetoolsApiRoot();
+        const destination = CommercetoolsDestinationPlugin.make({
+          productTypes: {
+            book: {
+              attributes: BookVariantAttributes,
+              productAttributes: BookProductAttributes,
+            },
+          },
+          sdkLayer: CommercetoolsSdk.layerFromApiRoot({
+            apiRoot: recording.apiRoot,
+            projectKey: "example-project",
+          }),
+        });
+        const invalidVariantAttributeError = yield* destination.helpers.products
+          .attributes("book")
+          .withAttributes({})
+          .set(
+            "pages",
+            // @ts-expect-error Runtime validation protects untyped callers too.
+            "320"
+          )
+          .toDraft()
+          .pipe(Effect.flip);
+        const invalidProductAttributeError = yield* destination.helpers.products
+          .productAttributes("book")
+          .withAttributes({
+            // @ts-expect-error Runtime validation protects untyped callers too.
+            searchable: "yes",
+          })
+          .toActions()
+          .pipe(Effect.flip);
+
+        expect(Schema.isSchemaError(invalidVariantAttributeError)).toBe(true);
+        expect(Schema.isSchemaError(invalidProductAttributeError)).toBe(true);
+      })
+  );
 
   it.effect("validates the product update command envelope", () =>
     Effect.gen(function* () {

@@ -1,5 +1,4 @@
 import type {
-  Attribute,
   BusinessUnit,
   BusinessUnitDraft,
   BusinessUnitUpdate,
@@ -34,6 +33,11 @@ import {
 } from "./custom-fields.ts";
 import type { CustomerUpdateAction } from "./customer-actions.ts";
 import type { ProductUpdateAction } from "./product-actions.ts";
+import {
+  type CommercetoolsProductAttributeSchemasInput,
+  makeProductHelpers,
+  type CommercetoolsProductHelpers as ProductHelpers,
+} from "./product-attributes.ts";
 import type {
   CommercetoolsBusinessUnitSelector,
   CommercetoolsCustomerSelector,
@@ -56,51 +60,14 @@ export type {
   CommercetoolsProductSelector,
 } from "./selectors.ts";
 
-export type CommercetoolsProductAttributeSchema = Schema.Codec<
-  object,
-  object,
-  never,
-  never
->;
-
 type CommercetoolsProductAttributeSchemaRecord = object;
 
-type SameShapeProductAttributeSchema<ProductAttributeSchema> =
-  ProductAttributeSchema extends Schema.Codec<
-    infer AttributeBag extends object,
-    infer EncodedAttributeBag extends object,
-    never,
-    never
-  >
-    ? [AttributeBag] extends [EncodedAttributeBag]
-      ? [EncodedAttributeBag] extends [AttributeBag]
-        ? ProductAttributeSchema
-        : never
-      : never
-    : never;
-
-export type CommercetoolsProductAttributeSchemas<
-  ProductAttributeSchemaRecord extends
-    CommercetoolsProductAttributeSchemaRecord = Readonly<
-    Record<string, CommercetoolsProductAttributeSchema>
-  >,
-> = {
-  readonly [ProductTypeKey in keyof ProductAttributeSchemaRecord]: SameShapeProductAttributeSchema<
-    ProductAttributeSchemaRecord[ProductTypeKey]
-  >;
-};
-
-export type CommercetoolsProductAttributeBag<
-  ProductAttributeSchemaRecord extends
-    CommercetoolsProductAttributeSchemaRecord,
-  ProductTypeKey extends keyof ProductAttributeSchemaRecord,
-> = Schema.Schema.Type<ProductAttributeSchemaRecord[ProductTypeKey]>;
-
-type CommercetoolsProductAttributeSchemasInput<
-  ProductAttributeSchemaRecord extends
-    CommercetoolsProductAttributeSchemaRecord,
-> = ProductAttributeSchemaRecord &
-  CommercetoolsProductAttributeSchemas<NoInfer<ProductAttributeSchemaRecord>>;
+export type {
+  CommercetoolsProductAttributeBag,
+  CommercetoolsProductAttributeSchema,
+  CommercetoolsProductAttributeSchemas,
+  CommercetoolsVariantAttributeBag,
+} from "./product-attributes.ts";
 
 export interface CommercetoolsDestinationBaseOptions {
   readonly sdkLayer: CommercetoolsSdkLayer;
@@ -331,17 +298,7 @@ export interface CommercetoolsBusinessUnitHelpers<
 export interface CommercetoolsProductHelpers<
   ProductAttributeSchemaRecord extends
     CommercetoolsProductAttributeSchemaRecord,
-> {
-  readonly attributes: <
-    const ProductTypeKey extends keyof ProductAttributeSchemaRecord & string,
-  >(
-    productTypeKey: ProductTypeKey,
-    input: CommercetoolsProductAttributeBag<
-      ProductAttributeSchemaRecord,
-      ProductTypeKey
-    >
-  ) => Effect.Effect<Attribute[], Schema.SchemaError>;
-}
+> extends ProductHelpers<ProductAttributeSchemaRecord> {}
 
 export interface CommercetoolsDestinationHelpers<
   ProductAttributeSchemaRecord extends
@@ -769,38 +726,6 @@ const customerMetadata = (
   customerEmail: customer.email,
   customerVersion: customer.version,
 });
-
-const toProductAttributes = (attributeBag: object): Attribute[] =>
-  Object.entries(attributeBag).flatMap(([name, value]) =>
-    value === undefined ? [] : [{ name, value }]
-  );
-
-const makeProductHelpers = <
-  const ProductAttributeSchemaRecord extends
-    CommercetoolsProductAttributeSchemaRecord,
->(
-  productTypes:
-    | CommercetoolsProductAttributeSchemasInput<ProductAttributeSchemaRecord>
-    | undefined
-): CommercetoolsProductHelpers<ProductAttributeSchemaRecord> => {
-  return {
-    attributes: (productTypeKey, input) => {
-      const schema = productTypes?.[productTypeKey];
-
-      if (schema === undefined) {
-        return Effect.die(
-          new Error(
-            `Commercetools product type '${productTypeKey}' does not have a configured attribute schema`
-          )
-        );
-      }
-
-      return Schema.decodeUnknownEffect(schema, { errors: "all" })(input).pipe(
-        Effect.map(toProductAttributes)
-      );
-    },
-  };
-};
 
 function make<
   const ProductAttributeSchemaRecord extends
