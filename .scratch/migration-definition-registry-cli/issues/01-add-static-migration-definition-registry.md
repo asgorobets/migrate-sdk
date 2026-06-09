@@ -14,22 +14,22 @@ This slice should make the registry usable directly from SDK code and tests befo
 
 ## Acceptance criteria
 
-- [ ] `MigrationDefinitionRegistry.make` accepts a non-empty or empty array of executable migration definitions and returns an immutable registry value.
-- [ ] Registry construction rejects duplicate migration definition ids.
-- [ ] Registry construction rejects missing required dependency ids in the full registry graph.
-- [ ] Registry construction rejects required dependency cycles.
-- [ ] Registry construction aggregates all hard catalog issues into one schema-backed construction error.
-- [ ] Migration definitions can express required and optional dependencies.
-- [ ] Existing required dependency shorthand remains supported as a compatibility path to required dependencies.
-- [ ] Missing optional dependency ids do not fail registry construction.
-- [ ] Optional dependency cycles do not fail registry construction.
-- [ ] `list()` returns static metadata for definition id, rollback availability, required dependencies, and optional dependencies.
-- [ ] `list()` preserves declared optional dependency ids even when the referenced definition is not registered.
-- [ ] `definitions()` returns the executable definitions in registry order for SDK integrations and tests.
-- [ ] `get(id)` returns an optional definition for known and unknown ids.
-- [ ] `require(id)` returns the definition or fails through a typed Effect lookup error.
-- [ ] Migration reference lookup relationships remain separate from migration definition dependencies.
-- [ ] Relevant design docs and public exports are updated to reflect the registry catalog API.
+- [x] `MigrationDefinitionRegistry.make` accepts a non-empty or empty array of executable migration definitions and returns an immutable registry value.
+- [x] Registry construction rejects duplicate migration definition ids.
+- [x] Registry construction rejects missing required dependency ids in the full registry graph.
+- [x] Registry construction rejects required dependency cycles.
+- [x] Registry construction aggregates all hard catalog issues into one schema-backed construction error.
+- [x] Migration definitions can express required and optional dependencies.
+- [x] Existing required dependency shorthand remains supported as a compatibility path to required dependencies.
+- [x] Missing optional dependency ids do not fail registry construction.
+- [x] Optional dependency cycles do not fail registry construction.
+- [x] `list()` returns static metadata for definition id, rollback availability, required dependencies, and optional dependencies.
+- [x] `list()` preserves declared optional dependency ids even when the referenced definition is not registered.
+- [x] `definitions()` returns the executable definitions in registry order for SDK integrations and tests.
+- [x] `get(id)` returns an optional definition for known and unknown ids.
+- [x] `require(id)` returns the definition or fails through a typed Effect lookup error.
+- [x] Migration reference lookup relationships remain separate from migration definition dependencies.
+- [x] Relevant design docs and public exports are updated to reflect the registry catalog API.
 
 ## Blocked by
 

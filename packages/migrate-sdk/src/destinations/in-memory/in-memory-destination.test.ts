@@ -73,6 +73,16 @@ const assertInMemoryEntryDestinationTypes = () => {
   // @ts-expect-error unconfigured commands are not exposed.
   publishOnly.commands.upsertEntry({ title: "Hidden upsert" });
 
+  const deleteOnly = InMemoryDestinationPlugin.makeEntries({
+    commands: {
+      deleteEntry: true,
+    },
+    contentType: "article",
+  });
+  deleteOnly.commands.deleteEntry();
+  // @ts-expect-error unconfigured commands are not exposed.
+  deleteOnly.commands.publishEntry();
+
   const upsertOnly = InMemoryDestinationPlugin.makeEntries({
     commands: {
       upsertEntry: { fields: ArticleEntryFields },
@@ -145,6 +155,14 @@ describe("InMemoryDestinationPlugin.makeEntries", () => {
         contentType: "article",
       })
     ).toThrow("In-memory publishEntry command option must be true");
+    expect(() =>
+      makeEntriesUnsafe({
+        commands: {
+          deleteEntry: false,
+        },
+        contentType: "article",
+      })
+    ).toThrow("In-memory deleteEntry command option must be true");
     expect(() =>
       makeEntriesUnsafe({
         commands: {
@@ -248,6 +266,37 @@ describe("InMemoryDestinationPlugin.makeEntries", () => {
       (record: IndexRecordCommand["record"]) => IndexRecordCommand
     >();
   });
+
+  it.effect("deletes entries by content type and source identity", () =>
+    Effect.gen(function* () {
+      const fixture = InMemoryDestinationTesting.fixtureEntries({
+        contentType: "article",
+        commands: {
+          deleteEntry: true,
+          upsertEntry: { fields: ArticleEntryFields },
+        },
+      });
+      const plugin = yield* DestinationPlugin.pipe(
+        Effect.provide(fixture.destination.layer)
+      );
+
+      yield* plugin.execute(
+        fixture.destination.commands.upsertEntry({
+          title: "Article to delete",
+        }),
+        commandContext
+      );
+      yield* plugin.execute(
+        fixture.destination.commands.deleteEntry(),
+        commandContext
+      );
+
+      expect(fixture.entry("article:article-1")).toBeUndefined();
+      expect(
+        fixture.executions().map((execution) => execution.command.kind)
+      ).toEqual(["UpsertEntry", "DeleteEntry"]);
+    })
+  );
 
   it.effect("counts raw execute attempts before command schema decoding", () =>
     Effect.gen(function* () {

@@ -2638,7 +2638,7 @@ describe("runMigration", () => {
       })
   );
 
-  it.effect("does not reprocess unchanged terminal Source Items", () =>
+  it.effect("only counts previously migrated Source Items as unchanged", () =>
     Effect.gen(function* () {
       const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
@@ -2670,8 +2670,12 @@ describe("runMigration", () => {
         }),
         store: InMemoryMigrationStore.layer(storeState),
         pipeline: (source) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
             pipelineCalls.push(source.identity);
+
+            if (source.identity === "article-2") {
+              return yield* skipItem("Still skipped");
+            }
 
             return {
               kind: "UpsertEntry" as const,
@@ -2715,12 +2719,12 @@ describe("runMigration", () => {
 
       expect(summary.definitions[0]?.counts).toEqual({
         migrated: 1,
-        skipped: 0,
+        skipped: 1,
         failed: 0,
-        unchanged: 2,
+        unchanged: 1,
         needsUpdate: 0,
       });
-      expect(pipelineCalls).toEqual(["article-3"]);
+      expect(pipelineCalls).toEqual(["article-2", "article-3"]);
       expect(
         destinationState.executions.map(
           (execution) => execution.context.sourceIdentity
@@ -2744,8 +2748,8 @@ describe("runMigration", () => {
       ).toEqual(
         expect.objectContaining({
           status: "skipped",
-          lastRunId: previousRunId,
-          updatedAt: previousUpdatedAt,
+          skipReason: "Still skipped",
+          lastRunId: summary.runId,
         })
       );
     })

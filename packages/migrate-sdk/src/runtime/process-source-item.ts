@@ -248,8 +248,7 @@ const isUnchangedTerminalState = <Source>(
   previousState: MigrationItemState | null,
   sourceItem: SourceItem<Source>
 ): boolean =>
-  (previousState?.status === "migrated" ||
-    previousState?.status === "skipped") &&
+  previousState?.status === "migrated" &&
   previousState.sourceVersion === sourceItem.version;
 
 const decodeSourceItem = <Source>(

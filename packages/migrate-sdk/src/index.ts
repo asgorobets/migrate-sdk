@@ -193,6 +193,8 @@ export type {
 
 export { InMemoryDestinationPlugin } from "./destinations/in-memory/in-memory-destination.ts";
 export type {
+  InMemoryDeleteEntryCommand,
+  InMemoryDeleteEntryCommandOptions,
   InMemoryEntryCommand,
   InMemoryEntryDestination,
   InMemoryEntryDestinationCommandOptions,
