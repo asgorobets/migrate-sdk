@@ -15,7 +15,14 @@ export type CommercetoolsBusinessUnitSelector = CommercetoolsResourceSelector;
 
 export type CommercetoolsCustomerSelector = CommercetoolsResourceSelector;
 
+export type CommercetoolsInventoryEntrySelector = CommercetoolsResourceSelector;
+
 export type CommercetoolsProductSelector = CommercetoolsResourceSelector;
+
+export type CommercetoolsProductSelectionSelector =
+  CommercetoolsResourceSelector;
+
+export type CommercetoolsStoreSelector = CommercetoolsResourceSelector;
 
 export const CommercetoolsResourceSelectorSchema = Schema.Union([
   Schema.Struct({
@@ -34,5 +41,14 @@ export const CommercetoolsBusinessUnitSelectorSchema =
 export const CommercetoolsCustomerSelectorSchema =
   CommercetoolsResourceSelectorSchema;
 
+export const CommercetoolsInventoryEntrySelectorSchema =
+  CommercetoolsResourceSelectorSchema;
+
 export const CommercetoolsProductSelectorSchema =
+  CommercetoolsResourceSelectorSchema;
+
+export const CommercetoolsProductSelectionSelectorSchema =
+  CommercetoolsResourceSelectorSchema;
+
+export const CommercetoolsStoreSelectorSchema =
   CommercetoolsResourceSelectorSchema;

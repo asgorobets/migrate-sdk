@@ -71,6 +71,43 @@ const assertBusinessUnitUpdateActionTypes = () => {
     name: "repoTaxId",
     value: "123",
   });
+  update.action({
+    action: "addAssociate",
+    associate: {
+      associateRoleAssignments: [
+        {
+          associateRole: {
+            key: "buyer-admin",
+            typeId: "associate-role",
+          },
+          inheritance: "Enabled",
+        },
+      ],
+      customer: {
+        key: "repo-buyer",
+        typeId: "customer",
+      },
+    },
+  });
+  update.action({
+    action: "setAssociates",
+    associates: [
+      {
+        associateRoleAssignments: [
+          {
+            associateRole: {
+              key: "buyer-admin",
+              typeId: "associate-role",
+            },
+          },
+        ],
+        customer: {
+          key: "repo-buyer",
+          typeId: "customer",
+        },
+      },
+    ],
+  });
 
   // @ts-expect-error The Commerce Tools API requires addressId or addressKey.
   update.action({
@@ -94,6 +131,10 @@ const assertBusinessUnitUpdateActionTypes = () => {
       kind: "id",
     },
     version: 1,
+  });
+  // @ts-expect-error Business unit addAssociate actions require associate.
+  update.action({
+    action: "addAssociate",
   });
 
   // @ts-expect-error The refined action type requires addressId or addressKey.

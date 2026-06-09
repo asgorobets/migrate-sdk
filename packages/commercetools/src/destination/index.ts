@@ -44,6 +44,24 @@ export type {
   ProductUpdateActionName,
 } from "./product-actions.ts";
 export type {
+  InventoryEntryUpdateAction,
+  InventoryEntryUpdateActionByName,
+  InventoryEntryUpdateActionInput,
+  InventoryEntryUpdateActionName,
+} from "./inventory-actions.ts";
+export type {
+  ProductSelectionUpdateAction,
+  ProductSelectionUpdateActionByName,
+  ProductSelectionUpdateActionInput,
+  ProductSelectionUpdateActionName,
+} from "./product-selection-actions.ts";
+export type {
+  StoreUpdateAction,
+  StoreUpdateActionByName,
+  StoreUpdateActionInput,
+  StoreUpdateActionName,
+} from "./store-actions.ts";
+export type {
   CustomerUpdateActionBuilder,
   CustomerUpdateCommandShape,
   CommercetoolsCustomerCommands,
@@ -59,6 +77,22 @@ export {
   CreateCustomerDraftCommand,
   UpdateCustomerCommand,
 } from "./customers.ts";
+export type {
+  CommercetoolsInventoryEntryCommands,
+  CreateInventoryEntryDraftCommand as CreateInventoryEntryDraftCommandType,
+  EmptyInventoryEntryUpdateActionBuilder,
+  InventoryEntryUpdateActionBuilder,
+  InventoryEntryUpdateCommandShape,
+  InventoryEntryUpdateFactory,
+  InventoryEntryUpdateInput,
+  InventoryEntryUpdateWithActionsInput,
+  NonEmptyInventoryEntryUpdateActions,
+  UpdateInventoryEntryCommand as UpdateInventoryEntryCommandType,
+} from "./inventory.ts";
+export {
+  CreateInventoryEntryDraftCommand,
+  UpdateInventoryEntryCommand,
+} from "./inventory.ts";
 export type {
   CommercetoolsDestination,
   CommercetoolsDestinationBaseOptions,
@@ -105,18 +139,53 @@ export type {
   UpdateProductCommand as UpdateProductCommandType,
 } from "./products.ts";
 export type {
+  CommercetoolsProductSelectionCommands,
+  CreateProductSelectionDraftCommand as CreateProductSelectionDraftCommandType,
+  EmptyProductSelectionUpdateActionBuilder,
+  NonEmptyProductSelectionUpdateActions,
+  ProductSelectionUpdateActionBuilder,
+  ProductSelectionUpdateCommandShape,
+  ProductSelectionUpdateFactory,
+  ProductSelectionUpdateInput,
+  ProductSelectionUpdateWithActionsInput,
+  UpdateProductSelectionCommand as UpdateProductSelectionCommandType,
+} from "./product-selections.ts";
+export type {
+  CommercetoolsStoreCommands,
+  CreateStoreDraftCommand as CreateStoreDraftCommandType,
+  EmptyStoreUpdateActionBuilder,
+  NonEmptyStoreUpdateActions,
+  StoreUpdateActionBuilder,
+  StoreUpdateCommandShape,
+  StoreUpdateFactory,
+  StoreUpdateInput,
+  StoreUpdateWithActionsInput,
+  UpdateStoreCommand as UpdateStoreCommandType,
+} from "./stores.ts";
+export type {
   CommercetoolsBusinessUnitSelector,
   CommercetoolsCustomerSelector,
+  CommercetoolsInventoryEntrySelector,
   CommercetoolsProductSelector,
+  CommercetoolsProductSelectionSelector,
+  CommercetoolsStoreSelector,
 } from "./selectors.ts";
 export {
   CommercetoolsBusinessUnitSelectorSchema,
   CommercetoolsCustomerSelectorSchema,
+  CommercetoolsInventoryEntrySelectorSchema,
   CommercetoolsProductSelectorSchema,
+  CommercetoolsProductSelectionSelectorSchema,
+  CommercetoolsStoreSelectorSchema,
 } from "./selectors.ts";
 export { CommercetoolsDestinationPlugin } from "./plugin.ts";
+export {
+  CreateProductSelectionDraftCommand,
+  UpdateProductSelectionCommand,
+} from "./product-selections.ts";
 export {
   CreateProductDraftCommand,
   PublishProductCommand,
   UpdateProductCommand,
 } from "./products.ts";
+export { CreateStoreDraftCommand, UpdateStoreCommand } from "./stores.ts";

@@ -25,7 +25,25 @@ import {
   makeCustomerUpdate,
   type UpdateCustomerCommand,
 } from "./customers.ts";
+import {
+  type CommercetoolsInventoryEntryCommands,
+  type CreateInventoryEntryDraftCommand,
+  handleCreateInventoryEntryDraft,
+  handleUpdateInventoryEntry,
+  inventoryCommandGroup,
+  makeInventoryEntryUpdate,
+  type UpdateInventoryEntryCommand,
+} from "./inventory.ts";
 import { makeProductHelpers } from "./product-attributes.ts";
+import {
+  type CommercetoolsProductSelectionCommands,
+  type CreateProductSelectionDraftCommand,
+  handleCreateProductSelectionDraft,
+  handleUpdateProductSelection,
+  makeProductSelectionUpdate,
+  productSelectionCommandGroup,
+  type UpdateProductSelectionCommand,
+} from "./product-selections.ts";
 import {
   type CommercetoolsProductAttributeSchemaRecord,
   type CommercetoolsProductAttributeSchemasInput,
@@ -40,6 +58,15 @@ import {
   productCommandGroup,
   type UpdateProductCommand,
 } from "./products.ts";
+import {
+  type CommercetoolsStoreCommands,
+  type CreateStoreDraftCommand,
+  handleCreateStoreDraft,
+  handleUpdateStore,
+  makeStoreUpdate,
+  storeCommandGroup,
+  type UpdateStoreCommand,
+} from "./stores.ts";
 
 export interface CommercetoolsDestinationBaseOptions {
   readonly sdkLayer: CommercetoolsSdkLayer;
@@ -93,14 +120,23 @@ export type CommercetoolsDestinationCommand =
   | UpdateBusinessUnitCommand
   | CreateCustomerDraftCommand
   | UpdateCustomerCommand
+  | CreateInventoryEntryDraftCommand
+  | UpdateInventoryEntryCommand
   | CreateProductDraftCommand
   | PublishProductCommand
-  | UpdateProductCommand;
+  | UpdateProductCommand
+  | CreateProductSelectionDraftCommand
+  | UpdateProductSelectionCommand
+  | CreateStoreDraftCommand
+  | UpdateStoreCommand;
 
 export interface CommercetoolsDestinationCommands {
   readonly businessUnits: CommercetoolsBusinessUnitCommands;
   readonly customers: CommercetoolsCustomerCommands;
+  readonly inventory: CommercetoolsInventoryEntryCommands;
+  readonly productSelections: CommercetoolsProductSelectionCommands;
   readonly products: CommercetoolsProductCommands;
+  readonly stores: CommercetoolsStoreCommands;
 }
 
 export interface CommercetoolsDestinationHelpers<
@@ -129,7 +165,10 @@ export interface CommercetoolsDestination<
 const pluginDefinition = defineDestinationPlugin("commercetools").addGroup(
   businessUnitCommandGroup,
   customerCommandGroup,
-  productCommandGroup
+  inventoryCommandGroup,
+  productCommandGroup,
+  productSelectionCommandGroup,
+  storeCommandGroup
 );
 
 const implementCommercetoolsDestination = () =>
@@ -145,11 +184,29 @@ const implementCommercetoolsDestination = () =>
           .handle("CreateCustomerDraft", handleCreateCustomerDraft)
           .handle("UpdateCustomer", handleUpdateCustomer)
       )
+      .group("inventory", (inventoryHandlers) =>
+        inventoryHandlers
+          .handle("CreateInventoryEntryDraft", handleCreateInventoryEntryDraft)
+          .handle("UpdateInventoryEntry", handleUpdateInventoryEntry)
+      )
       .group("products", (productHandlers) =>
         productHandlers
           .handle("CreateProductDraft", handleCreateProductDraft)
           .handle("PublishProduct", handlePublishProduct)
           .handle("UpdateProduct", handleUpdateProduct)
+      )
+      .group("productSelections", (productSelectionHandlers) =>
+        productSelectionHandlers
+          .handle(
+            "CreateProductSelectionDraft",
+            handleCreateProductSelectionDraft
+          )
+          .handle("UpdateProductSelection", handleUpdateProductSelection)
+      )
+      .group("stores", (storeHandlers) =>
+        storeHandlers
+          .handle("CreateStoreDraft", handleCreateStoreDraft)
+          .handle("UpdateStore", handleUpdateStore)
       )
   );
 
@@ -218,9 +275,21 @@ function make<
         ...implementedPlugin.commands.customers,
         update: makeCustomerUpdate,
       },
+      inventory: {
+        ...implementedPlugin.commands.inventory,
+        update: makeInventoryEntryUpdate,
+      },
       products: {
         ...implementedPlugin.commands.products,
         update: makeProductUpdate,
+      },
+      productSelections: {
+        ...implementedPlugin.commands.productSelections,
+        update: makeProductSelectionUpdate,
+      },
+      stores: {
+        ...implementedPlugin.commands.stores,
+        update: makeStoreUpdate,
       },
     },
     helpers: {
