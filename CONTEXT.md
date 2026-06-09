@@ -37,6 +37,18 @@ The result of processing one source item during a migration run.
 **Source Plugin**:
 A plugin that emits source items from a source system.
 
+**Document Source**:
+A source plugin that emits source items selected from a parsed structured document.
+
+**Document Fetcher**:
+The document source component that retrieves a structured resource for a parser.
+
+**Document Parser**:
+The document source component that parses a fetched resource into a schema-backed document.
+
+**Document Selector**:
+The document source component that selects source item payloads, and optional parent context, from a parsed document.
+
 **Destination Plugin**:
 A plugin that executes destination commands against a destination system.
 
