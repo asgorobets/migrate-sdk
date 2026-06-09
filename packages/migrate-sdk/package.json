@@ -10,6 +10,7 @@
     "./destinations/in-memory/testing": "./src/destinations/in-memory/testing.ts",
     "./internal/*": null,
     "./sources/csv": "./src/sources/csv/index.ts",
+    "./sources/document": "./src/sources/document/index.ts",
     "./sources/json-file": "./src/sources/json-file/index.ts",
     "./sources/in-memory": "./src/sources/in-memory/index.ts",
     "./stores/file": "./src/stores/file/index.ts",
