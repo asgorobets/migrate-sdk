@@ -6,6 +6,7 @@ export {
   DocumentFileTextFetcherCursor,
 } from "./document-fetcher.ts";
 export { DocumentParsers } from "./document-parser.ts";
+export { DocumentSourcePlugin } from "./document-source.ts";
 export type {
   DocumentFetcher,
   DocumentFetcherPlatform,
@@ -13,3 +14,19 @@ export type {
   DocumentFileTextFetcherOptions,
 } from "./document-fetcher.ts";
 export type { DocumentParser } from "./document-parser.ts";
+export type {
+  DocumentSourceCursor,
+  DocumentSourceDirectLookupResult,
+  DocumentSourceIdentity,
+  DocumentSourceIdentityScalar,
+  DocumentSourceIdentityValue,
+  DocumentSourceItemSelector,
+  DocumentSourceLookup,
+  DocumentSourceSchema,
+  DocumentSourceSchemaCursor,
+  DocumentSourceSchemaSelection,
+  DocumentSourceSelectedItem,
+  DocumentSourceSelectedSubitem,
+  DocumentSourceSubitemSelector,
+  DocumentSourceVersion,
+} from "./document-source.ts";

@@ -1,6 +1,6 @@
 # Compose Document Source From Fetcher And Parser
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Parent
 
@@ -22,34 +22,34 @@ slice's correctness, not a follow-up design ticket.
 
 ## Acceptance criteria
 
-- [ ] `DocumentSourcePlugin.make` composes a fetcher, parser, selector,
+- [x] `DocumentSourcePlugin.make` composes a fetcher, parser, selector,
       identity, lookup, and version into the existing configured Source Plugin
       runtime shape.
-- [ ] Top-level selectors emit selected payloads shaped as `{ item }`.
-- [ ] Nested selectors emit selected payloads shaped as `{ parent, item }`.
-- [ ] Selector callback authoring is inferred from the parser document schema.
-- [ ] The transformation pipeline receives the normal source item envelope whose
+- [x] Top-level selectors emit selected payloads shaped as `{ item }`.
+- [x] Nested selectors emit selected payloads shaped as `{ parent, item }`.
+- [x] Selector callback authoring is inferred from the parser document schema.
+- [x] The transformation pipeline receives the normal source item envelope whose
       payload is the selected document payload.
-- [ ] Destination projection remains in the transformation pipeline and is not
+- [x] Destination projection remains in the transformation pipeline and is not
       moved into source configuration.
-- [ ] Source identity is derived from explicit identity configuration.
-- [ ] Source version is derived from explicit version configuration.
-- [ ] Scan lookup reads resources, parses documents, applies selectors, derives
+- [x] Source identity is derived from explicit identity configuration.
+- [x] Source version is derived from explicit version configuration.
+- [x] Scan lookup reads resources, parses documents, applies selectors, derives
       identities, and matches the requested source identity.
-- [ ] Direct lookup reads a resource by identity and still parses, selects,
+- [x] Direct lookup reads a resource by identity and still parses, selects,
       derives identity, and verifies that the requested identity is present.
-- [ ] Direct lookup not-found returns `null` at the document source boundary.
-- [ ] Direct lookup failures remain source plugin failures.
-- [ ] Duplicate selected source identities fail for normal reads and lookup.
-- [ ] The document source owns one cursor envelope combining fetcher cursor,
+- [x] Direct lookup not-found returns `null` at the document source boundary.
+- [x] Direct lookup failures remain source plugin failures.
+- [x] Duplicate selected source identities fail for normal reads and lookup.
+- [x] The document source owns one cursor envelope combining fetcher cursor,
       parsed document index, selected item index, and optional resource
       fingerprint.
-- [ ] Zero-document parser output exhausts the current resource and advances to
+- [x] Zero-document parser output exhausts the current resource and advances to
       the next fetcher cursor without emitting source items.
-- [ ] Parser failures are wrapped with document source resource context such as
+- [x] Parser failures are wrapped with document source resource context such as
       resource identity, fetcher cursor, document index, or fingerprint when
       available.
-- [ ] Tests cover an end-to-end file text + JSON source with both top-level and
+- [x] Tests cover an end-to-end file text + JSON source with both top-level and
       nested selectors.
 
 ## Blocked by
