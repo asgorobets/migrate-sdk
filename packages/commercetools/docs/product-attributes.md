@@ -311,7 +311,7 @@ const variantAttributeActions = yield* destination.helpers.products
   .toActions({ sku: "book-sku" });
 
 const command = destination.commands.products.update.withActions({
-  selector: { key: "book" },
+  selector: { kind: "key", key: "book" },
   version,
   actions: [...productAttributeActions, ...variantAttributeActions],
 }).command();

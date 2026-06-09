@@ -9,16 +9,20 @@ export type {
   SameShapeCustomFieldSchema,
 } from "./custom-fields.ts";
 export type {
-  BusinessUnitUpdateActionBuilder,
+  BusinessUnitUpdateAction,
   BusinessUnitUpdateActionByName,
   BusinessUnitUpdateActionInput,
   BusinessUnitUpdateActionName,
+} from "./business-unit-actions.ts";
+export type {
+  BusinessUnitUpdateActionBuilder,
   BusinessUnitUpdateCommandShape,
+  EmptyBusinessUnitUpdateActionBuilder,
   BusinessUnitUpdateFactory,
   BusinessUnitUpdateInput,
   BusinessUnitUpdateWithActionsInput,
   NonEmptyBusinessUnitUpdateActions,
-} from "./business-unit-update-builder.ts";
+} from "./plugin.ts";
 export type {
   CustomerUpdateAction,
   CustomerUpdateActionByName,

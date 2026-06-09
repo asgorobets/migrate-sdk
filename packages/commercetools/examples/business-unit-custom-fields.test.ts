@@ -1,7 +1,10 @@
 import type { BusinessUnitDraft } from "@commercetools/platform-sdk";
 import { describe, expect, it } from "@effect/vitest";
 import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
-import { CommercetoolsDestinationPlugin } from "@migrate-sdk/commercetools/destination";
+import {
+  type BusinessUnitUpdateActionByName,
+  CommercetoolsDestinationPlugin,
+} from "@migrate-sdk/commercetools/destination";
 import { makeRecordingCommercetoolsApiRoot } from "@migrate-sdk/commercetools/testing";
 import { Effect, Schema } from "effect";
 import {
@@ -46,6 +49,60 @@ const makeDestination = () => {
     destination,
     recording,
   };
+};
+
+const assertBusinessUnitUpdateActionTypes = () => {
+  const { destination } = makeDestination();
+  const update = destination.commands.businessUnits.update({
+    selector: {
+      id: "recording-business-unit-id",
+      kind: "id",
+    },
+    version: 1,
+  });
+
+  update.action({
+    action: "setDefaultBillingAddress",
+    addressKey: "billing-address",
+  });
+  update.action({
+    action: "setAddressCustomField",
+    addressId: "address-id",
+    name: "repoTaxId",
+    value: "123",
+  });
+
+  // @ts-expect-error The Commerce Tools API requires addressId or addressKey.
+  update.action({
+    action: "setDefaultBillingAddress",
+  });
+  update.action({
+    action: "setAddressCustomField",
+    // @ts-expect-error Business unit address custom field actions require addressId.
+    addressKey: "address-key",
+    name: "repoTaxId",
+  });
+  destination.commands.businessUnits.update.withActions({
+    actions: [
+      // @ts-expect-error Raw actions use the same refined business unit action type.
+      {
+        action: "setDefaultBillingAddress",
+      },
+    ],
+    selector: {
+      id: "recording-business-unit-id",
+      kind: "id",
+    },
+    version: 1,
+  });
+
+  // @ts-expect-error The refined action type requires addressId or addressKey.
+  const missingDefaultBillingSelector: BusinessUnitUpdateActionByName<"setDefaultBillingAddress"> =
+    {
+      action: "setDefaultBillingAddress",
+    };
+
+  return missingDefaultBillingSelector;
 };
 
 describe("business unit custom field helpers", () => {
@@ -161,7 +218,8 @@ describe("business unit custom field helpers", () => {
             },
             version: Number(created.destinationVersion),
           })
-          .setContactEmail({
+          .action({
+            action: "setContactEmail",
             contactEmail: "buyer@example.com",
           })
           .command();
@@ -182,4 +240,27 @@ describe("business unit custom field helpers", () => {
         });
       })
   );
+
+  it("types business unit actions from the refined SDK action union", () => {
+    const { destination } = makeDestination();
+    expect(assertBusinessUnitUpdateActionTypes).toBeTypeOf("function");
+    const update = destination.commands.businessUnits.update({
+      selector: {
+        id: "recording-business-unit-id",
+        kind: "id",
+      },
+      version: 1,
+    });
+    const defaultAddressCommand = update
+      .action({
+        action: "setDefaultBillingAddress",
+        addressKey: "billing-address",
+      })
+      .command();
+
+    expect(defaultAddressCommand.actions[0]).toEqual({
+      action: "setDefaultBillingAddress",
+      addressKey: "billing-address",
+    });
+  });
 });

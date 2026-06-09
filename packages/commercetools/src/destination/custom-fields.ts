@@ -4,9 +4,9 @@ import type {
 } from "@commercetools/platform-sdk";
 import { Effect, Schema } from "effect";
 import {
-  type NonEmptyBusinessUnitUpdateActions,
-  nonEmptyBusinessUnitUpdateActions,
-} from "./business-unit-update-builder.ts";
+  type NonEmptyUpdateActions,
+  nonEmptyUpdateActions,
+} from "./update-command-builder.ts";
 
 export type CommercetoolsCustomFieldSchema =
   Schema.Struct<Schema.Struct.Fields> &
@@ -60,7 +60,7 @@ export interface BusinessUnitCustomFieldBuilder<CustomFieldSchema> {
     value: FieldValue<CustomFieldSchema, NoInfer<Name>>
   ) => BusinessUnitCustomFieldBuilder<CustomFieldSchema>;
   readonly toActions: () => Effect.Effect<
-    NonEmptyBusinessUnitUpdateActions<BusinessUnitSetCustomFieldAction>,
+    NonEmptyBusinessUnitCustomFieldActions,
     Schema.SchemaError
   >;
   readonly toDraft: () => Effect.Effect<CustomFieldsDraft, Schema.SchemaError>;
@@ -85,6 +85,9 @@ type ValidatedFieldOperation =
       readonly kind: "unset";
       readonly name: string;
     };
+
+type NonEmptyBusinessUnitCustomFieldActions =
+  NonEmptyUpdateActions<BusinessUnitSetCustomFieldAction>;
 
 const fieldSchema = (
   schema: CommercetoolsCustomFieldSchema,
@@ -167,8 +170,8 @@ const toDraftFields = (
 
 const toSetCustomFieldActions = (
   operations: readonly ValidatedFieldOperation[]
-): NonEmptyBusinessUnitUpdateActions<BusinessUnitSetCustomFieldAction> =>
-  nonEmptyBusinessUnitUpdateActions(
+): NonEmptyBusinessUnitCustomFieldActions =>
+  nonEmptyUpdateActions(
     operations.map((operation) =>
       operation.kind === "set"
         ? {
@@ -180,7 +183,8 @@ const toSetCustomFieldActions = (
             action: "setCustomField",
             name: operation.name,
           }
-    )
+    ),
+    "Business unit custom fields"
   );
 
 const makeBuilder = <CustomFieldSchema extends CommercetoolsCustomFieldSchema>(

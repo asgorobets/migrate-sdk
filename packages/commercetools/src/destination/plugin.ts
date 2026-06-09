@@ -3,7 +3,6 @@ import type {
   BusinessUnit,
   BusinessUnitDraft,
   BusinessUnitUpdate,
-  BusinessUnitUpdateAction,
   Customer,
   CustomerDraft,
   CustomerUpdate,
@@ -27,12 +26,7 @@ import {
   type CommercetoolsSdkError,
   type CommercetoolsSdkLayer,
 } from "../sdk.ts";
-import {
-  type BusinessUnitUpdateCommandShape,
-  type BusinessUnitUpdateFactory,
-  makeBusinessUnitUpdate,
-  type NonEmptyBusinessUnitUpdateActions,
-} from "./business-unit-update-builder.ts";
+import type { BusinessUnitUpdateAction } from "./business-unit-actions.ts";
 import {
   type BusinessUnitCustomFieldsHelper,
   type CommercetoolsCustomFieldSchema,
@@ -47,6 +41,7 @@ import {
   type ProductUpdateFactory,
 } from "./product-update-builder.ts";
 import type {
+  CommercetoolsBusinessUnitSelector,
   CommercetoolsCustomerSelector,
   CommercetoolsProductSelector,
 } from "./selectors.ts";
@@ -164,6 +159,46 @@ export interface CreateBusinessUnitDraftCommand {
   readonly draft: BusinessUnitDraft;
   readonly kind: "CreateBusinessUnitDraft";
 }
+
+export type NonEmptyBusinessUnitUpdateActions<
+  Action extends BusinessUnitUpdateAction = BusinessUnitUpdateAction,
+> = NonEmptyUpdateActions<Action>;
+
+export type BusinessUnitUpdateCommandShape<
+  Action extends BusinessUnitUpdateAction = BusinessUnitUpdateAction,
+> = UpdateCommandShape<
+  "UpdateBusinessUnit",
+  CommercetoolsBusinessUnitSelector,
+  Action
+>;
+
+export type BusinessUnitUpdateInput =
+  UpdateInput<CommercetoolsBusinessUnitSelector>;
+
+export type BusinessUnitUpdateWithActionsInput<
+  Action extends BusinessUnitUpdateAction = BusinessUnitUpdateAction,
+> = UpdateWithActionsInput<CommercetoolsBusinessUnitSelector, Action>;
+
+export type EmptyBusinessUnitUpdateActionBuilder = EmptyUpdateActionBuilder<
+  "UpdateBusinessUnit",
+  CommercetoolsBusinessUnitSelector,
+  BusinessUnitUpdateAction
+>;
+
+export type BusinessUnitUpdateActionBuilder<
+  Action extends BusinessUnitUpdateAction = BusinessUnitUpdateAction,
+> = UpdateActionBuilder<
+  "UpdateBusinessUnit",
+  CommercetoolsBusinessUnitSelector,
+  BusinessUnitUpdateAction,
+  Action
+>;
+
+export type BusinessUnitUpdateFactory = UpdateCommandFactory<
+  "UpdateBusinessUnit",
+  CommercetoolsBusinessUnitSelector,
+  BusinessUnitUpdateAction
+>;
 
 export type UpdateBusinessUnitCommand = BusinessUnitUpdateCommandShape;
 
@@ -322,23 +357,11 @@ const hasStringField = (value: UnknownRecord, field: string): boolean =>
 const hasIntegerField = (value: UnknownRecord, field: string): boolean =>
   typeof value[field] === "number" && Number.isInteger(value[field]);
 
-const hasBooleanField = (value: UnknownRecord, field: string): boolean =>
-  typeof value[field] === "boolean";
-
 const hasRecordField = (value: UnknownRecord, field: string): boolean =>
   isRecord(value[field]);
 
 const hasArrayField = (value: UnknownRecord, field: string): boolean =>
   Array.isArray(value[field]);
-
-const hasStringIdOrKey = (
-  value: UnknownRecord,
-  idField: string,
-  keyField: string
-): boolean =>
-  (hasOwnField(value, idField) || hasOwnField(value, keyField)) &&
-  (!hasOwnField(value, idField) || hasStringField(value, idField)) &&
-  (!hasOwnField(value, keyField) || hasStringField(value, keyField));
 
 const hasVariantSelector = (value: UnknownRecord): boolean =>
   hasIntegerField(value, "variantId") || hasStringField(value, "sku");
@@ -412,97 +435,26 @@ const isPositiveInteger = (value: unknown): value is number =>
 const isProductPublishScope = (value: unknown): value is ProductPublishScope =>
   typeof value === "string";
 
-type BusinessUnitUpdateActionGuard = (value: UnknownRecord) => boolean;
-
-const businessUnitUpdateActionGuardsByName = {
-  addAddress: (value) => hasRecordField(value, "address"),
-  addAssociate: (value) => hasRecordField(value, "associate"),
-  addBillingAddressId: (value) =>
-    hasStringIdOrKey(value, "addressId", "addressKey"),
-  addCustomerGroupAssignment: (value) =>
-    hasRecordField(value, "customerGroupAssignment"),
-  addShippingAddressId: (value) =>
-    hasStringIdOrKey(value, "addressId", "addressKey"),
-  addStore: (value) => hasRecordField(value, "store"),
-  changeAddress: (value) =>
-    hasStringIdOrKey(value, "addressId", "addressKey") &&
-    hasRecordField(value, "address"),
-  changeApprovalRuleMode: (value) => hasStringField(value, "approvalRuleMode"),
-  changeAssociate: (value) => hasRecordField(value, "associate"),
-  changeAssociateMode: (value) =>
-    hasStringField(value, "associateMode") &&
-    hasBooleanField(value, "makeInheritedAssociatesExplicit"),
-  changeName: (value) => hasStringField(value, "name"),
-  changeParentUnit: (value) => hasRecordField(value, "parentUnit"),
-  changeStatus: (value) => hasStringField(value, "status"),
-  removeAddress: (value) => hasStringIdOrKey(value, "addressId", "addressKey"),
-  removeAssociate: (value) => hasRecordField(value, "customer"),
-  removeBillingAddressId: (value) =>
-    hasStringIdOrKey(value, "addressId", "addressKey"),
-  removeCustomerGroupAssignment: (value) =>
-    hasRecordField(value, "customerGroup"),
-  removeShippingAddressId: (value) =>
-    hasStringIdOrKey(value, "addressId", "addressKey"),
-  removeStore: (value) => hasRecordField(value, "store"),
-  setAddressCustomField: (value) =>
-    hasStringField(value, "addressId") && hasStringField(value, "name"),
-  setAddressCustomType: (value) => hasStringField(value, "addressId"),
-  setAssociates: (value) => hasArrayField(value, "associates"),
-  setContactEmail: () => true,
-  setCustomField: (value) => hasStringField(value, "name"),
-  setCustomType: () => true,
-  setCustomerGroupAssignments: () => true,
-  setDefaultBillingAddress: (value) =>
-    hasOwnField(value, "addressId") || hasOwnField(value, "addressKey")
-      ? hasStringIdOrKey(value, "addressId", "addressKey")
-      : true,
-  setDefaultShippingAddress: (value) =>
-    hasOwnField(value, "addressId") || hasOwnField(value, "addressKey")
-      ? hasStringIdOrKey(value, "addressId", "addressKey")
-      : true,
-  setStoreMode: (value) => hasStringField(value, "storeMode"),
-  setStores: (value) => hasArrayField(value, "stores"),
-  setUnitType: (value) => hasStringField(value, "unitType"),
-} satisfies Record<
-  BusinessUnitUpdateAction["action"],
-  BusinessUnitUpdateActionGuard
->;
-
-const businessUnitUpdateActionGuards = new Map<
-  string,
-  BusinessUnitUpdateActionGuard
->(Object.entries(businessUnitUpdateActionGuardsByName));
-
-const isBusinessUnitUpdateAction = (
+const isSdkUpdateAction = <Action extends { readonly action: string }>(
   value: unknown
-): value is BusinessUnitUpdateAction => {
-  if (!isRecord(value) || typeof value.action !== "string") {
-    return false;
-  }
+): value is Action => isRecord(value) && hasStringField(value, "action");
 
-  const guard = businessUnitUpdateActionGuards.get(value.action);
-
-  return guard?.(value) === true;
-};
+const isNonEmptySdkUpdateActions = <Action extends { readonly action: string }>(
+  value: unknown
+): value is NonEmptyUpdateActions<Action> =>
+  Array.isArray(value) &&
+  value.length > 0 &&
+  value.every(isSdkUpdateAction<Action>);
 
 const isBusinessUnitUpdateActions = (
   value: unknown
 ): value is NonEmptyBusinessUnitUpdateActions =>
-  Array.isArray(value) &&
-  value.length > 0 &&
-  value.every(isBusinessUnitUpdateAction);
-
-const isCustomerUpdateAction = (
-  value: unknown
-): value is CustomerUpdateAction =>
-  isRecord(value) && hasStringField(value, "action");
+  isNonEmptySdkUpdateActions<BusinessUnitUpdateAction>(value);
 
 const isCustomerUpdateActions = (
   value: unknown
 ): value is NonEmptyCustomerUpdateActions =>
-  Array.isArray(value) &&
-  value.length > 0 &&
-  value.every(isCustomerUpdateAction);
+  isNonEmptySdkUpdateActions<CustomerUpdateAction>(value);
 
 type ProductUpdateActionGuard = (value: UnknownRecord) => boolean;
 
@@ -776,6 +728,15 @@ const updateBusinessUnitCommand = defineDestinationCommand(
     schema: UpdateBusinessUnitCommand,
   }
 );
+
+const makeBusinessUnitUpdate = makeUpdateCommandFactory<
+  "UpdateBusinessUnit",
+  CommercetoolsBusinessUnitSelector,
+  BusinessUnitUpdateAction
+>({
+  kind: "UpdateBusinessUnit",
+  label: "Business unit update",
+});
 
 const createCustomerDraftCommand = defineDestinationCommand(
   "CreateCustomerDraft",

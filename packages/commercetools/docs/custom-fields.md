@@ -181,6 +181,7 @@ const custom = yield* destination.helpers.businessUnits.customFields
 const command = destination.commands.businessUnits.createDraft({
   key: "buyer-org",
   name: "Buyer Org",
+  unitType: "Company",
   custom,
 });
 ```
@@ -196,13 +197,13 @@ const actions = yield* destination.helpers.businessUnits.customFields
   .toActions();
 
 const command = destination.commands.businessUnits.update.withActions({
-  selector: { key: "buyer-org" },
+  selector: { kind: "key", key: "buyer-org" },
   version,
   actions,
 }).command();
 ```
 
-The lower-level chainable command builders remain useful for mixed updates:
+The chainable update builder remains useful for mixed SDK-shaped updates:
 
 ```ts
 const customFieldActions = yield* destination.helpers.businessUnits.customFields
@@ -213,11 +214,11 @@ const customFieldActions = yield* destination.helpers.businessUnits.customFields
 
 const command = destination.commands.businessUnits.update
   .withActions({
-    selector: { key: "buyer-org" },
+    selector: { kind: "key", key: "buyer-org" },
     version,
     actions: customFieldActions,
   })
-  .setContactEmail({ contactEmail: "buyer@example.com" })
+  .action({ action: "setContactEmail", contactEmail: "buyer@example.com" })
   .command();
 ```
 
