@@ -1,73 +1,45 @@
-import type {
-  BusinessUnit,
-  BusinessUnitDraft,
-  BusinessUnitUpdate,
-  Customer,
-  CustomerDraft,
-  CustomerUpdate,
-  Product,
-  ProductDraft,
-  ProductPublishAction,
-  ProductPublishScope,
-  ProductUpdate,
-} from "@commercetools/platform-sdk";
-import { Effect, Schema } from "effect";
+import type { ConfiguredDestinationPlugin } from "migrate-sdk";
+import { defineDestinationPlugin } from "migrate-sdk";
+import type { CommercetoolsSdkLayer } from "../sdk.ts";
 import {
-  type ConfiguredDestinationPlugin,
-  DestinationPluginError,
-  defineDestinationCommand,
-  defineDestinationCommandGroup,
-  defineDestinationPlugin,
-} from "migrate-sdk";
+  businessUnitCommandGroup,
+  type CommercetoolsBusinessUnitCommands,
+  type CommercetoolsBusinessUnitHelpers,
+  type CreateBusinessUnitDraftCommand,
+  handleCreateBusinessUnitDraft,
+  handleUpdateBusinessUnit,
+  makeBusinessUnitUpdate,
+  type UpdateBusinessUnitCommand,
+} from "./business-units.ts";
 import {
-  CommercetoolsSdk,
-  type CommercetoolsSdkError,
-  type CommercetoolsSdkLayer,
-} from "../sdk.ts";
-import type { BusinessUnitUpdateAction } from "./business-unit-actions.ts";
-import {
-  type BusinessUnitCustomFieldsHelper,
   type CommercetoolsCustomFieldSchema,
   type CommercetoolsCustomTypeConfig,
   makeBusinessUnitCustomFieldsHelper,
 } from "./custom-fields.ts";
-import type { CustomerUpdateAction } from "./customer-actions.ts";
-import type { ProductUpdateAction } from "./product-actions.ts";
 import {
+  type CommercetoolsCustomerCommands,
+  type CreateCustomerDraftCommand,
+  customerCommandGroup,
+  handleCreateCustomerDraft,
+  handleUpdateCustomer,
+  makeCustomerUpdate,
+  type UpdateCustomerCommand,
+} from "./customers.ts";
+import { makeProductHelpers } from "./product-attributes.ts";
+import {
+  type CommercetoolsProductAttributeSchemaRecord,
   type CommercetoolsProductAttributeSchemasInput,
-  makeProductHelpers,
-  type CommercetoolsProductHelpers as ProductHelpers,
-} from "./product-attributes.ts";
-import type {
-  CommercetoolsBusinessUnitSelector,
-  CommercetoolsCustomerSelector,
-  CommercetoolsProductSelector,
-} from "./selectors.ts";
-import {
-  type EmptyUpdateActionBuilder,
-  makeUpdateCommandFactory,
-  type NonEmptyUpdateActions,
-  type UpdateActionBuilder,
-  type UpdateCommandFactory,
-  type UpdateCommandShape,
-  type UpdateInput,
-  type UpdateWithActionsInput,
-} from "./update-command-builder.ts";
-
-export type {
-  CommercetoolsBusinessUnitSelector,
-  CommercetoolsCustomerSelector,
-  CommercetoolsProductSelector,
-} from "./selectors.ts";
-
-type CommercetoolsProductAttributeSchemaRecord = object;
-
-export type {
-  CommercetoolsProductAttributeBag,
-  CommercetoolsProductAttributeSchema,
-  CommercetoolsProductAttributeSchemas,
-  CommercetoolsVariantAttributeBag,
-} from "./product-attributes.ts";
+  type CommercetoolsProductCommands,
+  type CommercetoolsProductHelpers,
+  type CreateProductDraftCommand,
+  handleCreateProductDraft,
+  handlePublishProduct,
+  handleUpdateProduct,
+  makeProductUpdate,
+  type PublishProductCommand,
+  productCommandGroup,
+  type UpdateProductCommand,
+} from "./products.ts";
 
 export interface CommercetoolsDestinationBaseOptions {
   readonly sdkLayer: CommercetoolsSdkLayer;
@@ -116,144 +88,6 @@ export type CommercetoolsDestinationOptions<
         BusinessUnitCustomFieldSchema
       >;
 
-export interface CreateBusinessUnitDraftCommand {
-  readonly draft: BusinessUnitDraft;
-  readonly kind: "CreateBusinessUnitDraft";
-}
-
-export type NonEmptyBusinessUnitUpdateActions<
-  Action extends BusinessUnitUpdateAction = BusinessUnitUpdateAction,
-> = NonEmptyUpdateActions<Action>;
-
-export type BusinessUnitUpdateCommandShape<
-  Action extends BusinessUnitUpdateAction = BusinessUnitUpdateAction,
-> = UpdateCommandShape<
-  "UpdateBusinessUnit",
-  CommercetoolsBusinessUnitSelector,
-  Action
->;
-
-export type BusinessUnitUpdateInput =
-  UpdateInput<CommercetoolsBusinessUnitSelector>;
-
-export type BusinessUnitUpdateWithActionsInput<
-  Action extends BusinessUnitUpdateAction = BusinessUnitUpdateAction,
-> = UpdateWithActionsInput<CommercetoolsBusinessUnitSelector, Action>;
-
-export type EmptyBusinessUnitUpdateActionBuilder = EmptyUpdateActionBuilder<
-  "UpdateBusinessUnit",
-  CommercetoolsBusinessUnitSelector,
-  BusinessUnitUpdateAction
->;
-
-export type BusinessUnitUpdateActionBuilder<
-  Action extends BusinessUnitUpdateAction = BusinessUnitUpdateAction,
-> = UpdateActionBuilder<
-  "UpdateBusinessUnit",
-  CommercetoolsBusinessUnitSelector,
-  BusinessUnitUpdateAction,
-  Action
->;
-
-export type BusinessUnitUpdateFactory = UpdateCommandFactory<
-  "UpdateBusinessUnit",
-  CommercetoolsBusinessUnitSelector,
-  BusinessUnitUpdateAction
->;
-
-export type UpdateBusinessUnitCommand = BusinessUnitUpdateCommandShape;
-
-export interface CreateCustomerDraftCommand {
-  readonly draft: CustomerDraft;
-  readonly kind: "CreateCustomerDraft";
-}
-
-export type NonEmptyCustomerUpdateActions<
-  Action extends CustomerUpdateAction = CustomerUpdateAction,
-> = NonEmptyUpdateActions<Action>;
-
-export type CustomerUpdateCommandShape<
-  Action extends CustomerUpdateAction = CustomerUpdateAction,
-> = UpdateCommandShape<"UpdateCustomer", CommercetoolsCustomerSelector, Action>;
-
-export type CustomerUpdateInput = UpdateInput<CommercetoolsCustomerSelector>;
-
-export type CustomerUpdateWithActionsInput<
-  Action extends CustomerUpdateAction = CustomerUpdateAction,
-> = UpdateWithActionsInput<CommercetoolsCustomerSelector, Action>;
-
-export type EmptyCustomerUpdateActionBuilder = EmptyUpdateActionBuilder<
-  "UpdateCustomer",
-  CommercetoolsCustomerSelector,
-  CustomerUpdateAction
->;
-
-export type CustomerUpdateActionBuilder<
-  Action extends CustomerUpdateAction = CustomerUpdateAction,
-> = UpdateActionBuilder<
-  "UpdateCustomer",
-  CommercetoolsCustomerSelector,
-  CustomerUpdateAction,
-  Action
->;
-
-export type CustomerUpdateFactory = UpdateCommandFactory<
-  "UpdateCustomer",
-  CommercetoolsCustomerSelector,
-  CustomerUpdateAction
->;
-
-export type UpdateCustomerCommand = CustomerUpdateCommandShape;
-
-export interface CreateProductDraftCommand {
-  readonly draft: ProductDraft;
-  readonly kind: "CreateProductDraft";
-}
-
-export interface PublishProductCommand {
-  readonly kind: "PublishProduct";
-  readonly scope?: ProductPublishScope | undefined;
-  readonly selector: CommercetoolsProductSelector;
-  readonly version: number;
-}
-
-export type NonEmptyProductUpdateActions<
-  Action extends ProductUpdateAction = ProductUpdateAction,
-> = NonEmptyUpdateActions<Action>;
-
-export type ProductUpdateCommandShape<
-  Action extends ProductUpdateAction = ProductUpdateAction,
-> = UpdateCommandShape<"UpdateProduct", CommercetoolsProductSelector, Action>;
-
-export type ProductUpdateInput = UpdateInput<CommercetoolsProductSelector>;
-
-export type ProductUpdateWithActionsInput<
-  Action extends ProductUpdateAction = ProductUpdateAction,
-> = UpdateWithActionsInput<CommercetoolsProductSelector, Action>;
-
-export type EmptyProductUpdateActionBuilder = EmptyUpdateActionBuilder<
-  "UpdateProduct",
-  CommercetoolsProductSelector,
-  ProductUpdateAction
->;
-
-export type ProductUpdateActionBuilder<
-  Action extends ProductUpdateAction = ProductUpdateAction,
-> = UpdateActionBuilder<
-  "UpdateProduct",
-  CommercetoolsProductSelector,
-  ProductUpdateAction,
-  Action
->;
-
-export type ProductUpdateFactory = UpdateCommandFactory<
-  "UpdateProduct",
-  CommercetoolsProductSelector,
-  ProductUpdateAction
->;
-
-export type UpdateProductCommand = ProductUpdateCommandShape;
-
 export type CommercetoolsDestinationCommand =
   | CreateBusinessUnitDraftCommand
   | UpdateBusinessUnitCommand
@@ -263,42 +97,11 @@ export type CommercetoolsDestinationCommand =
   | PublishProductCommand
   | UpdateProductCommand;
 
-export interface CommercetoolsBusinessUnitCommands {
-  readonly createDraft: (
-    draft: BusinessUnitDraft
-  ) => CreateBusinessUnitDraftCommand;
-  readonly update: BusinessUnitUpdateFactory;
-}
-
-export interface CommercetoolsCustomerCommands {
-  readonly createDraft: (draft: CustomerDraft) => CreateCustomerDraftCommand;
-  readonly update: CustomerUpdateFactory;
-}
-
-export interface CommercetoolsProductCommands {
-  readonly createDraft: (draft: ProductDraft) => CreateProductDraftCommand;
-  readonly publish: (
-    input: Omit<PublishProductCommand, "kind">
-  ) => PublishProductCommand;
-  readonly update: ProductUpdateFactory;
-}
-
 export interface CommercetoolsDestinationCommands {
   readonly businessUnits: CommercetoolsBusinessUnitCommands;
   readonly customers: CommercetoolsCustomerCommands;
   readonly products: CommercetoolsProductCommands;
 }
-
-export interface CommercetoolsBusinessUnitHelpers<
-  BusinessUnitCustomFieldSchema extends CommercetoolsCustomFieldSchema | never,
-> {
-  readonly customFields: BusinessUnitCustomFieldsHelper<BusinessUnitCustomFieldSchema>;
-}
-
-export interface CommercetoolsProductHelpers<
-  ProductAttributeSchemaRecord extends
-    CommercetoolsProductAttributeSchemaRecord,
-> extends ProductHelpers<ProductAttributeSchemaRecord> {}
 
 export interface CommercetoolsDestinationHelpers<
   ProductAttributeSchemaRecord extends
@@ -323,409 +126,32 @@ export interface CommercetoolsDestination<
   >;
 }
 
-type UnknownRecord = Readonly<Record<string, unknown>>;
-
-const isRecord = (value: unknown): value is UnknownRecord =>
-  typeof value === "object" && value !== null;
-
-const isStringRecord = (
-  value: unknown
-): value is Readonly<Record<string, string>> =>
-  isRecord(value) &&
-  Object.values(value).every((item) => typeof item === "string");
-
-const hasOwnField = (value: UnknownRecord, field: string): boolean =>
-  Object.hasOwn(value, field);
-
-const hasStringField = (value: UnknownRecord, field: string): boolean =>
-  typeof value[field] === "string" && value[field] !== "";
-
-const isProductTypeResourceIdentifier = (value: unknown): boolean => {
-  if (!isRecord(value) || value.typeId !== "product-type") {
-    return false;
-  }
-
-  const hasId = hasOwnField(value, "id");
-  const hasKey = hasOwnField(value, "key");
-
-  if (hasId === hasKey) {
-    return false;
-  }
-
-  return hasId ? hasStringField(value, "id") : hasStringField(value, "key");
-};
-
-const isBusinessUnitResourceIdentifier = (value: unknown): boolean => {
-  if (!isRecord(value) || value.typeId !== "business-unit") {
-    return false;
-  }
-
-  const hasId = hasOwnField(value, "id");
-  const hasKey = hasOwnField(value, "key");
-
-  if (hasId === hasKey) {
-    return false;
-  }
-
-  return hasId ? hasStringField(value, "id") : hasStringField(value, "key");
-};
-
-const isBusinessUnitDraft = (value: unknown): value is BusinessUnitDraft => {
-  if (
-    !(
-      isRecord(value) &&
-      hasStringField(value, "key") &&
-      hasStringField(value, "name")
-    )
-  ) {
-    return false;
-  }
-
-  if (value.unitType === "Company") {
-    return true;
-  }
-
-  return (
-    value.unitType === "Division" &&
-    isBusinessUnitResourceIdentifier(value.parentUnit)
-  );
-};
-
-const isProductDraft = (value: unknown): value is ProductDraft =>
-  isRecord(value) &&
-  isProductTypeResourceIdentifier(value.productType) &&
-  isStringRecord(value.name) &&
-  isStringRecord(value.slug);
-
-const isCustomerDraft = (value: unknown): value is CustomerDraft =>
-  isRecord(value) && hasStringField(value, "email");
-
-const isPositiveInteger = (value: unknown): value is number =>
-  typeof value === "number" && Number.isInteger(value) && value > 0;
-
-const isProductPublishScope = (value: unknown): value is ProductPublishScope =>
-  typeof value === "string";
-
-const isSdkUpdateAction = <Action extends { readonly action: string }>(
-  value: unknown
-): value is Action => isRecord(value) && hasStringField(value, "action");
-
-const isNonEmptySdkUpdateActions = <Action extends { readonly action: string }>(
-  value: unknown
-): value is NonEmptyUpdateActions<Action> =>
-  Array.isArray(value) &&
-  value.length > 0 &&
-  value.every(isSdkUpdateAction<Action>);
-
-const isBusinessUnitUpdateActions = (
-  value: unknown
-): value is NonEmptyBusinessUnitUpdateActions =>
-  isNonEmptySdkUpdateActions<BusinessUnitUpdateAction>(value);
-
-const isCustomerUpdateActions = (
-  value: unknown
-): value is NonEmptyCustomerUpdateActions =>
-  isNonEmptySdkUpdateActions<CustomerUpdateAction>(value);
-
-const isProductUpdateActions = (
-  value: unknown
-): value is NonEmptyProductUpdateActions =>
-  isNonEmptySdkUpdateActions<ProductUpdateAction>(value);
-
-const NonEmptyStringSchema = Schema.declare<string>(
-  (value): value is string => typeof value === "string" && value !== "",
-  {
-    identifier: "NonEmptyString",
-  }
-);
-
-const ProductDraftSchema = Schema.declare<ProductDraft>(isProductDraft, {
-  identifier: "ProductDraft",
-});
-
-const BusinessUnitDraftSchema = Schema.declare<BusinessUnitDraft>(
-  isBusinessUnitDraft,
-  {
-    identifier: "BusinessUnitDraft",
-  }
-);
-
-const CustomerDraftSchema = Schema.declare<CustomerDraft>(isCustomerDraft, {
-  identifier: "CustomerDraft",
-});
-
-export const CommercetoolsProductSelectorSchema = Schema.Union([
-  Schema.Struct({
-    id: NonEmptyStringSchema,
-    kind: Schema.Literal("id"),
-  }),
-  Schema.Struct({
-    key: NonEmptyStringSchema,
-    kind: Schema.Literal("key"),
-  }),
-]);
-
-export const CommercetoolsBusinessUnitSelectorSchema =
-  CommercetoolsProductSelectorSchema;
-
-export const CommercetoolsCustomerSelectorSchema =
-  CommercetoolsProductSelectorSchema;
-
-const ProductPublishScopeSchema = Schema.optional(
-  Schema.declare<ProductPublishScope>(isProductPublishScope, {
-    identifier: "ProductPublishScope",
-  })
-);
-
-const BusinessUnitUpdateActionsSchema =
-  Schema.declare<NonEmptyBusinessUnitUpdateActions>(
-    isBusinessUnitUpdateActions,
-    {
-      identifier: "BusinessUnitUpdateActions",
-    }
-  );
-
-const CustomerUpdateActionsSchema =
-  Schema.declare<NonEmptyCustomerUpdateActions>(isCustomerUpdateActions, {
-    identifier: "CustomerUpdateActions",
-  });
-
-const ProductUpdateActionsSchema = Schema.declare<NonEmptyProductUpdateActions>(
-  isProductUpdateActions,
-  {
-    identifier: "ProductUpdateActions",
-  }
-);
-
-const ProductVersionSchema = Schema.declare<number>(isPositiveInteger, {
-  identifier: "ProductVersion",
-});
-
-export const CreateBusinessUnitDraftCommand: Schema.Codec<
-  CreateBusinessUnitDraftCommand,
-  CreateBusinessUnitDraftCommand,
-  never,
-  never
-> = Schema.Struct({
-  draft: BusinessUnitDraftSchema,
-  kind: Schema.Literal("CreateBusinessUnitDraft"),
-});
-
-export const UpdateBusinessUnitCommand: Schema.Codec<
-  UpdateBusinessUnitCommand,
-  UpdateBusinessUnitCommand,
-  never,
-  never
-> = Schema.Struct({
-  actions: BusinessUnitUpdateActionsSchema,
-  kind: Schema.Literal("UpdateBusinessUnit"),
-  selector: CommercetoolsBusinessUnitSelectorSchema,
-  version: ProductVersionSchema,
-});
-
-export const CreateCustomerDraftCommand: Schema.Codec<
-  CreateCustomerDraftCommand,
-  CreateCustomerDraftCommand,
-  never,
-  never
-> = Schema.Struct({
-  draft: CustomerDraftSchema,
-  kind: Schema.Literal("CreateCustomerDraft"),
-});
-
-export const UpdateCustomerCommand: Schema.Codec<
-  UpdateCustomerCommand,
-  UpdateCustomerCommand,
-  never,
-  never
-> = Schema.Struct({
-  actions: CustomerUpdateActionsSchema,
-  kind: Schema.Literal("UpdateCustomer"),
-  selector: CommercetoolsCustomerSelectorSchema,
-  version: ProductVersionSchema,
-});
-
-export const CreateProductDraftCommand: Schema.Codec<
-  CreateProductDraftCommand,
-  CreateProductDraftCommand,
-  never,
-  never
-> = Schema.Struct({
-  draft: ProductDraftSchema,
-  kind: Schema.Literal("CreateProductDraft"),
-});
-
-export const PublishProductCommand: Schema.Codec<
-  PublishProductCommand,
-  PublishProductCommand,
-  never,
-  never
-> = Schema.Struct({
-  kind: Schema.Literal("PublishProduct"),
-  scope: ProductPublishScopeSchema,
-  selector: CommercetoolsProductSelectorSchema,
-  version: ProductVersionSchema,
-});
-
-export const UpdateProductCommand: Schema.Codec<
-  UpdateProductCommand,
-  UpdateProductCommand,
-  never,
-  never
-> = Schema.Struct({
-  actions: ProductUpdateActionsSchema,
-  kind: Schema.Literal("UpdateProduct"),
-  selector: CommercetoolsProductSelectorSchema,
-  version: ProductVersionSchema,
-});
-
-const createBusinessUnitDraftCommand = defineDestinationCommand(
-  "CreateBusinessUnitDraft",
-  {
-    identity: true,
-    make: {
-      createDraft: (
-        draft: BusinessUnitDraft
-      ): CreateBusinessUnitDraftCommand => ({
-        draft,
-        kind: "CreateBusinessUnitDraft",
-      }),
-    },
-    schema: CreateBusinessUnitDraftCommand,
-  }
-);
-
-const updateBusinessUnitCommand = defineDestinationCommand(
-  "UpdateBusinessUnit",
-  {
-    identity: false,
-    schema: UpdateBusinessUnitCommand,
-  }
-);
-
-const makeBusinessUnitUpdate = makeUpdateCommandFactory<
-  "UpdateBusinessUnit",
-  CommercetoolsBusinessUnitSelector,
-  BusinessUnitUpdateAction
->({
-  kind: "UpdateBusinessUnit",
-  label: "Business unit update",
-});
-
-const createCustomerDraftCommand = defineDestinationCommand(
-  "CreateCustomerDraft",
-  {
-    identity: true,
-    make: {
-      createDraft: (draft: CustomerDraft): CreateCustomerDraftCommand => ({
-        draft,
-        kind: "CreateCustomerDraft",
-      }),
-    },
-    schema: CreateCustomerDraftCommand,
-  }
-);
-
-const updateCustomerCommand = defineDestinationCommand("UpdateCustomer", {
-  identity: false,
-  schema: UpdateCustomerCommand,
-});
-
-const makeCustomerUpdate = makeUpdateCommandFactory<
-  "UpdateCustomer",
-  CommercetoolsCustomerSelector,
-  CustomerUpdateAction
->({
-  kind: "UpdateCustomer",
-  label: "Customer update",
-});
-
-const makeProductUpdate = makeUpdateCommandFactory<
-  "UpdateProduct",
-  CommercetoolsProductSelector,
-  ProductUpdateAction
->({
-  kind: "UpdateProduct",
-  label: "Product update",
-});
-
-const createProductDraftCommand = defineDestinationCommand(
-  "CreateProductDraft",
-  {
-    identity: true,
-    make: {
-      createDraft: (draft: ProductDraft): CreateProductDraftCommand => ({
-        draft,
-        kind: "CreateProductDraft",
-      }),
-    },
-    schema: CreateProductDraftCommand,
-  }
-);
-
-const publishProductCommand = defineDestinationCommand("PublishProduct", {
-  identity: false,
-  make: {
-    publish: (
-      input: Omit<PublishProductCommand, "kind">
-    ): PublishProductCommand => ({
-      ...input,
-      kind: "PublishProduct",
-    }),
-  },
-  schema: PublishProductCommand,
-});
-
-const updateProductCommand = defineDestinationCommand("UpdateProduct", {
-  identity: false,
-  schema: UpdateProductCommand,
-});
-
 const pluginDefinition = defineDestinationPlugin("commercetools").addGroup(
-  defineDestinationCommandGroup("businessUnits").add(
-    createBusinessUnitDraftCommand,
-    updateBusinessUnitCommand
-  ),
-  defineDestinationCommandGroup("customers").add(
-    createCustomerDraftCommand,
-    updateCustomerCommand
-  ),
-  defineDestinationCommandGroup("products").add(
-    createProductDraftCommand,
-    publishProductCommand,
-    updateProductCommand
-  )
+  businessUnitCommandGroup,
+  customerCommandGroup,
+  productCommandGroup
 );
 
-const toDestinationPluginError = (
-  cause: CommercetoolsSdkError
-): DestinationPluginError =>
-  new DestinationPluginError({
-    cause,
-    message: cause.message,
-  });
-
-const productMetadata = (
-  product: Product
-): Record<string, number | string> => ({
-  ...(product.key === undefined ? {} : { productKey: product.key }),
-  productVersion: product.version,
-});
-
-const businessUnitMetadata = (
-  businessUnit: BusinessUnit
-): Record<string, number | string> => ({
-  businessUnitKey: businessUnit.key,
-  businessUnitVersion: businessUnit.version,
-});
-
-const customerMetadata = (
-  customer: Customer
-): Record<string, number | string> => ({
-  ...(customer.key === undefined ? {} : { customerKey: customer.key }),
-  customerEmail: customer.email,
-  customerVersion: customer.version,
-});
+const implementCommercetoolsDestination = () =>
+  pluginDefinition.implement((handlers) =>
+    handlers
+      .group("businessUnits", (businessUnitHandlers) =>
+        businessUnitHandlers
+          .handle("CreateBusinessUnitDraft", handleCreateBusinessUnitDraft)
+          .handle("UpdateBusinessUnit", handleUpdateBusinessUnit)
+      )
+      .group("customers", (customerHandlers) =>
+        customerHandlers
+          .handle("CreateCustomerDraft", handleCreateCustomerDraft)
+          .handle("UpdateCustomer", handleUpdateCustomer)
+      )
+      .group("products", (productHandlers) =>
+        productHandlers
+          .handle("CreateProductDraft", handleCreateProductDraft)
+          .handle("PublishProduct", handlePublishProduct)
+          .handle("UpdateProduct", handleUpdateProduct)
+      )
+  );
 
 function make<
   const ProductAttributeSchemaRecord extends
@@ -776,202 +202,9 @@ function make<
   ProductAttributeSchemaRecord,
   BusinessUnitCustomFieldSchema
 > {
-  const implementedPlugin = pluginDefinition
-    .implement((handlers) =>
-      handlers
-        .group("businessUnits", (businessUnitHandlers) =>
-          businessUnitHandlers
-            .handle("CreateBusinessUnitDraft", ({ command }) =>
-              Effect.gen(function* () {
-                const sdk = yield* CommercetoolsSdk;
-                const businessUnit = yield* sdk
-                  .request("businessUnits.createDraft", (project) =>
-                    project.businessUnits().post({
-                      body: command.draft,
-                    })
-                  )
-                  .pipe(Effect.mapError(toDestinationPluginError));
-
-                return {
-                  destinationIdentity: businessUnit.id,
-                  destinationVersion: String(businessUnit.version),
-                  metadata: businessUnitMetadata(businessUnit),
-                };
-              })
-            )
-            .handle("UpdateBusinessUnit", ({ command }) =>
-              Effect.gen(function* () {
-                const sdk = yield* CommercetoolsSdk;
-                const body: BusinessUnitUpdate = {
-                  actions: [...command.actions],
-                  version: command.version,
-                };
-                const businessUnit = yield* sdk
-                  .request("businessUnits.update", (project) => {
-                    const businessUnits = project.businessUnits();
-                    const selectedBusinessUnit =
-                      command.selector.kind === "id"
-                        ? businessUnits.withId({ ID: command.selector.id })
-                        : businessUnits.withKey({
-                            key: command.selector.key,
-                          });
-
-                    return selectedBusinessUnit.post({
-                      body,
-                    });
-                  })
-                  .pipe(Effect.mapError(toDestinationPluginError));
-
-                return {
-                  destinationVersion: String(businessUnit.version),
-                  metadata: businessUnitMetadata(businessUnit),
-                };
-              })
-            )
-        )
-        .group("customers", (customerHandlers) =>
-          customerHandlers
-            .handle("CreateCustomerDraft", ({ command }) =>
-              Effect.gen(function* () {
-                const sdk = yield* CommercetoolsSdk;
-                const result = yield* sdk
-                  .request("customers.createDraft", (project) =>
-                    project.customers().post({
-                      body: command.draft,
-                    })
-                  )
-                  .pipe(Effect.mapError(toDestinationPluginError));
-                const customer = result.customer;
-
-                return {
-                  destinationIdentity: customer.id,
-                  destinationVersion: String(customer.version),
-                  metadata: customerMetadata(customer),
-                };
-              })
-            )
-            .handle("UpdateCustomer", ({ command }) =>
-              Effect.gen(function* () {
-                const sdk = yield* CommercetoolsSdk;
-                const body: CustomerUpdate = {
-                  actions: [...command.actions],
-                  version: command.version,
-                };
-                const customer = yield* sdk
-                  .request("customers.update", (project) => {
-                    const customers = project.customers();
-                    const selectedCustomer =
-                      command.selector.kind === "id"
-                        ? customers.withId({ ID: command.selector.id })
-                        : customers.withKey({
-                            key: command.selector.key,
-                          });
-
-                    return selectedCustomer.post({
-                      body,
-                    });
-                  })
-                  .pipe(Effect.mapError(toDestinationPluginError));
-
-                return {
-                  destinationVersion: String(customer.version),
-                  metadata: customerMetadata(customer),
-                };
-              })
-            )
-        )
-        .group("products", (productsHandlers) =>
-          productsHandlers
-            .handle("CreateProductDraft", ({ command }) =>
-              Effect.gen(function* () {
-                const sdk = yield* CommercetoolsSdk;
-                const product = yield* sdk
-                  .request("products.createDraft", (project) =>
-                    project.products().post({
-                      body: {
-                        ...command.draft,
-                        publish: false,
-                      },
-                    })
-                  )
-                  .pipe(Effect.mapError(toDestinationPluginError));
-
-                return {
-                  destinationIdentity: product.id,
-                  destinationVersion: String(product.version),
-                  metadata: productMetadata(product),
-                };
-              })
-            )
-            .handle("PublishProduct", ({ command }) =>
-              Effect.gen(function* () {
-                const sdk = yield* CommercetoolsSdk;
-                const action: ProductPublishAction = {
-                  action: "publish",
-                  ...(command.scope === undefined
-                    ? {}
-                    : { scope: command.scope }),
-                };
-                const body: ProductUpdate = {
-                  actions: [action],
-                  version: command.version,
-                };
-                const product = yield* sdk
-                  .request("products.publish", (project) => {
-                    const products = project.products();
-                    const selectedProduct =
-                      command.selector.kind === "id"
-                        ? products.withId({ ID: command.selector.id })
-                        : products.withKey({ key: command.selector.key });
-
-                    return selectedProduct.post({
-                      body,
-                    });
-                  })
-                  .pipe(Effect.mapError(toDestinationPluginError));
-
-                return {
-                  destinationVersion: String(product.version),
-                  metadata: {
-                    ...productMetadata(product),
-                    published: product.masterData.published,
-                  },
-                };
-              })
-            )
-            .handle("UpdateProduct", ({ command }) =>
-              Effect.gen(function* () {
-                const sdk = yield* CommercetoolsSdk;
-                const body: ProductUpdate = {
-                  actions: [...command.actions],
-                  version: command.version,
-                };
-                const product = yield* sdk
-                  .request("products.update", (project) => {
-                    const products = project.products();
-                    const selectedProduct =
-                      command.selector.kind === "id"
-                        ? products.withId({ ID: command.selector.id })
-                        : products.withKey({ key: command.selector.key });
-
-                    return selectedProduct.post({
-                      body,
-                    });
-                  })
-                  .pipe(Effect.mapError(toDestinationPluginError));
-
-                return {
-                  destinationVersion: String(product.version),
-                  metadata: {
-                    ...productMetadata(product),
-                    published: product.masterData.published,
-                  },
-                };
-              })
-            )
-        )
-    )
-    .provide(options.sdkLayer);
+  const implementedPlugin = implementCommercetoolsDestination().provide(
+    options.sdkLayer
+  );
 
   return {
     ...implementedPlugin,
