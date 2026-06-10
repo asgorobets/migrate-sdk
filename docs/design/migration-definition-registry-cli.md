@@ -861,8 +861,16 @@ lifecycle metadata and current item-state counts. It does not initialize source
 or destination systems.
 
 ```text
-Migration ID  Last Run   Migrated  Skipped  Failed  Needs Update
-articles      succeeded  2         1        0       0
+Migration Status
+
+Requested:
+articles
+
+Included:
+articles
+
+Definitions:
+1. articles: latest succeeded (migrated 2, skipped 1, failed 0, needs update 0)
 ```
 
 `status --scan-source` additionally initializes source plugins and scans current
@@ -871,8 +879,19 @@ source cursors, create run state, acquire locks, execute pipelines, call
 destination plugins, or persist warnings.
 
 ```text
-Migration ID  Last Run   Total  Migrated  Skipped  Failed  Needs Update  Unprocessed  Invalid  Duplicate  Orphaned
-articles      succeeded  4      2         1        0       0             1            0        1          1
+Migration Status
+
+Requested:
+articles
+
+Included:
+articles
+
+Definitions:
+1. articles: latest succeeded (migrated 2, skipped 1, failed 0, needs update 0; source total 4, unprocessed 1, invalid 0, duplicate 1, orphaned 1)
+
+Warnings:
+- Duplicate source identity in articles: article-new (1 duplicate item(s)). Check the source plugin identity mapping.
 ```
 
 Status output is ordered by registry/list order, not dependency execution

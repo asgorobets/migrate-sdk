@@ -1,4 +1,5 @@
 import { Effect, Option, Schema } from "effect";
+import { getMigrationStatuses } from "../runtime/get-migration-statuses.ts";
 import {
   type RollbackMigrationError,
   type RunMigrationError,
@@ -23,6 +24,10 @@ import type {
 } from "./rollback.ts";
 import type { AnyMigrationDefinition, MigrationRunSummary } from "./run.ts";
 import type { RunModeInput } from "./run-mode.ts";
+import type {
+  GetMigrationStatusesError,
+  MigrationStatusReport,
+} from "./status.ts";
 
 type AnyRollbackMigrationDefinitions =
   readonly AnyRollbackMigrationDefinition[];
@@ -65,6 +70,12 @@ export type MigrationDefinitionRegistryRunInput =
 export type MigrationDefinitionRegistryRollbackInput =
   MigrationDefinitionRegistrySelectionInput & {
     readonly sourceIdentities?: readonly SourceIdentityInput[];
+  };
+
+export type MigrationDefinitionRegistryStatusInput =
+  MigrationDefinitionRegistrySelectionInput & {
+    readonly concurrency?: number;
+    readonly scanSource?: boolean;
   };
 
 export interface MigrationDefinitionDependencyEdge {
@@ -138,6 +149,13 @@ export interface MigrationDefinitionRollbackPlan {
   readonly withDependencies: boolean;
 }
 
+export interface MigrationDefinitionRegistryStatusReport
+  extends MigrationStatusReport {
+  readonly includedDefinitionIds: readonly MigrationDefinitionId[];
+  readonly notices: readonly MigrationDefinitionPlanNotice[];
+  readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
+}
+
 export type MigrationDefinitionRegistryRunError =
   | MigrationDefinitionRegistryPlanningError
   | RunMigrationError;
@@ -145,6 +163,10 @@ export type MigrationDefinitionRegistryRunError =
 export type MigrationDefinitionRegistryRollbackError =
   | MigrationDefinitionRegistryPlanningError
   | RollbackMigrationError;
+
+export type MigrationDefinitionRegistryStatusError =
+  | MigrationDefinitionRegistryPlanningError
+  | GetMigrationStatusesError;
 
 export class DuplicateMigrationDefinitionId extends Schema.TaggedClass<DuplicateMigrationDefinitionId>()(
   "DuplicateMigrationDefinitionId",
@@ -1071,6 +1093,54 @@ export class MigrationDefinitionRegistry<
           : { sourceIdentities: plan.target.sourceIdentities }),
       })
     );
+  }
+
+  status(
+    input: MigrationDefinitionRegistryStatusInput
+  ): Effect.Effect<
+    MigrationDefinitionRegistryStatusReport,
+    MigrationDefinitionRegistryStatusError
+  > {
+    const definitions = this.#definitions;
+    const definitionsById = this.#definitionsById;
+
+    return Effect.gen(function* () {
+      const selection = yield* resolveSelectionInput(
+        definitions,
+        definitionsById,
+        input
+      );
+      const includedDefinitionIds = yield* resolveIncludedDefinitionIds(
+        definitionsById,
+        selection
+      );
+      const planDetails = resolveDefinitionPlanDetails(
+        definitions,
+        definitionsById,
+        includedDefinitionIds,
+        selection.notices
+      );
+      const statusDefinitions =
+        planDetails.includedDefinitionIdsInRegistryOrder.map((definitionId) =>
+          definitionsById.get(definitionId)
+        ) as readonly AnyMigrationDefinition[];
+      const report = yield* getMigrationStatuses({
+        definitions: statusDefinitions,
+        ...(input.concurrency === undefined
+          ? {}
+          : { concurrency: input.concurrency }),
+        ...(input.scanSource === undefined
+          ? {}
+          : { scanSource: input.scanSource }),
+      });
+
+      return {
+        ...report,
+        includedDefinitionIds: planDetails.includedDefinitionIdsInRegistryOrder,
+        notices: selection.notices,
+        requestedDefinitionIds: selection.requestedDefinitionIds,
+      };
+    });
   }
 
   require(

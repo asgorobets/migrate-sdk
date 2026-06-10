@@ -65,6 +65,23 @@ const makeDefinition = (input: TestDefinitionInput) =>
     ...(input.rollback === undefined ? {} : { rollback: input.rollback }),
   });
 
+const makeStatusDefinition = (
+  input: TestDefinitionInput & {
+    readonly store: Layer.Layer<MigrationStore, MigrationStoreError>;
+  }
+) =>
+  defineMigration<ArticleSource, NoopCommand>({
+    id: input.id,
+    ...(input.dependencies === undefined
+      ? {}
+      : { dependencies: input.dependencies }),
+    ...(input.dependsOn === undefined ? {} : { dependsOn: input.dependsOn }),
+    source,
+    destination,
+    store: input.store,
+    pipeline: () => ({ kind: "Noop" }),
+  });
+
 const makeRollbackSafetyFixture = () => {
   const authorsId = toMigrationDefinitionId("authors");
   const articlesId = toMigrationDefinitionId("articles");
@@ -423,6 +440,228 @@ describe("MigrationDefinitionRegistry", () => {
           withDependencies: true,
         });
       })
+  );
+
+  it.effect(
+    "reports status for selected definitions with dependency expansion in registry order",
+    () =>
+      Effect.gen(function* () {
+        const articlesId = toMigrationDefinitionId("articles");
+        const authorsId = toMigrationDefinitionId("authors");
+        const runId = toMigrationRunId("run-1");
+        const updatedAt = new Date("2026-01-01T00:00:02.000Z");
+        const articlesStoreState = InMemoryMigrationStore.makeState();
+        const authorsStoreState = InMemoryMigrationStore.makeState();
+        articlesStoreState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey(articlesId, "article-1"),
+          {
+            definitionId: articlesId,
+            destinationIdentity: toDestinationIdentity("entry-article-1"),
+            lastRunId: runId,
+            sourceIdentity: toSourceIdentity("article-1"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            status: "migrated",
+            updatedAt,
+          }
+        );
+        authorsStoreState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey(authorsId, "author-1"),
+          {
+            definitionId: authorsId,
+            lastRunId: runId,
+            skipReason: "No byline",
+            sourceIdentity: toSourceIdentity("author-1"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            status: "skipped",
+            updatedAt,
+          }
+        );
+        const articles = makeStatusDefinition({
+          id: articlesId,
+          dependencies: {
+            required: [authorsId],
+          },
+          store: InMemoryMigrationStore.layer(articlesStoreState),
+        });
+        const authors = makeStatusDefinition({
+          id: authorsId,
+          store: InMemoryMigrationStore.layer(authorsStoreState),
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles, authors] as const,
+        });
+
+        const report = yield* registry.status({
+          definitionIds: ["articles"],
+          withDependencies: true,
+        });
+
+        expect(report.requestedDefinitionIds).toEqual([articlesId]);
+        expect(report.includedDefinitionIds).toEqual([articlesId, authorsId]);
+        expect(report.notices).toEqual([]);
+        expect(report.scanSource).toBe(false);
+        expect(report.definitions.map((status) => status.definitionId)).toEqual(
+          [articlesId, authorsId]
+        );
+        expect("executionDefinitionIds" in report).toBe(false);
+        expect(report.definitions[0]?.durable).toEqual({
+          failed: 0,
+          migrated: 1,
+          needsUpdate: 0,
+          skipped: 0,
+        });
+        expect(report.definitions[1]?.durable).toEqual({
+          failed: 0,
+          migrated: 0,
+          needsUpdate: 0,
+          skipped: 1,
+        });
+      })
+  );
+
+  it.effect("records status notices from registry selection", () =>
+    Effect.gen(function* () {
+      const articles = makeStatusDefinition({
+        id: "articles",
+        dependencies: {
+          optional: ["tags"],
+        },
+        store: InMemoryMigrationStore.layer(),
+      });
+      const tags = makeStatusDefinition({
+        id: "tags",
+        dependencies: {
+          optional: ["articles"],
+        },
+        store: InMemoryMigrationStore.layer(),
+      });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles, tags] as const,
+      });
+
+      const report = yield* registry.status({
+        definitionIds: ["articles", "articles", "tags"],
+      });
+
+      expect(report.includedDefinitionIds).toEqual([
+        toMigrationDefinitionId("articles"),
+        toMigrationDefinitionId("tags"),
+      ]);
+      expect(report.notices).toEqual([
+        {
+          _tag: "MigrationDefinitionDuplicateRequestedDefinitionIgnored",
+          definitionId: toMigrationDefinitionId("articles"),
+        },
+        {
+          _tag: "MigrationDefinitionOptionalDependencyCycleIgnored",
+          definitionIds: [
+            toMigrationDefinitionId("articles"),
+            toMigrationDefinitionId("tags"),
+            toMigrationDefinitionId("articles"),
+          ],
+          edges: [
+            {
+              fromDefinitionId: toMigrationDefinitionId("articles"),
+              kind: "optional",
+              toDefinitionId: toMigrationDefinitionId("tags"),
+            },
+            {
+              fromDefinitionId: toMigrationDefinitionId("tags"),
+              kind: "optional",
+              toDefinitionId: toMigrationDefinitionId("articles"),
+            },
+          ],
+        },
+      ]);
+    })
+  );
+
+  it.effect("requires an explicit status scope", () =>
+    Effect.gen(function* () {
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [
+          makeStatusDefinition({
+            id: "articles",
+            store: InMemoryMigrationStore.layer(),
+          }),
+        ],
+      });
+
+      const error = yield* Effect.flip(
+        registry.status({} as Parameters<typeof registry.status>[0])
+      );
+
+      expect(error).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message:
+            "Registry planning requires all: true or at least one Migration Definition id",
+        })
+      );
+    })
+  );
+
+  it.effect(
+    "rejects status selections with missing required dependencies",
+    () =>
+      Effect.gen(function* () {
+        const authors = makeStatusDefinition({
+          id: "authors",
+          store: InMemoryMigrationStore.layer(),
+        });
+        const articles = makeStatusDefinition({
+          id: "articles",
+          dependencies: {
+            required: ["authors"],
+          },
+          store: InMemoryMigrationStore.layer(),
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [authors, articles] as const,
+        });
+
+        const error = yield* Effect.flip(
+          registry.status({ definitionIds: ["articles"] })
+        );
+
+        expect(error).toEqual(
+          new MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError(
+            {
+              definitionId: toMigrationDefinitionId("articles"),
+              message:
+                "Migration Definition selection is missing required dependencies",
+              missingDependencyIds: [toMigrationDefinitionId("authors")],
+            }
+          )
+        );
+      })
+  );
+
+  it.effect("reports status for all definitions in registry order", () =>
+    Effect.gen(function* () {
+      const articles = makeStatusDefinition({
+        id: "articles",
+        store: InMemoryMigrationStore.layer(),
+      });
+      const authors = makeStatusDefinition({
+        id: "authors",
+        store: InMemoryMigrationStore.layer(),
+      });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles, authors] as const,
+      });
+
+      const report = yield* registry.status({ all: true });
+
+      expect(report.requestedDefinitionIds).toBe("all");
+      expect(report.includedDefinitionIds).toEqual([
+        toMigrationDefinitionId("articles"),
+        toMigrationDefinitionId("authors"),
+      ]);
+      expect(report.definitions.map((status) => status.definitionId)).toEqual([
+        toMigrationDefinitionId("articles"),
+        toMigrationDefinitionId("authors"),
+      ]);
+    })
   );
 
   it.effect("rejects run planning without an explicit scope", () =>

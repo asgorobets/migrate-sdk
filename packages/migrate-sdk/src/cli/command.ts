@@ -11,6 +11,8 @@ import type {
   MigrationDefinitionRegistryRollbackInput,
   MigrationDefinitionRegistryRunError,
   MigrationDefinitionRegistryRunInput,
+  MigrationDefinitionRegistryStatusError,
+  MigrationDefinitionRegistryStatusInput,
 } from "../domain/registry.ts";
 import {
   loadMigrationCliConfig,
@@ -26,6 +28,7 @@ import {
   renderRunPlan,
   renderRunSummary,
   renderRuntimeError,
+  renderStatusReport,
 } from "./render.ts";
 import { MigrationCliRuntime } from "./runtime.ts";
 
@@ -129,6 +132,15 @@ const all = Flag.boolean("all").pipe(
 
 const withDependencies = Flag.boolean("with-dependencies").pipe(
   Flag.withDescription("Expand required Migration Definition dependencies")
+);
+
+const scanSource = Flag.boolean("scan-source").pipe(
+  Flag.withDescription("Scan source inventory while reading status")
+);
+
+const concurrency = Flag.integer("concurrency").pipe(
+  Flag.optional,
+  Flag.withDescription("Maximum concurrent source scans")
 );
 
 const failed = Flag.boolean("failed").pipe(
@@ -253,10 +265,47 @@ const makeRollbackPlanInput = (input: {
       };
 };
 
+const makeStatusInput = (input: {
+  readonly all: boolean;
+  readonly concurrency?: number;
+  readonly definitionIds: readonly string[];
+  readonly scanSource: boolean;
+  readonly withDependencies: boolean;
+}): MigrationDefinitionRegistryStatusInput => {
+  const statusOptions = {
+    ...(input.concurrency === undefined
+      ? {}
+      : { concurrency: input.concurrency }),
+    scanSource: input.scanSource,
+    withDependencies: input.withDependencies,
+  };
+
+  if (input.all) {
+    return input.definitionIds.length === 0
+      ? {
+          all: true,
+          ...statusOptions,
+        }
+      : ({
+          all: true,
+          definitionIds: input.definitionIds,
+          ...statusOptions,
+        } as MigrationDefinitionRegistryStatusInput);
+  }
+
+  return input.definitionIds.length === 0
+    ? ({} as MigrationDefinitionRegistryStatusInput)
+    : {
+        definitionIds: input.definitionIds as [string, ...string[]],
+        ...statusOptions,
+      };
+};
+
 const isPlanningError = (
   error:
     | MigrationDefinitionRegistryRollbackError
     | MigrationDefinitionRegistryRunError
+    | MigrationDefinitionRegistryStatusError
 ): error is MigrationDefinitionRegistryPlanningError => {
   switch (error._tag) {
     case "MigrationDefinitionRegistryInvalidSelectionError":
@@ -299,6 +348,63 @@ const renderRollbackCommandError = (
         hasTarget: input.hasTarget,
       })
     : renderRuntimeError(error);
+
+const renderStatusCommandError = (
+  error: MigrationDefinitionRegistryStatusError,
+  input: {
+    readonly definitionIds: readonly string[];
+  }
+): string => {
+  if (isPlanningError(error)) {
+    return renderPlanningError(error, {
+      command: "status",
+      definitionIds: input.definitionIds,
+      hasTarget: false,
+    });
+  }
+
+  if (error._tag === "MigrationStatusRequestError") {
+    return error.message;
+  }
+
+  return renderRuntimeError(error);
+};
+
+const statusCommand = Command.make(
+  "status",
+  {
+    all,
+    concurrency,
+    definitions: runDefinitions,
+    scanSource,
+    withDependencies,
+  },
+  (input) =>
+    Effect.gen(function* () {
+      const registry = yield* loadConfiguredRegistry;
+      const concurrencyInput = Option.getOrUndefined(input.concurrency);
+      const statusInput = makeStatusInput({
+        all: input.all,
+        ...(concurrencyInput === undefined
+          ? {}
+          : { concurrency: concurrencyInput }),
+        definitionIds: input.definitions,
+        scanSource: input.scanSource,
+        withDependencies: input.withDependencies,
+      });
+      const report = yield* registry.status(statusInput).pipe(
+        Effect.catch((error) =>
+          failReportedCliMessage(
+            renderStatusCommandError(error, {
+              definitionIds: input.definitions,
+            })
+          )
+        )
+      );
+
+      yield* Console.log(renderStatusReport(report));
+    })
+).pipe(Command.withDescription("Inspect Migration Definition status"));
 
 const runCommand = Command.make(
   "run",
@@ -437,6 +543,7 @@ export const migrateCommand = migrateBaseCommand.pipe(
   Command.withSubcommands([
     listCommand,
     graphCommand,
+    statusCommand,
     runCommand,
     rollbackCommand,
   ])

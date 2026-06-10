@@ -180,6 +180,188 @@ const planNoticeConfigSource = (): string => `
   });
 `;
 
+const statusConfigSource = (): string => `
+  import { Schema } from "effect";
+  import {
+    defineMigration,
+    InMemoryDestinationPlugin,
+    InMemoryMigrationStore,
+    InMemorySourcePlugin,
+    MigrationDefinitionRegistry,
+    toDestinationIdentity,
+    toMigrationDefinitionId,
+    toMigrationRunId,
+    toSourceIdentity,
+    toSourceVersion
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntryFields = Schema.Struct({ title: Schema.String });
+  const definitionId = toMigrationDefinitionId("articles");
+  const storeState = InMemoryMigrationStore.makeState();
+  const runId = toMigrationRunId("run-status");
+  const updatedAt = new Date("2026-01-01T00:00:02.000Z");
+  const store = InMemoryMigrationStore.layer(storeState);
+  const destination = InMemoryDestinationPlugin.makeEntries({
+    contentType: "entry",
+    commands: {
+      upsertEntry: {
+        fields: EntryFields
+      }
+    }
+  });
+
+  storeState.latestRunStates.set(definitionId, {
+    definitionIds: [definitionId],
+    finishedAt: new Date("2026-01-01T00:00:01.000Z"),
+    runId,
+    startedAt: new Date("2026-01-01T00:00:00.000Z"),
+    status: "succeeded"
+  });
+  storeState.itemStates.set(
+    InMemoryMigrationStore.itemStateKey(definitionId, "article-1"),
+    {
+      definitionId,
+      destinationIdentity: toDestinationIdentity("entry-article-1"),
+      lastRunId: runId,
+      sourceIdentity: toSourceIdentity("article-1"),
+      sourceVersion: toSourceVersion("source-version-1"),
+      status: "migrated",
+      updatedAt
+    }
+  );
+  storeState.itemStates.set(
+    InMemoryMigrationStore.itemStateKey(definitionId, "article-2"),
+    {
+      definitionId,
+      lastRunId: runId,
+      skipReason: "Draft article",
+      sourceIdentity: toSourceIdentity("article-2"),
+      sourceVersion: toSourceVersion("source-version-1"),
+      status: "skipped",
+      updatedAt
+    }
+  );
+
+  const articles = defineMigration({
+    id: definitionId,
+    source: InMemorySourcePlugin.make({
+      sourceSchema: EntrySource,
+      items: []
+    }),
+    destination,
+    store,
+    pipeline: (sourceItem) => destination.commands.upsertEntry({
+      title: sourceItem.item.title
+    })
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [articles]
+    })
+  });
+`;
+
+const statusScanConfigSource = (): string => `
+  import { Schema } from "effect";
+  import {
+    defineMigration,
+    InMemoryDestinationPlugin,
+    InMemoryMigrationStore,
+    InMemorySourcePlugin,
+    MigrationDefinitionRegistry,
+    toDestinationIdentity,
+    toMigrationDefinitionId,
+    toMigrationRunId,
+    toSourceIdentity,
+    toSourceVersion
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntryFields = Schema.Struct({ title: Schema.String });
+  const definitionId = toMigrationDefinitionId("articles");
+  const storeState = InMemoryMigrationStore.makeState();
+  const runId = toMigrationRunId("run-status");
+  const updatedAt = new Date("2026-01-01T00:00:02.000Z");
+  const store = InMemoryMigrationStore.layer(storeState);
+  const destination = InMemoryDestinationPlugin.makeEntries({
+    contentType: "entry",
+    commands: {
+      upsertEntry: {
+        fields: EntryFields
+      }
+    }
+  });
+
+  storeState.itemStates.set(
+    InMemoryMigrationStore.itemStateKey(definitionId, "article-1"),
+    {
+      definitionId,
+      destinationIdentity: toDestinationIdentity("entry-article-1"),
+      lastRunId: runId,
+      sourceIdentity: toSourceIdentity("article-1"),
+      sourceVersion: toSourceVersion("source-version-1"),
+      status: "migrated",
+      updatedAt
+    }
+  );
+  storeState.itemStates.set(
+    InMemoryMigrationStore.itemStateKey(definitionId, "article-orphan"),
+    {
+      definitionId,
+      destinationIdentity: toDestinationIdentity("entry-article-orphan"),
+      lastRunId: runId,
+      sourceIdentity: toSourceIdentity("article-orphan"),
+      sourceVersion: toSourceVersion("source-version-1"),
+      status: "migrated",
+      updatedAt
+    }
+  );
+
+  const articles = defineMigration({
+    id: definitionId,
+    source: InMemorySourcePlugin.make({
+      sourceSchema: EntrySource,
+      items: [
+        {
+          identity: "article-1",
+          version: "source-version-1",
+          item: { title: "Already migrated" }
+        },
+        {
+          identity: "article-new",
+          version: "source-version-1",
+          item: { title: "New article" }
+        },
+        {
+          identity: "article-new",
+          version: "source-version-2",
+          item: { title: "Duplicate article" }
+        },
+        {
+          identity: "article-invalid",
+          version: "source-version-1",
+          item: {}
+        }
+      ]
+    }),
+    destination,
+    store,
+    pipeline: (sourceItem) => destination.commands.upsertEntry({
+      title: sourceItem.item.title
+    })
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [articles]
+    })
+  });
+`;
+
 interface CliExecutionProbe {
   readonly executions: string[];
   readonly storeState: {
@@ -746,6 +928,247 @@ describe("migrate CLI", () => {
       expect(result.stdout).toContain("Migration Dependency Graph");
       expect(result.stdout).toContain("No dependencies.");
       expect(result.stdout).not.toContain("-->");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders durable-only status for explicit definitions", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        statusConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["status", "--config", "migrate.config.ts", "articles"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Migration Status");
+      expect(result.stdout).toContain("Requested:");
+      expect(result.stdout).toContain("articles");
+      expect(result.stdout).toContain("latest succeeded");
+      expect(result.stdout).toContain("migrated 1");
+      expect(result.stdout).toContain("skipped 1");
+      expect(result.stdout).not.toContain("unprocessed");
+      expect(result.stdout).not.toContain("orphaned");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("requires an explicit status scope", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        statusConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["status", "--config", "migrate.config.ts"],
+        project
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        "Registry planning requires all: true or at least one Migration Definition id"
+      );
+      expect(result.stdout).toBe("");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders status for all registered definitions", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        statusConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["status", "--config", "migrate.config.ts", "--all"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Requested:\nall");
+      expect(result.stdout).toContain("Included:\narticles");
+      expect(result.stdout).toContain("latest succeeded");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "renders status missing dependency suggestions without plan flags",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          planConfigSource()
+        );
+
+        const result = yield* runCli(
+          ["status", "--config", "migrate.config.ts", "articles"],
+          project
+        );
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain(
+          "Migration Definition selection is missing required dependencies"
+        );
+        expect(result.stderr).toContain(
+          "articles is missing required dependencies: authors"
+        );
+        expect(result.stderr).toContain(
+          "migrate status --with-dependencies articles"
+        );
+        expect(result.stderr).toContain("migrate status authors articles");
+        expect(result.stderr).not.toContain("--plan");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects status concurrency without source scanning", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        statusConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "status",
+          "--config",
+          "migrate.config.ts",
+          "--concurrency",
+          "2",
+          "articles",
+        ],
+        project
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        "Status concurrency is only valid when source scanning is enabled"
+      );
+      expect(result.stderr).not.toContain("MigrationStatusRequestError");
+      expect(result.stdout).toBe("");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects non-positive status source-scan concurrency", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        statusConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "status",
+          "--config",
+          "migrate.config.ts",
+          "--scan-source",
+          "--concurrency",
+          "0",
+          "articles",
+        ],
+        project
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        "Status concurrency must be a positive integer"
+      );
+      expect(result.stderr).not.toContain("MigrationStatusRequestError");
+      expect(result.stdout).toBe("");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("does not accept source identity targets for status", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        statusConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "status",
+          "--config",
+          "migrate.config.ts",
+          "--ids",
+          "article-1",
+          "articles",
+        ],
+        project
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(`${result.stderr}\n${result.cause}`).toContain("--ids");
+      expect(result.stdout).toContain("USAGE");
+      expect(result.stdout).not.toContain("Migration Status");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders source-scan status counts and warnings", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        statusScanConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "status",
+          "--config",
+          "migrate.config.ts",
+          "--scan-source",
+          "--concurrency",
+          "2",
+          "articles",
+        ],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("source total 4");
+      expect(result.stdout).toContain("unprocessed 1");
+      expect(result.stdout).toContain("invalid 1");
+      expect(result.stdout).toContain("duplicate 1");
+      expect(result.stdout).toContain("orphaned 1");
+      expect(result.stdout).toContain("Warnings:");
+      expect(result.stdout).toContain(
+        "Invalid source item in articles: article-invalid"
+      );
+      expect(result.stdout).toContain(
+        "Duplicate source identity in articles: article-new"
+      );
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 

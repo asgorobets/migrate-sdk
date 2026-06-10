@@ -5,6 +5,7 @@ import type {
   MigrationDefinitionRegistryConstructionIssue,
   MigrationDefinitionRegistryEntry,
   MigrationDefinitionRegistryPlanningError,
+  MigrationDefinitionRegistryStatusReport,
   MigrationDefinitionRollbackPlan,
   MigrationDefinitionRunPlan,
 } from "../domain/registry.ts";
@@ -252,8 +253,64 @@ export const renderRollbackSummary = (summary: RollbackRunSummary): string =>
     ...summary.definitions.map(renderRollbackDefinitionSummary),
   ].join("\n");
 
+const renderStatusDefinition = (
+  definition: MigrationDefinitionRegistryStatusReport["definitions"][number],
+  index: number
+): string => {
+  const durable = definition.durable;
+  const source =
+    definition.source === undefined
+      ? ""
+      : `; source total ${definition.source.total}, unprocessed ${definition.source.unprocessed}, invalid ${definition.source.invalid}, duplicate ${definition.source.duplicate}, orphaned ${definition.source.orphaned}`;
+  const latest =
+    definition.lastRun === null ? "none" : definition.lastRun.status;
+
+  return `${index + 1}. ${definition.definitionId}: latest ${latest} (migrated ${durable.migrated}, skipped ${durable.skipped}, failed ${durable.failed}, needs update ${durable.needsUpdate}${source})`;
+};
+
+const renderStatusWarning = (
+  warning: MigrationDefinitionRegistryStatusReport["warnings"][number]
+): string => {
+  switch (warning._tag) {
+    case "DuplicateSourceIdentityStatusWarning":
+      return `Duplicate source identity in ${warning.definitionId}: ${warning.sourceIdentity} (${warning.count} duplicate item(s)). Check the source plugin identity mapping.`;
+    case "InvalidSourceItemStatusWarning":
+      return `Invalid source item in ${warning.definitionId}: ${warning.sourceIdentity}. ${warning.message}. Check the Source Payload Schema and source data.`;
+    default: {
+      const exhaustive: never = warning;
+      return exhaustive;
+    }
+  }
+};
+
+export const renderStatusReport = (
+  report: MigrationDefinitionRegistryStatusReport
+): string =>
+  [
+    "Migration Status",
+    "",
+    "Requested:",
+    renderRequestedDefinitionIds(report.requestedDefinitionIds),
+    "",
+    "Included:",
+    renderDefinitionIdList(report.includedDefinitionIds),
+    "",
+    "Definitions:",
+    ...report.definitions.map(renderStatusDefinition),
+    ...renderNoticeSection(report.notices),
+    ...(report.warnings.length === 0
+      ? []
+      : [
+          "",
+          "Warnings:",
+          ...report.warnings.map(
+            (warning) => `- ${renderStatusWarning(warning)}`
+          ),
+        ]),
+  ].join("\n");
+
 const formatPlanCommand = (
-  command: "rollback" | "run",
+  command: "rollback" | "run" | "status",
   flags: readonly string[],
   definitionIds: readonly string[]
 ): string =>
@@ -275,10 +332,23 @@ const dedupeStrings = (values: readonly string[]): readonly string[] => {
   return uniqueValues;
 };
 
+const missingDependencyExpansionFlags = (
+  command: "rollback" | "run" | "status",
+  modeFlags: readonly string[]
+): readonly string[] =>
+  command === "status"
+    ? ["--with-dependencies"]
+    : ["--plan", ...modeFlags, "--with-dependencies"];
+
+const missingDependencyExplicitFlags = (
+  command: "rollback" | "run" | "status",
+  modeFlags: readonly string[]
+): readonly string[] => (command === "status" ? [] : ["--plan", ...modeFlags]);
+
 export const renderPlanningError = (
   error: MigrationDefinitionRegistryPlanningError,
   input: {
-    readonly command: "rollback" | "run";
+    readonly command: "rollback" | "run" | "status";
     readonly definitionIds: readonly string[];
     readonly hasTarget: boolean;
     readonly mode?: "failed" | "skipped";
@@ -313,12 +383,12 @@ export const renderPlanningError = (
         "Try:",
         formatPlanCommand(
           input.command,
-          ["--plan", ...modeFlags, "--with-dependencies"],
+          missingDependencyExpansionFlags(input.command, modeFlags),
           input.definitionIds
         ),
         formatPlanCommand(
           input.command,
-          ["--plan", ...modeFlags],
+          missingDependencyExplicitFlags(input.command, modeFlags),
           definitionIdsWithMissingDependencies
         ),
       ].join("\n");

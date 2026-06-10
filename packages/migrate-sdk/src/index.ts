@@ -142,6 +142,9 @@ export type {
   MigrationDefinitionRegistryRunError,
   MigrationDefinitionRegistryRunInput,
   MigrationDefinitionRegistrySelectionInput,
+  MigrationDefinitionRegistryStatusError,
+  MigrationDefinitionRegistryStatusInput,
+  MigrationDefinitionRegistryStatusReport,
   MigrationDefinitionRollbackPlan,
   MigrationDefinitionRunPlan,
 } from "./domain/registry.ts";
