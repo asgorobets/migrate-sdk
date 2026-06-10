@@ -8,6 +8,8 @@ import {
   DestinationIdentity as DestinationIdentitySchema,
   DestinationVersion as DestinationVersionSchema,
   EncodedSourceCursor as EncodedSourceCursorSchema,
+  MigrationDefinitionLock as MigrationDefinitionLockSchema,
+  MigrationDefinitionLockToken as MigrationDefinitionLockTokenSchema,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
   MigrationItemError,
   MigrationRunId as MigrationRunIdSchema,
@@ -16,6 +18,7 @@ import {
   MigrationStoreError,
   SourceIdentity as SourceIdentitySchema,
   SourceVersion as SourceVersionSchema,
+  toMigrationDefinitionLockToken,
   toMigrationRunId,
 } from "migrate-sdk";
 import {
@@ -25,6 +28,7 @@ import {
 } from "../sdk.ts";
 
 type EncodedSourceCursor = typeof EncodedSourceCursorSchema.Type;
+type MigrationDefinitionLock = typeof MigrationDefinitionLockSchema.Type;
 type MigrationDefinitionId = typeof MigrationDefinitionIdSchema.Type;
 type MigrationRunId = typeof MigrationRunIdSchema.Type;
 type MigrationRunStateType = typeof MigrationRunState.Type;
@@ -156,6 +160,25 @@ const MigrationItemStateRecord = Schema.Struct({
 });
 type MigrationItemStateRecord = typeof MigrationItemStateRecord.Type;
 
+const PersistedMigrationDefinitionLock = Schema.Struct({
+  createdAt: Schema.DateFromString,
+  definitionId: MigrationDefinitionIdSchema,
+  ownerRunId: MigrationRunIdSchema,
+  token: MigrationDefinitionLockTokenSchema,
+});
+
+const MigrationDefinitionLockRecord = Schema.Struct({
+  formatVersion: Schema.Literal(formatVersion),
+  index: Schema.Struct({
+    definitionId: MigrationDefinitionIdSchema,
+    ownerRunId: MigrationRunIdSchema,
+  }),
+  namespace: Schema.String,
+  recordKind: Schema.Literal("migration-definition-lock"),
+  state: PersistedMigrationDefinitionLock,
+});
+type MigrationDefinitionLockRecord = typeof MigrationDefinitionLockRecord.Type;
+
 const storeError = (message: string, cause?: unknown): MigrationStoreError =>
   new MigrationStoreError({
     message,
@@ -188,6 +211,12 @@ const latestRunStateKey = (
   definitionId: MigrationDefinitionId
 ): string =>
   `${namespace}__latest-run-state__definition_${hashSegment(definitionId)}`;
+
+const definitionLockKey = (
+  namespace: string,
+  definitionId: MigrationDefinitionId
+): string =>
+  `${namespace}__migration-definition-lock__definition_${hashSegment(definitionId)}`;
 
 const resolveOptions = (
   options: CommercetoolsMigrationStoreOptions = {}
@@ -296,6 +325,33 @@ const hasStatusCode = (cause: unknown, statusCode: number): boolean => {
 const isNotFoundSdkError = (cause: CommercetoolsSdkError): boolean =>
   hasStatusCode(cause.cause, 404);
 
+const isConcurrentModificationSdkError = (
+  cause: CommercetoolsSdkError
+): boolean => hasStatusCode(cause.cause, 409);
+
+const lockAcquisitionError = (
+  definitionId: MigrationDefinitionId,
+  cause: CommercetoolsSdkError
+): MigrationStoreError =>
+  isConcurrentModificationSdkError(cause)
+    ? storeError("Migration definition is already locked", definitionId)
+    : storeError(
+        `Unable to acquire migration definition lock ${definitionId}`,
+        cause
+      );
+
+const lockOwnershipError = (
+  lock: MigrationDefinitionLock,
+  current: MigrationDefinitionLock
+): MigrationStoreError =>
+  storeError("Migration definition lock is owned by another runner", {
+    currentOwnerRunId: current.ownerRunId,
+    currentToken: current.token,
+    definitionId: lock.definitionId,
+    releaseOwnerRunId: lock.ownerRunId,
+    releaseToken: lock.token,
+  });
+
 const encodeRecord = <A>(
   schema: Schema.Codec<A, unknown, never, never>,
   value: A,
@@ -341,26 +397,33 @@ const upsertCustomObject = (
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions,
   key: string,
-  value: unknown
+  value: unknown,
+  writeOptions: {
+    readonly mapError?: (cause: CommercetoolsSdkError) => MigrationStoreError;
+    readonly version?: number;
+  } = {}
 ): Effect.Effect<CustomObject, MigrationStoreError> => {
   const body: CustomObjectDraft = {
     container: options.container,
     key,
     value,
+    ...(writeOptions.version === undefined
+      ? {}
+      : { version: writeOptions.version }),
   };
+  const mapError =
+    writeOptions.mapError ??
+    ((cause: CommercetoolsSdkError) =>
+      storeError(
+        `Unable to upsert migration store Custom Object ${key}`,
+        cause
+      ));
 
   return sdk
     .request("customObjects.upsertMigrationStoreRecord", (project) =>
       project.customObjects().post({ body })
     )
-    .pipe(
-      Effect.mapError((cause) =>
-        storeError(
-          `Unable to upsert migration store Custom Object ${key}`,
-          cause
-        )
-      )
-    );
+    .pipe(Effect.mapError(mapError));
 };
 
 const deleteCustomObject = (
@@ -403,10 +466,16 @@ const writeRecord = <A>(
   options: ResolvedCommercetoolsMigrationStoreOptions,
   key: string,
   schema: Schema.Codec<A, unknown, never, never>,
-  record: A
+  record: A,
+  writeOptions?: {
+    readonly mapError?: (cause: CommercetoolsSdkError) => MigrationStoreError;
+    readonly version?: number;
+  }
 ): Effect.Effect<void, MigrationStoreError> =>
   encodeRecord(schema, record, key).pipe(
-    Effect.flatMap((value) => upsertCustomObject(sdk, options, key, value)),
+    Effect.flatMap((value) =>
+      upsertCustomObject(sdk, options, key, value, writeOptions)
+    ),
     Effect.asVoid
   );
 
@@ -458,6 +527,20 @@ const latestRunStateRecord = (
   namespace: options.namespace,
   recordKind: "latest-run-state",
   state,
+});
+
+const definitionLockRecord = (
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  lock: MigrationDefinitionLock
+): MigrationDefinitionLockRecord => ({
+  formatVersion,
+  index: {
+    definitionId: lock.definitionId,
+    ownerRunId: lock.ownerRunId,
+  },
+  namespace: options.namespace,
+  recordKind: "migration-definition-lock",
+  state: lock,
 });
 
 const readLatestRunState = (
@@ -640,6 +723,61 @@ const makeService = (
       updateLatestRunState(sdk, options, runId, definitionIds, "failed")
   );
 
+  const acquireDefinitionLock = Effect.fn(
+    "CommercetoolsMigrationStore.acquireDefinitionLock"
+  )(function* (
+    definitionId: MigrationDefinitionId,
+    ownerRunId: MigrationRunId
+  ) {
+    const lock: MigrationDefinitionLock = {
+      createdAt: new Date(),
+      definitionId,
+      ownerRunId,
+      token: toMigrationDefinitionLockToken(`lock-${randomUUID()}`),
+    };
+    const key = definitionLockKey(options.namespace, definitionId);
+
+    yield* writeRecord(
+      sdk,
+      options,
+      key,
+      MigrationDefinitionLockRecord,
+      definitionLockRecord(options, lock),
+      {
+        mapError: (cause) => lockAcquisitionError(definitionId, cause),
+        version: 0,
+      }
+    );
+
+    return lock;
+  });
+
+  const releaseDefinitionLock = Effect.fn(
+    "CommercetoolsMigrationStore.releaseDefinitionLock"
+  )(function* (lock: MigrationDefinitionLock) {
+    const key = definitionLockKey(options.namespace, lock.definitionId);
+    const customObject = yield* readCustomObjectOptional(sdk, options, key);
+
+    if (customObject === null) {
+      return;
+    }
+
+    const record = yield* decodeRecord(
+      MigrationDefinitionLockRecord,
+      customObject.value,
+      key
+    );
+
+    if (
+      record.state.ownerRunId !== lock.ownerRunId ||
+      record.state.token !== lock.token
+    ) {
+      return yield* lockOwnershipError(lock, record.state);
+    }
+
+    yield* deleteCustomObject(sdk, options, key, customObject.version);
+  });
+
   return {
     getSourceCursor,
     setSourceCursor,
@@ -651,10 +789,8 @@ const makeService = (
     beginRun,
     completeRun,
     failRun,
-    acquireDefinitionLock: () =>
-      Effect.fail(unsupportedOperation("acquireDefinitionLock")),
-    releaseDefinitionLock: () =>
-      Effect.fail(unsupportedOperation("releaseDefinitionLock")),
+    acquireDefinitionLock,
+    releaseDefinitionLock,
   };
 };
 

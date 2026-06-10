@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ApiRoot as PlatformApiRoot } from "@commercetools/platform-sdk";
 import { describe, expect, it } from "@effect/vitest";
 import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
 import { CommercetoolsMigrationStore } from "@migrate-sdk/commercetools/migration-store";
@@ -12,6 +13,7 @@ import {
   toDestinationIdentity,
   toDestinationVersion,
   toEncodedSourceCursor,
+  toMigrationDefinitionLockToken,
   toMigrationDefinitionId,
   toMigrationRunId,
   toSourceIdentity,
@@ -34,6 +36,9 @@ const itemStateKey = (definition: string, identity: string): string =>
 
 const latestRunStateKey = (definition: string): string =>
   `${namespace}__latest-run-state__definition_${hashedSegment(definition)}`;
+
+const definitionLockKey = (definition: string): string =>
+  `${namespace}__migration-definition-lock__definition_${hashedSegment(definition)}`;
 
 const customObjectKey = (
   request: RecordedCommercetoolsRequest
@@ -131,6 +136,233 @@ describe("CommercetoolsMigrationStore", () => {
         statusCode: 409,
       });
     });
+  });
+
+  it.effect(
+    "acquires definition locks with Custom Object version-zero create semantics",
+    () => {
+      const recording = makeRecordingCommercetoolsApiRoot();
+      const ownerRunId = toMigrationRunId("run-lock-owner");
+      const expectedKey = definitionLockKey(definitionId);
+
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const lock = yield* store.acquireDefinitionLock(
+          definitionId,
+          ownerRunId
+        );
+
+        expect(lock).toMatchObject({
+          definitionId,
+          ownerRunId,
+        });
+        expect(lock.createdAt).toBeInstanceOf(Date);
+        expect(lock.token).toMatch(/^lock-/u);
+        expect(recording.requests).toHaveLength(1);
+        expect(recording.requests[0]).toMatchObject({
+          body: {
+            container: "migrate-sdk",
+            key: expectedKey,
+            value: {
+              formatVersion: 1,
+              index: {
+                definitionId,
+                ownerRunId,
+              },
+              namespace,
+              recordKind: "migration-definition-lock",
+              state: {
+                createdAt: lock.createdAt.toISOString(),
+                definitionId,
+                ownerRunId,
+                token: lock.token,
+              },
+            },
+            version: 0,
+          },
+          method: "POST",
+        });
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  it.effect("maps duplicate definition lock acquisition to a store error", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const firstOwnerRunId = toMigrationRunId("run-lock-owner-1");
+    const secondOwnerRunId = toMigrationRunId("run-lock-owner-2");
+
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+
+      yield* store.acquireDefinitionLock(definitionId, firstOwnerRunId);
+      const error = yield* store
+        .acquireDefinitionLock(definitionId, secondOwnerRunId)
+        .pipe(Effect.flip);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          message: "Migration definition is already locked",
+        })
+      );
+      expect(recording.requests).toHaveLength(2);
+      expect(recording.requests[1]).toMatchObject({
+        body: {
+          key: definitionLockKey(definitionId),
+          version: 0,
+        },
+        method: "POST",
+      });
+    }).pipe(Effect.provide(makeStoreLayer(recording)));
+  });
+
+  it.effect("maps non-conflict SDK lock acquisition failures to store errors", () => {
+    const apiRoot = new PlatformApiRoot({
+      executeRequest: () =>
+        Promise.reject({
+          body: {
+            message: "transient platform failure",
+            statusCode: 500,
+          },
+          statusCode: 500,
+        }),
+    });
+
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const error = yield* store
+        .acquireDefinitionLock(definitionId, toMigrationRunId("run-lock-error"))
+        .pipe(Effect.flip);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          message: expect.stringContaining(
+            "Unable to acquire migration definition lock"
+          ),
+        })
+      );
+    }).pipe(
+      Effect.provide(
+        CommercetoolsMigrationStore.layerFromApiRoot({
+          apiRoot,
+          container: "migrate-sdk",
+          namespace,
+          projectKey: "test-project",
+        })
+      )
+    );
+  });
+
+  it.effect(
+    "releases definition locks by reading and deleting the current Custom Object version",
+    () => {
+      const recording = makeRecordingCommercetoolsApiRoot();
+      const ownerRunId = toMigrationRunId("run-lock-release");
+      const expectedKey = definitionLockKey(definitionId);
+
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const lock = yield* store.acquireDefinitionLock(
+          definitionId,
+          ownerRunId
+        );
+
+        yield* store.releaseDefinitionLock(lock);
+        yield* store.acquireDefinitionLock(definitionId, ownerRunId);
+
+        expect(recording.requests).toHaveLength(4);
+        expect(recording.requests[1]).toMatchObject({
+          method: "GET",
+          pathVariables: {
+            container: "migrate-sdk",
+            key: expectedKey,
+            projectKey: "test-project",
+          },
+        });
+        expect(recording.requests[2]).toMatchObject({
+          method: "DELETE",
+          pathVariables: {
+            container: "migrate-sdk",
+            key: expectedKey,
+            projectKey: "test-project",
+          },
+          queryParams: {
+            version: 1,
+          },
+        });
+        expect(recording.requests[3]).toMatchObject({
+          body: {
+            key: expectedKey,
+            version: 0,
+          },
+          method: "POST",
+        });
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  it.effect("refuses to release locks owned by another runner", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const ownerRunId = toMigrationRunId("run-lock-owner");
+    const otherRunId = toMigrationRunId("run-lock-other-owner");
+
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const lock = yield* store.acquireDefinitionLock(
+        definitionId,
+        ownerRunId
+      );
+
+      const error = yield* store
+        .releaseDefinitionLock({
+          ...lock,
+          ownerRunId: otherRunId,
+        })
+        .pipe(Effect.flip);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          message: "Migration definition lock is owned by another runner",
+        })
+      );
+      expect(
+        recording.requests.some((request) => request.method === "DELETE")
+      ).toBe(false);
+
+      yield* store.releaseDefinitionLock(lock);
+      expect(
+        recording.requests.some((request) => request.method === "DELETE")
+      ).toBe(true);
+    }).pipe(Effect.provide(makeStoreLayer(recording)));
+  });
+
+  it.effect("treats releasing a missing definition lock as a no-op", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const expectedKey = definitionLockKey(definitionId);
+
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+
+      yield* store.releaseDefinitionLock({
+        createdAt: new Date("2026-06-09T12:00:00.000Z"),
+        definitionId,
+        ownerRunId: toMigrationRunId("run-missing-lock"),
+        token: toMigrationDefinitionLockToken("lock-missing"),
+      });
+
+      expect(recording.requests).toEqual([
+        expect.objectContaining({
+          method: "GET",
+          pathVariables: {
+            container: "migrate-sdk",
+            key: expectedKey,
+            projectKey: "test-project",
+          },
+        }),
+      ]);
+    }).pipe(Effect.provide(makeStoreLayer(recording)));
   });
 
   it.effect("provides the MigrationStore service from an API root", () => {
