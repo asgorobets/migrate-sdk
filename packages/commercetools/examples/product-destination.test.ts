@@ -224,11 +224,40 @@ const assertProductUpdateBuilderTypes = (update: ProductUpdateFactory) => {
       "en-US": "Example Book Updated",
     },
   });
+  builder.withActions([
+    {
+      action: "changeSlug",
+      slug: {
+        "en-US": "example-book-updated",
+      },
+    },
+  ]);
+  builder
+    .action({
+      action: "publish",
+    })
+    .withActions([])
+    .withActions([
+      {
+        action: "unpublish",
+      },
+    ])
+    .command();
 
   // @ts-expect-error The SDK product action union does not include this action.
   builder.action({ action: "unknownProductAction" });
   // @ts-expect-error Product changeName actions require name.
   builder.action({ action: "changeName" });
+  // @ts-expect-error withActions requires at least one action.
+  builder.withActions([]);
+  builder.withActions([
+    // @ts-expect-error The SDK product action union does not include this action.
+    { action: "unknownProductAction" },
+  ]);
+  builder.withActions([
+    // @ts-expect-error Product changeName actions require name.
+    { action: "changeName" },
+  ]);
   builder.action({
     action: "addToCategory",
     // @ts-expect-error Category resource identifiers require id or key.

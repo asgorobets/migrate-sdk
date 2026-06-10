@@ -30,7 +30,7 @@ export interface UpdateWithActionsInput<
   readonly actions: NonEmptyUpdateActions<Action>;
 }
 
-interface UpdateActionMethods<
+interface UpdateActionMethod<
   Kind extends string,
   Selector,
   ActionUnion extends UpdateActionBase,
@@ -45,8 +45,11 @@ export interface EmptyUpdateActionBuilder<
   Kind extends string,
   Selector,
   ActionUnion extends UpdateActionBase,
-> extends UpdateActionMethods<Kind, Selector, ActionUnion> {
+> extends UpdateActionMethod<Kind, Selector, ActionUnion> {
   readonly actions: readonly [];
+  readonly withActions: <const Action extends ActionUnion>(
+    actions: NonEmptyUpdateActions<Action>
+  ) => UpdateActionBuilder<Kind, Selector, ActionUnion, Action>;
 }
 
 export interface UpdateActionBuilder<
@@ -54,9 +57,12 @@ export interface UpdateActionBuilder<
   Selector,
   ActionUnion extends UpdateActionBase,
   Action extends ActionUnion = ActionUnion,
-> extends UpdateActionMethods<Kind, Selector, ActionUnion, Action> {
+> extends UpdateActionMethod<Kind, Selector, ActionUnion, Action> {
   readonly actions: NonEmptyUpdateActions<Action>;
   readonly command: () => UpdateCommandShape<Kind, Selector, Action>;
+  readonly withActions: <const NextAction extends ActionUnion>(
+    actions: readonly NextAction[]
+  ) => UpdateActionBuilder<Kind, Selector, ActionUnion, Action | NextAction>;
 }
 
 export interface UpdateCommandFactory<
@@ -102,7 +108,11 @@ const makeUpdateActionBuilder = <
   input: UpdateInput<Selector> & {
     readonly actions: readonly CurrentAction[];
   }
-): UpdateActionMethods<Kind, Selector, ActionUnion, CurrentAction> => {
+): UpdateActionMethod<Kind, Selector, ActionUnion, CurrentAction> & {
+  readonly withActions: <const Action extends ActionUnion>(
+    actions: readonly Action[]
+  ) => UpdateActionBuilder<Kind, Selector, ActionUnion, CurrentAction | Action>;
+} => {
   const append = <const Action extends ActionUnion>(
     action: Action
   ): UpdateActionBuilder<Kind, Selector, ActionUnion, CurrentAction | Action> =>
@@ -110,9 +120,20 @@ const makeUpdateActionBuilder = <
       ...input,
       actions: nonEmptyUpdateActions([...input.actions, action], options.label),
     });
+  const appendMany = <const Action extends ActionUnion>(
+    actions: readonly Action[]
+  ): UpdateActionBuilder<Kind, Selector, ActionUnion, CurrentAction | Action> =>
+    makeUpdateActionBuilderWithActions(options, {
+      ...input,
+      actions: nonEmptyUpdateActions(
+        [...input.actions, ...actions],
+        options.label
+      ),
+    });
 
   return {
     action: append,
+    withActions: appendMany,
   };
 };
 

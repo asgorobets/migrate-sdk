@@ -125,15 +125,16 @@ export const runProductDestinationExample = Effect.fn(
     .unset("isbn")
     .toActions({ sku: "example-book-paperback", staged: true });
 
-  const updateCommand = destination.commands.products.update
-    .withActions({
-      actions: [...productAttributeActions, ...variantAttributeActions],
+  const updateCommand = destination.commands.products
+    .update({
       selector: {
         id: String(created.destinationIdentity),
         kind: "id",
       },
       version: productVersion,
     })
+    .withActions(productAttributeActions)
+    .withActions(variantAttributeActions)
     .action({
       action: "changeName",
       name: {
