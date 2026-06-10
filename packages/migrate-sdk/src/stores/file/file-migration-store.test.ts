@@ -468,6 +468,74 @@ describe("FileMigrationStore", () => {
     )
   );
 
+  it.effect("reads latest run state and item-state summaries", () =>
+    withTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("articles");
+        const runId = toMigrationRunId("run-status-file");
+        const updatedAt = new Date("2026-01-01T00:00:02.000Z");
+
+        yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          expect(yield* store.getLatestRunState(definitionId)).toBeNull();
+          yield* store.beginRun(runId, [definitionId]);
+          const completedRun = yield* store.completeRun(runId, [definitionId]);
+
+          yield* store.upsertItemState({
+            definitionId,
+            destinationIdentity: toDestinationIdentity("entry-status-1"),
+            lastRunId: runId,
+            sourceIdentity: toSourceIdentity("article-status-1"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            status: "migrated",
+            updatedAt,
+          });
+          yield* store.upsertItemState({
+            definitionId,
+            lastRunId: runId,
+            skipReason: "Not published",
+            sourceIdentity: toSourceIdentity("article-status-2"),
+            sourceVersion: toSourceVersion("source-version-2"),
+            status: "skipped",
+            updatedAt,
+          });
+          yield* store.upsertItemState({
+            definitionId,
+            error: {
+              errorTag: "PipelineError",
+              kind: "pipeline",
+              message: "Pipeline failed",
+            },
+            lastRunId: runId,
+            sourceIdentity: toSourceIdentity("article-status-3"),
+            status: "failed",
+            updatedAt,
+          });
+          yield* store.upsertItemState({
+            definitionId,
+            destinationIdentity: toDestinationIdentity("entry-status-4"),
+            lastRunId: runId,
+            reason: "Stub requires update",
+            sourceIdentity: toSourceIdentity("article-status-4"),
+            status: "needs-update",
+            updatedAt,
+          });
+
+          expect(yield* store.getLatestRunState(definitionId)).toEqual(
+            completedRun
+          );
+          expect(yield* store.getItemStateSummary(definitionId)).toEqual({
+            failed: 1,
+            migrated: 1,
+            needsUpdate: 1,
+            skipped: 1,
+          });
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+      })
+    )
+  );
+
   it.effect("uses persisted skipped item state in skipped mode", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {

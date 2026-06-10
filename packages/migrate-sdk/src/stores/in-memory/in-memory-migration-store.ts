@@ -17,6 +17,7 @@ import {
 import type { MigrationDefinitionLock } from "../../domain/lock.ts";
 import type { MigrationRunState } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
+import { summarizeMigrationItemStates } from "../../domain/status.ts";
 import { MigrationStore } from "../../services/migration-store.ts";
 
 export interface InMemoryMigrationStoreState {
@@ -119,6 +120,14 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         )
     );
 
+    const getItemStateSummary = Effect.fn(
+      "InMemoryMigrationStore.getItemStateSummary"
+    )(function* (definitionId: MigrationDefinitionId) {
+      const itemStates = yield* listItemStates(definitionId);
+
+      return summarizeMigrationItemStates(itemStates);
+    });
+
     const deleteItemState = Effect.fn("InMemoryMigrationStore.deleteItemState")(
       (definitionId: MigrationDefinitionId, identity: SourceIdentity) =>
         Effect.sync(() => {
@@ -142,6 +151,12 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
 
       return runId;
     });
+
+    const getLatestRunState = Effect.fn(
+      "InMemoryMigrationStore.getLatestRunState"
+    )((definitionId: MigrationDefinitionId) =>
+      Effect.sync(() => state.latestRunStates.get(definitionId) ?? null)
+    );
 
     const beginRun = Effect.fn("InMemoryMigrationStore.beginRun")(
       (
@@ -259,9 +274,11 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       setSourceCursor,
       getItemState,
       listItemStates,
+      getItemStateSummary,
       deleteItemState,
       upsertItemState,
       createRunId,
+      getLatestRunState,
       beginRun,
       completeRun,
       failRun,

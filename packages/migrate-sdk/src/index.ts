@@ -99,6 +99,23 @@ export type {
 } from "./domain/run.ts";
 
 export {
+  DuplicateSourceIdentityStatusWarning,
+  InvalidSourceItemStatusWarning,
+  makeMigrationStatusRequest,
+  MigrationDefinitionSourceStatus,
+  MigrationDefinitionStatus,
+  MigrationItemStateSummary,
+  MigrationStatusReport,
+  MigrationStatusRequestError,
+  MigrationStatusWarning,
+} from "./domain/status.ts";
+export type {
+  GetMigrationStatusesError,
+  MigrationStatusRequest,
+  MigrationStatusRequestInput,
+} from "./domain/status.ts";
+
+export {
   DuplicateMigrationDefinitionId,
   MigrationDefinitionDuplicateRequestedDefinitionIgnored,
   MigrationDefinitionDuplicateTargetIdIgnored,
@@ -180,6 +197,7 @@ export type {
 export { MigrationStore } from "./services/migration-store.ts";
 export { SourcePlugin } from "./services/source-plugin.ts";
 
+export { getMigrationStatuses } from "./runtime/get-migration-statuses.ts";
 export {
   rollbackMigration,
   rollbackMigrations,
