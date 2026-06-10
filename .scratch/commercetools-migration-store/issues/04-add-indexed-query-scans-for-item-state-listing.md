@@ -18,17 +18,17 @@ internal scans.
 
 ## Acceptance criteria
 
-- [ ] Item-state records include scalar index metadata needed to query by namespace and definition id.
-- [ ] `listItemStates(definitionId)` filters records by namespace, record kind, and definition id.
-- [ ] Query predicates are built through a centralized internal query builder.
-- [ ] User-provided predicate values are escaped or bound through one internal path.
-- [ ] Query scans sort by Custom Object key.
-- [ ] Query scans use the last key from the previous page as the next page cursor.
-- [ ] Query scans request no more than the configured page size.
-- [ ] Query scans disable total-count computation.
-- [ ] Multi-page scans collect all matching item states for the current public `MigrationStore` API.
-- [ ] Tests prove scanning continues beyond one page without using offset.
-- [ ] Typecheck and relevant query/listing tests pass.
+- [x] Item-state records include scalar index metadata needed to query by namespace and definition id.
+- [x] `listItemStates(definitionId)` filters records by namespace, record kind, and definition id.
+- [x] Query predicates are built through a centralized internal query builder.
+- [x] User-provided predicate values are escaped or bound through one internal path.
+- [x] Query scans sort by Custom Object key.
+- [x] Query scans use the last key from the previous page as the next page cursor.
+- [x] Query scans request no more than the configured page size.
+- [x] Query scans disable total-count computation.
+- [x] Multi-page scans collect all matching item states for the current public `MigrationStore` API.
+- [x] Tests prove scanning continues beyond one page without using offset.
+- [x] Typecheck and relevant query/listing tests pass.
 
 ## Blocked by
 

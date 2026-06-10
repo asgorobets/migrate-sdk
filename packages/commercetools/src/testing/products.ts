@@ -12,6 +12,7 @@ import type {
   CustomerUpdateAction,
   CustomObject,
   CustomObjectDraft,
+  CustomObjectPagedQueryResponse,
   InventoryEntry,
   InventoryEntryDraft,
   InventoryEntryUpdate,
@@ -65,6 +66,7 @@ export interface RecordingCommercetoolsApiRoot {
 type RecordedCommercetoolsResponseBody =
   | BusinessUnit
   | CustomObject
+  | CustomObjectPagedQueryResponse
   | Customer
   | CustomerSignInResult
   | InventoryEntry
@@ -392,6 +394,12 @@ const isCustomObjectRequest = (request: ClientRequest): boolean =>
 const customObjectStorageKey = (container: string, key: string): string =>
   `${container}\u0000${key}`;
 
+const customObjectContainer = (request: ClientRequest): string | undefined => {
+  const container = request.pathVariables?.container;
+
+  return typeof container === "string" ? container : undefined;
+};
+
 const customObjectPath = (
   request: ClientRequest
 ): { readonly container: string; readonly key: string } | undefined => {
@@ -436,6 +444,111 @@ const recordedCustomObject = ({
   value: draft.value,
   version,
 });
+
+const recordedCustomObjectPage = ({
+  limit,
+  results,
+}: {
+  readonly limit: number;
+  readonly results: readonly CustomObject[];
+}): CustomObjectPagedQueryResponse => ({
+  count: results.length,
+  limit,
+  offset: 0,
+  results: [...results],
+});
+
+const stringQueryParam = (value: unknown): string | undefined => {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    return value.every((item) => typeof item === "string")
+      ? value.join(" and ")
+      : undefined;
+  }
+
+  return undefined;
+};
+
+const numberQueryParam = (value: unknown): number | undefined => {
+  if (typeof value === "number") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+
+    return Number.isNaN(parsed) ? undefined : parsed;
+  }
+
+  return undefined;
+};
+
+const queryVariable = (
+  queryParams: RecordedCommercetoolsRequest["queryParams"],
+  name: string
+): string | undefined => {
+  const value = stringQueryParam(queryParams?.[`var.${name}`]);
+
+  return value === "" ? undefined : value;
+};
+
+const valueRecord = (
+  value: unknown
+): {
+  readonly index?: { readonly definitionId?: unknown };
+  readonly namespace?: unknown;
+  readonly recordKind?: unknown;
+} | null => {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+
+  const index =
+    "index" in value && isRecord(value.index) && "definitionId" in value.index
+      ? { definitionId: value.index.definitionId }
+      : undefined;
+
+  return {
+    ...(index === undefined ? {} : { index }),
+    namespace: "namespace" in value ? value.namespace : undefined,
+    recordKind: "recordKind" in value ? value.recordKind : undefined,
+  };
+};
+
+const customObjectMatchesWhere = (
+  customObject: CustomObject,
+  where: string | undefined,
+  queryParams: RecordedCommercetoolsRequest["queryParams"]
+): boolean => {
+  if (where === undefined) {
+    return true;
+  }
+
+  const value = valueRecord(customObject.value);
+
+  if (value === null) {
+    return false;
+  }
+
+  const namespace = queryVariable(queryParams, "namespace");
+  const recordKind = queryVariable(queryParams, "recordKind");
+  const definitionId = queryVariable(queryParams, "definitionId");
+  const lastKey = queryVariable(queryParams, "lastKey");
+
+  return (
+    (!where.includes("value(namespace = :namespace)") ||
+      value.namespace === namespace) &&
+    (!where.includes("value(recordKind = :recordKind)") ||
+      value.recordKind === recordKind) &&
+    (!where.includes("value(index(definitionId = :definitionId))") ||
+      value.index?.definitionId === definitionId) &&
+    (!where.includes("key > :lastKey") ||
+      (lastKey !== undefined && customObject.key > lastKey))
+  );
+};
 
 const recordedNotFoundError = (message: string): Error & { statusCode: 404 } =>
   Object.assign(new Error(message), {
@@ -1126,6 +1239,27 @@ export const makeRecordingCommercetoolsApiRoot =
         customObjects.set(storageKey, next);
 
         return recordedResponse(next);
+      }
+
+      const container = customObjectContainer(request);
+
+      if (
+        request.method === "GET" &&
+        container !== undefined &&
+        typeof request.pathVariables?.key !== "string"
+      ) {
+        const where = stringQueryParam(request.queryParams?.where);
+        const limit = numberQueryParam(request.queryParams?.limit) ?? 20;
+        const results = Array.from(customObjects.values())
+          .filter(
+            (customObject) =>
+              customObject.container === container &&
+              customObjectMatchesWhere(customObject, where, request.queryParams)
+          )
+          .sort((left, right) => left.key.localeCompare(right.key))
+          .slice(0, limit);
+
+        return recordedResponse(recordedCustomObjectPage({ limit, results }));
       }
 
       const path = customObjectPath(request);

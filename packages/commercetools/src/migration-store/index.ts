@@ -2,15 +2,16 @@ import { createHash, randomUUID } from "node:crypto";
 import type {
   CustomObject,
   CustomObjectDraft,
+  CustomObjectPagedQueryResponse,
 } from "@commercetools/platform-sdk";
 import { Effect, Layer, Schema } from "effect";
 import {
   DestinationIdentity as DestinationIdentitySchema,
   DestinationVersion as DestinationVersionSchema,
   EncodedSourceCursor as EncodedSourceCursorSchema,
-  MigrationDefinitionLock as MigrationDefinitionLockSchema,
-  MigrationDefinitionLockToken as MigrationDefinitionLockTokenSchema,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
+  type MigrationDefinitionLock as MigrationDefinitionLockSchema,
+  MigrationDefinitionLockToken as MigrationDefinitionLockTokenSchema,
   MigrationItemError,
   MigrationRunId as MigrationRunIdSchema,
   type MigrationRunState,
@@ -185,11 +186,6 @@ const storeError = (message: string, cause?: unknown): MigrationStoreError =>
     ...(cause === undefined ? {} : { cause }),
   });
 
-const unsupportedOperation = (operation: string): MigrationStoreError =>
-  storeError(
-    `Commercetools migration store operation is not implemented yet: ${operation}`
-  );
-
 const hashSegment = (value: string): string =>
   createHash("sha256").update(value).digest("base64url");
 
@@ -329,6 +325,34 @@ const isConcurrentModificationSdkError = (
   cause: CommercetoolsSdkError
 ): boolean => hasStatusCode(cause.cause, 409);
 
+interface CustomObjectQueryPredicate {
+  readonly variables: Readonly<Record<`var.${string}`, string>>;
+  readonly where: string;
+}
+
+const itemStateListPredicate = ({
+  definitionId,
+  lastKey,
+  namespace,
+}: {
+  readonly definitionId: MigrationDefinitionId;
+  readonly lastKey?: string;
+  readonly namespace: string;
+}): CustomObjectQueryPredicate => ({
+  variables: {
+    "var.definitionId": definitionId,
+    ...(lastKey === undefined ? {} : { "var.lastKey": lastKey }),
+    "var.namespace": namespace,
+    "var.recordKind": "migration-item-state",
+  },
+  where: [
+    "value(namespace = :namespace)",
+    "value(recordKind = :recordKind)",
+    "value(index(definitionId = :definitionId))",
+    ...(lastKey === undefined ? [] : ["key > :lastKey"]),
+  ].join(" and "),
+});
+
 const lockAcquisitionError = (
   definitionId: MigrationDefinitionId,
   cause: CommercetoolsSdkError
@@ -449,6 +473,32 @@ const deleteCustomObject = (
       )
     );
 
+const queryCustomObjects = (
+  sdk: typeof CommercetoolsSdk.Service,
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  predicate: CustomObjectQueryPredicate
+): Effect.Effect<CustomObjectPagedQueryResponse, MigrationStoreError> =>
+  sdk
+    .request("customObjects.queryMigrationStoreRecords", (project) =>
+      project
+        .customObjects()
+        .withContainer({ container: options.container })
+        .get({
+          queryArgs: {
+            limit: options.pageSize,
+            sort: "key asc",
+            where: predicate.where,
+            withTotal: false,
+            ...predicate.variables,
+          },
+        })
+    )
+    .pipe(
+      Effect.mapError((cause) =>
+        storeError("Unable to query migration store Custom Objects", cause)
+      )
+    );
+
 const readRecordOptional = <A>(
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions,
@@ -554,6 +604,52 @@ const readLatestRunState = (
     latestRunStateKey(options.namespace, definitionId),
     LatestRunStateRecord
   ).pipe(Effect.map((record) => record?.state ?? null));
+
+const listItemStates = (
+  sdk: typeof CommercetoolsSdk.Service,
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  definitionId: MigrationDefinitionId
+): Effect.Effect<readonly MigrationItemState[], MigrationStoreError> =>
+  Effect.gen(function* () {
+    const itemStates: MigrationItemState[] = [];
+    let lastKey: string | undefined;
+
+    while (true) {
+      const page = yield* queryCustomObjects(
+        sdk,
+        options,
+        itemStateListPredicate({
+          definitionId,
+          namespace: options.namespace,
+          ...(lastKey === undefined ? {} : { lastKey }),
+        })
+      );
+
+      for (const customObject of page.results) {
+        const record = yield* decodeRecord(
+          MigrationItemStateRecord,
+          customObject.value,
+          customObject.key
+        );
+
+        itemStates.push(record.state);
+      }
+
+      if (page.results.length < options.pageSize) {
+        break;
+      }
+
+      const nextLastKey = page.results.at(-1)?.key;
+
+      if (nextLastKey === undefined || nextLastKey === lastKey) {
+        break;
+      }
+
+      lastKey = nextLastKey;
+    }
+
+    return itemStates;
+  });
 
 const readRunState = (
   sdk: typeof CommercetoolsSdk.Service,
@@ -782,7 +878,8 @@ const makeService = (
     getSourceCursor,
     setSourceCursor,
     getItemState,
-    listItemStates: () => Effect.fail(unsupportedOperation("listItemStates")),
+    listItemStates: (definitionId: MigrationDefinitionId) =>
+      listItemStates(sdk, options, definitionId),
     deleteItemState,
     upsertItemState,
     createRunId: Effect.sync(() => toMigrationRunId(`run-${randomUUID()}`)),

@@ -13,14 +13,15 @@ import {
   toDestinationIdentity,
   toDestinationVersion,
   toEncodedSourceCursor,
-  toMigrationDefinitionLockToken,
   toMigrationDefinitionId,
+  toMigrationDefinitionLockToken,
   toMigrationRunId,
   toSourceIdentity,
   toSourceVersion,
 } from "migrate-sdk";
 
 const runIdPattern = /^run-/u;
+const lockTokenPattern = /^lock-/u;
 const definitionId = toMigrationDefinitionId("catalog-products");
 const sourceIdentity = toSourceIdentity("product:sku-123");
 const namespace = "catalog-import";
@@ -40,6 +41,12 @@ const latestRunStateKey = (definition: string): string =>
 const definitionLockKey = (definition: string): string =>
   `${namespace}__migration-definition-lock__definition_${hashedSegment(definition)}`;
 
+const itemStateQueryWhere = [
+  "value(namespace = :namespace)",
+  "value(recordKind = :recordKind)",
+  "value(index(definitionId = :definitionId))",
+].join(" and ");
+
 const customObjectKey = (
   request: RecordedCommercetoolsRequest
 ): string | undefined => {
@@ -58,6 +65,16 @@ const customObjectKey = (
 
   return undefined;
 };
+
+const customObjectQueryRequests = (
+  requests: readonly RecordedCommercetoolsRequest[]
+): readonly RecordedCommercetoolsRequest[] =>
+  requests.filter(
+    (request) =>
+      request.method === "GET" &&
+      request.pathVariables?.container === "migrate-sdk" &&
+      request.pathVariables?.key === undefined
+  );
 
 class RecordedHttpError extends Data.TaggedError("RecordedHttpError")<{
   readonly cause: unknown;
@@ -83,12 +100,14 @@ const recordedHttpError = (cause: unknown): RecordedHttpError =>
   });
 
 const makeStoreLayer = (
-  recording: ReturnType<typeof makeRecordingCommercetoolsApiRoot>
+  recording: ReturnType<typeof makeRecordingCommercetoolsApiRoot>,
+  options: { readonly pageSize?: number } = {}
 ) =>
   CommercetoolsMigrationStore.layerFromApiRoot({
     apiRoot: recording.apiRoot,
     container: "migrate-sdk",
     namespace,
+    ...(options.pageSize === undefined ? {} : { pageSize: options.pageSize }),
     projectKey: "test-project",
   });
 
@@ -157,7 +176,7 @@ describe("CommercetoolsMigrationStore", () => {
           ownerRunId,
         });
         expect(lock.createdAt).toBeInstanceOf(Date);
-        expect(lock.token).toMatch(/^lock-/u);
+        expect(lock.token).toMatch(lockTokenPattern);
         expect(recording.requests).toHaveLength(1);
         expect(recording.requests[0]).toMatchObject({
           body: {
@@ -186,73 +205,82 @@ describe("CommercetoolsMigrationStore", () => {
     }
   );
 
-  it.effect("maps duplicate definition lock acquisition to a store error", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
-    const firstOwnerRunId = toMigrationRunId("run-lock-owner-1");
-    const secondOwnerRunId = toMigrationRunId("run-lock-owner-2");
+  it.effect(
+    "maps duplicate definition lock acquisition to a store error",
+    () => {
+      const recording = makeRecordingCommercetoolsApiRoot();
+      const firstOwnerRunId = toMigrationRunId("run-lock-owner-1");
+      const secondOwnerRunId = toMigrationRunId("run-lock-owner-2");
 
-    return Effect.gen(function* () {
-      const store = yield* MigrationStore;
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
 
-      yield* store.acquireDefinitionLock(definitionId, firstOwnerRunId);
-      const error = yield* store
-        .acquireDefinitionLock(definitionId, secondOwnerRunId)
-        .pipe(Effect.flip);
+        yield* store.acquireDefinitionLock(definitionId, firstOwnerRunId);
+        const error = yield* store
+          .acquireDefinitionLock(definitionId, secondOwnerRunId)
+          .pipe(Effect.flip);
 
-      expect(error).toEqual(
-        expect.objectContaining({
-          _tag: "MigrationStoreError",
-          message: "Migration definition is already locked",
-        })
-      );
-      expect(recording.requests).toHaveLength(2);
-      expect(recording.requests[1]).toMatchObject({
-        body: {
-          key: definitionLockKey(definitionId),
-          version: 0,
-        },
-        method: "POST",
-      });
-    }).pipe(Effect.provide(makeStoreLayer(recording)));
-  });
-
-  it.effect("maps non-conflict SDK lock acquisition failures to store errors", () => {
-    const apiRoot = new PlatformApiRoot({
-      executeRequest: () =>
-        Promise.reject({
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationStoreError",
+            message: "Migration definition is already locked",
+          })
+        );
+        expect(recording.requests).toHaveLength(2);
+        expect(recording.requests[1]).toMatchObject({
           body: {
-            message: "transient platform failure",
-            statusCode: 500,
+            key: definitionLockKey(definitionId),
+            version: 0,
           },
-          statusCode: 500,
-        }),
-    });
+          method: "POST",
+        });
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
 
-    return Effect.gen(function* () {
-      const store = yield* MigrationStore;
-      const error = yield* store
-        .acquireDefinitionLock(definitionId, toMigrationRunId("run-lock-error"))
-        .pipe(Effect.flip);
+  it.effect(
+    "maps non-conflict SDK lock acquisition failures to store errors",
+    () => {
+      const apiRoot = new PlatformApiRoot({
+        executeRequest: () =>
+          Promise.reject({
+            body: {
+              message: "transient platform failure",
+              statusCode: 500,
+            },
+            statusCode: 500,
+          }),
+      });
 
-      expect(error).toEqual(
-        expect.objectContaining({
-          _tag: "MigrationStoreError",
-          message: expect.stringContaining(
-            "Unable to acquire migration definition lock"
-          ),
-        })
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const error = yield* store
+          .acquireDefinitionLock(
+            definitionId,
+            toMigrationRunId("run-lock-error")
+          )
+          .pipe(Effect.flip);
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationStoreError",
+            message: expect.stringContaining(
+              "Unable to acquire migration definition lock"
+            ),
+          })
+        );
+      }).pipe(
+        Effect.provide(
+          CommercetoolsMigrationStore.layerFromApiRoot({
+            apiRoot,
+            container: "migrate-sdk",
+            namespace,
+            projectKey: "test-project",
+          })
+        )
       );
-    }).pipe(
-      Effect.provide(
-        CommercetoolsMigrationStore.layerFromApiRoot({
-          apiRoot,
-          container: "migrate-sdk",
-          namespace,
-          projectKey: "test-project",
-        })
-      )
-    );
-  });
+    }
+  );
 
   it.effect(
     "releases definition locks by reading and deleting the current Custom Object version",
@@ -309,10 +337,7 @@ describe("CommercetoolsMigrationStore", () => {
 
     return Effect.gen(function* () {
       const store = yield* MigrationStore;
-      const lock = yield* store.acquireDefinitionLock(
-        definitionId,
-        ownerRunId
-      );
+      const lock = yield* store.acquireDefinitionLock(definitionId, ownerRunId);
 
       const error = yield* store
         .releaseDefinitionLock({
@@ -637,6 +662,188 @@ describe("CommercetoolsMigrationStore", () => {
           },
         },
       });
+    }).pipe(Effect.provide(makeStoreLayer(recording)));
+  });
+
+  it.effect("lists item states by definition through indexed queries", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const runId = toMigrationRunId("run-list-item-states");
+    const additionalDefinitionId = toMigrationDefinitionId("catalog-prices");
+    const firstState = {
+      definitionId,
+      destinationIdentity: toDestinationIdentity("ct-product-a"),
+      lastRunId: runId,
+      sourceIdentity: toSourceIdentity("product:sku-a"),
+      sourceVersion: toSourceVersion("source-a"),
+      status: "migrated",
+      updatedAt: new Date("2026-06-09T12:00:00.000Z"),
+    } as const;
+    const secondState = {
+      definitionId,
+      lastRunId: runId,
+      skipReason: "unchanged",
+      sourceIdentity: toSourceIdentity("product:sku-b"),
+      sourceVersion: toSourceVersion("source-b"),
+      status: "skipped",
+      updatedAt: new Date("2026-06-09T12:01:00.000Z"),
+    } as const;
+    const otherDefinitionState = {
+      definitionId: additionalDefinitionId,
+      destinationIdentity: toDestinationIdentity("ct-price-a"),
+      lastRunId: runId,
+      sourceIdentity: toSourceIdentity("price:sku-a"),
+      sourceVersion: toSourceVersion("source-price-a"),
+      status: "migrated",
+      updatedAt: new Date("2026-06-09T12:02:00.000Z"),
+    } as const;
+
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+
+      yield* store.upsertItemState(firstState);
+      yield* store.upsertItemState(otherDefinitionState);
+      yield* store.upsertItemState(secondState);
+
+      const listed = yield* store.listItemStates(definitionId);
+
+      expect(listed).toHaveLength(2);
+      expect(listed).toEqual(expect.arrayContaining([firstState, secondState]));
+
+      const [query] = customObjectQueryRequests(recording.requests);
+
+      expect(query).toMatchObject({
+        method: "GET",
+        pathVariables: {
+          container: "migrate-sdk",
+          projectKey: "test-project",
+        },
+        queryParams: {
+          "var.definitionId": definitionId,
+          "var.namespace": namespace,
+          "var.recordKind": "migration-item-state",
+          limit: 500,
+          sort: "key asc",
+          where: itemStateQueryWhere,
+          withTotal: false,
+        },
+      });
+      expect(query?.queryParams).not.toHaveProperty("offset");
+    }).pipe(Effect.provide(makeStoreLayer(recording)));
+  });
+
+  it.effect("scans item states across pages with keyset pagination", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const runId = toMigrationRunId("run-list-item-states-pages");
+    const itemStates = [
+      {
+        definitionId,
+        destinationIdentity: toDestinationIdentity("ct-product-a"),
+        lastRunId: runId,
+        sourceIdentity: toSourceIdentity("product:sku-a"),
+        sourceVersion: toSourceVersion("source-a"),
+        status: "migrated",
+        updatedAt: new Date("2026-06-09T12:00:00.000Z"),
+      },
+      {
+        definitionId,
+        destinationIdentity: toDestinationIdentity("ct-product-b"),
+        lastRunId: runId,
+        sourceIdentity: toSourceIdentity("product:sku-b"),
+        sourceVersion: toSourceVersion("source-b"),
+        status: "migrated",
+        updatedAt: new Date("2026-06-09T12:01:00.000Z"),
+      },
+      {
+        definitionId,
+        destinationIdentity: toDestinationIdentity("ct-product-c"),
+        lastRunId: runId,
+        sourceIdentity: toSourceIdentity("product:sku-c"),
+        sourceVersion: toSourceVersion("source-c"),
+        status: "migrated",
+        updatedAt: new Date("2026-06-09T12:02:00.000Z"),
+      },
+    ] as const;
+
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+
+      for (const itemState of itemStates) {
+        yield* store.upsertItemState(itemState);
+      }
+
+      const listed = yield* store.listItemStates(definitionId);
+
+      expect(listed).toHaveLength(itemStates.length);
+      expect(listed).toEqual(expect.arrayContaining([...itemStates]));
+
+      const queries = customObjectQueryRequests(recording.requests);
+      const sortedKeys = itemStates
+        .map((itemState) =>
+          itemStateKey(definitionId, itemState.sourceIdentity)
+        )
+        .sort();
+      const firstPageCursor = sortedKeys[1];
+
+      expect(queries).toHaveLength(2);
+      expect(queries[0]?.queryParams).toMatchObject({
+        "var.definitionId": definitionId,
+        "var.namespace": namespace,
+        "var.recordKind": "migration-item-state",
+        limit: 2,
+        sort: "key asc",
+        where: itemStateQueryWhere,
+        withTotal: false,
+      });
+      expect(queries[0]?.queryParams).not.toHaveProperty("offset");
+      expect(queries[0]?.queryParams?.where).not.toContain("key >");
+      expect(queries[1]?.queryParams).toMatchObject({
+        "var.definitionId": definitionId,
+        "var.lastKey": firstPageCursor,
+        "var.namespace": namespace,
+        "var.recordKind": "migration-item-state",
+        limit: 2,
+        sort: "key asc",
+        withTotal: false,
+        where: `${itemStateQueryWhere} and key > :lastKey`,
+      });
+      expect(queries[1]?.queryParams).not.toHaveProperty("offset");
+    }).pipe(Effect.provide(makeStoreLayer(recording, { pageSize: 2 })));
+  });
+
+  it.effect("binds definition ids as item-state query variables", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const quotedDefinitionId = toMigrationDefinitionId(
+      'catalog "special" \\ products'
+    );
+    const itemState = {
+      definitionId: quotedDefinitionId,
+      destinationIdentity: toDestinationIdentity("ct-product-special"),
+      lastRunId: toMigrationRunId("run-list-item-states-escaping"),
+      sourceIdentity: toSourceIdentity("product:sku-special"),
+      sourceVersion: toSourceVersion("source-special"),
+      status: "migrated",
+      updatedAt: new Date("2026-06-09T12:03:00.000Z"),
+    } as const;
+
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+
+      yield* store.upsertItemState(itemState);
+
+      expect(yield* store.listItemStates(quotedDefinitionId)).toEqual([
+        itemState,
+      ]);
+
+      const [query] = customObjectQueryRequests(recording.requests);
+
+      expect(query?.queryParams).toMatchObject({
+        "var.definitionId": quotedDefinitionId,
+        "var.namespace": namespace,
+        "var.recordKind": "migration-item-state",
+        where: itemStateQueryWhere,
+      });
+      expect(query?.queryParams?.where).toContain(":definitionId");
+      expect(query?.queryParams?.where).not.toContain('\\"special\\"');
     }).pipe(Effect.provide(makeStoreLayer(recording)));
   });
 
