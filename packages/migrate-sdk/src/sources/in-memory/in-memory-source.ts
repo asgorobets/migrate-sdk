@@ -128,7 +128,7 @@ const makeLayer = <A>(
 
 const make = <A>(
   options: InMemorySourceOptions<A>
-): ConfiguredSourcePlugin<A, InMemorySourceCursor> =>
+): ConfiguredSourcePlugin<A, InMemorySourceCursor, unknown> =>
   defineSourcePlugin({
     cursorSchema: InMemorySourceCursor,
     make: () => makeImplementation(options),

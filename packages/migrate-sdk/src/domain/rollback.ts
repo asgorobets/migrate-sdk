@@ -59,6 +59,12 @@ export type AnyRollbackMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Cursor is existential across heterogeneous rollback requests.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Rollback pipeline error is re-extracted by callers when execution exists.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source input is not relevant to rollback request shape.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source layer error is not relevant to rollback request shape.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source requirements are not relevant to rollback request shape.
   any
 >;
 
@@ -68,7 +74,10 @@ export type MigrationDefinitionRollbackPipelineError<Definition> =
     infer _Command,
     infer _PipelineError,
     infer _Cursor,
-    infer RollbackPipelineError
+    infer RollbackPipelineError,
+    infer _SourceInput,
+    infer _SourceLayerError,
+    infer _SourceRequirements
   >
     ? RollbackPipelineError
     : never;

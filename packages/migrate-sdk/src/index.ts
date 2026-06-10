@@ -9,16 +9,14 @@ export type {
   MigrationDefinitionDependenciesInput,
   MigrationDefinition,
   MigrationDefinitionInput,
+  SourcePayloadSchema,
   SourceReadResultInput,
   SourcePluginFactoryInput,
   SourcePluginImplementation,
   SourcePluginInput,
   SourceRetryStrategy,
 } from "./domain/definition.ts";
-export {
-  defineMigration,
-  defineSourcePlugin,
-} from "./domain/definition.ts";
+export { defineMigration, defineSourcePlugin } from "./domain/definition.ts";
 
 export type {
   DefinedDestinationCommands,
@@ -250,6 +248,21 @@ export type {
   CsvSourcePlatform,
   CsvVersion,
 } from "./sources/csv/csv-source.ts";
+
+export {
+  SqlSourcePlugin,
+  SqlSourcePluginName,
+} from "./sources/sql/sql-source.ts";
+export type {
+  SqlSourceLookup,
+  SqlSourceMetadata,
+  SqlSourceMetadataContext,
+  SqlSourceMetadataFailure,
+  SqlSourceMetadataResult,
+  SqlSourceMetadataSuccess,
+  SqlSourceOptions,
+  SqlSourceRead,
+} from "./sources/sql/sql-source.ts";
 
 export { InMemoryMigrationStore } from "./stores/in-memory/in-memory-migration-store.ts";
 export type { InMemoryMigrationStoreState } from "./stores/in-memory/in-memory-migration-store.ts";
