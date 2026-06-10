@@ -44,6 +44,21 @@ and `readByIdentity` execute configured statement builders, convert rows into
 Source Item inputs through metadata extraction, and normalize SQL execution
 failures into the current `SourcePluginError` boundary.
 
+The implementation validates cursor-window configuration and the source-item
+contract at the SQL boundary:
+
+- `batchSize` must be a positive integer before a read statement is built.
+- Read rows must produce Source Identity, Source Version, and Source Cursor
+  metadata.
+- Duplicate Source Identities in one read window fail that read after normal
+  Source Identity input normalization.
+- Direct lookup must return zero or one row, and a returned row's metadata
+  identity must match the requested Source Identity.
+
+The test suite includes a local SQLite-style table-backed client that exercises
+keyset pagination over multiple read windows and direct lookup without `OFFSET`
+or `LIMIT 1`.
+
 ## Target Public API
 
 The target raw SQL source exposes an Effect SQL `SqlClient` layer requirement

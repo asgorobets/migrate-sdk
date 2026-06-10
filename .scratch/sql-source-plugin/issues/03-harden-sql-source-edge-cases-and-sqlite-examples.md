@@ -1,6 +1,6 @@
 # Harden SQL Source Edge Cases And SQLite Examples
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Parent
 
@@ -14,24 +14,25 @@ The examples should demonstrate how a migration author writes deterministic keys
 
 ## Acceptance criteria
 
-- [ ] `batchSize` is validated as a positive integer.
-- [ ] Read windows fail when metadata extraction returns a Result error.
-- [ ] Lookup fails when metadata extraction returns a Result error.
-- [ ] Read windows fail when metadata extraction cannot produce a Source Cursor for a returned row.
-- [ ] Read windows reject duplicate Source Identities within the same returned window after normal Source Identity input normalization.
-- [ ] Lookup fails when the executed statement returns more than one row.
-- [ ] Lookup fails when the returned row's extracted Source Identity does not match the requested Source Identity after normalization.
-- [ ] Duplicate detection across different cursor windows remains out of scope for the SQL source plugin.
-- [ ] The source does not issue `limit + 1` probes.
-- [ ] The source does not expose or require first-class offset pagination.
-- [ ] A local SQLite-style test database exercises keyset pagination over at least two read windows.
-- [ ] The local SQLite-style test database exercises direct lookup by Source Identity.
-- [ ] The example or tests show Source Version and Source Cursor as related but separate signals.
-- [ ] The example or tests show the lookup query as identity-unique without relying on `LIMIT 1`.
-- [ ] The example or tests show the read query applying the provided `limit`.
-- [ ] The example or tests show deterministic ordering with a stable tie-breaker.
-- [ ] Authoring docs or examples are updated only where edge-case behavior is proven by this slice.
-- [ ] Existing SQL source happy-path tests from issue 02 remain green.
+- [x] `batchSize` is validated as a positive integer.
+- [x] Read windows fail when metadata extraction returns a Result error.
+- [x] Lookup fails when metadata extraction returns a Result error.
+- [x] Read windows fail when metadata extraction cannot produce a Source Cursor for a returned row.
+- [x] Read windows reject duplicate Source Identities within the same returned window after normal Source Identity input normalization.
+- [x] Lookup fails when the executed statement returns more than one row.
+- [x] Lookup fails when the returned row's extracted Source Identity does not match the requested Source Identity after normalization.
+- [x] Duplicate detection across different cursor windows remains out of scope for the SQL source plugin.
+- [x] The source does not issue `limit + 1` probes.
+- [x] The source does not expose or require first-class offset pagination.
+- [x] A local SQLite-style test database exercises keyset pagination over at least two read windows.
+- [x] A real in-memory SQLite smoke test exercises the Effect SQL SQLite client boundary.
+- [x] The local SQLite-style and real SQLite tests exercise direct lookup by Source Identity.
+- [x] The example or tests show Source Version and Source Cursor as related but separate signals.
+- [x] The example or tests show the lookup query as identity-unique without relying on `LIMIT 1`.
+- [x] The example or tests show the read query applying the provided `limit`.
+- [x] The example or tests show deterministic ordering with a stable tie-breaker.
+- [x] Authoring docs or examples are updated only where edge-case behavior is proven by this slice.
+- [x] Existing SQL source happy-path tests from issue 02 remain green.
 
 ## Blocked by
 

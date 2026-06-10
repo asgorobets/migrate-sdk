@@ -13,13 +13,17 @@ import type {
   SourceIdentityInput,
   SourceVersionInput,
 } from "../../domain/ids.ts";
+import { toSourceIdentity } from "../../domain/ids.ts";
 import type { SourceItemInput } from "../../domain/source.ts";
 import {
   type AnySourcePlugin,
   SourcePlugin as SourcePluginService,
 } from "../../services/source-plugin.ts";
 import {
+  makeSqlSourceBatchSizeError,
   makeSqlSourceExecutionError,
+  makeSqlSourceLookupIdentityMismatchError,
+  makeSqlSourceLookupMultipleRowsError,
   makeSqlSourceMetadataError,
 } from "./internal/errors.ts";
 
@@ -130,11 +134,16 @@ const readRows = <Source, Cursor, SourceInput>(
   SourcePluginError
 > =>
   Effect.gen(function* () {
+    if (!Number.isInteger(options.batchSize) || options.batchSize <= 0) {
+      return yield* makeSqlSourceBatchSizeError(options.batchSize);
+    }
+
     const rows = yield* executeStatement(
       "read",
       options.read(sql, cursor, options.batchSize)
     );
     const items: SourceItemInput<SourceInput>[] = [];
+    const sourceIdentityRows = new Map<string, number>();
     let nextCursor: Cursor | undefined;
 
     for (const [rowIndex, row] of rows.entries()) {
@@ -149,6 +158,35 @@ const readRows = <Source, Cursor, SourceInput>(
         );
       }
 
+      if (metadata.cursor === undefined) {
+        return yield* makeSqlSourceMetadataError(
+          "read",
+          rowIndex,
+          "source cursor is required",
+          {
+            rowIndex,
+            sourceCursor: metadata.cursor,
+          }
+        );
+      }
+
+      const sourceIdentity = toSourceIdentity(metadata.identity);
+      const existingRowIndex = sourceIdentityRows.get(sourceIdentity);
+
+      if (existingRowIndex !== undefined) {
+        return yield* makeSqlSourceMetadataError(
+          "read",
+          rowIndex,
+          "duplicate Source Identity in read window",
+          {
+            duplicateRowIndex: rowIndex,
+            firstRowIndex: existingRowIndex,
+            sourceIdentity,
+          }
+        );
+      }
+
+      sourceIdentityRows.set(sourceIdentity, rowIndex);
       items.push({
         identity: metadata.identity,
         item: row,
@@ -183,12 +221,27 @@ const makeImplementation = <Source, Cursor, SourceInput>(
       return null;
     }
 
-    return yield* sourceItemFromRow(
+    if (rows.length > 1) {
+      return yield* makeSqlSourceLookupMultipleRowsError(identity, rows.length);
+    }
+
+    const sourceItem = yield* sourceItemFromRow(
       options,
       "readByIdentity",
       rows[0] as SourceInput,
       0
     );
+    const requestedIdentity = toSourceIdentity(identity);
+    const returnedIdentity = toSourceIdentity(sourceItem.identity);
+
+    if (returnedIdentity !== requestedIdentity) {
+      return yield* makeSqlSourceLookupIdentityMismatchError(
+        requestedIdentity,
+        returnedIdentity
+      );
+    }
+
+    return sourceItem;
   });
 
   return {

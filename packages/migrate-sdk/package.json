@@ -35,9 +35,10 @@
   },
   "devDependencies": {
     "@effect/language-service": "^0.86.2",
+    "@effect/sql-sqlite-node": "4.0.0-beta.75",
     "@effect/vitest": "4.0.0-beta.75",
     "@repo/typescript-config": "workspace:*",
-    "@types/node": "^22.15.3",
+    "@types/node": "^24.13.1",
     "@types/papaparse": "^5.5.2",
     "typescript": "5.9.2",
     "vitest": "^4.1.8"

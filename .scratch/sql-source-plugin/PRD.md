@@ -1,6 +1,6 @@
 # SQL Source Plugin
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Problem Statement
 
@@ -8,8 +8,8 @@ Migration authors need a first-party SQL source plugin for reading Source Items
 from SQL databases without inventing a migrate-sdk-specific database driver
 abstraction. The SDK already has a durable source contract, cursor windows,
 Source Payload Schema validation, direct identity lookup, and source retry
-hooks, but the SQL source is currently only scaffolded and intentionally
-unimplemented.
+hooks; the SQL source must fit those boundaries instead of introducing a
+parallel source runtime.
 
 Raw SQL sources should let authors write the SQL they need while preserving the
 framework's Source Item semantics. They should be resumable, bounded by cursor
@@ -19,9 +19,9 @@ Transformation Pipeline begins.
 
 ## Solution
 
-Implement `SqlSourcePlugin` as a first-party source plugin in the main SDK
-package. The plugin uses Effect SQL `SqlClient` through an exposed Effect layer
-requirement, not concrete database clients and not an SDK-owned driver.
+`SqlSourcePlugin` is a first-party source plugin in the main SDK package. The
+plugin uses Effect SQL `SqlClient` through an exposed Effect layer requirement,
+not concrete database clients and not an SDK-owned driver.
 
 The raw SQL source API accepts statement-builder callbacks for cursor reads and
 identity lookup. `SqlSourcePlugin` executes those statements, enforces direct
@@ -419,8 +419,6 @@ user-facing schema.
 - Completing the broader source schema input-type preservation refactor beyond
   what is needed for SQL source ergonomics.
 
-- Adding implementation issues in this PRD slice.
-
 ## Further Notes
 
 - ADR-0005 records the decision to use Effect SQL `SqlClient` instead of an
@@ -429,13 +427,14 @@ user-facing schema.
 - The SQL source design document is the canonical detailed API sketch for this
   PRD.
 
-- The current scaffold already creates the SQL source folder, public exports,
-  and intentionally unimplemented plugin surface.
+- The v1 implementation lives in the SQL source folder with public exports for
+  the intended SQL source API.
 
-- The main deep module opportunity is row-to-source-window materialization: it
-  should encapsulate row execution results, metadata Result handling, identity
-  normalization, duplicate detection, cursor derivation, lookup cardinality, and
-  lookup identity consistency behind a small testable interface.
+- A future deep module refactor opportunity is row-to-source-window
+  materialization: it should encapsulate row execution results, metadata Result
+  handling, identity normalization, duplicate detection, cursor derivation,
+  lookup cardinality, and lookup identity consistency behind a small testable
+  interface.
 
 - A second deep module opportunity is source schema typing: preserving the
   encoded/source-native side of Source Payload Schema should improve SQL and
