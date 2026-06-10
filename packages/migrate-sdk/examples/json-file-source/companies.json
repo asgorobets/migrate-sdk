@@ -1,0 +1,83 @@
+{
+  "exportedAt": "2026-05-14",
+  "businessUnits": [
+    {
+      "key": "BU-100",
+      "name": "Orbit Labs",
+      "status": "active",
+      "contacts": [
+        {
+          "key": "CONTACT-100-1",
+          "firstName": "Avery",
+          "lastName": "Stone",
+          "email": "avery.stone@example.com",
+          "role": "Operations Lead",
+          "isPrimary": true
+        },
+        {
+          "key": "CONTACT-100-2",
+          "firstName": "Morgan",
+          "lastName": "Lee",
+          "email": "morgan.lee@example.com",
+          "role": "Purchasing",
+          "isPrimary": false
+        }
+      ],
+      "addresses": [
+        {
+          "key": "ADDR-100-BILL",
+          "street": "100 Market Street",
+          "city": "Austin",
+          "region": "TX",
+          "postalCode": "78701",
+          "country": "US",
+          "type": "billing"
+        },
+        {
+          "key": "ADDR-100-SHIP",
+          "street": "250 Warehouse Road",
+          "city": "Austin",
+          "region": "TX",
+          "postalCode": "78744",
+          "country": "US",
+          "type": "shipping"
+        }
+      ]
+    },
+    {
+      "key": "BU-200",
+      "name": "River Market",
+      "status": "inactive",
+      "contacts": [
+        {
+          "key": "CONTACT-200-1",
+          "firstName": "Riley",
+          "lastName": "Chen",
+          "email": "riley.chen@example.com",
+          "role": null,
+          "isPrimary": true
+        }
+      ],
+      "addresses": [
+        {
+          "key": "ADDR-200-BILL",
+          "street": "42 Cedar Avenue",
+          "city": "Denver",
+          "region": "CO",
+          "postalCode": "80202",
+          "country": "US",
+          "type": "billing"
+        },
+        {
+          "key": "ADDR-200-SHIP",
+          "street": "18 Loading Dock Lane",
+          "city": "Denver",
+          "region": "CO",
+          "postalCode": "80216",
+          "country": "US",
+          "type": "shipping"
+        }
+      ]
+    }
+  ]
+}

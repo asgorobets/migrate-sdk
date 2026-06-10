@@ -43,9 +43,9 @@ export const makeJsonPlaceholderPostsMigration = (
     store: InMemoryMigrationStore.layer(),
     pipeline: (source) =>
       destination.commands.upsertEntry({
-        authorId: source.item.userId,
-        body: source.item.body,
-        title: source.item.title,
+        authorId: source.item.item.userId,
+        body: source.item.item.body,
+        title: source.item.item.title,
       }),
   });
 };
