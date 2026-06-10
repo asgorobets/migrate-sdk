@@ -7,6 +7,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./destination": "./src/destination/index.ts",
+    "./migration-store": "./src/migration-store/index.ts",
     "./source": "./src/source/index.ts",
     "./testing": "./src/testing/index.ts",
     "./internal/*": null,
