@@ -22,6 +22,9 @@ The durable string form of a source cursor after schema encoding.
 **Source Cursor Window**:
 One batch of source items read from a source cursor.
 
+**Source Inventory Scan**:
+A read-only traversal of a migration definition's current source items for inspection.
+
 **Source Lookup Strategy**:
 The source plugin's declared cost model for reading a source item by identity.
 
@@ -75,6 +78,9 @@ The durable state for one migration run.
 
 **Migration Run Summary**:
 The structured result returned after a migration run completes or fails.
+
+**Migration Status Report**:
+The structured inspection result for one or more migration definitions.
 
 **Rollback Run Summary**:
 The structured result returned after a rollback run completes or fails.
@@ -166,6 +172,9 @@ A normalized error record stored for a failed migration item state.
 **Migration Item Error Detail**:
 Durable structured detail for inspecting a migration item error after the run has ended.
 
+**Migration Diagnostic**:
+A schema-backed warning or error record that explains migration status, item failure, run failure, or another operational condition.
+
 ## Relationships
 
 - A **Source Item** has exactly one **Migration Item State** for a given migration definition.
@@ -176,12 +185,18 @@ Durable structured detail for inspecting a migration item error after the run ha
 - An **Encoded Source Cursor** is the only cursor form persisted by a **Migration Store**.
 - A **Source Cursor Window** may return a next **Source Cursor**.
 - A **Source Cursor** is committed after a cursor window is processed, even when some source items in the window fail.
+- A **Source Inventory Scan** starts from the beginning of the source and does not read or write the persisted **Source Cursor**.
+- A **Source Inventory Scan** validates source item payloads with the **Source Payload Schema**.
+- A **Source Inventory Scan** may return **Migration Diagnostics** for invalid source payloads or duplicate **Source Identities**.
 - A **Migration Item State** records source identity, migration status, and may record observed source version, destination identity, or failure metadata.
 - A **Migration Item State** is modeled as discriminated variants by status.
 - A **Migration Item State** does not store source item payloads by default.
 - Public and persisted migration data uses domain-friendly discriminators such as `kind` and `status`; Effect `_tag` is reserved for Effect-native errors or internals and hidden from public authoring examples through helpers.
 - A **Migration Item Error** normalizes source, pipeline, destination, or store errors for durable storage.
 - A **Migration Item Error** may include **Migration Item Error Details** so future inspection can explain failures without rerunning the migration.
+- A **Migration Diagnostic** is serializable.
+- A **Migration Diagnostic** may be returned in an inspection report or persisted by a context-specific durable record.
+- Durable **Migration Diagnostics** do not persist raw Effect causes or raw thrown objects.
 - Live error causes are useful for logging, but durable **Migration Item Error** records do not persist raw causes.
 - A **Migration Store** error fails the migration run instead of becoming a migration item failure.
 - A **Source Plugin** cursor read error fails the migration definition run.
@@ -209,6 +224,9 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A **Migration Definition Registry** catalogs executable **Migration Definitions**.
 - A **Migration Definition Registry** is distinct from a **Plugin Registry** and does not compile **Migration Specs**.
 - A **Migration Definition Registry** may be authored directly or initialized from previously compiled **Migration Definitions**.
+- A **Migration Status Report** inspects selected **Migration Definitions** without acquiring **Migration Definition Locks** or creating **Migration Run State**.
+- A **Migration Status Report** may include current durable item-state counts, latest **Migration Run State** lifecycle metadata, and **Source Inventory Scan** counts.
+- A **Migration Status Report** over multiple **Migration Definitions** may read each definition's own **Migration Store** independently.
 - A **Migration Definition Lock** is acquired through the **Migration Store** before a migration definition is executed.
 - A **Migration Definition Lock** prevents concurrent runners from executing the same **Migration Definition** in the first version.
 - A **Migration Definition Lock** does not expire automatically in durable stores; abandoned locks require an explicit force-unlock workflow.

@@ -196,6 +196,13 @@ class MigrationDefinitionRegistry<
     RollbackRunSummary,
     MigrationDefinitionRegistryRollbackError
   >;
+
+  status(
+    input: MigrationDefinitionRegistryStatusInput
+  ): Effect.Effect<
+    MigrationDefinitionRegistryStatusReport,
+    MigrationDefinitionRegistryStatusError
+  >;
 }
 ```
 
@@ -299,6 +306,62 @@ Supplying `sourceIdentities` on rollback input is valid only with exactly one
 explicit definition id and one or more unique source identities. It rejects
 `all: true`, multiple explicit definition ids, and `withDependencies`.
 
+Status input reuses registry selection and does not accept source identity
+targets:
+
+```ts
+type MigrationDefinitionRegistryStatusInput =
+  MigrationDefinitionRegistrySelectionInput & {
+    readonly scanSource?: boolean;
+    readonly concurrency?: number;
+  };
+```
+
+`scanSource` defaults to `false`. `concurrency` controls how many selected
+migration definitions may scan their sources at the same time. It defaults to
+`1`, must be a positive integer, and is valid only when `scanSource` is true.
+Status rows are returned in registry order even when source scans run with
+concurrency greater than one.
+
+The standalone SDK status API accepts explicit definitions and optional
+definition filtering, but it does not expand dependencies:
+
+```ts
+interface MigrationStatusRequestInput<
+  Definitions extends readonly AnyMigrationDefinition[],
+> {
+  readonly definitions: Definitions;
+  readonly definitionIds?: readonly MigrationDefinitionIdInput[];
+  readonly scanSource?: boolean;
+  readonly concurrency?: number;
+}
+
+interface MigrationStatusRequest<
+  Definitions extends readonly AnyMigrationDefinition[],
+> {
+  readonly definitions: Definitions;
+  readonly definitionIds?: readonly MigrationDefinitionId[];
+  readonly scanSource: boolean;
+  readonly concurrency: number;
+}
+
+declare const makeMigrationStatusRequest: <
+  Definitions extends readonly AnyMigrationDefinition[],
+>(
+  input: MigrationStatusRequestInput<Definitions>
+) => MigrationStatusRequest<Definitions>;
+
+declare const getMigrationStatuses: <
+  Definitions extends readonly AnyMigrationDefinition[],
+>(
+  input: MigrationStatusRequestInput<Definitions>
+) => Effect.Effect<MigrationStatusReport, GetMigrationStatusesError>;
+```
+
+Use `registry.status(...)` when dependency expansion or registry selection
+policy is needed. Use `getMigrationStatuses(...)` when callers already have the
+exact definitions they want to inspect.
+
 ## Plans
 
 Planning methods return structured data, not preformatted CLI messages.
@@ -372,6 +435,134 @@ type MigrationDefinitionRegistryRollbackError =
   | MigrationDefinitionRegistryPlanningError
   | RollbackMigrationError;
 ```
+
+## Status
+
+Status is read-only inspection. It does not acquire migration definition locks,
+create run ids, begin or finalize run state, write source cursors, write item
+state, call destination plugins, or execute migration pipelines.
+
+Durable-only status reads store facts:
+
+```ts
+interface MigrationItemStateSummary {
+  readonly migrated: number;
+  readonly skipped: number;
+  readonly failed: number;
+  readonly needsUpdate: number;
+}
+
+interface MigrationDefinitionStatus {
+  readonly definitionId: MigrationDefinitionId;
+  readonly lastRun: MigrationRunState | null;
+  readonly durable: MigrationItemStateSummary;
+  readonly source?: MigrationDefinitionSourceStatus;
+  readonly warnings: readonly MigrationStatusWarning[];
+}
+
+interface MigrationStatusReport {
+  readonly definitions: readonly MigrationDefinitionStatus[];
+  readonly scanSource: boolean;
+  readonly warnings: readonly MigrationStatusWarning[];
+}
+
+interface MigrationDefinitionRegistryStatusReport
+  extends MigrationStatusReport {
+  readonly requestedDefinitionIds:
+    | "all"
+    | readonly MigrationDefinitionId[];
+  readonly includedDefinitionIds: readonly MigrationDefinitionId[];
+  readonly notices: readonly MigrationDefinitionPlanNotice[];
+}
+```
+
+`lastRun` is lifecycle metadata only: run id, definition ids, started time,
+finished time, and `running | succeeded | failed`. It is not a persisted copy of
+the latest run's item counts. The durable counts are current item-state counts
+from the migration store.
+
+Source scanning adds current-source inventory counts:
+
+```ts
+interface MigrationDefinitionSourceStatus {
+  readonly total: number;
+  readonly unprocessed: number;
+  readonly invalid: number;
+  readonly duplicate: number;
+  readonly orphaned: number;
+}
+```
+
+Classification:
+
+- `total` counts every source item emitted by the full source scan
+- `unprocessed` counts valid, non-duplicate current source identities with no
+  durable item state
+- `invalid` counts source items whose payload fails the source payload schema
+- `duplicate` counts repeated source identities after the first occurrence
+- `orphaned` counts durable item states whose source identity is absent from the
+  current source scan
+
+Durable buckets count all durable item state for the migration definition,
+including orphaned states. `unchanged` is not included because it is a run
+outcome, not persisted item state. `rollbackable` is not included because
+rollbackability is a plugin/runtime concern, not an operator status column.
+
+Status scan diagnostics are schema-backed returned data, not persisted records:
+
+```ts
+class DuplicateSourceIdentityStatusWarning extends Schema.TaggedClass<
+  DuplicateSourceIdentityStatusWarning
+>()(
+  "DuplicateSourceIdentityStatusWarning",
+  {
+    count: Schema.Number,
+    definitionId: MigrationDefinitionId,
+    sourceIdentity: SourceIdentity,
+  }
+) {}
+
+class InvalidSourceItemStatusWarning extends Schema.TaggedClass<
+  InvalidSourceItemStatusWarning
+>()(
+  "InvalidSourceItemStatusWarning",
+  {
+    definitionId: MigrationDefinitionId,
+    details: Schema.optional(Schema.Array(MigrationItemErrorDetail)),
+    message: Schema.String,
+    sourceIdentity: SourceIdentity,
+  }
+) {}
+
+type MigrationStatusWarning =
+  | DuplicateSourceIdentityStatusWarning
+  | InvalidSourceItemStatusWarning;
+```
+
+Use `Schema.TaggedClass`, not `Schema.TaggedErrorClass`, because warnings are
+not failures in the Effect error channel. CLI suggestions are rendered from the
+warning tag and fields; they are not stored in the warning payload. Future run
+logs or run errors should follow the same diagnostic convention: schema-backed,
+serializable, domain-friendly discriminators, and no raw Effect causes in
+durable records.
+
+Status errors are limited to request, store, source read, and registry planning
+failures:
+
+```ts
+type GetMigrationStatusesError =
+  | MigrationStatusRequestError
+  | MigrationStoreError
+  | SourcePluginError;
+
+type MigrationDefinitionRegistryStatusError =
+  | MigrationDefinitionRegistryPlanningError
+  | GetMigrationStatusesError;
+```
+
+Invalid source payloads and duplicate source identities are warnings in the
+returned report. Source cursor read failures fail status because the inventory
+scan cannot complete.
 
 For run plans, `executionDefinitionIds` are in forward dependency order. For
 rollback plans, `executionDefinitionIds` are in reverse dependency order.
@@ -608,6 +799,11 @@ Inspection commands:
 migrate list
 migrate graph
 migrate graph articles
+migrate status articles
+migrate status articles --with-dependencies
+migrate status --all
+migrate status --all --scan-source
+migrate status --all --scan-source --concurrency 4
 ```
 
 `list` renders static registry discovery metadata from `registry.list()`. It
@@ -658,6 +854,48 @@ articles (optional unresolved) --> legacy-assets
 
 Use an edge list instead of a visual tree because dependency graphs may contain
 cycles and are not necessarily hierarchical.
+
+`status` renders runtime inspection from `registry.status(...)`. Without
+`--scan-source`, it reads only durable migration store state: latest run
+lifecycle metadata and current item-state counts. It does not initialize source
+or destination systems.
+
+```text
+Migration ID  Last Run   Migrated  Skipped  Failed  Needs Update
+articles      succeeded  2         1        0       0
+```
+
+`status --scan-source` additionally initializes source plugins and scans current
+source inventories from the beginning. It does not read or write persisted
+source cursors, create run state, acquire locks, execute pipelines, call
+destination plugins, or persist warnings.
+
+```text
+Migration ID  Last Run   Total  Migrated  Skipped  Failed  Needs Update  Unprocessed  Invalid  Duplicate  Orphaned
+articles      succeeded  4      2         1        0       0             1            0        1          1
+```
+
+Status output is ordered by registry/list order, not dependency execution
+order. `--with-dependencies` expands required dependencies, but status does not
+return `executionDefinitionIds` and does not imply runnable sequencing.
+
+`--concurrency` is valid only with `--scan-source`. It defaults to `1` and
+controls concurrent source scans across selected migration definitions. Each
+definition still reads its own source cursor windows sequentially. Output order
+remains registry/list order regardless of completion order.
+
+Warnings render below the table with actionable suggestions:
+
+```text
+Warnings:
+- articles: duplicate source identity article-1 appeared 2 times.
+  Fix the source plugin or source data so each Source Identity appears once per full source scan.
+- articles: source identity article-3 failed Source Payload Schema validation.
+  Fix the source data or Source Payload Schema so the source item can be decoded.
+```
+
+`status` does not accept `--ids` in the first version. Item-level inspection is
+a separate future design.
 
 Run commands:
 
@@ -792,9 +1030,10 @@ No command silently selects every definition:
 ```sh
 migrate run
 migrate rollback
+migrate status
 ```
 
-Both commands are invalid without `--all` or at least one definition id.
+These commands are invalid without `--all` or at least one definition id.
 
 No command silently expands required dependency scope:
 
@@ -806,6 +1045,12 @@ migrate run authors articles
 # valid
 
 migrate run articles --with-dependencies
+# valid
+
+migrate status articles
+# errors if articles depends on authors and authors was not requested
+
+migrate status articles --with-dependencies
 # valid
 ```
 
@@ -883,8 +1128,9 @@ The CLI should use Effect CLI primitives for:
 - `--config` as a global file/path flag
 - `--with-dependencies`, `--all`, `--failed`, `--skipped`, `--ids`, and
   `--plan` flags
+- `--scan-source` and `--concurrency` flags for status
 - variadic definition id arguments
-- subcommands such as `list`, `graph`, `run`, and `rollback`
+- subcommands such as `list`, `graph`, `status`, `run`, and `rollback`
 - providing a loaded CLI config service to command handlers
 
 The migrate CLI owns:
