@@ -12,3 +12,7 @@ export const JsonPlaceholderPost = Schema.Struct({
 });
 
 export const JsonPlaceholderPosts = Schema.Array(JsonPlaceholderPost);
+
+export const JsonPlaceholderPostsDocument = Schema.Struct({
+  posts: JsonPlaceholderPosts,
+});
