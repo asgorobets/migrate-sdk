@@ -8,6 +8,8 @@ export {
 export { DocumentParsers } from "./document-parser.ts";
 export { DocumentSourcePlugin } from "./document-source.ts";
 export type {
+  DocumentEffectFetcherLayerOptions,
+  DocumentEffectFetcherOptions,
   DocumentFetcher,
   DocumentFetcherPlatform,
   DocumentFetchResult,

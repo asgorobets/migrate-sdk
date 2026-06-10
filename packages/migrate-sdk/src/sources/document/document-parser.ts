@@ -51,14 +51,32 @@ const decodeJsonResource = (parser: string, resource: string) =>
 const decodeDocument = <Document>(
   parser: string,
   schema: Schema.Codec<Document, unknown, never, never>,
-  document: unknown
+  document: unknown,
+  message = "JSON document does not match document schema"
 ) =>
   Schema.decodeUnknownEffect(schema, {
     errors: "all",
   })(document).pipe(
     Effect.mapError((cause) =>
       documentParserError(
-        "JSON document does not match document schema",
+        message,
+        parserFailureCause(parser, "document-schema", cause)
+      )
+    )
+  );
+
+const validateMaterializedDocument = <Document>(
+  parser: string,
+  schema: Schema.Codec<Document, unknown, never, never>,
+  document: unknown
+) =>
+  Schema.encodeUnknownEffect(schema, {
+    errors: "all",
+  })(document).pipe(
+    Effect.as(document as Document),
+    Effect.mapError((cause) =>
+      documentParserError(
+        "Document does not match document schema",
         parserFailureCause(parser, "document-schema", cause)
       )
     )
@@ -86,6 +104,19 @@ const makeJsonParser = <Document>(
   };
 };
 
+const makeSchemaParser = <Document>(
+  name: string,
+  documentSchema: Schema.Codec<Document, unknown, never, never>
+): DocumentParser<unknown, Document> => ({
+  documentSchema,
+  name,
+  parse: (resource) =>
+    validateMaterializedDocument(name, documentSchema, resource).pipe(
+      Effect.map((document) => [document])
+    ),
+});
+
 export const DocumentParsers = {
   json: makeJsonParser,
+  schema: makeSchemaParser,
 } as const;

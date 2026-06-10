@@ -2,6 +2,7 @@ import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSyst
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
+import { Service } from "effect/Context";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import { SourcePluginError } from "migrate-sdk";
@@ -61,6 +62,68 @@ const ResourceEnvelopeDocument = Schema.Struct({
   }),
 });
 
+const ApiPost = Schema.Struct({
+  body: Schema.String,
+  id: Schema.NumberFromString,
+  title: Schema.String,
+});
+
+type ApiPost = typeof ApiPost.Type;
+
+const ApiPostsDocument = Schema.Struct({
+  posts: Schema.Array(ApiPost),
+});
+
+interface ApiPostsState {
+  readonly detailCalls: number[];
+  listCalls: number;
+}
+
+class ApiPosts extends Service<
+  ApiPosts,
+  {
+    readonly getPost: (id: number) => Effect.Effect<ApiPost, SourcePluginError>;
+    readonly listPostIds: () => Effect.Effect<
+      readonly number[],
+      SourcePluginError
+    >;
+  }
+>()("@migrate-sdk/test/ApiPosts") {}
+
+const makeApiPostsLayer = (state: ApiPostsState): Layer.Layer<ApiPosts> =>
+  Layer.sync(ApiPosts, () => {
+    const posts = new Map<number, ApiPost>([
+      [1, { body: "First body", id: 1, title: "First" }],
+      [2, { body: "Second body", id: 2, title: "Second" }],
+    ]);
+
+    const getPost = (id: number) =>
+      Effect.gen(function* () {
+        state.detailCalls.push(id);
+        const post = posts.get(id);
+
+        if (post === undefined) {
+          return yield* new SourcePluginError({
+            message: "Post was not found",
+            cause: { id },
+          });
+        }
+
+        return post;
+      });
+
+    const listPostIds = () =>
+      Effect.sync(() => {
+        state.listCalls += 1;
+        return Array.from(posts.keys());
+      });
+
+    return {
+      getPost,
+      listPostIds,
+    };
+  });
+
 const testPlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
 const sha256HexPattern = /^[a-f0-9]{64}$/;
 
@@ -98,6 +161,69 @@ const writeCompaniesFile = (filePath: string) =>
   });
 
 describe("DocumentSourcePlugin", () => {
+  it.effect(
+    "composes an effect-native fetcher with a materialized schema parser",
+    () =>
+      Effect.gen(function* () {
+        const state: ApiPostsState = {
+          detailCalls: [],
+          listCalls: 0,
+        };
+        const source = DocumentSourcePlugin.make({
+          fetcher: DocumentFetchers.effect({
+            cursorSchema: Schema.Null,
+            read: () =>
+              Effect.gen(function* () {
+                const api = yield* ApiPosts;
+                const postIds = yield* api.listPostIds();
+                const posts = yield* Effect.forEach(
+                  postIds,
+                  (id) => api.getPost(id),
+                  { concurrency: 2 }
+                );
+
+                return {
+                  fingerprint: `posts:${postIds.join(",")}`,
+                  resource: { posts },
+                };
+              }),
+            layer: makeApiPostsLayer(state),
+          }),
+          parser: DocumentParsers.schema("api-posts", ApiPostsDocument),
+          selector: {
+            item: (document) => document.posts,
+          },
+          identity: ({ item }) => {
+            expectTypeOf(item.body).toEqualTypeOf<string>();
+
+            return item.id;
+          },
+          lookup: { kind: "scan" },
+          version: {
+            kind: "value",
+            value: ({ item }) => item.title,
+          },
+        });
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const read = yield* plugin.read(null);
+
+        expect(read.items).toEqual([
+          {
+            identity: "1",
+            item: { item: { body: "First body", id: 1, title: "First" } },
+            version: "First",
+          },
+          {
+            identity: "2",
+            item: { item: { body: "Second body", id: 2, title: "Second" } },
+            version: "Second",
+          },
+        ]);
+        expect(state.listCalls).toBe(1);
+        expect(state.detailCalls).toEqual([1, 2]);
+      })
+  );
+
   it.effect("reads top-level selected document items", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem;

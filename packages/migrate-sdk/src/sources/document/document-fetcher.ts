@@ -23,6 +23,29 @@ export interface DocumentFileTextFetcherOptions {
   readonly platform: DocumentFetcherPlatform;
 }
 
+export interface DocumentEffectFetcherOptions<Resource, Cursor> {
+  readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
+  readonly read: (
+    cursor: Cursor | null
+  ) => Effect.Effect<DocumentFetchResult<Resource, Cursor>, SourcePluginError>;
+}
+
+export interface DocumentEffectFetcherLayerOptions<
+  Resource,
+  Cursor,
+  Requirements,
+> {
+  readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
+  readonly layer: Layer.Layer<Requirements>;
+  readonly read: (
+    cursor: Cursor | null
+  ) => Effect.Effect<
+    DocumentFetchResult<Resource, Cursor>,
+    SourcePluginError,
+    Requirements
+  >;
+}
+
 export const DocumentFileTextFetcherCursor = Schema.Null;
 
 export type DocumentFileTextFetcherCursor =
@@ -119,6 +142,32 @@ const makeFileTextFetcher = (
   read: () => readFileText(options).pipe(Effect.provide(options.platform)),
 });
 
+function makeEffectFetcher<Resource, Cursor>(
+  options: DocumentEffectFetcherOptions<Resource, Cursor>
+): DocumentFetcher<Resource, Cursor>;
+function makeEffectFetcher<Resource, Cursor, Requirements>(
+  options: DocumentEffectFetcherLayerOptions<Resource, Cursor, Requirements>
+): DocumentFetcher<Resource, Cursor>;
+function makeEffectFetcher<Resource, Cursor, Requirements>(
+  options:
+    | DocumentEffectFetcherOptions<Resource, Cursor>
+    | DocumentEffectFetcherLayerOptions<Resource, Cursor, Requirements>
+): DocumentFetcher<Resource, Cursor> {
+  return {
+    cursorSchema: options.cursorSchema,
+    read: (cursor) =>
+      "layer" in options
+        ? (options
+            .read(cursor)
+            .pipe(Effect.provide(options.layer)) as Effect.Effect<
+            DocumentFetchResult<Resource, Cursor>,
+            SourcePluginError
+          >)
+        : options.read(cursor),
+  };
+}
+
 export const DocumentFetchers = {
+  effect: makeEffectFetcher,
   fileText: makeFileTextFetcher,
 } as const;

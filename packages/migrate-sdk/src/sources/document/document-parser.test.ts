@@ -19,6 +19,15 @@ const CompanyDocument = Schema.Struct({
   ),
 });
 
+const InventoryDocument = Schema.Struct({
+  items: Schema.Array(
+    Schema.Struct({
+      inventory: Schema.NumberFromString,
+      key: Schema.String,
+    })
+  ),
+});
+
 interface ParserFailureCause {
   readonly diagnostic: string;
   readonly kind: string;
@@ -167,5 +176,82 @@ describe("DocumentParsers.json", () => {
         expect(cause.diagnostic).toContain("count");
         expect(cause.diagnostic).toContain("Expected number");
       })
+  );
+});
+
+describe("DocumentParsers.schema", () => {
+  it.effect("validates an already-materialized resource as one document", () =>
+    Effect.gen(function* () {
+      const parser = DocumentParsers.schema("company-api", CompanyDocument);
+
+      expect(parser.name).toBe("company-api");
+      expect(parser.documentSchema).toBe(CompanyDocument);
+      expectTypeOf(parser).toMatchTypeOf<
+        DocumentParser<unknown, typeof CompanyDocument.Type>
+      >();
+
+      const documents = yield* parser.parse({
+        companies: [
+          {
+            contacts: [{ email: "a@example.com", id: "contact-1" }],
+            id: "company-1",
+          },
+        ],
+      });
+
+      expect(documents).toEqual([
+        {
+          companies: [
+            {
+              contacts: [{ email: "a@example.com", id: "contact-1" }],
+              id: "company-1",
+            },
+          ],
+        },
+      ]);
+    })
+  );
+
+  it.effect("validates the schema Type side for materialized resources", () =>
+    Effect.gen(function* () {
+      const parser = DocumentParsers.schema("inventory-api", InventoryDocument);
+
+      const documents = yield* parser.parse({
+        items: [{ inventory: 42, key: "sku-1" }],
+      });
+
+      expect(documents).toEqual([
+        {
+          items: [{ inventory: 42, key: "sku-1" }],
+        },
+      ]);
+    })
+  );
+
+  it.effect("reports schema parser validation failures with parser name", () =>
+    Effect.gen(function* () {
+      const parser = DocumentParsers.schema("company-api", CompanyDocument);
+
+      const error = yield* parser
+        .parse({
+          companies: [
+            {
+              contacts: [{ email: 404, id: "contact-1" }],
+              id: "company-1",
+            },
+          ],
+        })
+        .pipe(Effect.flip);
+      const cause = error.cause as ParserFailureCause;
+
+      expect(error).toBeInstanceOf(SourcePluginError);
+      expect(error.message).toBe("Document does not match document schema");
+      expect(cause.kind).toBe("document-schema");
+      expect(cause.parser).toBe("company-api");
+      expect(cause.diagnostic).toContain("companies");
+      expect(cause.diagnostic).toContain("contacts");
+      expect(cause.diagnostic).toContain("email");
+      expect(cause.diagnostic).toContain("Expected string");
+    })
   );
 });

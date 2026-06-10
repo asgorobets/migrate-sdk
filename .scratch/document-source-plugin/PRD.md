@@ -1,6 +1,6 @@
 # Document Source Plugin
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Problem Statement
 
@@ -308,7 +308,7 @@ escape hatch so API-backed sources are not forced through a narrow HTTP helper.
   than asserting private parsing implementation details.
 
 - Test `DocumentParsers.schema(name, schema)` with already-materialized values,
-  including decode failures and diagnostic naming.
+  including validation failures and diagnostic naming.
 
 - Test `DocumentFetchers.fileText(...)` with Effect platform filesystem
   services and stable resource fingerprint behavior.
