@@ -812,9 +812,10 @@ status. The default table includes definition id, rollback availability,
 required dependencies, and optional dependencies:
 
 ```text
-ID        Rollback  Required   Optional
-authors   yes       -          -
-articles  yes       authors    asset-cleanup
+Migration ID  Rollback  Required  Optional
+------------  --------  --------  -------------
+authors       yes       -         -
+articles      yes       authors   asset-cleanup
 ```
 
 Unresolved optional dependencies are marked without failing the command:
@@ -860,17 +861,24 @@ cycles and are not necessarily hierarchical.
 lifecycle metadata and current item-state counts. It does not initialize source
 or destination systems.
 
+The `State` column is a compact presentation summary for CLI scanning. It uses
+the highest-priority condition from durable state and, when source scanning is
+enabled, source inventory diagnostics: `failed`, `running`, `warning`,
+`pending`, `new`, or `ok`.
+
 ```text
 Migration Status
 
-Requested:
-articles
+Scope
+Requested  articles
+Included   articles
+Scan       durable store only
+Hint       Pass --scan-source to include source inventory counts.
 
-Included:
-articles
-
-Definitions:
-1. articles: latest succeeded (migrated 2, skipped 1, failed 0, needs update 0)
+Definitions
+State  Migration ID  Last Run   Migrated  Skipped  Failed  Needs Update
+-----  ------------  ---------  --------  -------  ------  ------------
+ok     articles      succeeded         2        1       0             0
 ```
 
 `status --scan-source` additionally initializes source plugins and scans current
@@ -881,17 +889,18 @@ destination plugins, or persist warnings.
 ```text
 Migration Status
 
-Requested:
-articles
+Scope
+Requested  articles
+Included   articles
+Scan       source inventory
 
-Included:
-articles
-
-Definitions:
-1. articles: latest succeeded (migrated 2, skipped 1, failed 0, needs update 0; source total 4, unprocessed 1, invalid 0, duplicate 1, orphaned 1)
+Definitions
+State    Migration ID  Last Run   Migrated  Skipped  Failed  Needs Update  Total  Unprocessed  Invalid  Duplicate  Orphaned
+-------  ------------  ---------  --------  -------  ------  ------------  -----  -----------  -------  ---------  --------
+warning  articles      succeeded         2        1       0             0      4            1        0          1         1
 
 Warnings:
-- Duplicate source identity in articles: article-new (1 duplicate item(s)). Check the source plugin identity mapping.
+! Duplicate source identity in articles: article-new (1 duplicate item(s)). Check the source plugin identity mapping.
 ```
 
 Status output is ordered by registry/list order, not dependency execution
@@ -907,10 +916,8 @@ Warnings render below the table with actionable suggestions:
 
 ```text
 Warnings:
-- articles: duplicate source identity article-1 appeared 2 times.
-  Fix the source plugin or source data so each Source Identity appears once per full source scan.
-- articles: source identity article-3 failed Source Payload Schema validation.
-  Fix the source data or Source Payload Schema so the source item can be decoded.
+! Duplicate source identity in articles: article-1 (2 duplicate item(s)). Check the source plugin identity mapping.
+! Invalid source item in articles: article-3. Expected string, actual undefined. Check the Source Payload Schema and source data.
 ```
 
 `status` does not accept `--ids` in the first version. Item-level inspection is
@@ -968,80 +975,71 @@ definitions, target ids when present, included definitions, execution order, and
 notices:
 
 ```text
-Run plan
+Run Plan
 
-Requested:
-articles
+Scope
+Requested  articles
+Included   authors, articles
 
-Included:
-authors
-articles
-
-Execution order:
-1. authors
-2. articles
+Execution Order
+#  Migration ID
+-  ------------
+1  authors
+2  articles
 ```
 
 When users provide multiple explicit definition ids, preserve their requested
 order in `Requested` and show normalized dependency order separately:
 
 ```text
-Requested:
-articles
-authors
+Scope
+Requested  articles, authors
 
-Execution order:
-1. authors
-2. articles
+Execution Order
+#  Migration ID
+-  ------------
+1  authors
+2  articles
 ```
 
 Duplicate requested definition ids are deduplicated for inclusion and execution,
 but preserved in `Requested` and surfaced as notices:
 
 ```text
-Requested:
-articles
-articles
-
-Included:
-articles
+Scope
+Requested  articles, articles
+Included   articles
 
 Notices:
-- Duplicate requested definition ignored: articles
+! Duplicate requested definition ignored: articles
 ```
 
 For all-registry plans, preserve the operator's original scope choice and expand
 the included definitions separately:
 
 ```text
-Requested:
-all
-
-Included:
-authors
-articles
-offers
+Scope
+Requested  all
+Included   authors, articles, offers
 ```
 
 ```text
-Rollback plan
+Rollback Plan
 
-Requested:
-articles
+Scope
+Requested  articles
+Included   articles
+Target ids article-1, article-2
 
-Target ids:
-article-1, article-2
-
-Included:
-articles
-
-Execution order:
-1. articles
+Execution Order
+#  Migration ID
+-  ------------
+1  articles
 ```
 
 ```text
 Notices:
-- Ignored optional dependency cycle: articles -> offers -> articles
+! Ignored optional dependency cycle: articles -> offers -> articles
 ```
 
 No command silently selects every definition:

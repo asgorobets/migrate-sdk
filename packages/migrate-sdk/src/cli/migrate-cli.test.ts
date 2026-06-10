@@ -8,11 +8,26 @@ import { TestConsole } from "effect/testing";
 import { CliOutput, Command } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { MigrationCliRuntime, migrateCommand } from "migrate-sdk/cli/testing";
+import { renderStatusReport } from "./render.ts";
 
 const packageRoot = fileURLToPath(new URL("../..", import.meta.url));
 const binPath = fileURLToPath(
   new URL("../../bin/migrate-sdk.mjs", import.meta.url)
 );
+
+const tagsAuthorsArticlesOrderPattern =
+  /1\s+tags[\s\S]*2\s+authors[\s\S]*3\s+articles/;
+const singleTagsRowPattern = /1\s+tags/;
+const articlesAuthorsOrderPattern = /1\s+articles[\s\S]*2\s+authors/;
+const authorsArticlesOrderPattern = /1\s+authors[\s\S]*2\s+articles/;
+const articlesAuthorsTagsOrderPattern =
+  /1\s+articles[\s\S]*2\s+authors[\s\S]*3\s+tags/;
+const selectedRunSummaryPattern =
+  /1\s+authors\s+succeeded\s+1\s+0\s+0\s+0\s+0[\s\S]*2\s+articles\s+succeeded\s+1\s+0\s+0\s+0\s+0/;
+const articleRunSummaryPattern = /1\s+articles\s+succeeded\s+1\s+0\s+0\s+0\s+0/;
+const rollbackAllSummaryPattern =
+  /1\s+articles\s+succeeded\s+1\s+0\s+0[\s\S]*2\s+authors\s+succeeded\s+1\s+0\s+0[\s\S]*3\s+tags\s+succeeded\s+1\s+0\s+0/;
+const tagRollbackSummaryPattern = /1\s+tags\s+succeeded\s+1\s+0\s+0/;
 
 const makeLayer = (cwd: string) =>
   Layer.mergeAll(
@@ -778,11 +793,15 @@ describe("migrate CLI", () => {
         expect(result.stderr).toBe("");
         expect(result.cause).toBe("");
         expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Migration ID");
+        expect(result.stdout).toContain("Rollback");
+        expect(result.stdout).toContain("Required");
+        expect(result.stdout).toContain("Optional");
         expect(result.stdout).toContain("authors");
         expect(result.stdout).toContain("articles");
-        expect(result.stdout).toContain("rollback: yes");
-        expect(result.stdout).toContain("required: authors");
-        expect(result.stdout).toContain("optional: images (unresolved)");
+        expect(result.stdout).toContain("yes");
+        expect(result.stdout).toContain("authors");
+        expect(result.stdout).toContain("images (unresolved)");
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -950,13 +969,21 @@ describe("migrate CLI", () => {
       expect(result.cause).toBe("");
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Migration Status");
-      expect(result.stdout).toContain("Requested:");
+      expect(result.stdout).toContain("Scope");
+      expect(result.stdout).toContain("Requested  articles");
+      expect(result.stdout).toContain("State");
+      expect(result.stdout).toContain("ok");
+      expect(result.stdout).toContain("Migration ID");
+      expect(result.stdout).toContain("Last Run");
+      expect(result.stdout).toContain("Migrated");
       expect(result.stdout).toContain("articles");
-      expect(result.stdout).toContain("latest succeeded");
-      expect(result.stdout).toContain("migrated 1");
-      expect(result.stdout).toContain("skipped 1");
-      expect(result.stdout).not.toContain("unprocessed");
-      expect(result.stdout).not.toContain("orphaned");
+      expect(result.stdout).toContain("succeeded");
+      expect(result.stdout).toContain("Skipped");
+      expect(result.stdout).toContain(
+        "Hint       Pass --scan-source to include source inventory counts."
+      );
+      expect(result.stdout).not.toContain("Unprocessed");
+      expect(result.stdout).not.toContain("Orphaned");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -1001,9 +1028,9 @@ describe("migrate CLI", () => {
       expect(result.stderr).toBe("");
       expect(result.cause).toBe("");
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Requested:\nall");
-      expect(result.stdout).toContain("Included:\narticles");
-      expect(result.stdout).toContain("latest succeeded");
+      expect(result.stdout).toContain("Requested  all");
+      expect(result.stdout).toContain("Included   articles");
+      expect(result.stdout).toContain("succeeded");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -1157,11 +1184,14 @@ describe("migrate CLI", () => {
       expect(result.stderr).toBe("");
       expect(result.cause).toBe("");
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("source total 4");
-      expect(result.stdout).toContain("unprocessed 1");
-      expect(result.stdout).toContain("invalid 1");
-      expect(result.stdout).toContain("duplicate 1");
-      expect(result.stdout).toContain("orphaned 1");
+      expect(result.stdout).toContain("Total");
+      expect(result.stdout).toContain("Unprocessed");
+      expect(result.stdout).toContain("Invalid");
+      expect(result.stdout).toContain("Duplicate");
+      expect(result.stdout).toContain("Orphaned");
+      expect(result.stdout).toContain("articles");
+      expect(result.stdout).toContain("failed");
+      expect(result.stdout).not.toContain("Pass --scan-source");
       expect(result.stdout).toContain("Warnings:");
       expect(result.stdout).toContain(
         "Invalid source item in articles: article-invalid"
@@ -1171,6 +1201,41 @@ describe("migrate CLI", () => {
       );
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
+
+  it("colorizes rendered status severity when colors are enabled", () => {
+    const output = renderStatusReport(
+      {
+        definitions: [
+          {
+            definitionId: "articles",
+            durable: {
+              failed: 0,
+              migrated: 1,
+              needsUpdate: 0,
+              skipped: 0,
+            },
+            lastRun: { status: "succeeded" },
+            source: {
+              duplicate: 0,
+              invalid: 0,
+              orphaned: 0,
+              total: 2,
+              unprocessed: 1,
+            },
+          },
+        ],
+        includedDefinitionIds: ["articles"],
+        notices: [],
+        requestedDefinitionIds: ["articles"],
+        scanSource: true,
+        warnings: [],
+      } as never,
+      { colors: true }
+    );
+
+    expect(output).toContain("\x1b[36mpending");
+    expect(output).toContain("\x1b[32msucceeded");
+  });
 
   it.effect(
     "renders a run plan with requested and execution order without executing",
@@ -1200,12 +1265,11 @@ describe("migrate CLI", () => {
         expect(result.stderr).toBe("");
         expect(result.cause).toBe("");
         expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain("Run plan");
-        expect(result.stdout).toContain("Requested:\narticles\ntags");
-        expect(result.stdout).toContain("Included:\ntags\narticles\nauthors");
-        expect(result.stdout).toContain(
-          "Execution order:\n1. tags\n2. authors\n3. articles"
-        );
+        expect(result.stdout).toContain("Run Plan");
+        expect(result.stdout).toContain("Requested  articles, tags");
+        expect(result.stdout).toContain("Included   tags, articles, authors");
+        expect(result.stdout).toContain("Execution Order");
+        expect(result.stdout).toMatch(tagsAuthorsArticlesOrderPattern);
         expect(result.stdout).not.toContain("executed");
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
@@ -1236,11 +1300,11 @@ describe("migrate CLI", () => {
       expect(result.stderr).toBe("");
       expect(result.cause).toBe("");
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Rollback plan");
-      expect(result.stdout).toContain("Requested:\ntags");
-      expect(result.stdout).toContain("Target ids:\narticle-1, article-2");
-      expect(result.stdout).toContain("Included:\ntags");
-      expect(result.stdout).toContain("Execution order:\n1. tags");
+      expect(result.stdout).toContain("Rollback Plan");
+      expect(result.stdout).toContain("Requested  tags");
+      expect(result.stdout).toContain("Target ids article-1, article-2");
+      expect(result.stdout).toContain("Included   tags");
+      expect(result.stdout).toMatch(singleTagsRowPattern);
       expect(result.stdout).not.toContain("executed");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
@@ -1272,11 +1336,9 @@ describe("migrate CLI", () => {
         expect(result.stderr).toBe("");
         expect(result.cause).toBe("");
         expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain("Requested:\nauthors\narticles");
-        expect(result.stdout).toContain("Included:\narticles\nauthors");
-        expect(result.stdout).toContain(
-          "Execution order:\n1. articles\n2. authors"
-        );
+        expect(result.stdout).toContain("Requested  authors, articles");
+        expect(result.stdout).toContain("Included   articles, authors");
+        expect(result.stdout).toMatch(articlesAuthorsOrderPattern);
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -1306,13 +1368,13 @@ describe("migrate CLI", () => {
       expect(result.stderr).toBe("");
       expect(result.cause).toBe("");
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Run plan");
-      expect(result.stdout).toContain("Requested:\narticles\narticles\ntags");
+      expect(result.stdout).toContain("Run Plan");
+      expect(result.stdout).toContain("Requested  articles, articles, tags");
       expect(result.stdout).toContain(
-        "Notices:\n- Duplicate requested definition ignored: articles"
+        "Notices:\n! Duplicate requested definition ignored: articles"
       );
       expect(result.stdout).toContain(
-        "- Ignored optional dependency cycle: articles -> tags -> articles"
+        "! Ignored optional dependency cycle: articles -> tags -> articles"
       );
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
@@ -1488,12 +1550,12 @@ describe("migrate CLI", () => {
       expect(result.stderr).toBe("");
       expect(result.cause).toBe("");
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Run plan");
-      expect(result.stdout).toContain("Mode:\nfailed");
-      expect(result.stdout).toContain("Execution order:\n1. tags");
+      expect(result.stdout).toContain("Run Plan");
+      expect(result.stdout).toContain("Mode       failed");
+      expect(result.stdout).toMatch(singleTagsRowPattern);
       expect(skippedResult.stderr).toBe("");
       expect(skippedResult.exitCode).toBe(0);
-      expect(skippedResult.stdout).toContain("Mode:\nskipped");
+      expect(skippedResult.stdout).toContain("Mode       skipped");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -1565,11 +1627,9 @@ describe("migrate CLI", () => {
 
       expect(result.stderr).toBe("");
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Included:\narticles\nauthors");
-      expect(result.stdout).not.toContain("Included:\ntags\narticles\nauthors");
-      expect(result.stdout).toContain(
-        "Execution order:\n1. authors\n2. articles"
-      );
+      expect(result.stdout).toContain("Included   articles, authors");
+      expect(result.stdout).not.toContain("Included   tags, articles, authors");
+      expect(result.stdout).toMatch(authorsArticlesOrderPattern);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -1601,9 +1661,9 @@ describe("migrate CLI", () => {
         expect(result.stderr).toBe("");
         expect(result.cause).toBe("");
         expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain("Target ids:\narticle,1, article-2");
+        expect(result.stdout).toContain("Target ids article,1, article-2");
         expect(result.stdout).toContain(
-          "Notices:\n- Duplicate target id ignored: article,1"
+          "Notices:\n! Duplicate target id ignored: article,1"
         );
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
@@ -1686,10 +1746,10 @@ describe("migrate CLI", () => {
       expect(result.stderr).toBe("");
       expect(result.cause).toBe("");
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Run plan");
-      expect(result.stdout).toContain("Requested:\ntags");
-      expect(result.stdout).toContain("Target ids:\narticle,1");
-      expect(result.stdout).toContain("Execution order:\n1. tags");
+      expect(result.stdout).toContain("Run Plan");
+      expect(result.stdout).toContain("Requested  tags");
+      expect(result.stdout).toContain("Target ids article,1");
+      expect(result.stdout).toMatch(singleTagsRowPattern);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -1900,19 +1960,15 @@ describe("migrate CLI", () => {
 
       expect(runAllResult.stderr).toBe("");
       expect(runAllResult.exitCode).toBe(0);
-      expect(runAllResult.stdout).toContain("Requested:\nall");
+      expect(runAllResult.stdout).toContain("Requested  all");
       expect(runAllResult.stdout).toContain(
-        "Included:\ntags\narticles\nauthors"
+        "Included   tags, articles, authors"
       );
-      expect(runAllResult.stdout).toContain(
-        "Execution order:\n1. tags\n2. authors\n3. articles"
-      );
+      expect(runAllResult.stdout).toMatch(tagsAuthorsArticlesOrderPattern);
       expect(rollbackAllResult.stderr).toBe("");
       expect(rollbackAllResult.exitCode).toBe(0);
-      expect(rollbackAllResult.stdout).toContain("Requested:\nall");
-      expect(rollbackAllResult.stdout).toContain(
-        "Execution order:\n1. articles\n2. authors\n3. tags"
-      );
+      expect(rollbackAllResult.stdout).toContain("Requested  all");
+      expect(rollbackAllResult.stdout).toMatch(articlesAuthorsTagsOrderPattern);
       expect(runOmittedScopeResult.exitCode).toBe(1);
       expect(runOmittedScopeResult.stderr).toContain(
         "Registry planning requires all: true or at least one Migration Definition id"
@@ -1992,14 +2048,11 @@ describe("migrate CLI", () => {
       expect(result.stderr).toBe("");
       expect(result.cause).toBe("");
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Run completed: succeeded");
-      expect(result.stdout).toContain(
-        "1. authors: succeeded (migrated 1, unchanged 0, skipped 0, failed 0, needs update 0)"
-      );
-      expect(result.stdout).toContain(
-        "2. articles: succeeded (migrated 1, unchanged 0, skipped 0, failed 0, needs update 0)"
-      );
-      expect(result.stdout).not.toContain("tags: succeeded");
+      expect(result.stdout).toContain("Run Completed succeeded");
+      expect(result.stdout).toContain("Migration ID");
+      expect(result.stdout).toContain("Needs Update");
+      expect(result.stdout).toMatch(selectedRunSummaryPattern);
+      expect(result.stdout).not.toContain("tags          succeeded");
       expect(getExecutionProbe().executions).toEqual(["authors", "articles"]);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
@@ -2023,7 +2076,7 @@ describe("migrate CLI", () => {
       expect(result.stderr).toBe("");
       expect(result.cause).toBe("");
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Run completed: succeeded");
+      expect(result.stdout).toContain("Run Completed succeeded");
       expect(getExecutionProbe().executions).toEqual([
         "tags",
         "authors",
@@ -2065,10 +2118,8 @@ describe("migrate CLI", () => {
 
       expect(failedResult.stderr).toBe("");
       expect(failedResult.exitCode).toBe(0);
-      expect(failedResult.stdout).toContain("Run completed: succeeded");
-      expect(failedResult.stdout).toContain(
-        "1. articles: succeeded (migrated 1, unchanged 0, skipped 0, failed 0, needs update 0)"
-      );
+      expect(failedResult.stdout).toContain("Run Completed succeeded");
+      expect(failedResult.stdout).toMatch(articleRunSummaryPattern);
       expect(skippedResult.stderr).toBe("");
       expect(skippedResult.exitCode).toBe(0);
       expect(itemResult.stderr).toBe("");
@@ -2100,16 +2151,8 @@ describe("migrate CLI", () => {
       expect(result.stderr).toBe("");
       expect(result.cause).toBe("");
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Rollback completed: succeeded");
-      expect(result.stdout).toContain(
-        "1. articles: succeeded (rolled back 1, skipped 0, failed 0)"
-      );
-      expect(result.stdout).toContain(
-        "2. authors: succeeded (rolled back 1, skipped 0, failed 0)"
-      );
-      expect(result.stdout).toContain(
-        "3. tags: succeeded (rolled back 1, skipped 0, failed 0)"
-      );
+      expect(result.stdout).toContain("Rollback Completed succeeded");
+      expect(result.stdout).toMatch(rollbackAllSummaryPattern);
       expect(getExecutionProbe().executions).toEqual([
         "rollback:articles",
         "rollback:authors",
@@ -2144,11 +2187,9 @@ describe("migrate CLI", () => {
       expect(result.stderr).toBe("");
       expect(result.cause).toBe("");
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("Rollback completed: succeeded");
-      expect(result.stdout).toContain(
-        "1. tags: succeeded (rolled back 1, skipped 0, failed 0)"
-      );
-      expect(result.stdout).not.toContain("authors: succeeded");
+      expect(result.stdout).toContain("Rollback Completed succeeded");
+      expect(result.stdout).toMatch(tagRollbackSummaryPattern);
+      expect(result.stdout).not.toContain("authors       succeeded");
       expect(getExecutionProbe().executions).toEqual(["rollback:tags"]);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
