@@ -157,6 +157,35 @@ use bounded `Effect.forEach` or other Effect composition internally, but each
 runtime read still returns one cursor page. That keeps cursor commits, failed
 item reruns, and durable progress semantics unchanged.
 
+## Source Error Channel
+
+The current source plugin contract normalizes source read and lookup failures to
+`SourcePluginError`:
+
+```ts
+read(cursor): Effect.Effect<SourceReadResult<Source, Cursor>, SourcePluginError>
+readByIdentity(identity): Effect.Effect<SourceItem<Source> | null, SourcePluginError>
+```
+
+This keeps the runtime boundary, CLI rendering, and durable item error records
+uniform across source plugins.
+
+Open question: source plugins may eventually need typed plugin-specific error
+channels before framework normalization. For example, an API source or SQL
+source may want migration authors to retry transport, timeout, deadlock, or
+serialization errors differently from schema, configuration, or metadata
+extraction errors. A future source authoring API could preserve the native
+source error type through `sourceCursorRetry` and `sourceLookupRetry`, then
+normalize to `SourcePluginError` only when the runtime records or returns the
+framework-level failure.
+
+Open question: the current source schema type uses
+`Schema.Codec<Source, unknown, never, never>`, which preserves the decoded
+pipeline-facing type but erases the encoded/source-native input type. SQL
+sources and other schema-backed sources may need the encoded side preserved so
+source-owned metadata extraction can be typed from the same Source Payload
+Schema that the runner uses for payload decoding.
+
 ## Cursor Reads
 
 `read(cursor)` reads one source cursor window and returns the next cursor when

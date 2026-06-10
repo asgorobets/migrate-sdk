@@ -88,6 +88,17 @@ const multipleIdentityCommandsError = (
       "Destination Command Plan contains more than one identity-bearing Destination Command",
   });
 
+const identityCommandsNotAllowedError = (
+  commandKinds: readonly string[]
+): MigrationItemError =>
+  destinationCommandPlanError({
+    details: commandKinds.map((kind) => ({
+      message: `Identity-bearing command: ${kind}`,
+    })),
+    message:
+      "Rollback Destination Command Plan must not contain identity-bearing Destination Commands",
+  });
+
 const validateNonEmptyCommandPlan = (
   commands: readonly DestinationCommand[]
 ): DestinationCommandPlanFailure | null =>
@@ -100,11 +111,19 @@ const validateNonEmptyCommandPlan = (
 
 const validateIdentityCommandDefinitions = <Command extends DestinationCommand>(
   commands: readonly Command[],
-  commandDefinitions: DefinedDestinationCommands<Command>
+  commandDefinitions: DefinedDestinationCommands<Command>,
+  rejectIdentityCommands: boolean
 ): DestinationCommandPlanFailure | null => {
   const planIdentityKinds = commands
     .map((command) => command.kind)
     .filter((kind) => commandDefinitions.definitions[kind]?.identity === true);
+
+  if (rejectIdentityCommands && planIdentityKinds.length > 0) {
+    return {
+      error: identityCommandsNotAllowedError(planIdentityKinds),
+      kind: "failed",
+    };
+  }
 
   return planIdentityKinds.length > 1
     ? {
@@ -215,12 +234,14 @@ export const executeDestinationCommandPlan = <
   destination,
   destinationRetry,
   plan,
+  rejectIdentityCommands,
 }: {
   readonly commandDefinitions: DefinedDestinationCommands<Command>;
   readonly context: DestinationCommandContext;
   readonly destination: DestinationPlugin;
   readonly destinationRetry?: DestinationRetryStrategy | undefined;
   readonly plan: DestinationCommandPlan<Command>;
+  readonly rejectIdentityCommands?: boolean | undefined;
 }): Effect.Effect<DestinationCommandPlanOutcome> =>
   Effect.gen(function* () {
     let latest: LatestDestinationResult = {};
@@ -233,7 +254,8 @@ export const executeDestinationCommandPlan = <
 
     const staticValidationFailure = validateIdentityCommandDefinitions(
       commands,
-      commandDefinitions
+      commandDefinitions,
+      rejectIdentityCommands ?? false
     );
 
     if (staticValidationFailure !== null) {

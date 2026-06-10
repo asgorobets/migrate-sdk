@@ -22,6 +22,9 @@ The durable string form of a source cursor after schema encoding.
 **Source Cursor Window**:
 One batch of source items read from a source cursor.
 
+**Source Inventory Scan**:
+A read-only traversal of a migration definition's current source items for inspection.
+
 **Source Lookup Strategy**:
 The source plugin's declared cost model for reading a source item by identity.
 
@@ -37,6 +40,18 @@ The result of processing one source item during a migration run.
 **Source Plugin**:
 A plugin that emits source items from a source system.
 
+**Document Source**:
+A source plugin that emits source items selected from a parsed structured document.
+
+**Document Fetcher**:
+The document source component that retrieves a structured resource for a parser.
+
+**Document Parser**:
+The document source component that parses a fetched resource into a schema-backed document.
+
+**Document Selector**:
+The document source component that selects source item payloads, and optional parent context, from a parsed document.
+
 **Destination Plugin**:
 A plugin that executes destination commands against a destination system.
 
@@ -45,6 +60,18 @@ The pluggable durable backend for a migration definition.
 
 **Migration Definition**:
 The configured workflow that connects a source plugin, transformation pipeline, destination plugin, and migration store.
+
+**Migration Definition Dependency**:
+An ordering relationship declared by a migration definition.
+
+**Required Migration Definition Dependency**:
+A migration definition dependency that must run before the dependent migration definition.
+
+**Optional Migration Definition Dependency**:
+A migration definition dependency that orders another migration definition first when both definitions participate in the same run.
+
+**Migration Definition Registry**:
+A catalog of executable migration definitions available to an SDK or CLI host.
 
 **Migration Definition Lock**:
 A durable ownership record that prevents multiple runners from executing the same migration definition concurrently.
@@ -63,6 +90,9 @@ The durable state for one migration run.
 
 **Migration Run Summary**:
 The structured result returned after a migration run completes or fails.
+
+**Migration Status Report**:
+The structured inspection result for one or more migration definitions.
 
 **Rollback Run Summary**:
 The structured result returned after a rollback run completes or fails.
@@ -154,6 +184,9 @@ A normalized error record stored for a failed migration item state.
 **Migration Item Error Detail**:
 Durable structured detail for inspecting a migration item error after the run has ended.
 
+**Migration Diagnostic**:
+A schema-backed warning or error record that explains migration status, item failure, run failure, or another operational condition.
+
 ## Relationships
 
 - A **Source Item** has exactly one **Migration Item State** for a given migration definition.
@@ -164,12 +197,18 @@ Durable structured detail for inspecting a migration item error after the run ha
 - An **Encoded Source Cursor** is the only cursor form persisted by a **Migration Store**.
 - A **Source Cursor Window** may return a next **Source Cursor**.
 - A **Source Cursor** is committed after a cursor window is processed, even when some source items in the window fail.
+- A **Source Inventory Scan** starts from the beginning of the source and does not read or write the persisted **Source Cursor**.
+- A **Source Inventory Scan** validates source item payloads with the **Source Payload Schema**.
+- A **Source Inventory Scan** may return **Migration Diagnostics** for invalid source payloads or duplicate **Source Identities**.
 - A **Migration Item State** records source identity, migration status, and may record observed source version, destination identity, or failure metadata.
 - A **Migration Item State** is modeled as discriminated variants by status.
 - A **Migration Item State** does not store source item payloads by default.
 - Public and persisted migration data uses domain-friendly discriminators such as `kind` and `status`; Effect `_tag` is reserved for Effect-native errors or internals and hidden from public authoring examples through helpers.
 - A **Migration Item Error** normalizes source, pipeline, destination, or store errors for durable storage.
 - A **Migration Item Error** may include **Migration Item Error Details** so future inspection can explain failures without rerunning the migration.
+- A **Migration Diagnostic** is serializable.
+- A **Migration Diagnostic** may be returned in an inspection report or persisted by a context-specific durable record.
+- Durable **Migration Diagnostics** do not persist raw Effect causes or raw thrown objects.
 - Live error causes are useful for logging, but durable **Migration Item Error** records do not persist raw causes.
 - A **Migration Store** error fails the migration run instead of becoming a migration item failure.
 - A **Source Plugin** cursor read error fails the migration definition run.
@@ -191,6 +230,15 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A **Destination Plugin** exposes or uses a **Destination Command Schema**.
 - A **Migration Definition** declares the source, pipeline, destination, migration store, and dependencies for a migration workflow.
 - A **Migration Definition** is executable and may contain layers and effects.
+- A **Required Migration Definition Dependency** is a hard ordering prerequisite.
+- An **Optional Migration Definition Dependency** is an ordering preference when both **Migration Definitions** participate in a run.
+- A **Migration Reference Lookup** relationship is not a **Migration Definition Dependency** unless the migration definition also declares it as one.
+- A **Migration Definition Registry** catalogs executable **Migration Definitions**.
+- A **Migration Definition Registry** is distinct from a **Plugin Registry** and does not compile **Migration Specs**.
+- A **Migration Definition Registry** may be authored directly or initialized from previously compiled **Migration Definitions**.
+- A **Migration Status Report** inspects selected **Migration Definitions** without acquiring **Migration Definition Locks** or creating **Migration Run State**.
+- A **Migration Status Report** may include current durable item-state counts, latest **Migration Run State** lifecycle metadata, and **Source Inventory Scan** counts.
+- A **Migration Status Report** over multiple **Migration Definitions** may read each definition's own **Migration Store** independently.
 - A **Migration Definition Lock** is acquired through the **Migration Store** before a migration definition is executed.
 - A **Migration Definition Lock** prevents concurrent runners from executing the same **Migration Definition** in the first version.
 - A **Migration Definition Lock** does not expire automatically in durable stores; abandoned locks require an explicit force-unlock workflow.
@@ -201,7 +249,7 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A **Migration Spec** can be compiled through a plugin registry into a **Migration Definition**.
 - A **Plugin Registry** supports future DSL or low-code workflows and is not required for the first code path.
 - A **Migration Run** executes one or more **Migration Definitions**.
-- A **Migration Run** orders multiple **Migration Definitions** by their declared dependencies.
+- A **Migration Run** orders multiple **Migration Definitions** by their declared **Migration Definition Dependencies**.
 - A **Migration Run** executes ordered **Migration Definitions** sequentially in the first version.
 - A **Migration Run** continues processing source items after an item failure in the first version.
 - A **Migration Run** is marked failed when one or more source items fail, even if other items complete.
@@ -218,7 +266,7 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A skipped **Run Mode** reprocesses skipped item states regardless of source version.
 - A **Run Request** supplies migration definitions, run mode, and optional migration definition selection.
 - A **Rollback Request** supplies migration definitions, rollback selection, and optional source identity selection.
-- A **Run Request** that selects migration definitions also includes their required dependencies.
+- A **Run Request** that selects migration definitions also includes their **Required Migration Definition Dependencies**.
 - An **Execution Adapter** may execute migration definitions inline, inline with bounded parallelism, or through a durable queue.
 - An **Execution Adapter** may be provided by users when they need custom scheduling or parallelization.
 - A **Migration Reference Lookup** reads migrated destination identities from **Migration Item State** in a **Migration Store**.
@@ -226,7 +274,7 @@ Durable structured detail for inspecting a migration item error after the run ha
 - A **Migration Reference Lookup** may target a **Migration Definition** that is not a declared dependency.
 - A **Migration Reference Lookup** may target one **Migration Definition** or an ordered list of **Migration Definitions**.
 - A **Migration Reference Lookup** over multiple **Migration Definitions** returns the first migrated reference found in lookup order.
-- A declared dependency gives same-run ordering and locking guarantees for reference lookup, but is not required to perform a reference lookup.
+- A declared **Migration Definition Dependency** gives same-run ordering and locking guarantees for reference lookup, but is not required to perform a reference lookup.
 - A missing migrated reference may be handled as no value or as an item-level pipeline failure by the **Transformation Pipeline**.
 - A missing migrated reference may create a **Destination Stub** when the **Migration Reference Lookup** is configured to allow stubs.
 - A referenced **Migration Definition** owns how its **Destination Stubs** are created.
@@ -288,4 +336,4 @@ Durable structured detail for inspecting a migration item error after the run ha
 - Hashing the entire source item was considered as an identity strategy — resolved: content hashes are usually **Source Version**, not **Source Identity**.
 - "highwater mark" was used for incremental source selection — resolved: use **Source Cursor**.
 - "source schema" and "source item schema" were used ambiguously — resolved: use **Source Payload Schema** for the schema that validates `SourceItem.item`, not source identity or source version.
-- Drupal-style `migration`, `source`, `stub_id`, and `no_stub` lookup option names were considered — resolved: use framework terms such as **Migration Definition**, **Source Identity**, and **Destination Stub** in the TypeScript API while preserving Drupal-inspired lookup semantics.
+- External lookup option names were considered — resolved: use framework terms such as **Migration Definition**, **Source Identity**, and **Destination Stub** consistently in the TypeScript API.

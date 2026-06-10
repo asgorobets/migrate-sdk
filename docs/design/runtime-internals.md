@@ -35,6 +35,37 @@ All selected and dependency-expanded definitions in one run must use the same
 store layer instance. This keeps locks, run state, item states, and cursors in
 one durability boundary.
 
+Read-only status inspection does not use the run lifecycle and does not require
+selected definitions to share one store layer. It reads each migration
+definition's own store independently.
+
+Status uses two store-level aggregate/read primitives:
+
+```ts
+interface MigrationItemStateSummary {
+  readonly migrated: number;
+  readonly skipped: number;
+  readonly failed: number;
+  readonly needsUpdate: number;
+}
+
+interface MigrationStore {
+  readonly getLatestRunState: (
+    definitionId: MigrationDefinitionId
+  ) => Effect.Effect<MigrationRunState | null, MigrationStoreError>;
+
+  readonly getItemStateSummary: (
+    definitionId: MigrationDefinitionId
+  ) => Effect.Effect<MigrationItemStateSummary, MigrationStoreError>;
+}
+```
+
+`getItemStateSummary` avoids materializing all item states for cheap
+durable-only status. File and in-memory stores may implement it by counting
+`listItemStates(definitionId)` internally. SQL and key/value stores can provide
+native grouped counts. `listItemStates(definitionId)` remains the detail API for
+rollback and source-scan status paths that need durable source identities.
+
 ## Runner Order
 
 High-level single-definition order:
@@ -83,6 +114,47 @@ Source payload decoding happens before unchanged-terminal checks, pipeline
 execution, and destination command execution. A source item with a valid
 identity and version but invalid payload becomes a failed item state with source
 error details.
+
+The current runtime sees source read and lookup failures as `SourcePluginError`.
+A future source contract may keep plugin-specific error channels available to
+source retry strategies before normalizing those errors at the framework
+boundary for run failures, item failures, CLI rendering, and durable item error
+records.
+
+## Status Inspection
+
+Status inspection is read-only. It must not:
+
+- acquire migration definition locks
+- create a run id
+- begin, fail, or complete run state
+- read or write persisted source cursor progress
+- write item state
+- execute transformation pipelines
+- call destination plugins
+
+Durable-only status reads latest run lifecycle metadata and aggregate item-state
+counts from the migration store.
+
+Source-scan status additionally scans the current source inventory. It starts at
+`source.read(null)`, follows returned `nextCursor` values until the source is
+exhausted, and never reads or writes the persisted source cursor. A status scan
+over multiple migration definitions may run definition scans concurrently, with
+a default concurrency of `1`. Each individual definition still reads its cursor
+windows sequentially.
+
+Source-scan status validates each emitted source item payload with the
+migration definition's source payload schema. Invalid payloads are returned as
+schema-backed status warnings and counted in source status; they are not
+persisted as failed item states. Duplicate source identities in the same full
+scan are also returned as schema-backed warnings. Source cursor read failures
+fail the status request because the inventory scan cannot complete.
+
+The first source-scan implementation may materialize
+`listItemStates(definitionId)` to compute orphaned durable states exactly.
+Future large-store implementations can add pagination or store-native scan
+optimizations when real pressure appears, but the first public status API does
+not add a separate batch item-state lookup primitive.
 
 ## Destination Command Plans
 

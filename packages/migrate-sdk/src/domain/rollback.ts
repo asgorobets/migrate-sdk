@@ -59,6 +59,12 @@ export type AnyRollbackMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Cursor is existential across heterogeneous rollback requests.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Rollback pipeline error is re-extracted by callers when execution exists.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source input is not relevant to rollback request shape.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source layer error is not relevant to rollback request shape.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source requirements are not relevant to rollback request shape.
   any
 >;
 
@@ -68,7 +74,10 @@ export type MigrationDefinitionRollbackPipelineError<Definition> =
     infer _Command,
     infer _PipelineError,
     infer _Cursor,
-    infer RollbackPipelineError
+    infer RollbackPipelineError,
+    infer _SourceInput,
+    infer _SourceLayerError,
+    infer _SourceRequirements
   >
     ? RollbackPipelineError
     : never;
@@ -79,6 +88,7 @@ export interface RollbackRequest<
 > {
   readonly definitionIds?: readonly MigrationDefinitionId[];
   readonly definitions: Definitions;
+  readonly sourceIdentities?: readonly [SourceIdentity, ...SourceIdentity[]];
 }
 
 export interface RollbackRequestInput<
@@ -87,18 +97,30 @@ export interface RollbackRequestInput<
 > {
   readonly definitionIds?: readonly MigrationDefinitionIdInput[];
   readonly definitions: Definitions;
+  readonly sourceIdentities?: readonly SourceIdentityInput[];
 }
 
 export const makeRollbackRequest = <
   Definitions extends readonly AnyRollbackMigrationDefinition[],
 >(
   input: RollbackRequestInput<Definitions>
-): RollbackRequest<Definitions> => ({
-  definitions: input.definitions,
-  ...(input.definitionIds === undefined
-    ? {}
-    : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
-});
+): RollbackRequest<Definitions> => {
+  const options = makeRollbackMigrationOptions(
+    input.sourceIdentities === undefined
+      ? {}
+      : { sourceIdentities: input.sourceIdentities }
+  );
+
+  return {
+    definitions: input.definitions,
+    ...(input.definitionIds === undefined
+      ? {}
+      : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
+    ...(options.sourceIdentities === undefined
+      ? {}
+      : { sourceIdentities: options.sourceIdentities }),
+  };
+};
 
 export interface RollbackMigrationOptions {
   readonly sourceIdentities?: readonly [SourceIdentity, ...SourceIdentity[]];

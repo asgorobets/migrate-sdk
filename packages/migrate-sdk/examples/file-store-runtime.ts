@@ -1,6 +1,6 @@
+import { fileURLToPath } from "node:url";
 import { Effect, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
-import { Path } from "effect/Path";
 import {
   defineMigration,
   type MigrationRunSummary,
@@ -34,15 +34,13 @@ export interface FileStoreExampleResult {
   readonly storeDirectory: string;
 }
 
-const getDefaultStoreDirectory = Effect.fn("getDefaultStoreDirectory")(
-  function* () {
-    const path = yield* Path;
-    const modulePath = yield* path
-      .fromFileUrl(new URL(import.meta.url))
-      .pipe(Effect.orDie);
+export interface MakeFileStoreArticlesMigrationOptions {
+  readonly definitionId?: string;
+  readonly storeDirectory?: string;
+}
 
-    return path.join(path.dirname(modulePath), ".migration-state");
-  }
+const defaultFileStoreDirectory = fileURLToPath(
+  new URL("./.migration-state/file-store-articles", import.meta.url)
 );
 
 const sourceItems = [
@@ -72,10 +70,14 @@ const sourceItems = [
   },
 ] as const;
 
-const makeArticlesMigration = (storeDirectory: string) => {
+export const makeFileStoreArticlesMigration = ({
+  definitionId = "articles",
+  storeDirectory = defaultFileStoreDirectory,
+}: MakeFileStoreArticlesMigrationOptions = {}) => {
   const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
     contentType: "article",
     commands: {
+      deleteEntry: true,
       publishEntry: true,
       upsertEntry: { fields: ArticleEntryFields },
     },
@@ -84,7 +86,7 @@ const makeArticlesMigration = (storeDirectory: string) => {
 
   const migration = defineMigration({
     destination,
-    id: "articles",
+    id: definitionId,
     pipeline: Effect.fn("fileStoreArticles.pipeline")(function* (source) {
       if (!source.item.publish) {
         return yield* skipItem("Article is not published");
@@ -94,6 +96,7 @@ const makeArticlesMigration = (storeDirectory: string) => {
         title: source.item.title,
       });
     }),
+    rollback: () => destination.commands.deleteEntry(),
     source: InMemorySourcePlugin.make({
       items: sourceItems,
       sourceSchema: Article,
@@ -108,20 +111,16 @@ export const runFileStoreExample = Effect.fn("runFileStoreExample")(function* (
   options: RunFileStoreExampleOptions = {}
 ) {
   const fs = yield* FileSystem;
-  const defaultStoreDirectory = yield* getDefaultStoreDirectory();
-  const storeDirectory =
-    options.storeDirectory ??
-    process.env.MIGRATE_SDK_FILE_STORE_DIR ??
-    defaultStoreDirectory;
+  const storeDirectory = options.storeDirectory ?? defaultFileStoreDirectory;
 
   if (options.reset === true) {
     yield* fs.remove(storeDirectory, { force: true, recursive: true });
   }
 
-  const first = makeArticlesMigration(storeDirectory);
+  const first = makeFileStoreArticlesMigration({ storeDirectory });
   const firstRun = yield* runMigration(first.migration);
 
-  const second = makeArticlesMigration(storeDirectory);
+  const second = makeFileStoreArticlesMigration({ storeDirectory });
   const secondRun = yield* runMigration(second.migration);
 
   return {

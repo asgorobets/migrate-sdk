@@ -129,8 +129,10 @@ export interface InMemoryUpsertEntryCommandOptions<
 }
 
 export type InMemoryPublishEntryCommandOptions = true;
+export type InMemoryDeleteEntryCommandOptions = true;
 
 export interface InMemoryEntryDestinationCommandOptions {
+  readonly deleteEntry?: InMemoryDeleteEntryCommandOptions;
   readonly publishEntry?: InMemoryPublishEntryCommandOptions;
   readonly upsertEntry?: InMemoryUpsertEntryCommandOptions;
 }
@@ -140,6 +142,7 @@ type NonEmptyString<Value extends string> = Value extends "" ? never : Value;
 type RequireAtLeastOneEntryCommand<
   Commands extends InMemoryEntryDestinationCommandOptions,
 > = Commands extends
+  | { readonly deleteEntry: InMemoryDeleteEntryCommandOptions }
   | { readonly publishEntry: InMemoryPublishEntryCommandOptions }
   | { readonly upsertEntry: InMemoryUpsertEntryCommandOptions }
   ? Commands
@@ -154,7 +157,9 @@ type InMemoryEntryDestinationCommandOptionsFor<
       : never
     : Key extends "publishEntry"
       ? InMemoryPublishEntryCommandOptions
-      : never;
+      : Key extends "deleteEntry"
+        ? InMemoryDeleteEntryCommandOptions
+        : never;
 };
 
 type InMemoryEntryFields<CommandOptions> =
@@ -187,12 +192,25 @@ export type InMemoryPublishEntryCommand<
     : never
   : never;
 
+export type InMemoryDeleteEntryCommand<
+  ContentType extends string,
+  Commands extends InMemoryEntryDestinationCommandOptions,
+> = Commands extends { readonly deleteEntry?: infer CommandOptions }
+  ? NonNullable<CommandOptions> extends InMemoryDeleteEntryCommandOptions
+    ? {
+        readonly contentType: ContentType;
+        readonly kind: "DeleteEntry";
+      }
+    : never
+  : never;
+
 export type InMemoryEntryCommand<
   ContentType extends string,
   Commands extends InMemoryEntryDestinationCommandOptions,
 > =
   | InMemoryUpsertEntryCommand<ContentType, Commands>
-  | InMemoryPublishEntryCommand<ContentType, Commands>;
+  | InMemoryPublishEntryCommand<ContentType, Commands>
+  | InMemoryDeleteEntryCommand<ContentType, Commands>;
 
 export type InMemoryEntryDestinationCommands<
   ContentType extends string,
@@ -212,6 +230,16 @@ export type InMemoryEntryDestinationCommands<
   }
     ? {
         readonly publishEntry: () => InMemoryPublishEntryCommand<
+          ContentType,
+          Commands
+        >;
+      }
+    : Record<never, never>) &
+  (Commands extends {
+    readonly deleteEntry: InMemoryDeleteEntryCommandOptions;
+  }
+    ? {
+        readonly deleteEntry: () => InMemoryDeleteEntryCommand<
           ContentType,
           Commands
         >;
@@ -326,7 +354,11 @@ const assertInMemoryEntryDestinationOptions = <
   }
 
   for (const commandName of Reflect.ownKeys(input.commands)) {
-    if (commandName !== "publishEntry" && commandName !== "upsertEntry") {
+    if (
+      commandName !== "deleteEntry" &&
+      commandName !== "publishEntry" &&
+      commandName !== "upsertEntry"
+    ) {
       throw new Error(
         `In-memory entry destination command is not supported: ${String(commandName)}`
       );
@@ -334,6 +366,7 @@ const assertInMemoryEntryDestinationOptions = <
   }
 
   if (
+    input.commands.deleteEntry === undefined &&
     input.commands.upsertEntry === undefined &&
     input.commands.publishEntry === undefined
   ) {
@@ -347,6 +380,13 @@ const assertInMemoryEntryDestinationOptions = <
     input.commands.publishEntry !== true
   ) {
     throw new Error("In-memory publishEntry command option must be true");
+  }
+
+  if (
+    input.commands.deleteEntry !== undefined &&
+    input.commands.deleteEntry !== true
+  ) {
+    throw new Error("In-memory deleteEntry command option must be true");
   }
 
   if (input.commands.upsertEntry !== undefined) {
@@ -428,6 +468,10 @@ type InMemoryRuntimeEntryCommand =
   | {
       readonly contentType: string;
       readonly kind: "PublishEntry";
+    }
+  | {
+      readonly contentType: string;
+      readonly kind: "DeleteEntry";
     };
 
 const makeUpsertEntryCommand = <
@@ -475,6 +519,27 @@ const makePublishEntryCommand = <const ContentType extends string>(
       }),
     },
     schema: PublishEntry,
+  });
+};
+
+const makeDeleteEntryCommand = <const ContentType extends string>(
+  contentType: ContentType
+) => {
+  const DeleteEntry = Schema.Struct({
+    contentType: Schema.Literal(contentType),
+    kind: Schema.Literal("DeleteEntry"),
+  });
+  type DeleteEntry = typeof DeleteEntry.Type;
+
+  return defineDestinationCommand("DeleteEntry", {
+    identity: false,
+    make: {
+      deleteEntry: (): DeleteEntry => ({
+        contentType,
+        kind: "DeleteEntry",
+      }),
+    },
+    schema: DeleteEntry,
   });
 };
 
@@ -640,6 +705,8 @@ const makeEntriesWithState = <
   const state =
     options.state ?? makeState<InMemoryEntryCommand<ContentType, Commands>>();
   const upsertEntryOptions = options.commands.upsertEntry;
+  const hasDeleteEntry = options.commands.deleteEntry === true;
+  const hasPublishEntry = options.commands.publishEntry === true;
   const execute = (
     command: InMemoryRuntimeEntryCommand,
     context: DestinationCommandContext
@@ -658,6 +725,12 @@ const makeEntriesWithState = <
           ...existing,
           published: true,
         });
+
+        return {};
+      }
+
+      if (command.kind === "DeleteEntry") {
+        state.entries.delete(key);
 
         return {};
       }
@@ -717,10 +790,34 @@ const makeEntriesWithState = <
     readonly layer: Layer.Layer<DestinationPlugin, DestinationPluginError>;
   };
 
-  if (
-    upsertEntryOptions !== undefined &&
-    options.commands.publishEntry === true
-  ) {
+  if (upsertEntryOptions !== undefined && hasPublishEntry && hasDeleteEntry) {
+    const upsertEntry = makeUpsertEntryCommand(
+      options.contentType,
+      upsertEntryOptions
+    );
+    const publishEntry = makePublishEntryCommand(options.contentType);
+    const deleteEntry = makeDeleteEntryCommand(options.contentType);
+    const pluginDefinition = defineDestinationPlugin(
+      "in-memory-entries"
+    ).addGroup(
+      defineDestinationCommandGroup("entries")
+        .topLevel()
+        .add(upsertEntry, publishEntry, deleteEntry)
+    );
+
+    implementedPlugin = pluginDefinition.implement((handlers) =>
+      handlers
+        .handle("UpsertEntry", ({ command, context }) =>
+          executeWithState(command, context)
+        )
+        .handle("PublishEntry", ({ command, context }) =>
+          executeWithState(command, context)
+        )
+        .handle("DeleteEntry", ({ command, context }) =>
+          executeWithState(command, context)
+        )
+    ) as unknown as typeof implementedPlugin;
+  } else if (upsertEntryOptions !== undefined && hasPublishEntry) {
     const upsertEntry = makeUpsertEntryCommand(
       options.contentType,
       upsertEntryOptions
@@ -743,6 +840,49 @@ const makeEntriesWithState = <
           executeWithState(command, context)
         )
     ) as unknown as typeof implementedPlugin;
+  } else if (upsertEntryOptions !== undefined && hasDeleteEntry) {
+    const upsertEntry = makeUpsertEntryCommand(
+      options.contentType,
+      upsertEntryOptions
+    );
+    const deleteEntry = makeDeleteEntryCommand(options.contentType);
+    const pluginDefinition = defineDestinationPlugin(
+      "in-memory-entries"
+    ).addGroup(
+      defineDestinationCommandGroup("entries")
+        .topLevel()
+        .add(upsertEntry, deleteEntry)
+    );
+
+    implementedPlugin = pluginDefinition.implement((handlers) =>
+      handlers
+        .handle("UpsertEntry", ({ command, context }) =>
+          executeWithState(command, context)
+        )
+        .handle("DeleteEntry", ({ command, context }) =>
+          executeWithState(command, context)
+        )
+    ) as unknown as typeof implementedPlugin;
+  } else if (hasPublishEntry && hasDeleteEntry) {
+    const publishEntry = makePublishEntryCommand(options.contentType);
+    const deleteEntry = makeDeleteEntryCommand(options.contentType);
+    const pluginDefinition = defineDestinationPlugin(
+      "in-memory-entries"
+    ).addGroup(
+      defineDestinationCommandGroup("entries")
+        .topLevel()
+        .add(publishEntry, deleteEntry)
+    );
+
+    implementedPlugin = pluginDefinition.implement((handlers) =>
+      handlers
+        .handle("PublishEntry", ({ command, context }) =>
+          executeWithState(command, context)
+        )
+        .handle("DeleteEntry", ({ command, context }) =>
+          executeWithState(command, context)
+        )
+    ) as unknown as typeof implementedPlugin;
   } else if (upsertEntryOptions !== undefined) {
     const upsertEntry = makeUpsertEntryCommand(
       options.contentType,
@@ -759,7 +899,7 @@ const makeEntriesWithState = <
         executeWithState(command, context)
       )
     ) as unknown as typeof implementedPlugin;
-  } else if (options.commands.publishEntry === true) {
+  } else if (hasPublishEntry) {
     const publishEntry = makePublishEntryCommand(options.contentType);
     const pluginDefinition = defineDestinationPlugin(
       "in-memory-entries"
@@ -769,6 +909,19 @@ const makeEntriesWithState = <
 
     implementedPlugin = pluginDefinition.implement((handlers) =>
       handlers.handle("PublishEntry", ({ command, context }) =>
+        executeWithState(command, context)
+      )
+    ) as unknown as typeof implementedPlugin;
+  } else if (hasDeleteEntry) {
+    const deleteEntry = makeDeleteEntryCommand(options.contentType);
+    const pluginDefinition = defineDestinationPlugin(
+      "in-memory-entries"
+    ).addGroup(
+      defineDestinationCommandGroup("entries").topLevel().add(deleteEntry)
+    );
+
+    implementedPlugin = pluginDefinition.implement((handlers) =>
+      handlers.handle("DeleteEntry", ({ command, context }) =>
         executeWithState(command, context)
       )
     ) as unknown as typeof implementedPlugin;

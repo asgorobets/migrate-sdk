@@ -10,6 +10,7 @@ import type {
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type { MigrationRunState } from "../domain/run.ts";
 import type { MigrationItemState } from "../domain/state.ts";
+import type { MigrationItemStateSummary } from "../domain/status.ts";
 
 export class MigrationStore extends Service<
   MigrationStore,
@@ -32,6 +33,10 @@ export class MigrationStore extends Service<
       definitionId: MigrationDefinitionId
     ) => Effect.Effect<readonly MigrationItemState[], MigrationStoreError>;
 
+    readonly getItemStateSummary: (
+      definitionId: MigrationDefinitionId
+    ) => Effect.Effect<MigrationItemStateSummary, MigrationStoreError>;
+
     readonly deleteItemState: (
       definitionId: MigrationDefinitionId,
       identity: SourceIdentity
@@ -42,6 +47,10 @@ export class MigrationStore extends Service<
     ) => Effect.Effect<void, MigrationStoreError>;
 
     readonly createRunId: Effect.Effect<MigrationRunId, MigrationStoreError>;
+
+    readonly getLatestRunState: (
+      definitionId: MigrationDefinitionId
+    ) => Effect.Effect<MigrationRunState | null, MigrationStoreError>;
 
     readonly beginRun: (
       runId: MigrationRunId,

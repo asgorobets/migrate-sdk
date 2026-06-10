@@ -25,6 +25,7 @@ import type { MigrationDefinitionLock } from "../../domain/lock.ts";
 import type { MigrationRunState } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { MigrationItemError } from "../../domain/state.ts";
+import { summarizeMigrationItemStates } from "../../domain/status.ts";
 import { MigrationStore } from "../../services/migration-store.ts";
 
 export interface FileMigrationStoreOptions {
@@ -502,6 +503,14 @@ const makeLayerWithoutPlatform = (
         }
       );
 
+      const getItemStateSummary = Effect.fn(
+        "FileMigrationStore.getItemStateSummary"
+      )(function* (definitionId: MigrationDefinitionId) {
+        const itemStates = yield* listItemStates(definitionId);
+
+        return summarizeMigrationItemStates(itemStates);
+      });
+
       const deleteItemState = Effect.fn("FileMigrationStore.deleteItemState")(
         (definitionId: MigrationDefinitionId, identity: SourceIdentity) =>
           removeFileIfExists(fs, paths.itemState(definitionId, identity))
@@ -525,6 +534,18 @@ const makeLayerWithoutPlatform = (
       const createRunId = Effect.sync(() =>
         MigrationRunIdSchema.make(`run-${randomUUID()}`)
       );
+
+      const getLatestRunState = Effect.fn(
+        "FileMigrationStore.getLatestRunState"
+      )(function* (definitionId: MigrationDefinitionId) {
+        const record = yield* readRecordOptional(
+          fs,
+          paths.latestRunState(definitionId),
+          LatestRunStateRecord
+        );
+
+        return record?.state ?? null;
+      });
 
       const beginRun = Effect.fn("FileMigrationStore.beginRun")(
         (
@@ -680,9 +701,11 @@ const makeLayerWithoutPlatform = (
         setSourceCursor,
         getItemState,
         listItemStates,
+        getItemStateSummary,
         deleteItemState,
         upsertItemState,
         createRunId,
+        getLatestRunState,
         beginRun,
         completeRun,
         failRun,

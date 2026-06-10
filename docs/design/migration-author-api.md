@@ -278,29 +278,29 @@ definition's store.
 import { MigrationReferenceLookup } from "migrate-sdk";
 
 const stitchCustomers = defineMigration({
-  id: "stitch-ct-customers-to-clerk-users",
-  dependsOn: ["migrate-customers-to-ct", "migrate-users-to-clerk"],
+  id: "stitch-customers-to-user-accounts",
+  dependsOn: ["migrate-customers", "migrate-user-accounts"],
   // ...
   pipeline: Effect.fn("stitch.pipeline")(function* (source) {
     const references = yield* MigrationReferenceLookup;
 
-    const ctCustomer = yield* references.lookup({
-      definitionId: "migrate-customers-to-ct",
+    const customer = yield* references.lookup({
+      definitionId: "migrate-customers",
       sourceIdentity: source.identity,
     });
 
-    const clerkUser = yield* references.lookup({
-      definitionId: "migrate-users-to-clerk",
+    const userAccount = yield* references.lookup({
+      definitionId: "migrate-user-accounts",
       sourceIdentity: source.identity,
     });
 
-    if (ctCustomer === null || clerkUser === null) {
+    if (customer === null || userAccount === null) {
       return yield* skipItem("Customer is missing required references");
     }
 
     return destination.commands.linkCustomerToUser({
-      clerkUserId: clerkUser.destinationIdentity,
-      customerId: ctCustomer.destinationIdentity,
+      customerId: customer.destinationIdentity,
+      userAccountId: userAccount.destinationIdentity,
     });
   }),
 });

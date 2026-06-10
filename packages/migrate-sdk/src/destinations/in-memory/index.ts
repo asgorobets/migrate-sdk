@@ -3,6 +3,8 @@
 
 export { InMemoryDestinationPlugin } from "./in-memory-destination.ts";
 export type {
+  InMemoryDeleteEntryCommand,
+  InMemoryDeleteEntryCommandOptions,
   InMemoryDestinationTransientFailures,
   InMemoryEntryCommand,
   InMemoryEntryDestination,

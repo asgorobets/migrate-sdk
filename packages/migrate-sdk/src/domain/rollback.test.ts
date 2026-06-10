@@ -69,9 +69,14 @@ describe("rollback public API", () => {
       rollback: rollbackPipeline,
     });
 
+    const definitions = [definition] as const;
     const request = makeRollbackRequest({
-      definitions: [definition],
+      definitions,
       definitionIds: ["articles"],
+    });
+    const requestWithSourceIdentities = makeRollbackRequest({
+      definitions,
+      sourceIdentities: ["article-1"],
     });
     const options = makeRollbackMigrationOptions({
       sourceIdentities: ["article-1"],
@@ -82,6 +87,10 @@ describe("rollback public API", () => {
     });
 
     expect(definition.rollback).toBe(rollbackPipeline);
+    expect(requestWithSourceIdentities.definitions).toBe(definitions);
+    expect(requestWithSourceIdentities.sourceIdentities).toEqual([
+      toSourceIdentity("article-1"),
+    ]);
     expect(request.definitionIds).toEqual([
       toMigrationDefinitionId("articles"),
     ]);

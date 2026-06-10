@@ -3,11 +3,17 @@ import { Effect, Layer, Schema } from "effect";
 import { Service } from "effect/Context";
 import {
   defineSourcePlugin,
+  type SourceItem,
   SourcePluginError,
+  type SourceReadResult,
   type SourceReadResultInput,
   toSourceIdentity,
 } from "migrate-sdk";
-import { SourcePlugin } from "../services/source-plugin.ts";
+import { expectTypeOf } from "vitest";
+import {
+  SourcePlugin,
+  type SourcePlugin as SourcePluginContract,
+} from "../services/source-plugin.ts";
 
 const RemoteArticle = Schema.Struct({
   id: Schema.String,
@@ -22,6 +28,23 @@ const RemoteArticleCursor = Schema.Struct({
 });
 
 type RemoteArticleCursor = typeof RemoteArticleCursor.Type;
+
+expectTypeOf<
+  ReturnType<SourcePluginContract<RemoteArticle, RemoteArticleCursor>["read"]>
+>().toEqualTypeOf<
+  Effect.Effect<
+    SourceReadResult<RemoteArticle, RemoteArticleCursor>,
+    SourcePluginError
+  >
+>();
+
+expectTypeOf<
+  ReturnType<
+    SourcePluginContract<RemoteArticle, RemoteArticleCursor>["readByIdentity"]
+  >
+>().toEqualTypeOf<
+  Effect.Effect<SourceItem<RemoteArticle> | null, SourcePluginError>
+>();
 
 interface ArticleListEntry {
   readonly id: string;

@@ -5,18 +5,18 @@ export type {
   ConfiguredDestinationPlugin,
   ConfiguredSourcePlugin,
   DestinationRetryStrategy,
+  MigrationDefinitionDependencies,
+  MigrationDefinitionDependenciesInput,
   MigrationDefinition,
   MigrationDefinitionInput,
+  SourcePayloadSchema,
   SourceReadResultInput,
   SourcePluginFactoryInput,
   SourcePluginImplementation,
   SourcePluginInput,
   SourceRetryStrategy,
 } from "./domain/definition.ts";
-export {
-  defineMigration,
-  defineSourcePlugin,
-} from "./domain/definition.ts";
+export { defineMigration, defineSourcePlugin } from "./domain/definition.ts";
 
 export type {
   DefinedDestinationCommands,
@@ -97,6 +97,57 @@ export type {
 } from "./domain/run.ts";
 
 export {
+  DuplicateSourceIdentityStatusWarning,
+  InvalidSourceItemStatusWarning,
+  makeMigrationStatusRequest,
+  MigrationDefinitionSourceStatus,
+  MigrationDefinitionStatus,
+  MigrationItemStateSummary,
+  MigrationStatusReport,
+  MigrationStatusRequestError,
+  MigrationStatusWarning,
+} from "./domain/status.ts";
+export type {
+  GetMigrationStatusesError,
+  MigrationStatusRequest,
+  MigrationStatusRequestInput,
+} from "./domain/status.ts";
+
+export {
+  DuplicateMigrationDefinitionId,
+  MigrationDefinitionDuplicateRequestedDefinitionIgnored,
+  MigrationDefinitionDuplicateTargetIdIgnored,
+  MigrationDefinitionOptionalDependencyCycleIgnored,
+  MigrationDefinitionPlanNotice,
+  MigrationDefinitionRegistry,
+  MigrationDefinitionRegistryConstructionError,
+  MigrationDefinitionRegistryConstructionIssue,
+  MigrationDefinitionRegistryInvalidSelectionError,
+  MigrationDefinitionRegistryLookupError,
+  MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
+  MigrationDefinitionRegistryUnknownDefinitionError,
+  MissingRequiredMigrationDefinitionDependency,
+  RequiredMigrationDefinitionDependencyCycle,
+} from "./domain/registry.ts";
+export type {
+  MigrationDefinitionDependencyEdge,
+  MigrationDefinitionPlanTarget,
+  MigrationDefinitionRegistryEntry,
+  MigrationDefinitionRegistryInput,
+  MigrationDefinitionRegistryPlanningError,
+  MigrationDefinitionRegistryRollbackError,
+  MigrationDefinitionRegistryRollbackInput,
+  MigrationDefinitionRegistryRunError,
+  MigrationDefinitionRegistryRunInput,
+  MigrationDefinitionRegistrySelectionInput,
+  MigrationDefinitionRegistryStatusError,
+  MigrationDefinitionRegistryStatusInput,
+  MigrationDefinitionRegistryStatusReport,
+  MigrationDefinitionRollbackPlan,
+  MigrationDefinitionRunPlan,
+} from "./domain/registry.ts";
+
+export {
   makeRollbackMigrationOptions,
   makeRollbackRequest,
   RollbackContext,
@@ -147,11 +198,22 @@ export type {
 export { MigrationStore } from "./services/migration-store.ts";
 export { SourcePlugin } from "./services/source-plugin.ts";
 
-export { runMigration, runMigrations } from "./runtime/run-migrations.ts";
-export type { RunMigrationError } from "./runtime/run-migrations.ts";
+export { getMigrationStatuses } from "./runtime/get-migration-statuses.ts";
+export {
+  rollbackMigration,
+  rollbackMigrations,
+  runMigration,
+  runMigrations,
+} from "./runtime/run-migrations.ts";
+export type {
+  RollbackMigrationError,
+  RunMigrationError,
+} from "./runtime/run-migrations.ts";
 
 export { InMemoryDestinationPlugin } from "./destinations/in-memory/in-memory-destination.ts";
 export type {
+  InMemoryDeleteEntryCommand,
+  InMemoryDeleteEntryCommandOptions,
   InMemoryEntryCommand,
   InMemoryEntryDestination,
   InMemoryEntryDestinationCommandOptions,
@@ -186,6 +248,21 @@ export type {
   CsvSourcePlatform,
   CsvVersion,
 } from "./sources/csv/csv-source.ts";
+
+export {
+  SqlSourcePlugin,
+  SqlSourcePluginName,
+} from "./sources/sql/sql-source.ts";
+export type {
+  SqlSourceLookup,
+  SqlSourceMetadata,
+  SqlSourceMetadataContext,
+  SqlSourceMetadataFailure,
+  SqlSourceMetadataResult,
+  SqlSourceMetadataSuccess,
+  SqlSourceOptions,
+  SqlSourceRead,
+} from "./sources/sql/sql-source.ts";
 
 export { InMemoryMigrationStore } from "./stores/in-memory/in-memory-migration-store.ts";
 export type { InMemoryMigrationStoreState } from "./stores/in-memory/in-memory-migration-store.ts";

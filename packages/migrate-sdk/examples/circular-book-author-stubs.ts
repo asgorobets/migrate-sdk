@@ -175,9 +175,7 @@ const isAuthorUpsertExecution = (
 ): execution is AuthorUpsertExecution =>
   execution.command.contentType === "author";
 
-export const runCircularBookAuthorStubsExample = Effect.fn(
-  "runCircularBookAuthorStubsExample"
-)(function* () {
+export const makeCircularBookAuthorStubMigrations = () => {
   const storeState = InMemoryMigrationStore.makeState();
   const store = InMemoryMigrationStore.layer(storeState);
   const destinationFixture = makeBookstoreDestinationFixture();
@@ -295,8 +293,20 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
   // Books need Authors, and Authors need popular Books. Running both
   // definitions together lets pipelines resolve the cycle with lookup-created
   // stubs instead of impossible dependency ordering.
+  return {
+    definitions: [books, authors] as const,
+    destinationFixture,
+    storeState,
+  };
+};
+
+export const runCircularBookAuthorStubsExample = Effect.fn(
+  "runCircularBookAuthorStubsExample"
+)(function* () {
+  const { definitions, destinationFixture, storeState } =
+    makeCircularBookAuthorStubMigrations();
   const summary = yield* runMigrations({
-    definitions: [books, authors],
+    definitions,
     definitionIds: ["books", "authors"],
   });
   const upsertExecutions = destinationFixture

@@ -45,7 +45,7 @@ const sourceItems = [
   },
 ] as const;
 
-const makeArticlesMigration = () => {
+export const makeInMemoryArticlesMigration = () => {
   const destination = InMemoryDestinationPlugin.makeEntries({
     contentType: "article",
     commands: {
@@ -78,7 +78,7 @@ const makeArticlesMigration = () => {
 };
 
 export const runInMemoryExample = Effect.fn("runInMemoryExample")(function* () {
-  return yield* runMigration(makeArticlesMigration());
+  return yield* runMigration(makeInMemoryArticlesMigration());
 });
 
 export const formatMigrationRunSummary = (
