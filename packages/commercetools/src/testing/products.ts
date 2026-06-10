@@ -10,6 +10,8 @@ import type {
   CustomerSignInResult,
   CustomerUpdate,
   CustomerUpdateAction,
+  CustomObject,
+  CustomObjectDraft,
   InventoryEntry,
   InventoryEntryDraft,
   InventoryEntryUpdate,
@@ -33,6 +35,7 @@ import { ApiRoot as PlatformApiRoot } from "@commercetools/platform-sdk";
 
 export type RecordedCommercetoolsRequestBody =
   | BusinessUnitDraft
+  | CustomObjectDraft
   | BusinessUnitUpdate
   | CustomerDraft
   | CustomerUpdate
@@ -61,6 +64,7 @@ export interface RecordingCommercetoolsApiRoot {
 
 type RecordedCommercetoolsResponseBody =
   | BusinessUnit
+  | CustomObject
   | Customer
   | CustomerSignInResult
   | InventoryEntry
@@ -96,6 +100,11 @@ const isCustomerUpdate = (
   value: ClientRequest["body"]
 ): value is CustomerUpdate =>
   isRecord(value) && "actions" in value && Array.isArray(value.actions);
+
+const isCustomObjectDraft = (
+  value: ClientRequest["body"]
+): value is CustomObjectDraft =>
+  isRecord(value) && "container" in value && "key" in value && "value" in value;
 
 const isInventoryEntryUpdate = (
   value: ClientRequest["body"]
@@ -146,6 +155,7 @@ const requestBody = (
     isProductUpdate(request.body) ||
     isBusinessUnitDraft(request.body) ||
     isBusinessUnitUpdate(request.body) ||
+    isCustomObjectDraft(request.body) ||
     isCustomerDraft(request.body) ||
     isCustomerUpdate(request.body) ||
     isInventoryEntryDraft(request.body) ||
@@ -375,6 +385,77 @@ const applyRecordedBusinessUnitAction = (
 
 const isBusinessUnitRequest = (request: ClientRequest): boolean =>
   request.uriTemplate?.includes("business-units") === true;
+
+const isCustomObjectRequest = (request: ClientRequest): boolean =>
+  request.uriTemplate?.includes("custom-objects") === true;
+
+const customObjectStorageKey = (container: string, key: string): string =>
+  `${container}\u0000${key}`;
+
+const customObjectPath = (
+  request: ClientRequest
+): { readonly container: string; readonly key: string } | undefined => {
+  const container = request.pathVariables?.container;
+  const key = request.pathVariables?.key;
+
+  if (typeof container !== "string" || typeof key !== "string") {
+    return undefined;
+  }
+
+  return { container, key };
+};
+
+const customObjectVersion = (request: ClientRequest): number | undefined => {
+  const version = request.queryParams?.version;
+
+  if (typeof version === "number") {
+    return version;
+  }
+
+  if (typeof version === "string") {
+    return Number.parseInt(version, 10);
+  }
+
+  return undefined;
+};
+
+const recordedCustomObject = ({
+  draft,
+  id,
+  version,
+}: {
+  readonly draft: CustomObjectDraft;
+  readonly id: string;
+  readonly version: number;
+}): CustomObject => ({
+  container: draft.container,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  id,
+  key: draft.key,
+  lastModifiedAt: "2026-01-01T00:00:00.000Z",
+  value: draft.value,
+  version,
+});
+
+const recordedNotFoundError = (message: string): Error & { statusCode: 404 } =>
+  Object.assign(new Error(message), {
+    body: {
+      message,
+      statusCode: 404,
+    },
+    code: 404,
+    statusCode: 404,
+  } as const);
+
+const recordedConflictError = (message: string): Error & { statusCode: 409 } =>
+  Object.assign(new Error(message), {
+    body: {
+      message,
+      statusCode: 409,
+    },
+    code: 409,
+    statusCode: 409,
+  } as const);
 
 const recordedCustomer = ({
   draft,
@@ -831,6 +912,7 @@ export const makeRecordingCommercetoolsApiRoot =
     let businessUnitVersion = 0;
     let createdCustomerDraft: CustomerDraft | undefined;
     let customerVersion = 0;
+    const customObjects = new Map<string, CustomObject>();
     let createdInventoryEntryDraft: InventoryEntryDraft | undefined;
     let inventoryEntryVersion = 0;
     let createdProductSelectionDraft: ProductSelectionDraft | undefined;
@@ -1005,6 +1087,81 @@ export const makeRecordingCommercetoolsApiRoot =
       );
     };
 
+    const executeCustomObjectRequest = (
+      request: ClientRequest
+    ): Promise<RecordedCommercetoolsResponse> | undefined => {
+      if (!isCustomObjectRequest(request)) {
+        return undefined;
+      }
+
+      const body = request.body;
+
+      if (request.method === "POST" && isCustomObjectDraft(body)) {
+        const storageKey = customObjectStorageKey(body.container, body.key);
+        const current = customObjects.get(storageKey);
+
+        if (body.version === 0 && current !== undefined) {
+          throw recordedConflictError(
+            "Recorded Custom Object version does not match"
+          );
+        }
+
+        if (
+          body.version !== undefined &&
+          body.version !== 0 &&
+          current?.version !== body.version
+        ) {
+          throw recordedConflictError(
+            "Recorded Custom Object version does not match"
+          );
+        }
+
+        const next = recordedCustomObject({
+          draft: body,
+          id:
+            current?.id ?? `recording-custom-object-${customObjects.size + 1}`,
+          version: (current?.version ?? 0) + 1,
+        });
+
+        customObjects.set(storageKey, next);
+
+        return recordedResponse(next);
+      }
+
+      const path = customObjectPath(request);
+
+      if (path === undefined) {
+        return undefined;
+      }
+
+      const storageKey = customObjectStorageKey(path.container, path.key);
+      const current = customObjects.get(storageKey);
+
+      if (current === undefined) {
+        throw recordedNotFoundError("Recorded Custom Object was not found");
+      }
+
+      if (request.method === "GET") {
+        return recordedResponse(current);
+      }
+
+      if (request.method === "DELETE") {
+        const version = customObjectVersion(request);
+
+        if (version !== current.version) {
+          throw recordedConflictError(
+            "Recorded Custom Object delete version does not match"
+          );
+        }
+
+        customObjects.delete(storageKey);
+
+        return recordedResponse(current);
+      }
+
+      return undefined;
+    };
+
     const executeDraftRequest = (
       request: ClientRequest
     ): Promise<RecordedCommercetoolsResponse> => {
@@ -1101,7 +1258,11 @@ export const makeRecordingCommercetoolsApiRoot =
       executeRequest: (request) => {
         requests.push(recordRequest(request));
 
-        return executeUpdateRequest(request) ?? executeDraftRequest(request);
+        return (
+          executeCustomObjectRequest(request) ??
+          executeUpdateRequest(request) ??
+          executeDraftRequest(request)
+        );
       },
     });
 
