@@ -1,6 +1,6 @@
 # Commercetools Migration Store
 
-Status: design.
+Status: implementation guide.
 
 Audience: migration authors and maintainers shaping the
 `@migrate-sdk/commercetools` package.
@@ -50,6 +50,7 @@ import {
   CommercetoolsMigrationStore,
 } from "@migrate-sdk/commercetools/migration-store";
 import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
+import { Layer } from "effect";
 
 const sdkLayer = CommercetoolsSdk.layerFromApiRoot({
   apiRoot,
@@ -62,12 +63,45 @@ const storeLayer = CommercetoolsMigrationStore.layer({
 }).pipe(Layer.provide(sdkLayer));
 ```
 
-The store depends on `CommercetoolsSdk`. It should not take a destination
-plugin instance as input. This lets users store migration state in the same
-project as the destination, or provide a separate SDK layer for a dedicated
-state project.
+The store depends on `CommercetoolsSdk`. It does not take a destination plugin
+instance as input. This lets users store migration state in the same project as
+the destination, or provide a separate SDK layer for a dedicated state project.
 
-An ergonomic convenience can also be exposed:
+### Same Project For Destination And State
+
+Use one SDK layer when the destination data and migration state should live in
+the same Commercetools project. Build the layer once and reuse that same layer
+reference for both the destination and store wiring:
+
+```ts
+import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
+import { CommercetoolsDestinationPlugin } from "@migrate-sdk/commercetools/destination";
+import {
+  CommercetoolsMigrationStore,
+} from "@migrate-sdk/commercetools/migration-store";
+import { Layer } from "effect";
+
+const commercetoolsSdkLayer = CommercetoolsSdk.layerFromApiRoot({
+  apiRoot,
+  projectKey: "destination-project",
+});
+
+const storeLayer = CommercetoolsMigrationStore.layer({
+  container: "migrate-sdk",
+  namespace: "catalog-import",
+}).pipe(Layer.provide(commercetoolsSdkLayer));
+
+const destination = CommercetoolsDestinationPlugin.make({
+  sdkLayer: commercetoolsSdkLayer,
+});
+```
+
+Pass `storeLayer` to every migration definition in the same `runMigrations`
+call. The core runtime expects one shared `MigrationStore` layer per run so
+definition locks, source cursors, run state, and item state all agree on the
+same durable backend.
+
+An ergonomic convenience is available when only the store needs a layer:
 
 ```ts
 const storeLayer = CommercetoolsMigrationStore.layerFromApiRoot({
@@ -77,6 +111,44 @@ const storeLayer = CommercetoolsMigrationStore.layerFromApiRoot({
   namespace: "catalog-import",
 });
 ```
+
+### Separate State Project
+
+Use separate SDK layers when migration state belongs in a dedicated operational
+project, or when migrating between Commercetools projects and the state should
+not be written to the destination project:
+
+```ts
+import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
+import { CommercetoolsDestinationPlugin } from "@migrate-sdk/commercetools/destination";
+import {
+  CommercetoolsMigrationStore,
+} from "@migrate-sdk/commercetools/migration-store";
+import { Layer } from "effect";
+
+const destinationSdkLayer = CommercetoolsSdk.layerFromApiRoot({
+  apiRoot: destinationApiRoot,
+  projectKey: "destination-project",
+});
+
+const stateSdkLayer = CommercetoolsSdk.layerFromApiRoot({
+  apiRoot: stateApiRoot,
+  projectKey: "migration-state-project",
+});
+
+const storeLayer = CommercetoolsMigrationStore.layer({
+  container: "migrate-sdk",
+  namespace: "catalog-import",
+}).pipe(Layer.provide(stateSdkLayer));
+
+const destination = CommercetoolsDestinationPlugin.make({
+  sdkLayer: destinationSdkLayer,
+});
+```
+
+The state project needs Custom Object read/write scopes. The destination
+project needs whatever scopes the destination commands require, such as product
+write scopes for product catalog migrations.
 
 ## Public API
 
@@ -124,21 +196,19 @@ contend on one Custom Object.
 The store uses a configured `container` and generated keys:
 
 ```txt
-<namespace>__manifest
-<namespace>__lock__<definitionHash>
-<namespace>__cursor__<definitionHash>
-<namespace>__run__<definitionHash>
-<namespace>__item__<definitionHash>__<identityHash>
+<namespace>__encoded-source-cursor__definition-hash_<hash>
+<namespace>__latest-run-state__definition-hash_<hash>
+<namespace>__migration-item-state__definition-hash_<hash>__source-identity-hash_<hash>
+<namespace>__migration-definition-lock__definition-hash_<hash>
 ```
 
 Examples:
 
 ```txt
-catalog.import__manifest
-catalog.import__lock__def_7c9f
-catalog.import__cursor__def_7c9f
-catalog.import__run__def_7c9f
-catalog.import__item__def_7c9f__id_a81b
+catalog-import__encoded-source-cursor__definition-hash_J8GvAmXGmXhMu0BB
+catalog-import__latest-run-state__definition-hash_J8GvAmXGmXhMu0BB
+catalog-import__migration-item-state__definition-hash_J8GvAmXGmXhMu0BB__source-identity-hash_1vaBLmAH3zS_WMMD
+catalog-import__migration-definition-lock__definition-hash_J8GvAmXGmXhMu0BB
 ```
 
 The delimiter is `__`. It remains readable when user-provided namespaces
@@ -146,9 +216,17 @@ contain dots or hyphens. The keys should be treated as generated addresses, not
 as the source of truth. Human-readable metadata belongs in the Custom Object
 value.
 
-Dynamic key parts should be hashed or otherwise encoded into safe, bounded
-segments. Raw `definitionId` and `sourceIdentity` values may be too long or may
-contain characters not allowed by Commercetools keys.
+Dynamic key parts are hashed into safe, bounded segments. Raw `definitionId`
+and `sourceIdentity` values may be too long or may contain characters not
+allowed by Commercetools keys.
+
+Choose `container` as the Commercetools Custom Object bucket for migration
+state, for example `migrate-sdk` or `migrate-sdk-state`. Choose `namespace` as
+the collision boundary inside that bucket, for example `catalog-import`,
+`catalog-import-dev`, or `catalog-import-prod`. Use a different namespace when
+two unrelated migration projects share one state project. Keep the namespace
+stable for the lifetime of a migration because it is part of every generated
+key.
 
 ## Record Envelopes
 
@@ -211,10 +289,10 @@ unions instead of relying on explicit `null`.
 
 ## Locking
 
-Definition locks should use one Custom Object per locked definition:
+Definition locks use one Custom Object per locked definition:
 
 ```txt
-<namespace>__lock__<definitionHash>
+<namespace>__migration-definition-lock__definition-hash_<hash>
 ```
 
 Lock acquisition uses Commercetools create-if-absent semantics by posting the
@@ -263,10 +341,11 @@ verify token and ownerRunId
 DELETE lock object with current version
 ```
 
-Locks should not auto-expire in the first slice. This matches the core runtime
-contract for durable stores: abandoned locks require an explicit force-unlock
-workflow so a stalled runner and a new runner cannot write state and destination
-side effects concurrently.
+Locks do not auto-expire. This matches the core runtime contract for durable
+stores: abandoned locks require an explicit force-unlock workflow so a stalled
+runner and a new runner cannot write state and destination side effects
+concurrently. Force-unlock should verify operator intent and lock ownership
+metadata; it is future maintenance tooling, not part of the store runtime.
 
 ## Store Operations
 
@@ -352,12 +431,12 @@ one of:
 
 ## Query And Scan Patterns
 
-Direct lookups should use deterministic keys:
+Direct item processing uses deterministic keys:
 
 ```txt
-getSourceCursor(definitionId) -> GET <namespace>__cursor__<definitionHash>
-getItemState(definitionId, identity) -> GET <namespace>__item__<definitionHash>__<identityHash>
-acquireDefinitionLock(definitionId) -> POST <namespace>__lock__<definitionHash>
+getSourceCursor(definitionId) -> GET <namespace>__encoded-source-cursor__definition-hash_<hash>
+getItemState(definitionId, identity) -> GET <namespace>__migration-item-state__definition-hash_<hash>__source-identity-hash_<hash>
+acquireDefinitionLock(definitionId) -> POST <namespace>__migration-definition-lock__definition-hash_<hash>
 ```
 
 Query predicates should be used for set-oriented operations:
@@ -510,6 +589,51 @@ Risks:
   cross-project migrations unless the store SDK layer is configurable
 - force-unlock and state-inspection tooling will matter once locks are durable
 - schema migration must be planned before changing record envelopes
+
+## Example
+
+The package includes a credential-free product catalog example at
+`packages/commercetools/examples/product-catalog-store-migration.ts`.
+
+It uses:
+
+- `InMemorySourcePlugin` for a small product catalog source fixture
+- `CommercetoolsDestinationPlugin` for product draft creation
+- `CommercetoolsMigrationStore` for Custom Object-backed cursors, item state,
+  run state, and locks
+- the recording Commercetools API root from the package testing helpers, so the
+  example can be typechecked and tested without live credentials
+
+Run it with:
+
+```sh
+pnpm --filter @migrate-sdk/commercetools example:product-catalog-store
+```
+
+To run the same catalog migration against a real Commercetools project, provide
+credentials in your shell environment and run the live script:
+
+```sh
+CT_PROJECT_KEY="your-project" \
+CT_CLIENT_ID="your-client-id" \
+CT_CLIENT_SECRET="your-client-secret" \
+CT_AUTH_URL="https://auth.<region>.commercetools.com" \
+CT_API_URL="https://api.<region>.commercetools.com" \
+CT_SCOPES="manage_project:your-project" \
+pnpm --filter @migrate-sdk/commercetools example:product-catalog-store:live
+```
+
+The live script writes real Custom Objects in container `migrate-sdk-examples`
+with namespace `product-catalog`, and it creates a real product with key
+`effectful-architecture`. The target project must already have a `book` product
+type with attributes matching the example schemas. Use a disposable project or
+clean up the product and Custom Objects manually while maintenance cleanup
+tooling is still future work.
+
+Future operational work should add explicit force-unlock, state export,
+cleanup, and live integration-test flows. Those should be separate tools or
+test suites because they have different safety and credential requirements than
+the runtime store.
 
 ## External References
 

@@ -19,18 +19,18 @@ catalog migration using the durable store.
 
 ## Acceptance criteria
 
-- [ ] Documentation shows how to import and configure the Commercetools migration store.
-- [ ] Documentation shows how to use the same Commercetools project for destination and state.
-- [ ] Documentation shows how to use a separate Commercetools project for state.
-- [ ] Documentation explains container and namespace choices.
-- [ ] Documentation explains that direct item processing uses keys while list and maintenance paths use indexed predicates.
-- [ ] Documentation explains the durable lock behavior and the lack of automatic lock expiry.
-- [ ] The package includes an example product catalog migration that uses the migration store and Commercetools destination together.
-- [ ] The example demonstrates product creation or update through the destination plugin.
-- [ ] The example demonstrates durable store wiring rather than the in-memory store.
-- [ ] The example can be typechecked or tested without live Commercetools credentials.
-- [ ] Operational force-unlock, export, cleanup, and live integration tests remain documented as future work rather than implemented behavior.
-- [ ] Typecheck and relevant example tests pass.
+- [x] Documentation shows how to import and configure the Commercetools migration store.
+- [x] Documentation shows how to use the same Commercetools project for destination and state.
+- [x] Documentation shows how to use a separate Commercetools project for state.
+- [x] Documentation explains container and namespace choices.
+- [x] Documentation explains that direct item processing uses keys while list and maintenance paths use indexed predicates.
+- [x] Documentation explains the durable lock behavior and the lack of automatic lock expiry.
+- [x] The package includes an example product catalog migration that uses the migration store and Commercetools destination together.
+- [x] The example demonstrates product creation or update through the destination plugin.
+- [x] The example demonstrates durable store wiring rather than the in-memory store.
+- [x] The example can be typechecked or tested without live Commercetools credentials.
+- [x] Operational force-unlock, export, cleanup, and live integration tests remain documented as future work rather than implemented behavior.
+- [x] Typecheck and relevant example tests pass.
 
 ## Blocked by
 
