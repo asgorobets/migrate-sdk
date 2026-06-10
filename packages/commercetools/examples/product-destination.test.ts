@@ -4,6 +4,8 @@ import {
   CommercetoolsDestinationPlugin,
   type CommercetoolsProductHelpers,
   CreateProductDraftCommand,
+  type ProductDraftInput,
+  type ProductPriceDraftInput,
   type ProductUpdateActionByName,
   type ProductUpdateFactory,
   UpdateProductCommand,
@@ -28,13 +30,180 @@ const assertProductUpdateActionTypes = () => {
       "en-US": "Example Book Updated",
     },
   };
+  const addToCategory: ProductUpdateActionByName<"addToCategory"> = {
+    action: "addToCategory",
+    category: {
+      key: "programming",
+      typeId: "category",
+    },
+  };
+  const setTaxCategory: ProductUpdateActionByName<"setTaxCategory"> = {
+    action: "setTaxCategory",
+    taxCategory: {
+      id: "standard-tax-category-id",
+      typeId: "tax-category",
+    },
+  };
+  const removeTaxCategory: ProductUpdateActionByName<"setTaxCategory"> = {
+    action: "setTaxCategory",
+  };
+  const transitionState: ProductUpdateActionByName<"transitionState"> = {
+    action: "transitionState",
+    state: {
+      key: "published-review",
+      typeId: "state",
+    },
+  };
+  const setProductPriceCustomType: ProductUpdateActionByName<"setProductPriceCustomType"> =
+    {
+      action: "setProductPriceCustomType",
+      priceId: "embedded-price-id",
+      type: {
+        key: "repoEmbeddedPrice",
+        typeId: "type",
+      },
+    };
+  const embeddedPrice: ProductPriceDraftInput = {
+    channel: {
+      key: "web",
+      typeId: "channel",
+    },
+    custom: {
+      fields: {
+        source: "migration",
+      },
+      type: {
+        key: "repoEmbeddedPrice",
+        typeId: "type",
+      },
+    },
+    customerGroup: {
+      id: "vip-customer-group-id",
+      typeId: "customer-group",
+    },
+    recurrencePolicy: {
+      key: "monthly",
+      typeId: "recurrence-policy",
+    },
+    value: {
+      centAmount: 1999,
+      currencyCode: "USD",
+    },
+  };
+  const addPrice: ProductUpdateActionByName<"addPrice"> = {
+    action: "addPrice",
+    price: embeddedPrice,
+    sku: "example-book-paperback",
+  };
+  const setPrices: ProductUpdateActionByName<"setPrices"> = {
+    action: "setPrices",
+    prices: [embeddedPrice],
+    sku: "example-book-paperback",
+  };
 
   // @ts-expect-error Product changeName actions require name.
   const missingName: ProductUpdateActionByName<"changeName"> = {
     action: "changeName",
   };
+  const missingCategoryIdentifier: ProductUpdateActionByName<"addToCategory"> =
+    {
+      action: "addToCategory",
+      // @ts-expect-error Category resource identifiers require id or key.
+      category: {
+        typeId: "category",
+      },
+    };
+  const ambiguousStateIdentifier: ProductUpdateActionByName<"transitionState"> =
+    {
+      action: "transitionState",
+      state: {
+        id: "published-review-id",
+        // @ts-expect-error State resource identifiers accept id or key, not both.
+        key: "published-review",
+        typeId: "state",
+      },
+    };
+  const missingCustomTypeIdentifier: ProductUpdateActionByName<"setProductPriceCustomType"> =
+    {
+      action: "setProductPriceCustomType",
+      priceId: "embedded-price-id",
+      // @ts-expect-error Type resource identifiers require id or key.
+      type: {
+        typeId: "type",
+      },
+    };
+  const missingPriceChannelIdentifier: ProductUpdateActionByName<"addPrice"> = {
+    action: "addPrice",
+    price: {
+      // @ts-expect-error Price channel resource identifiers require id or key.
+      channel: {
+        typeId: "channel",
+      },
+      value: {
+        centAmount: 1999,
+        currencyCode: "USD",
+      },
+    },
+    sku: "example-book-paperback",
+  };
+  const ambiguousPriceRecurrencePolicyIdentifier: ProductUpdateActionByName<"setPrices"> =
+    {
+      action: "setPrices",
+      prices: [
+        {
+          recurrencePolicy: {
+            id: "monthly-policy-id",
+            // @ts-expect-error Price recurrence policy identifiers accept id or key, not both.
+            key: "monthly",
+            typeId: "recurrence-policy",
+          },
+          value: {
+            centAmount: 1999,
+            currencyCode: "USD",
+          },
+        },
+      ],
+      sku: "example-book-paperback",
+    };
+  const missingPriceCustomTypeIdentifier: ProductUpdateActionByName<"addPrice"> =
+    {
+      action: "addPrice",
+      price: {
+        custom: {
+          fields: {
+            source: "migration",
+          },
+          // @ts-expect-error Price custom type resource identifiers require id or key.
+          type: {
+            typeId: "type",
+          },
+        },
+        value: {
+          centAmount: 1999,
+          currencyCode: "USD",
+        },
+      },
+      sku: "example-book-paperback",
+    };
 
-  return [publish, changeName, missingName];
+  return [
+    publish,
+    changeName,
+    addToCategory,
+    setTaxCategory,
+    removeTaxCategory,
+    transitionState,
+    setProductPriceCustomType,
+    addPrice,
+    setPrices,
+    missingName,
+    missingCategoryIdentifier,
+    ambiguousStateIdentifier,
+    missingCustomTypeIdentifier,
+    missingPriceChannelIdentifier,
+    ambiguousPriceRecurrencePolicyIdentifier,
+    missingPriceCustomTypeIdentifier,
+  ];
 };
 
 const assertProductUpdateBuilderTypes = (update: ProductUpdateFactory) => {
@@ -60,6 +229,203 @@ const assertProductUpdateBuilderTypes = (update: ProductUpdateFactory) => {
   builder.action({ action: "unknownProductAction" });
   // @ts-expect-error Product changeName actions require name.
   builder.action({ action: "changeName" });
+  builder.action({
+    action: "addToCategory",
+    // @ts-expect-error Category resource identifiers require id or key.
+    category: {
+      typeId: "category",
+    },
+  });
+  builder.action({
+    action: "setTaxCategory",
+    taxCategory: {
+      id: "standard-tax-category-id",
+      // @ts-expect-error Tax category resource identifiers accept id or key, not both.
+      key: "standard",
+      typeId: "tax-category",
+    },
+  });
+  builder.action({
+    action: "transitionState",
+    // @ts-expect-error State resource identifiers require id or key.
+    state: {
+      typeId: "state",
+    },
+  });
+  builder.action({
+    action: "setProductPriceCustomType",
+    priceId: "embedded-price-id",
+    // @ts-expect-error Type resource identifiers require id or key.
+    type: {
+      typeId: "type",
+    },
+  });
+  builder.action({
+    action: "addPrice",
+    price: {
+      // @ts-expect-error Price channel resource identifiers require id or key.
+      channel: {
+        typeId: "channel",
+      },
+      value: {
+        centAmount: 1999,
+        currencyCode: "USD",
+      },
+    },
+    sku: "example-book-paperback",
+  });
+  builder.action({
+    action: "setPrices",
+    prices: [
+      {
+        customerGroup: {
+          id: "vip-customer-group-id",
+          // @ts-expect-error Price customer group identifiers accept id or key, not both.
+          key: "vip",
+          typeId: "customer-group",
+        },
+        value: {
+          centAmount: 1999,
+          currencyCode: "USD",
+        },
+      },
+    ],
+    sku: "example-book-paperback",
+  });
+};
+
+const assertProductDraftResourceIdentifierTypes = () => {
+  const productDraft: ProductDraftInput = {
+    ...bookProductDraft,
+    categories: [
+      {
+        key: "programming",
+        typeId: "category",
+      },
+    ],
+    state: {
+      key: "published-review",
+      typeId: "state",
+    },
+    taxCategory: {
+      id: "standard-tax-category-id",
+      typeId: "tax-category",
+    },
+    masterVariant: {
+      prices: [
+        {
+          channel: {
+            key: "web",
+            typeId: "channel",
+          },
+          value: {
+            centAmount: 1999,
+            currencyCode: "USD",
+          },
+        },
+      ],
+      sku: "example-book-paperback",
+    },
+    variants: [
+      {
+        prices: [
+          {
+            custom: {
+              fields: {
+                source: "migration",
+              },
+              type: {
+                key: "repoEmbeddedPrice",
+                typeId: "type",
+              },
+            },
+            value: {
+              centAmount: 2499,
+              currencyCode: "USD",
+            },
+          },
+        ],
+        sku: "example-book-hardcover",
+      },
+    ],
+  };
+  const productTypeById: ProductDraftInput = {
+    ...bookProductDraft,
+    productType: {
+      id: "book-product-type-id",
+      typeId: "product-type",
+    },
+  };
+  const missingProductTypeIdentifier: ProductDraftInput = {
+    ...bookProductDraft,
+    // @ts-expect-error Product type resource identifiers require id or key.
+    productType: {
+      typeId: "product-type",
+    },
+  };
+  const ambiguousCategoryIdentifier: ProductDraftInput = {
+    ...bookProductDraft,
+    categories: [
+      // @ts-expect-error Category resource identifiers accept id or key, not both.
+      {
+        id: "programming-category-id",
+        key: "programming",
+        typeId: "category",
+      },
+    ],
+  };
+  const missingMasterVariantPriceChannelIdentifier: ProductDraftInput = {
+    ...bookProductDraft,
+    masterVariant: {
+      prices: [
+        {
+          // @ts-expect-error Price channel resource identifiers require id or key.
+          channel: {
+            typeId: "channel",
+          },
+          value: {
+            centAmount: 1999,
+            currencyCode: "USD",
+          },
+        },
+      ],
+      sku: "example-book-paperback",
+    },
+  };
+  const missingVariantPriceCustomTypeIdentifier: ProductDraftInput = {
+    ...bookProductDraft,
+    variants: [
+      {
+        prices: [
+          {
+            custom: {
+              fields: {
+                source: "migration",
+              },
+              // @ts-expect-error Price custom type resource identifiers require id or key.
+              type: {
+                typeId: "type",
+              },
+            },
+            value: {
+              centAmount: 2499,
+              currencyCode: "USD",
+            },
+          },
+        ],
+        sku: "example-book-hardcover",
+      },
+    ],
+  };
+
+  return [
+    productDraft,
+    productTypeById,
+    missingProductTypeIdentifier,
+    ambiguousCategoryIdentifier,
+    missingMasterVariantPriceChannelIdentifier,
+    missingVariantPriceCustomTypeIdentifier,
+  ];
 };
 
 const assertProductAttributeHelperTypes = (
@@ -278,17 +644,107 @@ describe("product destination example", () => {
           },
           kind: "CreateProductDraft",
         }).pipe(Effect.flip);
+        const missingCategoryIdentifierError =
+          yield* Schema.decodeUnknownEffect(CreateProductDraftCommand)({
+            draft: {
+              ...bookProductDraft,
+              categories: [
+                {
+                  typeId: "category",
+                },
+              ],
+            },
+            kind: "CreateProductDraft",
+          }).pipe(Effect.flip);
+        const ambiguousTaxCategoryIdentifierError =
+          yield* Schema.decodeUnknownEffect(CreateProductDraftCommand)({
+            draft: {
+              ...bookProductDraft,
+              taxCategory: {
+                id: "standard-tax-category-id",
+                key: "standard",
+                typeId: "tax-category",
+              },
+            },
+            kind: "CreateProductDraft",
+          }).pipe(Effect.flip);
+        const missingStateIdentifierError = yield* Schema.decodeUnknownEffect(
+          CreateProductDraftCommand
+        )({
+          draft: {
+            ...bookProductDraft,
+            state: {
+              typeId: "state",
+            },
+          },
+          kind: "CreateProductDraft",
+        }).pipe(Effect.flip);
+        const missingMasterVariantPriceChannelIdentifierError =
+          yield* Schema.decodeUnknownEffect(CreateProductDraftCommand)({
+            draft: {
+              ...bookProductDraft,
+              masterVariant: {
+                prices: [
+                  {
+                    channel: {
+                      typeId: "channel",
+                    },
+                    value: {
+                      centAmount: 1999,
+                      currencyCode: "USD",
+                    },
+                  },
+                ],
+                sku: "example-book-paperback",
+              },
+            },
+            kind: "CreateProductDraft",
+          }).pipe(Effect.flip);
+        const missingVariantPriceCustomTypeIdentifierError =
+          yield* Schema.decodeUnknownEffect(CreateProductDraftCommand)({
+            draft: {
+              ...bookProductDraft,
+              variants: [
+                {
+                  prices: [
+                    {
+                      custom: {
+                        fields: {
+                          source: "migration",
+                        },
+                        type: {
+                          typeId: "type",
+                        },
+                      },
+                      value: {
+                        centAmount: 2499,
+                        currencyCode: "USD",
+                      },
+                    },
+                  ],
+                  sku: "example-book-hardcover",
+                },
+              ],
+            },
+            kind: "CreateProductDraft",
+          }).pipe(Effect.flip);
 
         expect(missingIdentifierError).toBeDefined();
         expect(ambiguousIdentifierError).toBeDefined();
         expect(emptyIdWithKeyError).toBeDefined();
         expect(idWithEmptyKeyError).toBeDefined();
+        expect(missingCategoryIdentifierError).toBeDefined();
+        expect(ambiguousTaxCategoryIdentifierError).toBeDefined();
+        expect(missingStateIdentifierError).toBeDefined();
+        expect(missingMasterVariantPriceChannelIdentifierError).toBeDefined();
+        expect(missingVariantPriceCustomTypeIdentifierError).toBeDefined();
       })
   );
 
   it("types product actions from the SDK action union", () => {
     expect(assertProductUpdateActionTypes).toBeTypeOf("function");
     expect(assertProductUpdateBuilderTypes).toBeTypeOf("function");
+    expect(assertProductDraftResourceIdentifierTypes).toBeTypeOf("function");
     expect(assertProductAttributeHelperTypes).toBeTypeOf("function");
   });
 
@@ -378,6 +834,89 @@ describe("product destination example", () => {
         },
         version: 1,
       }).pipe(Effect.flip);
+      const missingAddPriceChannelIdentifierError =
+        yield* Schema.decodeUnknownEffect(UpdateProductCommand)({
+          actions: [
+            {
+              action: "addPrice",
+              price: {
+                channel: {
+                  typeId: "channel",
+                },
+                value: {
+                  centAmount: 1999,
+                  currencyCode: "USD",
+                },
+              },
+              sku: "example-book-paperback",
+            },
+          ],
+          kind: "UpdateProduct",
+          selector: {
+            id: "recording-product-id",
+            kind: "id",
+          },
+          version: 1,
+        }).pipe(Effect.flip);
+      const ambiguousSetPricesRecurrencePolicyIdentifierError =
+        yield* Schema.decodeUnknownEffect(UpdateProductCommand)({
+          actions: [
+            {
+              action: "setPrices",
+              prices: [
+                {
+                  recurrencePolicy: {
+                    id: "monthly-policy-id",
+                    key: "monthly",
+                    typeId: "recurrence-policy",
+                  },
+                  value: {
+                    centAmount: 1999,
+                    currencyCode: "USD",
+                  },
+                },
+              ],
+              sku: "example-book-paperback",
+            },
+          ],
+          kind: "UpdateProduct",
+          selector: {
+            id: "recording-product-id",
+            kind: "id",
+          },
+          version: 1,
+        }).pipe(Effect.flip);
+      const missingAddVariantPriceCustomTypeIdentifierError =
+        yield* Schema.decodeUnknownEffect(UpdateProductCommand)({
+          actions: [
+            {
+              action: "addVariant",
+              prices: [
+                {
+                  custom: {
+                    fields: {
+                      source: "migration",
+                    },
+                    type: {
+                      typeId: "type",
+                    },
+                  },
+                  value: {
+                    centAmount: 2499,
+                    currencyCode: "USD",
+                  },
+                },
+              ],
+              sku: "example-book-hardcover",
+            },
+          ],
+          kind: "UpdateProduct",
+          selector: {
+            id: "recording-product-id",
+            kind: "id",
+          },
+          version: 1,
+        }).pipe(Effect.flip);
 
       expect(validAction.actions).toEqual([
         {
@@ -386,6 +925,9 @@ describe("product destination example", () => {
       ]);
       expect(missingActionError).toBeDefined();
       expect(emptyActionsError).toBeDefined();
+      expect(missingAddPriceChannelIdentifierError).toBeDefined();
+      expect(ambiguousSetPricesRecurrencePolicyIdentifierError).toBeDefined();
+      expect(missingAddVariantPriceCustomTypeIdentifierError).toBeDefined();
     })
   );
 });

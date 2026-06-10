@@ -1,3 +1,8 @@
+import type {
+  RefineResourceIdentifierField,
+  RefineResourceIdentifierFields,
+} from "./sdk-resource-identifiers.ts";
+
 export interface SdkUpdateActionBase {
   readonly action: string;
 }
@@ -21,22 +26,11 @@ type RequireAtLeastOne<T, Keys extends keyof T> = Omit<T, Keys> &
       Partial<Pick<T, Exclude<Keys, Key>>>;
   }[Keys];
 
-type ForbidKeys<Keys extends PropertyKey> = {
-  readonly [Key in Keys]?: never;
-};
-
-type RequireExactlyOne<T, Keys extends keyof T> = Omit<T, Keys> &
-  {
-    readonly [Key in Keys]-?: Required<Pick<T, Key>> &
-      ForbidKeys<Exclude<Keys, Key>>;
-  }[Keys];
-
 type OptionalKeys<T> = {
   readonly [Key in keyof T]-?: undefined extends T[Key] ? Key : never;
 }[keyof T];
 
 type AddressSelectorKeys = "addressId" | "addressKey";
-type ResourceSelectorKeys = "id" | "key";
 
 interface AddressIdOrKeyFields<T> {
   readonly addressId?: T extends { readonly addressId?: infer AddressId }
@@ -47,11 +41,6 @@ interface AddressIdOrKeyFields<T> {
     : never;
 }
 
-interface ResourceIdOrKeyFields<T> {
-  readonly id?: T extends { readonly id?: infer Id } ? Id : never;
-  readonly key?: T extends { readonly key?: infer Key } ? Key : never;
-}
-
 type RequireOptionalAddressIdOrKey<T> = [AddressSelectorKeys] extends [keyof T]
   ? [AddressSelectorKeys] extends [OptionalKeys<T>]
     ? Omit<T, "addressId" | "addressKey"> &
@@ -59,34 +48,19 @@ type RequireOptionalAddressIdOrKey<T> = [AddressSelectorKeys] extends [keyof T]
     : T
   : T;
 
-type RequireOptionalResourceIdOrKey<T> = [ResourceSelectorKeys] extends [
-  keyof T,
-]
-  ? [ResourceSelectorKeys] extends [OptionalKeys<T>]
-    ? Omit<T, "id" | "key"> &
-        RequireExactlyOne<ResourceIdOrKeyFields<T>, ResourceSelectorKeys>
-    : T
-  : T;
-
 type RefineOptionalAddressIdOrKeyAction<Action extends SdkUpdateActionBase> =
   RequireOptionalAddressIdOrKey<Omit<Action, "action">> &
     Pick<Action, "action">;
 
-type RefineProductResourceIdentifier<T> = T extends {
-  readonly product: infer Product;
-}
-  ? Omit<T, "product"> & {
-      readonly product: RequireOptionalResourceIdOrKey<Product>;
-    }
-  : T;
+type RefineProductResourceIdentifier<T> = RefineResourceIdentifierField<
+  T,
+  "product"
+>;
 
-type RefineProductSelectionSetting<T> = T extends {
-  readonly productSelection: infer ProductSelection;
-}
-  ? Omit<T, "productSelection"> & {
-      readonly productSelection: RequireOptionalResourceIdOrKey<ProductSelection>;
-    }
-  : T;
+type RefineProductSelectionSetting<T> = RefineResourceIdentifierField<
+  T,
+  "productSelection"
+>;
 
 type RefineProductSelectionSettings<ProductSelections> =
   ProductSelections extends (infer Setting)[]
@@ -95,13 +69,8 @@ type RefineProductSelectionSettings<ProductSelections> =
       ? readonly RefineProductSelectionSetting<Setting>[]
       : ProductSelections;
 
-type RefineProductSelectionResourceIdentifier<T> = T extends {
-  readonly productSelection: infer ProductSelection;
-}
-  ? Omit<T, "productSelection"> & {
-      readonly productSelection: RequireOptionalResourceIdOrKey<ProductSelection>;
-    }
-  : T;
+type RefineProductSelectionResourceIdentifier<T> =
+  RefineResourceIdentifierField<T, "productSelection">;
 
 type RefineProductSelectionSettingsField<T> =
   "productSelections" extends keyof T
@@ -126,6 +95,12 @@ type RefineProductSelectionResourceIdentifierAction<
 > = RefineProductSelectionResourceIdentifiers<Omit<Action, "action">> &
   Pick<Action, "action">;
 
+type RefineResourceIdentifierFieldsAction<
+  Action extends SdkUpdateActionBase,
+  Fields extends readonly PropertyKey[],
+> = RefineResourceIdentifierFields<Omit<Action, "action">, Fields> &
+  Pick<Action, "action">;
+
 export type RefineOptionalAddressIdOrKeyActions<
   ActionUnion extends SdkUpdateActionBase,
 > = ActionUnion extends SdkUpdateActionBase
@@ -142,4 +117,11 @@ export type RefineProductSelectionResourceIdentifierActions<
   ActionUnion extends SdkUpdateActionBase,
 > = ActionUnion extends SdkUpdateActionBase
   ? RefineProductSelectionResourceIdentifierAction<ActionUnion>
+  : never;
+
+export type RefineResourceIdentifierFieldActions<
+  ActionUnion extends SdkUpdateActionBase,
+  Fields extends readonly PropertyKey[],
+> = ActionUnion extends SdkUpdateActionBase
+  ? RefineResourceIdentifierFieldsAction<ActionUnion, Fields>
   : never;

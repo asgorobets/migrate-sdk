@@ -1,7 +1,10 @@
 import { fileURLToPath } from "node:url";
-import type { Attribute, ProductDraft } from "@commercetools/platform-sdk";
+import type { Attribute } from "@commercetools/platform-sdk";
 import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
-import { CommercetoolsDestinationPlugin } from "@migrate-sdk/commercetools/destination";
+import {
+  CommercetoolsDestinationPlugin,
+  type ProductDraftInput,
+} from "@migrate-sdk/commercetools/destination";
 import {
   makeRecordingCommercetoolsApiRoot,
   type RecordedCommercetoolsRequest,
@@ -39,7 +42,7 @@ export const bookProductDraft = {
   slug: {
     "en-US": "example-book",
   },
-} satisfies ProductDraft;
+} satisfies ProductDraftInput;
 
 const destinationContext = {
   definitionId: toMigrationDefinitionId("example-products"),

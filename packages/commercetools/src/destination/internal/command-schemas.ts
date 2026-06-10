@@ -38,6 +38,28 @@ export const isResourceIdentifier =
     return hasId ? hasStringField(value, "id") : hasStringField(value, "key");
   };
 
+export const hasRequiredResourceIdentifier = (
+  value: UnknownRecord,
+  field: string,
+  isExpectedResourceIdentifier: (value: unknown) => boolean
+): boolean => isExpectedResourceIdentifier(value[field]);
+
+export const hasOptionalResourceIdentifier = (
+  value: UnknownRecord,
+  field: string,
+  isExpectedResourceIdentifier: (value: unknown) => boolean
+): boolean =>
+  !Object.hasOwn(value, field) || isExpectedResourceIdentifier(value[field]);
+
+export const hasOptionalResourceIdentifierArray = (
+  value: UnknownRecord,
+  field: string,
+  isExpectedResourceIdentifier: (value: unknown) => boolean
+): boolean =>
+  !Object.hasOwn(value, field) ||
+  (Array.isArray(value[field]) &&
+    value[field].every(isExpectedResourceIdentifier));
+
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value > 0;
 

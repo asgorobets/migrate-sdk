@@ -17,13 +17,27 @@ import { CommercetoolsSdk } from "../sdk.ts";
 import type { ProductUpdateAction } from "./product-actions.ts";
 import type { CommercetoolsProductHelpers as ProductHelpers } from "./product-attributes.ts";
 import {
+  hasOptionalResourceIdentifier,
+  hasOptionalResourceIdentifierArray,
+  hasRequiredResourceIdentifier,
+  isNonEmptySdkUpdateActions,
   isRecord,
   isResourceIdentifier,
   isStringRecord,
-  makeUpdateActionsSchema,
   ResourceVersionSchema,
 } from "./internal/command-schemas.ts";
 import { toDestinationPluginError } from "./internal/plugin-errors.ts";
+import {
+  hasOptionalProductVariantDraftArrayPriceResourceIdentifiers,
+  hasOptionalProductVariantDraftPriceResourceIdentifiers,
+  hasValidProductUpdateActionPriceDraftResourceIdentifiers,
+  type ProductPriceDraftInput as InternalProductPriceDraftInput,
+  type ProductVariantDraftInput as InternalProductVariantDraftInput,
+} from "./internal/product-price-drafts.ts";
+import type {
+  RefineResourceIdentifierArrayFields,
+  RefineResourceIdentifierFields,
+} from "./internal/sdk-resource-identifiers.ts";
 import { CommercetoolsProductSelectorSchema } from "./selectors.ts";
 import type { CommercetoolsProductSelector } from "./selectors.ts";
 import {
@@ -59,7 +73,7 @@ export type {
 } from "./product-attributes.ts";
 
 export interface CreateProductDraftCommand {
-  readonly draft: ProductDraft;
+  readonly draft: ProductDraftInput;
   readonly kind: "CreateProductDraft";
 }
 
@@ -108,7 +122,7 @@ export type ProductUpdateFactory = UpdateCommandFactory<
 export type UpdateProductCommand = ProductUpdateCommandShape;
 
 export interface CommercetoolsProductCommands {
-  readonly createDraft: (draft: ProductDraft) => CreateProductDraftCommand;
+  readonly createDraft: (draft: ProductDraftInput) => CreateProductDraftCommand;
   readonly publish: (
     input: Omit<PublishProductCommand, "kind">
   ) => PublishProductCommand;
@@ -116,6 +130,21 @@ export interface CommercetoolsProductCommands {
 }
 
 export type CommercetoolsProductAttributeSchemaRecord = object;
+
+export type ProductDraftInput = RefineResourceIdentifierArrayFields<
+  RefineResourceIdentifierFields<
+    Omit<ProductDraft, "masterVariant" | "variants"> & {
+      readonly masterVariant?: InternalProductVariantDraftInput;
+      readonly variants?: InternalProductVariantDraftInput[];
+    },
+    ["productType", "taxCategory", "state"]
+  >,
+  ["categories"]
+>;
+
+export type ProductPriceDraftInput = InternalProductPriceDraftInput;
+
+export type ProductVariantDraftInput = InternalProductVariantDraftInput;
 
 export interface CommercetoolsProductHelpers<
   ProductAttributeSchemaRecord extends
@@ -126,17 +155,40 @@ export type { CommercetoolsProductAttributeSchemasInput } from "./product-attrib
 export type { CommercetoolsProductSelector } from "./selectors.ts";
 
 const isProductTypeResourceIdentifier = isResourceIdentifier("product-type");
+const isCategoryResourceIdentifier = isResourceIdentifier("category");
+const isStateResourceIdentifier = isResourceIdentifier("state");
+const isTaxCategoryResourceIdentifier = isResourceIdentifier("tax-category");
+const isTypeResourceIdentifier = isResourceIdentifier("type");
 
-const isProductDraft = (value: unknown): value is ProductDraft =>
+const isProductDraft = (value: unknown): value is ProductDraftInput =>
   isRecord(value) &&
   isProductTypeResourceIdentifier(value.productType) &&
+  hasOptionalResourceIdentifierArray(
+    value,
+    "categories",
+    isCategoryResourceIdentifier
+  ) &&
+  hasOptionalResourceIdentifier(value, "state", isStateResourceIdentifier) &&
+  hasOptionalResourceIdentifier(
+    value,
+    "taxCategory",
+    isTaxCategoryResourceIdentifier
+  ) &&
+  hasOptionalProductVariantDraftPriceResourceIdentifiers(
+    value,
+    "masterVariant"
+  ) &&
+  hasOptionalProductVariantDraftArrayPriceResourceIdentifiers(
+    value,
+    "variants"
+  ) &&
   isStringRecord(value.name) &&
   isStringRecord(value.slug);
 
 const isProductPublishScope = (value: unknown): value is ProductPublishScope =>
   typeof value === "string";
 
-const ProductDraftSchema = Schema.declare<ProductDraft>(isProductDraft, {
+const ProductDraftSchema = Schema.declare<ProductDraftInput>(isProductDraft, {
   identifier: "ProductDraft",
 });
 
@@ -146,8 +198,56 @@ const ProductPublishScopeSchema = Schema.optional(
   })
 );
 
-const ProductUpdateActionsSchema = makeUpdateActionsSchema<ProductUpdateAction>(
-  "ProductUpdateActions"
+const hasValidProductUpdateActionResourceIdentifiers = (
+  action: Readonly<Record<string, unknown>>
+): boolean => {
+  switch (action.action) {
+    case "addToCategory":
+    case "removeFromCategory":
+      return hasRequiredResourceIdentifier(
+        action,
+        "category",
+        isCategoryResourceIdentifier
+      );
+    case "setAssetCustomType":
+    case "setProductPriceCustomType":
+      return hasOptionalResourceIdentifier(
+        action,
+        "type",
+        isTypeResourceIdentifier
+      );
+    case "setTaxCategory":
+      return hasOptionalResourceIdentifier(
+        action,
+        "taxCategory",
+        isTaxCategoryResourceIdentifier
+      );
+    case "transitionState":
+      return hasOptionalResourceIdentifier(
+        action,
+        "state",
+        isStateResourceIdentifier
+      );
+    default:
+      return true;
+  }
+};
+
+const isProductUpdateActions = (
+  value: unknown
+): value is NonEmptyProductUpdateActions =>
+  isNonEmptySdkUpdateActions<ProductUpdateAction>(value) &&
+  value.every(
+    (action) =>
+      hasValidProductUpdateActionResourceIdentifiers(action) &&
+      hasValidProductUpdateActionPriceDraftResourceIdentifiers(action)
+  );
+
+const ProductUpdateActionsSchema = Schema.declare<NonEmptyProductUpdateActions>(
+  isProductUpdateActions,
+  {
+    identifier: "ProductUpdateActions",
+  }
 );
 
 export const CreateProductDraftCommand: Schema.Codec<
@@ -198,7 +298,7 @@ export const createProductDraftCommand = defineDestinationCommand(
   {
     identity: true,
     make: {
-      createDraft: (draft: ProductDraft): CreateProductDraftCommand => ({
+      createDraft: (draft: ProductDraftInput): CreateProductDraftCommand => ({
         draft,
         kind: "CreateProductDraft",
       }),
