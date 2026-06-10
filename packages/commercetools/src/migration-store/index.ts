@@ -189,30 +189,36 @@ const storeError = (message: string, cause?: unknown): MigrationStoreError =>
 const hashSegment = (value: string): string =>
   createHash("sha256").update(value).digest("base64url");
 
+const definitionHashSegment = (definitionId: MigrationDefinitionId): string =>
+  `definition-hash_${hashSegment(definitionId)}`;
+
+const sourceIdentityHashSegment = (identity: SourceIdentity): string =>
+  `source-identity-hash_${hashSegment(identity)}`;
+
 const sourceCursorKey = (
   namespace: string,
   definitionId: MigrationDefinitionId
 ): string =>
-  `${namespace}__encoded-source-cursor__definition_${hashSegment(definitionId)}`;
+  `${namespace}__encoded-source-cursor__${definitionHashSegment(definitionId)}`;
 
 const itemStateKey = (
   namespace: string,
   definitionId: MigrationDefinitionId,
   identity: SourceIdentity
 ): string =>
-  `${namespace}__migration-item-state__definition_${hashSegment(definitionId)}__source_${hashSegment(identity)}`;
+  `${namespace}__migration-item-state__${definitionHashSegment(definitionId)}__${sourceIdentityHashSegment(identity)}`;
 
 const latestRunStateKey = (
   namespace: string,
   definitionId: MigrationDefinitionId
 ): string =>
-  `${namespace}__latest-run-state__definition_${hashSegment(definitionId)}`;
+  `${namespace}__latest-run-state__${definitionHashSegment(definitionId)}`;
 
 const definitionLockKey = (
   namespace: string,
   definitionId: MigrationDefinitionId
 ): string =>
-  `${namespace}__migration-definition-lock__definition_${hashSegment(definitionId)}`;
+  `${namespace}__migration-definition-lock__${definitionHashSegment(definitionId)}`;
 
 const resolveOptions = (
   options: CommercetoolsMigrationStoreOptions = {}
@@ -330,6 +336,18 @@ interface CustomObjectQueryPredicate {
   readonly where: string;
 }
 
+const formatVersionValue = (value: unknown): unknown => {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("formatVersion" in value)
+  ) {
+    return undefined;
+  }
+
+  return value.formatVersion;
+};
+
 const itemStateListPredicate = ({
   definitionId,
   lastKey,
@@ -391,12 +409,337 @@ const decodeRecord = <A>(
   schema: Schema.Codec<A, unknown, never, never>,
   value: unknown,
   key: string
-): Effect.Effect<A, MigrationStoreError> =>
-  Schema.decodeUnknownEffect(schema)(value).pipe(
+): Effect.Effect<A, MigrationStoreError> => {
+  const persistedFormatVersion = formatVersionValue(value);
+
+  if (
+    persistedFormatVersion !== undefined &&
+    persistedFormatVersion !== formatVersion
+  ) {
+    return Effect.fail(
+      storeError(
+        `Unsupported migration store record format version ${String(
+          persistedFormatVersion
+        )} for ${key}; expected ${formatVersion}`
+      )
+    );
+  }
+
+  return Schema.decodeUnknownEffect(schema)(value).pipe(
     Effect.mapError((cause) =>
       storeError(`Unable to decode migration store record ${key}`, cause)
     )
   );
+};
+
+const metadataMismatchError = (
+  key: string,
+  fieldName: string,
+  expected: unknown,
+  actual: unknown
+): MigrationStoreError =>
+  storeError(`Migration store record metadata mismatch for ${key}`, {
+    actual,
+    expected,
+    fieldName,
+  });
+
+const validateMetadata = (
+  key: string,
+  fieldName: string,
+  expected: unknown,
+  actual: unknown
+): Effect.Effect<void, MigrationStoreError> =>
+  actual === expected
+    ? Effect.void
+    : Effect.fail(metadataMismatchError(key, fieldName, expected, actual));
+
+const dateMetadataValue = (date: Date | undefined): string | undefined =>
+  date?.toISOString();
+
+const validateDateMetadata = (
+  key: string,
+  fieldName: string,
+  expected: Date | undefined,
+  actual: Date | undefined
+): Effect.Effect<void, MigrationStoreError> =>
+  validateMetadata(
+    key,
+    fieldName,
+    dateMetadataValue(expected),
+    dateMetadataValue(actual)
+  );
+
+const sameDefinitionIds = (
+  left: readonly MigrationDefinitionId[],
+  right: readonly MigrationDefinitionId[]
+): boolean =>
+  left.length === right.length &&
+  left.every((definitionId, index) => definitionId === right[index]);
+
+const validateDefinitionIdsMetadata = (
+  key: string,
+  fieldName: string,
+  expected: readonly MigrationDefinitionId[],
+  actual: readonly MigrationDefinitionId[]
+): Effect.Effect<void, MigrationStoreError> =>
+  sameDefinitionIds(expected, actual)
+    ? Effect.void
+    : Effect.fail(metadataMismatchError(key, fieldName, expected, actual));
+
+const validateRecordNamespace = (
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  key: string,
+  record: { readonly namespace: string }
+): Effect.Effect<void, MigrationStoreError> =>
+  validateMetadata(key, "namespace", options.namespace, record.namespace);
+
+const validateSourceCursorRecord = (
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  key: string,
+  definitionId: MigrationDefinitionId,
+  record: EncodedSourceCursorRecord
+): Effect.Effect<void, MigrationStoreError> =>
+  validateRecordNamespace(options, key, record).pipe(
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "definitionId",
+        definitionId,
+        record.index.definitionId
+      )
+    )
+  );
+
+const validateItemStateRecord = (
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  key: string,
+  record: MigrationItemStateRecord,
+  expected: {
+    readonly definitionId: MigrationDefinitionId;
+    readonly sourceIdentity?: SourceIdentity;
+  }
+): Effect.Effect<void, MigrationStoreError> =>
+  Effect.all(
+    [
+      validateRecordNamespace(options, key, record),
+      validateMetadata(
+        key,
+        "index.definitionId",
+        expected.definitionId,
+        record.index.definitionId
+      ),
+      validateMetadata(
+        key,
+        "state.definitionId",
+        expected.definitionId,
+        record.state.definitionId
+      ),
+      validateMetadata(
+        key,
+        "key",
+        itemStateKey(
+          options.namespace,
+          record.state.definitionId,
+          record.state.sourceIdentity
+        ),
+        key
+      ),
+      validateMetadata(
+        key,
+        "index.lastRunId",
+        record.state.lastRunId,
+        record.index.lastRunId
+      ),
+      validateMetadata(
+        key,
+        "index.sourceIdentity",
+        record.state.sourceIdentity,
+        record.index.sourceIdentity
+      ),
+      validateMetadata(
+        key,
+        "index.sourceIdentityHash",
+        hashSegment(record.state.sourceIdentity),
+        record.index.sourceIdentityHash
+      ),
+      validateMetadata(
+        key,
+        "index.status",
+        record.state.status,
+        record.index.status
+      ),
+      validateDateMetadata(
+        key,
+        "index.updatedAt",
+        record.state.updatedAt,
+        record.index.updatedAt
+      ),
+      ...(expected.sourceIdentity === undefined
+        ? []
+        : [
+            validateMetadata(
+              key,
+              "state.sourceIdentity",
+              expected.sourceIdentity,
+              record.state.sourceIdentity
+            ),
+          ]),
+    ],
+    { discard: true }
+  );
+
+const validateLatestRunStateRecord = (
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  key: string,
+  definitionId: MigrationDefinitionId,
+  record: LatestRunStateRecord
+): Effect.Effect<void, MigrationStoreError> =>
+  validateRecordNamespace(options, key, record).pipe(
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "key",
+        latestRunStateKey(options.namespace, record.index.definitionId),
+        key
+      )
+    ),
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "index.definitionId",
+        definitionId,
+        record.index.definitionId
+      )
+    ),
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "index.runId",
+        record.state.runId,
+        record.index.runId
+      )
+    ),
+    Effect.andThen(
+      validateDateMetadata(
+        key,
+        "index.startedAt",
+        record.state.startedAt,
+        record.index.startedAt
+      )
+    ),
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "index.status",
+        record.state.status,
+        record.index.status
+      )
+    ),
+    Effect.andThen(
+      validateDateMetadata(
+        key,
+        "index.finishedAt",
+        record.state.finishedAt,
+        record.index.finishedAt
+      )
+    ),
+    Effect.andThen(
+      record.state.definitionIds.includes(definitionId)
+        ? Effect.void
+        : Effect.fail(
+            metadataMismatchError(
+              key,
+              "state.definitionIds",
+              definitionId,
+              record.state.definitionIds
+            )
+          )
+    )
+  );
+
+const validateDefinitionLockRecord = (
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  key: string,
+  definitionId: MigrationDefinitionId,
+  record: MigrationDefinitionLockRecord
+): Effect.Effect<void, MigrationStoreError> =>
+  validateRecordNamespace(options, key, record).pipe(
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "key",
+        definitionLockKey(options.namespace, record.state.definitionId),
+        key
+      )
+    ),
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "index.definitionId",
+        definitionId,
+        record.index.definitionId
+      )
+    ),
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "state.definitionId",
+        definitionId,
+        record.state.definitionId
+      )
+    ),
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "index.ownerRunId",
+        record.state.ownerRunId,
+        record.index.ownerRunId
+      )
+    )
+  );
+
+const validateRunStateRecords = (
+  runId: MigrationRunId,
+  definitionIds: readonly MigrationDefinitionId[],
+  runStates: readonly MigrationRunStateType[]
+): Effect.Effect<MigrationRunStateType, MigrationStoreError> =>
+  Effect.gen(function* () {
+    const current = runStates[0];
+
+    if (
+      current === undefined ||
+      runStates.some((runState) => runState.runId !== runId)
+    ) {
+      return yield* storeError("Migration run was not found", runId);
+    }
+
+    const key = `migration run ${runId}`;
+
+    for (const runState of runStates) {
+      yield* validateDefinitionIdsMetadata(
+        key,
+        "definitionIds",
+        definitionIds,
+        runState.definitionIds
+      );
+      yield* validateMetadata(key, "status", current.status, runState.status);
+      yield* validateDateMetadata(
+        key,
+        "startedAt",
+        current.startedAt,
+        runState.startedAt
+      );
+      yield* validateDateMetadata(
+        key,
+        "finishedAt",
+        current.finishedAt,
+        runState.finishedAt
+      );
+    }
+
+    return current;
+  });
 
 const readCustomObjectOptional = (
   sdk: typeof CommercetoolsSdk.Service,
@@ -503,12 +846,17 @@ const readRecordOptional = <A>(
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions,
   key: string,
-  schema: Schema.Codec<A, unknown, never, never>
+  schema: Schema.Codec<A, unknown, never, never>,
+  validateRecord: (
+    record: A
+  ) => Effect.Effect<void, MigrationStoreError> = () => Effect.void
 ): Effect.Effect<A | null, MigrationStoreError> =>
   Effect.flatMap(readCustomObjectOptional(sdk, options, key), (customObject) =>
     customObject === null
       ? Effect.succeed(null)
-      : decodeRecord(schema, customObject.value, key)
+      : decodeRecord(schema, customObject.value, key).pipe(
+          Effect.tap(validateRecord)
+        )
   );
 
 const writeRecord = <A>(
@@ -597,13 +945,13 @@ const readLatestRunState = (
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions,
   definitionId: MigrationDefinitionId
-): Effect.Effect<MigrationRunStateType | null, MigrationStoreError> =>
-  readRecordOptional(
-    sdk,
-    options,
-    latestRunStateKey(options.namespace, definitionId),
-    LatestRunStateRecord
+): Effect.Effect<MigrationRunStateType | null, MigrationStoreError> => {
+  const key = latestRunStateKey(options.namespace, definitionId);
+
+  return readRecordOptional(sdk, options, key, LatestRunStateRecord, (record) =>
+    validateLatestRunStateRecord(options, key, definitionId, record)
   ).pipe(Effect.map((record) => record?.state ?? null));
+};
 
 const listItemStates = (
   sdk: typeof CommercetoolsSdk.Service,
@@ -631,6 +979,10 @@ const listItemStates = (
           customObject.value,
           customObject.key
         );
+
+        yield* validateItemStateRecord(options, customObject.key, record, {
+          definitionId,
+        });
 
         itemStates.push(record.state);
       }
@@ -670,16 +1022,7 @@ const readRunState = (
       runStates.push(runState);
     }
 
-    const current = runStates[0];
-
-    if (
-      current === undefined ||
-      runStates.some((runState) => runState.runId !== runId)
-    ) {
-      return yield* storeError("Migration run was not found", runId);
-    }
-
-    return current;
+    return yield* validateRunStateRecords(runId, definitionIds, runStates);
   });
 
 const writeLatestRunState = (
@@ -728,14 +1071,17 @@ const makeService = (
 ): (typeof MigrationStore)["Service"] => {
   const getSourceCursor = Effect.fn(
     "CommercetoolsMigrationStore.getSourceCursor"
-  )((definitionId: MigrationDefinitionId) =>
-    readRecordOptional(
+  )((definitionId: MigrationDefinitionId) => {
+    const key = sourceCursorKey(options.namespace, definitionId);
+
+    return readRecordOptional(
       sdk,
       options,
-      sourceCursorKey(options.namespace, definitionId),
-      EncodedSourceCursorRecord
-    ).pipe(Effect.map((record) => record?.state ?? null))
-  );
+      key,
+      EncodedSourceCursorRecord,
+      (record) => validateSourceCursorRecord(options, key, definitionId, record)
+    ).pipe(Effect.map((record) => record?.state ?? null));
+  });
 
   const setSourceCursor = Effect.fn(
     "CommercetoolsMigrationStore.setSourceCursor"
@@ -752,13 +1098,21 @@ const makeService = (
   });
 
   const getItemState = Effect.fn("CommercetoolsMigrationStore.getItemState")(
-    (definitionId: MigrationDefinitionId, identity: SourceIdentity) =>
-      readRecordOptional(
+    (definitionId: MigrationDefinitionId, identity: SourceIdentity) => {
+      const key = itemStateKey(options.namespace, definitionId, identity);
+
+      return readRecordOptional(
         sdk,
         options,
-        itemStateKey(options.namespace, definitionId, identity),
-        MigrationItemStateRecord
-      ).pipe(Effect.map((record) => record?.state ?? null))
+        key,
+        MigrationItemStateRecord,
+        (record) =>
+          validateItemStateRecord(options, key, record, {
+            definitionId,
+            sourceIdentity: identity,
+          })
+      ).pipe(Effect.map((record) => record?.state ?? null));
+    }
   );
 
   const deleteItemState = Effect.fn(
@@ -771,7 +1125,16 @@ const makeService = (
       return;
     }
 
-    yield* decodeRecord(MigrationItemStateRecord, customObject.value, key);
+    const record = yield* decodeRecord(
+      MigrationItemStateRecord,
+      customObject.value,
+      key
+    );
+
+    yield* validateItemStateRecord(options, key, record, {
+      definitionId,
+      sourceIdentity: identity,
+    });
     yield* deleteCustomObject(sdk, options, key, customObject.version);
   });
 
@@ -862,6 +1225,13 @@ const makeService = (
       MigrationDefinitionLockRecord,
       customObject.value,
       key
+    );
+
+    yield* validateDefinitionLockRecord(
+      options,
+      key,
+      lock.definitionId,
+      record
     );
 
     if (

@@ -22,6 +22,7 @@ import {
 
 const runIdPattern = /^run-/u;
 const lockTokenPattern = /^lock-/u;
+const safeCustomObjectKeyPattern = /^[A-Za-z0-9_.~-]+(?:__[A-Za-z0-9_.~-]+)+$/u;
 const definitionId = toMigrationDefinitionId("catalog-products");
 const sourceIdentity = toSourceIdentity("product:sku-123");
 const namespace = "catalog-import";
@@ -29,17 +30,23 @@ const namespace = "catalog-import";
 const hashedSegment = (value: string): string =>
   createHash("sha256").update(value).digest("base64url");
 
+const definitionHashSegment = (definition: string): string =>
+  `definition-hash_${hashedSegment(definition)}`;
+
+const sourceIdentityHashSegment = (identity: string): string =>
+  `source-identity-hash_${hashedSegment(identity)}`;
+
 const sourceCursorKey = (definition: string): string =>
-  `${namespace}__encoded-source-cursor__definition_${hashedSegment(definition)}`;
+  `${namespace}__encoded-source-cursor__${definitionHashSegment(definition)}`;
 
 const itemStateKey = (definition: string, identity: string): string =>
-  `${namespace}__migration-item-state__definition_${hashedSegment(definition)}__source_${hashedSegment(identity)}`;
+  `${namespace}__migration-item-state__${definitionHashSegment(definition)}__${sourceIdentityHashSegment(identity)}`;
 
 const latestRunStateKey = (definition: string): string =>
-  `${namespace}__latest-run-state__definition_${hashedSegment(definition)}`;
+  `${namespace}__latest-run-state__${definitionHashSegment(definition)}`;
 
 const definitionLockKey = (definition: string): string =>
-  `${namespace}__migration-definition-lock__definition_${hashedSegment(definition)}`;
+  `${namespace}__migration-definition-lock__${definitionHashSegment(definition)}`;
 
 const itemStateQueryWhere = [
   "value(namespace = :namespace)",
@@ -66,6 +73,22 @@ const customObjectKey = (
   return undefined;
 };
 
+const customObjectValue = (request: RecordedCommercetoolsRequest): unknown => {
+  const body = request.body;
+
+  if (
+    typeof body === "object" &&
+    body !== null &&
+    "container" in body &&
+    "key" in body &&
+    "value" in body
+  ) {
+    return body.value;
+  }
+
+  return undefined;
+};
+
 const customObjectQueryRequests = (
   requests: readonly RecordedCommercetoolsRequest[]
 ): readonly RecordedCommercetoolsRequest[] =>
@@ -75,6 +98,47 @@ const customObjectQueryRequests = (
       request.pathVariables?.container === "migrate-sdk" &&
       request.pathVariables?.key === undefined
   );
+
+const containsExplicitNull = (value: unknown): boolean => {
+  if (value === null) {
+    return true;
+  }
+
+  if (Array.isArray(value)) {
+    return value.some(containsExplicitNull);
+  }
+
+  if (typeof value === "object") {
+    return Object.values(value).some(containsExplicitNull);
+  }
+
+  return false;
+};
+
+const seedCustomObject = (
+  recording: ReturnType<typeof makeRecordingCommercetoolsApiRoot>,
+  key: string,
+  value: unknown
+): Effect.Effect<void, RecordedHttpError> => {
+  const project = recording.apiRoot.withProjectKey({
+    projectKey: "test-project",
+  });
+
+  return Effect.tryPromise({
+    try: () =>
+      project
+        .customObjects()
+        .post({
+          body: {
+            container: "migrate-sdk",
+            key,
+            value,
+          },
+        })
+        .execute(),
+    catch: recordedHttpError,
+  }).pipe(Effect.asVoid);
+};
 
 class RecordedHttpError extends Data.TaggedError("RecordedHttpError")<{
   readonly cause: unknown;
@@ -363,6 +427,55 @@ describe("CommercetoolsMigrationStore", () => {
     }).pipe(Effect.provide(makeStoreLayer(recording)));
   });
 
+  it.effect("rejects definition locks whose index metadata drifted", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const ownerRunId = toMigrationRunId("run-lock-index-state");
+    const otherRunId = toMigrationRunId("run-lock-index-other");
+    const token = toMigrationDefinitionLockToken("lock-index-state");
+    const key = definitionLockKey(definitionId);
+
+    return Effect.gen(function* () {
+      yield* seedCustomObject(recording, key, {
+        formatVersion: 1,
+        index: {
+          definitionId,
+          ownerRunId: otherRunId,
+        },
+        namespace,
+        recordKind: "migration-definition-lock",
+        state: {
+          createdAt: "2026-06-09T12:00:00.000Z",
+          definitionId,
+          ownerRunId,
+          token,
+        },
+      });
+
+      const error = yield* Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        return yield* store.releaseDefinitionLock({
+          createdAt: new Date("2026-06-09T12:00:00.000Z"),
+          definitionId,
+          ownerRunId,
+          token,
+        });
+      }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          message: expect.stringContaining(
+            "Migration store record metadata mismatch"
+          ),
+        })
+      );
+      expect(
+        recording.requests.some((request) => request.method === "DELETE")
+      ).toBe(false);
+    });
+  });
+
   it.effect("treats releasing a missing definition lock as a no-op", () => {
     const recording = makeRecordingCommercetoolsApiRoot();
     const expectedKey = definitionLockKey(definitionId);
@@ -560,6 +673,97 @@ describe("CommercetoolsMigrationStore", () => {
     }
   );
 
+  it.effect(
+    "uses safe bounded hashed key segments for unsafe long values",
+    () => {
+      const recording = makeRecordingCommercetoolsApiRoot();
+      const unsafeDefinitionId = toMigrationDefinitionId(
+        `catalog products/"special"|${"x".repeat(500)}`
+      );
+      const unsafeSourceIdentity = toSourceIdentity(
+        `sku/"special"|${"y".repeat(500)}`
+      );
+      const cursor = toEncodedSourceCursor("cursor-long-values");
+      const itemState = {
+        definitionId: unsafeDefinitionId,
+        destinationIdentity: toDestinationIdentity("ct-product-long-values"),
+        lastRunId: toMigrationRunId("run-long-values"),
+        sourceIdentity: unsafeSourceIdentity,
+        sourceVersion: toSourceVersion("source-long-values"),
+        status: "migrated",
+        updatedAt: new Date("2026-06-09T12:00:00.000Z"),
+      } as const;
+
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        yield* store.setSourceCursor(unsafeDefinitionId, cursor);
+        yield* store.upsertItemState(itemState);
+
+        const keys = recording.requests
+          .map(customObjectKey)
+          .filter((key): key is string => key !== undefined);
+        const sourceCursorCustomObjectKey = keys[0];
+        const itemStateCustomObjectKey = keys[1];
+
+        expect(sourceCursorCustomObjectKey).toBeDefined();
+        expect(itemStateCustomObjectKey).toBeDefined();
+        expect(sourceCursorCustomObjectKey).toHaveLength(
+          sourceCursorKey(unsafeDefinitionId).length
+        );
+        expect(itemStateCustomObjectKey).toHaveLength(
+          itemStateKey(unsafeDefinitionId, unsafeSourceIdentity).length
+        );
+        expect(sourceCursorCustomObjectKey?.length).toBeLessThanOrEqual(256);
+        expect(itemStateCustomObjectKey?.length).toBeLessThanOrEqual(256);
+        expect(sourceCursorCustomObjectKey).toMatch(safeCustomObjectKeyPattern);
+        expect(itemStateCustomObjectKey).toMatch(safeCustomObjectKeyPattern);
+        expect(sourceCursorCustomObjectKey).toContain("definition-hash_");
+        expect(itemStateCustomObjectKey).toContain("definition-hash_");
+        expect(itemStateCustomObjectKey).toContain("source-identity-hash_");
+        expect(sourceCursorCustomObjectKey).not.toContain(unsafeDefinitionId);
+        expect(itemStateCustomObjectKey).not.toContain(unsafeSourceIdentity);
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  it.effect("persists store records without explicit null values", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const runId = toMigrationRunId("run-no-explicit-nulls");
+    const itemState = {
+      definitionId,
+      destinationIdentity: toDestinationIdentity("ct-product-no-nulls"),
+      lastRunId: runId,
+      reason: "destination version was not observed yet",
+      sourceIdentity,
+      status: "needs-update",
+      updatedAt: new Date("2026-06-09T12:00:00.000Z"),
+    } as const;
+
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+
+      yield* store.setSourceCursor(
+        definitionId,
+        toEncodedSourceCursor("cursor-no-explicit-nulls")
+      );
+      yield* store.upsertItemState(itemState);
+      yield* store.beginRun(runId, [definitionId]);
+      yield* store.acquireDefinitionLock(definitionId, runId);
+
+      const upserts = recording.requests.filter(
+        (request) => request.method === "POST"
+      );
+
+      expect(upserts).toHaveLength(4);
+      expect(
+        upserts.some((request) =>
+          containsExplicitNull(customObjectValue(request))
+        )
+      ).toBe(false);
+    }).pipe(Effect.provide(makeStoreLayer(recording)));
+  });
+
   it.effect("round-trips all migration item states as Custom Objects", () => {
     const recording = makeRecordingCommercetoolsApiRoot();
     const runId = toMigrationRunId("run-item-states");
@@ -662,7 +866,232 @@ describe("CommercetoolsMigrationStore", () => {
           },
         },
       });
+      expect(
+        upserts.some((request) =>
+          containsExplicitNull(customObjectValue(request))
+        )
+      ).toBe(false);
     }).pipe(Effect.provide(makeStoreLayer(recording)));
+  });
+
+  it.effect(
+    "fails clearly for unsupported future record format versions",
+    () => {
+      const recording = makeRecordingCommercetoolsApiRoot();
+      const cursor = toEncodedSourceCursor("future-version-cursor");
+      const key = sourceCursorKey(definitionId);
+
+      return Effect.gen(function* () {
+        yield* seedCustomObject(recording, key, {
+          formatVersion: 2,
+          index: {
+            definitionId,
+          },
+          namespace,
+          recordKind: "encoded-source-cursor",
+          state: cursor,
+        });
+
+        const error = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.getSourceCursor(definitionId);
+        }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationStoreError",
+            message: expect.stringContaining(
+              "Unsupported migration store record format version"
+            ),
+          })
+        );
+      });
+    }
+  );
+
+  it.effect(
+    "rejects source cursor records whose metadata targets another definition",
+    () => {
+      const recording = makeRecordingCommercetoolsApiRoot();
+      const requestedDefinitionId = toMigrationDefinitionId("catalog-products");
+      const persistedDefinitionId = toMigrationDefinitionId("catalog-prices");
+      const key = sourceCursorKey(requestedDefinitionId);
+
+      return Effect.gen(function* () {
+        yield* seedCustomObject(recording, key, {
+          formatVersion: 1,
+          index: {
+            definitionId: persistedDefinitionId,
+          },
+          namespace,
+          recordKind: "encoded-source-cursor",
+          state: toEncodedSourceCursor("wrong-definition-cursor"),
+        });
+
+        const error = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.getSourceCursor(requestedDefinitionId);
+        }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationStoreError",
+            message: expect.stringContaining(
+              "Migration store record metadata mismatch"
+            ),
+          })
+        );
+      });
+    }
+  );
+
+  it.effect(
+    "rejects item state records whose metadata targets another item",
+    () => {
+      const recording = makeRecordingCommercetoolsApiRoot();
+      const requestedSourceIdentity = toSourceIdentity("product:requested");
+      const persistedSourceIdentity = toSourceIdentity("product:persisted");
+      const key = itemStateKey(definitionId, requestedSourceIdentity);
+
+      return Effect.gen(function* () {
+        yield* seedCustomObject(recording, key, {
+          formatVersion: 1,
+          index: {
+            definitionId,
+            lastRunId: toMigrationRunId("run-corrupt-item"),
+            sourceIdentity: persistedSourceIdentity,
+            sourceIdentityHash: hashedSegment(persistedSourceIdentity),
+            status: "migrated",
+            updatedAt: "2026-06-09T12:00:00.000Z",
+          },
+          namespace,
+          recordKind: "migration-item-state",
+          state: {
+            definitionId,
+            destinationIdentity: toDestinationIdentity("ct-corrupt-item"),
+            lastRunId: toMigrationRunId("run-corrupt-item"),
+            sourceIdentity: persistedSourceIdentity,
+            sourceVersion: toSourceVersion("source-corrupt-item"),
+            status: "migrated",
+            updatedAt: "2026-06-09T12:00:00.000Z",
+          },
+        });
+
+        const error = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.getItemState(
+            definitionId,
+            requestedSourceIdentity
+          );
+        }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationStoreError",
+            message: expect.stringContaining(
+              "Migration store record metadata mismatch"
+            ),
+          })
+        );
+      });
+    }
+  );
+
+  it.effect("rejects item state records whose index metadata drifted", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const key = itemStateKey(definitionId, sourceIdentity);
+
+    return Effect.gen(function* () {
+      yield* seedCustomObject(recording, key, {
+        formatVersion: 1,
+        index: {
+          definitionId,
+          lastRunId: toMigrationRunId("run-index-state"),
+          sourceIdentity,
+          sourceIdentityHash: hashedSegment(sourceIdentity),
+          status: "migrated",
+          updatedAt: "2026-06-09T12:00:00.000Z",
+        },
+        namespace,
+        recordKind: "migration-item-state",
+        state: {
+          definitionId,
+          error: {
+            errorTag: "DestinationRejected",
+            kind: "destination",
+            message: "Product was rejected",
+          },
+          lastRunId: toMigrationRunId("run-index-state"),
+          sourceIdentity,
+          sourceVersion: toSourceVersion("source-index-state"),
+          status: "failed",
+          updatedAt: "2026-06-09T12:00:00.000Z",
+        },
+      });
+
+      const error = yield* Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        return yield* store.getItemState(definitionId, sourceIdentity);
+      }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          message: expect.stringContaining(
+            "Migration store record metadata mismatch"
+          ),
+        })
+      );
+    });
+  });
+
+  it.effect("rejects listed item state records with non-canonical keys", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const nonCanonicalKey = `${namespace}__migration-item-state__definition-hash_wrong__source-identity-hash_wrong`;
+
+    return Effect.gen(function* () {
+      yield* seedCustomObject(recording, nonCanonicalKey, {
+        formatVersion: 1,
+        index: {
+          definitionId,
+          lastRunId: toMigrationRunId("run-non-canonical-key"),
+          sourceIdentity,
+          sourceIdentityHash: hashedSegment(sourceIdentity),
+          status: "migrated",
+          updatedAt: "2026-06-09T12:00:00.000Z",
+        },
+        namespace,
+        recordKind: "migration-item-state",
+        state: {
+          definitionId,
+          destinationIdentity: toDestinationIdentity("ct-non-canonical-key"),
+          lastRunId: toMigrationRunId("run-non-canonical-key"),
+          sourceIdentity,
+          sourceVersion: toSourceVersion("source-non-canonical-key"),
+          status: "migrated",
+          updatedAt: "2026-06-09T12:00:00.000Z",
+        },
+      });
+
+      const error = yield* Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        return yield* store.listItemStates(definitionId);
+      }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          message: expect.stringContaining(
+            "Migration store record metadata mismatch"
+          ),
+        })
+      );
+    });
   });
 
   it.effect("lists item states by definition through indexed queries", () => {
@@ -886,6 +1315,175 @@ describe("CommercetoolsMigrationStore", () => {
       }).pipe(Effect.provide(makeStoreLayer(recording)));
     }
   );
+
+  it.effect("rejects latest run states whose index metadata drifted", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const runId = toMigrationRunId("run-latest-index-state");
+    const key = latestRunStateKey(definitionId);
+
+    return Effect.gen(function* () {
+      yield* seedCustomObject(recording, key, {
+        formatVersion: 1,
+        index: {
+          definitionId,
+          runId: toMigrationRunId("run-latest-index-other"),
+          startedAt: "2026-06-09T12:00:00.000Z",
+          status: "running",
+        },
+        namespace,
+        recordKind: "latest-run-state",
+        state: {
+          definitionIds: [definitionId],
+          runId,
+          startedAt: "2026-06-09T12:00:00.000Z",
+          status: "running",
+        },
+      });
+
+      const error = yield* Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        return yield* store.completeRun(runId, [definitionId]);
+      }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          message: expect.stringContaining(
+            "Migration store record metadata mismatch"
+          ),
+        })
+      );
+    });
+  });
+
+  it.effect("rejects run states whose definition ids drifted", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const runId = toMigrationRunId("run-definition-ids-drift");
+    const additionalDefinitionId = toMigrationDefinitionId("catalog-prices");
+    const definitionIds = [definitionId, additionalDefinitionId] as const;
+
+    return Effect.gen(function* () {
+      yield* seedCustomObject(recording, latestRunStateKey(definitionId), {
+        formatVersion: 1,
+        index: {
+          definitionId,
+          runId,
+          startedAt: "2026-06-09T12:00:00.000Z",
+          status: "running",
+        },
+        namespace,
+        recordKind: "latest-run-state",
+        state: {
+          definitionIds,
+          runId,
+          startedAt: "2026-06-09T12:00:00.000Z",
+          status: "running",
+        },
+      });
+      yield* seedCustomObject(
+        recording,
+        latestRunStateKey(additionalDefinitionId),
+        {
+          formatVersion: 1,
+          index: {
+            definitionId: additionalDefinitionId,
+            runId,
+            startedAt: "2026-06-09T12:00:00.000Z",
+            status: "running",
+          },
+          namespace,
+          recordKind: "latest-run-state",
+          state: {
+            definitionIds: [additionalDefinitionId],
+            runId,
+            startedAt: "2026-06-09T12:00:00.000Z",
+            status: "running",
+          },
+        }
+      );
+
+      const error = yield* Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        return yield* store.completeRun(runId, definitionIds);
+      }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          message: expect.stringContaining(
+            "Migration store record metadata mismatch"
+          ),
+        })
+      );
+    });
+  });
+
+  it.effect("rejects run states whose per-definition status drifted", () => {
+    const recording = makeRecordingCommercetoolsApiRoot();
+    const runId = toMigrationRunId("run-status-drift");
+    const additionalDefinitionId = toMigrationDefinitionId("catalog-prices");
+    const definitionIds = [definitionId, additionalDefinitionId] as const;
+
+    return Effect.gen(function* () {
+      yield* seedCustomObject(recording, latestRunStateKey(definitionId), {
+        formatVersion: 1,
+        index: {
+          definitionId,
+          runId,
+          startedAt: "2026-06-09T12:00:00.000Z",
+          status: "running",
+        },
+        namespace,
+        recordKind: "latest-run-state",
+        state: {
+          definitionIds,
+          runId,
+          startedAt: "2026-06-09T12:00:00.000Z",
+          status: "running",
+        },
+      });
+      yield* seedCustomObject(
+        recording,
+        latestRunStateKey(additionalDefinitionId),
+        {
+          formatVersion: 1,
+          index: {
+            definitionId: additionalDefinitionId,
+            finishedAt: "2026-06-09T12:01:00.000Z",
+            runId,
+            startedAt: "2026-06-09T12:00:00.000Z",
+            status: "failed",
+          },
+          namespace,
+          recordKind: "latest-run-state",
+          state: {
+            definitionIds,
+            finishedAt: "2026-06-09T12:01:00.000Z",
+            runId,
+            startedAt: "2026-06-09T12:00:00.000Z",
+            status: "failed",
+          },
+        }
+      );
+
+      const error = yield* Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        return yield* store.completeRun(runId, definitionIds);
+      }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          message: expect.stringContaining(
+            "Migration store record metadata mismatch"
+          ),
+        })
+      );
+    });
+  });
 
   it.effect("round-trips latest run states for every definition", () => {
     const recording = makeRecordingCommercetoolsApiRoot();
