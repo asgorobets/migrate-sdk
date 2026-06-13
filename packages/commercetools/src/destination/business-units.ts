@@ -164,17 +164,19 @@ export const makeBusinessUnitUpdate = makeUpdateCommandFactory<
   label: "Business unit update",
 });
 
+export const makeCreateBusinessUnitDraftCommand = (
+  draft: BusinessUnitDraft
+): CreateBusinessUnitDraftCommand => ({
+  draft,
+  kind: "CreateBusinessUnitDraft",
+});
+
 export const createBusinessUnitDraftCommand = defineDestinationCommand(
   "CreateBusinessUnitDraft",
   {
     identity: true,
     make: {
-      createDraft: (
-        draft: BusinessUnitDraft
-      ): CreateBusinessUnitDraftCommand => ({
-        draft,
-        kind: "CreateBusinessUnitDraft",
-      }),
+      createDraft: makeCreateBusinessUnitDraftCommand,
     },
     schema: CreateBusinessUnitDraftCommand,
   }
@@ -191,6 +193,12 @@ export const updateBusinessUnitCommand = defineDestinationCommand(
 export const businessUnitCommandGroup = defineDestinationCommandGroup(
   "businessUnits"
 ).add(createBusinessUnitDraftCommand, updateBusinessUnitCommand);
+
+export const makeCommercetoolsBusinessUnitCommands =
+  (): CommercetoolsBusinessUnitCommands => ({
+    createDraft: makeCreateBusinessUnitDraftCommand,
+    update: makeBusinessUnitUpdate,
+  });
 
 const businessUnitMetadata = (
   businessUnit: BusinessUnit

@@ -121,15 +121,19 @@ export const makeCustomerUpdate = makeUpdateCommandFactory<
   label: "Customer update",
 });
 
+export const makeCreateCustomerDraftCommand = (
+  draft: CustomerDraft
+): CreateCustomerDraftCommand => ({
+  draft,
+  kind: "CreateCustomerDraft",
+});
+
 export const createCustomerDraftCommand = defineDestinationCommand(
   "CreateCustomerDraft",
   {
     identity: true,
     make: {
-      createDraft: (draft: CustomerDraft): CreateCustomerDraftCommand => ({
-        draft,
-        kind: "CreateCustomerDraft",
-      }),
+      createDraft: makeCreateCustomerDraftCommand,
     },
     schema: CreateCustomerDraftCommand,
   }
@@ -146,6 +150,12 @@ export const updateCustomerCommand = defineDestinationCommand(
 export const customerCommandGroup = defineDestinationCommandGroup(
   "customers"
 ).add(createCustomerDraftCommand, updateCustomerCommand);
+
+export const makeCommercetoolsCustomerCommands =
+  (): CommercetoolsCustomerCommands => ({
+    createDraft: makeCreateCustomerDraftCommand,
+    update: makeCustomerUpdate,
+  });
 
 const customerMetadata = (
   customer: Customer

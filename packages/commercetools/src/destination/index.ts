@@ -138,7 +138,6 @@ export type {
   ProductUpdateInput,
   ProductUpdateWithActionsInput,
   ProductVariantDraftInput,
-  PublishProductCommand as PublishProductCommandType,
   UpdateProductCommand as UpdateProductCommandType,
 } from "./products.ts";
 export type {
@@ -188,7 +187,6 @@ export {
 } from "./product-selections.ts";
 export {
   CreateProductDraftCommand,
-  PublishProductCommand,
   UpdateProductCommand,
 } from "./products.ts";
 export { CreateStoreDraftCommand, UpdateStoreCommand } from "./stores.ts";

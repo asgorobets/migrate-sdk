@@ -8,7 +8,7 @@ import {
   type CreateBusinessUnitDraftCommand,
   handleCreateBusinessUnitDraft,
   handleUpdateBusinessUnit,
-  makeBusinessUnitUpdate,
+  makeCommercetoolsBusinessUnitCommands,
   type UpdateBusinessUnitCommand,
 } from "./business-units.ts";
 import {
@@ -22,7 +22,7 @@ import {
   customerCommandGroup,
   handleCreateCustomerDraft,
   handleUpdateCustomer,
-  makeCustomerUpdate,
+  makeCommercetoolsCustomerCommands,
   type UpdateCustomerCommand,
 } from "./customers.ts";
 import {
@@ -31,7 +31,7 @@ import {
   handleCreateInventoryEntryDraft,
   handleUpdateInventoryEntry,
   inventoryCommandGroup,
-  makeInventoryEntryUpdate,
+  makeCommercetoolsInventoryEntryCommands,
   type UpdateInventoryEntryCommand,
 } from "./inventory.ts";
 import { makeProductHelpers } from "./product-attributes.ts";
@@ -40,7 +40,7 @@ import {
   type CreateProductSelectionDraftCommand,
   handleCreateProductSelectionDraft,
   handleUpdateProductSelection,
-  makeProductSelectionUpdate,
+  makeCommercetoolsProductSelectionCommands,
   productSelectionCommandGroup,
   type UpdateProductSelectionCommand,
 } from "./product-selections.ts";
@@ -51,10 +51,8 @@ import {
   type CommercetoolsProductHelpers,
   type CreateProductDraftCommand,
   handleCreateProductDraft,
-  handlePublishProduct,
   handleUpdateProduct,
-  makeProductUpdate,
-  type PublishProductCommand,
+  makeCommercetoolsProductCommands,
   productCommandGroup,
   type UpdateProductCommand,
 } from "./products.ts";
@@ -63,7 +61,7 @@ import {
   type CreateStoreDraftCommand,
   handleCreateStoreDraft,
   handleUpdateStore,
-  makeStoreUpdate,
+  makeCommercetoolsStoreCommands,
   storeCommandGroup,
   type UpdateStoreCommand,
 } from "./stores.ts";
@@ -123,7 +121,6 @@ export type CommercetoolsDestinationCommand =
   | CreateInventoryEntryDraftCommand
   | UpdateInventoryEntryCommand
   | CreateProductDraftCommand
-  | PublishProductCommand
   | UpdateProductCommand
   | CreateProductSelectionDraftCommand
   | UpdateProductSelectionCommand
@@ -171,8 +168,8 @@ const pluginDefinition = defineDestinationPlugin("commercetools").addGroup(
   storeCommandGroup
 );
 
-const implementCommercetoolsDestination = () =>
-  pluginDefinition.implement((handlers) =>
+const implementedCommercetoolsDestination = pluginDefinition.implement(
+  (handlers) =>
     handlers
       .group("businessUnits", (businessUnitHandlers) =>
         businessUnitHandlers
@@ -192,7 +189,6 @@ const implementCommercetoolsDestination = () =>
       .group("products", (productHandlers) =>
         productHandlers
           .handle("CreateProductDraft", handleCreateProductDraft)
-          .handle("PublishProduct", handlePublishProduct)
           .handle("UpdateProduct", handleUpdateProduct)
       )
       .group("productSelections", (productSelectionHandlers) =>
@@ -208,7 +204,17 @@ const implementCommercetoolsDestination = () =>
           .handle("CreateStoreDraft", handleCreateStoreDraft)
           .handle("UpdateStore", handleUpdateStore)
       )
-  );
+);
+
+const makeCommercetoolsDestinationCommands =
+  (): CommercetoolsDestinationCommands => ({
+    businessUnits: makeCommercetoolsBusinessUnitCommands(),
+    customers: makeCommercetoolsCustomerCommands(),
+    inventory: makeCommercetoolsInventoryEntryCommands(),
+    products: makeCommercetoolsProductCommands(),
+    productSelections: makeCommercetoolsProductSelectionCommands(),
+    stores: makeCommercetoolsStoreCommands(),
+  });
 
 function make<
   const ProductAttributeSchemaRecord extends
@@ -259,39 +265,13 @@ function make<
   ProductAttributeSchemaRecord,
   BusinessUnitCustomFieldSchema
 > {
-  const implementedPlugin = implementCommercetoolsDestination().provide(
+  const implementedPlugin = implementedCommercetoolsDestination.provide(
     options.sdkLayer
   );
 
   return {
     ...implementedPlugin,
-    commands: {
-      ...implementedPlugin.commands,
-      businessUnits: {
-        ...implementedPlugin.commands.businessUnits,
-        update: makeBusinessUnitUpdate,
-      },
-      customers: {
-        ...implementedPlugin.commands.customers,
-        update: makeCustomerUpdate,
-      },
-      inventory: {
-        ...implementedPlugin.commands.inventory,
-        update: makeInventoryEntryUpdate,
-      },
-      products: {
-        ...implementedPlugin.commands.products,
-        update: makeProductUpdate,
-      },
-      productSelections: {
-        ...implementedPlugin.commands.productSelections,
-        update: makeProductSelectionUpdate,
-      },
-      stores: {
-        ...implementedPlugin.commands.stores,
-        update: makeStoreUpdate,
-      },
-    },
+    commands: makeCommercetoolsDestinationCommands(),
     helpers: {
       businessUnits: {
         customFields:

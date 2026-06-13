@@ -121,15 +121,19 @@ export const makeStoreUpdate = makeUpdateCommandFactory<
   label: "Store update",
 });
 
+export const makeCreateStoreDraftCommand = (
+  draft: StoreDraft
+): CreateStoreDraftCommand => ({
+  draft,
+  kind: "CreateStoreDraft",
+});
+
 export const createStoreDraftCommand = defineDestinationCommand(
   "CreateStoreDraft",
   {
     identity: true,
     make: {
-      createDraft: (draft: StoreDraft): CreateStoreDraftCommand => ({
-        draft,
-        kind: "CreateStoreDraft",
-      }),
+      createDraft: makeCreateStoreDraftCommand,
     },
     schema: CreateStoreDraftCommand,
   }
@@ -144,6 +148,12 @@ export const storeCommandGroup = defineDestinationCommandGroup("stores").add(
   createStoreDraftCommand,
   updateStoreCommand
 );
+
+export const makeCommercetoolsStoreCommands =
+  (): CommercetoolsStoreCommands => ({
+    createDraft: makeCreateStoreDraftCommand,
+    update: makeStoreUpdate,
+  });
 
 const storeMetadata = (store: Store): Record<string, number | string> => ({
   storeKey: store.key,

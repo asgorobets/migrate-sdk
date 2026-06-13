@@ -135,17 +135,19 @@ export const makeInventoryEntryUpdate = makeUpdateCommandFactory<
   label: "Inventory entry update",
 });
 
+export const makeCreateInventoryEntryDraftCommand = (
+  draft: InventoryEntryDraft
+): CreateInventoryEntryDraftCommand => ({
+  draft,
+  kind: "CreateInventoryEntryDraft",
+});
+
 export const createInventoryEntryDraftCommand = defineDestinationCommand(
   "CreateInventoryEntryDraft",
   {
     identity: true,
     make: {
-      createDraft: (
-        draft: InventoryEntryDraft
-      ): CreateInventoryEntryDraftCommand => ({
-        draft,
-        kind: "CreateInventoryEntryDraft",
-      }),
+      createDraft: makeCreateInventoryEntryDraftCommand,
     },
     schema: CreateInventoryEntryDraftCommand,
   }
@@ -162,6 +164,12 @@ export const updateInventoryEntryCommand = defineDestinationCommand(
 export const inventoryCommandGroup = defineDestinationCommandGroup(
   "inventory"
 ).add(createInventoryEntryDraftCommand, updateInventoryEntryCommand);
+
+export const makeCommercetoolsInventoryEntryCommands =
+  (): CommercetoolsInventoryEntryCommands => ({
+    createDraft: makeCreateInventoryEntryDraftCommand,
+    update: makeInventoryEntryUpdate,
+  });
 
 const inventoryEntryMetadata = (
   inventoryEntry: InventoryEntry

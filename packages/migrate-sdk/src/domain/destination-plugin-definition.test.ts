@@ -47,11 +47,11 @@ const UpsertProduct = Schema.Struct({
 });
 type UpsertProduct = typeof UpsertProduct.Type;
 
-const PublishProduct = Schema.Struct({
-  kind: Schema.Literal("PublishProduct"),
+const RetireProduct = Schema.Struct({
+  kind: Schema.Literal("RetireProduct"),
   key: Schema.String,
 });
-type PublishProduct = typeof PublishProduct.Type;
+type RetireProduct = typeof RetireProduct.Type;
 
 const UpsertInventory = Schema.Struct({
   kind: Schema.Literal("UpsertInventory"),
@@ -113,15 +113,15 @@ const upsertProduct = defineDestinationCommand("UpsertProduct", {
   schema: UpsertProduct,
 });
 
-const publishProduct = defineDestinationCommand("PublishProduct", {
+const retireProduct = defineDestinationCommand("RetireProduct", {
   identity: false,
   make: {
-    publishProduct: (key: string): PublishProduct => ({
+    retireProduct: (key: string): RetireProduct => ({
       key,
-      kind: "PublishProduct",
+      kind: "RetireProduct",
     }),
   },
-  schema: PublishProduct,
+  schema: RetireProduct,
 });
 
 const upsertInventory = defineDestinationCommand("UpsertInventory", {
@@ -137,7 +137,7 @@ const upsertInventory = defineDestinationCommand("UpsertInventory", {
 });
 
 const catalogDestination = defineDestinationPlugin("catalog").addGroup(
-  defineDestinationCommandGroup("products").add(upsertProduct, publishProduct),
+  defineDestinationCommandGroup("products").add(upsertProduct, retireProduct),
   defineDestinationCommandGroup("inventory").add(upsertInventory)
 );
 
@@ -146,7 +146,7 @@ const topLevelCatalogDestination = defineDestinationPlugin(
 ).addGroup(
   defineDestinationCommandGroup("products")
     .topLevel()
-    .add(upsertProduct, publishProduct)
+    .add(upsertProduct, retireProduct)
 );
 
 interface UnsafeDestinationHandlers {
@@ -302,13 +302,13 @@ const assertDestinationPluginDefinitionTypes = () => {
   });
 
   catalogDestination.commands.products.upsertProduct("product-key");
-  catalogDestination.commands.products.publishProduct("product-key");
+  catalogDestination.commands.products.retireProduct("product-key");
   catalogDestination.commands.inventory.upsertInventory("sku-1", 5);
   // @ts-expect-error grouped commands are not exposed at the root by default.
   catalogDestination.commands.upsertProduct("product-key");
 
   topLevelCatalogDestination.commands.upsertProduct("product-key");
-  topLevelCatalogDestination.commands.publishProduct("product-key");
+  topLevelCatalogDestination.commands.retireProduct("product-key");
   // @ts-expect-error top-level groups expose factories at the root.
   topLevelCatalogDestination.commands.products.upsertProduct("product-key");
 
@@ -318,7 +318,7 @@ const assertDestinationPluginDefinitionTypes = () => {
 
     return handlers
       .handle("UpsertProduct", () => Effect.succeed({}))
-      .handle("PublishProduct", () => Effect.succeed({}));
+      .handle("RetireProduct", () => Effect.succeed({}));
   });
 
   const namespacedFactoryReuse = defineDestinationPlugin(
@@ -381,7 +381,7 @@ const assertDestinationPluginDefinitionTypes = () => {
     const afterProducts = handlers.group("products", (products) =>
       products
         .handle("UpsertProduct", () => Effect.succeed({}))
-        .handle("PublishProduct", () => Effect.succeed({}))
+        .handle("RetireProduct", () => Effect.succeed({}))
     );
 
     // @ts-expect-error handled command groups are no longer available.
@@ -458,9 +458,9 @@ describe("destination plugin definitions", () => {
                   };
                 })
               )
-              .handle("PublishProduct", ({ command }) =>
+              .handle("RetireProduct", ({ command }) =>
                 Effect.sync(() => {
-                  events.push(`product-publish:${command.key}`);
+                  events.push(`product-retire:${command.key}`);
                   return {};
                 })
               )
@@ -485,7 +485,7 @@ describe("destination plugin definitions", () => {
       );
 
       yield* plugin.execute(
-        destination.commands.products.publishProduct("product-key"),
+        destination.commands.products.retireProduct("product-key"),
         commandContext
       );
       yield* plugin.execute(
@@ -500,7 +500,7 @@ describe("destination plugin definitions", () => {
       );
       expect(events).toEqual([
         "product-upsert:product-key",
-        "product-publish:product-key",
+        "product-retire:product-key",
         "inventory-upsert:sku-1:5",
       ]);
       expectTypeOf(destination.commands.products.upsertProduct).toEqualTypeOf<
@@ -520,8 +520,8 @@ describe("destination plugin definitions", () => {
       kind: "UpsertProduct",
     });
     expectTypeOf(
-      topLevelCatalogDestination.commands.publishProduct
-    ).toEqualTypeOf<(key: string) => PublishProduct>();
+      topLevelCatalogDestination.commands.retireProduct
+    ).toEqualTypeOf<(key: string) => RetireProduct>();
   });
 
   it("allows named group factories to reuse root command factory names", () => {

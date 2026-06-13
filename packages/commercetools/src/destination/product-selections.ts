@@ -135,17 +135,19 @@ export const makeProductSelectionUpdate = makeUpdateCommandFactory<
   label: "Product selection update",
 });
 
+export const makeCreateProductSelectionDraftCommand = (
+  draft: ProductSelectionDraft
+): CreateProductSelectionDraftCommand => ({
+  draft,
+  kind: "CreateProductSelectionDraft",
+});
+
 export const createProductSelectionDraftCommand = defineDestinationCommand(
   "CreateProductSelectionDraft",
   {
     identity: true,
     make: {
-      createDraft: (
-        draft: ProductSelectionDraft
-      ): CreateProductSelectionDraftCommand => ({
-        draft,
-        kind: "CreateProductSelectionDraft",
-      }),
+      createDraft: makeCreateProductSelectionDraftCommand,
     },
     schema: CreateProductSelectionDraftCommand,
   }
@@ -162,6 +164,12 @@ export const updateProductSelectionCommand = defineDestinationCommand(
 export const productSelectionCommandGroup = defineDestinationCommandGroup(
   "productSelections"
 ).add(createProductSelectionDraftCommand, updateProductSelectionCommand);
+
+export const makeCommercetoolsProductSelectionCommands =
+  (): CommercetoolsProductSelectionCommands => ({
+    createDraft: makeCreateProductSelectionDraftCommand,
+    update: makeProductSelectionUpdate,
+  });
 
 const productSelectionMetadata = (
   productSelection: ProductSelection
