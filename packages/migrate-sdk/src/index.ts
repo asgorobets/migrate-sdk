@@ -16,7 +16,10 @@ export type {
   SourcePluginInput,
   SourceRetryStrategy,
 } from "./domain/definition.ts";
-export { defineMigration, defineSourcePlugin } from "./domain/definition.ts";
+export {
+  defineMigration,
+  defineSourcePlugin,
+} from "./domain/definition.ts";
 
 export type {
   DefinedDestinationCommands,
@@ -108,9 +111,11 @@ export {
   MigrationStatusWarning,
 } from "./domain/status.ts";
 export type {
+  DurableMigrationStatusRequestInput,
   GetMigrationStatusesError,
   MigrationStatusRequest,
   MigrationStatusRequestInput,
+  SourceScanMigrationStatusRequestInput,
 } from "./domain/status.ts";
 
 export {
@@ -137,9 +142,11 @@ export type {
   MigrationDefinitionRegistryPlanningError,
   MigrationDefinitionRegistryRollbackError,
   MigrationDefinitionRegistryRollbackInput,
+  MigrationDefinitionRegistryDurableStatusInput,
   MigrationDefinitionRegistryRunError,
   MigrationDefinitionRegistryRunInput,
   MigrationDefinitionRegistrySelectionInput,
+  MigrationDefinitionRegistrySourceScanStatusInput,
   MigrationDefinitionRegistryStatusError,
   MigrationDefinitionRegistryStatusInput,
   MigrationDefinitionRegistryStatusReport,

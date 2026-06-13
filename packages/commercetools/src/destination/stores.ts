@@ -197,6 +197,7 @@ export const handleUpdateStore: DestinationCommandHandler<
       .pipe(Effect.mapError(toDestinationPluginError));
 
     return {
+      destinationIdentity: store.id,
       destinationVersion: String(store.version),
       metadata: storeMetadata(store),
     };

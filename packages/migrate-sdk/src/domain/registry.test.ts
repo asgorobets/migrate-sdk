@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, type Layer, Option, Schema } from "effect";
+import { expectTypeOf } from "vitest";
 import {
   type ConfiguredDestinationPlugin,
   type ConfiguredSourcePlugin,
@@ -15,6 +16,8 @@ import {
   MigrationDefinitionRegistryInvalidSelectionError,
   MigrationDefinitionRegistryLookupError,
   MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
+  type MigrationDefinitionRegistryStatusError,
+  type MigrationDefinitionRegistryStatusReport,
   MigrationDefinitionRegistryUnknownDefinitionError,
   type MigrationStore,
   type MigrationStoreError,
@@ -51,6 +54,18 @@ const source = {} as ConfiguredSourcePlugin<ArticleSource, unknown>;
 const destination = {} as ConfiguredDestinationPlugin<NoopCommand>;
 const store = {} as Layer.Layer<MigrationStore, MigrationStoreError>;
 
+interface RequiredRegistryStatusSourceService {
+  readonly _tag: "RequiredRegistryStatusSourceService";
+}
+
+const sourceRequiringService = source as ConfiguredSourcePlugin<
+  ArticleSource,
+  unknown,
+  ArticleSource,
+  never,
+  RequiredRegistryStatusSourceService
+>;
+
 const makeDefinition = (input: TestDefinitionInput) =>
   defineMigration<ArticleSource, NoopCommand>({
     id: input.id,
@@ -77,6 +92,23 @@ const makeStatusDefinition = (
       : { dependencies: input.dependencies }),
     ...(input.dependsOn === undefined ? {} : { dependsOn: input.dependsOn }),
     source,
+    destination,
+    store: input.store,
+    pipeline: () => ({ kind: "Noop" }),
+  });
+
+const makeSourceRequiredStatusDefinition = (
+  input: TestDefinitionInput & {
+    readonly store: Layer.Layer<MigrationStore, MigrationStoreError>;
+  }
+) =>
+  defineMigration({
+    id: input.id,
+    ...(input.dependencies === undefined
+      ? {}
+      : { dependencies: input.dependencies }),
+    ...(input.dependsOn === undefined ? {} : { dependsOn: input.dependsOn }),
+    source: sourceRequiringService,
     destination,
     store: input.store,
     pipeline: () => ({ kind: "Noop" }),
@@ -173,6 +205,33 @@ const makeRollbackSafetyFixture = () => {
 };
 
 describe("MigrationDefinitionRegistry", () => {
+  it("keeps durable-only status source requirements out of the public type", () => {
+    const definition = makeSourceRequiredStatusDefinition({
+      id: "articles",
+      store: InMemoryMigrationStore.layer(),
+    });
+    const registry = MigrationDefinitionRegistry.make({
+      definitions: [definition] as const,
+    });
+
+    expectTypeOf(registry.status({ all: true })).toMatchTypeOf<
+      Effect.Effect<
+        MigrationDefinitionRegistryStatusReport,
+        MigrationDefinitionRegistryStatusError,
+        never
+      >
+    >();
+    expectTypeOf(
+      registry.status({ all: true, scanSource: true })
+    ).toMatchTypeOf<
+      Effect.Effect<
+        MigrationDefinitionRegistryStatusReport,
+        MigrationDefinitionRegistryStatusError,
+        RequiredRegistryStatusSourceService
+      >
+    >();
+  });
+
   it("allows an empty immutable registry", () => {
     const registry = MigrationDefinitionRegistry.make({ definitions: [] });
 

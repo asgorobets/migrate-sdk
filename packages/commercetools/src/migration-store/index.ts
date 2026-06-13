@@ -1003,6 +1003,43 @@ const listItemStates = (
     return itemStates;
   });
 
+const summarizeItemStates = (
+  itemStates: readonly MigrationItemState[]
+): {
+  readonly failed: number;
+  readonly migrated: number;
+  readonly needsUpdate: number;
+  readonly skipped: number;
+} => {
+  const summary = {
+    failed: 0,
+    migrated: 0,
+    needsUpdate: 0,
+    skipped: 0,
+  };
+
+  for (const itemState of itemStates) {
+    switch (itemState.status) {
+      case "failed":
+        summary.failed += 1;
+        break;
+      case "migrated":
+        summary.migrated += 1;
+        break;
+      case "needs-update":
+        summary.needsUpdate += 1;
+        break;
+      case "skipped":
+        summary.skipped += 1;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return summary;
+};
+
 const readRunState = (
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions,
@@ -1115,6 +1152,14 @@ const makeService = (
     }
   );
 
+  const getItemStateSummary = Effect.fn(
+    "CommercetoolsMigrationStore.getItemStateSummary"
+  )(function* (definitionId: MigrationDefinitionId) {
+    const itemStates = yield* listItemStates(sdk, options, definitionId);
+
+    return summarizeItemStates(itemStates);
+  });
+
   const deleteItemState = Effect.fn(
     "CommercetoolsMigrationStore.deleteItemState"
   )(function* (definitionId: MigrationDefinitionId, identity: SourceIdentity) {
@@ -1170,6 +1215,12 @@ const makeService = (
 
         return runState;
       })
+  );
+
+  const getLatestRunState = Effect.fn(
+    "CommercetoolsMigrationStore.getLatestRunState"
+  )((definitionId: MigrationDefinitionId) =>
+    readLatestRunState(sdk, options, definitionId)
   );
 
   const completeRun = Effect.fn("CommercetoolsMigrationStore.completeRun")(
@@ -1250,9 +1301,11 @@ const makeService = (
     getItemState,
     listItemStates: (definitionId: MigrationDefinitionId) =>
       listItemStates(sdk, options, definitionId),
+    getItemStateSummary,
     deleteItemState,
     upsertItemState,
     createRunId: Effect.sync(() => toMigrationRunId(`run-${randomUUID()}`)),
+    getLatestRunState,
     beginRun,
     completeRun,
     failRun,

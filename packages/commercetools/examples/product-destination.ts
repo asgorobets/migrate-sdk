@@ -1,13 +1,17 @@
 import { fileURLToPath } from "node:url";
-import type { Attribute } from "@commercetools/platform-sdk";
-import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
+import type {
+  Attribute,
+  Product,
+  ProductData,
+} from "@commercetools/platform-sdk";
 import {
   CommercetoolsDestinationPlugin,
   type ProductDraftInput,
 } from "@migrate-sdk/commercetools/destination";
 import {
-  makeRecordingCommercetoolsApiRoot,
-  type RecordedCommercetoolsRequest,
+  makeScriptedCommercetoolsSdk,
+  type ScriptedCommercetoolsSdkRequest,
+  scriptedCommercetoolsSdkRoute,
 } from "@migrate-sdk/commercetools/testing";
 import { Console, Effect, Schema } from "effect";
 import {
@@ -51,13 +55,59 @@ const destinationContext = {
   sourceVersion: toSourceVersion("source-version-1"),
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null;
+
+const isProductUpdateBody = (
+  body: unknown
+): body is { readonly actions: readonly { readonly action?: unknown }[] } =>
+  isRecord(body) && Array.isArray(body.actions);
+
+const productResponse = ({
+  published,
+  version,
+}: {
+  readonly published: boolean;
+  readonly version: number;
+}): Product => {
+  const data: ProductData = {
+    attributes: [],
+    categories: [],
+    masterVariant: {
+      id: 1,
+    },
+    name: bookProductDraft.name,
+    searchKeywords: {},
+    slug: bookProductDraft.slug,
+    variants: [],
+  };
+
+  return {
+    createdAt: "2026-01-01T00:00:00.000Z",
+    id: "recording-product-id",
+    key: bookProductDraft.key,
+    lastModifiedAt: "2026-01-01T00:00:00.000Z",
+    masterData: {
+      current: data,
+      hasStagedChanges: !published,
+      published,
+      staged: data,
+    },
+    productType: {
+      id: "book",
+      typeId: "product-type",
+    },
+    version,
+  };
+};
+
 export interface ProductDestinationExampleResult {
   readonly attributes: readonly Attribute[];
   readonly created: DestinationCommandResult;
   readonly productAttributes: readonly Attribute[];
   readonly productDraftFields: readonly string[];
   readonly productDraftInventoryField: "absent" | "present";
-  readonly sdkRequests: readonly RecordedCommercetoolsRequest[];
+  readonly sdkRequests: readonly ScriptedCommercetoolsSdkRequest[];
   readonly updateActionKinds: readonly string[];
   readonly updated: DestinationCommandResult;
   readonly withActionsThenChainedUpdateActionKinds: readonly string[];
@@ -66,7 +116,21 @@ export interface ProductDestinationExampleResult {
 export const runProductDestinationExample = Effect.fn(
   "runProductDestinationExample"
 )(function* () {
-  const recording = makeRecordingCommercetoolsApiRoot();
+  const sdk = makeScriptedCommercetoolsSdk({
+    projectKey: "example-project",
+    routes: [
+      scriptedCommercetoolsSdkRoute("products.createDraft")
+        .matchBody((body) => isRecord(body) && "productType" in body)
+        .reply(productResponse({ published: false, version: 1 })),
+      scriptedCommercetoolsSdkRoute("products.update")
+        .matchBody(
+          (body) =>
+            isProductUpdateBody(body) &&
+            body.actions.some((action) => action.action === "publish")
+        )
+        .reply(productResponse({ published: true, version: 2 })),
+    ],
+  });
   const destination = CommercetoolsDestinationPlugin.make({
     productTypes: {
       book: {
@@ -74,10 +138,7 @@ export const runProductDestinationExample = Effect.fn(
         productAttributes: BookProductAttributes,
       },
     },
-    sdkLayer: CommercetoolsSdk.layerFromApiRoot({
-      apiRoot: recording.apiRoot,
-      projectKey: "example-project",
-    }),
+    sdkLayer: sdk.layer,
   });
   const destinationPlugin = yield* DestinationPlugin.pipe(
     Effect.provide(destination.layer)
@@ -206,7 +267,7 @@ export const runProductDestinationExample = Effect.fn(
       ? "present"
       : "absent",
     withActionsThenChainedUpdateActionKinds,
-    sdkRequests: recording.requests,
+    sdkRequests: sdk.requests,
     updateActionKinds,
     updated,
   } satisfies ProductDestinationExampleResult;

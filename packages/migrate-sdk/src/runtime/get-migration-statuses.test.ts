@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Schedule, Schema } from "effect";
+import { expectTypeOf } from "vitest";
 import {
   type ConfiguredDestinationPlugin,
   type ConfiguredSourcePlugin,
@@ -8,11 +9,13 @@ import {
   DuplicateSourceIdentityStatusWarning,
   defineMigration,
   defineSourcePlugin,
+  type GetMigrationStatusesError,
   getMigrationStatuses,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
   InvalidSourceItemStatusWarning,
   type MigrationItemState,
+  type MigrationStatusReport,
   MigrationStatusRequestError,
   MigrationStore,
   MigrationStoreError,
@@ -39,7 +42,23 @@ const failingSource = {
     throw new Error("durable-only status must not initialize source plugins");
   }),
   sourceSchema: ArticleSource,
-} as unknown as ConfiguredSourcePlugin<typeof ArticleSource.Type, unknown>;
+} as unknown as ConfiguredSourcePlugin<
+  typeof ArticleSource.Type,
+  unknown,
+  unknown
+>;
+
+interface RequiredStatusSourceService {
+  readonly _tag: "RequiredStatusSourceService";
+}
+
+const sourceRequiringService = failingSource as ConfiguredSourcePlugin<
+  typeof ArticleSource.Type,
+  unknown,
+  unknown,
+  never,
+  RequiredStatusSourceService
+>;
 
 const failingDestination = {
   commandDefinitions: {},
@@ -64,12 +83,24 @@ const makeStatusOnlyDefinition = (
 
 const makeStatusScanDefinition = (
   store: ReturnType<typeof InMemoryMigrationStore.layer>,
-  source: ConfiguredSourcePlugin<typeof ArticleSource.Type, unknown>,
+  source: ConfiguredSourcePlugin<typeof ArticleSource.Type, unknown, unknown>,
   id = "articles"
 ) =>
   defineMigration({
     id,
     source,
+    destination: failingDestination,
+    store,
+    pipeline: () => ({ kind: "Noop" }),
+  });
+
+const makeSourceRequiredStatusDefinition = (
+  store: ReturnType<typeof InMemoryMigrationStore.layer>,
+  id = "articles"
+) =>
+  defineMigration({
+    id,
+    source: sourceRequiringService,
     destination: failingDestination,
     store,
     pipeline: () => ({ kind: "Noop" }),
@@ -126,6 +157,32 @@ const makeObservableSource = ({
   });
 
 describe("getMigrationStatuses", () => {
+  it("keeps durable-only status source requirements out of the public type", () => {
+    const definition = makeSourceRequiredStatusDefinition(
+      InMemoryMigrationStore.layer()
+    );
+
+    expectTypeOf(
+      getMigrationStatuses({
+        definitions: [definition] as const,
+      })
+    ).toMatchTypeOf<
+      Effect.Effect<MigrationStatusReport, GetMigrationStatusesError, never>
+    >();
+    expectTypeOf(
+      getMigrationStatuses({
+        definitions: [definition] as const,
+        scanSource: true,
+      })
+    ).toMatchTypeOf<
+      Effect.Effect<
+        MigrationStatusReport,
+        GetMigrationStatusesError,
+        RequiredStatusSourceService
+      >
+    >();
+  });
+
   it.effect("returns latest run lifecycle and durable item-state counts", () =>
     Effect.gen(function* () {
       const definitionId = toMigrationDefinitionId("articles");

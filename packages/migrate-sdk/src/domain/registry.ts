@@ -83,6 +83,26 @@ export type MigrationDefinitionRegistryStatusInput =
     readonly scanSource?: boolean;
   };
 
+export type MigrationDefinitionRegistryDurableStatusInput =
+  MigrationDefinitionRegistrySelectionInput & {
+    readonly concurrency?: never;
+    readonly scanSource?: false;
+  };
+
+export type MigrationDefinitionRegistrySourceScanStatusInput =
+  MigrationDefinitionRegistrySelectionInput & {
+    readonly concurrency?: number;
+    readonly scanSource: true;
+  };
+
+type MigrationDefinitionRegistryStatusImplementationEffect = Effect.Effect<
+  MigrationDefinitionRegistryStatusReport,
+  // biome-ignore lint/suspicious/noExplicitAny: Hidden implementation signature; public overloads keep precise status errors.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Hidden implementation signature; public overloads keep precise status requirements.
+  any
+>;
+
 export interface MigrationDefinitionDependencyEdge {
   readonly fromDefinitionId: MigrationDefinitionId;
   readonly kind: "required" | "optional";
@@ -1106,11 +1126,34 @@ export class MigrationDefinitionRegistry<
   }
 
   status(
+    input: MigrationDefinitionRegistryDurableStatusInput
+  ): Effect.Effect<
+    MigrationDefinitionRegistryStatusReport,
+    MigrationDefinitionRegistryStatusError,
+    never
+  >;
+  status(
+    input: MigrationDefinitionRegistrySourceScanStatusInput
+  ): Effect.Effect<
+    MigrationDefinitionRegistryStatusReport,
+    | MigrationDefinitionRegistryStatusError
+    | RunRequestSourceLayerError<Definitions>,
+    RunRequestSourceRequirements<Definitions>
+  >;
+  status(
     input: MigrationDefinitionRegistryStatusInput
   ): Effect.Effect<
     MigrationDefinitionRegistryStatusReport,
-    MigrationDefinitionRegistryStatusError
-  > {
+    | MigrationDefinitionRegistryStatusError
+    | RunRequestSourceLayerError<Definitions>,
+    RunRequestSourceRequirements<Definitions>
+  >;
+  status(
+    input:
+      | MigrationDefinitionRegistryDurableStatusInput
+      | MigrationDefinitionRegistrySourceScanStatusInput
+      | MigrationDefinitionRegistryStatusInput
+  ): MigrationDefinitionRegistryStatusImplementationEffect {
     const definitions = this.#definitions;
     const definitionsById = this.#definitionsById;
 
@@ -1130,10 +1173,12 @@ export class MigrationDefinitionRegistry<
         includedDefinitionIds,
         selection.notices
       );
-      const statusDefinitions =
-        planDetails.includedDefinitionIdsInRegistryOrder.map((definitionId) =>
-          definitionsById.get(definitionId)
-        ) as readonly AnyMigrationDefinition[];
+      const includedDefinitionIdSet = new Set(
+        planDetails.includedDefinitionIdsInRegistryOrder
+      );
+      const statusDefinitions = definitions.filter((definition) =>
+        includedDefinitionIdSet.has(definition.id)
+      );
       const report = yield* getMigrationStatuses({
         definitions: statusDefinitions,
         ...(input.concurrency === undefined
@@ -1150,7 +1195,7 @@ export class MigrationDefinitionRegistry<
         notices: selection.notices,
         requestedDefinitionIds: selection.requestedDefinitionIds,
       };
-    });
+    }) as MigrationDefinitionRegistryStatusImplementationEffect;
   }
 
   require(

@@ -4,7 +4,6 @@ import type { MigrationReferenceLookup } from "../services/migration-reference-l
 import type { MigrationStore } from "../services/migration-store.ts";
 import {
   type AnySourcePlugin,
-  type SourcePlugin,
   SourcePlugin as SourcePluginService,
 } from "../services/source-plugin.ts";
 import type {
@@ -90,21 +89,36 @@ export interface SourcePluginImplementation<
   Source,
   Cursor,
   SourceInput = Source,
+  SourceRequirements = never,
 > {
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
   ) => Effect.Effect<
     SourceReadResultInput<SourceInput, Cursor>,
-    SourcePluginError
+    SourcePluginError,
+    SourceRequirements
   >;
   readonly readByIdentity: (
     identity: SourceIdentityInput
-  ) => Effect.Effect<SourceItemInput<SourceInput> | null, SourcePluginError>;
+  ) => Effect.Effect<
+    SourceItemInput<SourceInput> | null,
+    SourcePluginError,
+    SourceRequirements
+  >;
 }
 
-export interface SourcePluginInput<Source, Cursor, SourceInput = Source>
-  extends SourcePluginImplementation<Source, Cursor, SourceInput> {
+export interface SourcePluginInput<
+  Source,
+  Cursor,
+  SourceInput = Source,
+  SourceRequirements = never,
+> extends SourcePluginImplementation<
+    Source,
+    Cursor,
+    SourceInput,
+    SourceRequirements
+  > {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
 }
@@ -113,13 +127,19 @@ export interface SourcePluginFactoryInput<
   Source,
   Cursor,
   SourceInput = Source,
+  SourceRequirements = never,
 > {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
-  readonly make: () => SourcePluginImplementation<Source, Cursor, SourceInput>;
+  readonly make: () => SourcePluginImplementation<
+    Source,
+    Cursor,
+    SourceInput,
+    SourceRequirements
+  >;
   readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
 }
 
-export interface SourcePluginLayerInput<
+interface SourcePluginLayerInput<
   Source,
   _Cursor,
   SourceInput = Source,
@@ -182,11 +202,22 @@ const makeConfiguredSourcePlugin = <
   sourceSchema: input.sourceSchema,
 });
 
-export const defineSourcePlugin = <Source, Cursor, SourceInput = Source>(
+export const defineSourcePlugin = <
+  Source,
+  Cursor,
+  SourceInput = Source,
+  SourceRequirements = never,
+>(
   input:
-    | SourcePluginFactoryInput<Source, Cursor, SourceInput>
-    | SourcePluginInput<Source, Cursor, SourceInput>
-): ConfiguredSourcePlugin<Source, Cursor, SourceInput> => {
+    | SourcePluginFactoryInput<Source, Cursor, SourceInput, SourceRequirements>
+    | SourcePluginInput<Source, Cursor, SourceInput, SourceRequirements>
+): ConfiguredSourcePlugin<
+  Source,
+  Cursor,
+  SourceInput,
+  never,
+  SourceRequirements
+> => {
   const makeImplementation =
     "make" in input
       ? input.make
@@ -197,55 +228,34 @@ export const defineSourcePlugin = <Source, Cursor, SourceInput = Source>(
         });
 
   return makeConfiguredSourcePlugin({
-    layer: Layer.sync(
+    layer: Layer.effect(
       SourcePluginService,
-      (): SourcePlugin<Source, Cursor, SourceInput> => {
+      Effect.gen(function* () {
         const implementation = makeImplementation();
+        const services = yield* Effect.context<SourceRequirements>();
 
         return {
           cursorSchema: input.cursorSchema,
           lookupStrategy: implementation.lookupStrategy,
           read: (cursor) =>
-            implementation
-              .read(cursor)
-              .pipe(Effect.map((result) => normalizeSourceReadResult(result))),
+            implementation.read(cursor).pipe(
+              Effect.provideContext(services),
+              Effect.map((result) => normalizeSourceReadResult(result))
+            ),
           readByIdentity: (identity) =>
-            implementation
-              .readByIdentity(identity)
-              .pipe(
-                Effect.map((sourceItem) =>
-                  sourceItem === null ? null : makeSourceItem(sourceItem)
-                )
-              ),
+            implementation.readByIdentity(identity).pipe(
+              Effect.provideContext(services),
+              Effect.map((sourceItem) =>
+                sourceItem === null ? null : makeSourceItem(sourceItem)
+              )
+            ),
           sourceSchema: input.sourceSchema,
         };
-      }
+      })
     ),
     sourceSchema: input.sourceSchema,
   });
 };
-
-export const defineSourcePluginLayer = <
-  Source,
-  Cursor,
-  SourceInput = Source,
-  SourceLayerError = never,
-  SourceRequirements = never,
->(
-  input: SourcePluginLayerInput<
-    Source,
-    Cursor,
-    SourceInput,
-    SourceLayerError,
-    SourceRequirements
-  >
-): ConfiguredSourcePlugin<
-  Source,
-  Cursor,
-  SourceInput,
-  SourceLayerError,
-  SourceRequirements
-> => makeConfiguredSourcePlugin(input);
 
 const normalizeSourceReadResult = <SourceInput, Cursor>(
   result: SourceReadResultInput<SourceInput, Cursor>

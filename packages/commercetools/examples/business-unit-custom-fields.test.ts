@@ -1,11 +1,16 @@
-import type { BusinessUnitDraft } from "@commercetools/platform-sdk";
+import type {
+  BusinessUnit,
+  BusinessUnitDraft,
+} from "@commercetools/platform-sdk";
 import { describe, expect, it } from "@effect/vitest";
-import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
 import {
   type BusinessUnitUpdateActionByName,
   CommercetoolsDestinationPlugin,
 } from "@migrate-sdk/commercetools/destination";
-import { makeRecordingCommercetoolsApiRoot } from "@migrate-sdk/commercetools/testing";
+import {
+  makeScriptedCommercetoolsSdk,
+  scriptedCommercetoolsSdkRoute,
+} from "@migrate-sdk/commercetools/testing";
 import { Effect, Schema } from "effect";
 import {
   DestinationPlugin,
@@ -29,8 +34,84 @@ const destinationContext = {
   sourceVersion: toSourceVersion("source-version-1"),
 };
 
+const businessUnitResponse = ({
+  draft,
+  version,
+}: {
+  readonly draft: BusinessUnitDraft;
+  readonly version: number;
+}): BusinessUnit => {
+  const topLevelUnit: BusinessUnit["topLevelUnit"] = {
+    key:
+      draft.unitType === "Company"
+        ? draft.key
+        : (draft.parentUnit.key ?? "recording-top-level-business-unit"),
+    typeId: "business-unit",
+  };
+  const shared = {
+    addresses: [],
+    approvalRuleMode:
+      draft.approvalRuleMode ??
+      (draft.unitType === "Company" ? "Explicit" : "ExplicitAndFromParent"),
+    associateMode:
+      draft.associateMode ??
+      (draft.unitType === "Company" ? "Explicit" : "ExplicitAndFromParent"),
+    associates: [],
+    billingAddressIds: [],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    id: "recording-business-unit-id",
+    key: draft.key,
+    lastModifiedAt: "2026-01-01T00:00:00.000Z",
+    name: draft.name,
+    shippingAddressIds: [],
+    status: draft.status ?? "Active",
+    storeMode:
+      draft.storeMode ??
+      (draft.unitType === "Company" ? "Explicit" : "FromParent"),
+    topLevelUnit,
+    version,
+  } satisfies Omit<BusinessUnit, "unitType">;
+
+  if (draft.unitType === "Company") {
+    return {
+      ...shared,
+      unitType: "Company",
+    };
+  }
+
+  return {
+    ...shared,
+    parentUnit: {
+      key: draft.parentUnit.key ?? "recording-parent-business-unit",
+      typeId: "business-unit",
+    },
+    unitType: "Division",
+  };
+};
+
 const makeDestination = () => {
-  const recording = makeRecordingCommercetoolsApiRoot();
+  const recording = makeScriptedCommercetoolsSdk({
+    projectKey: "example-project",
+    routes: [
+      scriptedCommercetoolsSdkRoute("businessUnits.createDraft").replyWith(
+        (request) =>
+          businessUnitResponse({
+            draft: request.body as BusinessUnitDraft,
+            version: 1,
+          })
+      ),
+      scriptedCommercetoolsSdkRoute("businessUnits.update").reply(
+        businessUnitResponse({
+          draft: {
+            key: "buyer-org",
+            name: "Buyer Org",
+            unitType: "Company",
+          },
+          version: 2,
+        })
+      ),
+    ],
+  });
 
   const destination = CommercetoolsDestinationPlugin.make({
     customTypes: {
@@ -39,10 +120,7 @@ const makeDestination = () => {
         typeKey: "repoBusinessUnit",
       },
     },
-    sdkLayer: CommercetoolsSdk.layerFromApiRoot({
-      apiRoot: recording.apiRoot,
-      projectKey: "example-project",
-    }),
+    sdkLayer: recording.layer,
   });
 
   return {
@@ -273,6 +351,7 @@ describe("business unit custom field helpers", () => {
 
         expect(created.destinationIdentity).toBe("recording-business-unit-id");
         expect(created.destinationVersion).toBe("1");
+        expect(updated.destinationIdentity).toBe("recording-business-unit-id");
         expect(updated.destinationVersion).toBe("2");
         expect(createRequest?.body).toEqual(draft);
         expect(updateRequest?.body).toEqual({

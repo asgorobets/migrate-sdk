@@ -1,12 +1,18 @@
-import type { CustomerDraft } from "@commercetools/platform-sdk";
+import type {
+  Customer,
+  CustomerDraft,
+  CustomerSignInResult,
+} from "@commercetools/platform-sdk";
 import { describe, expect, it } from "@effect/vitest";
-import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
 import {
   CommercetoolsDestinationPlugin,
   type CustomerUpdateActionByName,
   UpdateCustomerCommand,
 } from "@migrate-sdk/commercetools/destination";
-import { makeRecordingCommercetoolsApiRoot } from "@migrate-sdk/commercetools/testing";
+import {
+  makeScriptedCommercetoolsSdk,
+  scriptedCommercetoolsSdkRoute,
+} from "@migrate-sdk/commercetools/testing";
 import { Effect, Schema } from "effect";
 import {
   DestinationPlugin,
@@ -23,14 +29,63 @@ const destinationContext = {
   sourceVersion: toSourceVersion("source-version-1"),
 };
 
+const customerResponse = ({
+  draft,
+  version,
+}: {
+  readonly draft: CustomerDraft;
+  readonly version: number;
+}): Customer => ({
+  addresses: [],
+  authenticationMode: draft.authenticationMode ?? "Password",
+  billingAddressIds: [],
+  createdAt: "2026-01-01T00:00:00.000Z",
+  customerGroupAssignments: [],
+  email: draft.email,
+  id: "recording-customer-id",
+  isEmailVerified: draft.isEmailVerified ?? false,
+  ...(draft.key === undefined ? {} : { key: draft.key }),
+  lastModifiedAt: "2026-01-01T00:00:00.000Z",
+  shippingAddressIds: [],
+  stores: [],
+  version,
+});
+
+const customerSignInResponse = ({
+  draft,
+  version,
+}: {
+  readonly draft: CustomerDraft;
+  readonly version: number;
+}): CustomerSignInResult => ({
+  customer: customerResponse({ draft, version }),
+});
+
 const makeDestination = () => {
-  const recording = makeRecordingCommercetoolsApiRoot();
+  const recording = makeScriptedCommercetoolsSdk({
+    projectKey: "example-project",
+    routes: [
+      scriptedCommercetoolsSdkRoute("customers.createDraft").replyWith(
+        (request) =>
+          customerSignInResponse({
+            draft: request.body as CustomerDraft,
+            version: 1,
+          })
+      ),
+      scriptedCommercetoolsSdkRoute("customers.update").reply(
+        customerResponse({
+          draft: {
+            email: "ada.lovelace@example.com",
+            key: "ada-lovelace",
+          },
+          version: 2,
+        })
+      ),
+    ],
+  });
 
   const destination = CommercetoolsDestinationPlugin.make({
-    sdkLayer: CommercetoolsSdk.layerFromApiRoot({
-      apiRoot: recording.apiRoot,
-      projectKey: "example-project",
-    }),
+    sdkLayer: recording.layer,
   });
 
   return {

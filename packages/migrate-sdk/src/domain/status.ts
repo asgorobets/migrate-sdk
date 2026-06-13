@@ -86,6 +86,24 @@ export interface MigrationStatusRequestInput<
   readonly scanSource?: boolean;
 }
 
+export type DurableMigrationStatusRequestInput<
+  Definitions extends
+    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
+> = Omit<
+  MigrationStatusRequestInput<Definitions>,
+  "concurrency" | "scanSource"
+> & {
+  readonly concurrency?: never;
+  readonly scanSource?: false;
+};
+
+export type SourceScanMigrationStatusRequestInput<
+  Definitions extends
+    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
+> = Omit<MigrationStatusRequestInput<Definitions>, "scanSource"> & {
+  readonly scanSource: true;
+};
+
 export interface MigrationStatusRequest<
   Definitions extends
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],

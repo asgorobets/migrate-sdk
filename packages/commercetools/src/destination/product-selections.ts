@@ -219,6 +219,7 @@ export const handleUpdateProductSelection: DestinationCommandHandler<
       .pipe(Effect.mapError(toDestinationPluginError));
 
     return {
+      destinationIdentity: productSelection.id,
       destinationVersion: String(productSelection.version),
       metadata: productSelectionMetadata(productSelection),
     };

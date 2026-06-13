@@ -601,8 +601,9 @@ It uses:
 - `CommercetoolsDestinationPlugin` for product draft creation
 - `CommercetoolsMigrationStore` for Custom Object-backed cursors, item state,
   run state, and locks
-- the recording Commercetools API root from the package testing helpers, so the
-  example can be typechecked and tested without live credentials
+- the scripted Commercetools SDK and scripted Custom Object routes from the
+  package testing helpers, so the example can be typechecked and tested without
+  live credentials
 
 Run it with:
 
@@ -611,15 +612,16 @@ pnpm --filter @migrate-sdk/commercetools example:product-catalog-store
 ```
 
 To run the same catalog migration against a real Commercetools project, provide
-credentials in your shell environment and run the live script:
+credentials in your shell environment or in
+`packages/commercetools/examples/.env`, then run the live script:
 
 ```sh
-CT_PROJECT_KEY="your-project" \
-CT_CLIENT_ID="your-client-id" \
-CT_CLIENT_SECRET="your-client-secret" \
-CT_AUTH_URL="https://auth.<region>.commercetools.com" \
-CT_API_URL="https://api.<region>.commercetools.com" \
-CT_SCOPES="manage_project:your-project" \
+CTP_PROJECT_KEY="your-project" \
+CTP_CLIENT_ID="your-client-id" \
+CTP_CLIENT_SECRET="your-client-secret" \
+CTP_AUTH_URL="https://auth.<region>.commercetools.com" \
+CTP_API_URL="https://api.<region>.commercetools.com" \
+CTP_SCOPES="manage_project:your-project" \
 pnpm --filter @migrate-sdk/commercetools example:product-catalog-store:live
 ```
 
@@ -629,6 +631,43 @@ with namespace `product-catalog`, and it creates a real product with key
 type with attributes matching the example schemas. Use a disposable project or
 clean up the product and Custom Objects manually while maintenance cleanup
 tooling is still future work.
+
+The package also includes a CLI-driven live Business Unit scratchpad at
+`packages/commercetools/examples/migrate.config.ts`.
+
+It wires one real Commercetools API root into:
+
+- `CommercetoolsSourcePlugin` for loading existing Business Units
+- `CommercetoolsDestinationPlugin` for updating those Business Units
+- `CommercetoolsMigrationStore` for storing migration state in Commercetools
+  Custom Objects
+
+Edit the batch size or migration body directly in
+`packages/commercetools/examples/migrate.config.ts` and
+`packages/commercetools/examples/business-unit-static-field-migration.ts`. The
+scratchpad loads Business Units with `CommercetoolsSourcePlugin.businessUnits(...)`,
+then emits a `setContactEmail` update using each Business Unit's current
+`contactEmail`, so it exercises source, destination, and store wiring without a
+fixture key. Credentials can stay in your shell environment or in
+`packages/commercetools/examples/.env`:
+
+```sh
+pnpm --filter @migrate-sdk/commercetools example:business-units:live
+```
+
+The migration writes `setContactEmail` update actions for Business Units that
+already have a `contactEmail`; Business Units without one are skipped. State is
+stored in container `migrate-sdk-examples` with namespace
+`business-unit-static-field`.
+
+With the same environment loaded, inspect the plan without executing updates:
+
+```sh
+pnpm --filter @migrate-sdk/commercetools exec migrate run \
+  --config examples/migrate.config.ts \
+  --plan \
+  business-unit-static-field
+```
 
 Future operational work should add explicit force-unlock, state export,
 cleanup, and live integration-test flows. Those should be separate tools or

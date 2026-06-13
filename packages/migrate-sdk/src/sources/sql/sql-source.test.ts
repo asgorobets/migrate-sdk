@@ -311,12 +311,9 @@ describe("SqlSourcePlugin", () => {
     "reads source items and looks up identities through a provided SQL client",
     () =>
       Effect.gen(function* () {
-        const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([articleRows, [articleRows[1]]]);
-        const plugin = yield* SourcePlugin.pipe(
-          Effect.provide(source.layer),
-          Effect.provide(fakeSql.layer)
-        );
+        const source = makeSqlArticleSource().provide(fakeSql.layer);
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
         const page = yield* plugin.read(null);
 
@@ -398,12 +395,11 @@ describe("SqlSourcePlugin", () => {
 
   it.effect("fails reads when batchSize is not a positive integer", () =>
     Effect.gen(function* () {
-      const source = makeSqlArticleSource({ batchSize: 0 });
       const fakeSql = makeFakeSqlClient([articleRows]);
-      const plugin = yield* SourcePlugin.pipe(
-        Effect.provide(source.layer),
-        Effect.provide(fakeSql.layer)
+      const source = makeSqlArticleSource({ batchSize: 0 }).provide(
+        fakeSql.layer
       );
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
       const error = yield* Effect.flip(plugin.read(null));
 
@@ -420,17 +416,14 @@ describe("SqlSourcePlugin", () => {
     "fails read windows when a returned row has no cursor metadata",
     () =>
       Effect.gen(function* () {
+        const fakeSql = makeFakeSqlClient([[articleRows[0]]]);
         const source = makeSqlArticleSource({
           getSourceMetadata: (row, context) => ({
             ...getSqlArticleMetadata(row, context),
             cursor: undefined as unknown as SqlArticleCursor,
           }),
-        });
-        const fakeSql = makeFakeSqlClient([[articleRows[0]]]);
-        const plugin = yield* SourcePlugin.pipe(
-          Effect.provide(source.layer),
-          Effect.provide(fakeSql.layer)
-        );
+        }).provide(fakeSql.layer);
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
         const error = yield* Effect.flip(plugin.read(null));
 
@@ -449,7 +442,6 @@ describe("SqlSourcePlugin", () => {
     "fails read windows when metadata extraction returns a failure",
     () =>
       Effect.gen(function* () {
-        const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([
           [
             {
@@ -458,10 +450,8 @@ describe("SqlSourcePlugin", () => {
             },
           ],
         ]);
-        const plugin = yield* SourcePlugin.pipe(
-          Effect.provide(source.layer),
-          Effect.provide(fakeSql.layer)
-        );
+        const source = makeSqlArticleSource().provide(fakeSql.layer);
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
         const error = yield* Effect.flip(plugin.read(null));
 
@@ -474,7 +464,6 @@ describe("SqlSourcePlugin", () => {
 
   it.effect("fails lookups when metadata extraction returns a failure", () =>
     Effect.gen(function* () {
-      const source = makeSqlArticleSource();
       const fakeSql = makeFakeSqlClient([
         [
           {
@@ -483,10 +472,8 @@ describe("SqlSourcePlugin", () => {
           },
         ],
       ]);
-      const plugin = yield* SourcePlugin.pipe(
-        Effect.provide(source.layer),
-        Effect.provide(fakeSql.layer)
-      );
+      const source = makeSqlArticleSource().provide(fakeSql.layer);
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
       const error = yield* Effect.flip(
         plugin.readByIdentity(toSourceIdentity("article-1"))
@@ -508,12 +495,9 @@ describe("SqlSourcePlugin", () => {
           id: articleRows[0].id,
         },
       ] satisfies readonly SqlArticleRow[];
-      const source = makeSqlArticleSource();
       const fakeSql = makeFakeSqlClient([duplicateRows]);
-      const plugin = yield* SourcePlugin.pipe(
-        Effect.provide(source.layer),
-        Effect.provide(fakeSql.layer)
-      );
+      const source = makeSqlArticleSource().provide(fakeSql.layer);
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
       const error = yield* Effect.flip(plugin.read(null));
 
@@ -531,12 +515,9 @@ describe("SqlSourcePlugin", () => {
 
   it.effect("fails lookups when the SQL statement returns multiple rows", () =>
     Effect.gen(function* () {
-      const source = makeSqlArticleSource();
       const fakeSql = makeFakeSqlClient([articleRows]);
-      const plugin = yield* SourcePlugin.pipe(
-        Effect.provide(source.layer),
-        Effect.provide(fakeSql.layer)
-      );
+      const source = makeSqlArticleSource().provide(fakeSql.layer);
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
       const error = yield* Effect.flip(
         plugin.readByIdentity(toSourceIdentity("article-1"))
@@ -557,12 +538,9 @@ describe("SqlSourcePlugin", () => {
     "fails lookups when returned metadata does not match the requested identity",
     () =>
       Effect.gen(function* () {
-        const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([[articleRows[1]]]);
-        const plugin = yield* SourcePlugin.pipe(
-          Effect.provide(source.layer),
-          Effect.provide(fakeSql.layer)
-        );
+        const source = makeSqlArticleSource().provide(fakeSql.layer);
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
         const error = yield* Effect.flip(
           plugin.readByIdentity(toSourceIdentity("article-1"))
@@ -608,12 +586,9 @@ describe("SqlSourcePlugin", () => {
     "returns no cursor for empty reads and no item for empty lookups",
     () =>
       Effect.gen(function* () {
-        const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([[], []]);
-        const plugin = yield* SourcePlugin.pipe(
-          Effect.provide(source.layer),
-          Effect.provide(fakeSql.layer)
-        );
+        const source = makeSqlArticleSource().provide(fakeSql.layer);
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
         const page = yield* plugin.read(null);
         const item = yield* plugin.readByIdentity(toSourceIdentity("missing"));
@@ -627,13 +602,10 @@ describe("SqlSourcePlugin", () => {
 
   it.effect("normalizes SQL execution failures through SourcePluginError", () =>
     Effect.gen(function* () {
-      const source = makeSqlArticleSource();
       const cause = new Error("database unavailable");
       const fakeSql = makeFakeSqlClient([sqlFailure(cause)]);
-      const plugin = yield* SourcePlugin.pipe(
-        Effect.provide(source.layer),
-        Effect.provide(fakeSql.layer)
-      );
+      const source = makeSqlArticleSource().provide(fakeSql.layer);
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
       const error = yield* Effect.flip(plugin.read(null));
 
@@ -647,8 +619,8 @@ describe("SqlSourcePlugin", () => {
     "passes decoded SQL rows into the transformation pipeline through the runner",
     () =>
       Effect.gen(function* () {
-        const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([[articleRows[0]], []]);
+        const source = makeSqlArticleSource().provide(fakeSql.layer);
         const storeState = InMemoryMigrationStore.makeState();
         const destination = InMemoryDestinationPlugin.makeEntries({
           commands: {
@@ -676,16 +648,10 @@ describe("SqlSourcePlugin", () => {
         });
 
         expectTypeOf(runMigration(definition)).toMatchTypeOf<
-          Effect.Effect<
-            MigrationRunSummary,
-            RunMigrationError,
-            SqlClient.SqlClient
-          >
+          Effect.Effect<MigrationRunSummary, RunMigrationError, never>
         >();
 
-        const summary = yield* runMigration(definition).pipe(
-          Effect.provide(fakeSql.layer)
-        );
+        const summary = yield* runMigration(definition);
 
         expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts).toEqual({
@@ -952,12 +918,12 @@ describe("SqlSourcePlugin", () => {
     "stores invalid SQL row payloads as failed item state through the runner",
     () =>
       Effect.gen(function* () {
-        const source = makeSqlArticleSource();
         const invalidRow = {
           ...articleRows[0],
           views: null as unknown as string,
         } satisfies SqlArticleRow;
         const fakeSql = makeFakeSqlClient([[invalidRow], []]);
+        const source = makeSqlArticleSource().provide(fakeSql.layer);
         const storeState = InMemoryMigrationStore.makeState();
         const destination = InMemoryDestinationPlugin.makeEntries({
           commands: {
@@ -984,9 +950,7 @@ describe("SqlSourcePlugin", () => {
           store: InMemoryMigrationStore.layer(storeState),
         });
 
-        const summary = yield* runMigration(definition).pipe(
-          Effect.provide(fakeSql.layer)
-        );
+        const summary = yield* runMigration(definition);
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("sql-articles", "article-1")
         );

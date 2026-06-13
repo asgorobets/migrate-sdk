@@ -1,12 +1,14 @@
-import type { StoreDraft } from "@commercetools/platform-sdk";
+import type { Store, StoreDraft } from "@commercetools/platform-sdk";
 import { describe, expect, it } from "@effect/vitest";
-import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
 import {
   CommercetoolsDestinationPlugin,
   type StoreUpdateActionByName,
   UpdateStoreCommand,
 } from "@migrate-sdk/commercetools/destination";
-import { makeRecordingCommercetoolsApiRoot } from "@migrate-sdk/commercetools/testing";
+import {
+  makeScriptedCommercetoolsSdk,
+  scriptedCommercetoolsSdkRoute,
+} from "@migrate-sdk/commercetools/testing";
 import { Effect, Schema } from "effect";
 import {
   DestinationPlugin,
@@ -23,14 +25,67 @@ const destinationContext = {
   sourceVersion: toSourceVersion("source-version-1"),
 };
 
+const storeResponse = ({
+  draft,
+  version,
+}: {
+  readonly draft: StoreDraft;
+  readonly version: number;
+}): Store => ({
+  countries: draft.countries ?? [],
+  createdAt: "2026-01-01T00:00:00.000Z",
+  distributionChannels: [],
+  id: "recording-store-id",
+  key: draft.key,
+  languages: draft.languages ?? [],
+  lastModifiedAt: "2026-01-01T00:00:00.000Z",
+  ...(draft.name === undefined ? {} : { name: draft.name }),
+  productSelections: (draft.productSelections ?? []).map((setting) => ({
+    active: setting.active ?? false,
+    productSelection: {
+      id:
+        setting.productSelection.id ??
+        setting.productSelection.key ??
+        "recording-product-selection-id",
+      typeId: "product-selection",
+    },
+  })),
+  supplyChannels: [],
+  version,
+});
+
 const makeDestination = () => {
-  const recording = makeRecordingCommercetoolsApiRoot();
+  const recording = makeScriptedCommercetoolsSdk({
+    projectKey: "example-project",
+    routes: [
+      scriptedCommercetoolsSdkRoute("stores.createDraft").replyWith((request) =>
+        storeResponse({
+          draft: request.body as StoreDraft,
+          version: 1,
+        })
+      ),
+      scriptedCommercetoolsSdkRoute("stores.update").reply(
+        storeResponse({
+          draft: {
+            key: "example-store",
+            productSelections: [
+              {
+                active: true,
+                productSelection: {
+                  key: "featured-selection",
+                  typeId: "product-selection",
+                },
+              },
+            ],
+          },
+          version: 2,
+        })
+      ),
+    ],
+  });
 
   const destination = CommercetoolsDestinationPlugin.make({
-    sdkLayer: CommercetoolsSdk.layerFromApiRoot({
-      apiRoot: recording.apiRoot,
-      projectKey: "example-project",
-    }),
+    sdkLayer: recording.layer,
   });
 
   return {

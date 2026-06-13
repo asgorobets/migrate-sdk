@@ -204,6 +204,7 @@ export const handleUpdateCustomer: DestinationCommandHandler<
       .pipe(Effect.mapError(toDestinationPluginError));
 
     return {
+      destinationIdentity: customer.id,
       destinationVersion: String(customer.version),
       metadata: customerMetadata(customer),
     };

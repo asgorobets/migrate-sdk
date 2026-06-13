@@ -93,7 +93,7 @@ const source = SqlSourcePlugin.make({
       from legacy_articles
       where id = ${identity}
     `,
-});
+}).provide(pgClientLayer);
 
 const definition = defineMigration({
   id: "legacy-articles",
@@ -103,11 +103,11 @@ const definition = defineMigration({
   store,
 });
 
-yield* runMigration(definition).pipe(Effect.provide(pgClientLayer));
+yield* runMigration(definition);
 ```
 
-If a migration config should own a specific SQL connection, close the source
-requirement on the configured plugin instead:
+If a migration config should own more than one SQL connection, close each source
+requirement on its configured plugin:
 
 ```ts
 const legacySource = SqlSourcePlugin.make({

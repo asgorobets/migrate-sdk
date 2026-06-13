@@ -1,12 +1,17 @@
-import type { ProductSelectionDraft } from "@commercetools/platform-sdk";
+import type {
+  ProductSelection,
+  ProductSelectionDraft,
+} from "@commercetools/platform-sdk";
 import { describe, expect, it } from "@effect/vitest";
-import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
 import {
   CommercetoolsDestinationPlugin,
   type ProductSelectionUpdateActionByName,
   UpdateProductSelectionCommand,
 } from "@migrate-sdk/commercetools/destination";
-import { makeRecordingCommercetoolsApiRoot } from "@migrate-sdk/commercetools/testing";
+import {
+  makeScriptedCommercetoolsSdk,
+  scriptedCommercetoolsSdkRoute,
+} from "@migrate-sdk/commercetools/testing";
 import { Effect, Schema } from "effect";
 import {
   DestinationPlugin,
@@ -23,14 +28,55 @@ const destinationContext = {
   sourceVersion: toSourceVersion("source-version-1"),
 };
 
+const productSelectionResponse = ({
+  draft,
+  productCount,
+  version,
+}: {
+  readonly draft: ProductSelectionDraft;
+  readonly productCount: number;
+  readonly version: number;
+}): ProductSelection => ({
+  createdAt: "2026-01-01T00:00:00.000Z",
+  id: "recording-product-selection-id",
+  ...(draft.key === undefined ? {} : { key: draft.key }),
+  lastModifiedAt: "2026-01-01T00:00:00.000Z",
+  mode: draft.mode ?? "Individual",
+  name: draft.name,
+  productCount,
+  version,
+});
+
 const makeDestination = () => {
-  const recording = makeRecordingCommercetoolsApiRoot();
+  const recording = makeScriptedCommercetoolsSdk({
+    projectKey: "example-project",
+    routes: [
+      scriptedCommercetoolsSdkRoute("productSelections.createDraft").replyWith(
+        (request) =>
+          productSelectionResponse({
+            draft: request.body as ProductSelectionDraft,
+            productCount: 0,
+            version: 1,
+          })
+      ),
+      scriptedCommercetoolsSdkRoute("productSelections.update").reply(
+        productSelectionResponse({
+          draft: {
+            key: "example-selection-updated",
+            mode: "Individual",
+            name: {
+              "en-US": "Example Product Selection Updated",
+            },
+          },
+          productCount: 1,
+          version: 2,
+        })
+      ),
+    ],
+  });
 
   const destination = CommercetoolsDestinationPlugin.make({
-    sdkLayer: CommercetoolsSdk.layerFromApiRoot({
-      apiRoot: recording.apiRoot,
-      projectKey: "example-project",
-    }),
+    sdkLayer: recording.layer,
   });
 
   return {

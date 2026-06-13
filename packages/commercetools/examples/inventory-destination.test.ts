@@ -1,12 +1,17 @@
-import type { InventoryEntryDraft } from "@commercetools/platform-sdk";
+import type {
+  InventoryEntry,
+  InventoryEntryDraft,
+} from "@commercetools/platform-sdk";
 import { describe, expect, it } from "@effect/vitest";
-import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
 import {
   CommercetoolsDestinationPlugin,
   type InventoryEntryUpdateActionByName,
   UpdateInventoryEntryCommand,
 } from "@migrate-sdk/commercetools/destination";
-import { makeRecordingCommercetoolsApiRoot } from "@migrate-sdk/commercetools/testing";
+import {
+  makeScriptedCommercetoolsSdk,
+  scriptedCommercetoolsSdkRoute,
+} from "@migrate-sdk/commercetools/testing";
 import { Effect, Schema } from "effect";
 import {
   DestinationPlugin,
@@ -23,14 +28,49 @@ const destinationContext = {
   sourceVersion: toSourceVersion("source-version-1"),
 };
 
+const inventoryEntryResponse = ({
+  draft,
+  version,
+}: {
+  readonly draft: InventoryEntryDraft;
+  readonly version: number;
+}): InventoryEntry => ({
+  availableQuantity: draft.quantityOnStock,
+  createdAt: "2026-01-01T00:00:00.000Z",
+  id: "recording-inventory-entry-id",
+  ...(draft.key === undefined ? {} : { key: draft.key }),
+  lastModifiedAt: "2026-01-01T00:00:00.000Z",
+  quantityOnStock: draft.quantityOnStock,
+  sku: draft.sku,
+  version,
+});
+
 const makeDestination = () => {
-  const recording = makeRecordingCommercetoolsApiRoot();
+  const recording = makeScriptedCommercetoolsSdk({
+    projectKey: "example-project",
+    routes: [
+      scriptedCommercetoolsSdkRoute("inventory.createDraft").replyWith(
+        (request) =>
+          inventoryEntryResponse({
+            draft: request.body as InventoryEntryDraft,
+            version: 1,
+          })
+      ),
+      scriptedCommercetoolsSdkRoute("inventory.update").reply(
+        inventoryEntryResponse({
+          draft: {
+            key: "example-book-inventory",
+            quantityOnStock: 20,
+            sku: "example-book-paperback",
+          },
+          version: 2,
+        })
+      ),
+    ],
+  });
 
   const destination = CommercetoolsDestinationPlugin.make({
-    sdkLayer: CommercetoolsSdk.layerFromApiRoot({
-      apiRoot: recording.apiRoot,
-      projectKey: "example-project",
-    }),
+    sdkLayer: recording.layer,
   });
 
   return {

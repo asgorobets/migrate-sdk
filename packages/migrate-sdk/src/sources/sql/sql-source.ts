@@ -1,9 +1,8 @@
-import { Effect, Layer, type Schema } from "effect";
+import { Effect, type Layer, type Schema } from "effect";
 import { SqlClient, type Statement } from "effect/unstable/sql";
 import {
   type ConfiguredSourcePlugin,
   defineSourcePlugin,
-  defineSourcePluginLayer,
   type SourcePayloadSchema,
   type SourcePluginImplementation,
   type SourceReadResultInput,
@@ -15,10 +14,7 @@ import type {
 } from "../../domain/ids.ts";
 import { toSourceIdentity } from "../../domain/ids.ts";
 import type { SourceItemInput } from "../../domain/source.ts";
-import {
-  type AnySourcePlugin,
-  SourcePlugin as SourcePluginService,
-} from "../../services/source-plugin.ts";
+import type { AnySourcePlugin } from "../../services/source-plugin.ts";
 import {
   makeSqlSourceBatchSizeError,
   makeSqlSourceExecutionError,
@@ -202,16 +198,23 @@ const readRows = <Source, Cursor, SourceInput>(
   });
 
 const makeImplementation = <Source, Cursor, SourceInput>(
-  options: SqlSourceOptions<Source, Cursor, SourceInput>,
-  sql: SqlClient.SqlClient
-): SourcePluginImplementation<Source, Cursor, SourceInput> => {
-  const read = Effect.fn("SqlSource.read")((cursor: Cursor | null) =>
-    readRows(options, sql, cursor)
-  );
+  options: SqlSourceOptions<Source, Cursor, SourceInput>
+): SourcePluginImplementation<
+  Source,
+  Cursor,
+  SourceInput,
+  SqlClient.SqlClient
+> => {
+  const read = Effect.fn("SqlSource.read")(function* (cursor: Cursor | null) {
+    const sql = yield* SqlClient.SqlClient;
+
+    return yield* readRows(options, sql, cursor);
+  });
 
   const readByIdentity = Effect.fn("SqlSource.readByIdentity")(function* (
     identity: SourceIdentityInput
   ) {
+    const sql = yield* SqlClient.SqlClient;
     const rows = yield* executeStatement(
       "readByIdentity",
       options.lookup(sql, identity)
@@ -260,20 +263,9 @@ const make = <Source, Cursor, SourceInput>(
   never,
   SqlClient.SqlClient
 > =>
-  defineSourcePluginLayer({
-    layer: Layer.effect(
-      SourcePluginService,
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const source = defineSourcePlugin({
-          cursorSchema: options.cursorSchema,
-          make: () => makeImplementation(options, sql),
-          sourceSchema: options.sourceSchema,
-        });
-
-        return yield* SourcePluginService.pipe(Effect.provide(source.layer));
-      })
-    ),
+  defineSourcePlugin({
+    cursorSchema: options.cursorSchema,
+    make: () => makeImplementation(options),
     sourceSchema: options.sourceSchema,
   });
 

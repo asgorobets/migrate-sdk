@@ -247,6 +247,7 @@ export const handleUpdateBusinessUnit: DestinationCommandHandler<
       .pipe(Effect.mapError(toDestinationPluginError));
 
     return {
+      destinationIdentity: businessUnit.id,
       destinationVersion: String(businessUnit.version),
       metadata: businessUnitMetadata(businessUnit),
     };

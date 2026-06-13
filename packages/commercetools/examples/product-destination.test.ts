@@ -1,5 +1,4 @@
 import { describe, expect, it } from "@effect/vitest";
-import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
 import {
   CommercetoolsDestinationPlugin,
   type CommercetoolsProductHelpers,
@@ -10,7 +9,7 @@ import {
   type ProductUpdateFactory,
   UpdateProductCommand,
 } from "@migrate-sdk/commercetools/destination";
-import { makeRecordingCommercetoolsApiRoot } from "@migrate-sdk/commercetools/testing";
+import { makeScriptedCommercetoolsSdkLayer } from "@migrate-sdk/commercetools/testing";
 import { Effect, Schema } from "effect";
 import {
   BookProductAttributes,
@@ -582,9 +581,11 @@ describe("product destination example", () => {
           result.attributes
         );
         expect(createDraft?.masterVariant?.sku).toBe("example-book-paperback");
-        expect(productUpdate?.actions.map((action) => action.action)).toEqual(
-          result.updateActionKinds
-        );
+        expect(
+          productUpdate?.actions.map(
+            (action: { readonly action: string }) => action.action
+          )
+        ).toEqual(result.updateActionKinds);
         expect(productUpdate?.actions.slice(0, 4)).toEqual([
           {
             action: "setProductAttribute",
@@ -781,7 +782,6 @@ describe("product destination example", () => {
     "rejects attribute values that do not match configured schemas",
     () =>
       Effect.gen(function* () {
-        const recording = makeRecordingCommercetoolsApiRoot();
         const destination = CommercetoolsDestinationPlugin.make({
           productTypes: {
             book: {
@@ -789,9 +789,9 @@ describe("product destination example", () => {
               productAttributes: BookProductAttributes,
             },
           },
-          sdkLayer: CommercetoolsSdk.layerFromApiRoot({
-            apiRoot: recording.apiRoot,
+          sdkLayer: makeScriptedCommercetoolsSdkLayer({
             projectKey: "example-project",
+            routes: [],
           }),
         });
         const invalidVariantAttributeError = yield* destination.helpers.products

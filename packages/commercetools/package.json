@@ -15,6 +15,7 @@
   },
   "scripts": {
     "check-types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.check.json",
+    "example:business-units:live": "migrate run --config examples/migrate.config.ts business-unit-static-field",
     "example:product-catalog-store": "tsx examples/product-catalog-store-migration.ts",
     "example:product-catalog-store:live": "tsx examples/product-catalog-store-migration.live.ts",
     "example:products": "tsx examples/product-destination.ts",

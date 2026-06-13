@@ -1,24 +1,24 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { ProductDraftInput } from "@migrate-sdk/commercetools/destination";
-import type { RecordedCommercetoolsRequest } from "@migrate-sdk/commercetools/testing";
 import { Effect } from "effect";
 import {
   formatProductCatalogStoreMigrationExampleResult,
+  type ProductCatalogStoreMigrationSdkRequest,
   runProductCatalogStoreMigrationExample,
 } from "./product-catalog-store-migration.ts";
 
 const isCustomObjectRequest = (
-  request: RecordedCommercetoolsRequest
+  request: ProductCatalogStoreMigrationSdkRequest
 ): boolean => request.uriTemplate?.includes("custom-objects") === true;
 
 const isDirectCustomObjectRequest = (
-  request: RecordedCommercetoolsRequest
+  request: ProductCatalogStoreMigrationSdkRequest
 ): boolean =>
   isCustomObjectRequest(request) &&
   typeof request.pathVariables?.key === "string";
 
 const isCustomObjectQueryRequest = (
-  request: RecordedCommercetoolsRequest
+  request: ProductCatalogStoreMigrationSdkRequest
 ): boolean =>
   isCustomObjectRequest(request) &&
   typeof request.queryParams?.where === "string";

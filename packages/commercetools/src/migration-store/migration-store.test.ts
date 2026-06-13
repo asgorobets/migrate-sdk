@@ -4,8 +4,8 @@ import { describe, expect, it } from "@effect/vitest";
 import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
 import { CommercetoolsMigrationStore } from "@migrate-sdk/commercetools/migration-store";
 import {
-  makeRecordingCommercetoolsApiRoot,
-  type RecordedCommercetoolsRequest,
+  makeRecordingCustomObjectApiRoot,
+  type RecordedCustomObjectRequest,
 } from "@migrate-sdk/commercetools/testing";
 import { Data, Effect, Layer } from "effect";
 import {
@@ -55,7 +55,7 @@ const itemStateQueryWhere = [
 ].join(" and ");
 
 const customObjectKey = (
-  request: RecordedCommercetoolsRequest
+  request: RecordedCustomObjectRequest
 ): string | undefined => {
   const body = request.body;
 
@@ -73,7 +73,7 @@ const customObjectKey = (
   return undefined;
 };
 
-const customObjectValue = (request: RecordedCommercetoolsRequest): unknown => {
+const customObjectValue = (request: RecordedCustomObjectRequest): unknown => {
   const body = request.body;
 
   if (
@@ -90,8 +90,8 @@ const customObjectValue = (request: RecordedCommercetoolsRequest): unknown => {
 };
 
 const customObjectQueryRequests = (
-  requests: readonly RecordedCommercetoolsRequest[]
-): readonly RecordedCommercetoolsRequest[] =>
+  requests: readonly RecordedCustomObjectRequest[]
+): readonly RecordedCustomObjectRequest[] =>
   requests.filter(
     (request) =>
       request.method === "GET" &&
@@ -116,7 +116,7 @@ const containsExplicitNull = (value: unknown): boolean => {
 };
 
 const seedCustomObject = (
-  recording: ReturnType<typeof makeRecordingCommercetoolsApiRoot>,
+  recording: ReturnType<typeof makeRecordingCustomObjectApiRoot>,
   key: string,
   value: unknown
 ): Effect.Effect<void, RecordedHttpError> => {
@@ -164,7 +164,7 @@ const recordedHttpError = (cause: unknown): RecordedHttpError =>
   });
 
 const makeStoreLayer = (
-  recording: ReturnType<typeof makeRecordingCommercetoolsApiRoot>,
+  recording: ReturnType<typeof makeRecordingCustomObjectApiRoot>,
   options: { readonly pageSize?: number } = {}
 ) =>
   CommercetoolsMigrationStore.layerFromApiRoot({
@@ -177,7 +177,7 @@ const makeStoreLayer = (
 
 describe("CommercetoolsMigrationStore", () => {
   it.effect("records Custom Object create-only writes with version 0", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const project = recording.apiRoot.withProjectKey({
       projectKey: "test-project",
     });
@@ -224,7 +224,7 @@ describe("CommercetoolsMigrationStore", () => {
   it.effect(
     "acquires definition locks with Custom Object version-zero create semantics",
     () => {
-      const recording = makeRecordingCommercetoolsApiRoot();
+      const recording = makeRecordingCustomObjectApiRoot();
       const ownerRunId = toMigrationRunId("run-lock-owner");
       const expectedKey = definitionLockKey(definitionId);
 
@@ -272,7 +272,7 @@ describe("CommercetoolsMigrationStore", () => {
   it.effect(
     "maps duplicate definition lock acquisition to a store error",
     () => {
-      const recording = makeRecordingCommercetoolsApiRoot();
+      const recording = makeRecordingCustomObjectApiRoot();
       const firstOwnerRunId = toMigrationRunId("run-lock-owner-1");
       const secondOwnerRunId = toMigrationRunId("run-lock-owner-2");
 
@@ -349,7 +349,7 @@ describe("CommercetoolsMigrationStore", () => {
   it.effect(
     "releases definition locks by reading and deleting the current Custom Object version",
     () => {
-      const recording = makeRecordingCommercetoolsApiRoot();
+      const recording = makeRecordingCustomObjectApiRoot();
       const ownerRunId = toMigrationRunId("run-lock-release");
       const expectedKey = definitionLockKey(definitionId);
 
@@ -395,7 +395,7 @@ describe("CommercetoolsMigrationStore", () => {
   );
 
   it.effect("refuses to release locks owned by another runner", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const ownerRunId = toMigrationRunId("run-lock-owner");
     const otherRunId = toMigrationRunId("run-lock-other-owner");
 
@@ -428,7 +428,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("rejects definition locks whose index metadata drifted", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const ownerRunId = toMigrationRunId("run-lock-index-state");
     const otherRunId = toMigrationRunId("run-lock-index-other");
     const token = toMigrationDefinitionLockToken("lock-index-state");
@@ -477,7 +477,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("treats releasing a missing definition lock as a no-op", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const expectedKey = definitionLockKey(definitionId);
 
     return Effect.gen(function* () {
@@ -504,7 +504,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("provides the MigrationStore service from an API root", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
 
     return Effect.gen(function* () {
       const store = yield* MigrationStore;
@@ -523,7 +523,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("uses an application-provided Commercetools SDK layer", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const sdkLayer = CommercetoolsSdk.layerFromApiRoot({
       apiRoot: recording.apiRoot,
       projectKey: "test-project",
@@ -543,7 +543,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("rejects invalid Custom Object container names", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
 
     return Effect.gen(function* () {
       const error = yield* MigrationStore.pipe(
@@ -568,7 +568,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("rejects invalid Custom Object namespaces", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
 
     return Effect.gen(function* () {
       const error = yield* MigrationStore.pipe(
@@ -593,7 +593,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("rejects page sizes outside the Custom Object query limit", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
 
     return Effect.gen(function* () {
       const error = yield* MigrationStore.pipe(
@@ -620,7 +620,7 @@ describe("CommercetoolsMigrationStore", () => {
   it.effect(
     "round-trips source cursors as Custom Objects with deterministic keys",
     () => {
-      const recording = makeRecordingCommercetoolsApiRoot();
+      const recording = makeRecordingCustomObjectApiRoot();
       const cursor = toEncodedSourceCursor(
         JSON.stringify({ lastId: "product-123", page: 2 })
       );
@@ -676,7 +676,7 @@ describe("CommercetoolsMigrationStore", () => {
   it.effect(
     "uses safe bounded hashed key segments for unsafe long values",
     () => {
-      const recording = makeRecordingCommercetoolsApiRoot();
+      const recording = makeRecordingCustomObjectApiRoot();
       const unsafeDefinitionId = toMigrationDefinitionId(
         `catalog products/"special"|${"x".repeat(500)}`
       );
@@ -728,7 +728,7 @@ describe("CommercetoolsMigrationStore", () => {
   );
 
   it.effect("persists store records without explicit null values", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const runId = toMigrationRunId("run-no-explicit-nulls");
     const itemState = {
       definitionId,
@@ -765,7 +765,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("round-trips all migration item states as Custom Objects", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const runId = toMigrationRunId("run-item-states");
     const updatedAt = new Date("2026-06-09T12:00:00.000Z");
     const itemStates = [
@@ -877,7 +877,7 @@ describe("CommercetoolsMigrationStore", () => {
   it.effect(
     "fails clearly for unsupported future record format versions",
     () => {
-      const recording = makeRecordingCommercetoolsApiRoot();
+      const recording = makeRecordingCustomObjectApiRoot();
       const cursor = toEncodedSourceCursor("future-version-cursor");
       const key = sourceCursorKey(definitionId);
 
@@ -913,7 +913,7 @@ describe("CommercetoolsMigrationStore", () => {
   it.effect(
     "rejects source cursor records whose metadata targets another definition",
     () => {
-      const recording = makeRecordingCommercetoolsApiRoot();
+      const recording = makeRecordingCustomObjectApiRoot();
       const requestedDefinitionId = toMigrationDefinitionId("catalog-products");
       const persistedDefinitionId = toMigrationDefinitionId("catalog-prices");
       const key = sourceCursorKey(requestedDefinitionId);
@@ -950,7 +950,7 @@ describe("CommercetoolsMigrationStore", () => {
   it.effect(
     "rejects item state records whose metadata targets another item",
     () => {
-      const recording = makeRecordingCommercetoolsApiRoot();
+      const recording = makeRecordingCustomObjectApiRoot();
       const requestedSourceIdentity = toSourceIdentity("product:requested");
       const persistedSourceIdentity = toSourceIdentity("product:persisted");
       const key = itemStateKey(definitionId, requestedSourceIdentity);
@@ -1001,7 +1001,7 @@ describe("CommercetoolsMigrationStore", () => {
   );
 
   it.effect("rejects item state records whose index metadata drifted", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const key = itemStateKey(definitionId, sourceIdentity);
 
     return Effect.gen(function* () {
@@ -1050,7 +1050,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("rejects listed item state records with non-canonical keys", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const nonCanonicalKey = `${namespace}__migration-item-state__definition-hash_wrong__source-identity-hash_wrong`;
 
     return Effect.gen(function* () {
@@ -1095,7 +1095,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("lists item states by definition through indexed queries", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const runId = toMigrationRunId("run-list-item-states");
     const additionalDefinitionId = toMigrationDefinitionId("catalog-prices");
     const firstState = {
@@ -1161,7 +1161,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("scans item states across pages with keyset pagination", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const runId = toMigrationRunId("run-list-item-states-pages");
     const itemStates = [
       {
@@ -1240,7 +1240,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("binds definition ids as item-state query variables", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const quotedDefinitionId = toMigrationDefinitionId(
       'catalog "special" \\ products'
     );
@@ -1279,7 +1279,7 @@ describe("CommercetoolsMigrationStore", () => {
   it.effect(
     "deletes item state by reading the current Custom Object version first",
     () => {
-      const recording = makeRecordingCommercetoolsApiRoot();
+      const recording = makeRecordingCustomObjectApiRoot();
       const itemState = {
         definitionId,
         destinationIdentity: toDestinationIdentity("ct-product-123"),
@@ -1317,7 +1317,7 @@ describe("CommercetoolsMigrationStore", () => {
   );
 
   it.effect("rejects latest run states whose index metadata drifted", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const runId = toMigrationRunId("run-latest-index-state");
     const key = latestRunStateKey(definitionId);
 
@@ -1358,7 +1358,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("rejects run states whose definition ids drifted", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const runId = toMigrationRunId("run-definition-ids-drift");
     const additionalDefinitionId = toMigrationDefinitionId("catalog-prices");
     const definitionIds = [definitionId, additionalDefinitionId] as const;
@@ -1421,7 +1421,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("rejects run states whose per-definition status drifted", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const runId = toMigrationRunId("run-status-drift");
     const additionalDefinitionId = toMigrationDefinitionId("catalog-prices");
     const definitionIds = [definitionId, additionalDefinitionId] as const;
@@ -1486,7 +1486,7 @@ describe("CommercetoolsMigrationStore", () => {
   });
 
   it.effect("round-trips latest run states for every definition", () => {
-    const recording = makeRecordingCommercetoolsApiRoot();
+    const recording = makeRecordingCustomObjectApiRoot();
     const runId = toMigrationRunId("run-latest-state");
     const additionalDefinitionId = toMigrationDefinitionId("catalog-prices");
     const definitionIds = [definitionId, additionalDefinitionId] as const;

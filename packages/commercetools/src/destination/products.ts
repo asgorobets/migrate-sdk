@@ -392,6 +392,7 @@ export const handlePublishProduct: DestinationCommandHandler<
       .pipe(Effect.mapError(toDestinationPluginError));
 
     return {
+      destinationIdentity: product.id,
       destinationVersion: String(product.version),
       metadata: {
         ...productMetadata(product),
@@ -425,6 +426,7 @@ export const handleUpdateProduct: DestinationCommandHandler<
       .pipe(Effect.mapError(toDestinationPluginError));
 
     return {
+      destinationIdentity: product.id,
       destinationVersion: String(product.version),
       metadata: {
         ...productMetadata(product),

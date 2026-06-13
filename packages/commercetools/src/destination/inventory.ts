@@ -219,6 +219,7 @@ export const handleUpdateInventoryEntry: DestinationCommandHandler<
       .pipe(Effect.mapError(toDestinationPluginError));
 
     return {
+      destinationIdentity: inventoryEntry.id,
       destinationVersion: String(inventoryEntry.version),
       metadata: inventoryEntryMetadata(inventoryEntry),
     };
