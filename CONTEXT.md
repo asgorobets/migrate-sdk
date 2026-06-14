@@ -8,7 +8,19 @@ A framework for moving data or content between systems while preserving typed tr
 One unit emitted by a source plugin for migration.
 
 **Source Identity**:
-The stable identity of a source item within a migration definition.
+The stable, possibly composite identity of a source item within a migration definition.
+
+**Source Identity Key**:
+The structured value of a source identity for one source item.
+
+**Source Identity Part**:
+A named element of a composite source identity key tuple.
+
+**Encoded Source Identity**:
+The durable string form of a source identity after schema encoding.
+
+**Source Identity Contract**:
+The static agreement that defines the id, schema, key derivation, and encoding of source identities for a migration definition.
 
 **Source Version**:
 The observed version or fingerprint of a source item at read time.
@@ -32,7 +44,7 @@ The source plugin's declared cost model for reading a source item by identity.
 Durable state for one source item within a migration.
 
 **Rollbackable Migration Item State**:
-A migration item state that records a destination identity and can be passed to a rollback pipeline.
+A migration item state that records destination tracking changes and can be passed to a rollback pipeline.
 
 **Migration Item Outcome**:
 The result of processing one source item during a migration run.
@@ -53,13 +65,19 @@ The document source component that parses a fetched resource into a schema-backe
 The document source component that selects source item payloads, and optional parent context, from a parsed document.
 
 **Destination Plugin**:
-A plugin that executes destination commands against a destination system.
+A plugin that exposes destination-owned commands for a destination system.
+
+**Destination Capability Module**:
+An Effect helper module that exposes destination-owned helpers, typed destination change descriptors, dependency layers, and optional rollback helpers.
 
 **Migration Store**:
 The pluggable durable backend for a migration definition.
 
 **Migration Definition**:
-The configured workflow that connects a source plugin, transformation pipeline, destination plugin, and migration store.
+The configured workflow that connects a source plugin, scoped transformation pipeline, tracking mode, and migration store.
+
+**Migration Contract**:
+The stored compatibility agreement for the identity, version, tracking mode, and optional tracking record contract of a migration definition.
 
 **Migration Definition Dependency**:
 An ordering relationship declared by a migration definition.
@@ -113,19 +131,22 @@ The invocation object that starts a rollback run from the SDK, CLI, or another h
 The runtime strategy that executes migration definitions.
 
 **Migration Reference Lookup**:
-A pipeline capability for reading migrated destination identities from migration item states.
+A pipeline capability for reading migrated tracking state or destination references from migration item states.
 
 **Transformation Pipeline**:
-The typed transformation from one source item into destination commands.
+The scoped Effect that processes one source item and performs destination commands.
+
+**Pipeline Execution Scope**:
+The per-source-item runtime boundary shared by a transformation pipeline and destination commands.
 
 **Rollback Pipeline**:
-The typed compensation from a durable migration item state into destination commands that undo destination-side effects.
+The scoped compensation Effect from durable migration item state into destination commands that undo destination-side effects.
 
 **Destination Command**:
-The typed command produced by a transformation pipeline and executed by a destination plugin.
+The typed destination-owned operation invoked by a transformation pipeline or rollback pipeline.
 
 **Destination Command Definition**:
-A destination-owned definition that validates a destination command kind and classifies whether it is identity-bearing or side-effect-only. Normal migration pipelines should use destination-owned command factories rather than constructing command definition records directly.
+A destination-owned definition that validates a destination command kind and describes its command shape. Normal migration pipelines should use destination-owned command factories rather than constructing command definition records directly.
 
 **Destination Command Group**:
 A destination-owned namespace of destination command definitions. Grouped command factories are exposed under `commands.<group>` unless the group is marked top-level, in which case its factories are exposed directly under `commands`.
@@ -139,29 +160,47 @@ A no-service Effect schema for a destination command. It validates pipeline-faci
 **Destination Entry Field Schema**:
 A destination-owned Effect schema for pipeline-facing entry fields. It validates already-decoded values and must have the same encoded and decoded TypeScript shape.
 
-**Destination Command Plan**:
-An ordered set of destination commands produced for one source item.
-
-**Rollback Command Plan**:
-An ordered set of destination commands produced by a rollback pipeline for one migration item state.
-
 **Destination Command Result**:
 The result of executing a destination command.
 
-**Destination Identity**:
-The stable identity of a destination item created or updated by a destination plugin.
+**Destination Change**:
+A typed, destination-native outcome recorded by a successful destination helper because it may be needed for tracking, rollback, or inspection. It is not necessarily a structural diff.
+
+**Destination Change Descriptor**:
+A destination-owned typed descriptor for one kind of destination change.
+
+**Destination Journal**:
+The per-source-item collection of destination journal entries observed during pipeline execution.
+
+**Destination Journal Entry**:
+An internal journal entry that records one destination change value, its descriptor, optional alias, and runtime metadata.
+
+**Change Alias**:
+A migration-owned name assigned to a destination change when one change descriptor is used more than once in a pipeline.
+
+**Custom Destination Change**:
+A migration-owned destination change recorded explicitly when destination-native helpers cannot know the tracking data shape.
+
+**Tracking Record**:
+The optional durable, schema-validated materialized state staged by a transformation pipeline and persisted for one migration item.
+
+**Tracking Record Contract**:
+The static agreement that declares a tracking record id and schema and requires one staged schema-valid tracking record before a successful item can be persisted.
+
+**Tracking Mode**:
+The migration definition's static choice to persist destination journal tracking, persist a materialized tracking record, or omit destination tracking.
 
 **Destination Version**:
 The observed destination-side version or revision returned by a destination plugin.
 
 **Destination Stub**:
-A placeholder destination item created to reserve a destination identity before the full destination item can be written.
+A placeholder destination item created to reserve a destination reference before the full destination item can be written.
 
 **Needs Update**:
-A migration item state status indicating that destination identity exists but the destination item is incomplete.
+A migration item state status indicating that tracked destination state exists but the destination item is incomplete.
 
 **Destination Retry Strategy**:
-The Effect retry wrapper selected by a migration definition for destination command execution.
+The Effect retry wrapper applied by a pipeline at a destination command call site.
 
 **Source Cursor Retry Strategy**:
 The Effect retry wrapper selected by a migration definition for source cursor reads.
@@ -191,6 +230,15 @@ A schema-backed warning or error record that explains migration status, item fai
 
 - A **Source Item** has exactly one **Migration Item State** for a given migration definition.
 - A **Source Item** must have a **Source Identity**.
+- A **Source Identity** may be singular or composite.
+- A **Source Identity** conforms to a **Source Identity Contract**.
+- A **Source Identity Key** is described by an Effect schema.
+- A singular **Source Identity Key** is described by a scalar schema.
+- A composite **Source Identity Key** is described by a fixed tuple schema with named **Source Identity Parts**.
+- A **Source Identity Part** name is schema metadata for diagnostics, CLI targeting, status reports, reset/rekey tooling, and contract mismatch errors.
+- A **Migration Item State** preserves the structured **Source Identity**, including composite identity fields.
+- An **Encoded Source Identity** is the only source identity form used for durable lookup keys and operator targeting.
+- A **Source Plugin** derives **Source Identity** before the **Transformation Pipeline** receives the **Source Item**.
 - A **Source Item** must have a **Source Version** supplied by a source field, source metadata, or a hash of the item contents.
 - A **Source Cursor** selects which source items to inspect during a migration run.
 - A **Source Cursor** shape is owned by the **Source Plugin** and must be described by a **Source Cursor Schema**.
@@ -200,9 +248,10 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Source Inventory Scan** starts from the beginning of the source and does not read or write the persisted **Source Cursor**.
 - A **Source Inventory Scan** validates source item payloads with the **Source Payload Schema**.
 - A **Source Inventory Scan** may return **Migration Diagnostics** for invalid source payloads or duplicate **Source Identities**.
-- A **Migration Item State** records source identity, migration status, and may record observed source version, destination identity, or failure metadata.
+- A **Migration Item State** records source identity, migration status, and may record observed source version, destination tracking changes, or failure metadata.
 - A **Migration Item State** is modeled as discriminated variants by status.
 - A **Migration Item State** does not store source item payloads by default.
+- A failed **Migration Item State** may preserve **Destination Changes** recorded before the item failed.
 - Public and persisted migration data uses domain-friendly discriminators such as `kind` and `status`; Effect `_tag` is reserved for Effect-native errors or internals and hidden from public authoring examples through helpers.
 - A **Migration Item Error** normalizes source, pipeline, destination, or store errors for durable storage.
 - A **Migration Item Error** may include **Migration Item Error Details** so future inspection can explain failures without rerunning the migration.
@@ -223,12 +272,14 @@ A schema-backed warning or error record that explains migration status, item fai
 - A source item with a valid identity and version but invalid payload becomes a failed **Migration Item State** with durable **Migration Item Error Details**.
 - A **Source Lookup Strategy** may be direct or scan-based.
 - A **Migration Definition** may select separate **Source Cursor Retry Strategy** and **Source Lookup Retry Strategy** wrappers.
-- A **Migration Store** records **Migration Item State**, the latest **Migration Run State**, and the last successful **Source Cursor** for each **Migration Definition**.
+- A **Migration Store** records **Migration Item State**, the latest **Migration Run State**, the last successful **Source Cursor**, and the **Migration Contract** for each **Migration Definition**.
 - A **Migration Store** may be backed by SQL, key/value storage, files, or another durable system.
 - A **Migration Definition** uses one public **Migration Store** service.
-- A **Destination Plugin** executes **Destination Commands** and returns **Destination Command Results**.
+- A **Migration Run** blocks before processing items when the current **Migration Contract** differs from the stored **Migration Contract** and any **Migration Item State** exists for the **Migration Definition**.
+- A **Destination Plugin** exposes **Destination Commands** to transformation and rollback pipelines.
+- A **Destination Plugin** does not decide whether destination tracking is persisted.
 - A **Destination Plugin** exposes or uses a **Destination Command Schema**.
-- A **Migration Definition** declares the source, pipeline, destination, migration store, and dependencies for a migration workflow.
+- A **Migration Definition** declares the source, pipeline, migration store, tracking mode, optional tracking record contract, and dependencies for a migration workflow.
 - A **Migration Definition** is executable and may contain layers and effects.
 - A **Required Migration Definition Dependency** is a hard ordering prerequisite.
 - An **Optional Migration Definition Dependency** is an ordering preference when both **Migration Definitions** participate in a run.
@@ -269,7 +320,12 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Run Request** that selects migration definitions also includes their **Required Migration Definition Dependencies**.
 - An **Execution Adapter** may execute migration definitions inline, inline with bounded parallelism, or through a durable queue.
 - An **Execution Adapter** may be provided by users when they need custom scheduling or parallelization.
-- A **Migration Reference Lookup** reads migrated destination identities from **Migration Item State** in a **Migration Store**.
+- A **Migration Reference Lookup** reads migrated tracking state or destination references from **Migration Item State** in a **Migration Store**.
+- A **Migration Reference Lookup** result is typed from the referenced **Migration Definition's Tracking Mode**.
+- A **Migration Reference Lookup** for `record` **Tracking Mode** returns the structured **Tracking Record** and **Destination Journal**.
+- A **Migration Reference Lookup** for `journal` **Tracking Mode** returns the **Destination Journal** and requires the caller to read typed **Destination Changes** with **Destination Change Descriptors**.
+- An untracked **Migration Definition** is not reference-lookupable by default.
+- A **Migration Definition** expected to serve downstream references should use `record` **Tracking Mode**.
 - A **Migration Reference Lookup** reads and writes referenced **Migration Item State** through the referenced **Migration Definition's Migration Store**.
 - A **Migration Reference Lookup** may target a **Migration Definition** that is not a declared dependency.
 - A **Migration Reference Lookup** may target one **Migration Definition** or an ordered list of **Migration Definitions**.
@@ -279,21 +335,34 @@ A schema-backed warning or error record that explains migration status, item fai
 - A missing migrated reference may create a **Destination Stub** when the **Migration Reference Lookup** is configured to allow stubs.
 - A referenced **Migration Definition** owns how its **Destination Stubs** are created.
 - A referenced **Migration Definition** creates **Destination Stubs** from a **Source Identity**, not from the full referenced **Source Item** payload.
-- A referenced **Migration Definition** creates **Destination Stubs** by producing a **Destination Command Plan**.
+- A referenced **Migration Definition** creates **Destination Stubs** by invoking destination commands.
 - A **Migration Reference Lookup** over multiple **Migration Definitions** must select one referenced **Migration Definition** to create a **Destination Stub** when no migrated reference is found.
 - A **Migration Reference Lookup** that creates a **Destination Stub** records **Needs Update** item state for the stubbed reference.
 - A **Needs Update** item state created by **Migration Reference Lookup** may not have an observed source version yet.
-- A **Migration Reference Lookup** may return a **Needs Update** item state as a usable reference because the **Destination Identity** already exists.
-- A **Transformation Pipeline** transforms exactly one **Source Item** into one **Destination Command Plan**.
-- A **Rollback Pipeline** transforms exactly one **Rollbackable Migration Item State** into one **Rollback Command Plan**.
-- A **Rollback Pipeline** is explicit compensation, not an inferred inverse of a **Transformation Pipeline** or **Destination Command Plan**.
+- A **Migration Reference Lookup** may return a **Needs Update** item state as a usable reference because tracked destination state already exists.
+- A **Transformation Pipeline** processes exactly one **Source Item** within one **Pipeline Execution Scope**.
+- A **Transformation Pipeline** may invoke one or more **Destination Commands**.
+- A **Rollback Pipeline** processes exactly one **Rollbackable Migration Item State** within one **Pipeline Execution Scope**.
+- A **Rollback Pipeline** is explicit compensation, not an inferred inverse of a **Transformation Pipeline** or previous destination effects.
 - A **Rollback Pipeline** uses durable **Migration Item State** and does not require reading the **Source Item**.
-- A **Rollbackable Migration Item State** is any **Migration Item State** that records a **Destination Identity**.
-- A **Rollback Command Plan** uses the same **Destination Commands**, **Destination Command Definitions**, and **Destination Plugin** as a **Destination Command Plan**.
-- A **Destination Command Plan** may contain one or more ordered **Destination Commands**.
+- A **Rollbackable Migration Item State** is any **Migration Item State** that records destination tracking changes.
+- A **Rollback Pipeline** uses durable **Destination Changes** and optional **Tracking Records** to compensate destination-side work.
+- A destination capability module exposes **Destination Change Descriptors** for destination change kinds it can record.
+- A destination helper may record a **Destination Change** in the **Destination Journal**.
+- A **Destination Change** conforms to a **Destination Change Descriptor**.
+- A **Destination Journal** is scoped to one **Source Item** or one **Rollbackable Migration Item State**.
+- A **Destination Journal** survives item-level pipeline failure so partial destination effects can be recorded in **Migration Item State**.
+- A `journal` **Tracking Mode** persists the **Destination Journal** as the canonical destination-side tracking state.
+- A `record` **Tracking Mode** persists the **Destination Journal** and requires one staged schema-valid **Tracking Record**.
+- An untracked **Migration Definition** may complete without durable destination tracking.
+- An untracked **Migration Definition** still records **Migration Item State**, including source identity, source version, status, and failure metadata.
+- A **Tracking Record** may include multiple named destination items affected by one **Source Item**.
+- A **Migration Item State** may preserve a structured **Tracking Record** for `record` tracking mode.
+- A **Change Alias** disambiguates multiple destination changes that share the same **Destination Change Descriptor**.
+- A **Custom Destination Change** is used when the migration definition needs custom change data not known by the destination capability module.
 - A **Destination Plugin Definition** owns the **Destination Command Groups** for the command kinds it accepts.
 - A **Destination Command Group** owns related **Destination Command Definitions**.
-- A **Destination Command Definition** classifies its command kind as identity-bearing or side-effect-only.
+- A **Destination Command Definition** validates command shape and does not define migration tracking.
 - A **Destination Plugin Definition** may expose grouped command factories under `destination.commands.<group>` or top-level command factories directly under `destination.commands`.
 - A **Destination Plugin Definition** may be implemented with command handlers that compile to the runtime **Destination Plugin** service.
 - A **Destination Plugin Definition** must contain at least one **Destination Command Definition** through its **Destination Command Groups** before it can compile to a runtime **Destination Plugin** service.
@@ -302,27 +371,24 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Destination Entry Field Schema** must not change value representation between its encoded and decoded sides.
 - A **Destination Plugin** may expose command factories such as `destination.commands.upsertEntry(...)` so pipelines do not construct raw command objects.
 - Destination-specific schemas should be configured once when creating a **Destination Plugin**; command factories enforce the relevant configured schema for the command being created.
-- A **Destination Command** maps back to exactly one **Source Item** through its **Destination Command Plan**.
-- A **Destination Retry Strategy** wraps each **Destination Command** execution in a **Destination Command Plan** independently.
-- A **Destination Command Result** may include a non-empty **Destination Identity** and a non-empty **Destination Version**.
-- A side-effect-only **Destination Command Result** may omit **Destination Identity**.
-- A **Migration Item State** records one primary **Destination Identity** for a **Source Item**.
-- A **Destination Command Plan** that records a migrated or needs-update **Migration Item State** must produce or preserve one primary **Destination Identity**.
-- A **Destination Command Plan** must not produce more than one identity-bearing **Destination Command Result**.
-- A **Destination Command Plan** with more than one identity-bearing command or result fails the **Source Item**.
-- Side-effect-only **Destination Command Results** do not replace the primary **Destination Identity** recorded in **Migration Item State**.
-- If a **Destination Command Plan** partially succeeds and then fails, the **Migration Item State** is failed and preserves the latest known primary **Destination Identity** and **Destination Version**.
-- A workflow that creates multiple durable destination identities should use multiple **Migration Definitions** stitched through **Migration Reference Lookup**.
+- A **Destination Command** maps back to exactly one **Source Item** through its **Pipeline Execution Scope**.
+- A **Destination Retry Strategy** is applied inline by the pipeline around the destination command being retried.
+- A destination helper may record a **Destination Change** and a destination-native version in the **Destination Journal**.
+- A side-effect-only destination helper may omit **Destination Changes**.
+- If a **Transformation Pipeline** partially succeeds and then fails, the **Migration Item State** is failed and preserves recorded **Destination Changes**.
 - A **Destination Stub** is incomplete and must be updated by a later migration run.
 - A **Needs Update** item state is not terminal and must be reprocessed even when source version is unchanged.
-- A **Destination Plugin** may classify retryable errors, but a **Migration Definition** selects the **Destination Retry Strategy**.
+- A **Destination Plugin** may classify retryable errors, but the **Transformation Pipeline** selects where to apply a **Destination Retry Strategy**.
 - A **Transformation Pipeline** may fail with **Skip Item** to record a skipped **Migration Item State**.
-- A **Destination Plugin** is not called when a **Transformation Pipeline** fails with **Skip Item**.
+- A **Destination Plugin** is not called when a **Transformation Pipeline** fails with **Skip Item** before invoking destination commands.
 
 ## Example dialogue
 
 > **Dev:** "Can the SQL plugin call this a row?"
 > **Domain expert:** "Inside the SQL plugin, yes. In the framework glossary it is a **Source Item**, because non-SQL sources emit items too."
+
+> **Dev:** "Does the product destination plugin decide whether product IDs are tracked?"
+> **Domain expert:** "No — the plugin owns product commands and destination changes, but the **Migration Definition** owns the **Tracking Mode** that decides whether the journal, a materialized record, or no destination tracking is persisted."
 
 ## Flagged ambiguities
 
@@ -337,3 +403,9 @@ A schema-backed warning or error record that explains migration status, item fai
 - "highwater mark" was used for incremental source selection — resolved: use **Source Cursor**.
 - "source schema" and "source item schema" were used ambiguously — resolved: use **Source Payload Schema** for the schema that validates `SourceItem.item`, not source identity or source version.
 - External lookup option names were considered — resolved: use framework terms such as **Migration Definition**, **Source Identity**, and **Destination Stub** consistently in the TypeScript API.
+- "destination identity" was assumed to mean one primary destination record — resolved: durable destination tracking is journal-first, and an optional **Tracking Record** may be composite or bucketed.
+- "pipeline outcome" was used to mean durable item state — resolved: the **Transformation Pipeline** performs scoped effects, while the runtime records **Migration Item State** from the **Destination Journal**, **Tracking Mode**, and optional **Tracking Record Contract**.
+- "identity-bearing command" put migration tracking decisions in destination plugins — resolved: destination helpers may record **Destination Changes**, but **Tracking Mode** belongs to the **Migration Definition**.
+- "untracked" could mean no durable item state — resolved: untracked means no durable destination tracking, while **Migration Item State** is still recorded.
+- Raw change kind strings were considered for journal reads and rollback helpers — resolved: migration authors reference typed **Destination Change Descriptors** exported by destination capability modules.
+- `Schema.Struct` was considered for composite **Source Identity Keys** — resolved: use fixed tuple schemas with named **Source Identity Parts** because source identity is a positional lookup key.

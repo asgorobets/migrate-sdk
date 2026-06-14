@@ -6,6 +6,12 @@ We will model destination plugin authoring around three levels: destination plug
 
 Accepted
 
+Amended by [ADR 0006](./0006-scoped-pipeline-tracking-with-composite-identities.md):
+the grouping decision remains useful for the older command-plan implementation,
+but command identity-bearing semantics are not the target tracking model for new
+work. Destination tracking moves to scoped journals, typed destination changes,
+and migration-owned tracking modes.
+
 ## Considered Options
 
 - Keep destination plugins as one flat set of command definitions.

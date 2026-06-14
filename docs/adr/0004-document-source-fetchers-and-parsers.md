@@ -10,6 +10,11 @@ contract.
 
 Accepted
 
+Amended by [ADR 0006](./0006-scoped-pipeline-tracking-with-composite-identities.md):
+the document source decision remains accepted, and the public identity examples
+now use the ADR 0006 source identity contract shape with `identity.id`,
+`identity.schema`, and `identity.key`.
+
 ## Considered Options
 
 - Keep one source plugin per transport and format combination, such as JSON
@@ -38,7 +43,14 @@ DocumentSourcePlugin.make({
     parent: (document) => document.businessUnits,
     item: (businessUnit) => businessUnit.contacts,
   },
-  identity: ({ parent, item }) => [parent.key, item.key],
+  identity: {
+    id: "business-unit-contact@v1",
+    schema: SourceIdentity.tuple([
+      SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
+      SourceIdentity.part("contactKey", Schema.NonEmptyString),
+    ]),
+    key: ({ parent, item }) => [parent.key, item.key] as const,
+  },
   lookup: { kind: "scan" },
   version: { kind: "content-hash" },
 });
@@ -75,7 +87,8 @@ mapping, or destination-specific projection outside the pipeline.
 The existing durable source plugin boundary remains unchanged:
 
 - `read(cursor)` returns one cursor window and an optional next cursor.
-- `readByIdentity(identity)` is required for reruns and targeted runs.
+- `readByIdentity(identity)` receives a decoded source identity target and is
+  required for reruns and targeted runs.
 - The document source requires an explicit lookup configuration that compiles
   to the existing runtime `SourceLookupStrategy`.
 - Source cursor encoding belongs to the configured source plugin.

@@ -2,6 +2,15 @@
 
 Audience: people implementing destination plugins.
 
+Status: pre-ADR-0006 command-plan plugin design. This document is still useful
+for the older command-group implementation, but destination identity tracking
+and pipeline execution are being revised by
+[ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md),
+[Scoped Pipeline Tracking API](./scoped-pipeline-tracking-api.md), and
+[Effectful Pipeline Destination Capabilities](./effectful-pipeline-destination-capabilities.md).
+The `identity` flag and command-plan examples below should not be used as the
+direction for new tracking work.
+
 Destination plugins execute destination commands. They own command validation,
 command factories, destination-native encoding, and the Effect dependencies used
 by their implementation.

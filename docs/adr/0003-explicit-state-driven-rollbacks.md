@@ -6,6 +6,12 @@ Rollback is modeled as an explicit rollback pipeline that turns durable migratio
 
 Accepted
 
+Amended by [ADR 0006](./0006-scoped-pipeline-tracking-with-composite-identities.md):
+the state-driven rollback decision remains accepted, but identity-specific
+consequences in this ADR describe the older command-plan model. Rollbackable
+evidence may now come from durable destination journal changes and optional
+tracking records instead of one singular destination identity.
+
 ## Considered Options
 
 - Infer rollback commands by reversing forward destination commands.

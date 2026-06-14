@@ -2,6 +2,16 @@
 
 Audience: users writing migrations.
 
+Status: pre-ADR-0006 command-plan authoring design. This document describes the
+older public authoring model where pipelines return destination command plans
+through a configured destination plugin. The target public API is refined by
+[ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md),
+[Scoped Pipeline Tracking API](./scoped-pipeline-tracking-api.md), and
+[Effectful Pipeline Destination Capabilities](./effectful-pipeline-destination-capabilities.md):
+pipelines execute destination effects inline, destination helpers record typed
+changes into a scoped journal, and tracking mode decides what durable
+destination tracking is persisted.
+
 Migration authors compose configured plugins, a migration store, and a typed
 pipeline into an executable `MigrationDefinition`. Plugin implementation details
 and Effect layers are hidden behind configured plugin values.

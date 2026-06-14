@@ -3,6 +3,14 @@
 Audience: maintainers of the runner, store implementations, and runtime
 extension points.
 
+Status: pre-ADR-0006 command-plan runtime notes. This document describes the
+older runtime model that executes destination command plans and persists one
+primary destination identity. The target runtime direction is refined by
+[ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md),
+[Scoped Pipeline Tracking API](./scoped-pipeline-tracking-api.md), and
+[Effectful Pipeline Destination Capabilities](./effectful-pipeline-destination-capabilities.md).
+Do not treat the destination command-plan sections below as the new public API.
+
 This document intentionally sits behind the public authoring docs. Migration
 authors should start with [Migration Author API](./migration-author-api.md).
 
@@ -107,8 +115,9 @@ definition run fails because the runner does not know which source identities
 were selected.
 
 Identity lookups are item-specific after the source identity is already known.
-`readByIdentity(identity)` powers failed reruns, skipped reruns, needs-update
-backlog, and item mode. Lookup failures can be recorded as item failures.
+`readByIdentity(identity)` receives a decoded source identity target and powers
+failed reruns, skipped reruns, needs-update backlog, and item mode. Lookup
+failures can be recorded as item failures.
 
 Source payload decoding happens before unchanged-terminal checks, pipeline
 execution, and destination command execution. A source item with a valid

@@ -2,6 +2,15 @@
 
 Audience: SDK users authoring rollback-capable migrations.
 
+Status: pre-ADR-0006 command-plan rollback design. This document describes the
+older singular destination identity and command-plan model. Rollback remains
+state-driven, but the target state shape is refined by
+[ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md)
+and the [Scoped Pipeline Tracking API](./scoped-pipeline-tracking-api.md):
+rollbackable evidence may come from durable destination journal changes and
+optional tracking records. Do not treat the examples below as the new scoped
+pipeline rollback API.
+
 Rollback is a separate SDK operation from forward migration execution. It is
 driven by durable migration item state, not by source reads. A rollback pipeline
 receives a rollbackable item state with a destination identity and returns a

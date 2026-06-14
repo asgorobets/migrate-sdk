@@ -1,6 +1,9 @@
 # CSV Source Plugin Design
 
-Status: draft
+Status: draft, with source identity authoring updated for
+[ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md).
+CSV identity examples use the new `identity.id`, `identity.schema`, and
+`identity.key` contract shape.
 
 Audience: maintainers and migration authors working on `CsvSourcePlugin`.
 
@@ -31,7 +34,17 @@ const source = CsvSourcePlugin.make({
   dialect: { kind: "standard" },
   emptyRows: { kind: "skip" },
   headers: { kind: "from-row", rowIndex: 2 },
-  identity: { kind: "columns", columns: ["book_id", "format"] },
+  identity: {
+    id: "book-format@v1",
+    schema: SourceIdentity.tuple([
+      SourceIdentity.part("bookId", Schema.NonEmptyString),
+      SourceIdentity.part("format", Schema.NonEmptyString),
+    ]),
+    key: {
+      kind: "columns",
+      columns: ["book_id", "format"],
+    },
+  },
   version: { kind: "column", column: "catalog_version" },
   sourceSchema: CsvBookSource,
 });
@@ -174,19 +187,34 @@ record durable item state:
 
 ```ts
 type CsvIdentity = {
-  readonly kind: "columns";
-  readonly columns: readonly string[];
+  readonly id: SourceIdentityContractId;
+  readonly schema: SourceIdentitySchema<unknown>;
+  readonly key: {
+    readonly kind: "columns";
+    readonly columns: readonly string[];
+  };
 };
 ```
 
-`identity.columns` is the only v1 identity strategy. Trim identity values before
-checking emptiness and building the identity.
+`identity.key.columns` is the only v1 identity derivation strategy. The
+configured columns map by position to the scalar identity schema or fixed tuple
+parts. Trim identity values before checking emptiness and building the identity.
 
-Single-column identity uses the trimmed value. Composite identity uses a
-canonical JSON tuple in configured column order:
+Single-column identity uses the trimmed value. Composite identity uses the
+configured tuple order:
 
 ```ts
-identity: { kind: "columns", columns: ["book_id", "format"] };
+identity: {
+  id: "book-format@v1",
+  schema: SourceIdentity.tuple([
+    SourceIdentity.part("bookId", Schema.NonEmptyString),
+    SourceIdentity.part("format", Schema.NonEmptyString),
+  ]),
+  key: {
+    kind: "columns",
+    columns: ["book_id", "format"],
+  },
+};
 // Source Identity material: ["BOOK-001","paperback"]
 ```
 

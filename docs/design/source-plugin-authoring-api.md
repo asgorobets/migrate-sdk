@@ -2,6 +2,12 @@
 
 Audience: people implementing source plugins.
 
+Status: source identity API updated for
+[ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md).
+This document uses the new source identity contract shape:
+`SourceIdentityDefinition`, structured identity keys, and decoded
+`SourceIdentityTarget` lookup input.
+
 Source plugins emit source items by cursor and by identity. They own source
 cursor semantics, source payload validation, and the declared lookup cost model.
 Migration authors consume configured plugin values rather than raw Effect
@@ -13,32 +19,61 @@ services.
 plugin:
 
 ```ts
-interface ConfiguredSourcePlugin<Source, Cursor> {
+interface ConfiguredSourcePlugin<Source, Cursor, IdentityKey> {
   readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
+  readonly identity: SourceIdentityDefinition<IdentityKey>;
 }
 
-interface SourcePluginInput<Source, Cursor> {
+interface SourcePluginInput<Source, Cursor, IdentityKey> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
+  readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
   ) => Effect.Effect<SourceReadResultInput<Source, Cursor>, SourcePluginError>;
   readonly readByIdentity: (
-    identity: SourceIdentityInput
-  ) => Effect.Effect<SourceItemInput<Source> | null, SourcePluginError>;
+    identity: SourceIdentityTarget<IdentityKey>
+  ) => Effect.Effect<
+    SourceItemInput<Source, IdentityKey> | null,
+    SourcePluginError
+  >;
 }
 
-interface SourcePluginImplementation<Source, Cursor> {
+interface SourcePluginImplementation<Source, Cursor, IdentityKey> {
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
   ) => Effect.Effect<SourceReadResultInput<Source, Cursor>, SourcePluginError>;
   readonly readByIdentity: (
-    identity: SourceIdentityInput
-  ) => Effect.Effect<SourceItemInput<Source> | null, SourcePluginError>;
+    identity: SourceIdentityTarget<IdentityKey>
+  ) => Effect.Effect<
+    SourceItemInput<Source, IdentityKey> | null,
+    SourcePluginError
+  >;
 }
 ```
+
+The runtime parses, decodes, validates, and encodes source identity targets
+before calling `readByIdentity`:
+
+```ts
+interface SourceIdentityTarget<Key> {
+  readonly id: SourceIdentityContractId;
+  readonly key: Key;
+  readonly encoded: EncodedSourceIdentity;
+}
+
+interface SourceItemInput<Source, IdentityKey> {
+  readonly identity: IdentityKey;
+  readonly version: SourceVersionInput;
+  readonly item: Source;
+}
+```
+
+Source plugins should use `identity.key`, not parse `identity.encoded`, when
+implementing lookup. Source read results emit only the `IdentityKey` value; the
+configured identity contract supplies the id, schema, encoder, and fingerprint.
 
 The configured plugin also carries an SDK-owned source layer used by the runner.
 Plugin authors normally return the configured value from `defineSourcePlugin`
@@ -48,10 +83,11 @@ Plugins can also use the factory form when each configured plugin needs fresh
 mutable state or client instances:
 
 ```ts
-interface SourcePluginFactoryInput<Source, Cursor> {
+interface SourcePluginFactoryInput<Source, Cursor, IdentityKey> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
-  readonly make: () => SourcePluginImplementation<Source, Cursor>;
+  readonly identity: SourceIdentityDefinition<IdentityKey>;
+  readonly make: () => SourcePluginImplementation<Source, Cursor, IdentityKey>;
 }
 ```
 
@@ -120,12 +156,16 @@ export const JsonPlaceholderPostSourcePlugin = {
     return defineSourcePlugin({
       cursorSchema: JsonPlaceholderPostCursor,
       sourceSchema: JsonPlaceholderPost,
+      identity: SourceIdentity.define({
+        id: "jsonplaceholder-post@v1",
+        schema: SourceIdentity.key("postId", Schema.NonEmptyString),
+      }),
       lookupStrategy: "direct",
       read: Effect.fn("JsonPlaceholderPostSource.read")((cursor) =>
         withApiLayer(apiLayer, readPostPage(cursor))
       ),
       readByIdentity: Effect.fn("JsonPlaceholderPostSource.readByIdentity")(
-        (identity) => withApiLayer(apiLayer, readPostByIdentity(identity))
+        (identity) => withApiLayer(apiLayer, readPostByIdentity(identity.key))
       ),
     });
   },
@@ -140,6 +180,12 @@ options only expose the API layer override used by tests and live diagnostics.
 identity and source version into the runtime's branded values. It also normalizes
 `nextCursor: undefined` away before the runtime sees the read result. Cursor
 encoding and decoding still belongs to the configured `cursorSchema`.
+
+The configured `identity` contract supplies the source identity id, schema,
+encoder, and fingerprint. Each emitted `SourceItemInput.identity` value is the
+source identity key for that item and must conform to `identity.schema`; the
+runtime attaches the contract id and encoded source identity when it constructs
+the pipeline-facing `SourceItem`.
 
 The source plugin depends on a small `JsonPlaceholderApi` service with
 `listPostIds()` and `getPost(id)` methods. The live adapter calls the public
@@ -164,7 +210,9 @@ The current source plugin contract normalizes source read and lookup failures to
 
 ```ts
 read(cursor): Effect.Effect<SourceReadResult<Source, Cursor>, SourcePluginError>
-readByIdentity(identity): Effect.Effect<SourceItem<Source> | null, SourcePluginError>
+readByIdentity(
+  identity: SourceIdentityTarget<Key>
+): Effect.Effect<SourceItemInput<Source, Key> | null, SourcePluginError>
 ```
 
 This keeps the runtime boundary, CLI rendering, and durable item error records
@@ -208,6 +256,7 @@ const read = Effect.fn("SqlArticleSource.read")(function* (cursor) {
 
   return {
     items: rows.map((row) => ({
+      // Identity key value for the configured Source Identity Contract.
       identity: String(row.id),
       version: row.updated_at.toISOString(),
       item: row,
@@ -233,8 +282,8 @@ items in that window fail. Failed items are retried later from item state using
 
 ## Identity Lookup
 
-`readByIdentity(identity)` is required. It powers failed-item reruns, skipped
-reruns, needs-update backlog, and single-item runs.
+`readByIdentity(identity)` receives a decoded `SourceIdentityTarget`. It powers
+failed-item reruns, skipped reruns, needs-update backlog, and targeted runs.
 
 If the source system has a direct lookup API, use it and set
 `lookupStrategy: "direct"`. If it does not, implement lookup by scanning and set

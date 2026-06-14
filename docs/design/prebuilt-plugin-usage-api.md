@@ -2,6 +2,16 @@
 
 Audience: migration authors consuming first-party SDK plugins.
 
+Status: pre-ADR-0006 command-plan usage design. This document describes the
+older first-party plugin usage shape where destination plugins expose command
+factories and pipelines return command plans. The target public API is refined
+by [ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md),
+[Scoped Pipeline Tracking API](./scoped-pipeline-tracking-api.md), and
+[Effectful Pipeline Destination Capabilities](./effectful-pipeline-destination-capabilities.md).
+The source identity examples are being updated toward the new contract, but the
+destination examples below remain legacy until the effectful pipeline API is
+implemented.
+
 This document covers plugin usage, not plugin implementation. Source and
 destination plugin authoring are separate audiences:
 
@@ -30,7 +40,14 @@ const source = CsvSourcePlugin.make({
   dialect: { kind: "standard" },
   emptyRows: { kind: "skip" },
   headers: { kind: "from-row", rowIndex: 0 },
-  identity: { kind: "columns", columns: ["id"] },
+  identity: {
+    id: "article@v1",
+    schema: SourceIdentity.key("articleId", Schema.NonEmptyString),
+    key: {
+      kind: "columns",
+      columns: ["id"],
+    },
+  },
   version: { kind: "row-hash" },
   sourceSchema: CsvArticleSource,
 });
