@@ -11,13 +11,13 @@ import {
   DestinationVersion as DestinationVersionSchema,
   EncodedSourceCursor,
   type EncodedSourceCursor as EncodedSourceCursorType,
+  type EncodedSourceIdentity,
   type MigrationDefinitionId,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
   MigrationDefinitionLockToken as MigrationDefinitionLockTokenSchema,
   type MigrationRunId,
   MigrationRunId as MigrationRunIdSchema,
-  type SourceIdentity,
-  SourceIdentity as SourceIdentitySchema,
+  SourceIdentitySnapshot as SourceIdentitySnapshotSchema,
   SourceVersion as SourceVersionSchema,
   toMigrationDefinitionLockToken,
 } from "../../domain/ids.ts";
@@ -69,7 +69,7 @@ const EncodedSourceCursorRecord = Schema.Struct({
 const PersistedMigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionIdSchema,
   lastRunId: MigrationRunIdSchema,
-  sourceIdentity: SourceIdentitySchema,
+  sourceIdentity: SourceIdentitySnapshotSchema,
   updatedAt: Schema.DateFromString,
 } as const;
 
@@ -371,7 +371,7 @@ const makePaths = (path: Path, directory: string) => {
       path.join(definitionDirectory(definitionId), "items"),
     itemState: (
       definitionId: MigrationDefinitionId,
-      identity: SourceIdentity
+      identity: EncodedSourceIdentity
     ) =>
       path.join(
         definitionDirectory(definitionId),
@@ -466,7 +466,7 @@ const makeLayerWithoutPlatform = (
       const getItemState = Effect.fn("FileMigrationStore.getItemState")(
         function* (
           definitionId: MigrationDefinitionId,
-          identity: SourceIdentity
+          identity: EncodedSourceIdentity
         ) {
           const record = yield* readRecordOptional(
             fs,
@@ -512,8 +512,10 @@ const makeLayerWithoutPlatform = (
       });
 
       const deleteItemState = Effect.fn("FileMigrationStore.deleteItemState")(
-        (definitionId: MigrationDefinitionId, identity: SourceIdentity) =>
-          removeFileIfExists(fs, paths.itemState(definitionId, identity))
+        (
+          definitionId: MigrationDefinitionId,
+          identity: EncodedSourceIdentity
+        ) => removeFileIfExists(fs, paths.itemState(definitionId, identity))
       );
 
       const upsertItemState = Effect.fn("FileMigrationStore.upsertItemState")(
@@ -521,7 +523,7 @@ const makeLayerWithoutPlatform = (
           writeRecordAtomic(
             fs,
             path,
-            paths.itemState(state.definitionId, state.sourceIdentity),
+            paths.itemState(state.definitionId, state.sourceIdentity.encoded),
             MigrationItemStateRecord,
             {
               formatVersion,

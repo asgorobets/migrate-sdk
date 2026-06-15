@@ -32,6 +32,7 @@ SqlSourcePlugin.make({
   batchSize,
   cursorSchema,
   getSourceMetadata,
+  identity,
   lookup,
   read,
   sourceSchema,
@@ -68,6 +69,7 @@ and accepts explicit query callbacks:
 const source = SqlSourcePlugin.make({
   batchSize: 500,
   cursorSchema: LegacyArticleCursor,
+  identity: LegacyArticleIdentity,
   sourceSchema: LegacyArticleSource,
   read: (sql, cursor, limit) =>
     sql`
@@ -80,7 +82,7 @@ const source = SqlSourcePlugin.make({
   getSourceMetadata: (row, context) =>
     ({
       kind: "success",
-      identity: row.id,
+      identityKey: row.id,
       version: row.updated_at,
       cursor: {
         updatedAt: row.updated_at,
@@ -91,7 +93,7 @@ const source = SqlSourcePlugin.make({
     sql`
       select id, updated_at, title, body
       from legacy_articles
-      where id = ${identity}
+      where id = ${identity.key}
     `,
 });
 
@@ -113,6 +115,7 @@ requirement on the configured plugin instead:
 const legacySource = SqlSourcePlugin.make({
   batchSize: 500,
   cursorSchema: LegacyArticleCursor,
+  identity: LegacyArticleIdentity,
   sourceSchema: LegacyArticleSource,
   read: legacyRead,
   lookup: legacyLookup,
@@ -122,6 +125,7 @@ const legacySource = SqlSourcePlugin.make({
 const crmSource = SqlSourcePlugin.make({
   batchSize: 500,
   cursorSchema: CrmUserCursor,
+  identity: CrmUserIdentity,
   sourceSchema: CrmUserSource,
   read: crmRead,
   lookup: crmLookup,
@@ -147,16 +151,16 @@ The SQL row type should come from the encoded/input side of `sourceSchema`.
 Conceptually:
 
 ```ts
-interface SqlSourceOptions<Row, Source, Cursor> {
+interface SqlSourceOptions<Row, Source, Cursor, IdentityKey> {
   readonly sourceSchema: Schema.Codec<Source, Row, never, never>;
   readonly getSourceMetadata: (
     row: Readonly<Row>,
     context: SqlSourceMetadataContext
-  ) => Result<SqlSourceMetadata<Cursor>, SqlSourceMetadataError>;
+  ) => Result<SqlSourceMetadata<Cursor, IdentityKey>, SqlSourceMetadataError>;
 }
 
-interface SqlSourceMetadata<Cursor> {
-  readonly identity: SourceIdentityInput;
+interface SqlSourceMetadata<Cursor, IdentityKey> {
+  readonly identityKey: IdentityKey;
   readonly version: SourceVersionInput;
   readonly cursor: Cursor;
 }
@@ -202,7 +206,8 @@ becomes a failed Migration Item State instead of a cursor-read failure.
 The plugin should require a pure source metadata extractor that returns a
 Result-style value with:
 
-- `identity`: the durable Source Identity input.
+- `identityKey`: the source identity key value that matches the configured
+  Source Identity contract.
 - `version`: the durable Source Version input.
 - `cursor`: the next cursor candidate for pagination.
 
@@ -247,7 +252,7 @@ uses before invoking the transformation pipeline.
 contract. Raw SQL v1 should therefore use one source metadata extractor for
 both read and lookup results. The SQL projections may include extra fields, but
 they must be compatible with the same extractor and produce the same
-`identity`, `version`, payload, and cursor semantics for a given source item.
+`identityKey`, `version`, payload, and cursor semantics for a given source item.
 
 ## Cursor Contract
 
@@ -304,6 +309,7 @@ const ArticleCursor = Schema.Struct({
 SqlSourcePlugin.make({
   batchSize: 500,
   cursorSchema: ArticleCursor,
+  identity: ArticleIdentity,
   sourceSchema: ArticleSource,
   read: (sql, cursor, limit) =>
     sql`
@@ -321,12 +327,12 @@ SqlSourcePlugin.make({
     sql`
       select id, updated_at, title, body
       from legacy_articles
-      where id = ${identity}
+      where id = ${identity.key}
     `,
   getSourceMetadata: (row) =>
     ({
       kind: "success",
-      identity: row.id,
+      identityKey: row.id,
       version: row.updated_at,
       cursor: {
         updatedAt: row.updated_at,

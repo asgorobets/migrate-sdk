@@ -5,17 +5,18 @@ import { SqlClient, type Statement } from "effect/unstable/sql";
 import {
   type ConfiguredSourcePlugin,
   defineMigration,
+  type EncodedSourceIdentityInput,
   InMemoryDestinationPlugin,
   InMemoryMigrationStore,
   type MigrationRunSummary,
   type RunMigrationError,
   runMigration,
-  type SourceIdentityInput,
+  SourceIdentity,
   type SourcePayloadSchema,
   SourcePlugin,
   SourcePluginError,
   type SourceVersionInput,
-  toSourceIdentity,
+  toEncodedSourceIdentity,
 } from "migrate-sdk";
 import { SqlSourcePlugin } from "migrate-sdk/sources/sql";
 import { expectTypeOf } from "vitest";
@@ -37,6 +38,11 @@ const SqlArticleCursor = Schema.Struct({
 
 type SqlArticleCursor = typeof SqlArticleCursor.Type;
 
+const SqlArticleIdentity = SourceIdentity.make({
+  id: "sql-article@v1",
+  schema: SourceIdentity.key("id", Schema.NonEmptyString),
+});
+
 const ArticleEntryFields = Schema.Struct({
   title: Schema.String,
   views: Schema.Number,
@@ -51,6 +57,15 @@ const SqliteArticleRow = Schema.Struct({
 });
 
 type SqliteArticleRow = Schema.Codec.Encoded<typeof SqliteArticleRow>;
+
+const NumericSqlArticleRow = Schema.Struct({
+  content_hash: Schema.String,
+  id: Schema.Number,
+  title: Schema.String,
+  updated_at: Schema.String,
+});
+
+type NumericSqlArticleRow = typeof NumericSqlArticleRow.Type;
 
 const metadataFailure = {
   kind: "failure" as const,
@@ -248,7 +263,7 @@ const getSqlArticleMetadata = (
           id: row.id,
           updated_at: row.updated_at,
         },
-        identity: row.id satisfies SourceIdentityInput,
+        identityKey: row.id,
         version: row.updated_at satisfies SourceVersionInput,
       };
 };
@@ -263,9 +278,10 @@ const makeSqlArticleSource = (
     batchSize: options.batchSize ?? 2,
     cursorSchema: SqlArticleCursor,
     getSourceMetadata: options.getSourceMetadata ?? getSqlArticleMetadata,
+    identity: SqlArticleIdentity,
     lookup: (sql, identity) => {
-      expectTypeOf(identity).toEqualTypeOf<SourceIdentityInput>();
-      return sql<SqlArticleRow>`select id, title, updated_at, views from articles where id = ${identity}`;
+      expectTypeOf(identity.key).toEqualTypeOf<string>();
+      return sql<SqlArticleRow>`select id, title, updated_at, views from articles where id = ${identity.key}`;
     },
     read: (sql, cursor, limit) => {
       expectTypeOf(cursor).toEqualTypeOf<SqlArticleCursor | null>();
@@ -291,6 +307,7 @@ describe("SqlSourcePlugin", () => {
       ConfiguredSourcePlugin<
         SqlArticle,
         SqlArticleCursor,
+        string,
         SqlArticleRow,
         never,
         SqlClient.SqlClient
@@ -300,6 +317,7 @@ describe("SqlSourcePlugin", () => {
       ConfiguredSourcePlugin<
         SqlArticle,
         SqlArticleCursor,
+        string,
         SqlArticleRow,
         never,
         never
@@ -314,13 +332,17 @@ describe("SqlSourcePlugin", () => {
         const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([articleRows, [articleRows[1]]]);
         const plugin = yield* SourcePlugin.pipe(
-          Effect.provide(source.layer),
-          Effect.provide(fakeSql.layer)
+          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
         );
 
         const page = yield* plugin.read(null);
 
-        expect(page.items).toEqual([
+        expect(
+          page.items.map((sourceItem) => ({
+            ...sourceItem,
+            identity: sourceItem.identity.encoded,
+          }))
+        ).toEqual([
           {
             identity: "article-1",
             item: articleRows[0],
@@ -339,17 +361,83 @@ describe("SqlSourcePlugin", () => {
         expect(fakeSql.calls[0]?.values).toEqual([2]);
 
         const item = yield* plugin.readByIdentity(
-          toSourceIdentity("article-2")
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("article-2")
+          )
         );
 
         expect(item).toEqual({
-          identity: "article-2",
+          identity: SourceIdentity.fromKey(plugin.identity, "article-2"),
           item: articleRows[1],
           version: "2026-01-02T00:00:00.000Z",
         });
         expect(fakeSql.calls[1]?.values).toEqual(["article-2"]);
         expect(fakeSql.transactionCount()).toBe(0);
       })
+  );
+
+  it.effect("supports explicit non-string source identity contracts", () =>
+    Effect.gen(function* () {
+      const NumericArticleIdentity = SourceIdentity.make({
+        id: "numeric-sql-article@v1",
+        schema: SourceIdentity.key("articleId", Schema.Number),
+      });
+      const rows = [
+        {
+          content_hash: "hash-101",
+          id: 101,
+          title: "First numeric article",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          content_hash: "hash-102",
+          id: 102,
+          title: "Second numeric article",
+          updated_at: "2026-01-02T00:00:00.000Z",
+        },
+      ] satisfies readonly NumericSqlArticleRow[];
+      const source = SqlSourcePlugin.make({
+        batchSize: 2,
+        cursorSchema: SqlArticleCursor,
+        getSourceMetadata: (row) => ({
+          kind: "success",
+          cursor: {
+            id: String(row.id),
+            updated_at: row.updated_at,
+          },
+          identityKey: row.id,
+          version: row.content_hash,
+        }),
+        identity: NumericArticleIdentity,
+        lookup: (sql, identity) => {
+          expectTypeOf(identity.key).toEqualTypeOf<number>();
+          return sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles where id = ${identity.key}`;
+        },
+        read: (sql, cursor, limit) =>
+          cursor === null
+            ? sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles order by updated_at, id limit ${limit}`
+            : sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles where (updated_at, id) > (${cursor.updated_at}, ${cursor.id}) order by updated_at, id limit ${limit}`,
+        sourceSchema: NumericSqlArticleRow,
+      });
+      const fakeSql = makeFakeSqlClient([rows, [rows[1]]]);
+      const plugin = yield* SourcePlugin.pipe(
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+      );
+
+      const page = yield* plugin.read(null);
+      const lookupItem = yield* plugin.readByIdentity(
+        SourceIdentity.fromKey(plugin.identity, 102)
+      );
+
+      expect(page.items.map((item) => item.identity.encoded)).toEqual([
+        "101",
+        "102",
+      ]);
+      expect(lookupItem?.identity.key).toBe(102);
+      expect(fakeSql.calls[0]?.values).toEqual([2]);
+      expect(fakeSql.calls[1]?.values).toEqual([102]);
+    })
   );
 
   it.effect("can close SQL client requirements on the source plugin", () =>
@@ -401,8 +489,7 @@ describe("SqlSourcePlugin", () => {
       const source = makeSqlArticleSource({ batchSize: 0 });
       const fakeSql = makeFakeSqlClient([articleRows]);
       const plugin = yield* SourcePlugin.pipe(
-        Effect.provide(source.layer),
-        Effect.provide(fakeSql.layer)
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
       );
 
       const error = yield* Effect.flip(plugin.read(null));
@@ -428,8 +515,7 @@ describe("SqlSourcePlugin", () => {
         });
         const fakeSql = makeFakeSqlClient([[articleRows[0]]]);
         const plugin = yield* SourcePlugin.pipe(
-          Effect.provide(source.layer),
-          Effect.provide(fakeSql.layer)
+          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
         );
 
         const error = yield* Effect.flip(plugin.read(null));
@@ -459,8 +545,7 @@ describe("SqlSourcePlugin", () => {
           ],
         ]);
         const plugin = yield* SourcePlugin.pipe(
-          Effect.provide(source.layer),
-          Effect.provide(fakeSql.layer)
+          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
         );
 
         const error = yield* Effect.flip(plugin.read(null));
@@ -484,12 +569,16 @@ describe("SqlSourcePlugin", () => {
         ],
       ]);
       const plugin = yield* SourcePlugin.pipe(
-        Effect.provide(source.layer),
-        Effect.provide(fakeSql.layer)
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
       );
 
       const error = yield* Effect.flip(
-        plugin.readByIdentity(toSourceIdentity("article-1"))
+        plugin.readByIdentity(
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("article-1")
+          )
+        )
       );
 
       expect(error).toBeInstanceOf(SourcePluginError);
@@ -511,8 +600,7 @@ describe("SqlSourcePlugin", () => {
       const source = makeSqlArticleSource();
       const fakeSql = makeFakeSqlClient([duplicateRows]);
       const plugin = yield* SourcePlugin.pipe(
-        Effect.provide(source.layer),
-        Effect.provide(fakeSql.layer)
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
       );
 
       const error = yield* Effect.flip(plugin.read(null));
@@ -534,12 +622,16 @@ describe("SqlSourcePlugin", () => {
       const source = makeSqlArticleSource();
       const fakeSql = makeFakeSqlClient([articleRows]);
       const plugin = yield* SourcePlugin.pipe(
-        Effect.provide(source.layer),
-        Effect.provide(fakeSql.layer)
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
       );
 
       const error = yield* Effect.flip(
-        plugin.readByIdentity(toSourceIdentity("article-1"))
+        plugin.readByIdentity(
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("article-1")
+          )
+        )
       );
 
       expect(error).toBeInstanceOf(SourcePluginError);
@@ -560,12 +652,16 @@ describe("SqlSourcePlugin", () => {
         const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([[articleRows[1]]]);
         const plugin = yield* SourcePlugin.pipe(
-          Effect.provide(source.layer),
-          Effect.provide(fakeSql.layer)
+          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
         );
 
         const error = yield* Effect.flip(
-          plugin.readByIdentity(toSourceIdentity("article-1"))
+          plugin.readByIdentity(
+            SourceIdentity.fromEncoded(
+              plugin.identity,
+              toEncodedSourceIdentity("article-1")
+            )
+          )
         );
 
         expect(error).toBeInstanceOf(SourcePluginError);
@@ -597,8 +693,8 @@ describe("SqlSourcePlugin", () => {
       const legacyPage = yield* legacyPlugin.read(null);
       const crmPage = yield* crmPlugin.read(null);
 
-      expect(legacyPage.items[0]?.identity).toBe("legacy-article");
-      expect(crmPage.items[0]?.identity).toBe("crm-article");
+      expect(legacyPage.items[0]?.identity.encoded).toBe("legacy-article");
+      expect(crmPage.items[0]?.identity.encoded).toBe("crm-article");
       expect(legacySql.calls).toHaveLength(1);
       expect(crmSql.calls).toHaveLength(1);
     })
@@ -611,12 +707,16 @@ describe("SqlSourcePlugin", () => {
         const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([[], []]);
         const plugin = yield* SourcePlugin.pipe(
-          Effect.provide(source.layer),
-          Effect.provide(fakeSql.layer)
+          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
         );
 
         const page = yield* plugin.read(null);
-        const item = yield* plugin.readByIdentity(toSourceIdentity("missing"));
+        const item = yield* plugin.readByIdentity(
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("missing")
+          )
+        );
 
         expect(page).toEqual({ items: [] });
         expect(page.nextCursor).toBeUndefined();
@@ -631,8 +731,7 @@ describe("SqlSourcePlugin", () => {
       const cause = new Error("database unavailable");
       const fakeSql = makeFakeSqlClient([sqlFailure(cause)]);
       const plugin = yield* SourcePlugin.pipe(
-        Effect.provide(source.layer),
-        Effect.provide(fakeSql.layer)
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
       );
 
       const error = yield* Effect.flip(plugin.read(null));
@@ -736,14 +835,15 @@ describe("SqlSourcePlugin", () => {
               id: row.id,
               updated_at: row.updated_at,
             },
-            identity: row.id,
+            identityKey: row.id,
             version: row.content_hash,
           }),
+          identity: SqlArticleIdentity,
           lookup: (sql, identity) =>
             sql<SqliteArticleRow>`
               select id, updated_at, content_hash, title, views
               from articles
-              where id = ${identity}
+              where id = ${identity.key}
             `,
           read: (sql, cursor, limit) =>
             cursor === null
@@ -778,7 +878,7 @@ describe("SqlSourcePlugin", () => {
           id: "sqlite-articles",
           pipeline: (sourceItem) => {
             pipelineItems.push(
-              `${sourceItem.identity}:${sourceItem.version}:${sourceItem.item.views}`
+              `${sourceItem.identity.encoded}:${sourceItem.version}:${sourceItem.item.views}`
             );
 
             return destination.commands.upsertEntry({
@@ -793,7 +893,10 @@ describe("SqlSourcePlugin", () => {
         const summary = yield* runMigration(definition);
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
         const lookupItem = yield* plugin.readByIdentity(
-          toSourceIdentity("article-b")
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("article-b")
+          )
         );
         const sqlTexts = sqlite.calls.map((call) =>
           normalizeSqlText(call.strings)
@@ -817,7 +920,7 @@ describe("SqlSourcePlugin", () => {
         expect(sqlTexts.every((text) => !text.includes("limit 1"))).toBe(true);
         expect(sqlTexts.some((text) => text.includes("where id ="))).toBe(true);
         expect(lookupItem).toEqual({
-          identity: "article-b",
+          identity: SourceIdentity.fromKey(plugin.identity, "article-b"),
           item: rows[1],
           version: "hash-2",
         });
@@ -854,14 +957,15 @@ describe("SqlSourcePlugin", () => {
             id: row.id,
             updated_at: row.updated_at,
           },
-          identity: row.id,
+          identityKey: row.id,
           version: row.content_hash,
         }),
+        identity: SqlArticleIdentity,
         lookup: (sql, identity) =>
           sql<SqliteArticleRow>`
               select id, updated_at, content_hash, title, views
               from articles
-              where id = ${identity}
+              where id = ${identity.key}
             `,
         read: (sql, cursor, limit) =>
           cursor === null
@@ -890,7 +994,7 @@ describe("SqlSourcePlugin", () => {
         contentType: "article",
       });
       const pipelineItems: Array<{
-        readonly identity: SourceIdentityInput;
+        readonly sourceIdentity: EncodedSourceIdentityInput;
         readonly valueType: string;
         readonly views: number;
       }> = [];
@@ -900,7 +1004,7 @@ describe("SqlSourcePlugin", () => {
         id: "sqlite-real-articles",
         pipeline: (sourceItem) => {
           pipelineItems.push({
-            identity: sourceItem.identity,
+            sourceIdentity: sourceItem.identity.encoded,
             valueType: typeof sourceItem.item.views,
             views: sourceItem.item.views,
           });
@@ -917,18 +1021,21 @@ describe("SqlSourcePlugin", () => {
       const summary = yield* runMigration(definition);
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
       const lookupItem = yield* plugin.readByIdentity(
-        toSourceIdentity("article-b")
+        SourceIdentity.fromEncoded(
+          plugin.identity,
+          toEncodedSourceIdentity("article-b")
+        )
       );
 
       expect(summary.status).toBe("succeeded");
       expect(summary.definitions[0]?.counts.migrated).toBe(3);
       expect(pipelineItems).toEqual([
-        { identity: "article-a", valueType: "number", views: 1 },
-        { identity: "article-b", valueType: "number", views: 2 },
-        { identity: "article-c", valueType: "number", views: 3 },
+        { sourceIdentity: "article-a", valueType: "number", views: 1 },
+        { sourceIdentity: "article-b", valueType: "number", views: 2 },
+        { sourceIdentity: "article-c", valueType: "number", views: 3 },
       ]);
       expect(lookupItem).toEqual({
-        identity: "article-b",
+        identity: SourceIdentity.fromKey(plugin.identity, "article-b"),
         item: {
           content_hash: "hash-2",
           id: "article-b",

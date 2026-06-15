@@ -295,8 +295,8 @@ const renderPlanNotice = (notice: MigrationDefinitionPlanNotice): string => {
   switch (notice._tag) {
     case "MigrationDefinitionDuplicateRequestedDefinitionIgnored":
       return `Duplicate requested definition ignored: ${notice.definitionId}`;
-    case "MigrationDefinitionDuplicateTargetIdIgnored":
-      return `Duplicate target id ignored: ${notice.sourceIdentity}`;
+    case "MigrationDefinitionDuplicateSourceIdentityTargetIgnored":
+      return `Duplicate source identity target ignored: ${notice.sourceIdentity}`;
     case "MigrationDefinitionOptionalDependencyCycleIgnored":
       return `Ignored optional dependency cycle: ${notice.definitionIds.join(
         " -> "
@@ -339,7 +339,7 @@ const renderPlanScope = (
   ...(input.mode === undefined ? [] : [`Mode       ${input.mode}`]),
   ...(input.sourceIdentities === undefined
     ? []
-    : [`Target ids ${input.sourceIdentities.join(", ")}`]),
+    : [`Target source identities ${input.sourceIdentities.join(", ")}`]),
 ];
 
 export const renderRunPlan = (

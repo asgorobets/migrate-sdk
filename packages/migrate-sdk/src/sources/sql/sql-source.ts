@@ -10,11 +10,16 @@ import {
 } from "../../domain/definition.ts";
 import type { SourcePluginError } from "../../domain/errors.ts";
 import type {
-  SourceIdentityInput,
+  SourceIdentity,
+  SourceIdentityDefinition,
+  SourceIdentitySnapshotKey,
+  SourceIdentityTarget,
   SourceVersionInput,
 } from "../../domain/ids.ts";
-import { toSourceIdentity } from "../../domain/ids.ts";
-import type { SourceItemInput } from "../../domain/source.ts";
+import {
+  encodeSourceIdentityKey,
+  type SourceItemInput,
+} from "../../domain/source.ts";
 import {
   type AnySourcePlugin,
   SourcePlugin as SourcePluginService,
@@ -33,9 +38,12 @@ export interface SqlSourceMetadataContext {
   readonly rowIndex: number;
 }
 
-export interface SqlSourceMetadataSuccess<Cursor> {
+export interface SqlSourceMetadataSuccess<
+  Cursor,
+  IdentityKey extends SourceIdentitySnapshotKey = string,
+> {
   readonly cursor: Cursor;
-  readonly identity: SourceIdentityInput;
+  readonly identityKey: IdentityKey;
   readonly kind: "success";
   readonly version: SourceVersionInput;
 }
@@ -46,9 +54,10 @@ export interface SqlSourceMetadataFailure {
   readonly message: string;
 }
 
-export type SqlSourceMetadataResult<Cursor> =
-  | SqlSourceMetadataFailure
-  | SqlSourceMetadataSuccess<Cursor>;
+export type SqlSourceMetadataResult<
+  Cursor,
+  IdentityKey extends SourceIdentitySnapshotKey = string,
+> = SqlSourceMetadataFailure | SqlSourceMetadataSuccess<Cursor, IdentityKey>;
 
 export type SqlSourceRead<Row, Cursor> = (
   sql: SqlClient.SqlClient,
@@ -56,23 +65,43 @@ export type SqlSourceRead<Row, Cursor> = (
   limit: number
 ) => Statement.Statement<Row>;
 
-export type SqlSourceLookup<Row> = (
+export type SqlSourceLookup<
+  Row,
+  IdentityKey extends SourceIdentitySnapshotKey = string,
+> = (
   sql: SqlClient.SqlClient,
-  identity: SourceIdentityInput
+  identity: SourceIdentityTarget<IdentityKey>
 ) => Statement.Statement<Row>;
 
-export type SqlSourceMetadata<Row, Cursor> = (
+export type SqlSourceMetadata<
+  Row,
+  Cursor,
+  IdentityKey extends SourceIdentitySnapshotKey = string,
+> = (
   row: Readonly<Row>,
   context: SqlSourceMetadataContext
-) => SqlSourceMetadataResult<Cursor>;
+) => SqlSourceMetadataResult<Cursor, IdentityKey>;
 
-export interface SqlSourceOptions<Source, Cursor, SourceInput = unknown> {
+interface SqlSourceBaseOptions<Source, Cursor, SourceInput = unknown> {
   readonly batchSize: number;
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
-  readonly getSourceMetadata: SqlSourceMetadata<SourceInput, Cursor>;
-  readonly lookup: SqlSourceLookup<SourceInput>;
   readonly read: SqlSourceRead<SourceInput, Cursor>;
   readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+}
+
+export interface SqlSourceOptions<
+  Source,
+  Cursor,
+  SourceInput = unknown,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> extends SqlSourceBaseOptions<Source, Cursor, SourceInput> {
+  readonly getSourceMetadata: SqlSourceMetadata<
+    SourceInput,
+    Cursor,
+    IdentityKey
+  >;
+  readonly identity: SourceIdentityDefinition<IdentityKey>;
+  readonly lookup: SqlSourceLookup<SourceInput, IdentityKey>;
 }
 
 const executeStatement = <Row>(
@@ -83,12 +112,20 @@ const executeStatement = <Row>(
     Effect.mapError((cause) => makeSqlSourceExecutionError(operation, cause))
   );
 
-const extractMetadata = <Source, Cursor, SourceInput>(
-  options: SqlSourceOptions<Source, Cursor, SourceInput>,
+const extractMetadata = <
+  Source,
+  Cursor,
+  SourceInput,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: SqlSourceOptions<Source, Cursor, SourceInput, IdentityKey>,
   operation: "read" | "readByIdentity",
   row: SourceInput,
   rowIndex: number
-): Effect.Effect<SqlSourceMetadataResult<Cursor>, SourcePluginError> =>
+): Effect.Effect<
+  SqlSourceMetadataResult<Cursor, IdentityKey>,
+  SourcePluginError
+> =>
   Effect.try({
     try: () => options.getSourceMetadata(row, { rowIndex }),
     catch: (cause) =>
@@ -100,12 +137,20 @@ const extractMetadata = <Source, Cursor, SourceInput>(
       ),
   });
 
-const sourceItemFromRow = <Source, Cursor, SourceInput>(
-  options: SqlSourceOptions<Source, Cursor, SourceInput>,
+const sourceItemFromRow = <
+  Source,
+  Cursor,
+  SourceInput,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: SqlSourceOptions<Source, Cursor, SourceInput, IdentityKey>,
   operation: "read" | "readByIdentity",
   row: SourceInput,
   rowIndex: number
-): Effect.Effect<SourceItemInput<SourceInput>, SourcePluginError> =>
+): Effect.Effect<
+  SourceItemInput<SourceInput, IdentityKey>,
+  SourcePluginError
+> =>
   extractMetadata(options, operation, row, rowIndex).pipe(
     Effect.flatMap((metadata) =>
       metadata.kind === "failure"
@@ -118,19 +163,25 @@ const sourceItemFromRow = <Source, Cursor, SourceInput>(
             )
           )
         : Effect.succeed({
-            identity: metadata.identity,
+            identityKey: metadata.identityKey,
             item: row,
             version: metadata.version,
           })
     )
   );
 
-const readRows = <Source, Cursor, SourceInput>(
-  options: SqlSourceOptions<Source, Cursor, SourceInput>,
+const readRows = <
+  Source,
+  Cursor,
+  SourceInput,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: SqlSourceOptions<Source, Cursor, SourceInput, IdentityKey>,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>,
   sql: SqlClient.SqlClient,
   cursor: Cursor | null
 ): Effect.Effect<
-  SourceReadResultInput<SourceInput, Cursor>,
+  SourceReadResultInput<SourceInput, Cursor, IdentityKey>,
   SourcePluginError
 > =>
   Effect.gen(function* () {
@@ -142,7 +193,7 @@ const readRows = <Source, Cursor, SourceInput>(
       "read",
       options.read(sql, cursor, options.batchSize)
     );
-    const items: SourceItemInput<SourceInput>[] = [];
+    const items: SourceItemInput<SourceInput, IdentityKey>[] = [];
     const sourceIdentityRows = new Map<string, number>();
     let nextCursor: Cursor | undefined;
 
@@ -170,7 +221,10 @@ const readRows = <Source, Cursor, SourceInput>(
         );
       }
 
-      const sourceIdentity = toSourceIdentity(metadata.identity);
+      const sourceIdentity = yield* encodeSourceIdentityKey(
+        identityDefinition,
+        metadata.identityKey
+      );
       const existingRowIndex = sourceIdentityRows.get(sourceIdentity);
 
       if (existingRowIndex !== undefined) {
@@ -188,7 +242,7 @@ const readRows = <Source, Cursor, SourceInput>(
 
       sourceIdentityRows.set(sourceIdentity, rowIndex);
       items.push({
-        identity: metadata.identity,
+        identityKey: metadata.identityKey,
         item: row,
         version: metadata.version,
       });
@@ -201,16 +255,22 @@ const readRows = <Source, Cursor, SourceInput>(
     };
   });
 
-const makeImplementation = <Source, Cursor, SourceInput>(
-  options: SqlSourceOptions<Source, Cursor, SourceInput>,
-  sql: SqlClient.SqlClient
-): SourcePluginImplementation<Source, Cursor, SourceInput> => {
+const makeImplementation = <
+  Source,
+  Cursor,
+  SourceInput,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: SqlSourceOptions<Source, Cursor, SourceInput, IdentityKey>,
+  sql: SqlClient.SqlClient,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+): SourcePluginImplementation<Source, Cursor, IdentityKey, SourceInput> => {
   const read = Effect.fn("SqlSource.read")((cursor: Cursor | null) =>
-    readRows(options, sql, cursor)
+    readRows(options, identityDefinition, sql, cursor)
   );
 
   const readByIdentity = Effect.fn("SqlSource.readByIdentity")(function* (
-    identity: SourceIdentityInput
+    identity: SourceIdentity<IdentityKey>
   ) {
     const rows = yield* executeStatement(
       "readByIdentity",
@@ -222,17 +282,29 @@ const makeImplementation = <Source, Cursor, SourceInput>(
     }
 
     if (rows.length > 1) {
-      return yield* makeSqlSourceLookupMultipleRowsError(identity, rows.length);
+      return yield* makeSqlSourceLookupMultipleRowsError(
+        identity.encoded,
+        rows.length
+      );
+    }
+
+    const [row] = rows;
+
+    if (row === undefined) {
+      return null;
     }
 
     const sourceItem = yield* sourceItemFromRow(
       options,
       "readByIdentity",
-      rows[0] as SourceInput,
+      row,
       0
     );
-    const requestedIdentity = toSourceIdentity(identity);
-    const returnedIdentity = toSourceIdentity(sourceItem.identity);
+    const requestedIdentity = identity.encoded;
+    const returnedIdentity = yield* encodeSourceIdentityKey(
+      identityDefinition,
+      sourceItem.identityKey
+    );
 
     if (returnedIdentity !== requestedIdentity) {
       return yield* makeSqlSourceLookupIdentityMismatchError(
@@ -251,34 +323,48 @@ const makeImplementation = <Source, Cursor, SourceInput>(
   };
 };
 
-const make = <Source, Cursor, SourceInput>(
-  options: SqlSourceOptions<Source, Cursor, SourceInput>
-): ConfiguredSourcePlugin<
+const make = <
   Source,
   Cursor,
   SourceInput,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: SqlSourceOptions<Source, Cursor, SourceInput, IdentityKey>
+): ConfiguredSourcePlugin<
+  Source,
+  Cursor,
+  IdentityKey,
+  SourceInput,
   never,
   SqlClient.SqlClient
-> =>
-  defineSourcePluginLayer({
+> => {
+  return defineSourcePluginLayer({
     layer: Layer.effect(
       SourcePluginService,
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         const source = defineSourcePlugin({
           cursorSchema: options.cursorSchema,
-          make: () => makeImplementation(options, sql),
+          identity: options.identity,
+          make: () => makeImplementation(options, sql, options.identity),
           sourceSchema: options.sourceSchema,
         });
 
         return yield* SourcePluginService.pipe(Effect.provide(source.layer));
       })
     ),
+    identity: options.identity,
     sourceSchema: options.sourceSchema,
   });
+};
 
-const makeLayer = <Source, Cursor, SourceInput>(
-  options: SqlSourceOptions<Source, Cursor, SourceInput>
+const makeLayer = <
+  Source,
+  Cursor,
+  SourceInput,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: SqlSourceOptions<Source, Cursor, SourceInput, IdentityKey>
 ): Layer.Layer<AnySourcePlugin, never, SqlClient.SqlClient> =>
   make(options).layer;
 

@@ -4,10 +4,10 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
-import { CsvSourcePlugin } from "migrate-sdk/sources/csv";
-import { toSourceIdentity } from "../../domain/ids.ts";
+import { CsvIdentity, CsvSourcePlugin } from "migrate-sdk/sources/csv";
+import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
 import { SourcePlugin } from "../../services/source-plugin.ts";
-import { CsvParserCore } from "./csv-source.ts";
+import { CsvParserCore, type CsvParserOptions } from "./csv-source.ts";
 
 const CsvArticleSource = Schema.Struct({
   id: Schema.String,
@@ -37,21 +37,33 @@ const CsvBookstoreCatalogRowSource = Schema.Struct({
 
 const sha256HexPattern = /^[a-f0-9]{64}$/;
 
-const csvOptions = {
+const CsvArticleIdentity = CsvIdentity.column({
+  column: "id",
+  id: "csv-article@v1",
+});
+
+const CsvBookstoreCatalogIdentity = CsvIdentity.columns({
+  columns: ["book_id", "format"],
+  id: "csv-bookstore-catalog@v1",
+});
+
+const csvOptions: CsvParserOptions<string> = {
   dialect: { kind: "standard" },
   emptyRows: { kind: "skip" },
   headers: { kind: "from-row", rowIndex: 0 },
-  identity: { kind: "columns", columns: ["id"] },
+  identity: CsvArticleIdentity,
   version: { kind: "row-hash" },
-} as const;
+};
 
-const bookstoreCatalogOptions = {
+const bookstoreCatalogOptions: CsvParserOptions<
+  readonly [string, string, ...string[]]
+> = {
   dialect: { kind: "standard" },
   emptyRows: { kind: "skip" },
   headers: { kind: "from-row", rowIndex: 2 },
-  identity: { kind: "columns", columns: ["book_id", "format"] },
+  identity: CsvBookstoreCatalogIdentity,
   version: { kind: "column", column: "catalog_version" },
-} as const;
+};
 
 const testPlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
 
@@ -66,7 +78,7 @@ describe("CsvParserCore", () => {
         );
 
         expect(document.rows).toHaveLength(1);
-        expect(document.rows[0]?.sourceItem.identity).toBe("42");
+        expect(document.rows[0]?.sourceItem.identityKey).toBe("42");
         expect(document.rows[0]?.sourceItem.version).toMatch(sha256HexPattern);
         expect(document.rows[0]?.sourceItem.item).toEqual({
           id: " 42 ",
@@ -105,7 +117,7 @@ describe("CsvParserCore", () => {
         csvOptions
       );
 
-      expect(document.rows[0]?.sourceItem.identity).toBe("42");
+      expect(document.rows[0]?.sourceItem.identityKey).toBe("42");
     })
   );
 
@@ -159,7 +171,7 @@ describe("CsvParserCore", () => {
       const exit = yield* Effect.exit(
         CsvParserCore.parse('id,title\n42,a"bad\n43,ok\n', {
           ...csvOptions,
-          identity: { kind: "columns", columns: ["id"] },
+          identity: CsvArticleIdentity,
           version: { kind: "row-hash" },
         })
       );
@@ -228,7 +240,7 @@ describe("CsvSourcePlugin", () => {
       const read = yield* plugin.read(null);
 
       expect(read.items).toHaveLength(4);
-      expect(read.items.map((item) => item.identity)).toEqual([
+      expect(read.items.map((item) => item.identity.encoded)).toEqual([
         JSON.stringify(["BOOK-001", "paperback"]),
         JSON.stringify(["BOOK-001", "ebook"]),
         JSON.stringify(["BOOK-002", "hardcover"]),
@@ -246,7 +258,10 @@ describe("CsvSourcePlugin", () => {
       );
 
       const lookedUp = yield* plugin.readByIdentity(
-        toSourceIdentity(JSON.stringify(["BOOK-002", "hardcover"]))
+        SourceIdentity.fromEncoded(
+          plugin.identity,
+          toEncodedSourceIdentity(JSON.stringify(["BOOK-002", "hardcover"]))
+        )
       );
 
       expect(lookedUp?.item.primary_author_id).toBe("AUTH-002");

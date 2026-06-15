@@ -30,13 +30,18 @@ shape passed to the identity key callback. The SDK standardizes the identity
 envelope all source plugins expose:
 
 ```ts
+const tuple2 = <A, B>(first: A, second: B): readonly [A, B] => [
+  first,
+  second,
+]
+
 identity: {
   id: "business-address@v1",
   schema: SourceIdentity.tuple([
     SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
     SourceIdentity.part("addressIndex", Schema.Int),
   ]),
-  key: ({ parent, item }) => [parent.key, item.index] as const,
+  key: ({ parent, item }) => tuple2(parent.key, item.index),
 }
 ```
 
@@ -145,7 +150,7 @@ const businessAddressesSource = DocumentSourcePlugin.make({
       SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
       SourceIdentity.part("addressIndex", Schema.Int),
     ]),
-    key: ({ parent, item }) => [parent.key, item.index] as const,
+    key: ({ parent, item }) => tuple2(parent.key, item.index),
   },
   lookup: { kind: "scan" },
   version: { kind: "content-hash" },
@@ -155,14 +160,14 @@ const businessAddressesSource = DocumentSourcePlugin.make({
 `SourceIdentity.part(name, schema)` attaches the part name through Effect Schema
 key annotations. The tuple index is the durable position. The part name is used
 for diagnostics, status reports, CLI help, reset/rekey tooling, and contract
-fingerprints.
+fingerprints. Part names are labels, not semantic lookup handles; tuple
+position remains canonical.
 
 The SDK should reject unsupported source identity schema shapes at configuration
 time:
 
 - raw `Schema.Struct` as the canonical source identity key
 - tuples with unnamed parts
-- tuples with duplicate part names
 - optional tuple elements
 - tuple rest elements
 - nested object, array, or record parts unless a future identity codec
@@ -180,7 +185,7 @@ When the same identity shape is reused, migration authors can extract the
 source plugin options:
 
 ```ts
-const BusinessAddressIdentity = SourceIdentity.define({
+const BusinessAddressIdentity = SourceIdentity.make({
   id: "business-address@v1",
   schema: SourceIdentity.tuple([
     SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
@@ -196,7 +201,6 @@ identity schema contract:
 interface SourceIdentityDefinition<Key> {
   readonly id: SourceIdentityContractId
   readonly schema: SourceIdentitySchema<Key>
-  readonly encode: (key: Key) => EncodedSourceIdentity
   readonly fingerprint: SourceIdentityContractFingerprint
 }
 ```
@@ -214,7 +218,7 @@ const businessAddressesSource = DocumentSourcePlugin.make({
   },
   identity: {
     ...BusinessAddressIdentity,
-    key: ({ parent, item }) => [parent.key, item.index] as const,
+    key: ({ parent, item }) => tuple2(parent.key, item.index),
   },
   lookup: { kind: "scan" },
   version: { kind: "content-hash" },
@@ -231,8 +235,9 @@ second generic `fields` API.
 Every source plugin exposes the same `id`/`schema`/`key` envelope, but the
 `key` authoring shape can remain plugin-specific.
 
-For CSV, identity derivation is naturally column-based. Tuple positions map to
-column positions:
+For CSV, identity derivation is naturally column-based. The plugin exposes a
+CSV-native helper and compiles it into the shared schema-backed identity
+contract internally:
 
 ```ts
 const csvSource = CsvSourcePlugin.make({
@@ -241,17 +246,10 @@ const csvSource = CsvSourcePlugin.make({
   dialect: { kind: "standard" },
   emptyRows: { kind: "skip" },
   headers: { kind: "from-row", rowIndex: 0 },
-  identity: {
+  identity: CsvIdentity.columns({
     id: "business-address@v1",
-    schema: SourceIdentity.tuple([
-      SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
-      SourceIdentity.part("addressIndex", Schema.Int),
-    ]),
-    key: {
-      kind: "columns",
-      columns: ["business_unit_key", "address_index"],
-    },
-  },
+    columns: ["business_unit_key", "address_index"],
+  }),
   version: { kind: "row-hash" },
   sourceSchema: CsvBusinessAddress,
 })
@@ -275,7 +273,7 @@ const documentSource = DocumentSourcePlugin.make({
       SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
       SourceIdentity.part("addressIndex", Schema.Int),
     ]),
-    key: ({ parent, item }) => [parent.key, item.index] as const,
+    key: ({ parent, item }) => tuple2(parent.key, item.index),
   },
   lookup: { kind: "scan" },
   version: { kind: "content-hash" },
@@ -329,7 +327,7 @@ parse it before producing the key:
 identity: {
   id: "business-address@v1",
   schema: BusinessAddressIdentitySchema,
-  key: ({ parent, item }) => [parent.key, item.index] as const,
+  key: ({ parent, item }) => tuple2(parent.key, item.index),
 }
 ```
 
@@ -341,22 +339,20 @@ The identity contract fingerprint should include at least:
 - the plugin identity strategy
 - any declarative mapping from source-native fields to identity key positions
 
-For declarative plugins, the source-to-key mapping is fingerprintable:
+For declarative plugins, the source-to-key mapping is fingerprintable. The
+plugin should expose a source-native helper rather than asking migration authors
+to assemble the low-level `SourceIdentity` envelope directly:
 
 ```ts
-identity: {
+identity: CsvIdentity.columns({
   id: "business-address@v1",
-  schema: BusinessAddressIdentitySchema,
-  key: {
-    kind: "columns",
-    columns: ["business_unit_key", "address_index"],
-  },
-}
+  columns: ["business_unit_key", "address_index"],
+})
 ```
 
 Changing the second column from `"address_index"` to `"address_key"` changes
-the derivation fingerprint even if the identity key schema is still
-`readonly [string, number]`.
+the derivation fingerprint. The CSV plugin still compiles the helper into a
+schema-backed `SourceIdentity` contract internally.
 
 For function-based identity derivation, the schema is fingerprintable but the
 function body is not. JavaScript function source is not a stable public
@@ -368,7 +364,7 @@ require the user-authored `identity.id` to carry the compatibility promise:
 identity: {
   id: "business-address@v1",
   schema: BusinessAddressIdentitySchema,
-  key: ({ parent, item }) => [parent.key, item.index] as const,
+  key: ({ parent, item }) => tuple2(parent.key, item.index),
 }
 ```
 
@@ -398,18 +394,25 @@ The id gives humans a stable compatibility name. The fingerprint lets the
 runtime detect accidental contract drift under the same id.
 
 The migration store persists the structured source identity and an encoded
-source identity key. The encoded key is used for durable lookup and operator
-targeting; the structured identity remains available to tracking evaluation,
-rollback pipelines, status reports, and inspection APIs.
+source identity key. The encoded key is used for durable lookup and internal
+targeting after operator input is parsed through the source identity schema; the
+structured identity remains available to tracking evaluation, rollback
+pipelines, status reports, and inspection APIs.
 
 ## Source Identity Targeting
 
-Source identity targeting uses one repeatable `--id` flag. The selected
-migration definition's `identity.schema` decides how the text is parsed.
+Source identity targeting uses the `--id` flag. The selected migration
+definition's `identity.schema` decides how the text is parsed. Forward run
+targeting is single-identity in this slice; rollback targeting may accept
+multiple identities.
 
 ```sh
-migrate run articles --id article-1 --id article-2
+migrate run articles --id article-1
 ```
+
+Multiple source identities for forward runs are a future capability. Supporting
+them requires a plural targeted-run mode with explicit per-target lookup
+failure, continuation, and reporting semantics.
 
 Composite keys use tuple order. Part names come from schema annotations and are
 used in help and error messages:
@@ -418,10 +421,16 @@ used in help and error messages:
 migrate run business-addresses --id 'bu-1:1'
 ```
 
-The delimiter and escaping rules belong to the CLI implementation, but the API
-contract is positional: the first token is decoded with tuple part 0, the second
-token with tuple part 1, and so on. The schema validates the decoded tuple
-before targeting starts.
+Tuple text is split on `:` first, then each part is percent-decoded. A key part
+that contains `:` must escape it:
+
+```sh
+migrate run business-addresses --id 'bu%3Awest:1'
+```
+
+The API contract is positional: the first token is decoded with tuple part 0,
+the second token with tuple part 1, and so on. The schema validates the decoded
+tuple before targeting starts.
 
 The CLI flow is:
 

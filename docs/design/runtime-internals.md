@@ -257,9 +257,11 @@ File stores can use exclusive creation for local development.
 ## Reference Lookup And Stubs
 
 `MigrationReferenceLookup` reads migrated destination identities from migration
-item state. It may target one definition id or an ordered list of definition
-ids. For multiple definition ids, lookup returns the first migrated or
-needs-update reference found in lookup order.
+item state. It targets one referenced migration definition object or an ordered
+list of referenced migration definition/source identity key pairs. For multiple
+targets, lookup validates and encodes each decoded source identity key against
+that target definition's `source.identity` contract and returns the first
+migrated or needs-update reference found in lookup order.
 
 A declared dependency gives same-run ordering and locking guarantees, but lookup
 itself can target definitions that are not declared dependencies.
@@ -269,6 +271,10 @@ must provide a `stub` hook. Stub creation runs in a scoped migration run for the
 referenced definition and records a `needs-update` item state with a usable
 destination identity. The source identity is enough to create the stub; the full
 referenced source payload is not required.
+
+For ordered lookup targets, `stub: true` uses the first target when no existing
+reference is found. A later target can be selected explicitly with
+`stub: { definition }`.
 
 ## Execution Adapter Direction
 

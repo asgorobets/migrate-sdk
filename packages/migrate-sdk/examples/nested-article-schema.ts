@@ -3,6 +3,7 @@ import {
   defineMigration,
   type MigrationRunSummary,
   runMigration,
+  SourceIdentity,
 } from "migrate-sdk";
 import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
@@ -42,6 +43,11 @@ const NestedArticle = Schema.Struct({
   title: Schema.Trim,
 });
 
+const NestedArticleIdentity = SourceIdentity.make({
+  id: "nested-article@v1",
+  schema: SourceIdentity.key("articleId", Schema.NonEmptyString),
+});
+
 const ArticleEntryFields = Schema.Struct({
   authorDisplayName: Schema.String,
   locale: ArticleLocale,
@@ -78,7 +84,7 @@ export interface NestedArticleSchemaExampleResult {
 
 const sourceItems = [
   {
-    identity: "article:schema-first:en-US",
+    identityKey: "article:schema-first:en-US",
     version: "source-version-1",
     item: {
       author: {
@@ -112,6 +118,7 @@ export const makeNestedArticleSchemaMigration = () => {
   const migration = defineMigration({
     id: "nested-articles",
     source: InMemorySourcePlugin.make({
+      identity: NestedArticleIdentity,
       items: sourceItems,
       sourceSchema: NestedArticle,
     }),

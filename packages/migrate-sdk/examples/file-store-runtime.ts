@@ -5,6 +5,7 @@ import {
   defineMigration,
   type MigrationRunSummary,
   runMigration,
+  SourceIdentity,
   skipItem,
 } from "migrate-sdk";
 import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
@@ -19,6 +20,11 @@ const Article = Schema.Struct({
 
 const ArticleEntryFields = Schema.Struct({
   title: Schema.String,
+});
+
+const ArticleSourceIdentity = SourceIdentity.make({
+  id: "file-store-article@v1",
+  schema: SourceIdentity.key("articleId", Schema.NonEmptyString),
 });
 
 export interface RunFileStoreExampleOptions {
@@ -45,7 +51,7 @@ const defaultFileStoreDirectory = fileURLToPath(
 
 const sourceItems = [
   {
-    identity: "article:1:en-US",
+    identityKey: "article:1:en-US",
     version: "source-version-1",
     item: {
       publish: true,
@@ -53,7 +59,7 @@ const sourceItems = [
     },
   },
   {
-    identity: "article:2:en-US",
+    identityKey: "article:2:en-US",
     version: "source-version-1",
     item: {
       publish: false,
@@ -61,7 +67,7 @@ const sourceItems = [
     },
   },
   {
-    identity: "article:3:en-US",
+    identityKey: "article:3:en-US",
     version: "source-version-1",
     item: {
       publish: true,
@@ -98,6 +104,7 @@ export const makeFileStoreArticlesMigration = ({
     }),
     rollback: () => destination.commands.deleteEntry(),
     source: InMemorySourcePlugin.make({
+      identity: ArticleSourceIdentity,
       items: sourceItems,
       sourceSchema: Article,
     }),

@@ -7,8 +7,17 @@ import {
   type SourcePluginImplementation,
 } from "../../domain/definition.ts";
 import { SourcePluginError } from "../../domain/errors.ts";
-import type { SourceIdentityInput } from "../../domain/ids.ts";
-import type { SourceItemInput } from "../../domain/source.ts";
+import type {
+  SourceIdentityContractIdInput,
+  SourceIdentityDefinition,
+  SourceIdentitySchema,
+  SourceIdentitySnapshotKey,
+} from "../../domain/ids.ts";
+import { SourceIdentity } from "../../domain/ids.ts";
+import {
+  encodeSourceIdentityKey,
+  type SourceItemInput,
+} from "../../domain/source.ts";
 import {
   type AnySourcePlugin,
   SourcePlugin,
@@ -20,7 +29,7 @@ export interface JsonFileItemsPath {
   readonly path: string;
 }
 
-export type JsonFileIdentity =
+export type JsonFileIdentitySelector =
   | {
       readonly field: string;
       readonly kind: "field";
@@ -29,6 +38,14 @@ export type JsonFileIdentity =
       readonly fields: readonly string[];
       readonly kind: "fields";
     };
+
+export interface JsonFileIdentity<
+  IdentityKey extends SourceIdentitySnapshotKey,
+> {
+  readonly id: SourceIdentityContractIdInput;
+  readonly key: JsonFileIdentitySelector;
+  readonly schema: SourceIdentitySchema<IdentityKey>;
+}
 
 export type JsonFileVersion =
   | {
@@ -39,9 +56,12 @@ export type JsonFileVersion =
       readonly kind: "content-hash";
     };
 
-export interface JsonFileSourceOptions<Source> {
+export interface JsonFileSourceOptions<
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> {
   readonly batchSize?: number;
-  readonly identity: JsonFileIdentity;
+  readonly identity: JsonFileIdentity<IdentityKey>;
   readonly items: JsonFileItemsPath;
   readonly path: string;
   readonly platform: JsonFileSourcePlatform;
@@ -128,9 +148,14 @@ export interface JsonFileDocumentSubitemSelectors<
   ) => JsonFileSchemaSelection<Selection>;
 }
 
-export type JsonFileDocumentIdentity<Source> = (
-  item: Source
-) => JsonFileIdentityValue;
+export interface JsonFileDocumentIdentity<
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> {
+  readonly id: SourceIdentityContractIdInput;
+  readonly key: (item: Source) => IdentityKey;
+  readonly schema: SourceIdentitySchema<IdentityKey>;
+}
 
 export type JsonFileDocumentVersion<Source> =
   | {
@@ -148,10 +173,14 @@ export interface JsonFileDocumentSourceBaseOptions<Document> {
   readonly platform: JsonFileSourcePlatform;
 }
 
-export interface JsonFileDocumentItemSourceOptions<Document, Selection>
-  extends JsonFileDocumentSourceBaseOptions<Document> {
+export interface JsonFileDocumentItemSourceOptions<
+  Document,
+  Selection,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> extends JsonFileDocumentSourceBaseOptions<Document> {
   readonly identity: JsonFileDocumentIdentity<
-    JsonFileSelectedItem<JsonFileCursorFocus<Selection>>
+    JsonFileSelectedItem<JsonFileCursorFocus<Selection>>,
+    IdentityKey
   >;
   readonly items: JsonFileDocumentItemSelectors<Document, Selection>;
   readonly version: JsonFileDocumentVersion<
@@ -163,12 +192,14 @@ export interface JsonFileDocumentSubitemSourceOptions<
   Document,
   ParentSelection,
   Selection,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
 > extends JsonFileDocumentSourceBaseOptions<Document> {
   readonly identity: JsonFileDocumentIdentity<
     JsonFileSelectedSubitem<
       JsonFileCursorFocus<ParentSelection>,
       JsonFileCursorFocus<Selection>
-    >
+    >,
+    IdentityKey
   >;
   readonly items: JsonFileDocumentSubitemSelectors<
     Document,
@@ -183,9 +214,12 @@ export interface JsonFileDocumentSubitemSourceOptions<
   >;
 }
 
-interface JsonFileCompiledDocumentSourceOptions<Document, Source>
-  extends JsonFileDocumentSourceBaseOptions<Document> {
-  readonly identity: JsonFileDocumentIdentity<Source>;
+interface JsonFileCompiledDocumentSourceOptions<
+  Document,
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> extends JsonFileDocumentSourceBaseOptions<Document> {
+  readonly identity: JsonFileDocumentIdentity<Source, IdentityKey>;
   readonly items: JsonFileCompiledDocumentItems<Source>;
   readonly version: JsonFileDocumentVersion<Source>;
 }
@@ -197,9 +231,12 @@ export const JsonFileSourceCursor = Schema.Struct({
 
 export type JsonFileSourceCursor = typeof JsonFileSourceCursor.Type;
 
-interface JsonFileDocument<Source> {
+interface JsonFileDocument<
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> {
   readonly fileFingerprint: string;
-  readonly items: readonly SourceItemInput<Source>[];
+  readonly items: readonly SourceItemInput<Source, IdentityKey>[];
 }
 
 interface JsonFileSelectionFrame {
@@ -389,7 +426,7 @@ const normalizeFields = (
   });
 
 const fieldsForIdentity = (
-  identity: JsonFileIdentity
+  identity: JsonFileIdentitySelector
 ): Effect.Effect<readonly string[], SourcePluginError> =>
   identity.kind === "field"
     ? normalizeFields([identity.field], "JSON file identity")
@@ -749,6 +786,32 @@ const stringifyIdentityValue = (
 ): Effect.Effect<string, SourcePluginError> =>
   stringifyFieldValue(value, label, itemIndex, label);
 
+const validateIdentityScalar = (
+  value: unknown,
+  itemIndex: number,
+  label: "identity" | "version"
+): Effect.Effect<JsonFileIdentityScalar, SourcePluginError> =>
+  Effect.gen(function* () {
+    if (value === undefined || value === null) {
+      return yield* jsonFileError(`JSON file ${label} field was not found`, {
+        itemIndex,
+      });
+    }
+
+    if (
+      typeof value !== "string" &&
+      typeof value !== "number" &&
+      typeof value !== "boolean"
+    ) {
+      return yield* jsonFileError(
+        `JSON file ${label} field must be a scalar value`,
+        { itemIndex, value }
+      );
+    }
+
+    return value;
+  });
+
 const isIdentityValueArray = (
   value: JsonFileIdentityValue
 ): value is readonly JsonFileIdentityScalar[] => Array.isArray(value);
@@ -792,18 +855,85 @@ const fieldValue = (
         })
       );
 
+const scalarFieldValue = (
+  item: unknown,
+  field: string,
+  itemIndex: number,
+  label: "identity" | "version"
+): Effect.Effect<JsonFileIdentityScalar, SourcePluginError> =>
+  isRecord(item)
+    ? validateIdentityScalar(item[field], itemIndex, label).pipe(
+        Effect.mapError((cause) =>
+          jsonFileError(`JSON file ${label} field must be scalar`, {
+            cause,
+            field,
+            itemIndex,
+          })
+        )
+      )
+    : Effect.fail(
+        jsonFileError(`JSON file ${label} item must be an object`, {
+          field,
+          itemIndex,
+        })
+      );
+
 const buildIdentity = (
   item: unknown,
-  identity: JsonFileIdentity,
+  identity: JsonFileIdentitySelector,
   itemIndex: number
-): Effect.Effect<string, SourcePluginError> =>
+): Effect.Effect<JsonFileIdentityValue, SourcePluginError> =>
   Effect.gen(function* () {
     const fields = yield* fieldsForIdentity(identity);
     const values = yield* Effect.forEach(fields, (field) =>
-      fieldValue(item, field, itemIndex, "identity")
+      scalarFieldValue(item, field, itemIndex, "identity")
     );
 
-    return values.length === 1 ? (values[0] as string) : JSON.stringify(values);
+    if (values.length === 1) {
+      const [value] = values;
+
+      if (value === undefined) {
+        return yield* jsonFileError("JSON file identity field was not found", {
+          itemIndex,
+        });
+      }
+
+      return value;
+    }
+
+    return values;
+  });
+
+const makeJsonFileSourceIdentityDefinition = <
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(identity: {
+  readonly id: SourceIdentityContractIdInput;
+  readonly schema: SourceIdentitySchema<IdentityKey>;
+}): SourceIdentityDefinition<IdentityKey> =>
+  SourceIdentity.make({
+    id: identity.id,
+    schema: identity.schema,
+  });
+
+const decodeIdentityKey = <IdentityKey extends SourceIdentitySnapshotKey>(
+  definition: SourceIdentityDefinition<IdentityKey>,
+  value: unknown,
+  itemIndex: number
+): Effect.Effect<IdentityKey, SourcePluginError> =>
+  Effect.try({
+    try: () => {
+      const decoded = definition.schema.decode(value);
+
+      return SourceIdentity.fromKey(definition, decoded).key;
+    },
+    catch: (cause) =>
+      jsonFileError(
+        "JSON file source identity did not match Source Identity Schema",
+        {
+          cause,
+          itemIndex,
+        }
+      ),
   });
 
 const encodeSourceItemJson = <Source>(
@@ -848,23 +978,31 @@ const buildVersion = <Source>(
     }
   });
 
-const buildDocumentIdentity = <Source>(
+const buildDocumentIdentity = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   item: Source,
-  identity: JsonFileDocumentIdentity<Source>,
+  identity: JsonFileDocumentIdentity<Source, IdentityKey>,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>,
   itemIndex: number
-): Effect.Effect<string, SourcePluginError> =>
-  Effect.try({
-    try: () => identity(item),
-    catch: (cause) =>
-      jsonFileError("Unable to build JSON file source identity", {
-        cause,
-        itemIndex,
-      }),
-  }).pipe(
-    Effect.flatMap((identityValue) =>
-      normalizeIdentityValue(identityValue, itemIndex, "identity")
-    )
-  );
+): Effect.Effect<IdentityKey, SourcePluginError> =>
+  Effect.gen(function* () {
+    const identityValue = yield* Effect.try({
+      try: () => identity.key(item),
+      catch: (cause) =>
+        jsonFileError("Unable to build JSON file source identity", {
+          cause,
+          itemIndex,
+        }),
+    });
+
+    return yield* decodeIdentityKey(
+      identityDefinition,
+      identityValue,
+      itemIndex
+    );
+  });
 
 const buildDocumentVersion = <Source>(
   item: Source,
@@ -908,11 +1046,15 @@ const buildDocumentVersion = <Source>(
     }
   });
 
-const decodeSourceItem = <Source>(
+const decodeSourceItem = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   rawItem: unknown,
   itemIndex: number,
-  options: JsonFileSourceOptions<Source>
-): Effect.Effect<SourceItemInput<Source>, SourcePluginError> =>
+  options: JsonFileSourceOptions<Source, IdentityKey>,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+): Effect.Effect<SourceItemInput<Source, IdentityKey>, SourcePluginError> =>
   Effect.gen(function* () {
     const item = yield* Schema.decodeUnknownEffect(options.sourceSchema)(
       rawItem
@@ -924,7 +1066,16 @@ const decodeSourceItem = <Source>(
         })
       )
     );
-    const identity = yield* buildIdentity(item, options.identity, itemIndex);
+    const identityValue = yield* buildIdentity(
+      item,
+      options.identity.key,
+      itemIndex
+    );
+    const identity = yield* decodeIdentityKey(
+      identityDefinition,
+      identityValue,
+      itemIndex
+    );
     const version = yield* buildVersion(
       item,
       options.version,
@@ -933,17 +1084,21 @@ const decodeSourceItem = <Source>(
     );
 
     return {
-      identity,
+      identityKey: identity,
       item,
       version,
     };
   });
 
-const decodeDocumentSourceItem = <Source>(
+const decodeDocumentSourceItem = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   rawItem: unknown,
   itemIndex: number,
-  options: JsonFileCompiledDocumentSourceOptions<unknown, Source>
-): Effect.Effect<SourceItemInput<Source>, SourcePluginError> =>
+  options: JsonFileCompiledDocumentSourceOptions<unknown, Source, IdentityKey>,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+): Effect.Effect<SourceItemInput<Source, IdentityKey>, SourcePluginError> =>
   Effect.gen(function* () {
     const item = yield* Schema.decodeUnknownEffect(options.items.sourceSchema)(
       rawItem
@@ -958,6 +1113,7 @@ const decodeDocumentSourceItem = <Source>(
     const identity = yield* buildDocumentIdentity(
       item,
       options.identity,
+      identityDefinition,
       itemIndex
     );
     const version = yield* buildDocumentVersion(
@@ -968,7 +1124,7 @@ const decodeDocumentSourceItem = <Source>(
     );
 
     return {
-      identity,
+      identityKey: identity,
       item,
       version,
     };
@@ -990,32 +1146,41 @@ const configuredBatchSize = (
       );
 };
 
-const ensureUniqueIdentities = <Source>(
-  items: readonly SourceItemInput<Source>[]
+const ensureUniqueIdentities = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  items: readonly SourceItemInput<Source, IdentityKey>[],
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
 ): Effect.Effect<void, SourcePluginError> =>
   Effect.gen(function* () {
     const identityIndexes = new Map<string, number>();
 
     for (const [itemIndex, item] of items.entries()) {
-      const existingIndex = identityIndexes.get(item.identity);
+      const encodedIdentity = yield* encodeSourceIdentityKey(
+        identityDefinition,
+        item.identityKey
+      );
+      const existingIndex = identityIndexes.get(encodedIdentity);
 
       if (existingIndex !== undefined) {
         return yield* jsonFileError("Duplicate JSON file source identity", {
           duplicateItemIndex: itemIndex,
           firstItemIndex: existingIndex,
-          sourceIdentity: item.identity,
+          sourceIdentity: encodedIdentity,
         });
       }
 
-      identityIndexes.set(item.identity, itemIndex);
+      identityIndexes.set(encodedIdentity, itemIndex);
     }
   });
 
-const loadDocument = <Source>(
+const loadDocument = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
   fs: FileSystem,
   path: Path,
-  options: JsonFileSourceOptions<Source>
-): Effect.Effect<JsonFileDocument<Source>, SourcePluginError> =>
+  options: JsonFileSourceOptions<Source, IdentityKey>,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+): Effect.Effect<JsonFileDocument<Source, IdentityKey>, SourcePluginError> =>
   Effect.gen(function* () {
     const file = yield* readFileBytes(fs, path, options.path);
     const fileFingerprint = yield* sha256Hex(file.bytes);
@@ -1023,9 +1188,9 @@ const loadDocument = <Source>(
     const root = yield* parseJson(text, file.resolvedPath);
     const rawItems = yield* selectItems(root, options.items.path);
     const items = yield* Effect.forEach(rawItems, (item, itemIndex) =>
-      decodeSourceItem(item, itemIndex, options)
+      decodeSourceItem(item, itemIndex, options, identityDefinition)
     );
-    yield* ensureUniqueIdentities(items);
+    yield* ensureUniqueIdentities(items, identityDefinition);
 
     return {
       fileFingerprint,
@@ -1033,11 +1198,16 @@ const loadDocument = <Source>(
     };
   });
 
-const loadProjectedDocument = <Document, Source>(
+const loadProjectedDocument = <
+  Document,
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   fs: FileSystem,
   path: Path,
-  options: JsonFileCompiledDocumentSourceOptions<Document, Source>
-): Effect.Effect<JsonFileDocument<Source>, SourcePluginError> =>
+  options: JsonFileCompiledDocumentSourceOptions<Document, Source, IdentityKey>,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+): Effect.Effect<JsonFileDocument<Source, IdentityKey>, SourcePluginError> =>
   Effect.gen(function* () {
     const file = yield* readFileBytes(fs, path, options.path);
     const fileFingerprint = yield* sha256Hex(file.bytes);
@@ -1052,9 +1222,9 @@ const loadProjectedDocument = <Document, Source>(
     );
     const rawItems = yield* options.items.select(root);
     const items = yield* Effect.forEach(rawItems, (item, itemIndex) =>
-      decodeDocumentSourceItem(item, itemIndex, options)
+      decodeDocumentSourceItem(item, itemIndex, options, identityDefinition)
     );
-    yield* ensureUniqueIdentities(items);
+    yield* ensureUniqueIdentities(items, identityDefinition);
 
     return {
       fileFingerprint,
@@ -1062,13 +1232,17 @@ const loadProjectedDocument = <Document, Source>(
     };
   });
 
-const makeImplementationWithBatchSize = <Source>(
+const makeImplementationWithBatchSize = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   batchSize: number | undefined,
   loadDocumentItems: () => Effect.Effect<
-    JsonFileDocument<Source>,
+    JsonFileDocument<Source, IdentityKey>,
     SourcePluginError
-  >
-): SourcePluginImplementation<Source, JsonFileSourceCursor> => {
+  >,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+): SourcePluginImplementation<Source, JsonFileSourceCursor, IdentityKey> => {
   const read = Effect.fn("JsonFileSource.read")(function* (
     cursor: JsonFileSourceCursor | null
   ) {
@@ -1096,11 +1270,22 @@ const makeImplementationWithBatchSize = <Source>(
   });
 
   const readByIdentity = Effect.fn("JsonFileSource.readByIdentity")(function* (
-    identity: SourceIdentityInput
+    identity: SourceIdentity<IdentityKey>
   ) {
     const document = yield* loadDocumentItems();
 
-    return document.items.find((item) => item.identity === identity) ?? null;
+    for (const item of document.items) {
+      const encodedIdentity = yield* encodeSourceIdentityKey(
+        identityDefinition,
+        item.identityKey
+      );
+
+      if (encodedIdentity === identity.encoded) {
+        return item;
+      }
+    }
+
+    return null;
   });
 
   return {
@@ -1110,28 +1295,50 @@ const makeImplementationWithBatchSize = <Source>(
   };
 };
 
-const makePathImplementation = <Source>(
-  options: JsonFileSourceOptions<Source>,
+const makePathImplementation = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: JsonFileSourceOptions<Source, IdentityKey>,
   fs: FileSystem,
-  path: Path
-): SourcePluginImplementation<Source, JsonFileSourceCursor> => {
-  const load = () => loadDocument(fs, path, options);
+  path: Path,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+): SourcePluginImplementation<Source, JsonFileSourceCursor, IdentityKey> => {
+  const load = () => loadDocument(fs, path, options, identityDefinition);
 
-  return makeImplementationWithBatchSize(options.batchSize, load);
+  return makeImplementationWithBatchSize(
+    options.batchSize,
+    load,
+    identityDefinition
+  );
 };
 
-const makeDocumentImplementation = <Document, Source>(
-  options: JsonFileCompiledDocumentSourceOptions<Document, Source>,
+const makeDocumentImplementation = <
+  Document,
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: JsonFileCompiledDocumentSourceOptions<Document, Source, IdentityKey>,
   fs: FileSystem,
-  path: Path
-): SourcePluginImplementation<Source, JsonFileSourceCursor> => {
-  const load = () => loadProjectedDocument(fs, path, options);
+  path: Path,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+): SourcePluginImplementation<Source, JsonFileSourceCursor, IdentityKey> => {
+  const load = () =>
+    loadProjectedDocument(fs, path, options, identityDefinition);
 
-  return makeImplementationWithBatchSize(options.batchSize, load);
+  return makeImplementationWithBatchSize(
+    options.batchSize,
+    load,
+    identityDefinition
+  );
 };
 
-const makeLayerWithoutPlatform = <Source>(
-  options: JsonFileSourceOptions<Source>
+const makeLayerWithoutPlatform = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: JsonFileSourceOptions<Source, IdentityKey>,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
 ): Layer.Layer<AnySourcePlugin, never, FileSystem | Path> =>
   Layer.effect(
     SourcePlugin,
@@ -1140,7 +1347,9 @@ const makeLayerWithoutPlatform = <Source>(
       const path = yield* Path;
       const configured = defineSourcePlugin({
         cursorSchema: JsonFileSourceCursor,
-        make: () => makePathImplementation(options, fs, path),
+        identity: identityDefinition,
+        make: () =>
+          makePathImplementation(options, fs, path, identityDefinition),
         sourceSchema: options.sourceSchema,
       });
 
@@ -1148,13 +1357,21 @@ const makeLayerWithoutPlatform = <Source>(
     })
   );
 
-const makeLayer = <Source>(
-  options: JsonFileSourceOptions<Source>
+const makeLayer = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
+  options: JsonFileSourceOptions<Source, IdentityKey>,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
 ): Layer.Layer<AnySourcePlugin> =>
-  makeLayerWithoutPlatform(options).pipe(Layer.provide(options.platform));
+  makeLayerWithoutPlatform(options, identityDefinition).pipe(
+    Layer.provide(options.platform)
+  );
 
-const makeDocumentLayerWithoutPlatform = <Document, Source>(
-  options: JsonFileCompiledDocumentSourceOptions<Document, Source>
+const makeDocumentLayerWithoutPlatform = <
+  Document,
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: JsonFileCompiledDocumentSourceOptions<Document, Source, IdentityKey>,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
 ): Layer.Layer<AnySourcePlugin, never, FileSystem | Path> =>
   Layer.effect(
     SourcePlugin,
@@ -1163,7 +1380,9 @@ const makeDocumentLayerWithoutPlatform = <Document, Source>(
       const path = yield* Path;
       const configured = defineSourcePlugin({
         cursorSchema: JsonFileSourceCursor,
-        make: () => makeDocumentImplementation(options, fs, path),
+        identity: identityDefinition,
+        make: () =>
+          makeDocumentImplementation(options, fs, path, identityDefinition),
         sourceSchema: options.items.sourceSchema,
       });
 
@@ -1171,18 +1390,28 @@ const makeDocumentLayerWithoutPlatform = <Document, Source>(
     })
   );
 
-const makeDocumentLayer = <Document, Source>(
-  options: JsonFileCompiledDocumentSourceOptions<Document, Source>
+const makeDocumentLayer = <
+  Document,
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: JsonFileCompiledDocumentSourceOptions<Document, Source, IdentityKey>,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
 ): Layer.Layer<AnySourcePlugin> =>
-  makeDocumentLayerWithoutPlatform(options).pipe(
+  makeDocumentLayerWithoutPlatform(options, identityDefinition).pipe(
     Layer.provide(options.platform)
   );
 
-function makeFromDocument<Document, Selection>(
+function makeFromDocument<
+  Document,
+  Selection,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   options: JsonFileDocumentSourceBaseOptions<Document> & {
     readonly items: JsonFileDocumentItemSelectors<Document, Selection>;
     readonly identity: JsonFileDocumentIdentity<
-      JsonFileSelectedItem<JsonFileCursorFocus<Selection>>
+      JsonFileSelectedItem<JsonFileCursorFocus<Selection>>,
+      IdentityKey
     >;
     readonly version: JsonFileDocumentVersion<
       JsonFileSelectedItem<JsonFileCursorFocus<Selection>>
@@ -1190,9 +1419,16 @@ function makeFromDocument<Document, Selection>(
   }
 ): ConfiguredSourcePlugin<
   JsonFileSelectedItem<JsonFileCursorFocus<Selection>>,
-  JsonFileSourceCursor
+  JsonFileSourceCursor,
+  IdentityKey,
+  unknown
 >;
-function makeFromDocument<Document, ParentSelection, Selection>(
+function makeFromDocument<
+  Document,
+  ParentSelection,
+  Selection,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   options: JsonFileDocumentSourceBaseOptions<Document> & {
     readonly items: JsonFileDocumentSubitemSelectors<
       Document,
@@ -1203,7 +1439,8 @@ function makeFromDocument<Document, ParentSelection, Selection>(
       JsonFileSelectedSubitem<
         JsonFileCursorFocus<ParentSelection>,
         JsonFileCursorFocus<Selection>
-      >
+      >,
+      IdentityKey
     >;
     readonly version: JsonFileDocumentVersion<
       JsonFileSelectedSubitem<
@@ -1217,13 +1454,24 @@ function makeFromDocument<Document, ParentSelection, Selection>(
     JsonFileCursorFocus<ParentSelection>,
     JsonFileCursorFocus<Selection>
   >,
-  JsonFileSourceCursor
+  JsonFileSourceCursor,
+  IdentityKey,
+  unknown
 >;
-function makeFromDocument<Document, Source>(
+function makeFromDocument<
+  Document,
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   options:
-    | JsonFileDocumentItemSourceOptions<Document, unknown>
-    | JsonFileDocumentSubitemSourceOptions<Document, unknown, unknown>
-): ConfiguredSourcePlugin<Source, JsonFileSourceCursor> {
+    | JsonFileDocumentItemSourceOptions<Document, unknown, IdentityKey>
+    | JsonFileDocumentSubitemSourceOptions<
+        Document,
+        unknown,
+        unknown,
+        IdentityKey
+      >
+): ConfiguredSourcePlugin<Source, JsonFileSourceCursor, IdentityKey, unknown> {
   const compiledItems = compileDocumentItems(
     options.documentSchema,
     options.items
@@ -1231,30 +1479,63 @@ function makeFromDocument<Document, Source>(
   const compiledOptions = {
     ...options,
     items: compiledItems,
-  } as JsonFileCompiledDocumentSourceOptions<Document, Source>;
+  } as JsonFileCompiledDocumentSourceOptions<Document, Source, IdentityKey>;
+  const identityDefinition = makeJsonFileSourceIdentityDefinition(
+    options.identity
+  );
 
   return {
-    layer: makeDocumentLayer(compiledOptions),
+    identity: identityDefinition,
+    layer: makeDocumentLayer(compiledOptions, identityDefinition),
     sourceSchema: compiledItems.sourceSchema,
-  } as ConfiguredSourcePlugin<Source, JsonFileSourceCursor>;
+  } as ConfiguredSourcePlugin<
+    Source,
+    JsonFileSourceCursor,
+    IdentityKey,
+    unknown
+  >;
 }
 
-const makeJsonFileSource = <Source>(
-  options: JsonFileSourceOptions<Source>
-): ConfiguredSourcePlugin<Source, JsonFileSourceCursor> =>
-  ({
-    layer: makeLayer(options),
-    sourceSchema: options.sourceSchema,
-  }) as ConfiguredSourcePlugin<Source, JsonFileSourceCursor>;
+const makeJsonFileSource = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: JsonFileSourceOptions<Source, IdentityKey>
+): ConfiguredSourcePlugin<
+  Source,
+  JsonFileSourceCursor,
+  IdentityKey,
+  unknown
+> => {
+  const identityDefinition = makeJsonFileSourceIdentityDefinition(
+    options.identity
+  );
 
-function makeSource<Source>(
-  options: JsonFileSourceOptions<Source>
-): ConfiguredSourcePlugin<Source, JsonFileSourceCursor>;
-function makeSource<Document, Selection>(
+  return {
+    identity: identityDefinition,
+    layer: makeLayer(options, identityDefinition),
+    sourceSchema: options.sourceSchema,
+  } as ConfiguredSourcePlugin<
+    Source,
+    JsonFileSourceCursor,
+    IdentityKey,
+    unknown
+  >;
+};
+
+function makeSource<Source, IdentityKey extends SourceIdentitySnapshotKey>(
+  options: JsonFileSourceOptions<Source, IdentityKey>
+): ConfiguredSourcePlugin<Source, JsonFileSourceCursor, IdentityKey, unknown>;
+function makeSource<
+  Document,
+  Selection,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   options: JsonFileDocumentSourceBaseOptions<Document> & {
     readonly items: JsonFileDocumentItemSelectors<Document, Selection>;
     readonly identity: JsonFileDocumentIdentity<
-      JsonFileSelectedItem<JsonFileCursorFocus<Selection>>
+      JsonFileSelectedItem<JsonFileCursorFocus<Selection>>,
+      IdentityKey
     >;
     readonly version: JsonFileDocumentVersion<
       JsonFileSelectedItem<JsonFileCursorFocus<Selection>>
@@ -1262,9 +1543,16 @@ function makeSource<Document, Selection>(
   }
 ): ConfiguredSourcePlugin<
   JsonFileSelectedItem<JsonFileCursorFocus<Selection>>,
-  JsonFileSourceCursor
+  JsonFileSourceCursor,
+  IdentityKey,
+  unknown
 >;
-function makeSource<Document, ParentSelection, Selection>(
+function makeSource<
+  Document,
+  ParentSelection,
+  Selection,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   options: JsonFileDocumentSourceBaseOptions<Document> & {
     readonly items: JsonFileDocumentSubitemSelectors<
       Document,
@@ -1275,7 +1563,8 @@ function makeSource<Document, ParentSelection, Selection>(
       JsonFileSelectedSubitem<
         JsonFileCursorFocus<ParentSelection>,
         JsonFileCursorFocus<Selection>
-      >
+      >,
+      IdentityKey
     >;
     readonly version: JsonFileDocumentVersion<
       JsonFileSelectedSubitem<
@@ -1289,11 +1578,18 @@ function makeSource<Document, ParentSelection, Selection>(
     JsonFileCursorFocus<ParentSelection>,
     JsonFileCursorFocus<Selection>
   >,
-  JsonFileSourceCursor
+  JsonFileSourceCursor,
+  IdentityKey,
+  unknown
 >;
 function makeSource(
   options: unknown
-): ConfiguredSourcePlugin<unknown, JsonFileSourceCursor> {
+): ConfiguredSourcePlugin<
+  unknown,
+  JsonFileSourceCursor,
+  SourceIdentitySnapshotKey,
+  unknown
+> {
   if (isRecord(options) && "documentSchema" in options) {
     return makeFromDocument(options as never);
   }

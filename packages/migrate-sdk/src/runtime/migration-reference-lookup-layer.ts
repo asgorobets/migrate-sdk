@@ -4,30 +4,30 @@ import {
   MigrationReferenceLookupError,
   type MigrationStoreError,
 } from "../domain/errors.ts";
-import type { MigrationDefinitionId, SourceIdentity } from "../domain/ids.ts";
-import { toMigrationDefinitionId, toSourceIdentity } from "../domain/ids.ts";
+import type {
+  EncodedSourceIdentity,
+  MigrationDefinitionId,
+} from "../domain/ids.ts";
+import { SourceIdentity } from "../domain/ids.ts";
 import type { AnyMigrationDefinition } from "../domain/run.ts";
 import type { MigrationItemState } from "../domain/state.ts";
 import {
+  type AnyMigrationReferenceLookupInput,
   type MigrationReference,
   MigrationReferenceLookup,
-  type MigrationReferenceLookupInput,
+  type MigrationReferenceLookupTarget,
+  type MigrationReferenceLookupTargetSet,
+  makeMigrationReferenceLookupTarget,
 } from "../services/migration-reference-lookup.ts";
 import { MigrationStore } from "../services/migration-store.ts";
 
 export type CreateMigrationReferenceStub = (input: {
   readonly definition: AnyMigrationDefinition;
-  readonly sourceIdentity: SourceIdentity;
+  readonly sourceIdentity: EncodedSourceIdentity;
 }) => Effect.Effect<
   MigrationReference,
   DestinationPluginError | MigrationReferenceLookupError | MigrationStoreError
 >;
-
-const definitionNotFoundError = (definitionId: MigrationDefinitionId) =>
-  new MigrationReferenceLookupError({
-    message: "Migration Reference Lookup definition was not found",
-    cause: { definitionId },
-  });
 
 const stubDefinitionNotInLookupError = (
   definitionId: MigrationDefinitionId,
@@ -35,34 +35,70 @@ const stubDefinitionNotInLookupError = (
 ) =>
   new MigrationReferenceLookupError({
     message:
-      "Migration Reference Lookup stub definition must be one of the lookup definitions",
+      "Migration Reference Lookup stub definition must be one of the lookup targets",
     cause: { definitionId, definitionIds },
   });
 
-const definitionIdsFromInput = (
-  input: MigrationReferenceLookupInput
-): readonly MigrationDefinitionId[] =>
-  "definitionIds" in input && input.definitionIds !== undefined
-    ? input.definitionIds.map(toMigrationDefinitionId)
-    : [toMigrationDefinitionId(input.definitionId)];
+const targetsFromInput = (
+  input: AnyMigrationReferenceLookupInput
+): MigrationReferenceLookupTargetSet =>
+  "targets" in input && input.targets !== undefined
+    ? input.targets
+    : [
+        makeMigrationReferenceLookupTarget(
+          input.definition,
+          input.sourceIdentityKey
+        ),
+      ];
 
-const sourceIdentityFromInput = (
-  input: MigrationReferenceLookupInput
-): SourceIdentity => toSourceIdentity(input.sourceIdentity);
+const sourceIdentityForTarget = (
+  target: MigrationReferenceLookupTarget<AnyMigrationDefinition>
+): Effect.Effect<EncodedSourceIdentity, MigrationReferenceLookupError> =>
+  Effect.try({
+    try: () =>
+      SourceIdentity.fromKey(
+        target.definition.source.identity,
+        target.sourceIdentityKey
+      ).encoded,
+    catch: (cause) =>
+      new MigrationReferenceLookupError({
+        message:
+          "Migration Reference Lookup source identity key did not match Source Identity Schema",
+        cause,
+      }),
+  });
 
-const stubDefinitionIdFromInput = (
-  input: MigrationReferenceLookupInput,
-  definitionIds: readonly MigrationDefinitionId[]
-): MigrationDefinitionId | null => {
-  if (input.stub !== true && typeof input.stub !== "object") {
-    return null;
+const stubDefinitionFromInput = (
+  input: AnyMigrationReferenceLookupInput,
+  targets: MigrationReferenceLookupTargetSet
+): Effect.Effect<
+  MigrationReferenceLookupTarget<AnyMigrationDefinition> | null,
+  MigrationReferenceLookupError
+> => {
+  const stub = input.stub;
+
+  if (stub !== true && typeof stub !== "object") {
+    return Effect.succeed(null);
   }
 
-  if (typeof input.stub === "object" && input.stub.definitionId !== undefined) {
-    return toMigrationDefinitionId(input.stub.definitionId);
+  if (stub !== true && stub.definition !== undefined) {
+    const target = targets.find(
+      (lookupTarget) => lookupTarget.definition === stub.definition
+    );
+
+    if (target !== undefined) {
+      return Effect.succeed(target);
+    }
+
+    return Effect.fail(
+      stubDefinitionNotInLookupError(
+        stub.definition.id,
+        targets.map((lookupTarget) => lookupTarget.definition.id)
+      )
+    );
   }
 
-  return definitionIds[0] ?? null;
+  return Effect.succeed(targets[0]);
 };
 
 const referenceFromState = (
@@ -75,14 +111,14 @@ const referenceFromState = (
         ...(state.destinationVersion === undefined
           ? {}
           : { destinationVersion: state.destinationVersion }),
-        sourceIdentity: state.sourceIdentity,
+        sourceIdentity: state.sourceIdentity.encoded,
         status: state.status,
       }
     : null;
 
 const getReferenceState = (
   definition: AnyMigrationDefinition,
-  sourceIdentity: SourceIdentity
+  sourceIdentity: EncodedSourceIdentity
 ) =>
   Effect.gen(function* () {
     const store = yield* MigrationStore;
@@ -90,20 +126,11 @@ const getReferenceState = (
     return yield* store.getItemState(definition.id, sourceIdentity);
   }).pipe(Effect.provide(definition.store));
 
-const findExistingReference = (
-  definitionsById: ReadonlyMap<MigrationDefinitionId, AnyMigrationDefinition>,
-  definitionIds: readonly MigrationDefinitionId[],
-  sourceIdentity: SourceIdentity
-) =>
+const findExistingReference = (targets: MigrationReferenceLookupTargetSet) =>
   Effect.gen(function* () {
-    for (const definitionId of definitionIds) {
-      const definition = definitionsById.get(definitionId);
-
-      if (definition === undefined) {
-        return yield* definitionNotFoundError(definitionId);
-      }
-
-      const state = yield* getReferenceState(definition, sourceIdentity);
+    for (const target of targets) {
+      const sourceIdentity = yield* sourceIdentityForTarget(target);
+      const state = yield* getReferenceState(target.definition, sourceIdentity);
       const reference = referenceFromState(state);
 
       if (reference !== null) {
@@ -114,67 +141,37 @@ const findExistingReference = (
     return null;
   });
 
-const validateStubDefinitionId = (
-  stubDefinitionId: MigrationDefinitionId,
-  definitionIds: readonly MigrationDefinitionId[]
-) =>
-  definitionIds.includes(stubDefinitionId)
-    ? Effect.succeed(stubDefinitionId)
-    : Effect.fail(
-        stubDefinitionNotInLookupError(stubDefinitionId, definitionIds)
-      );
-
 export const makeMigrationReferenceLookupLayer = ({
   createStubReference,
-  definitions,
 }: {
   readonly createStubReference: CreateMigrationReferenceStub;
-  readonly definitions: readonly AnyMigrationDefinition[];
 }): Layer.Layer<MigrationReferenceLookup> =>
   Layer.effect(
     MigrationReferenceLookup,
-    Effect.gen(function* () {
-      const definitionsById = new Map(
-        definitions.map((definition) => [definition.id, definition])
-      );
-
-      const lookup = Effect.fn("MigrationReferenceLookup.lookup")(function* (
-        input: MigrationReferenceLookupInput
+    Effect.succeed({
+      lookup: Effect.fn("MigrationReferenceLookup.lookup")(function* (
+        input: AnyMigrationReferenceLookupInput
       ) {
-        const definitionIds = definitionIdsFromInput(input);
-        const sourceIdentity = sourceIdentityFromInput(input);
-        const existingReference = yield* findExistingReference(
-          definitionsById,
-          definitionIds,
-          sourceIdentity
-        );
+        const targets = targetsFromInput(input);
+        const existingReference = yield* findExistingReference(targets);
 
         if (existingReference !== null) {
           return existingReference;
         }
 
-        const stubDefinitionId = stubDefinitionIdFromInput(
-          input,
-          definitionIds
-        );
+        const stubTarget = yield* stubDefinitionFromInput(input, targets);
 
-        if (stubDefinitionId === null) {
+        if (stubTarget === null) {
           return null;
         }
 
-        yield* validateStubDefinitionId(stubDefinitionId, definitionIds);
-        const stubDefinition = definitionsById.get(stubDefinitionId);
-
-        if (stubDefinition === undefined) {
-          return yield* definitionNotFoundError(stubDefinitionId);
-        }
+        const sourceIdentity = yield* sourceIdentityForTarget(stubTarget);
 
         return yield* createStubReference({
-          definition: stubDefinition,
+          definition: stubTarget.definition,
           sourceIdentity,
         });
-      });
-
-      return { lookup };
+      }),
+      target: makeMigrationReferenceLookupTarget,
     })
   );

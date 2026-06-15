@@ -124,6 +124,11 @@ const businessUnitsSource = DocumentSourcePlugin.make({
 Nested document selection with parent context:
 
 ```ts
+const tuple2 = <A, B>(first: A, second: B): readonly [A, B] => [
+  first,
+  second,
+];
+
 const contactsSource = DocumentSourcePlugin.make({
   fetcher: DocumentFetchers.fileText({
     path: "./examples/document-source/companies.json",
@@ -140,7 +145,7 @@ const contactsSource = DocumentSourcePlugin.make({
       SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
       SourceIdentity.part("contactKey", Schema.NonEmptyString),
     ]),
-    key: ({ parent, item }) => [parent.key, item.key] as const,
+    key: ({ parent, item }) => tuple2(parent.key, item.key),
   },
   lookup: { kind: "scan" },
   version: { kind: "content-hash" },

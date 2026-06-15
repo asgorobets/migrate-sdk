@@ -1,13 +1,23 @@
 import { Effect, Schema } from "effect";
 import {
+  type DestinationPluginError,
   defineMigration,
+  type MigrationDefinition,
   type MigrationItemState,
   MigrationReferenceLookup,
+  type MigrationReferenceLookupError,
   type MigrationRunSummary,
+  type MigrationStoreError,
   runMigrations,
+  SourceIdentity,
+  type SourceIdentityDefinition,
 } from "migrate-sdk";
+import type { InMemoryEntryCommand } from "migrate-sdk/destinations/in-memory";
 import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
-import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
+import {
+  type InMemorySourceCursor,
+  InMemorySourcePlugin,
+} from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
 
@@ -35,6 +45,16 @@ const AuthorSource = Schema.Struct({
   }),
   popularBookIds: Schema.Array(Schema.String),
   specialties: Schema.Array(Schema.String),
+});
+
+const BookSourceIdentity = SourceIdentity.make({
+  id: "book@v1",
+  schema: SourceIdentity.key("bookId", Schema.NonEmptyString),
+});
+
+const AuthorSourceIdentity = SourceIdentity.make({
+  id: "author@v1",
+  schema: SourceIdentity.key("authorId", Schema.NonEmptyString),
 });
 
 const BookEntryFields = Schema.Struct({
@@ -112,6 +132,47 @@ type BookUpsertExecution = BookstoreExecution & {
 type AuthorUpsertExecution = BookstoreExecution & {
   readonly command: UpsertAuthorEntryCommand;
 };
+type SourceIdentityKey<Definition> =
+  Definition extends SourceIdentityDefinition<infer Key> ? Key : never;
+
+interface BookEntryCommandOptions {
+  readonly publishEntry: true;
+  readonly upsertEntry: { readonly fields: typeof BookEntryFields };
+}
+interface AuthorEntryCommandOptions {
+  readonly publishEntry: true;
+  readonly upsertEntry: { readonly fields: typeof AuthorEntryFields };
+}
+type BookMigrationCommand = InMemoryEntryCommand<
+  "book",
+  BookEntryCommandOptions
+>;
+type AuthorMigrationCommand = InMemoryEntryCommand<
+  "author",
+  AuthorEntryCommandOptions
+>;
+type ReferenceLookupPipelineError =
+  | DestinationPluginError
+  | MigrationReferenceLookupError
+  | MigrationStoreError;
+type BookMigration = MigrationDefinition<
+  typeof BookSource.Type,
+  BookMigrationCommand,
+  ReferenceLookupPipelineError,
+  InMemorySourceCursor,
+  SourceIdentityKey<typeof BookSourceIdentity>,
+  ReferenceLookupPipelineError,
+  unknown
+>;
+type AuthorMigration = MigrationDefinition<
+  typeof AuthorSource.Type,
+  AuthorMigrationCommand,
+  ReferenceLookupPipelineError,
+  InMemorySourceCursor,
+  SourceIdentityKey<typeof AuthorSourceIdentity>,
+  ReferenceLookupPipelineError,
+  unknown
+>;
 
 export interface CircularBookAuthorStubsExampleResult {
   readonly authorEntryFields: UpsertAuthorEntryCommand["fields"] | null;
@@ -126,7 +187,7 @@ export interface CircularBookAuthorStubsExampleResult {
 
 const bookSourceItems = [
   {
-    identity: "book:effectful-architecture",
+    identityKey: "book:effectful-architecture",
     version: "book-version-1",
     item: {
       authorIds: ["author:maya-chen"],
@@ -146,7 +207,7 @@ const bookSourceItems = [
 
 const authorSourceItems = [
   {
-    identity: "author:maya-chen",
+    identityKey: "author:maya-chen",
     version: "author-version-1",
     item: {
       biography:
@@ -181,9 +242,10 @@ export const makeCircularBookAuthorStubMigrations = () => {
   const destinationFixture = makeBookstoreDestinationFixture();
   const { authorDestination, bookDestination } = destinationFixture;
 
-  const books = defineMigration({
+  const books: BookMigration = defineMigration({
     id: "books",
     source: InMemorySourcePlugin.make({
+      identity: BookSourceIdentity,
       items: bookSourceItems,
       sourceSchema: BookSource,
     }),
@@ -210,8 +272,8 @@ export const makeCircularBookAuthorStubMigrations = () => {
       const authorReferences = yield* Effect.all(
         source.item.authorIds.map((authorId) =>
           references.lookup({
-            definitionId: "authors",
-            sourceIdentity: authorId,
+            definition: authors,
+            sourceIdentityKey: authorId,
             stub: true,
           })
         )
@@ -239,9 +301,10 @@ export const makeCircularBookAuthorStubMigrations = () => {
     }),
   });
 
-  const authors = defineMigration({
+  const authors: AuthorMigration = defineMigration({
     id: "authors",
     source: InMemorySourcePlugin.make({
+      identity: AuthorSourceIdentity,
       items: authorSourceItems,
       sourceSchema: AuthorSource,
     }),
@@ -264,8 +327,8 @@ export const makeCircularBookAuthorStubMigrations = () => {
       const popularBookReferences = yield* Effect.all(
         source.item.popularBookIds.map((bookId) =>
           references.lookup({
-            definitionId: "books",
-            sourceIdentity: bookId,
+            definition: books,
+            sourceIdentityKey: bookId,
             stub: true,
           })
         )
@@ -363,7 +426,7 @@ export const formatCircularBookAuthorStubsExampleResult = (
     "Persisted Item States",
     ...result.itemStates.map((itemState) =>
       [
-        `${itemState.definitionId}:${itemState.sourceIdentity}`,
+        `${itemState.definitionId}:${itemState.sourceIdentity.encoded}`,
         `  status: ${itemState.status}`,
         ...(itemState.status === "failed"
           ? [

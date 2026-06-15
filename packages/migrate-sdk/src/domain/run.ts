@@ -10,8 +10,8 @@ import {
   MigrationRunId,
   toMigrationDefinitionId,
 } from "./ids.ts";
-import type { RunMode, RunModeInput } from "./run-mode.ts";
-import { makeRunMode } from "./run-mode.ts";
+import type { EncodedRunModeInput, RunMode, RunModeInput } from "./run-mode.ts";
+import { makeEncodedRunMode } from "./run-mode.ts";
 
 export type AnyMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous run requests.
@@ -20,6 +20,8 @@ export type AnyMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Pipeline error is re-extracted by MigrationDefinitionPipelineError.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Cursor is existential across heterogeneous run requests.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source identity key is existential across heterogeneous run requests.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Rollback pipeline error is not relevant to forward run requests.
   any,
@@ -37,6 +39,7 @@ export type MigrationDefinitionPipelineError<Definition> =
     infer _Command,
     infer PipelineError,
     infer _Cursor,
+    infer _IdentityKey,
     infer _RollbackPipelineError,
     infer _SourceInput,
     infer _SourceLayerError,
@@ -51,6 +54,7 @@ export type MigrationDefinitionSourceLayerError<Definition> =
     infer _Command,
     infer _PipelineError,
     infer _Cursor,
+    infer _IdentityKey,
     infer _RollbackPipelineError,
     infer _SourceInput,
     infer SourceLayerError,
@@ -65,12 +69,28 @@ export type MigrationDefinitionSourceRequirements<Definition> =
     infer _Command,
     infer _PipelineError,
     infer _Cursor,
+    infer _IdentityKey,
     infer _RollbackPipelineError,
     infer _SourceInput,
     infer _SourceLayerError,
     infer SourceRequirements
   >
     ? SourceRequirements
+    : never;
+
+export type MigrationDefinitionSourceIdentityKey<Definition> =
+  Definition extends MigrationDefinition<
+    infer _Source,
+    infer _Command,
+    infer _PipelineError,
+    infer _Cursor,
+    infer IdentityKey,
+    infer _RollbackPipelineError,
+    infer _SourceInput,
+    infer _SourceLayerError,
+    infer _SourceRequirements
+  >
+    ? IdentityKey
     : never;
 
 export type RunRequestSourceLayerError<
@@ -87,7 +107,9 @@ export interface RunRequest<
 > {
   readonly definitionIds?: readonly MigrationDefinitionId[];
   readonly definitions: Definitions;
-  readonly mode?: RunMode;
+  readonly mode?: RunModeInput<
+    MigrationDefinitionSourceIdentityKey<Definitions[number]>
+  >;
 }
 
 export interface RunRequestInput<
@@ -96,7 +118,9 @@ export interface RunRequestInput<
 > {
   readonly definitionIds?: readonly MigrationDefinitionIdInput[];
   readonly definitions: Definitions;
-  readonly mode?: RunModeInput;
+  readonly mode?: RunModeInput<
+    MigrationDefinitionSourceIdentityKey<Definitions[number]>
+  >;
 }
 
 export const makeRunRequest = <
@@ -105,7 +129,37 @@ export const makeRunRequest = <
   input: RunRequestInput<Definitions>
 ): RunRequest<Definitions> => ({
   definitions: input.definitions,
-  ...(input.mode === undefined ? {} : { mode: makeRunMode(input.mode) }),
+  ...(input.mode === undefined ? {} : { mode: input.mode }),
+  ...(input.definitionIds === undefined
+    ? {}
+    : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
+});
+
+export interface EncodedRunRequest<
+  Definitions extends
+    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
+> {
+  readonly definitionIds?: readonly MigrationDefinitionId[];
+  readonly definitions: Definitions;
+  readonly mode?: RunMode;
+}
+
+export interface EncodedRunRequestInput<
+  Definitions extends
+    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
+> {
+  readonly definitionIds?: readonly MigrationDefinitionIdInput[];
+  readonly definitions: Definitions;
+  readonly mode?: EncodedRunModeInput;
+}
+
+export const makeEncodedRunRequest = <
+  Definitions extends readonly AnyMigrationDefinition[],
+>(
+  input: EncodedRunRequestInput<Definitions>
+): EncodedRunRequest<Definitions> => ({
+  definitions: input.definitions,
+  ...(input.mode === undefined ? {} : { mode: makeEncodedRunMode(input.mode) }),
   ...(input.definitionIds === undefined
     ? {}
     : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),

@@ -4,9 +4,9 @@ import {
   type DestinationIdentityInput,
   type DestinationVersion,
   type DestinationVersionInput,
+  type EncodedSourceIdentity,
   type MigrationDefinitionId,
   type MigrationRunId,
-  type SourceIdentity,
   type SourceVersion,
   toDestinationIdentity,
   toDestinationVersion,
@@ -127,6 +127,6 @@ export interface DestinationCommandContext {
   readonly definitionId: MigrationDefinitionId;
   readonly previousState?: MigrationItemState;
   readonly runId: MigrationRunId;
-  readonly sourceIdentity: SourceIdentity;
+  readonly sourceIdentity: EncodedSourceIdentity;
   readonly sourceVersion?: SourceVersion;
 }

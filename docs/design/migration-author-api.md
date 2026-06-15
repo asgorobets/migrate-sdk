@@ -42,6 +42,7 @@ import {
   InMemorySourcePlugin,
   runMigration,
   skipItem,
+  SourceIdentity,
 } from "migrate-sdk";
 
 const ArticleSource = Schema.Struct({
@@ -53,9 +54,14 @@ const ArticleEntryFields = Schema.Struct({
   title: Schema.String,
 });
 
+const ArticleSourceIdentity = SourceIdentity.make({
+  id: "article@v1",
+  schema: SourceIdentity.key("articleId", Schema.NonEmptyString),
+});
+
 const sourceItems = [
   {
-    identity: "article-1",
+    identityKey: "article-1",
     version: "source-version-1",
     item: {
       publish: true,
@@ -63,7 +69,7 @@ const sourceItems = [
     },
   },
   {
-    identity: "article-2",
+    identityKey: "article-2",
     version: "source-version-1",
     item: {
       publish: false,
@@ -83,6 +89,7 @@ const destination = InMemoryDestinationPlugin.makeEntries({
 const articles = defineMigration({
   id: "articles",
   source: InMemorySourcePlugin.make({
+    identity: ArticleSourceIdentity,
     items: sourceItems,
     sourceSchema: ArticleSource,
   }),
@@ -223,9 +230,10 @@ yield* runMigrations({
 
 yield* runMigrations({
   definitions: [authors, articles],
+  definitionIds: ["articles"],
   mode: {
     kind: "item",
-    sourceIdentity: "article-123",
+    sourceIdentityKey: "article-123",
   },
 });
 ```
@@ -284,6 +292,12 @@ created by another migration. Dependencies provide same-run ordering and lock
 safety, but lookup itself reads durable item state through the referenced
 definition's store.
 
+Lookup accepts the referenced migration definition object and a decoded source
+identity key for that definition. The runtime validates and encodes the key with
+the referenced definition's `source.identity` contract before reading the
+Migration Store. Authors do not hand-author encoded composite source identity
+strings.
+
 ```ts
 import { MigrationReferenceLookup } from "migrate-sdk";
 
@@ -295,13 +309,13 @@ const stitchCustomers = defineMigration({
     const references = yield* MigrationReferenceLookup;
 
     const customer = yield* references.lookup({
-      definitionId: "migrate-customers",
-      sourceIdentity: source.identity,
+      definition: migrateCustomers,
+      sourceIdentityKey: source.item.customerKey,
     });
 
     const userAccount = yield* references.lookup({
-      definitionId: "migrate-user-accounts",
-      sourceIdentity: source.identity,
+      definition: migrateUserAccounts,
+      sourceIdentityKey: source.item.userAccountKey,
     });
 
     if (customer === null || userAccount === null) {
@@ -316,9 +330,38 @@ const stitchCustomers = defineMigration({
 });
 ```
 
+Composite referenced identities pass the decoded tuple key:
+
+```ts
+const address = yield* references.lookup({
+  definition: migrateBusinessAddresses,
+  sourceIdentityKey: [source.item.businessUnitKey, source.item.addressIndex],
+});
+```
+
+When a lookup may resolve through one of several referenced migrations, provide
+ordered target pairs. Each target carries its own definition and decoded source
+identity key, so heterogeneous source identity schemas are supported:
+
+```ts
+const author = yield* references.lookup({
+  targets: [
+    references.target(migrateStaffAuthors, source.item.staffAuthorId),
+    references.target(migrateGuestAuthors, [
+      source.item.publisherId,
+      source.item.guestAuthorId,
+    ]),
+  ],
+});
+```
+
 Lookup can also be configured with `stub: true` when the referenced migration
 definition owns a `stub` hook. Stubbed references have status `needs-update` and
 carry a usable destination identity.
+
+For ordered targets, `stub: true` creates the stub from the first target when no
+existing reference is found. Use `stub: { definition }` to choose a later target
+explicitly.
 
 ## Run Summary
 

@@ -26,14 +26,16 @@ import {
   makeDestinationCommandResult,
   runMigration,
   runMigrations,
+  SourceIdentity,
+  type SourceItemInput,
   SourcePluginError,
   skipItem,
   toDestinationIdentity,
   toEncodedSourceCursor,
+  toEncodedSourceIdentity,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
   toMigrationRunId,
-  toSourceIdentity,
   toSourceVersion,
 } from "../../index.ts";
 
@@ -44,6 +46,11 @@ const UpsertEntryCommand = Schema.Struct({
 });
 
 type UpsertEntryCommand = typeof UpsertEntryCommand.Type;
+
+const TestSourceIdentity = SourceIdentity.make({
+  id: "test-source@v1",
+  schema: SourceIdentity.key("id", Schema.NonEmptyString),
+});
 
 const upsertEntryCommand = defineDestinationCommand("UpsertEntry", {
   identity: true,
@@ -156,6 +163,8 @@ const ArticleSource = Schema.Struct({
   publish: Schema.optional(Schema.Boolean),
   title: Schema.String,
 });
+type ArticleSource = typeof ArticleSource.Type;
+type ArticleSourceItem = SourceItemInput<ArticleSource, string>;
 
 const encodedInMemoryCursor = (offset: number) =>
   toEncodedSourceCursor(JSON.stringify({ offset }));
@@ -246,15 +255,12 @@ const makeArticlesMigration = (options: {
   readonly destinationState: ReturnType<
     typeof makeTestDestinationState<UpsertEntryCommand>
   >;
-  readonly items: readonly {
-    readonly identity: string;
-    readonly item: { readonly publish?: boolean; readonly title: string };
-    readonly version: string;
-  }[];
+  readonly items: readonly ArticleSourceItem[];
 }) =>
   defineMigration({
     id: "articles",
     source: InMemorySourcePlugin.make({
+      identity: TestSourceIdentity,
       sourceSchema: ArticleSource,
       items: options.items,
     }),
@@ -289,12 +295,12 @@ describe("FileMigrationStore", () => {
           destinationState: firstDestinationState,
           items: [
             {
-              identity: "article:1:en-US",
+              identityKey: "article:1:en-US",
               version: "source-version-1",
               item: { title: "First article" },
             },
             {
-              identity: "article:2:en-US",
+              identityKey: "article:2:en-US",
               version: "source-version-1",
               item: { title: "Second article" },
             },
@@ -319,12 +325,12 @@ describe("FileMigrationStore", () => {
           destinationState: secondDestinationState,
           items: [
             {
-              identity: "article:1:en-US",
+              identityKey: "article:1:en-US",
               version: "source-version-1",
               item: { title: "First article" },
             },
             {
-              identity: "article:2:en-US",
+              identityKey: "article:2:en-US",
               version: "source-version-1",
               item: { title: "Second article" },
             },
@@ -350,12 +356,15 @@ describe("FileMigrationStore", () => {
     withTempDirectory((directory) =>
       Effect.gen(function* () {
         const definitionId = toMigrationDefinitionId("articles");
-        const sourceIdentity = toSourceIdentity("article-delete-file");
+        const sourceIdentity = toEncodedSourceIdentity("article-delete-file");
         const itemState = {
           definitionId,
           destinationIdentity: toDestinationIdentity("entry-delete-file"),
           lastRunId: toMigrationRunId("run-delete-file"),
-          sourceIdentity,
+          sourceIdentity: SourceIdentity.fromEncoded(
+            TestSourceIdentity,
+            sourceIdentity
+          ),
           sourceVersion: toSourceVersion("source-version-1"),
           status: "migrated" as const,
           updatedAt: new Date("2026-01-01T00:00:00.000Z"),
@@ -394,16 +403,17 @@ describe("FileMigrationStore", () => {
         const definition = defineMigration({
           id: "articles",
           source: InMemorySourcePlugin.make({
+            identity: TestSourceIdentity,
             sourceSchema: ArticleSource,
             batchSize: 1,
             items: [
               {
-                identity: "article:1:en-US",
+                identityKey: "article:1:en-US",
                 version: "source-version-1",
                 item: { title: "First article" },
               },
               {
-                identity: "article:2:en-US",
+                identityKey: "article:2:en-US",
                 version: "source-version-1",
                 item: { title: "Second article" },
               },
@@ -447,7 +457,7 @@ describe("FileMigrationStore", () => {
           destinationState,
           items: [
             {
-              identity: "article:latest-run:en-US",
+              identityKey: "article:latest-run:en-US",
               version: "source-version-1",
               item: { title: "Latest run article" },
             },
@@ -486,7 +496,10 @@ describe("FileMigrationStore", () => {
             definitionId,
             destinationIdentity: toDestinationIdentity("entry-status-1"),
             lastRunId: runId,
-            sourceIdentity: toSourceIdentity("article-status-1"),
+            sourceIdentity: SourceIdentity.fromKey(
+              TestSourceIdentity,
+              "article-status-1"
+            ),
             sourceVersion: toSourceVersion("source-version-1"),
             status: "migrated",
             updatedAt,
@@ -495,7 +508,10 @@ describe("FileMigrationStore", () => {
             definitionId,
             lastRunId: runId,
             skipReason: "Not published",
-            sourceIdentity: toSourceIdentity("article-status-2"),
+            sourceIdentity: SourceIdentity.fromKey(
+              TestSourceIdentity,
+              "article-status-2"
+            ),
             sourceVersion: toSourceVersion("source-version-2"),
             status: "skipped",
             updatedAt,
@@ -508,7 +524,10 @@ describe("FileMigrationStore", () => {
               message: "Pipeline failed",
             },
             lastRunId: runId,
-            sourceIdentity: toSourceIdentity("article-status-3"),
+            sourceIdentity: SourceIdentity.fromKey(
+              TestSourceIdentity,
+              "article-status-3"
+            ),
             status: "failed",
             updatedAt,
           });
@@ -517,7 +536,10 @@ describe("FileMigrationStore", () => {
             destinationIdentity: toDestinationIdentity("entry-status-4"),
             lastRunId: runId,
             reason: "Stub requires update",
-            sourceIdentity: toSourceIdentity("article-status-4"),
+            sourceIdentity: SourceIdentity.fromKey(
+              TestSourceIdentity,
+              "article-status-4"
+            ),
             status: "needs-update",
             updatedAt,
           });
@@ -546,7 +568,7 @@ describe("FileMigrationStore", () => {
           destinationState: firstDestinationState,
           items: [
             {
-              identity: "article:draft:en-US",
+              identityKey: "article:draft:en-US",
               version: "source-version-1",
               item: { publish: false, title: "Draft article" },
             },
@@ -565,7 +587,7 @@ describe("FileMigrationStore", () => {
           destinationState: secondDestinationState,
           items: [
             {
-              identity: "article:draft:en-US",
+              identityKey: "article:draft:en-US",
               version: "source-version-1",
               item: { publish: true, title: "Published draft article" },
             },
@@ -602,7 +624,7 @@ describe("FileMigrationStore", () => {
             destinationState,
             items: [
               {
-                identity: "article:locked:success",
+                identityKey: "article:locked:success",
                 version: "source-version-1",
                 item: { title: "Successful article" },
               },
@@ -629,6 +651,7 @@ describe("FileMigrationStore", () => {
           id: "articles",
           source: defineSourcePlugin({
             cursorSchema: InMemorySourceCursor,
+            identity: TestSourceIdentity,
             sourceSchema: Schema.Unknown,
             lookupStrategy: "scan",
             read: () => Effect.fail(sourceError),
@@ -671,7 +694,7 @@ describe("FileMigrationStore", () => {
 
           return yield* store.getItemState(
             toMigrationDefinitionId("articles"),
-            toSourceIdentity("article:corrupt:en-US")
+            toEncodedSourceIdentity("article:corrupt:en-US")
           );
         }).pipe(Effect.provide(fileStoreLayer(directory)), Effect.flip);
 
@@ -727,7 +750,7 @@ describe("FileMigrationStore", () => {
           destinationState,
           items: [
             {
-              identity: "article:locked:en-US",
+              identityKey: "article:locked:en-US",
               version: "source-version-1",
               item: { title: "Locked article" },
             },

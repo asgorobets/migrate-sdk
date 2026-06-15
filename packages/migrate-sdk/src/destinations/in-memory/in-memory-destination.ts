@@ -22,7 +22,7 @@ import { DestinationPluginError } from "../../domain/errors.ts";
 import type {
   DestinationIdentity,
   DestinationVersion,
-  SourceIdentity,
+  EncodedSourceIdentity,
 } from "../../domain/ids.ts";
 import {
   toDestinationIdentity,
@@ -42,7 +42,7 @@ export interface InMemoryDestinationEntry {
   readonly destinationVersion: DestinationVersion;
   readonly fields: object;
   readonly published: boolean;
-  readonly sourceIdentity: SourceIdentity;
+  readonly sourceIdentity: EncodedSourceIdentity;
 }
 
 interface InMemoryDestinationState<C extends DestinationCommand> {
@@ -437,7 +437,7 @@ const transientDestinationError = (): DestinationPluginError =>
 
 const inMemoryEntryKey = (
   contentType: string,
-  sourceIdentity: SourceIdentity
+  sourceIdentity: EncodedSourceIdentity
 ) => `${contentType}:${sourceIdentity}`;
 
 const nextEntryVersion = <C extends DestinationCommand>(

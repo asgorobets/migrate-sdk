@@ -56,18 +56,24 @@ export {
 } from "./domain/errors.ts";
 
 export type {
+  EncodedSourceIdentityInput,
   DestinationIdentityInput,
   DestinationVersionInput,
   EncodedSourceCursorInput,
   MigrationDefinitionIdInput,
   MigrationDefinitionLockTokenInput,
   MigrationRunIdInput,
-  SourceIdentityInput,
+  SourceIdentityDefinition,
+  SourceIdentitySchema,
+  SourceIdentitySnapshot,
+  SourceIdentitySnapshotKey,
+  SourceIdentityTarget,
   SourceVersionInput,
 } from "./domain/ids.ts";
 export {
   DestinationIdentity,
   DestinationVersion,
+  EncodedSourceIdentity,
   EncodedSourceCursor,
   MigrationDefinitionId,
   MigrationDefinitionLockToken,
@@ -80,7 +86,7 @@ export {
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
   toMigrationRunId,
-  toSourceIdentity,
+  toEncodedSourceIdentity,
   toSourceVersion,
 } from "./domain/ids.ts";
 
@@ -116,7 +122,7 @@ export type {
 export {
   DuplicateMigrationDefinitionId,
   MigrationDefinitionDuplicateRequestedDefinitionIgnored,
-  MigrationDefinitionDuplicateTargetIdIgnored,
+  MigrationDefinitionDuplicateSourceIdentityTargetIgnored,
   MigrationDefinitionOptionalDependencyCycleIgnored,
   MigrationDefinitionPlanNotice,
   MigrationDefinitionRegistry,
@@ -165,7 +171,7 @@ export type {
   RollbackRequestInput,
 } from "./domain/rollback.ts";
 
-export type { RunMode, RunModeInput } from "./domain/run-mode.ts";
+export type { RunModeInput } from "./domain/run-mode.ts";
 
 export type {
   SourceItem,
@@ -194,6 +200,7 @@ export { MigrationReferenceLookup } from "./services/migration-reference-lookup.
 export type {
   MigrationReference,
   MigrationReferenceLookupInput,
+  MigrationReferenceLookupTarget,
 } from "./services/migration-reference-lookup.ts";
 export { MigrationStore } from "./services/migration-store.ts";
 export { SourcePlugin } from "./services/source-plugin.ts";
@@ -236,14 +243,17 @@ export type {
 } from "./sources/in-memory/in-memory-source.ts";
 
 export {
+  CsvIdentity,
   CsvSourceCursor,
   CsvSourcePlugin,
 } from "./sources/csv/csv-source.ts";
 export type {
+  CsvCompositeIdentityKey,
   CsvDialect,
   CsvEmptyRows,
   CsvHeaders,
-  CsvIdentity,
+  CsvIdentityDefinition,
+  CsvIdentityKeySelector,
   CsvSourceOptions,
   CsvSourcePlatform,
   CsvVersion,

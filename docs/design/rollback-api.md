@@ -98,17 +98,19 @@ Identity-targeted rollback is an implemented single-definition helper mode:
 
 ```ts
 yield* rollbackMigration(articles, {
-  sourceIdentities: ["article-123"],
+  sourceIdentityKeys: ["article-123"],
 });
 ```
 
-`sourceIdentities` accepts one or more source identities for the selected
-definition. An empty `sourceIdentities` array is a request validation failure.
-Omit `sourceIdentities` to rollback all rollbackable states for the definition.
-Duplicate source identities are deduplicated while preserving first occurrence
-order. Targeted rollback uses direct item-state lookup for each deduplicated
-identity. Missing item state, skipped item state, and failed item state without
-a destination identity count as skipped and remain unchanged.
+`sourceIdentityKeys` accepts one or more decoded source identity keys for the
+selected definition. The runtime validates and encodes those keys through the
+definition's Source Identity contract before reading item state. An empty
+`sourceIdentityKeys` array is a request validation failure. Omit
+`sourceIdentityKeys` to rollback all rollbackable states for the definition.
+Duplicate encoded source identities are deduplicated while preserving first
+occurrence order. Targeted rollback uses direct item-state lookup for each
+deduplicated identity. Missing item state, skipped item state, and failed item
+state without a destination identity count as skipped and remain unchanged.
 
 The first slice is SDK-first. There is no CLI yet, but the request shape should
 support future CLI options such as selected definitions, source identities, and
@@ -319,8 +321,8 @@ The single-definition rollback operation includes:
 
 - `rollbackMigration(definition)` for all rollbackable item states on one
   migration definition
-- `rollbackMigration(definition, { sourceIdentities })` for targeted
-  single-definition rollback by source identity
+- `rollbackMigration(definition, { sourceIdentityKeys })` for targeted
+  single-definition rollback by decoded source identity key
 - definition lock acquisition and normal migration run lifecycle reuse
 - durable item-state selection without source reads, source identity lookups, or
   source cursor updates

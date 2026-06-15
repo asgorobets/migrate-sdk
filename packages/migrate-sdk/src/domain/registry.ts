@@ -3,20 +3,19 @@ import { getMigrationStatuses } from "../runtime/get-migration-statuses.ts";
 import {
   type RollbackMigrationError,
   type RunMigrationError,
-  rollbackMigrations,
-  runMigrations,
+  rollbackMigrationsWithEncodedSourceIdentities,
+  runMigrationsWithEncodedRunMode,
 } from "../runtime/run-migrations.ts";
 import type {
+  EncodedSourceIdentity,
   MigrationDefinitionId,
   MigrationDefinitionIdInput,
-  SourceIdentity,
-  SourceIdentityInput,
 } from "./ids.ts";
 import {
+  EncodedSourceIdentity as EncodedSourceIdentitySchema,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
-  SourceIdentity as SourceIdentitySchema,
+  SourceIdentity,
   toMigrationDefinitionId,
-  toSourceIdentity,
 } from "./ids.ts";
 import type {
   AnyRollbackMigrationDefinition,
@@ -69,12 +68,12 @@ export type MigrationDefinitionRegistrySelectionInput =
 export type MigrationDefinitionRegistryRunInput =
   MigrationDefinitionRegistrySelectionInput & {
     readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
-    readonly sourceIdentities?: readonly SourceIdentityInput[];
+    readonly sourceIdentities?: readonly string[];
   };
 
 export type MigrationDefinitionRegistryRollbackInput =
   MigrationDefinitionRegistrySelectionInput & {
-    readonly sourceIdentities?: readonly SourceIdentityInput[];
+    readonly sourceIdentities?: readonly string[];
   };
 
 export type MigrationDefinitionRegistryStatusInput =
@@ -96,10 +95,10 @@ export class MigrationDefinitionDuplicateRequestedDefinitionIgnored extends Sche
   }
 ) {}
 
-export class MigrationDefinitionDuplicateTargetIdIgnored extends Schema.TaggedClass<MigrationDefinitionDuplicateTargetIdIgnored>()(
-  "MigrationDefinitionDuplicateTargetIdIgnored",
+export class MigrationDefinitionDuplicateSourceIdentityTargetIgnored extends Schema.TaggedClass<MigrationDefinitionDuplicateSourceIdentityTargetIgnored>()(
+  "MigrationDefinitionDuplicateSourceIdentityTargetIgnored",
   {
-    sourceIdentity: SourceIdentitySchema,
+    sourceIdentity: EncodedSourceIdentitySchema,
   }
 ) {}
 
@@ -119,7 +118,7 @@ export class MigrationDefinitionOptionalDependencyCycleIgnored extends Schema.Ta
 
 export const MigrationDefinitionPlanNotice = Schema.Union([
   MigrationDefinitionDuplicateRequestedDefinitionIgnored,
-  MigrationDefinitionDuplicateTargetIdIgnored,
+  MigrationDefinitionDuplicateSourceIdentityTargetIgnored,
   MigrationDefinitionOptionalDependencyCycleIgnored,
 ]);
 export type MigrationDefinitionPlanNotice =
@@ -127,7 +126,10 @@ export type MigrationDefinitionPlanNotice =
 
 export interface MigrationDefinitionPlanTarget {
   readonly definitionId: MigrationDefinitionId;
-  readonly sourceIdentities: readonly [SourceIdentity, ...SourceIdentity[]];
+  readonly sourceIdentities: readonly [
+    EncodedSourceIdentity,
+    ...EncodedSourceIdentity[],
+  ];
 }
 
 export interface MigrationDefinitionRunPlan {
@@ -315,18 +317,18 @@ const dedupeRequestedDefinitionIds = (
 };
 
 const dedupeTargetSourceIdentities = (
-  sourceIdentities: readonly SourceIdentityInput[],
+  sourceIdentities: readonly EncodedSourceIdentity[],
   notices: MigrationDefinitionPlanNotice[]
-): readonly SourceIdentity[] => {
-  const uniqueSourceIdentities: SourceIdentity[] = [];
-  const seenSourceIdentities = new Set<SourceIdentity>();
+): readonly EncodedSourceIdentity[] => {
+  const uniqueSourceIdentities: EncodedSourceIdentity[] = [];
+  const seenSourceIdentities = new Set<EncodedSourceIdentity>();
 
-  for (const sourceIdentityInput of sourceIdentities) {
-    const sourceIdentity = toSourceIdentity(sourceIdentityInput);
-
+  for (const sourceIdentity of sourceIdentities) {
     if (seenSourceIdentities.has(sourceIdentity)) {
       notices.push(
-        new MigrationDefinitionDuplicateTargetIdIgnored({ sourceIdentity })
+        new MigrationDefinitionDuplicateSourceIdentityTargetIgnored({
+          sourceIdentity,
+        })
       );
       continue;
     }
@@ -337,6 +339,38 @@ const dedupeTargetSourceIdentities = (
 
   return uniqueSourceIdentities;
 };
+
+const parseTargetSourceIdentity = (
+  definition: AnyMigrationDefinition,
+  target: string
+): Effect.Effect<
+  EncodedSourceIdentity,
+  MigrationDefinitionRegistryInvalidSelectionError
+> =>
+  Effect.try({
+    try: () =>
+      SourceIdentity.fromText(definition.source.identity, target).encoded,
+    catch: () =>
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: `Source identity target is invalid for Migration Definition ${definition.id}: ${target}`,
+      }),
+  });
+
+const normalizeTargetSourceIdentities = (
+  definition: AnyMigrationDefinition,
+  sourceIdentities: readonly string[],
+  notices: MigrationDefinitionPlanNotice[]
+): Effect.Effect<
+  readonly EncodedSourceIdentity[],
+  MigrationDefinitionRegistryInvalidSelectionError
+> =>
+  Effect.map(
+    Effect.forEach(sourceIdentities, (sourceIdentity) =>
+      parseTargetSourceIdentity(definition, sourceIdentity)
+    ),
+    (parsedSourceIdentities) =>
+      dedupeTargetSourceIdentities(parsedSourceIdentities, notices)
+  );
 
 interface ResolvedRegistrySelection {
   readonly notices: MigrationDefinitionPlanNotice[];
@@ -636,7 +670,8 @@ const resolveDefinitionPlanDetails = (
 
 const normalizeRunTarget = (
   input: MigrationDefinitionRegistryRunInput,
-  selection: ResolvedRegistrySelection
+  selection: ResolvedRegistrySelection,
+  definitionsById: ReadonlyMap<MigrationDefinitionId, AnyMigrationDefinition>
 ): Effect.Effect<
   Option.Option<MigrationDefinitionPlanTarget>,
   MigrationDefinitionRegistryInvalidSelectionError
@@ -686,24 +721,6 @@ const normalizeRunTarget = (
     );
   }
 
-  const sourceIdentities = dedupeTargetSourceIdentities(
-    input.sourceIdentities,
-    selection.notices
-  );
-  const [firstSourceIdentity, ...remainingSourceIdentities] = sourceIdentities;
-
-  if (
-    firstSourceIdentity === undefined ||
-    remainingSourceIdentities.length > 0
-  ) {
-    return Effect.fail(
-      new MigrationDefinitionRegistryInvalidSelectionError({
-        message:
-          "Run source identity targeting requires exactly one source identity",
-      })
-    );
-  }
-
   const [definitionId] = selection.uniqueRequestedDefinitionIds;
 
   if (definitionId === undefined) {
@@ -715,17 +732,53 @@ const normalizeRunTarget = (
     );
   }
 
-  return Effect.succeed(
-    Option.some({
-      definitionId,
-      sourceIdentities: [firstSourceIdentity],
-    })
+  const definition = definitionsById.get(definitionId);
+
+  if (definition === undefined) {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message:
+          "Run source identity targeting requires a registered Migration Definition",
+      })
+    );
+  }
+
+  return Effect.flatMap(
+    normalizeTargetSourceIdentities(
+      definition,
+      input.sourceIdentities,
+      selection.notices
+    ),
+    (sourceIdentities) => {
+      const [firstSourceIdentity, ...remainingSourceIdentities] =
+        sourceIdentities;
+
+      if (
+        firstSourceIdentity === undefined ||
+        remainingSourceIdentities.length > 0
+      ) {
+        return Effect.fail(
+          new MigrationDefinitionRegistryInvalidSelectionError({
+            message:
+              "Run source identity targeting requires exactly one source identity",
+          })
+        );
+      }
+
+      return Effect.succeed(
+        Option.some({
+          definitionId,
+          sourceIdentities: [firstSourceIdentity],
+        })
+      );
+    }
   );
 };
 
 const normalizeRollbackTarget = (
   input: MigrationDefinitionRegistryRollbackInput,
-  selection: ResolvedRegistrySelection
+  selection: ResolvedRegistrySelection,
+  definitionsById: ReadonlyMap<MigrationDefinitionId, AnyMigrationDefinition>
 ): Effect.Effect<
   Option.Option<MigrationDefinitionPlanTarget>,
   MigrationDefinitionRegistryInvalidSelectionError
@@ -755,21 +808,6 @@ const normalizeRollbackTarget = (
     );
   }
 
-  const sourceIdentities = dedupeTargetSourceIdentities(
-    input.sourceIdentities,
-    selection.notices
-  );
-  const [firstSourceIdentity, ...remainingSourceIdentities] = sourceIdentities;
-
-  if (firstSourceIdentity === undefined) {
-    return Effect.fail(
-      new MigrationDefinitionRegistryInvalidSelectionError({
-        message:
-          "Rollback source identity targeting requires at least one source identity",
-      })
-    );
-  }
-
   const [definitionId] = selection.uniqueRequestedDefinitionIds;
 
   if (definitionId === undefined) {
@@ -781,11 +819,43 @@ const normalizeRollbackTarget = (
     );
   }
 
-  return Effect.succeed(
-    Option.some({
-      definitionId,
-      sourceIdentities: [firstSourceIdentity, ...remainingSourceIdentities],
-    })
+  const definition = definitionsById.get(definitionId);
+
+  if (definition === undefined) {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message:
+          "Rollback source identity targeting requires a registered Migration Definition",
+      })
+    );
+  }
+
+  return Effect.flatMap(
+    normalizeTargetSourceIdentities(
+      definition,
+      input.sourceIdentities,
+      selection.notices
+    ),
+    (sourceIdentities) => {
+      const [firstSourceIdentity, ...remainingSourceIdentities] =
+        sourceIdentities;
+
+      if (firstSourceIdentity === undefined) {
+        return Effect.fail(
+          new MigrationDefinitionRegistryInvalidSelectionError({
+            message:
+              "Rollback source identity targeting requires at least one source identity",
+          })
+        );
+      }
+
+      return Effect.succeed(
+        Option.some({
+          definitionId,
+          sourceIdentities: [firstSourceIdentity, ...remainingSourceIdentities],
+        })
+      );
+    }
   );
 };
 
@@ -981,7 +1051,11 @@ export class MigrationDefinitionRegistry<
         definitionsById,
         input
       );
-      const targetOption = yield* normalizeRunTarget(input, selection);
+      const targetOption = yield* normalizeRunTarget(
+        input,
+        selection,
+        definitionsById
+      );
       const includedDefinitionIds = yield* resolveIncludedDefinitionIds(
         definitionsById,
         selection
@@ -1026,7 +1100,11 @@ export class MigrationDefinitionRegistry<
         definitionsById,
         input
       );
-      const targetOption = yield* normalizeRollbackTarget(input, selection);
+      const targetOption = yield* normalizeRollbackTarget(
+        input,
+        selection,
+        definitionsById
+      );
       const includedDefinitionIds = yield* resolveIncludedDefinitionIds(
         definitionsById,
         selection
@@ -1068,7 +1146,7 @@ export class MigrationDefinitionRegistry<
     RunRequestSourceRequirements<Definitions>
   > {
     return Effect.flatMap(this.planRun(input), (plan) =>
-      runMigrations<Definitions>(
+      runMigrationsWithEncodedRunMode<Definitions>(
         plan.target === undefined
           ? {
               definitions: plan.definitions as Definitions,
@@ -1078,7 +1156,7 @@ export class MigrationDefinitionRegistry<
               definitions: plan.definitions as Definitions,
               mode: {
                 kind: "item" as const,
-                sourceIdentity: plan.target.sourceIdentities[0],
+                encodedSourceIdentity: plan.target.sourceIdentities[0],
               },
             }
       )
@@ -1095,12 +1173,12 @@ export class MigrationDefinitionRegistry<
       .#definitions as unknown as AnyRollbackMigrationDefinitions;
 
     return Effect.flatMap(this.planRollback(input), (plan) =>
-      rollbackMigrations({
+      rollbackMigrationsWithEncodedSourceIdentities({
         definitions,
         definitionIds: [...plan.executionDefinitionIds].reverse(),
         ...(plan.target === undefined
           ? {}
-          : { sourceIdentities: plan.target.sourceIdentities }),
+          : { encodedSourceIdentities: plan.target.sourceIdentities }),
       })
     );
   }

@@ -3,6 +3,7 @@ import {
   defineMigration,
   type MigrationRunSummary,
   runMigration,
+  SourceIdentity,
   skipItem,
 } from "migrate-sdk";
 import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
@@ -18,9 +19,14 @@ const ArticleEntryFields = Schema.Struct({
   title: Schema.String,
 });
 
+const ArticleSourceIdentity = SourceIdentity.make({
+  id: "example-article@v1",
+  schema: SourceIdentity.key("articleId", Schema.NonEmptyString),
+});
+
 const sourceItems = [
   {
-    identity: "article-1",
+    identityKey: "article-1",
     version: "source-version-1",
     item: {
       publish: true,
@@ -28,7 +34,7 @@ const sourceItems = [
     },
   },
   {
-    identity: "article-2",
+    identityKey: "article-2",
     version: "source-version-1",
     item: {
       publish: false,
@@ -36,7 +42,7 @@ const sourceItems = [
     },
   },
   {
-    identity: "article-3",
+    identityKey: "article-3",
     version: "source-version-1",
     item: {
       publish: true,
@@ -57,6 +63,7 @@ export const makeInMemoryArticlesMigration = () => {
   return defineMigration({
     id: "articles",
     source: InMemorySourcePlugin.make({
+      identity: ArticleSourceIdentity,
       items: sourceItems,
       sourceSchema: Article,
     }),

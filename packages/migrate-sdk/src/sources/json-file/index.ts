@@ -14,6 +14,7 @@ export type {
   JsonFileDocumentSubitemSourceOptions,
   JsonFileDocumentVersion,
   JsonFileIdentity,
+  JsonFileIdentitySelector,
   JsonFileIdentityValue,
   JsonFileItemsPath,
   JsonFilePathSegment,

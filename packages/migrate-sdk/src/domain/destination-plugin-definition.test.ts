@@ -14,9 +14,9 @@ import {
   makeDestinationCommandResult,
   toDestinationIdentity,
   toDestinationVersion,
+  toEncodedSourceIdentity,
   toMigrationDefinitionId,
   toMigrationRunId,
-  toSourceIdentity,
   toSourceVersion,
 } from "migrate-sdk";
 import { expectTypeOf } from "vitest";
@@ -216,7 +216,7 @@ const makeArticleApiLayer = (
 const commandContext: DestinationCommandContext = {
   definitionId: toMigrationDefinitionId("articles"),
   runId: toMigrationRunId("run-1"),
-  sourceIdentity: toSourceIdentity("article-1"),
+  sourceIdentity: toEncodedSourceIdentity("article-1"),
   sourceVersion: toSourceVersion("source-version-1"),
 };
 

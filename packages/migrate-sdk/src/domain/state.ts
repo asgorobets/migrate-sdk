@@ -4,14 +4,14 @@ import {
   DestinationVersion,
   MigrationDefinitionId,
   MigrationRunId,
-  SourceIdentity,
+  SourceIdentitySnapshot,
   SourceVersion,
 } from "./ids.ts";
 
 const MigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionId,
   lastRunId: MigrationRunId,
-  sourceIdentity: SourceIdentity,
+  sourceIdentity: SourceIdentitySnapshot,
   updatedAt: Schema.Date,
 } as const;
 
@@ -88,7 +88,7 @@ export type MigrationItemState = typeof MigrationItemState.Type;
 export interface MigrationItemStateBase {
   readonly definitionId: MigrationDefinitionId;
   readonly lastRunId: MigrationRunId;
-  readonly sourceIdentity: SourceIdentity;
+  readonly sourceIdentity: SourceIdentitySnapshot;
   readonly sourceVersion?: SourceVersion;
   readonly updatedAt: Date;
 }

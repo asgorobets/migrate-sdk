@@ -7,9 +7,9 @@ import {
   DestinationPluginError,
   defineDestinationCommand,
   InMemoryDestinationPlugin,
+  toEncodedSourceIdentity,
   toMigrationDefinitionId,
   toMigrationRunId,
-  toSourceIdentity,
   toSourceVersion,
 } from "migrate-sdk";
 import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
@@ -44,7 +44,7 @@ const indexRecordCommand = defineDestinationCommand("IndexRecord", {
 const commandContext: DestinationCommandContext = {
   definitionId: toMigrationDefinitionId("articles"),
   runId: toMigrationRunId("run-1"),
-  sourceIdentity: toSourceIdentity("article-1"),
+  sourceIdentity: toEncodedSourceIdentity("article-1"),
   sourceVersion: toSourceVersion("source-version-1"),
 };
 

@@ -165,9 +165,10 @@ const skipped = Flag.boolean("skipped").pipe(
   Flag.withDescription("Plan a rerun of skipped items")
 );
 
-const ids = Flag.string("ids").pipe(
+const id = Flag.string("id").pipe(
+  Flag.atMost(Number.MAX_SAFE_INTEGER),
   Flag.optional,
-  Flag.withDescription("Comma-separated source identity targets")
+  Flag.withDescription("Repeatable source identity target")
 );
 
 const runDefinitions = Argument.string("definition").pipe(Argument.variadic());
@@ -177,31 +178,20 @@ const decodeSourceIdentityTarget = (
 ): Effect.Effect<string, CliError.UserError> =>
   Effect.try({
     try: () => decodeURIComponent(segment),
-    catch: () => "--ids contains invalid percent encoding",
+    catch: () => "--id contains invalid percent encoding",
   }).pipe(
     Effect.catch((message) => failReportedCliMessage(message)),
-    Effect.flatMap((decodedSegment) =>
-      decodedSegment.length === 0
-        ? failReportedCliMessage(
-            "--ids must not contain empty source identities"
-          )
-        : Effect.succeed(decodedSegment)
+    Effect.flatMap(() =>
+      segment.length === 0
+        ? failReportedCliMessage("--id must not be empty")
+        : Effect.succeed(segment)
     )
   );
 
 const parseSourceIdentityTargets = (
-  input: string
-): Effect.Effect<readonly string[], CliError.UserError> => {
-  const segments = input.split(",");
-
-  if (segments.some((segment) => segment.length === 0)) {
-    return failReportedCliMessage(
-      "--ids must not contain empty comma-separated segments"
-    );
-  }
-
-  return Effect.forEach(segments, decodeSourceIdentityTarget);
-};
+  input: readonly string[]
+): Effect.Effect<readonly string[], CliError.UserError> =>
+  Effect.forEach(input, decodeSourceIdentityTarget);
 
 const makeRunPlanInput = (input: {
   readonly all: boolean;
@@ -428,7 +418,7 @@ const runCommand = Command.make(
     all,
     definitions: runDefinitions,
     failed,
-    ids,
+    id,
     plan,
     skipped,
     withDependencies,
@@ -442,9 +432,9 @@ const runCommand = Command.make(
       }
 
       const registry = yield* loadConfiguredRegistry;
-      const idsInput = Option.getOrUndefined(input.ids);
+      const idsInput = Option.getOrUndefined(input.id);
       const sourceIdentities =
-        idsInput === undefined
+        idsInput === undefined || idsInput.length === 0
           ? undefined
           : yield* parseSourceIdentityTargets(idsInput);
       let mode: "failed" | "skipped" | undefined;
@@ -508,16 +498,16 @@ const rollbackCommand = Command.make(
   {
     all,
     definitions: runDefinitions,
-    ids,
+    id,
     plan,
     withDependencies,
   },
   (input) =>
     Effect.gen(function* () {
       const registry = yield* loadConfiguredRegistry;
-      const idsInput = Option.getOrUndefined(input.ids);
+      const idsInput = Option.getOrUndefined(input.id);
       const sourceIdentities =
-        idsInput === undefined
+        idsInput === undefined || idsInput.length === 0
           ? undefined
           : yield* parseSourceIdentityTargets(idsInput);
       const rollbackInput = makeRollbackPlanInput({

@@ -34,17 +34,10 @@ const source = CsvSourcePlugin.make({
   dialect: { kind: "standard" },
   emptyRows: { kind: "skip" },
   headers: { kind: "from-row", rowIndex: 2 },
-  identity: {
+  identity: CsvIdentity.columns({
     id: "book-format@v1",
-    schema: SourceIdentity.tuple([
-      SourceIdentity.part("bookId", Schema.NonEmptyString),
-      SourceIdentity.part("format", Schema.NonEmptyString),
-    ]),
-    key: {
-      kind: "columns",
-      columns: ["book_id", "format"],
-    },
-  },
+    columns: ["book_id", "format"],
+  }),
   version: { kind: "column", column: "catalog_version" },
   sourceSchema: CsvBookSource,
 });
@@ -53,17 +46,21 @@ const source = CsvSourcePlugin.make({
 All user choices that affect source semantics are required:
 
 ```ts
-interface CsvSourceOptions<Source> {
+interface CsvSourceOptions<Source, IdentityKey = unknown> {
   readonly path: string;
   readonly platform: CsvSourcePlatform;
   readonly dialect: CsvDialect;
   readonly emptyRows: CsvEmptyRows;
   readonly headers: CsvHeaders;
-  readonly identity: CsvIdentity;
+  readonly identity: CsvIdentityDefinition<IdentityKey>;
   readonly version: CsvVersion;
   readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
 }
 ```
+
+`identity` should normally be produced by `CsvIdentity.column(...)` or
+`CsvIdentity.columns(...)`; migration authors should not need to construct the
+low-level schema-backed identity definition by hand.
 
 The plugin factory may still derive mechanical details such as cursor schema,
 scan lookup strategy, and the canonical row-hash algorithm.
@@ -186,9 +183,9 @@ The CSV source must produce a non-empty Source Identity before the runtime can
 record durable item state:
 
 ```ts
-type CsvIdentity = {
+type CsvIdentityDefinition<IdentityKey> = {
   readonly id: SourceIdentityContractId;
-  readonly schema: SourceIdentitySchema<unknown>;
+  readonly schema: SourceIdentitySchema<IdentityKey>;
   readonly key: {
     readonly kind: "columns";
     readonly columns: readonly string[];
@@ -196,25 +193,42 @@ type CsvIdentity = {
 };
 ```
 
-`identity.key.columns` is the only v1 identity derivation strategy. The
-configured columns map by position to the scalar identity schema or fixed tuple
-parts. Trim identity values before checking emptiness and building the identity.
+Migration authors should construct this definition through CSV-native helpers:
+
+```ts
+identity: CsvIdentity.column({
+  id: "article@v1",
+  column: "id",
+})
+```
+
+```ts
+identity: CsvIdentity.columns({
+  id: "book-format@v1",
+  columns: ["book_id", "format"],
+})
+```
+
+`identity.key.columns` is the only v1 identity derivation strategy. The CSV
+plugin converts one column into `SourceIdentity.key(...)` and multiple columns
+into `SourceIdentity.tuple(...)`, using `Schema.NonEmptyString` for each raw CSV
+identity column. The source trims identity values, rejects empty values, and
+decodes the derived key through the generated `identity.schema` before emitting
+the source item.
 
 Single-column identity uses the trimmed value. Composite identity uses the
-configured tuple order:
+configured tuple order. This is the internal shape produced by
+`CsvIdentity.columns(...)`:
 
 ```ts
 identity: {
   id: "book-format@v1",
+  key: { kind: "columns", columns: ["book_id", "format"] },
   schema: SourceIdentity.tuple([
-    SourceIdentity.part("bookId", Schema.NonEmptyString),
+    SourceIdentity.part("book_id", Schema.NonEmptyString),
     SourceIdentity.part("format", Schema.NonEmptyString),
   ]),
-  key: {
-    kind: "columns",
-    columns: ["book_id", "format"],
-  },
-};
+}
 // Source Identity material: ["BOOK-001","paperback"]
 ```
 

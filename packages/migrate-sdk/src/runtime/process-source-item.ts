@@ -16,6 +16,7 @@ import {
 import type {
   MigrationDefinitionId,
   MigrationRunId,
+  SourceIdentitySnapshotKey,
   SourceVersion,
 } from "../domain/ids.ts";
 import type { PipelineContext } from "../domain/pipeline.ts";
@@ -43,6 +44,7 @@ export interface ProcessSourceItemOptions<
   Command extends DestinationCommand,
   PipelineError,
   Cursor = unknown,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
   SourceInput = unknown,
   SourceLayerError = never,
   SourceRequirements = never,
@@ -52,6 +54,7 @@ export interface ProcessSourceItemOptions<
     Command,
     PipelineError,
     Cursor,
+    IdentityKey,
     unknown,
     SourceInput,
     SourceLayerError,
@@ -59,7 +62,7 @@ export interface ProcessSourceItemOptions<
   >;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
-  readonly sourceItem: SourceItem<SourceInput>;
+  readonly sourceItem: SourceItem<SourceInput, IdentityKey>;
   readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
 }
 
@@ -254,22 +257,29 @@ const persistNonCommandPipelineOutcome = <
     .pipe(Effect.as("failed" as const));
 };
 
-const isUnchangedTerminalState = <Source>(
+const isUnchangedTerminalState = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   previousState: MigrationItemState | null,
-  sourceItem: SourceItem<Source>
+  sourceItem: SourceItem<Source, IdentityKey>
 ): boolean =>
   previousState?.status === "migrated" &&
   previousState.sourceVersion === sourceItem.version;
 
-const decodeSourceItem = <Source, SourceInput>(
+const decodeSourceItem = <
+  Source,
+  SourceInput,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   sourceSchema: SourcePayloadSchema<Source, SourceInput>,
-  sourceItem: SourceItem<SourceInput>
+  sourceItem: SourceItem<SourceInput, IdentityKey>
 ) =>
   Schema.decodeUnknownEffect(sourceSchema, { errors: "all" })(
     sourceItem.item
   ).pipe(
     Effect.map(
-      (item): SourceItem<Source> => ({
+      (item): SourceItem<Source, IdentityKey> => ({
         ...sourceItem,
         item,
       })
@@ -281,6 +291,7 @@ const runPipeline = <
   Command extends DestinationCommand,
   PipelineError,
   Cursor = unknown,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
   SourceInput = Source,
   SourceLayerError = never,
   SourceRequirements = never,
@@ -290,12 +301,13 @@ const runPipeline = <
     Command,
     PipelineError,
     Cursor,
+    IdentityKey,
     unknown,
     SourceInput,
     SourceLayerError,
     SourceRequirements
   >,
-  sourceItem: SourceItem<Source>,
+  sourceItem: SourceItem<Source, IdentityKey>,
   context: PipelineContext
 ) =>
   Effect.try({
@@ -318,6 +330,7 @@ export const processSourceItem = <
   Command extends DestinationCommand,
   PipelineError,
   Cursor,
+  IdentityKey extends SourceIdentitySnapshotKey,
   SourceInput,
   SourceLayerError,
   SourceRequirements,
@@ -332,6 +345,7 @@ export const processSourceItem = <
   Command,
   PipelineError,
   Cursor,
+  IdentityKey,
   SourceInput,
   SourceLayerError,
   SourceRequirements
@@ -345,7 +359,7 @@ export const processSourceItem = <
     const store = yield* MigrationStore;
     const previousState = yield* store.getItemState(
       definition.id,
-      sourceItem.identity
+      sourceItem.identity.encoded
     );
     const decodedSourceItem = yield* decodeSourceItem(
       sourceSchema,
@@ -423,7 +437,7 @@ export const processSourceItem = <
     const destinationContext: DestinationCommandContext = {
       definitionId: definition.id,
       runId,
-      sourceIdentity: decodedSourceItem.identity,
+      sourceIdentity: decodedSourceItem.identity.encoded,
       sourceVersion: decodedSourceItem.version,
       ...(previousState === null ? {} : { previousState }),
     };

@@ -106,7 +106,11 @@ describe("in-memory runtime example", () => {
         expect(result.bookStubState).toEqual(
           expect.objectContaining({
             definitionId: "books",
-            sourceIdentity: "book:future-catalog",
+            sourceIdentity: expect.objectContaining({
+              encoded: "book:future-catalog",
+              id: "book@v1",
+              key: "book:future-catalog",
+            }),
             status: "needs-update",
             destinationIdentity: "entry:book:book:future-catalog",
           })
@@ -114,7 +118,11 @@ describe("in-memory runtime example", () => {
         expect(result.authorState).toEqual(
           expect.objectContaining({
             definitionId: "authors",
-            sourceIdentity: "author:maya-chen",
+            sourceIdentity: expect.objectContaining({
+              encoded: "author:maya-chen",
+              id: "author@v1",
+              key: "author:maya-chen",
+            }),
             sourceVersion: "author-version-1",
             status: "migrated",
             destinationIdentity: "entry:author:author:maya-chen",

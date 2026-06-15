@@ -31,7 +31,10 @@ interface SourcePluginInput<Source, Cursor, IdentityKey> {
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
-  ) => Effect.Effect<SourceReadResultInput<Source, Cursor>, SourcePluginError>;
+  ) => Effect.Effect<
+    SourceReadResultInput<Source, Cursor, IdentityKey>,
+    SourcePluginError
+  >;
   readonly readByIdentity: (
     identity: SourceIdentityTarget<IdentityKey>
   ) => Effect.Effect<
@@ -44,7 +47,10 @@ interface SourcePluginImplementation<Source, Cursor, IdentityKey> {
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
-  ) => Effect.Effect<SourceReadResultInput<Source, Cursor>, SourcePluginError>;
+  ) => Effect.Effect<
+    SourceReadResultInput<Source, Cursor, IdentityKey>,
+    SourcePluginError
+  >;
   readonly readByIdentity: (
     identity: SourceIdentityTarget<IdentityKey>
   ) => Effect.Effect<
@@ -65,7 +71,7 @@ interface SourceIdentityTarget<Key> {
 }
 
 interface SourceItemInput<Source, IdentityKey> {
-  readonly identity: IdentityKey;
+  readonly identityKey: IdentityKey;
   readonly version: SourceVersionInput;
   readonly item: Source;
 }
@@ -73,7 +79,8 @@ interface SourceItemInput<Source, IdentityKey> {
 
 Source plugins should use `identity.key`, not parse `identity.encoded`, when
 implementing lookup. Source read results emit only the `IdentityKey` value; the
-configured identity contract supplies the id, schema, encoder, and fingerprint.
+configured identity contract supplies the id, schema, and fingerprint, and the
+runtime applies the SDK-owned canonical encoder.
 
 The configured plugin also carries an SDK-owned source layer used by the runner.
 Plugin authors normally return the configured value from `defineSourcePlugin`
@@ -156,7 +163,7 @@ export const JsonPlaceholderPostSourcePlugin = {
     return defineSourcePlugin({
       cursorSchema: JsonPlaceholderPostCursor,
       sourceSchema: JsonPlaceholderPost,
-      identity: SourceIdentity.define({
+      identity: SourceIdentity.make({
         id: "jsonplaceholder-post@v1",
         schema: SourceIdentity.key("postId", Schema.NonEmptyString),
       }),
@@ -181,11 +188,11 @@ identity and source version into the runtime's branded values. It also normalize
 `nextCursor: undefined` away before the runtime sees the read result. Cursor
 encoding and decoding still belongs to the configured `cursorSchema`.
 
-The configured `identity` contract supplies the source identity id, schema,
-encoder, and fingerprint. Each emitted `SourceItemInput.identity` value is the
-source identity key for that item and must conform to `identity.schema`; the
-runtime attaches the contract id and encoded source identity when it constructs
-the pipeline-facing `SourceItem`.
+The configured `identity` contract supplies the source identity id, schema, and
+fingerprint. Each emitted `SourceItemInput.identityKey` value is the source
+identity key for that item and must conform to `identity.schema`; the runtime
+attaches the contract id and encoded source identity when it constructs the
+pipeline-facing `SourceItem`.
 
 The source plugin depends on a small `JsonPlaceholderApi` service with
 `listPostIds()` and `getPost(id)` methods. The live adapter calls the public
@@ -257,7 +264,7 @@ const read = Effect.fn("SqlArticleSource.read")(function* (cursor) {
   return {
     items: rows.map((row) => ({
       // Identity key value for the configured Source Identity Contract.
-      identity: String(row.id),
+      identityKey: String(row.id),
       version: row.updated_at.toISOString(),
       item: row,
     })),
@@ -359,9 +366,12 @@ boundary forces a split.
 
 ```ts
 export const CsvSourcePlugin = {
-  make: (options: CsvSourceOptions) =>
+  make: <Source, IdentityKey>(
+    options: CsvSourceOptions<Source, IdentityKey>
+  ) =>
     defineSourcePlugin({
       cursorSchema: CsvSourceCursor,
+      identity: makeCsvIdentityDefinition(options.identity),
       make: () => makeCsvSourceImplementation(options),
       sourceSchema: options.sourceSchema,
     }),

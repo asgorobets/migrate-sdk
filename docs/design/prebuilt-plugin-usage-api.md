@@ -40,14 +40,10 @@ const source = CsvSourcePlugin.make({
   dialect: { kind: "standard" },
   emptyRows: { kind: "skip" },
   headers: { kind: "from-row", rowIndex: 0 },
-  identity: {
+  identity: CsvIdentity.column({
     id: "article@v1",
-    schema: SourceIdentity.key("articleId", Schema.NonEmptyString),
-    key: {
-      kind: "columns",
-      columns: ["id"],
-    },
-  },
+    column: "id",
+  }),
   version: { kind: "row-hash" },
   sourceSchema: CsvArticleSource,
 });

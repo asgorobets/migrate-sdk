@@ -15,7 +15,6 @@ import {
   type RollbackableMigrationItemState,
   type RollbackContext,
   type RollbackDefinitionRunSummary,
-  type RollbackMigrationOptions,
   type RollbackMigrationOptionsInput,
   type RollbackPipeline,
   RollbackPreflightError,
@@ -23,13 +22,12 @@ import {
   RollbackRequestError,
   type RollbackRequestInput,
   RollbackRunSummary,
-  type SourceIdentity,
-  type SourceIdentityInput,
+  type SourceIdentitySnapshotKey,
   toMigrationDefinitionId,
   toMigrationRunId,
-  toSourceIdentity,
 } from "migrate-sdk";
 import { expectTypeOf } from "vitest";
+import type { RollbackMigrationOptions } from "./rollback.ts";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -44,7 +42,7 @@ interface RollbackPipelineError {
   readonly _tag: "RollbackPipelineError";
 }
 
-const source = {} as ConfiguredSourcePlugin<ArticleSource, unknown>;
+const source = {} as ConfiguredSourcePlugin<ArticleSource, unknown, string>;
 const destination = {} as ConfiguredDestinationPlugin<DeleteArticleCommand>;
 const store = {} as Layer.Layer<MigrationStore, MigrationStoreError>;
 
@@ -59,6 +57,7 @@ describe("rollback public API", () => {
       DeleteArticleCommand,
       never,
       unknown,
+      string,
       RollbackPipelineError
     >({
       id: "articles",
@@ -76,28 +75,26 @@ describe("rollback public API", () => {
     });
     const requestWithSourceIdentities = makeRollbackRequest({
       definitions,
-      sourceIdentities: ["article-1"],
+      sourceIdentityKeys: ["article-1"],
     });
     const options = makeRollbackMigrationOptions({
-      sourceIdentities: ["article-1"],
+      sourceIdentityKeys: ["article-1"],
     });
-    const dynamicSourceIdentities: SourceIdentityInput[] = ["article-2"];
+    const dynamicSourceIdentities: string[] = ["article-2"];
     const dynamicOptions = makeRollbackMigrationOptions({
-      sourceIdentities: dynamicSourceIdentities,
+      sourceIdentityKeys: dynamicSourceIdentities,
     });
 
     expect(definition.rollback).toBe(rollbackPipeline);
     expect(requestWithSourceIdentities.definitions).toBe(definitions);
-    expect(requestWithSourceIdentities.sourceIdentities).toEqual([
-      toSourceIdentity("article-1"),
+    expect(requestWithSourceIdentities.sourceIdentityKeys).toEqual([
+      "article-1",
     ]);
     expect(request.definitionIds).toEqual([
       toMigrationDefinitionId("articles"),
     ]);
-    expect(options.sourceIdentities).toEqual([toSourceIdentity("article-1")]);
-    expect(dynamicOptions.sourceIdentities).toEqual([
-      toSourceIdentity("article-2"),
-    ]);
+    expect(options.sourceIdentityKeys).toEqual(["article-1"]);
+    expect(dynamicOptions.sourceIdentityKeys).toEqual(["article-2"]);
   });
 
   it("exposes distinct rollback runtime errors", () => {
@@ -112,19 +109,20 @@ describe("rollback public API", () => {
   it("rejects empty targeted source identities", () => {
     expect(() =>
       makeRollbackMigrationOptions({
-        sourceIdentities: [],
+        sourceIdentityKeys: [],
       })
     ).toThrow(RollbackRequestError);
   });
 
-  it("deduplicates targeted source identities in first occurrence order", () => {
+  it("keeps targeted source identity keys for definition-aware encoding", () => {
     const options = makeRollbackMigrationOptions({
-      sourceIdentities: ["article-1", "article-2", "article-1"],
+      sourceIdentityKeys: ["article-1", "article-2", "article-1"],
     });
 
-    expect(options.sourceIdentities).toEqual([
-      toSourceIdentity("article-1"),
-      toSourceIdentity("article-2"),
+    expect(options.sourceIdentityKeys).toEqual([
+      "article-1",
+      "article-2",
+      "article-1",
     ]);
   });
 
@@ -205,9 +203,10 @@ expectTypeOf<RollbackDefinitionRunSummary["counts"]>().toEqualTypeOf<{
 expectTypeOf<RollbackRunSummary["kind"]>().toEqualTypeOf<"rollback">();
 expectTypeOf<RollbackRequest>().toMatchTypeOf<RollbackRequestInput>();
 expectTypeOf<RollbackMigrationOptions>().toMatchTypeOf<RollbackMigrationOptionsInput>();
-expectTypeOf<RollbackMigrationOptions["sourceIdentities"]>().toEqualTypeOf<
-  readonly [SourceIdentity, ...SourceIdentity[]] | undefined
+expectTypeOf<RollbackMigrationOptions["sourceIdentityKeys"]>().toEqualTypeOf<
+  | readonly [SourceIdentitySnapshotKey, ...SourceIdentitySnapshotKey[]]
+  | undefined
 >();
-expectTypeOf<RollbackMigrationOptionsInput["sourceIdentities"]>().toEqualTypeOf<
-  readonly SourceIdentityInput[] | undefined
->();
+expectTypeOf<
+  RollbackMigrationOptionsInput["sourceIdentityKeys"]
+>().toEqualTypeOf<readonly SourceIdentitySnapshotKey[] | undefined>();

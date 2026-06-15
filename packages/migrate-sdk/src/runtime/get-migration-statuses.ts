@@ -1,5 +1,8 @@
 import { Effect, Layer, Schema } from "effect";
-import type { MigrationDefinitionId, SourceIdentity } from "../domain/ids.ts";
+import type {
+  EncodedSourceIdentity,
+  MigrationDefinitionId,
+} from "../domain/ids.ts";
 import type { AnyMigrationDefinition } from "../domain/run.ts";
 import type { SourceItem } from "../domain/source.ts";
 import type { MigrationItemState } from "../domain/state.ts";
@@ -113,7 +116,7 @@ const validateSourceItem = (
         new InvalidSourceItemStatusWarning({
           definitionId,
           message: normalized.message,
-          sourceIdentity: sourceItem.identity,
+          sourceIdentity: sourceItem.identity.encoded,
           ...(normalized.details === undefined
             ? {}
             : { details: normalized.details }),
@@ -130,18 +133,18 @@ const scanSourceInventory = (
   Effect.gen(function* () {
     const sourceItems = yield* readSourceInventory(definition, source);
     const durableSourceIdentities = new Set(
-      itemStates.map((itemState) => itemState.sourceIdentity)
+      itemStates.map((itemState) => itemState.sourceIdentity.encoded)
     );
-    const seenSourceIdentities = new Set<SourceIdentity>();
-    const currentSourceIdentities = new Set<SourceIdentity>();
-    const duplicateCounts = new Map<SourceIdentity, number>();
+    const seenSourceIdentities = new Set<EncodedSourceIdentity>();
+    const currentSourceIdentities = new Set<EncodedSourceIdentity>();
+    const duplicateCounts = new Map<EncodedSourceIdentity, number>();
     const warnings: MigrationStatusWarning[] = [];
     let invalid = 0;
     let duplicate = 0;
     let unprocessed = 0;
 
     for (const sourceItem of sourceItems) {
-      currentSourceIdentities.add(sourceItem.identity);
+      currentSourceIdentities.add(sourceItem.identity.encoded);
 
       const validationWarning = yield* validateSourceItem(
         definition.id,
@@ -155,18 +158,20 @@ const scanSourceInventory = (
         warnings.push(validationWarning);
       }
 
-      if (seenSourceIdentities.has(sourceItem.identity)) {
+      if (seenSourceIdentities.has(sourceItem.identity.encoded)) {
         duplicate += 1;
         duplicateCounts.set(
-          sourceItem.identity,
-          (duplicateCounts.get(sourceItem.identity) ?? 0) + 1
+          sourceItem.identity.encoded,
+          (duplicateCounts.get(sourceItem.identity.encoded) ?? 0) + 1
         );
         continue;
       }
 
-      seenSourceIdentities.add(sourceItem.identity);
+      seenSourceIdentities.add(sourceItem.identity.encoded);
 
-      if (!(isInvalid || durableSourceIdentities.has(sourceItem.identity))) {
+      if (
+        !(isInvalid || durableSourceIdentities.has(sourceItem.identity.encoded))
+      ) {
         unprocessed += 1;
       }
     }
@@ -182,7 +187,8 @@ const scanSourceInventory = (
     }
 
     const orphaned = itemStates.filter(
-      (itemState) => !currentSourceIdentities.has(itemState.sourceIdentity)
+      (itemState) =>
+        !currentSourceIdentities.has(itemState.sourceIdentity.encoded)
     ).length;
 
     return {
@@ -233,8 +239,13 @@ const getScannedDefinitionStatus = (
     };
   });
 
+  const sourceLayer = definition.source.layer as Layer.Layer<
+    AnySourcePlugin,
+    GetMigrationStatusesError
+  >;
+
   return program.pipe(
-    Effect.provide(Layer.mergeAll(definition.source.layer, definition.store))
+    Effect.provide(Layer.mergeAll(sourceLayer, definition.store))
   );
 };
 

@@ -9,7 +9,7 @@ import {
   JsonFileSourcePlugin,
 } from "migrate-sdk/sources/json-file";
 import { expectTypeOf } from "vitest";
-import { toSourceIdentity } from "../../domain/ids.ts";
+import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
 import { SourcePlugin } from "../../services/source-plugin.ts";
 
 const JsonArticleSource = Schema.Struct({
@@ -83,6 +83,77 @@ const sha256HexPattern = /^[a-f0-9]{64}$/;
 
 const testPlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
 
+const tuple2 = <A, B>(first: A, second: B): readonly [A, B] => [first, second];
+
+const fieldSelector = <Field extends string>(
+  field: Field
+): {
+  readonly field: Field;
+  readonly kind: "field";
+} => ({
+  field,
+  kind: "field",
+});
+
+const fieldsSelector = <const Fields extends readonly [string, ...string[]]>(
+  fields: Fields
+): {
+  readonly fields: Fields;
+  readonly kind: "fields";
+} => ({
+  fields,
+  kind: "fields",
+});
+
+const JsonArticleIdentity = {
+  id: "json-article@v1",
+  key: fieldSelector("id"),
+  schema: SourceIdentity.key("id", Schema.NonEmptyString),
+};
+
+const JsonLocalizedArticleIdentity = {
+  id: "json-localized-article@v1",
+  key: fieldsSelector(["id", "locale"]),
+  schema: SourceIdentity.tuple([
+    SourceIdentity.part("id", Schema.NonEmptyString),
+    SourceIdentity.part("locale", Schema.NonEmptyString),
+  ]),
+};
+
+const JsonBusinessUnitIdentity = {
+  id: "json-business-unit@v1",
+  key: ({
+    item,
+  }: {
+    readonly item: typeof JsonCompanyBusinessUnitSource.Type;
+  }) => item.key,
+  schema: SourceIdentity.key("businessUnitKey", Schema.NonEmptyString),
+};
+
+const JsonInventoryItemIdentity = {
+  id: "json-inventory-item@v1",
+  key: ({ item }: { readonly item: typeof JsonArticleWithBigIntSource.Type }) =>
+    item.id,
+  schema: SourceIdentity.key("inventoryItemId", Schema.NonEmptyString),
+};
+
+const JsonBusinessUnitChildIdentity = {
+  id: "json-business-unit-child@v1",
+  key: ({
+    item,
+    parent,
+  }: {
+    readonly item:
+      | typeof JsonCompanyAddressSource.Type
+      | typeof JsonCompanyContactSource.Type;
+    readonly parent: typeof JsonCompanyBusinessUnitSource.Type;
+  }) => tuple2(parent.key, item.key),
+  schema: SourceIdentity.tuple([
+    SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
+    SourceIdentity.part("childKey", Schema.NonEmptyString),
+  ]),
+};
+
 describe("JsonFileSourcePlugin source entrypoint", () => {
   it("exports the configured source factory and cursor schema", () => {
     expect(JsonFileSourcePlugin).toHaveProperty("make");
@@ -113,7 +184,7 @@ describe("JsonFileSourcePlugin", () => {
       );
 
       const source = JsonFileSourcePlugin.make({
-        identity: { field: "id", kind: "field" },
+        identity: JsonArticleIdentity,
         items: { path: "$.data.articles" },
         path: filePath,
         platform: testPlatformLayer,
@@ -124,7 +195,7 @@ describe("JsonFileSourcePlugin", () => {
       const read = yield* plugin.read(null);
 
       expect(read.items).toHaveLength(2);
-      expect(read.items[0]?.identity).toBe("article-1");
+      expect(read.items[0]?.identity.encoded).toBe("article-1");
       expect(read.items[0]?.version).toBe("v1");
       expect(read.items[0]?.item).toEqual({
         id: "article-1",
@@ -156,7 +227,7 @@ describe("JsonFileSourcePlugin", () => {
 
       const source = JsonFileSourcePlugin.make({
         batchSize: 2,
-        identity: { field: "id", kind: "field" },
+        identity: JsonArticleIdentity,
         items: { path: "$.articles" },
         path: filePath,
         platform: testPlatformLayer,
@@ -166,14 +237,14 @@ describe("JsonFileSourcePlugin", () => {
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
       const firstRead = yield* plugin.read(null);
 
-      expect(firstRead.items.map((item) => item.identity)).toEqual([
+      expect(firstRead.items.map((item) => item.identity.encoded)).toEqual([
         "article-1",
         "article-2",
       ]);
       expect(firstRead.nextCursor?.nextItemIndex).toBe(2);
 
       const secondRead = yield* plugin.read(firstRead.nextCursor ?? null);
-      expect(secondRead.items.map((item) => item.identity)).toEqual([
+      expect(secondRead.items.map((item) => item.identity.encoded)).toEqual([
         "article-3",
       ]);
       expect(secondRead.nextCursor).toBeUndefined();
@@ -204,7 +275,7 @@ describe("JsonFileSourcePlugin", () => {
       );
 
       const source = JsonFileSourcePlugin.make({
-        identity: { field: "id", kind: "field" },
+        identity: JsonArticleIdentity,
         items: { path: "$" },
         path: filePath,
         platform: testPlatformLayer,
@@ -212,12 +283,22 @@ describe("JsonFileSourcePlugin", () => {
         version: { field: "version", kind: "field" },
       });
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const found = yield* plugin.readByIdentity(toSourceIdentity("article-2"));
+      const found = yield* plugin.readByIdentity(
+        SourceIdentity.fromEncoded(
+          plugin.identity,
+          toEncodedSourceIdentity("article-2")
+        )
+      );
 
       expect(found?.item.title).toBe("Two");
       expect(found?.version).toBe("v2");
       expect(
-        yield* plugin.readByIdentity(toSourceIdentity("missing"))
+        yield* plugin.readByIdentity(
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("missing")
+          )
+        )
       ).toBeNull();
     }).pipe(Effect.provide(testPlatformLayer))
   );
@@ -238,7 +319,7 @@ describe("JsonFileSourcePlugin", () => {
       );
 
       const source = JsonFileSourcePlugin.make({
-        identity: { fields: ["id", "locale"], kind: "fields" },
+        identity: JsonLocalizedArticleIdentity,
         items: { path: "$" },
         path: filePath,
         platform: testPlatformLayer,
@@ -248,7 +329,7 @@ describe("JsonFileSourcePlugin", () => {
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
       const read = yield* plugin.read(null);
 
-      expect(read.items[0]?.identity).toBe(
+      expect(read.items[0]?.identity.encoded).toBe(
         JSON.stringify(["article-1", "en-US"])
       );
       expect(read.items[0]?.version).toMatch(sha256HexPattern);
@@ -269,7 +350,7 @@ describe("JsonFileSourcePlugin", () => {
       );
 
       const source = JsonFileSourcePlugin.make({
-        identity: { field: "id", kind: "field" },
+        identity: JsonArticleIdentity,
         items: { path: "$" },
         path: filePath,
         platform: testPlatformLayer,
@@ -291,11 +372,15 @@ describe("JsonFileSourcePlugin", () => {
         parentSelector: (document) => document.businessUnits,
         selector: (businessUnit) => businessUnit.contacts,
       },
-      identity: ({ item, parent }) => {
-        expectTypeOf(parent.key).toEqualTypeOf<string>();
-        expectTypeOf(item.key).toEqualTypeOf<string>();
+      identity: {
+        id: "json-company-contact@v1",
+        key: ({ item, parent }) => {
+          expectTypeOf(parent.key).toEqualTypeOf<string>();
+          expectTypeOf(item.key).toEqualTypeOf<string>();
 
-        return [parent.key, item.key];
+          return tuple2(parent.key, item.key);
+        },
+        schema: JsonBusinessUnitChildIdentity.schema,
       },
       path: "not-read-in-type-test.json",
       platform: testPlatformLayer,
@@ -322,10 +407,14 @@ describe("JsonFileSourcePlugin", () => {
       items: {
         selector: (document) => document.businessUnits,
       },
-      identity: ({ item }) => {
-        expectTypeOf(item.key).toEqualTypeOf<string>();
+      identity: {
+        id: "json-business-unit@v1",
+        key: ({ item }) => {
+          expectTypeOf(item.key).toEqualTypeOf<string>();
 
-        return item.key;
+          return item.key;
+        },
+        schema: JsonBusinessUnitIdentity.schema,
       },
       path: "not-read-in-type-test.json",
       platform: testPlatformLayer,
@@ -361,7 +450,7 @@ describe("JsonFileSourcePlugin", () => {
           items: {
             selector: (document) => document.items,
           },
-          identity: ({ item }) => item.id,
+          identity: JsonInventoryItemIdentity,
           path: filePath,
           platform: testPlatformLayer,
           version: { kind: "content-hash" },
@@ -369,7 +458,7 @@ describe("JsonFileSourcePlugin", () => {
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
         const read = yield* plugin.read(null);
 
-        expect(read.items[0]?.identity).toBe("article-1");
+        expect(read.items[0]?.identity.encoded).toBe("article-1");
         expect(read.items[0]?.item.item.inventory).toBe(42n);
         expect(read.items[0]?.version).toMatch(sha256HexPattern);
       }).pipe(Effect.provide(testPlatformLayer))
@@ -465,7 +554,7 @@ describe("JsonFileSourcePlugin", () => {
           items: {
             selector: (document) => document.businessUnits,
           },
-          identity: ({ item }) => item.key,
+          identity: JsonBusinessUnitIdentity,
           path: filePath,
           platform: testPlatformLayer,
           version: {
@@ -479,7 +568,7 @@ describe("JsonFileSourcePlugin", () => {
             parentSelector: (document) => document.businessUnits,
             selector: (businessUnit) => businessUnit.contacts,
           },
-          identity: ({ item, parent }) => [parent.key, item.key],
+          identity: JsonBusinessUnitChildIdentity,
           path: filePath,
           platform: testPlatformLayer,
           version: { kind: "content-hash" },
@@ -490,7 +579,7 @@ describe("JsonFileSourcePlugin", () => {
             parentSelector: (document) => document.businessUnits,
             selector: (businessUnit) => businessUnit.addresses,
           },
-          identity: ({ item, parent }) => [parent.key, item.key],
+          identity: JsonBusinessUnitChildIdentity,
           path: filePath,
           platform: testPlatformLayer,
           version: { kind: "content-hash" },
@@ -504,10 +593,10 @@ describe("JsonFileSourcePlugin", () => {
         );
 
         expect(
-          firstBusinessUnitRead.items.map((item) => item.identity)
+          firstBusinessUnitRead.items.map((item) => item.identity.encoded)
         ).toEqual(["BU-100"]);
         expect(
-          secondBusinessUnitRead.items.map((item) => item.identity)
+          secondBusinessUnitRead.items.map((item) => item.identity.encoded)
         ).toEqual(["BU-200"]);
         expect(firstBusinessUnitRead.items[0]?.item.item.name).toBe(
           "Orbit Labs"
@@ -518,10 +607,13 @@ describe("JsonFileSourcePlugin", () => {
         );
         const contactRead = yield* contactPlugin.read(null);
         const foundContact = yield* contactPlugin.readByIdentity(
-          toSourceIdentity(JSON.stringify(["BU-200", "CONTACT-200-1"]))
+          SourceIdentity.fromEncoded(
+            contactPlugin.identity,
+            toEncodedSourceIdentity(JSON.stringify(["BU-200", "CONTACT-200-1"]))
+          )
         );
 
-        expect(contactRead.items.map((item) => item.identity)).toEqual([
+        expect(contactRead.items.map((item) => item.identity.encoded)).toEqual([
           JSON.stringify(["BU-100", "CONTACT-100-1"]),
           JSON.stringify(["BU-100", "CONTACT-100-2"]),
           JSON.stringify(["BU-200", "CONTACT-200-1"]),
@@ -585,10 +677,13 @@ describe("JsonFileSourcePlugin", () => {
         );
         const addressRead = yield* addressPlugin.read(null);
         const foundAddress = yield* addressPlugin.readByIdentity(
-          toSourceIdentity(JSON.stringify(["BU-100", "ADDR-100-SHIP"]))
+          SourceIdentity.fromEncoded(
+            addressPlugin.identity,
+            toEncodedSourceIdentity(JSON.stringify(["BU-100", "ADDR-100-SHIP"]))
+          )
         );
 
-        expect(addressRead.items.map((item) => item.identity)).toEqual([
+        expect(addressRead.items.map((item) => item.identity.encoded)).toEqual([
           JSON.stringify(["BU-100", "ADDR-100-BILL"]),
           JSON.stringify(["BU-100", "ADDR-100-SHIP"]),
           JSON.stringify(["BU-200", "ADDR-200-SHIP"]),
@@ -620,7 +715,7 @@ describe("JsonFileSourcePlugin", () => {
         items: {
           selector: (document) => document.businessUnits,
         },
-        identity: ({ item }) => item.key,
+        identity: JsonBusinessUnitIdentity,
         path: filePath,
         platform: testPlatformLayer,
         version: { kind: "content-hash" },
@@ -655,7 +750,7 @@ describe("JsonFileSourcePlugin", () => {
 
       const source = JsonFileSourcePlugin.make({
         batchSize: 1,
-        identity: { field: "id", kind: "field" },
+        identity: JsonArticleIdentity,
         items: { path: "$" },
         path: filePath,
         platform: testPlatformLayer,
@@ -673,7 +768,7 @@ describe("JsonFileSourcePlugin", () => {
       );
 
       const changedRead = yield* plugin.read(firstRead.nextCursor ?? null);
-      expect(changedRead.items.map((item) => item.identity)).toEqual([
+      expect(changedRead.items.map((item) => item.identity.encoded)).toEqual([
         "article-new",
       ]);
       expect(changedRead.nextCursor).toBeUndefined();
@@ -697,7 +792,7 @@ describe("JsonFileSourcePlugin", () => {
       );
 
       const source = JsonFileSourcePlugin.make({
-        identity: { field: "id", kind: "field" },
+        identity: JsonArticleIdentity,
         items: { path: "$" },
         path: filePath,
         platform: testPlatformLayer,
@@ -750,7 +845,7 @@ describe("JsonFileSourcePlugin", () => {
         const filePath = path.join(directory, `${testCase.name}.json`);
         yield* fs.writeFileString(filePath, testCase.content);
         const source = JsonFileSourcePlugin.make({
-          identity: { field: "id", kind: "field" },
+          identity: JsonArticleIdentity,
           items: { path: "$" },
           path: filePath,
           platform: testPlatformLayer,
@@ -781,7 +876,7 @@ describe("JsonFileSourcePlugin", () => {
         JSON.stringify([{ title: "One", version: "v1", views: 1 }])
       );
       const identitySource = JsonFileSourcePlugin.make({
-        identity: { field: "id", kind: "field" },
+        identity: JsonArticleIdentity,
         items: { path: "$" },
         path: missingIdentityPath,
         platform: testPlatformLayer,
@@ -806,7 +901,7 @@ describe("JsonFileSourcePlugin", () => {
         JSON.stringify([{ id: "article-1", title: "One", views: 1 }])
       );
       const versionSource = JsonFileSourcePlugin.make({
-        identity: { field: "id", kind: "field" },
+        identity: JsonArticleIdentity,
         items: { path: "$" },
         path: missingVersionPath,
         platform: testPlatformLayer,
@@ -839,7 +934,7 @@ describe("JsonFileSourcePlugin", () => {
 
       const source = JsonFileSourcePlugin.make({
         batchSize: 0,
-        identity: { field: "id", kind: "field" },
+        identity: JsonArticleIdentity,
         items: { path: "$" },
         path: filePath,
         platform: testPlatformLayer,

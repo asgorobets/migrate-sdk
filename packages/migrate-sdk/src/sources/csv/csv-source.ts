@@ -6,11 +6,21 @@ import Papa from "papaparse";
 import {
   type ConfiguredSourcePlugin,
   defineSourcePlugin,
+  defineSourcePluginLayer,
   type SourcePluginImplementation,
 } from "../../domain/definition.ts";
 import { SourcePluginError } from "../../domain/errors.ts";
-import type { SourceIdentityInput } from "../../domain/ids.ts";
-import type { SourceItemInput } from "../../domain/source.ts";
+import {
+  SourceIdentity,
+  type SourceIdentityContractIdInput,
+  type SourceIdentityDefinition,
+  type SourceIdentitySchema,
+  type SourceIdentitySnapshotKey,
+} from "../../domain/ids.ts";
+import {
+  encodeSourceIdentityKey,
+  type SourceItemInput,
+} from "../../domain/source.ts";
 import {
   type AnySourcePlugin,
   SourcePlugin,
@@ -46,10 +56,67 @@ export type CsvHeaders =
       readonly dataStartRowIndex: number;
     };
 
-export interface CsvIdentity {
+export interface CsvIdentityKeySelector {
   readonly columns: readonly string[];
   readonly kind: "columns";
 }
+
+export interface CsvIdentityDefinition<
+  IdentityKey extends SourceIdentitySnapshotKey,
+> {
+  readonly id: SourceIdentityContractIdInput;
+  readonly key: CsvIdentityKeySelector;
+  readonly schema: SourceIdentitySchema<IdentityKey>;
+}
+
+export type CsvCompositeIdentityKey = readonly [string, string, ...string[]];
+
+interface CsvColumnIdentityOptions {
+  readonly column: string;
+  readonly id: SourceIdentityContractIdInput;
+}
+
+interface CsvColumnsIdentityOptions {
+  readonly columns: readonly [string, string, ...string[]];
+  readonly id: SourceIdentityContractIdInput;
+}
+
+const makeCsvColumnIdentity = (
+  input: CsvColumnIdentityOptions
+): CsvIdentityDefinition<string> => ({
+  id: input.id,
+  key: {
+    columns: [input.column],
+    kind: "columns",
+  },
+  schema: SourceIdentity.key(input.column, Schema.NonEmptyString),
+});
+
+const makeCsvColumnsIdentity = (
+  input: CsvColumnsIdentityOptions
+): CsvIdentityDefinition<CsvCompositeIdentityKey> => {
+  const [firstColumn, secondColumn, ...remainingColumns] = input.columns;
+
+  return {
+    id: input.id,
+    key: {
+      columns: input.columns,
+      kind: "columns",
+    },
+    schema: SourceIdentity.tuple([
+      SourceIdentity.part(firstColumn, Schema.NonEmptyString),
+      SourceIdentity.part(secondColumn, Schema.NonEmptyString),
+      ...remainingColumns.map((column) =>
+        SourceIdentity.part(column, Schema.NonEmptyString)
+      ),
+    ]),
+  };
+};
+
+export const CsvIdentity = {
+  column: makeCsvColumnIdentity,
+  columns: makeCsvColumnsIdentity,
+} as const;
 
 export type CsvVersion =
   | {
@@ -60,11 +127,13 @@ export type CsvVersion =
       readonly kind: "row-hash";
     };
 
-export interface CsvParserOptions {
+export interface CsvParserOptions<
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> {
   readonly dialect: CsvDialect;
   readonly emptyRows: CsvEmptyRows;
   readonly headers: CsvHeaders;
-  readonly identity: CsvIdentity;
+  readonly identity: CsvIdentityDefinition<IdentityKey>;
   readonly version: CsvVersion;
 }
 
@@ -72,7 +141,10 @@ export type CsvParserInput = string | Uint8Array;
 
 export type CsvSourcePlatform = Layer.Layer<FileSystem | Path>;
 
-export interface CsvSourceOptions<Source> extends CsvParserOptions {
+export interface CsvSourceOptions<
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> extends CsvParserOptions<IdentityKey> {
   readonly path: string;
   readonly platform: CsvSourcePlatform;
   readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
@@ -85,17 +157,21 @@ export const CsvSourceCursor = Schema.Struct({
 
 export type CsvSourceCursor = typeof CsvSourceCursor.Type;
 
-export interface CsvParsedRow {
+export interface CsvParsedRow<
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> {
   readonly lineNumber: number;
   readonly rowIndex: number;
-  readonly sourceItem: SourceItemInput<Record<string, string>>;
+  readonly sourceItem: SourceItemInput<Record<string, string>, IdentityKey>;
 }
 
-export interface CsvParsedDocument {
+export interface CsvParsedDocument<
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> {
   readonly columns: readonly string[];
   readonly dataStartRowIndex: number;
   readonly nextRowIndex: number;
-  readonly rows: readonly CsvParsedRow[];
+  readonly rows: readonly CsvParsedRow<IdentityKey>[];
 }
 
 interface LogicalCsvRecord {
@@ -453,11 +529,11 @@ const recordToItem = (
   return item;
 };
 
-const buildIdentity = (
+const buildIdentityKey = (
   item: Record<string, string>,
   columns: readonly string[],
   record: LogicalCsvRecord
-): Effect.Effect<string, SourcePluginError> =>
+): Effect.Effect<unknown, SourcePluginError> =>
   Effect.gen(function* () {
     const values = columns.map((column) => item[column]?.trim() ?? "");
 
@@ -471,7 +547,45 @@ const buildIdentity = (
       }
     }
 
-    return values.length === 1 ? (values[0] as string) : JSON.stringify(values);
+    if (values.length === 1) {
+      const [value] = values;
+
+      if (value === undefined) {
+        return yield* csvError("CSV identity value must not be empty", {
+          lineNumber: record.lineNumber,
+          rowIndex: record.rowIndex,
+        });
+      }
+
+      return value;
+    }
+
+    return values;
+  });
+
+const makeCsvIdentityDefinition = <
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  identity: CsvIdentityDefinition<IdentityKey>
+): SourceIdentityDefinition<IdentityKey> =>
+  SourceIdentity.make({
+    id: identity.id,
+    schema: identity.schema,
+  });
+
+const decodeIdentityKey = <IdentityKey extends SourceIdentitySnapshotKey>(
+  identity: SourceIdentityDefinition<IdentityKey>,
+  key: unknown,
+  record: LogicalCsvRecord
+): Effect.Effect<IdentityKey, SourcePluginError> =>
+  Effect.try({
+    try: () => identity.schema.decode(key),
+    catch: (cause) =>
+      csvError("CSV identity key did not match Source Identity Schema", {
+        cause,
+        lineNumber: record.lineNumber,
+        rowIndex: record.rowIndex,
+      }),
   });
 
 const hexFromBytes = (bytes: Uint8Array): string =>
@@ -542,10 +656,10 @@ const buildVersion = (
     }
   });
 
-const parseDocument = (
+const parseDocument = <IdentityKey extends SourceIdentitySnapshotKey>(
   input: CsvParserInput,
-  options: CsvParserOptions
-): Effect.Effect<CsvParsedDocument, SourcePluginError> =>
+  options: CsvParserOptions<IdentityKey>
+): Effect.Effect<CsvParsedDocument<IdentityKey>, SourcePluginError> =>
   Effect.gen(function* () {
     const text = yield* decodeParserInput(input);
     const separator = yield* separatorForDialectEffect(options.dialect);
@@ -558,7 +672,7 @@ const parseDocument = (
     });
     const header = yield* resolveHeader(records, options.headers);
     const identityColumns = yield* normalizeConfiguredColumns(
-      options.identity.columns,
+      options.identity.key.columns,
       "CSV identity"
     );
 
@@ -566,12 +680,12 @@ const parseDocument = (
       yield* ensureConfiguredColumnExists(column, header.columns, "identity");
     }
 
-    const version =
+    const version: CsvVersion =
       options.version.kind === "column"
-        ? ({
-            kind: "column" as const,
+        ? {
+            kind: "column",
             column: options.version.column.trim(),
-          } satisfies CsvVersion)
+          }
         : options.version;
 
     if (version.kind === "column") {
@@ -586,8 +700,9 @@ const parseDocument = (
       );
     }
 
-    const rows: CsvParsedRow[] = [];
-    const identityRows = new Map<string, CsvParsedRow>();
+    const rows: CsvParsedRow<IdentityKey>[] = [];
+    const identityRows = new Map<string, CsvParsedRow<IdentityKey>>();
+    const identityDefinition = makeCsvIdentityDefinition(options.identity);
 
     for (const record of records) {
       if (record.rowIndex < header.dataStartRowIndex) {
@@ -607,7 +722,16 @@ const parseDocument = (
       }
 
       const item = recordToItem(record, header.columns);
-      const identity = yield* buildIdentity(item, identityColumns, record);
+      const rawIdentityKey = yield* buildIdentityKey(
+        item,
+        identityColumns,
+        record
+      );
+      const identityKey = yield* decodeIdentityKey(
+        identityDefinition,
+        rawIdentityKey,
+        record
+      );
       const sourceVersion = yield* buildVersion(
         item,
         header.columns,
@@ -615,16 +739,20 @@ const parseDocument = (
         record
       );
       const sourceItem = {
-        identity,
+        identityKey,
         item,
         version: sourceVersion,
-      } satisfies SourceItemInput<Record<string, string>>;
-      const parsedRow: CsvParsedRow = {
+      } satisfies SourceItemInput<Record<string, string>, IdentityKey>;
+      const parsedRow: CsvParsedRow<IdentityKey> = {
         lineNumber: record.lineNumber,
         rowIndex: record.rowIndex,
         sourceItem,
       };
-      const existingRow = identityRows.get(identity);
+      const encodedIdentity = yield* encodeSourceIdentityKey(
+        identityDefinition,
+        identityKey
+      );
+      const existingRow = identityRows.get(encodedIdentity);
 
       if (existingRow !== undefined) {
         return yield* csvError("Duplicate CSV source identity", {
@@ -632,11 +760,11 @@ const parseDocument = (
           duplicateRowIndex: parsedRow.rowIndex,
           firstLineNumber: existingRow.lineNumber,
           firstRowIndex: existingRow.rowIndex,
-          sourceIdentity: identity,
+          sourceIdentity: encodedIdentity,
         });
       }
 
-      identityRows.set(identity, parsedRow);
+      identityRows.set(encodedIdentity, parsedRow);
       rows.push(parsedRow);
     }
 
@@ -686,12 +814,12 @@ const decodeUtf8 = (
       }),
   });
 
-const loadPathDocument = (
+const loadPathDocument = <IdentityKey extends SourceIdentitySnapshotKey>(
   fs: FileSystem,
   path: Path,
-  options: CsvSourceOptions<unknown>
+  options: CsvSourceOptions<unknown, IdentityKey>
 ): Effect.Effect<
-  CsvParsedDocument & {
+  CsvParsedDocument<IdentityKey> & {
     readonly fileFingerprint: string;
     readonly resolvedPath: string;
   },
@@ -710,13 +838,21 @@ const loadPathDocument = (
     };
   });
 
-const makeImplementation = <Source>(
-  options: CsvSourceOptions<Source>,
+const makeImplementation = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: CsvSourceOptions<Source, IdentityKey>,
   fs: FileSystem,
   path: Path
-): SourcePluginImplementation<Source, CsvSourceCursor> => {
-  const load = () =>
-    loadPathDocument(fs, path, options as CsvSourceOptions<unknown>);
+): SourcePluginImplementation<
+  Source,
+  CsvSourceCursor,
+  IdentityKey,
+  unknown
+> => {
+  const load = () => loadPathDocument(fs, path, options);
+  const identity = makeCsvIdentityDefinition(options.identity);
 
   const read = Effect.fn("CsvSource.read")(function* (
     cursor: CsvSourceCursor | null
@@ -730,7 +866,7 @@ const makeImplementation = <Source>(
     const shouldAdvanceCursor = startRowIndex < document.nextRowIndex;
 
     return {
-      items: rows.map((row) => row.sourceItem as SourceItemInput<Source>),
+      items: rows.map((row) => row.sourceItem),
       ...(shouldAdvanceCursor
         ? {
             nextCursor: {
@@ -743,15 +879,22 @@ const makeImplementation = <Source>(
   });
 
   const readByIdentity = Effect.fn("CsvSource.readByIdentity")(function* (
-    identity: SourceIdentityInput
+    target: SourceIdentity<IdentityKey>
   ) {
     const document = yield* load();
-    const row =
-      document.rows.find(
-        (candidate) => candidate.sourceItem.identity === identity
-      ) ?? null;
 
-    return row === null ? null : (row.sourceItem as SourceItemInput<Source>);
+    for (const candidate of document.rows) {
+      const encodedIdentity = yield* encodeSourceIdentityKey(
+        identity,
+        candidate.sourceItem.identityKey
+      );
+
+      if (encodedIdentity === target.encoded) {
+        return candidate.sourceItem;
+      }
+    }
+
+    return null;
   });
 
   return {
@@ -761,8 +904,11 @@ const makeImplementation = <Source>(
   };
 };
 
-const makeLayerWithoutPlatform = <Source>(
-  options: CsvSourceOptions<Source>
+const makeLayerWithoutPlatform = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: CsvSourceOptions<Source, IdentityKey>
 ): Layer.Layer<AnySourcePlugin, never, FileSystem | Path> =>
   Layer.effect(
     SourcePlugin,
@@ -771,6 +917,7 @@ const makeLayerWithoutPlatform = <Source>(
       const path = yield* Path;
       const configured = defineSourcePlugin({
         cursorSchema: CsvSourceCursor,
+        identity: makeCsvIdentityDefinition(options.identity),
         make: () => makeImplementation(options, fs, path),
         sourceSchema: options.sourceSchema,
       });
@@ -779,18 +926,19 @@ const makeLayerWithoutPlatform = <Source>(
     })
   );
 
-const makeLayer = <Source>(
-  options: CsvSourceOptions<Source>
+const makeLayer = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
+  options: CsvSourceOptions<Source, IdentityKey>
 ): Layer.Layer<AnySourcePlugin> =>
   makeLayerWithoutPlatform(options).pipe(Layer.provide(options.platform));
 
-const make = <Source>(
-  options: CsvSourceOptions<Source>
-): ConfiguredSourcePlugin<Source, CsvSourceCursor> =>
-  ({
+const make = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
+  options: CsvSourceOptions<Source, IdentityKey>
+): ConfiguredSourcePlugin<Source, CsvSourceCursor, IdentityKey, unknown> =>
+  defineSourcePluginLayer({
+    identity: makeCsvIdentityDefinition(options.identity),
     layer: makeLayer(options),
     sourceSchema: options.sourceSchema,
-  }) as ConfiguredSourcePlugin<Source, CsvSourceCursor>;
+  });
 
 export const CsvParserCore = {
   parse: parseDocument,

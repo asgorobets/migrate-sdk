@@ -5,8 +5,8 @@ import type {
   MigrationDefinitionIdInput,
 } from "./ids.ts";
 import {
+  EncodedSourceIdentity,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
-  SourceIdentity,
   toMigrationDefinitionId,
 } from "./ids.ts";
 import type { AnyMigrationDefinition } from "./run.ts";
@@ -40,7 +40,7 @@ export class DuplicateSourceIdentityStatusWarning extends Schema.TaggedClass<Dup
   {
     count: StatusCount,
     definitionId: MigrationDefinitionIdSchema,
-    sourceIdentity: SourceIdentity,
+    sourceIdentity: EncodedSourceIdentity,
   }
 ) {}
 
@@ -50,7 +50,7 @@ export class InvalidSourceItemStatusWarning extends Schema.TaggedClass<InvalidSo
     definitionId: MigrationDefinitionIdSchema,
     details: Schema.optional(Schema.Array(MigrationItemErrorDetail)),
     message: Schema.String,
-    sourceIdentity: SourceIdentity,
+    sourceIdentity: EncodedSourceIdentity,
   }
 ) {}
 

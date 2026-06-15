@@ -7,6 +7,7 @@ import {
   type MigrationRunSummary,
   type MigrationStore,
   runMigrations,
+  SourceIdentity,
 } from "migrate-sdk";
 import {
   type InMemoryDestinationEntry,
@@ -95,6 +96,29 @@ const defaultFilePath = () =>
 
 const companiesDocumentParser = DocumentParsers.json(CompaniesDocument);
 
+const tuple2 = <A, B>(first: A, second: B): readonly [A, B] => [first, second];
+
+const BusinessUnitSourceIdentity = {
+  id: "companies-business-unit@v1",
+  schema: SourceIdentity.key("businessUnitKey", Schema.NonEmptyString),
+};
+
+const ContactSourceIdentity = {
+  id: "companies-contact@v1",
+  schema: SourceIdentity.tuple([
+    SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
+    SourceIdentity.part("contactKey", Schema.NonEmptyString),
+  ]),
+};
+
+const AddressSourceIdentity = {
+  id: "companies-address@v1",
+  schema: SourceIdentity.tuple([
+    SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
+    SourceIdentity.part("addressKey", Schema.NonEmptyString),
+  ]),
+};
+
 const makeCompaniesDocumentFetcher = (options: {
   readonly filePath?: string | undefined;
   readonly platform?: DocumentFetcherPlatform | undefined;
@@ -173,7 +197,10 @@ export const makeBusinessUnitsMigration = (
       selector: {
         item: (document) => document.businessUnits,
       },
-      identity: ({ item }) => item.key,
+      identity: {
+        ...BusinessUnitSourceIdentity,
+        key: ({ item }) => item.key,
+      },
       lookup: { kind: "scan" },
       version: { kind: "content-hash" },
     }),
@@ -215,7 +242,10 @@ export const makeContactsMigration = (
         parent: (document) => document.businessUnits,
         item: (businessUnit) => businessUnit.contacts,
       },
-      identity: ({ item, parent }) => [parent.key, item.key],
+      identity: {
+        ...ContactSourceIdentity,
+        key: ({ item, parent }) => tuple2(parent.key, item.key),
+      },
       lookup: { kind: "scan" },
       version: { kind: "content-hash" },
     }),
@@ -258,7 +288,10 @@ export const makeAddressesMigration = (
         parent: (document) => document.businessUnits,
         item: (businessUnit) => businessUnit.addresses,
       },
-      identity: ({ item, parent }) => [parent.key, item.key],
+      identity: {
+        ...AddressSourceIdentity,
+        key: ({ item, parent }) => tuple2(parent.key, item.key),
+      },
       lookup: { kind: "scan" },
       version: { kind: "content-hash" },
     }),

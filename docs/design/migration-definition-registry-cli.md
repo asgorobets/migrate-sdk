@@ -267,16 +267,10 @@ a short alias because this flag expands execution scope.
 Run input also carries failed/skipped run modes:
 
 ```ts
-type SourceIdentityTargetInput<Key = unknown> = {
-  readonly id: SourceIdentityContractId;
-  readonly key: Key;
-  readonly encoded: EncodedSourceIdentity;
-};
-
 type MigrationDefinitionRegistryRunInput =
   MigrationDefinitionRegistrySelectionInput & {
     readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
-    readonly sourceIdentities?: readonly SourceIdentityTargetInput[];
+    readonly sourceIdentities?: readonly string[];
   };
 ```
 
@@ -293,16 +287,20 @@ same flag pattern, for example a future `--needs-update` flag.
 
 `--id` is the CLI shorthand for source identities. The flag is repeatable
 instead of comma-split. The SDK and registry plan types keep the domain term
-`sourceIdentities`. The first slice exposes only `--id`, with no longer
-source-identity alias.
+`sourceIdentities`. Registry input stores raw target text so it can be parsed
+through the selected migration definition's source identity contract.
 
 Supplying `sourceIdentities` on run input triggers item mode. It is valid only
-with exactly one explicit definition id and one or more unique source identities.
+with exactly one explicit definition id and exactly one unique source identity.
 It cannot combine with `all: true`, multiple definition ids,
 `withDependencies`, failed mode, or skipped mode.
 Registry-backed run input does not accept `mode: { kind: "item" }`; item mode is
 requested through `sourceIdentities` so the registry can validate definition
 scope and target identity count before delegating to the lower-level runtime.
+Multiple source identities for forward runs are a future capability. Supporting
+them requires promoting singleton item mode into plural targeted-run mode so the
+runtime can define per-target lookup failure, continuation, and reporting
+semantics instead of silently looping single-item mode.
 
 Rollback identity targeting is allowed only when exactly one definition id is
 requested. The target identity belongs to that requested definition.
@@ -310,7 +308,7 @@ requested. The target identity belongs to that requested definition.
 ```ts
 type MigrationDefinitionRegistryRollbackInput =
   MigrationDefinitionRegistrySelectionInput & {
-    readonly sourceIdentities?: readonly SourceIdentityTargetInput[];
+    readonly sourceIdentities?: readonly string[];
   };
 ```
 
@@ -410,8 +408,8 @@ interface MigrationDefinitionRollbackPlan {
 interface MigrationDefinitionPlanTarget {
   readonly definitionId: MigrationDefinitionId;
   readonly sourceIdentities: readonly [
-    SourceIdentityTargetInput,
-    ...SourceIdentityTargetInput[],
+    EncodedSourceIdentity,
+    ...EncodedSourceIdentity[],
   ];
 }
 
@@ -423,7 +421,7 @@ interface MigrationDefinitionDependencyEdge {
 
 type MigrationDefinitionPlanNotice =
   | MigrationDefinitionDuplicateRequestedDefinitionIgnored
-  | MigrationDefinitionDuplicateTargetIdIgnored
+  | MigrationDefinitionDuplicateSourceIdentityTargetIgnored
   | MigrationDefinitionOptionalDependencyCycleIgnored;
 
 interface MigrationDefinitionDuplicateRequestedDefinitionIgnored {
@@ -431,9 +429,9 @@ interface MigrationDefinitionDuplicateRequestedDefinitionIgnored {
   readonly definitionId: MigrationDefinitionId;
 }
 
-interface MigrationDefinitionDuplicateTargetIdIgnored {
-  readonly _tag: "MigrationDefinitionDuplicateTargetIdIgnored";
-  readonly sourceIdentity: SourceIdentity;
+interface MigrationDefinitionDuplicateSourceIdentityTargetIgnored {
+  readonly _tag: "MigrationDefinitionDuplicateSourceIdentityTargetIgnored";
+  readonly sourceIdentity: EncodedSourceIdentity;
 }
 
 interface MigrationDefinitionOptionalDependencyCycleIgnored {
@@ -986,7 +984,8 @@ should cover exit codes, key rendered text, and that `--plan` exits before
 execution.
 
 Human plan output is compact and command-specific. It shows requested
-definitions, target ids when present, included definitions, execution order, and
+definitions, source identity targets when present, included definitions, execution
+order, and
 notices:
 
 ```text
@@ -1044,7 +1043,7 @@ Rollback Plan
 Scope
 Requested  articles
 Included   articles
-Target ids article-1, article-2
+Target source identities article-1, article-2
 
 Execution Order
 #  Migration ID
@@ -1087,16 +1086,16 @@ migrate status articles --with-dependencies
 ```
 
 Forward `--id` targeting is item mode. It is valid only for exactly one explicit
-definition id and one or more parsed source identities. It cannot be combined
-with `--all`, multiple definition ids, `--with-dependencies`, `--failed`, or
-`--skipped`:
+definition id and exactly one unique parsed source identity. It cannot be
+combined with `--all`, multiple definition ids, `--with-dependencies`,
+`--failed`, or `--skipped`:
 
 ```sh
 migrate run articles --id article-1
 # valid
 
 migrate run articles --id article-1 --id article-2
-# valid
+# invalid
 
 migrate run articles authors --id article-1
 # invalid
@@ -1141,14 +1140,17 @@ migrate rollback business-addresses --id 'bu-1:1'
 Duplicate parsed `--id` values are deduplicated and surfaced as notices:
 
 ```text
-Target ids:
+Target source identities:
 article-1
 
 Notices:
-- Duplicate target id ignored: article-1
+- Duplicate source identity target ignored: article-1
 ```
 
 For forward run item mode, duplicate parsed ids are accepted with a notice.
+Plural forward run targeting is a future capability, not part of this slice.
+When added, it should be modeled as plural targeted-run mode rather than as an
+implicit loop around singleton item mode.
 
 ## Effect CLI Integration
 
