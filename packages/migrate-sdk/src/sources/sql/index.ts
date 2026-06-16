@@ -2,10 +2,15 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public subpath entrypoint intentionally re-exports the SQL source API.
 
 export {
+  SqlIdentity,
   SqlSourcePlugin,
   SqlSourcePluginName,
 } from "./sql-source.ts";
 export type {
+  AnySqlIdentityDefinition,
+  SqlIdentityColumn,
+  SqlIdentityColumns,
+  SqlIdentityDefinition,
   SqlSourceLookup,
   SqlSourceMetadata,
   SqlSourceMetadataContext,

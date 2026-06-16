@@ -19,42 +19,57 @@ services.
 plugin:
 
 ```ts
-interface ConfiguredSourcePlugin<Source, Cursor, IdentityKey> {
-  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
+interface ConfiguredSourcePlugin<
+  Source,
+  Cursor,
+  IdentityKey,
+  SourceInput = Source,
+> {
+  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
 }
 
-interface SourcePluginInput<Source, Cursor, IdentityKey> {
+interface SourcePluginInput<
+  Source,
+  Cursor,
+  IdentityKey,
+  SourceInput = Source,
+> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
-  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
+  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
   ) => Effect.Effect<
-    SourceReadResultInput<Source, Cursor, IdentityKey>,
+    SourceReadResultInput<SourceInput, Cursor, IdentityKey>,
     SourcePluginError
   >;
   readonly readByIdentity: (
     identity: SourceIdentityTarget<IdentityKey>
   ) => Effect.Effect<
-    SourceItemInput<Source, IdentityKey> | null,
+    SourceItemInput<SourceInput, IdentityKey> | null,
     SourcePluginError
   >;
 }
 
-interface SourcePluginImplementation<Source, Cursor, IdentityKey> {
+interface SourcePluginImplementation<
+  Source,
+  Cursor,
+  IdentityKey,
+  SourceInput = Source,
+> {
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
   ) => Effect.Effect<
-    SourceReadResultInput<Source, Cursor, IdentityKey>,
+    SourceReadResultInput<SourceInput, Cursor, IdentityKey>,
     SourcePluginError
   >;
   readonly readByIdentity: (
     identity: SourceIdentityTarget<IdentityKey>
   ) => Effect.Effect<
-    SourceItemInput<Source, IdentityKey> | null,
+    SourceItemInput<SourceInput, IdentityKey> | null,
     SourcePluginError
   >;
 }
@@ -70,10 +85,10 @@ interface SourceIdentityTarget<Key> {
   readonly encoded: EncodedSourceIdentity;
 }
 
-interface SourceItemInput<Source, IdentityKey> {
+interface SourceItemInput<SourceInput, IdentityKey> {
   readonly identityKey: IdentityKey;
   readonly version: SourceVersionInput;
-  readonly item: Source;
+  readonly item: SourceInput;
 }
 ```
 
@@ -90,11 +105,21 @@ Plugins can also use the factory form when each configured plugin needs fresh
 mutable state or client instances:
 
 ```ts
-interface SourcePluginFactoryInput<Source, Cursor, IdentityKey> {
+interface SourcePluginFactoryInput<
+  Source,
+  Cursor,
+  IdentityKey,
+  SourceInput = Source,
+> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
-  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
+  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
-  readonly make: () => SourcePluginImplementation<Source, Cursor, IdentityKey>;
+  readonly make: () => SourcePluginImplementation<
+    Source,
+    Cursor,
+    IdentityKey,
+    SourceInput,
+  >;
 }
 ```
 
@@ -216,10 +241,13 @@ The current source plugin contract normalizes source read and lookup failures to
 `SourcePluginError`:
 
 ```ts
-read(cursor): Effect.Effect<SourceReadResult<Source, Cursor>, SourcePluginError>
+read(cursor): Effect.Effect<
+  SourceReadResultInput<SourceInput, Cursor, Key>,
+  SourcePluginError
+>
 readByIdentity(
   identity: SourceIdentityTarget<Key>
-): Effect.Effect<SourceItemInput<Source, Key> | null, SourcePluginError>
+): Effect.Effect<SourceItemInput<SourceInput, Key> | null, SourcePluginError>
 ```
 
 This keeps the runtime boundary, CLI rendering, and durable item error records
@@ -234,12 +262,13 @@ source error type through `sourceCursorRetry` and `sourceLookupRetry`, then
 normalize to `SourcePluginError` only when the runtime records or returns the
 framework-level failure.
 
-Open question: the current source schema type uses
-`Schema.Codec<Source, unknown, never, never>`, which preserves the decoded
-pipeline-facing type but erases the encoded/source-native input type. SQL
-sources and other schema-backed sources may need the encoded side preserved so
-source-owned metadata extraction can be typed from the same Source Payload
-Schema that the runner uses for payload decoding.
+The core source schema type is `SourcePayloadSchema<Source, SourceInput>`, which
+can preserve both the decoded pipeline-facing value and the source-native input
+value emitted by the plugin. Plugin authors should preserve `SourceInput` when
+the plugin has a stable structured input shape that its helpers inspect, such as
+a SQL row. Plugins may use `unknown` when the input side is intentionally opaque
+or fully owned by plugin-specific selectors, such as CSV row parsing, Document
+selection, or in-memory test items.
 
 ## Cursor Reads
 
@@ -308,7 +337,7 @@ item failures instead of run-level discovery failures.
 Every configured source plugin must expose a Source Payload Schema:
 
 ```ts
-readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
+readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
 ```
 
 This schema lives at the external-source boundary. It may decode source-native
@@ -326,6 +355,13 @@ The runtime decodes every emitted `sourceItem.item` with `sourceSchema` before
 unchanged-terminal checks, pipeline execution, and destination command
 execution. A valid source envelope with an invalid payload becomes a failed item
 state with source error details.
+
+When a plugin exposes a known source-native shape, use
+`SourcePayloadSchema<Source, SourceInput>` so plugin-owned helpers can reference
+the same input shape the runtime validates. For example, SQL uses the input side
+for metadata extraction and `SqlIdentity.columns(...)` validation. When a plugin
+does not expose a stable source-native item shape, `unknown` remains the right
+encoded side.
 
 Source plugins may decode through the schema before emitting items when that
 makes implementation code safer. The runtime validation still remains the

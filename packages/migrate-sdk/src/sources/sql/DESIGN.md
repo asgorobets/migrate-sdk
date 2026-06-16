@@ -28,6 +28,10 @@ a named plugin surface, and the read/lookup happy path:
 
 ```ts
 SqlSourcePlugin.name; // "sql"
+SqlIdentity.columns({
+  id: "article@v1",
+  columns: [SqlIdentity.column("id", Schema.NonEmptyString)],
+});
 SqlSourcePlugin.make({
   batchSize,
   cursorSchema,
@@ -69,7 +73,10 @@ and accepts explicit query callbacks:
 const source = SqlSourcePlugin.make({
   batchSize: 500,
   cursorSchema: LegacyArticleCursor,
-  identity: LegacyArticleIdentity,
+  identity: SqlIdentity.columns({
+    id: "legacy-article@v1",
+    columns: [SqlIdentity.column("id", Schema.NonEmptyString)],
+  }),
   sourceSchema: LegacyArticleSource,
   read: (sql, cursor, limit) =>
     sql`
@@ -82,7 +89,6 @@ const source = SqlSourcePlugin.make({
   getSourceMetadata: (row, context) =>
     ({
       kind: "success",
-      identityKey: row.id,
       version: row.updated_at,
       cursor: {
         updatedAt: row.updated_at,
@@ -115,7 +121,10 @@ requirement on the configured plugin instead:
 const legacySource = SqlSourcePlugin.make({
   batchSize: 500,
   cursorSchema: LegacyArticleCursor,
-  identity: LegacyArticleIdentity,
+  identity: SqlIdentity.columns({
+    id: "legacy-article@v1",
+    columns: [SqlIdentity.column("id", Schema.NonEmptyString)],
+  }),
   sourceSchema: LegacyArticleSource,
   read: legacyRead,
   lookup: legacyLookup,
@@ -125,7 +134,10 @@ const legacySource = SqlSourcePlugin.make({
 const crmSource = SqlSourcePlugin.make({
   batchSize: 500,
   cursorSchema: CrmUserCursor,
-  identity: CrmUserIdentity,
+  identity: SqlIdentity.columns({
+    id: "crm-user@v1",
+    columns: [SqlIdentity.column("id", Schema.NonEmptyString)],
+  }),
   sourceSchema: CrmUserSource,
   read: crmRead,
   lookup: crmLookup,
@@ -151,16 +163,16 @@ The SQL row type should come from the encoded/input side of `sourceSchema`.
 Conceptually:
 
 ```ts
-interface SqlSourceOptions<Row, Source, Cursor, IdentityKey> {
+interface SqlSourceOptions<Row, Source, Cursor> {
   readonly sourceSchema: Schema.Codec<Source, Row, never, never>;
+  readonly identity: SqlIdentityDefinition;
   readonly getSourceMetadata: (
     row: Readonly<Row>,
     context: SqlSourceMetadataContext
-  ) => Result<SqlSourceMetadata<Cursor, IdentityKey>, SqlSourceMetadataError>;
+  ) => Result<SqlSourceMetadata<Cursor>, SqlSourceMetadataError>;
 }
 
-interface SqlSourceMetadata<Cursor, IdentityKey> {
-  readonly identityKey: IdentityKey;
+interface SqlSourceMetadata<Cursor> {
   readonly version: SourceVersionInput;
   readonly cursor: Cursor;
 }
@@ -177,10 +189,13 @@ framework. If metadata columns should not be visible to the pipeline, the
 Source Payload Schema can decode from a wider SQL row into a narrower
 pipeline-facing item.
 
-The current core source contract erases the encoded side as `unknown`:
-`Schema.Codec<Source, unknown, never, never>`. Preserving the source payload
-input type is a framework refinement, not a reason for the raw SQL source to add
-a second required schema.
+The core source contract can preserve the source payload input side as
+`SourceInput` through `SourcePayloadSchema<Source, SourceInput>`. Not every
+source plugin needs to expose that input type: CSV, Document, and in-memory
+sources may choose `unknown` when identity is derived from plugin-owned row,
+selection, or in-memory item semantics. Raw SQL should preserve it because the
+SQL row returned by `read` and `lookup` is the same value that metadata
+extraction and identity columns inspect.
 
 Read and lookup callbacks are declarative statement builders, not arbitrary
 Effect programs. `SqlSourcePlugin` owns statement execution so it can preserve
@@ -203,11 +218,15 @@ migration runner. This keeps SQL aligned with CSV, JSON, API, and other source
 plugins: a source item with a valid identity and version but an invalid payload
 becomes a failed Migration Item State instead of a cursor-read failure.
 
-The plugin should require a pure source metadata extractor that returns a
-Result-style value with:
+The plugin should require a source identity descriptor and a pure source
+metadata extractor. `SqlIdentity.columns(...)` declares ordered row columns or
+aliases that become the source identity key. Those column names and their
+schema-encoded value types are checked against the input side of `sourceSchema`;
+TypeScript cannot parse arbitrary SQL text, so the query itself must return rows
+matching that schema.
 
-- `identityKey`: the source identity key value that matches the configured
-  Source Identity contract.
+The metadata extractor returns a Result-style value with:
+
 - `version`: the durable Source Version input.
 - `cursor`: the next cursor candidate for pagination.
 
@@ -249,10 +268,10 @@ the configured Source Payload Schema is still the public contract the runner
 uses before invoking the transformation pipeline.
 
 `read` and `readByIdentity` are two access paths to the same Source Item
-contract. Raw SQL v1 should therefore use one source metadata extractor for
-both read and lookup results. The SQL projections may include extra fields, but
-they must be compatible with the same extractor and produce the same
-`identityKey`, `version`, payload, and cursor semantics for a given source item.
+contract. Raw SQL v1 should therefore use one source identity descriptor and one
+source metadata extractor for both read and lookup results. The SQL projections
+may include extra fields, but they must be compatible with the same identity
+columns, version, payload, and cursor semantics for a given source item.
 
 ## Cursor Contract
 
@@ -309,7 +328,10 @@ const ArticleCursor = Schema.Struct({
 SqlSourcePlugin.make({
   batchSize: 500,
   cursorSchema: ArticleCursor,
-  identity: ArticleIdentity,
+  identity: SqlIdentity.columns({
+    id: "article@v1",
+    columns: [SqlIdentity.column("id", Schema.NonEmptyString)],
+  }),
   sourceSchema: ArticleSource,
   read: (sql, cursor, limit) =>
     sql`
@@ -332,7 +354,6 @@ SqlSourcePlugin.make({
   getSourceMetadata: (row) =>
     ({
       kind: "success",
-      identityKey: row.id,
       version: row.updated_at,
       cursor: {
         updatedAt: row.updated_at,

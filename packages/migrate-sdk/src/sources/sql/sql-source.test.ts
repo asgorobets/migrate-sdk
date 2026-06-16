@@ -18,7 +18,7 @@ import {
   type SourceVersionInput,
   toEncodedSourceIdentity,
 } from "migrate-sdk";
-import { SqlSourcePlugin } from "migrate-sdk/sources/sql";
+import { SqlIdentity, SqlSourcePlugin } from "migrate-sdk/sources/sql";
 import { expectTypeOf } from "vitest";
 
 const SqlArticleRow = Schema.Struct({
@@ -38,9 +38,9 @@ const SqlArticleCursor = Schema.Struct({
 
 type SqlArticleCursor = typeof SqlArticleCursor.Type;
 
-const SqlArticleIdentity = SourceIdentity.make({
+const SqlArticleColumnIdentity = SqlIdentity.columns({
   id: "sql-article@v1",
-  schema: SourceIdentity.key("id", Schema.NonEmptyString),
+  columns: [SqlIdentity.column("id", Schema.NonEmptyString)],
 });
 
 const ArticleEntryFields = Schema.Struct({
@@ -66,6 +66,40 @@ const NumericSqlArticleRow = Schema.Struct({
 });
 
 type NumericSqlArticleRow = typeof NumericSqlArticleRow.Type;
+
+const StringEncodedNumericArticleRow = Schema.Struct({
+  id: Schema.NumberFromString,
+  title: Schema.String,
+  updated_at: Schema.String,
+});
+
+type StringEncodedNumericArticleRow = Schema.Codec.Encoded<
+  typeof StringEncodedNumericArticleRow
+>;
+
+const TenantUserRow = Schema.Struct({
+  email_key: Schema.NonEmptyString,
+  name: Schema.String,
+  tenant_id: Schema.NonEmptyString,
+  updated_at: Schema.String,
+});
+
+type TenantUserRow = typeof TenantUserRow.Type;
+
+const TenantUserCursor = Schema.Struct({
+  email_key: Schema.String,
+  tenant_id: Schema.String,
+});
+
+type TenantUserCursor = typeof TenantUserCursor.Type;
+
+const TenantUserIdentity = SqlIdentity.columns({
+  id: "tenant-user@v1",
+  columns: [
+    SqlIdentity.column("tenant_id", Schema.NonEmptyString),
+    SqlIdentity.column("email_key", Schema.NonEmptyString),
+  ],
+});
 
 const metadataFailure = {
   kind: "failure" as const,
@@ -263,7 +297,6 @@ const getSqlArticleMetadata = (
           id: row.id,
           updated_at: row.updated_at,
         },
-        identityKey: row.id,
         version: row.updated_at satisfies SourceVersionInput,
       };
 };
@@ -278,7 +311,7 @@ const makeSqlArticleSource = (
     batchSize: options.batchSize ?? 2,
     cursorSchema: SqlArticleCursor,
     getSourceMetadata: options.getSourceMetadata ?? getSqlArticleMetadata,
-    identity: SqlArticleIdentity,
+    identity: SqlArticleColumnIdentity,
     lookup: (sql, identity) => {
       expectTypeOf(identity.key).toEqualTypeOf<string>();
       return sql<SqlArticleRow>`select id, title, updated_at, views from articles where id = ${identity.key}`;
@@ -323,6 +356,74 @@ describe("SqlSourcePlugin", () => {
         never
       >
     >();
+
+    const expectMissingIdentityColumnToFailTypeCheck = () => {
+      // @ts-expect-error SQL identity columns must exist on the source schema input side.
+      SqlSourcePlugin.make({
+        batchSize: 2,
+        cursorSchema: SqlArticleCursor,
+        getSourceMetadata: (row: SqlArticleRow) => ({
+          kind: "success",
+          cursor: {
+            id: row.id,
+            updated_at: row.updated_at,
+          },
+          version: row.updated_at,
+        }),
+        identity: SqlIdentity.columns({
+          id: "bad-sql-article@v1",
+          columns: [SqlIdentity.column("articleId", Schema.NonEmptyString)],
+        }),
+        lookup: (sql: SqlClient.SqlClient, identity: SourceIdentity<string>) =>
+          sql<SqlArticleRow>`select id, title, updated_at, views from articles where id = ${identity.key}`,
+        read: (
+          sql: SqlClient.SqlClient,
+          cursor: SqlArticleCursor | null,
+          limit: number
+        ) =>
+          cursor === null
+            ? sql<SqlArticleRow>`select id, title, updated_at, views from articles order by updated_at, id limit ${limit}`
+            : sql<SqlArticleRow>`select id, title, updated_at, views from articles where (updated_at, id) > (${cursor.updated_at}, ${cursor.id}) order by updated_at, id limit ${limit}`,
+        sourceSchema: SqlArticleRow,
+      });
+    };
+
+    expectTypeOf(expectMissingIdentityColumnToFailTypeCheck).toBeFunction();
+
+    const expectMismatchedIdentityColumnSchemaToFailTypeCheck = () => {
+      // @ts-expect-error SQL identity column schemas must match the source schema input side.
+      SqlSourcePlugin.make({
+        batchSize: 2,
+        cursorSchema: SqlArticleCursor,
+        getSourceMetadata: (row: NumericSqlArticleRow) => ({
+          kind: "success",
+          cursor: {
+            id: String(row.id),
+            updated_at: row.updated_at,
+          },
+          version: row.content_hash,
+        }),
+        identity: SqlIdentity.columns({
+          id: "bad-numeric-sql-article@v1",
+          columns: [SqlIdentity.column("id", Schema.NonEmptyString)],
+        }),
+        lookup: (sql: SqlClient.SqlClient, identity: SourceIdentity<number>) =>
+          sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles where id = ${identity.key}`,
+        read: (
+          sql: SqlClient.SqlClient,
+          cursor: SqlArticleCursor | null,
+          limit: number
+        ) =>
+          cursor === null
+            ? sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles order by updated_at, id limit ${limit}`
+            : sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles where (updated_at, id) > (${cursor.updated_at}, ${cursor.id}) order by updated_at, id limit ${limit}`,
+        sourceSchema: NumericSqlArticleRow,
+      });
+    };
+
+    expectTypeOf(
+      expectMismatchedIdentityColumnSchemaToFailTypeCheck
+    ).toBeFunction();
   });
 
   it.effect(
@@ -379,9 +480,9 @@ describe("SqlSourcePlugin", () => {
 
   it.effect("supports explicit non-string source identity contracts", () =>
     Effect.gen(function* () {
-      const NumericArticleIdentity = SourceIdentity.make({
+      const NumericArticleIdentity = SqlIdentity.columns({
         id: "numeric-sql-article@v1",
-        schema: SourceIdentity.key("articleId", Schema.Number),
+        columns: [SqlIdentity.column("id", Schema.Number)],
       });
       const rows = [
         {
@@ -406,7 +507,6 @@ describe("SqlSourcePlugin", () => {
             id: String(row.id),
             updated_at: row.updated_at,
           },
-          identityKey: row.id,
           version: row.content_hash,
         }),
         identity: NumericArticleIdentity,
@@ -420,6 +520,16 @@ describe("SqlSourcePlugin", () => {
             : sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles where (updated_at, id) > (${cursor.updated_at}, ${cursor.id}) order by updated_at, id limit ${limit}`,
         sourceSchema: NumericSqlArticleRow,
       });
+      expectTypeOf(source).toMatchTypeOf<
+        ConfiguredSourcePlugin<
+          NumericSqlArticleRow,
+          SqlArticleCursor,
+          number,
+          NumericSqlArticleRow,
+          never,
+          SqlClient.SqlClient
+        >
+      >();
       const fakeSql = makeFakeSqlClient([rows, [rows[1]]]);
       const plugin = yield* SourcePlugin.pipe(
         Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
@@ -437,6 +547,127 @@ describe("SqlSourcePlugin", () => {
       expect(lookupItem?.identity.key).toBe(102);
       expect(fakeSql.calls[0]?.values).toEqual([2]);
       expect(fakeSql.calls[1]?.values).toEqual([102]);
+    })
+  );
+
+  it.effect("derives codec source identities from encoded SQL row values", () =>
+    Effect.gen(function* () {
+      const CodecArticleIdentity = SqlIdentity.columns({
+        id: "codec-sql-article@v1",
+        columns: [SqlIdentity.column("id", Schema.NumberFromString)],
+      });
+      const rows = [
+        {
+          id: "101",
+          title: "First codec article",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        },
+      ] satisfies readonly StringEncodedNumericArticleRow[];
+      const source = SqlSourcePlugin.make({
+        batchSize: 2,
+        cursorSchema: SqlArticleCursor,
+        getSourceMetadata: (row) => ({
+          kind: "success",
+          cursor: {
+            id: row.id,
+            updated_at: row.updated_at,
+          },
+          version: row.updated_at,
+        }),
+        identity: CodecArticleIdentity,
+        lookup: (sql, identity) => {
+          expectTypeOf(identity.key).toEqualTypeOf<number>();
+
+          return sql<StringEncodedNumericArticleRow>`select id, title, updated_at from articles where id = ${String(identity.key)}`;
+        },
+        read: (sql, cursor, limit) =>
+          cursor === null
+            ? sql<StringEncodedNumericArticleRow>`select id, title, updated_at from articles order by updated_at, id limit ${limit}`
+            : sql<StringEncodedNumericArticleRow>`select id, title, updated_at from articles where (updated_at, id) > (${cursor.updated_at}, ${cursor.id}) order by updated_at, id limit ${limit}`,
+        sourceSchema: StringEncodedNumericArticleRow,
+      });
+      const fakeSql = makeFakeSqlClient([rows, rows]);
+      const plugin = yield* SourcePlugin.pipe(
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+      );
+
+      const page = yield* plugin.read(null);
+      const lookupItem = yield* plugin.readByIdentity(
+        SourceIdentity.fromKey(plugin.identity, 101)
+      );
+
+      expect(page.items[0]?.identity.key).toBe(101);
+      expect(page.items[0]?.identity.encoded).toBe("101");
+      expect(lookupItem?.identity.key).toBe(101);
+      expect(fakeSql.calls[1]?.values).toEqual(["101"]);
+    })
+  );
+
+  it.effect("derives composite source identities from SQL row aliases", () =>
+    Effect.gen(function* () {
+      const rows = [
+        {
+          email_key: "ada@example.com",
+          name: "Ada",
+          tenant_id: "tenant-1",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        },
+      ] satisfies readonly TenantUserRow[];
+      const source = SqlSourcePlugin.make({
+        batchSize: 2,
+        cursorSchema: TenantUserCursor,
+        getSourceMetadata: (row) => ({
+          kind: "success",
+          cursor: {
+            email_key: row.email_key,
+            tenant_id: row.tenant_id,
+          },
+          version: row.updated_at,
+        }),
+        identity: TenantUserIdentity,
+        lookup: (sql, identity) => {
+          expectTypeOf(identity.key).toMatchTypeOf<readonly [string, string]>();
+          const [tenantId, emailKey] = identity.key;
+
+          return sql<TenantUserRow>`select tenant_id, email_key, name, updated_at from users where tenant_id = ${tenantId} and email_key = ${emailKey}`;
+        },
+        read: (sql, cursor, limit) =>
+          cursor === null
+            ? sql<TenantUserRow>`select tenant_id, email_key, name, updated_at from users order by tenant_id, email_key limit ${limit}`
+            : sql<TenantUserRow>`select tenant_id, email_key, name, updated_at from users where (tenant_id, email_key) > (${cursor.tenant_id}, ${cursor.email_key}) order by tenant_id, email_key limit ${limit}`,
+        sourceSchema: TenantUserRow,
+      });
+      expectTypeOf(source).toMatchTypeOf<
+        ConfiguredSourcePlugin<
+          TenantUserRow,
+          TenantUserCursor,
+          readonly [string, string],
+          TenantUserRow,
+          never,
+          SqlClient.SqlClient
+        >
+      >();
+      const fakeSql = makeFakeSqlClient([rows, rows]);
+      const plugin = yield* SourcePlugin.pipe(
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+      );
+
+      const page = yield* plugin.read(null);
+      const lookupItem = yield* plugin.readByIdentity(
+        SourceIdentity.fromKey(plugin.identity, ["tenant-1", "ada@example.com"])
+      );
+
+      expect(page.items.map((item) => item.identity.encoded)).toEqual([
+        '["tenant-1","ada@example.com"]',
+      ]);
+      expect(page.items[0]?.identity.key).toEqual([
+        "tenant-1",
+        "ada@example.com",
+      ]);
+      expect(lookupItem?.identity.encoded).toBe(
+        '["tenant-1","ada@example.com"]'
+      );
+      expect(fakeSql.calls[1]?.values).toEqual(["tenant-1", "ada@example.com"]);
     })
   );
 
@@ -835,10 +1066,9 @@ describe("SqlSourcePlugin", () => {
               id: row.id,
               updated_at: row.updated_at,
             },
-            identityKey: row.id,
             version: row.content_hash,
           }),
-          identity: SqlArticleIdentity,
+          identity: SqlArticleColumnIdentity,
           lookup: (sql, identity) =>
             sql<SqliteArticleRow>`
               select id, updated_at, content_hash, title, views
@@ -957,10 +1187,9 @@ describe("SqlSourcePlugin", () => {
             id: row.id,
             updated_at: row.updated_at,
           },
-          identityKey: row.id,
           version: row.content_hash,
         }),
-        identity: SqlArticleIdentity,
+        identity: SqlArticleColumnIdentity,
         lookup: (sql, identity) =>
           sql<SqliteArticleRow>`
               select id, updated_at, content_hash, title, views

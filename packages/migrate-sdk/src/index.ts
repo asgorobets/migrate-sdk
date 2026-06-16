@@ -274,10 +274,15 @@ export type {
 } from "./sources/csv/csv-source.ts";
 
 export {
+  SqlIdentity,
   SqlSourcePlugin,
   SqlSourcePluginName,
 } from "./sources/sql/sql-source.ts";
 export type {
+  AnySqlIdentityDefinition,
+  SqlIdentityColumn,
+  SqlIdentityColumns,
+  SqlIdentityDefinition,
   SqlSourceLookup,
   SqlSourceMetadata,
   SqlSourceMetadataContext,

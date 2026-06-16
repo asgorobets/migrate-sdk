@@ -9,14 +9,22 @@ import {
   type SourceReadResultInput,
 } from "../../domain/definition.ts";
 import type { SourcePluginError } from "../../domain/errors.ts";
-import type {
+import {
   SourceIdentity,
-  SourceIdentityDefinition,
-  SourceIdentitySnapshotKey,
-  SourceIdentityTarget,
-  SourceVersionInput,
+  type SourceIdentityContractIdInput,
+  type SourceIdentityDefinition,
+  type SourceIdentityKeyScalar,
+  type SourceIdentityPart,
+  type SourceIdentityScalar,
+  type SourceIdentitySchema,
+  type SourceIdentitySnapshotKey,
+  type SourceIdentityTarget,
+  type SourceVersionInput,
 } from "../../domain/ids.ts";
-import type { SourceVersionContractFingerprint } from "../../domain/migration-contract.ts";
+import {
+  makeSourceIdentityContractFingerprint,
+  type SourceVersionContractFingerprint,
+} from "../../domain/migration-contract.ts";
 import {
   encodeSourceIdentityKey,
   type SourceItemInput,
@@ -39,12 +47,8 @@ export interface SqlSourceMetadataContext {
   readonly rowIndex: number;
 }
 
-export interface SqlSourceMetadataSuccess<
-  Cursor,
-  IdentityKey extends SourceIdentitySnapshotKey = string,
-> {
+export interface SqlSourceMetadataSuccess<Cursor> {
   readonly cursor: Cursor;
-  readonly identityKey: IdentityKey;
   readonly kind: "success";
   readonly version: SourceVersionInput;
 }
@@ -55,10 +59,9 @@ export interface SqlSourceMetadataFailure {
   readonly message: string;
 }
 
-export type SqlSourceMetadataResult<
-  Cursor,
-  IdentityKey extends SourceIdentitySnapshotKey = string,
-> = SqlSourceMetadataFailure | SqlSourceMetadataSuccess<Cursor, IdentityKey>;
+export type SqlSourceMetadataResult<Cursor> =
+  | SqlSourceMetadataFailure
+  | SqlSourceMetadataSuccess<Cursor>;
 
 export type SqlSourceRead<Row, Cursor> = (
   sql: SqlClient.SqlClient,
@@ -74,14 +77,169 @@ export type SqlSourceLookup<
   identity: SourceIdentityTarget<IdentityKey>
 ) => Statement.Statement<Row>;
 
-export type SqlSourceMetadata<
-  Row,
-  Cursor,
-  IdentityKey extends SourceIdentitySnapshotKey = string,
-> = (
+export type SqlSourceMetadata<Row, Cursor> = (
   row: Readonly<Row>,
   context: SqlSourceMetadataContext
-) => SqlSourceMetadataResult<Cursor, IdentityKey>;
+) => SqlSourceMetadataResult<Cursor>;
+
+export interface SqlIdentityColumn<
+  Name extends string = string,
+  Value extends SourceIdentityScalar = SourceIdentityScalar,
+  Encoded extends SourceIdentityKeyScalar = SourceIdentityKeyScalar,
+> {
+  readonly name: Name;
+  readonly schema: SourceIdentityPart<Value, Encoded>;
+}
+
+export type SqlIdentityColumns = readonly [
+  SqlIdentityColumn,
+  ...SqlIdentityColumn[],
+];
+
+type SqlIdentityColumnValue<Column> =
+  Column extends SqlIdentityColumn<string, infer Value, SourceIdentityKeyScalar>
+    ? Value
+    : never;
+
+type SqlIdentityColumnsKey<Columns extends SqlIdentityColumns> =
+  Columns extends readonly [infer Column]
+    ? SqlIdentityColumnValue<Column>
+    : {
+        readonly [Index in keyof Columns]: SqlIdentityColumnValue<
+          Columns[Index]
+        >;
+      };
+
+export interface SqlIdentityDefinition<
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+  Columns extends SqlIdentityColumns = SqlIdentityColumns,
+> {
+  readonly id: SourceIdentityContractIdInput;
+  readonly key: {
+    readonly columns: Columns;
+    readonly kind: "columns";
+  };
+  readonly schema: SourceIdentitySchema<IdentityKey>;
+}
+
+export type AnySqlIdentityDefinition = SqlIdentityDefinition<
+  SourceIdentitySnapshotKey,
+  SqlIdentityColumns
+>;
+
+type SqlIdentityDefinitionKey<Identity extends AnySqlIdentityDefinition> =
+  Identity extends SqlIdentityDefinition<infer IdentityKey, infer _Columns>
+    ? IdentityKey
+    : never;
+
+type KnownStringKeyOf<T> = string extends keyof T
+  ? never
+  : Extract<keyof T, string>;
+
+type SqlIdentityForSourceInput<
+  SourceInput,
+  Identity extends AnySqlIdentityDefinition,
+> =
+  Identity extends SqlIdentityDefinition<infer _IdentityKey, infer Columns>
+    ? SqlIdentityColumnsCompatibleWithSourceInput<
+        SourceInput,
+        Columns
+      > extends true
+      ? Identity
+      : never
+    : never;
+
+type SqlIdentityColumnCompatibleWithSourceInput<SourceInput, Column> =
+  Column extends SqlIdentityColumn<
+    infer Name,
+    SourceIdentityScalar,
+    infer Encoded
+  >
+    ? Name extends KnownStringKeyOf<SourceInput>
+      ? SourceInput[Name] extends Encoded
+        ? true
+        : false
+      : false
+    : false;
+
+type SqlIdentityColumnsCompatibleWithSourceInput<
+  SourceInput,
+  Columns extends readonly SqlIdentityColumn[],
+> = Columns extends readonly []
+  ? true
+  : Columns extends readonly [infer Column, ...infer RemainingColumns]
+    ? SqlIdentityColumnCompatibleWithSourceInput<
+        SourceInput,
+        Column
+      > extends true
+      ? RemainingColumns extends readonly SqlIdentityColumn[]
+        ? SqlIdentityColumnsCompatibleWithSourceInput<
+            SourceInput,
+            RemainingColumns
+          >
+        : false
+      : false
+    : false;
+
+type SqlSourceOptionsForIdentity<
+  Source,
+  Cursor,
+  SourceInput,
+  Identity extends AnySqlIdentityDefinition,
+> =
+  SqlIdentityForSourceInput<SourceInput, Identity> extends never
+    ? never
+    : SqlSourceOptions<Source, Cursor, SourceInput, Identity>;
+
+const makeSqlIdentityColumn = <
+  const Name extends string,
+  Value extends SourceIdentityScalar,
+  Encoded extends SourceIdentityKeyScalar,
+>(
+  name: Name,
+  schema: Schema.Codec<Value, Encoded, never, never>
+): SqlIdentityColumn<Name, Value, Encoded> => ({
+  name,
+  schema: SourceIdentity.part(name, schema),
+});
+
+function makeSqlColumnsIdentity<const Column extends SqlIdentityColumn>(input: {
+  readonly columns: readonly [Column];
+  readonly id: SourceIdentityContractIdInput;
+}): SqlIdentityDefinition<SqlIdentityColumnValue<Column>, readonly [Column]>;
+function makeSqlColumnsIdentity<
+  const Columns extends SqlIdentityColumns,
+>(input: {
+  readonly columns: Columns;
+  readonly id: SourceIdentityContractIdInput;
+}): SqlIdentityDefinition<SqlIdentityColumnsKey<Columns>, Columns>;
+function makeSqlColumnsIdentity(input: {
+  readonly columns: SqlIdentityColumns;
+  readonly id: SourceIdentityContractIdInput;
+}): SqlIdentityDefinition {
+  const [firstColumn, ...remainingColumns] = input.columns;
+  const schema =
+    remainingColumns.length === 0
+      ? SourceIdentity.key(firstColumn.name, firstColumn.schema)
+      : SourceIdentity.tuple([
+          firstColumn.schema,
+          ...remainingColumns.map((column) => column.schema),
+        ]);
+
+  return {
+    id: input.id,
+    key: {
+      columns: input.columns,
+      kind: "columns",
+    },
+    schema,
+  };
+}
+
+export const SqlIdentity = {
+  column: makeSqlIdentityColumn,
+  columns: makeSqlColumnsIdentity,
+} as const;
 
 interface SqlSourceBaseOptions<Source, Cursor, SourceInput = unknown> {
   readonly batchSize: number;
@@ -94,16 +252,14 @@ export interface SqlSourceOptions<
   Source,
   Cursor,
   SourceInput = unknown,
-  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+  Identity extends AnySqlIdentityDefinition = AnySqlIdentityDefinition,
 > extends SqlSourceBaseOptions<Source, Cursor, SourceInput> {
-  readonly getSourceMetadata: SqlSourceMetadata<
+  readonly getSourceMetadata: SqlSourceMetadata<SourceInput, Cursor>;
+  readonly identity: Identity;
+  readonly lookup: SqlSourceLookup<
     SourceInput,
-    Cursor,
-    IdentityKey
+    SqlIdentityDefinitionKey<Identity>
   >;
-  readonly identity: SourceIdentityDefinition<IdentityKey>;
-  readonly lookup: SqlSourceLookup<SourceInput, IdentityKey>;
-  readonly sourceIdentityContractFingerprint?: SourceIdentityDefinition<IdentityKey>["fingerprint"];
   readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
 }
 
@@ -115,20 +271,80 @@ const executeStatement = <Row>(
     Effect.mapError((cause) => makeSqlSourceExecutionError(operation, cause))
   );
 
+const makeSqlIdentityDefinition = <
+  IdentityKey extends SourceIdentitySnapshotKey,
+  Columns extends SqlIdentityColumns,
+>(
+  identity: SqlIdentityDefinition<IdentityKey, Columns>
+): SourceIdentityDefinition<IdentityKey> =>
+  SourceIdentity.make({
+    id: identity.id,
+    schema: identity.schema,
+  });
+
+const makeSqlSourceIdentityContractFingerprint = <
+  Identity extends AnySqlIdentityDefinition,
+>(
+  identity: Identity,
+  identityDefinition: SourceIdentityDefinition<
+    SqlIdentityDefinitionKey<Identity>
+  >
+) =>
+  makeSourceIdentityContractFingerprint({
+    identity: identityDefinition.fingerprint,
+    key: {
+      columns: identity.key.columns.map((column) => column.name),
+      kind: identity.key.kind,
+    },
+    source: "sql@v1",
+  });
+
+const readSqlIdentityColumnValue = (
+  row: unknown,
+  column: SqlIdentityColumn
+): unknown =>
+  typeof row === "object" && row !== null
+    ? Reflect.get(row, column.name)
+    : undefined;
+
+const buildIdentityKey = <Identity extends AnySqlIdentityDefinition>(
+  identity: Identity,
+  identityDefinition: SourceIdentityDefinition<
+    SqlIdentityDefinitionKey<Identity>
+  >,
+  operation: "read" | "readByIdentity",
+  row: unknown,
+  rowIndex: number
+): Effect.Effect<SqlIdentityDefinitionKey<Identity>, SourcePluginError> =>
+  Effect.try({
+    try: () => {
+      const rawKeyParts = identity.key.columns.map((column) =>
+        readSqlIdentityColumnValue(row, column)
+      );
+      const rawKey = rawKeyParts.length === 1 ? rawKeyParts[0] : rawKeyParts;
+
+      return SourceIdentity.decode(identityDefinition, rawKey);
+    },
+    catch: (cause) =>
+      makeSqlSourceMetadataError(
+        operation,
+        rowIndex,
+        "source identity key did not match Source Identity Schema",
+        cause
+      ),
+  });
+
 const extractMetadata = <
   Source,
   Cursor,
   SourceInput,
-  IdentityKey extends SourceIdentitySnapshotKey,
+  Identity extends AnySqlIdentityDefinition,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, IdentityKey>,
+  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity>,
   operation: "read" | "readByIdentity",
   row: SourceInput,
   rowIndex: number
-): Effect.Effect<
-  SqlSourceMetadataResult<Cursor, IdentityKey>,
-  SourcePluginError
-> =>
+): Effect.Effect<SqlSourceMetadataResult<Cursor>, SourcePluginError> =>
   Effect.try({
     try: () => options.getSourceMetadata(row, { rowIndex }),
     catch: (cause) =>
@@ -144,47 +360,66 @@ const sourceItemFromRow = <
   Source,
   Cursor,
   SourceInput,
-  IdentityKey extends SourceIdentitySnapshotKey,
+  Identity extends AnySqlIdentityDefinition,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, IdentityKey>,
+  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity>,
+  identityDefinition: SourceIdentityDefinition<
+    SqlIdentityDefinitionKey<Identity>
+  >,
   operation: "read" | "readByIdentity",
   row: SourceInput,
   rowIndex: number
 ): Effect.Effect<
-  SourceItemInput<SourceInput, IdentityKey>,
+  SourceItemInput<SourceInput, SqlIdentityDefinitionKey<Identity>>,
   SourcePluginError
 > =>
   extractMetadata(options, operation, row, rowIndex).pipe(
-    Effect.flatMap((metadata) =>
-      metadata.kind === "failure"
-        ? Effect.fail(
-            makeSqlSourceMetadataError(
-              operation,
-              rowIndex,
-              metadata.message,
-              metadata.cause
-            )
+    Effect.flatMap((metadata) => {
+      if (metadata.kind === "failure") {
+        return Effect.fail(
+          makeSqlSourceMetadataError(
+            operation,
+            rowIndex,
+            metadata.message,
+            metadata.cause
           )
-        : Effect.succeed({
-            identityKey: metadata.identityKey,
-            item: row,
-            version: metadata.version,
-          })
-    )
+        );
+      }
+
+      return buildIdentityKey(
+        options.identity,
+        identityDefinition,
+        operation,
+        row,
+        rowIndex
+      ).pipe(
+        Effect.map((identityKey) => ({
+          identityKey,
+          item: row,
+          version: metadata.version,
+        }))
+      );
+    })
   );
 
 const readRows = <
   Source,
   Cursor,
   SourceInput,
-  IdentityKey extends SourceIdentitySnapshotKey,
+  Identity extends AnySqlIdentityDefinition,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, IdentityKey>,
-  identityDefinition: SourceIdentityDefinition<IdentityKey>,
+  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity>,
+  identityDefinition: SourceIdentityDefinition<
+    SqlIdentityDefinitionKey<Identity>
+  >,
   sql: SqlClient.SqlClient,
   cursor: Cursor | null
 ): Effect.Effect<
-  SourceReadResultInput<SourceInput, Cursor, IdentityKey>,
+  SourceReadResultInput<
+    SourceInput,
+    Cursor,
+    SqlIdentityDefinitionKey<Identity>
+  >,
   SourcePluginError
 > =>
   Effect.gen(function* () {
@@ -196,7 +431,10 @@ const readRows = <
       "read",
       options.read(sql, cursor, options.batchSize)
     );
-    const items: SourceItemInput<SourceInput, IdentityKey>[] = [];
+    const items: SourceItemInput<
+      SourceInput,
+      SqlIdentityDefinitionKey<Identity>
+    >[] = [];
     const sourceIdentityRows = new Map<string, number>();
     let nextCursor: Cursor | undefined;
 
@@ -224,9 +462,16 @@ const readRows = <
         );
       }
 
+      const identityKey = yield* buildIdentityKey(
+        options.identity,
+        identityDefinition,
+        "read",
+        row,
+        rowIndex
+      );
       const sourceIdentity = yield* encodeSourceIdentityKey(
         identityDefinition,
-        metadata.identityKey
+        identityKey
       );
       const existingRowIndex = sourceIdentityRows.get(sourceIdentity);
 
@@ -245,7 +490,7 @@ const readRows = <
 
       sourceIdentityRows.set(sourceIdentity, rowIndex);
       items.push({
-        identityKey: metadata.identityKey,
+        identityKey,
         item: row,
         version: metadata.version,
       });
@@ -262,18 +507,25 @@ const makeImplementation = <
   Source,
   Cursor,
   SourceInput,
-  IdentityKey extends SourceIdentitySnapshotKey,
+  Identity extends AnySqlIdentityDefinition,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, IdentityKey>,
+  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity>,
   sql: SqlClient.SqlClient,
-  identityDefinition: SourceIdentityDefinition<IdentityKey>
-): SourcePluginImplementation<Source, Cursor, IdentityKey, SourceInput> => {
+  identityDefinition: SourceIdentityDefinition<
+    SqlIdentityDefinitionKey<Identity>
+  >
+): SourcePluginImplementation<
+  Source,
+  Cursor,
+  SqlIdentityDefinitionKey<Identity>,
+  SourceInput
+> => {
   const read = Effect.fn("SqlSource.read")((cursor: Cursor | null) =>
     readRows(options, identityDefinition, sql, cursor)
   );
 
   const readByIdentity = Effect.fn("SqlSource.readByIdentity")(function* (
-    identity: SourceIdentity<IdentityKey>
+    identity: SourceIdentity<SqlIdentityDefinitionKey<Identity>>
   ) {
     const rows = yield* executeStatement(
       "readByIdentity",
@@ -299,6 +551,7 @@ const makeImplementation = <
 
     const sourceItem = yield* sourceItemFromRow(
       options,
+      identityDefinition,
       "readByIdentity",
       row,
       0
@@ -331,8 +584,14 @@ const make = <
   Cursor,
   SourceInput,
   IdentityKey extends SourceIdentitySnapshotKey,
+  Columns extends SqlIdentityColumns,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, IdentityKey>
+  options: SqlSourceOptionsForIdentity<
+    Source,
+    Cursor,
+    SourceInput,
+    SqlIdentityDefinition<IdentityKey, Columns>
+  >
 ): ConfiguredSourcePlugin<
   Source,
   Cursor,
@@ -341,21 +600,41 @@ const make = <
   never,
   SqlClient.SqlClient
 > => {
-  return defineSourcePluginLayer({
+  const identityDefinition = makeSqlIdentityDefinition(options.identity);
+  const sourceIdentityContractFingerprint =
+    makeSqlSourceIdentityContractFingerprint(
+      options.identity,
+      identityDefinition
+    );
+
+  return defineSourcePluginLayer<
+    Source,
+    Cursor,
+    IdentityKey,
+    SourceInput,
+    never,
+    SqlClient.SqlClient
+  >({
     layer: Layer.effect(
       SourcePluginService,
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        const source = defineSourcePlugin({
+        const source = defineSourcePlugin<
+          Source,
+          Cursor,
+          IdentityKey,
+          SourceInput
+        >({
           cursorSchema: options.cursorSchema,
-          identity: options.identity,
-          make: () => makeImplementation(options, sql, options.identity),
-          ...(options.sourceIdentityContractFingerprint === undefined
-            ? {}
-            : {
-                sourceIdentityContractFingerprint:
-                  options.sourceIdentityContractFingerprint,
-              }),
+          identity: identityDefinition,
+          make: () =>
+            makeImplementation<
+              Source,
+              Cursor,
+              SourceInput,
+              SqlIdentityDefinition<IdentityKey, Columns>
+            >(options, sql, identityDefinition),
+          sourceIdentityContractFingerprint,
           sourceSchema: options.sourceSchema,
           ...(options.sourceVersionContractFingerprint === undefined
             ? {}
@@ -368,13 +647,8 @@ const make = <
         return yield* SourcePluginService.pipe(Effect.provide(source.layer));
       })
     ),
-    identity: options.identity,
-    ...(options.sourceIdentityContractFingerprint === undefined
-      ? {}
-      : {
-          sourceIdentityContractFingerprint:
-            options.sourceIdentityContractFingerprint,
-        }),
+    identity: identityDefinition,
+    sourceIdentityContractFingerprint,
     sourceSchema: options.sourceSchema,
     ...(options.sourceVersionContractFingerprint === undefined
       ? {}
@@ -390,10 +664,16 @@ const makeLayer = <
   Cursor,
   SourceInput,
   IdentityKey extends SourceIdentitySnapshotKey,
+  Columns extends SqlIdentityColumns,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, IdentityKey>
+  options: SqlSourceOptionsForIdentity<
+    Source,
+    Cursor,
+    SourceInput,
+    SqlIdentityDefinition<IdentityKey, Columns>
+  >
 ): Layer.Layer<AnySourcePlugin, never, SqlClient.SqlClient> =>
-  make(options).layer;
+  make<Source, Cursor, SourceInput, IdentityKey, Columns>(options).layer;
 
 export const SqlSourcePlugin = {
   make,
