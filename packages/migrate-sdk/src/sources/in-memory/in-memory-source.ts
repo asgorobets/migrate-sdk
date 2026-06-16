@@ -7,9 +7,11 @@ import {
 import { SourcePluginError } from "../../domain/errors.ts";
 import type {
   SourceIdentity,
+  SourceIdentityContractFingerprint,
   SourceIdentityDefinition,
   SourceIdentitySnapshotKey,
 } from "../../domain/ids.ts";
+import type { SourceVersionContractFingerprint } from "../../domain/migration-contract.ts";
 import {
   encodeSourceIdentityKey,
   type SourceItemInput,
@@ -31,7 +33,9 @@ interface InMemorySourceBaseOptions<
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly items: readonly SourceItemInput<A, IdentityKey>[];
   readonly lookupStrategy?: SourceLookupStrategy;
+  readonly sourceIdentityContractFingerprint?: SourceIdentityContractFingerprint;
   readonly sourceSchema: Schema.Codec<A, unknown, never, never>;
+  readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
   readonly state?: InMemorySourceState;
   readonly transientFailures?: InMemorySourceTransientFailures;
 }
@@ -154,6 +158,18 @@ const make = <A, IdentityKey extends SourceIdentitySnapshotKey>(
     identity: options.identity,
     make: () => makeImplementation(options, options.identity),
     sourceSchema: options.sourceSchema,
+    ...(options.sourceIdentityContractFingerprint === undefined
+      ? {}
+      : {
+          sourceIdentityContractFingerprint:
+            options.sourceIdentityContractFingerprint,
+        }),
+    ...(options.sourceVersionContractFingerprint === undefined
+      ? {}
+      : {
+          sourceVersionContractFingerprint:
+            options.sourceVersionContractFingerprint,
+        }),
   });
 };
 

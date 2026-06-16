@@ -19,6 +19,7 @@ import type {
   SourceIdentitySnapshotKey,
   SourceVersion,
 } from "../domain/ids.ts";
+import type { SourceVersionContractFingerprint } from "../domain/migration-contract.ts";
 import type { PipelineContext } from "../domain/pipeline.ts";
 import type { SourceItem } from "../domain/source.ts";
 import type {
@@ -90,25 +91,32 @@ const isSkipItem = (error: unknown): error is SkipItem =>
 const isMigrationStoreError = (error: unknown): error is MigrationStoreError =>
   Predicate.isTagged(error, "MigrationStoreError");
 
+interface SourceVersionContractContext {
+  readonly definitionId: MigrationDefinitionId;
+  readonly sourceVersionContractFingerprint: SourceVersionContractFingerprint;
+}
+
 const makeItemStateBase = <Source>(
-  definitionId: MigrationDefinitionId,
+  sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>
 ): MigrationItemStateBase & { readonly sourceVersion: SourceVersion } => ({
-  definitionId,
+  definitionId: sourceVersionContractContext.definitionId,
   sourceIdentity: sourceItem.identity,
+  sourceVersionContractFingerprint:
+    sourceVersionContractContext.sourceVersionContractFingerprint,
   sourceVersion: sourceItem.version,
   lastRunId: runId,
   updatedAt: new Date(),
 });
 
 const makeSkippedItemState = <Source>(
-  definitionId: MigrationDefinitionId,
+  sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>,
   reason: string
 ): SkippedItemState => ({
-  ...makeItemStateBase(definitionId, runId, sourceItem),
+  ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
   status: "skipped",
   skipReason: reason,
 });
@@ -134,7 +142,7 @@ const previousDestinationVersion = (
     : undefined;
 
 const makeFailedItemState = <Source>(
-  definitionId: MigrationDefinitionId,
+  sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>,
   error: MigrationItemError,
@@ -144,7 +152,7 @@ const makeFailedItemState = <Source>(
     readonly destinationVersion?: FailedItemState["destinationVersion"];
   }
 ): FailedItemState => ({
-  ...makeItemStateBase(definitionId, runId, sourceItem),
+  ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
   ...((latestDestination?.destinationIdentity ??
     previousDestinationIdentity(previousState)) === undefined
     ? {}
@@ -166,7 +174,7 @@ const makeFailedItemState = <Source>(
 });
 
 const makeMigratedItemState = <Source>(
-  definitionId: MigrationDefinitionId,
+  sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>,
   result: {
@@ -174,7 +182,7 @@ const makeMigratedItemState = <Source>(
     readonly destinationVersion?: MigratedItemState["destinationVersion"];
   }
 ): MigratedItemState => ({
-  ...makeItemStateBase(definitionId, runId, sourceItem),
+  ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
   status: "migrated",
   destinationIdentity: result.destinationIdentity,
   ...(result.destinationVersion === undefined
@@ -189,20 +197,20 @@ const missingDestinationIdentityError = (): DestinationPluginError =>
 
 const persistMissingDestinationIdentityFailure = <Source>({
   decodedSourceItem,
-  definitionId,
   previousState,
   runId,
+  sourceVersionContractContext,
   store,
 }: {
   readonly decodedSourceItem: SourceItem<Source>;
-  readonly definitionId: MigrationDefinitionId;
   readonly previousState: MigrationItemState | null;
   readonly runId: MigrationRunId;
+  readonly sourceVersionContractContext: SourceVersionContractContext;
   readonly store: typeof MigrationStore.Service;
 }) =>
   store.upsertItemState(
     makeFailedItemState(
-      definitionId,
+      sourceVersionContractContext,
       runId,
       decodedSourceItem,
       normalizeItemError("destination", missingDestinationIdentityError()),
@@ -215,27 +223,27 @@ const persistNonCommandPipelineOutcome = <
   Command extends DestinationCommand,
 >({
   decodedSourceItem,
-  definitionId,
   outcome,
   previousState,
   runId,
+  sourceVersionContractContext,
   store,
 }: {
   readonly decodedSourceItem: SourceItem<Source>;
-  readonly definitionId: MigrationDefinitionId;
   readonly outcome: Exclude<
     PipelineOutcome<Command>,
     { readonly kind: "command" }
   >;
   readonly previousState: MigrationItemState | null;
   readonly runId: MigrationRunId;
+  readonly sourceVersionContractContext: SourceVersionContractContext;
   readonly store: typeof MigrationStore.Service;
 }) => {
   if (outcome.kind === "skipped") {
     return store
       .upsertItemState(
         makeSkippedItemState(
-          definitionId,
+          sourceVersionContractContext,
           runId,
           decodedSourceItem,
           outcome.reason
@@ -247,7 +255,7 @@ const persistNonCommandPipelineOutcome = <
   return store
     .upsertItemState(
       makeFailedItemState(
-        definitionId,
+        sourceVersionContractContext,
         runId,
         decodedSourceItem,
         outcome.error,
@@ -261,10 +269,13 @@ const isUnchangedTerminalState = <
   Source,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
+  sourceVersionContractFingerprint: SourceVersionContractFingerprint,
   previousState: MigrationItemState | null,
   sourceItem: SourceItem<Source, IdentityKey>
 ): boolean =>
   previousState?.status === "migrated" &&
+  previousState.sourceVersionContractFingerprint ===
+    sourceVersionContractFingerprint &&
   previousState.sourceVersion === sourceItem.version;
 
 const decodeSourceItem = <
@@ -357,6 +368,11 @@ export const processSourceItem = <
   Effect.gen(function* () {
     const destination = yield* DestinationPlugin;
     const store = yield* MigrationStore;
+    const sourceVersionContractContext = {
+      definitionId: definition.id,
+      sourceVersionContractFingerprint:
+        definition.source.sourceVersionContractFingerprint,
+    };
     const previousState = yield* store.getItemState(
       definition.id,
       sourceItem.identity.encoded
@@ -369,7 +385,7 @@ export const processSourceItem = <
         store
           .upsertItemState(
             makeFailedItemState(
-              definition.id,
+              sourceVersionContractContext,
               runId,
               sourceItem,
               normalizeSourcePayloadSchemaError(error),
@@ -386,7 +402,11 @@ export const processSourceItem = <
 
     if (
       !reprocessUnchangedTerminal &&
-      isUnchangedTerminalState(previousState, decodedSourceItem)
+      isUnchangedTerminalState(
+        sourceVersionContractContext.sourceVersionContractFingerprint,
+        previousState,
+        decodedSourceItem
+      )
     ) {
       return "unchanged" as const;
     }
@@ -426,10 +446,10 @@ export const processSourceItem = <
     if (pipelineOutcome.kind !== "command") {
       return yield* persistNonCommandPipelineOutcome({
         decodedSourceItem,
-        definitionId: definition.id,
         outcome: pipelineOutcome,
         previousState,
         runId,
+        sourceVersionContractContext,
         store,
       });
     }
@@ -453,7 +473,7 @@ export const processSourceItem = <
     if (destinationOutcome.kind === "failed") {
       yield* store.upsertItemState(
         makeFailedItemState(
-          definition.id,
+          sourceVersionContractContext,
           runId,
           decodedSourceItem,
           destinationOutcome.error,
@@ -475,9 +495,9 @@ export const processSourceItem = <
     if (destinationIdentity === undefined) {
       yield* persistMissingDestinationIdentityFailure({
         decodedSourceItem,
-        definitionId: definition.id,
         previousState,
         runId,
+        sourceVersionContractContext,
         store,
       });
 
@@ -485,10 +505,15 @@ export const processSourceItem = <
     }
 
     yield* store.upsertItemState(
-      makeMigratedItemState(definition.id, runId, decodedSourceItem, {
-        destinationIdentity,
-        ...(destinationVersion === undefined ? {} : { destinationVersion }),
-      })
+      makeMigratedItemState(
+        sourceVersionContractContext,
+        runId,
+        decodedSourceItem,
+        {
+          destinationIdentity,
+          ...(destinationVersion === undefined ? {} : { destinationVersion }),
+        }
+      )
     );
 
     return "migrated" as const;

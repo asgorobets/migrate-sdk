@@ -4,6 +4,7 @@ import { Path } from "effect/Path";
 import {
   type ConfiguredSourcePlugin,
   defineSourcePlugin,
+  defineSourcePluginLayer,
   type SourcePluginImplementation,
 } from "../../domain/definition.ts";
 import { SourcePluginError } from "../../domain/errors.ts";
@@ -14,6 +15,12 @@ import type {
   SourceIdentitySnapshotKey,
 } from "../../domain/ids.ts";
 import { SourceIdentity } from "../../domain/ids.ts";
+import {
+  makeSourceIdentityContractFingerprint,
+  makeSourceVersionContractFingerprint,
+  SourceVersionContractId,
+  type SourceVersionContractIdInput,
+} from "../../domain/migration-contract.ts";
 import {
   encodeSourceIdentityKey,
   type SourceItemInput,
@@ -162,6 +169,7 @@ export type JsonFileDocumentVersion<Source> =
       readonly kind: "content-hash";
     }
   | {
+      readonly id: SourceVersionContractIdInput;
       readonly kind: "value";
       readonly value: (item: Source) => JsonFileIdentityScalar;
     };
@@ -915,6 +923,56 @@ const makeJsonFileSourceIdentityDefinition = <
     schema: identity.schema,
   });
 
+const makeJsonFileSourceIdentityContractFingerprint = <
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: {
+    readonly identity: JsonFileIdentity<IdentityKey>;
+    readonly items: JsonFileItemsPath;
+  },
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+) =>
+  makeSourceIdentityContractFingerprint({
+    identity: identityDefinition.fingerprint,
+    items: options.items,
+    key: options.identity.key,
+    source: "json-file@v1",
+  });
+
+const makeJsonFileDocumentSourceIdentityContractFingerprint = <
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+) =>
+  makeSourceIdentityContractFingerprint({
+    identity: identityDefinition.fingerprint,
+    source: "json-file-document@v1",
+  });
+
+const makeJsonFileSourceVersionContractFingerprint = (
+  version: JsonFileVersion
+) =>
+  makeSourceVersionContractFingerprint({
+    source: "json-file@v1",
+    version,
+  });
+
+const makeJsonFileDocumentSourceVersionContractFingerprint = <Source>(
+  version: JsonFileDocumentVersion<Source>
+) =>
+  makeSourceVersionContractFingerprint({
+    source: "json-file-document@v1",
+    version:
+      version.kind === "value"
+        ? {
+            id: SourceVersionContractId.make(version.id),
+            kind: version.kind,
+          }
+        : {
+            kind: version.kind,
+          },
+  });
+
 const decodeIdentityKey = <IdentityKey extends SourceIdentitySnapshotKey>(
   definition: SourceIdentityDefinition<IdentityKey>,
   value: unknown,
@@ -1350,7 +1408,14 @@ const makeLayerWithoutPlatform = <
         identity: identityDefinition,
         make: () =>
           makePathImplementation(options, fs, path, identityDefinition),
+        sourceIdentityContractFingerprint:
+          makeJsonFileSourceIdentityContractFingerprint(
+            options,
+            identityDefinition
+          ),
         sourceSchema: options.sourceSchema,
+        sourceVersionContractFingerprint:
+          makeJsonFileSourceVersionContractFingerprint(options.version),
       });
 
       return yield* SourcePlugin.pipe(Effect.provide(configured.layer));
@@ -1383,7 +1448,13 @@ const makeDocumentLayerWithoutPlatform = <
         identity: identityDefinition,
         make: () =>
           makeDocumentImplementation(options, fs, path, identityDefinition),
+        sourceIdentityContractFingerprint:
+          makeJsonFileDocumentSourceIdentityContractFingerprint(
+            identityDefinition
+          ),
         sourceSchema: options.items.sourceSchema,
+        sourceVersionContractFingerprint:
+          makeJsonFileDocumentSourceVersionContractFingerprint(options.version),
       });
 
       return yield* SourcePlugin.pipe(Effect.provide(configured.layer));
@@ -1484,16 +1555,15 @@ function makeFromDocument<
     options.identity
   );
 
-  return {
+  return defineSourcePluginLayer({
     identity: identityDefinition,
     layer: makeDocumentLayer(compiledOptions, identityDefinition),
+    sourceIdentityContractFingerprint:
+      makeJsonFileDocumentSourceIdentityContractFingerprint(identityDefinition),
     sourceSchema: compiledItems.sourceSchema,
-  } as ConfiguredSourcePlugin<
-    Source,
-    JsonFileSourceCursor,
-    IdentityKey,
-    unknown
-  >;
+    sourceVersionContractFingerprint:
+      makeJsonFileDocumentSourceVersionContractFingerprint(options.version),
+  });
 }
 
 const makeJsonFileSource = <
@@ -1511,16 +1581,18 @@ const makeJsonFileSource = <
     options.identity
   );
 
-  return {
+  return defineSourcePluginLayer({
     identity: identityDefinition,
     layer: makeLayer(options, identityDefinition),
+    sourceIdentityContractFingerprint:
+      makeJsonFileSourceIdentityContractFingerprint(
+        options,
+        identityDefinition
+      ),
     sourceSchema: options.sourceSchema,
-  } as ConfiguredSourcePlugin<
-    Source,
-    JsonFileSourceCursor,
-    IdentityKey,
-    unknown
-  >;
+    sourceVersionContractFingerprint:
+      makeJsonFileSourceVersionContractFingerprint(options.version),
+  });
 };
 
 function makeSource<Source, IdentityKey extends SourceIdentitySnapshotKey>(

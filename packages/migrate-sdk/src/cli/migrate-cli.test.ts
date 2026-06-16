@@ -500,6 +500,7 @@ const executionConfigSource = (): string => `
 const modeExecutionConfigSource = (): string => `
   import { Schema } from "effect";
   import {
+    defaultSourceVersionContractFingerprint,
     defineMigration,
     InMemoryDestinationPlugin,
     InMemoryMigrationStore,
@@ -540,6 +541,12 @@ const modeExecutionConfigSource = (): string => `
 
   const previousRunId = toMigrationRunId("run-previous");
   const previousDate = new Date("2026-01-01T00:00:00.000Z");
+
+  storeState.migrationContracts.set(definitionId, {
+    definitionId,
+    sourceIdentityContractFingerprint: EntrySourceIdentity.fingerprint,
+    sourceVersionContractFingerprint: defaultSourceVersionContractFingerprint
+  });
 
   storeState.itemStates.set(
     InMemoryMigrationStore.itemStateKey("articles", "article-failed"),

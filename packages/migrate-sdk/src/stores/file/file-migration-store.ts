@@ -22,6 +22,11 @@ import {
   toMigrationDefinitionLockToken,
 } from "../../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../../domain/lock.ts";
+import {
+  MigrationContract,
+  type MigrationContract as MigrationContractType,
+  SourceVersionContractFingerprint,
+} from "../../domain/migration-contract.ts";
 import type { MigrationRunState } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { MigrationItemError } from "../../domain/state.ts";
@@ -66,6 +71,12 @@ const EncodedSourceCursorRecord = Schema.Struct({
   state: EncodedSourceCursor,
 });
 
+const MigrationContractRecord = Schema.Struct({
+  formatVersion: Schema.Literal(formatVersion),
+  recordKind: Schema.Literal("migration-contract"),
+  state: MigrationContract,
+});
+
 const PersistedMigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionIdSchema,
   lastRunId: MigrationRunIdSchema,
@@ -74,6 +85,9 @@ const PersistedMigrationItemStateBaseFields = {
 } as const;
 
 const PersistedObservedSourceVersionFields = {
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: SourceVersionSchema,
 } as const;
 
@@ -94,6 +108,9 @@ const PersistedSkippedItemState = Schema.Struct({
 
 const PersistedFailedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: Schema.optional(SourceVersionSchema),
   destinationIdentity: Schema.optional(DestinationIdentitySchema),
   destinationVersion: Schema.optional(DestinationVersionSchema),
@@ -103,6 +120,9 @@ const PersistedFailedItemState = Schema.Struct({
 
 const PersistedNeedsUpdateItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: Schema.optional(SourceVersionSchema),
   destinationIdentity: DestinationIdentitySchema,
   destinationVersion: Schema.optional(DestinationVersionSchema),
@@ -367,6 +387,8 @@ const makePaths = (path: Path, directory: string) => {
       path.join(definitionDirectory(definitionId), "latest-run.json"),
     sourceCursor: (definitionId: MigrationDefinitionId) =>
       path.join(definitionDirectory(definitionId), "cursor.json"),
+    migrationContract: (definitionId: MigrationDefinitionId) =>
+      path.join(definitionDirectory(definitionId), "contract.json"),
     itemStatesDirectory: (definitionId: MigrationDefinitionId) =>
       path.join(definitionDirectory(definitionId), "items"),
     itemState: (
@@ -476,6 +498,34 @@ const makeLayerWithoutPlatform = (
 
           return record?.state ?? null;
         }
+      );
+
+      const getMigrationContract = Effect.fn(
+        "FileMigrationStore.getMigrationContract"
+      )(function* (definitionId: MigrationDefinitionId) {
+        const record = yield* readRecordOptional(
+          fs,
+          paths.migrationContract(definitionId),
+          MigrationContractRecord
+        );
+
+        return record?.state ?? null;
+      });
+
+      const upsertMigrationContract = Effect.fn(
+        "FileMigrationStore.upsertMigrationContract"
+      )((contract: MigrationContractType) =>
+        writeRecordAtomic(
+          fs,
+          path,
+          paths.migrationContract(contract.definitionId),
+          MigrationContractRecord,
+          {
+            formatVersion,
+            recordKind: "migration-contract",
+            state: contract,
+          }
+        )
       );
 
       const listItemStates = Effect.fn("FileMigrationStore.listItemStates")(
@@ -701,6 +751,8 @@ const makeLayerWithoutPlatform = (
       return {
         getSourceCursor,
         setSourceCursor,
+        getMigrationContract,
+        upsertMigrationContract,
         getItemState,
         listItemStates,
         getItemStateSummary,

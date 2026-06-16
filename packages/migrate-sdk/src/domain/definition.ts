@@ -28,6 +28,10 @@ import {
   type SourceIdentityTarget,
   toMigrationDefinitionId,
 } from "./ids.ts";
+import {
+  defaultSourceVersionContractFingerprint,
+  type SourceVersionContractFingerprint,
+} from "./migration-contract.ts";
 import type { PipelineContext } from "./pipeline.ts";
 import type { RollbackPipeline } from "./rollback.ts";
 import type {
@@ -81,7 +85,9 @@ export interface ConfiguredSourcePlugin<
     SourceLayerError | ProvidedError,
     RemainingRequirements | Exclude<SourceRequirements, ProvidedRequirements>
   >;
+  readonly sourceIdentityContractFingerprint: SourceIdentityDefinition<IdentityKey>["fingerprint"];
   readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceVersionContractFingerprint: SourceVersionContractFingerprint;
   readonly [configuredSourcePluginTypeId]: {
     readonly cursor: Cursor;
     readonly identityKey: IdentityKey;
@@ -121,7 +127,9 @@ export interface SourcePluginInput<
 > extends SourcePluginImplementation<Source, Cursor, IdentityKey, SourceInput> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
+  readonly sourceIdentityContractFingerprint?: SourceIdentityDefinition<IdentityKey>["fingerprint"];
   readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
 }
 
 export interface SourcePluginFactoryInput<
@@ -138,7 +146,9 @@ export interface SourcePluginFactoryInput<
     IdentityKey,
     SourceInput
   >;
+  readonly sourceIdentityContractFingerprint?: SourceIdentityDefinition<IdentityKey>["fingerprint"];
   readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
 }
 
 export interface SourcePluginLayerInput<
@@ -155,7 +165,9 @@ export interface SourcePluginLayerInput<
     SourceLayerError,
     SourceRequirements
   >;
+  readonly sourceIdentityContractFingerprint?: SourceIdentityDefinition<IdentityKey>["fingerprint"];
   readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
 }
 
 export interface SourceReadResultInput<
@@ -212,8 +224,25 @@ const makeConfiguredSourcePlugin = <
       layer: input.layer.pipe(Layer.provide(layer)),
       identity: input.identity,
       sourceSchema: input.sourceSchema,
+      ...(input.sourceIdentityContractFingerprint === undefined
+        ? {}
+        : {
+            sourceIdentityContractFingerprint:
+              input.sourceIdentityContractFingerprint,
+          }),
+      ...(input.sourceVersionContractFingerprint === undefined
+        ? {}
+        : {
+            sourceVersionContractFingerprint:
+              input.sourceVersionContractFingerprint,
+          }),
     }),
   sourceSchema: input.sourceSchema,
+  sourceIdentityContractFingerprint:
+    input.sourceIdentityContractFingerprint ?? input.identity.fingerprint,
+  sourceVersionContractFingerprint:
+    input.sourceVersionContractFingerprint ??
+    defaultSourceVersionContractFingerprint,
 });
 
 export const defineSourcePlugin = <
@@ -273,6 +302,18 @@ export const defineSourcePlugin = <
     ),
     identity: input.identity,
     sourceSchema: input.sourceSchema,
+    ...(input.sourceIdentityContractFingerprint === undefined
+      ? {}
+      : {
+          sourceIdentityContractFingerprint:
+            input.sourceIdentityContractFingerprint,
+        }),
+    ...(input.sourceVersionContractFingerprint === undefined
+      ? {}
+      : {
+          sourceVersionContractFingerprint:
+            input.sourceVersionContractFingerprint,
+        }),
   });
 };
 

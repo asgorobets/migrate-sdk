@@ -224,6 +224,108 @@ describe("CsvParserCore", () => {
 });
 
 describe("CsvSourcePlugin", () => {
+  it("includes declarative identity columns in the source identity contract fingerprint", () => {
+    const schema = SourceIdentity.key("articleId", Schema.NonEmptyString);
+    const fromId = CsvSourcePlugin.make({
+      ...csvOptions,
+      identity: {
+        id: "csv-article@v1",
+        key: {
+          columns: ["id"],
+          kind: "columns",
+        },
+        schema,
+      },
+      path: "articles.csv",
+      platform: testPlatformLayer,
+      sourceSchema: CsvArticleSource,
+    });
+    const fromSlug = CsvSourcePlugin.make({
+      ...csvOptions,
+      identity: {
+        id: "csv-article@v1",
+        key: {
+          columns: ["slug"],
+          kind: "columns",
+        },
+        schema,
+      },
+      path: "articles.csv",
+      platform: testPlatformLayer,
+      sourceSchema: CsvArticleSource,
+    });
+
+    expect(fromId.identity.fingerprint).toBe(fromSlug.identity.fingerprint);
+    expect(fromId.sourceIdentityContractFingerprint).not.toBe(
+      fromSlug.sourceIdentityContractFingerprint
+    );
+  });
+
+  it("includes source-native headers in the source identity contract fingerprint", () => {
+    const fromIdColumn = CsvSourcePlugin.make({
+      ...csvOptions,
+      headers: {
+        columns: ["id", "title", "views"],
+        dataStartRowIndex: 0,
+        kind: "provided",
+      },
+      path: "articles.csv",
+      platform: testPlatformLayer,
+      sourceSchema: CsvArticleSource,
+    });
+    const fromTitleColumn = CsvSourcePlugin.make({
+      ...csvOptions,
+      headers: {
+        columns: ["title", "id", "views"],
+        dataStartRowIndex: 0,
+        kind: "provided",
+      },
+      path: "articles.csv",
+      platform: testPlatformLayer,
+      sourceSchema: CsvArticleSource,
+    });
+
+    expect(fromIdColumn.identity.fingerprint).toBe(
+      fromTitleColumn.identity.fingerprint
+    );
+    expect(fromIdColumn.sourceIdentityContractFingerprint).not.toBe(
+      fromTitleColumn.sourceIdentityContractFingerprint
+    );
+  });
+
+  it("includes source-native dialect in the source identity contract fingerprint", () => {
+    const commaSeparated = CsvSourcePlugin.make({
+      ...csvOptions,
+      headers: {
+        columns: ["id", "title", "views"],
+        dataStartRowIndex: 0,
+        kind: "provided",
+      },
+      path: "articles.csv",
+      platform: testPlatformLayer,
+      sourceSchema: CsvArticleSource,
+    });
+    const semicolonSeparated = CsvSourcePlugin.make({
+      ...csvOptions,
+      dialect: { kind: "custom", separator: ";" },
+      headers: {
+        columns: ["id", "title", "views"],
+        dataStartRowIndex: 0,
+        kind: "provided",
+      },
+      path: "articles.csv",
+      platform: testPlatformLayer,
+      sourceSchema: CsvArticleSource,
+    });
+
+    expect(commaSeparated.identity.fingerprint).toBe(
+      semicolonSeparated.identity.fingerprint
+    );
+    expect(commaSeparated.sourceIdentityContractFingerprint).not.toBe(
+      semicolonSeparated.sourceIdentityContractFingerprint
+    );
+  });
+
   it.effect("reads a bookstore book catalog fixture", () =>
     Effect.gen(function* () {
       const path = yield* Path;

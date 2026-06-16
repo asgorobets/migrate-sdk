@@ -9,6 +9,10 @@ import {
 } from "migrate-sdk/destinations/in-memory/testing";
 import { expectTypeOf } from "vitest";
 import {
+  defaultSourceVersionContractFingerprint,
+  makeSourceVersionContractFingerprint,
+} from "../domain/migration-contract.ts";
+import {
   type DestinationCommand,
   type DestinationCommandContext,
   type DestinationCommandResultInput,
@@ -24,6 +28,7 @@ import {
   type InMemoryDestinationTransientFailures,
   type InMemoryEntryCommand,
   InMemoryMigrationStore,
+  type InMemoryMigrationStoreState,
   InMemorySourceCursor,
   type InMemorySourceOptions,
   InMemorySourcePlugin,
@@ -128,6 +133,22 @@ const ArticleSourceIdentity = SourceIdentity.make({
 });
 const articleSourceIdentity = (key: string) =>
   SourceIdentity.fromKey(ArticleSourceIdentity, key);
+const seedMigrationContract = (
+  storeState: InMemoryMigrationStoreState,
+  definitionId: string,
+  sourceIdentity = ArticleSourceIdentity
+) => {
+  storeState.migrationContracts.set(toMigrationDefinitionId(definitionId), {
+    definitionId: toMigrationDefinitionId(definitionId),
+    sourceIdentityContractFingerprint: sourceIdentity.fingerprint,
+    sourceVersionContractFingerprint: defaultSourceVersionContractFingerprint,
+  });
+};
+const seedArticleMigrationContract = (
+  storeState: InMemoryMigrationStoreState
+) => {
+  seedMigrationContract(storeState, "articles");
+};
 
 const ArticleEntryFields = Schema.Struct({
   title: Schema.String,
@@ -883,6 +904,260 @@ describe("runMigration", () => {
   );
 
   it.effect(
+    "blocks execution before source reads when existing item state uses a different source identity contract",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const changedSourceState = InMemorySourcePlugin.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const destination = makeTestUpsertEntryDestination({});
+        const pipeline = (source: { readonly item: ArticleSource }) => ({
+          kind: "UpsertEntry" as const,
+          contentType: "article",
+          fields: {
+            title: source.item.title,
+          },
+        });
+        const original = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Original contract",
+                },
+              },
+            ],
+          }),
+          destination,
+          store,
+          pipeline,
+        });
+
+        yield* runMigration(original);
+
+        const ChangedArticleSourceIdentity = SourceIdentity.make({
+          id: "test-article@v1",
+          schema: SourceIdentity.key("articleId", Schema.NonEmptyString),
+        });
+        const changed = defineMigration({
+          id: "articles",
+          source: InMemorySourcePlugin.make({
+            identity: ChangedArticleSourceIdentity,
+            sourceSchema: ArticleSource,
+            state: changedSourceState,
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Changed contract",
+                },
+              },
+            ],
+          }),
+          destination,
+          store,
+          pipeline,
+        });
+
+        const error = yield* Effect.flip(runMigration(changed));
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationRuntimeError",
+            message: "Migration Definition source contract changed",
+          })
+        );
+        expect(changedSourceState.readAttempts).toBe(0);
+        expect(changedSourceState.readByIdentityAttempts).toBe(0);
+      })
+  );
+
+  it.effect(
+    "blocks execution before source reads when item state exists without a stored Migration Contract",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const sourceState = InMemorySourcePlugin.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            destinationIdentity: toDestinationIdentity("entry-article-1"),
+            destinationVersion: toDestinationVersion("destination-version-1"),
+            lastRunId: toMigrationRunId("run-previous"),
+            sourceIdentity: articleSourceIdentity("article-1"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            status: "migrated",
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          }
+        );
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            state: sourceState,
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Existing state",
+                },
+              },
+            ],
+          }),
+          destination: makeTestUpsertEntryDestination({}),
+          store,
+          pipeline: (source) => ({
+            kind: "UpsertEntry" as const,
+            contentType: "article",
+            fields: {
+              title: source.item.title,
+            },
+          }),
+        });
+
+        const error = yield* Effect.flip(runMigration(definition));
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationRuntimeError",
+            message: "Migration Definition source contract changed",
+          })
+        );
+        expect(sourceState.readAttempts).toBe(0);
+        expect(sourceState.readByIdentityAttempts).toBe(0);
+        expect(storeState.migrationContracts.size).toBe(0);
+      })
+  );
+
+  it.effect(
+    "reprocesses migrated items when source version contract changes",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const changedSourceState = InMemorySourcePlugin.makeState();
+        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const destination = makeTestUpsertEntryDestination({
+          state: destinationState,
+        });
+        const pipeline = (source: { readonly item: ArticleSource }) => ({
+          kind: "UpsertEntry" as const,
+          contentType: "article",
+          fields: {
+            title: source.item.title,
+          },
+        });
+        const originalVersionContract = makeSourceVersionContractFingerprint({
+          kind: "field",
+          field: "updatedAt",
+        });
+        const original = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            sourceVersionContractFingerprint: originalVersionContract,
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Original version contract",
+                },
+              },
+            ],
+          }),
+          destination,
+          store,
+          pipeline,
+        });
+
+        yield* runMigration(original);
+        expect(
+          storeState.migrationContracts.get(toMigrationDefinitionId("articles"))
+        ).toEqual(
+          expect.objectContaining({
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentityContractFingerprint:
+              ArticleSourceIdentity.fingerprint,
+          })
+        );
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            sourceVersionContractFingerprint: originalVersionContract,
+          })
+        );
+
+        const changedVersionContract = makeSourceVersionContractFingerprint({
+          kind: "field",
+          field: "changedAt",
+        });
+        const changed = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            sourceVersionContractFingerprint: changedVersionContract,
+            state: changedSourceState,
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Changed version contract",
+                },
+              },
+            ],
+          }),
+          destination,
+          store,
+          pipeline,
+        });
+
+        const summary = yield* runMigration(changed);
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(changedSourceState.readAttempts).toBe(1);
+        expect(changedSourceState.readByIdentityAttempts).toBe(0);
+        expect(
+          storeState.migrationContracts.get(toMigrationDefinitionId("articles"))
+        ).toEqual(
+          expect.objectContaining({
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentityContractFingerprint:
+              ArticleSourceIdentity.fingerprint,
+          })
+        );
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            sourceVersion: toSourceVersion("source-version-1"),
+            sourceVersionContractFingerprint: changedVersionContract,
+            status: "migrated",
+          })
+        );
+      })
+  );
+
+  it.effect(
     "persists skipped Source Items without executing a Destination Command",
     () =>
       Effect.gen(function* () {
@@ -1583,6 +1858,7 @@ describe("runMigration", () => {
           }),
       });
 
+      seedArticleMigrationContract(storeState);
       storeState.itemStates.set(
         InMemoryMigrationStore.itemStateKey(
           "articles",
@@ -2125,6 +2401,7 @@ describe("runMigration", () => {
             }),
         });
 
+        seedArticleMigrationContract(storeState);
         storeState.sourceCursors.set(definition.id, encodedInMemoryCursor(1));
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey("articles", "article-failed"),
@@ -2196,6 +2473,7 @@ describe("runMigration", () => {
             }),
         });
 
+        seedArticleMigrationContract(storeState);
         storeState.sourceCursors.set(definition.id, encodedInMemoryCursor(1));
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey(
@@ -2280,6 +2558,7 @@ describe("runMigration", () => {
           }),
       });
 
+      seedArticleMigrationContract(storeState);
       storeState.itemStates.set(
         InMemoryMigrationStore.itemStateKey("articles", "article-failed"),
         {
@@ -2369,6 +2648,7 @@ describe("runMigration", () => {
           }),
       });
 
+      seedArticleMigrationContract(storeState);
       storeState.itemStates.set(
         InMemoryMigrationStore.itemStateKey("articles", "article-skipped"),
         {
@@ -2439,6 +2719,7 @@ describe("runMigration", () => {
           }),
       });
 
+      seedArticleMigrationContract(storeState);
       storeState.itemStates.set(
         InMemoryMigrationStore.itemStateKey("articles", "article-target"),
         {
@@ -2507,6 +2788,7 @@ describe("runMigration", () => {
             }),
         });
 
+        seedArticleMigrationContract(storeState);
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey("articles", "article-failed"),
           {
@@ -2589,6 +2871,7 @@ describe("runMigration", () => {
             }),
         });
 
+        seedArticleMigrationContract(storeState);
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey("articles", "article-migrated"),
           {
@@ -2678,6 +2961,7 @@ describe("runMigration", () => {
             }),
         });
 
+        seedArticleMigrationContract(storeState);
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey("articles", "article-failed"),
           {
@@ -2780,12 +3064,15 @@ describe("runMigration", () => {
       const previousRunId = toMigrationRunId("run-previous");
       const previousUpdatedAt = new Date("2026-01-01T00:00:00.000Z");
 
+      seedArticleMigrationContract(storeState);
       storeState.itemStates.set(
         InMemoryMigrationStore.itemStateKey("articles", "article-1"),
         {
           definitionId: toMigrationDefinitionId("articles"),
           sourceIdentity: articleSourceIdentity("article-1"),
           sourceVersion: toSourceVersion("source-version-1"),
+          sourceVersionContractFingerprint:
+            defaultSourceVersionContractFingerprint,
           lastRunId: previousRunId,
           updatedAt: previousUpdatedAt,
           status: "migrated",
@@ -2798,6 +3085,8 @@ describe("runMigration", () => {
           definitionId: toMigrationDefinitionId("articles"),
           sourceIdentity: articleSourceIdentity("article-2"),
           sourceVersion: toSourceVersion("source-version-1"),
+          sourceVersionContractFingerprint:
+            defaultSourceVersionContractFingerprint,
           lastRunId: previousRunId,
           updatedAt: previousUpdatedAt,
           status: "skipped",
@@ -2886,6 +3175,7 @@ describe("runMigration", () => {
           }),
       });
 
+      seedArticleMigrationContract(storeState);
       storeState.itemStates.set(
         InMemoryMigrationStore.itemStateKey("articles", "article-1"),
         {
@@ -3790,6 +4080,19 @@ describe("runMigration", () => {
           })
         );
         expect(
+          authorsStoreState.migrationContracts.get(
+            toMigrationDefinitionId("authors")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            definitionId: toMigrationDefinitionId("authors"),
+            sourceIdentityContractFingerprint:
+              ArticleSourceIdentity.fingerprint,
+            sourceVersionContractFingerprint:
+              defaultSourceVersionContractFingerprint,
+          })
+        );
+        expect(
           articlesStoreState.itemStates.get(
             InMemoryMigrationStore.itemStateKey("authors", "author-1")
           )
@@ -3813,6 +4116,132 @@ describe("runMigration", () => {
           author: "entry-author-1",
           authorStatus: "needs-update",
         });
+      })
+  );
+
+  it.effect(
+    "blocks lookup stub creation when the referenced Migration Definition source identity contract changed",
+    () =>
+      Effect.gen(function* () {
+        const authorsStoreState = InMemoryMigrationStore.makeState();
+        const articlesStoreState = InMemoryMigrationStore.makeState();
+        seedMigrationContract(authorsStoreState, "authors");
+        authorsStoreState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("authors", "author-existing"),
+          {
+            definitionId: toMigrationDefinitionId("authors"),
+            destinationIdentity: toDestinationIdentity("entry-author-existing"),
+            lastRunId: toMigrationRunId("run-authors"),
+            reason: "Destination Stub requires update",
+            sourceIdentity: articleSourceIdentity("author-existing"),
+            status: "needs-update",
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          }
+        );
+        const changedAuthorIdentity = SourceIdentity.make({
+          id: "test-article@v1",
+          schema: SourceIdentity.key("authorId", Schema.NonEmptyString),
+        });
+        const destinationState = makeTestDestinationState<EntryCommand>();
+        const destination = makeTestEntryDestination({
+          state: destinationState,
+        });
+
+        const authors = defineMigration({
+          id: "authors",
+          source: InMemorySourcePlugin.make({
+            identity: changedAuthorIdentity,
+            items: [],
+            sourceSchema: ArticleSource,
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(authorsStoreState),
+          stub: ({ sourceIdentity }) =>
+            Effect.succeed([
+              {
+                kind: "UpsertEntry" as const,
+                contentType: "author",
+                fields: {
+                  title: `Stub ${sourceIdentity}`,
+                },
+              },
+            ]),
+          pipeline: (source) =>
+            Effect.succeed({
+              kind: "UpsertEntry" as const,
+              contentType: "author",
+              fields: source.item,
+            }),
+        });
+        const articles = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: { title: "Article with blocked author stub" },
+              },
+            ],
+          }),
+          destination,
+          store: InMemoryMigrationStore.layer(articlesStoreState),
+          pipeline: (source) =>
+            Effect.gen(function* () {
+              const references = yield* MigrationReferenceLookup;
+              yield* references.lookup({
+                definition: authors,
+                sourceIdentityKey: "author-1",
+                stub: true,
+              });
+
+              return {
+                kind: "UpsertEntry" as const,
+                contentType: "article",
+                fields: {
+                  title: source.item.title,
+                },
+              };
+            }),
+        });
+
+        const summary = yield* runMigrations({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+        });
+
+        expect(summary.status).toBe("failed");
+        expect(destinationState.executions).toEqual([]);
+        expect(authorsStoreState.definitionLocks.size).toBe(0);
+        expect(authorsStoreState.latestRunStates.size).toBe(0);
+        expect(
+          authorsStoreState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("authors", "author-1")
+          )
+        ).toBeUndefined();
+        expect(
+          authorsStoreState.migrationContracts.get(
+            toMigrationDefinitionId("authors")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            sourceIdentityContractFingerprint:
+              ArticleSourceIdentity.fingerprint,
+          })
+        );
+        expect(
+          articlesStoreState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            error: expect.objectContaining({
+              kind: "pipeline",
+              message: "Migration Definition source contract changed",
+            }),
+          })
+        );
       })
   );
 
@@ -5003,6 +5432,7 @@ describe("runMigration", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const destinationState = makeTestDestinationState<UpsertEntryCommand>();
+        seedArticleMigrationContract(storeState);
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey("articles", "article-1"),
           {
@@ -5976,6 +6406,7 @@ describe("runMigration", () => {
           })
         );
         expect(storeState.latestRunStates.size).toBe(0);
+        expect(storeState.migrationContracts.size).toBe(0);
       })
   );
 
@@ -6066,6 +6497,7 @@ describe("runMigration", () => {
         expect(destinationState.executions).toEqual([]);
         expect(pipelineCalls).toEqual([]);
         expect(storeState.latestRunStates.size).toBe(0);
+        expect(storeState.migrationContracts.size).toBe(0);
         expect(storeState.definitionLocks).toEqual(
           new Map([
             [

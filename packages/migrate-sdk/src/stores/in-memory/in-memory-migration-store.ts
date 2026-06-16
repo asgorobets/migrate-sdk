@@ -15,6 +15,7 @@ import {
   toMigrationDefinitionLockToken,
 } from "../../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../../domain/lock.ts";
+import type { MigrationContract } from "../../domain/migration-contract.ts";
 import type { MigrationRunState } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { summarizeMigrationItemStates } from "../../domain/status.ts";
@@ -24,6 +25,7 @@ export interface InMemoryMigrationStoreState {
   readonly definitionLocks: Map<MigrationDefinitionId, MigrationDefinitionLock>;
   readonly itemStates: Map<string, MigrationItemState>;
   readonly latestRunStates: Map<MigrationDefinitionId, MigrationRunState>;
+  readonly migrationContracts: Map<MigrationDefinitionId, MigrationContract>;
   nextLockNumber: number;
   nextRunNumber: number;
   readonly sourceCursorCommits: {
@@ -42,6 +44,7 @@ const itemStateKey = (
 const makeState = (): InMemoryMigrationStoreState => ({
   itemStates: new Map(),
   latestRunStates: new Map(),
+  migrationContracts: new Map(),
   sourceCursors: new Map(),
   sourceCursorCommits: [],
   definitionLocks: new Map(),
@@ -109,6 +112,20 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
           () =>
             state.itemStates.get(itemStateKey(definitionId, identity)) ?? null
         )
+    );
+
+    const getMigrationContract = Effect.fn(
+      "InMemoryMigrationStore.getMigrationContract"
+    )((definitionId: MigrationDefinitionId) =>
+      Effect.sync(() => state.migrationContracts.get(definitionId) ?? null)
+    );
+
+    const upsertMigrationContract = Effect.fn(
+      "InMemoryMigrationStore.upsertMigrationContract"
+    )((contract: MigrationContract) =>
+      Effect.sync(() => {
+        state.migrationContracts.set(contract.definitionId, contract);
+      })
     );
 
     const listItemStates = Effect.fn("InMemoryMigrationStore.listItemStates")(
@@ -275,6 +292,8 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
     return {
       getSourceCursor,
       setSourceCursor,
+      getMigrationContract,
+      upsertMigrationContract,
       getItemState,
       listItemStates,
       getItemStateSummary,

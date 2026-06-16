@@ -63,6 +63,7 @@ export type {
   MigrationDefinitionIdInput,
   MigrationDefinitionLockTokenInput,
   MigrationRunIdInput,
+  SourceIdentityContractFingerprint,
   SourceIdentityDefinition,
   SourceIdentitySchema,
   SourceIdentitySnapshot,
@@ -89,6 +90,19 @@ export {
   toEncodedSourceIdentity,
   toSourceVersion,
 } from "./domain/ids.ts";
+
+export type {
+  MigrationContract,
+  SourceVersionContractIdInput,
+  SourceVersionContractFingerprintInput,
+} from "./domain/migration-contract.ts";
+export {
+  SourceVersionContractId,
+  SourceVersionContractFingerprint,
+  defaultSourceVersionContractFingerprint,
+  makeSourceIdentityContractFingerprint,
+  makeSourceVersionContractFingerprint,
+} from "./domain/migration-contract.ts";
 
 export { MigrationDefinitionLock } from "./domain/lock.ts";
 

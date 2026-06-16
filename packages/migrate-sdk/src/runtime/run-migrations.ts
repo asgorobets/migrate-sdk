@@ -25,6 +25,7 @@ import type {
 } from "../domain/ids.ts";
 import { SourceIdentity, toEncodedSourceCursor } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
+import type { MigrationContract } from "../domain/migration-contract.ts";
 import type {
   AnyRollbackMigrationDefinition,
   EncodedRollbackMigrationOptions,
@@ -130,6 +131,20 @@ const invalidRunRequestError = (cause: unknown) =>
   new MigrationRuntimeError({
     message: "Run request contains invalid input",
     cause,
+  });
+
+const sourceContractChangedError = (
+  definitionId: MigrationDefinitionId,
+  stored: MigrationContract | null,
+  current: MigrationContract
+) =>
+  new MigrationRuntimeError({
+    message: "Migration Definition source contract changed",
+    cause: {
+      definitionId,
+      current,
+      stored,
+    },
   });
 
 const invalidRollbackRequestError = (cause: unknown) =>
@@ -489,6 +504,68 @@ const encodeSourceCursor = <Cursor>(
     )
   );
 
+const makeMigrationContract = (
+  definition: AnyMigrationDefinition
+): MigrationContract => ({
+  definitionId: definition.id,
+  sourceIdentityContractFingerprint:
+    definition.source.sourceIdentityContractFingerprint,
+  sourceVersionContractFingerprint:
+    definition.source.sourceVersionContractFingerprint,
+});
+
+const sourceIdentityContractsMatch = (
+  left: MigrationContract,
+  right: MigrationContract
+): boolean =>
+  left.sourceIdentityContractFingerprint ===
+  right.sourceIdentityContractFingerprint;
+
+const validateMigrationContract = (
+  store: typeof MigrationStore.Service,
+  definition: AnyMigrationDefinition
+): Effect.Effect<void, MigrationStoreError | MigrationRuntimeError> =>
+  Effect.gen(function* () {
+    const current = makeMigrationContract(definition);
+    const stored = yield* store.getMigrationContract(definition.id);
+    const itemStates = yield* store.listItemStates(definition.id);
+
+    if (stored === null) {
+      if (itemStates.length === 0) {
+        yield* store.upsertMigrationContract(current);
+        return;
+      }
+
+      return yield* sourceContractChangedError(definition.id, stored, current);
+    }
+
+    if (sourceIdentityContractsMatch(stored, current)) {
+      if (
+        stored.sourceVersionContractFingerprint !==
+        current.sourceVersionContractFingerprint
+      ) {
+        yield* store.upsertMigrationContract(current);
+      }
+
+      return;
+    }
+
+    if (itemStates.length === 0) {
+      yield* store.upsertMigrationContract(current);
+      return;
+    }
+
+    return yield* sourceContractChangedError(definition.id, stored, current);
+  });
+
+const validateMigrationContracts = (
+  store: typeof MigrationStore.Service,
+  definitions: readonly AnyMigrationDefinition[]
+): Effect.Effect<void, MigrationStoreError | MigrationRuntimeError> =>
+  Effect.forEach(definitions, (definition) =>
+    validateMigrationContract(store, definition)
+  ).pipe(Effect.asVoid);
+
 const decodeSourceCursor = <Cursor>(
   cursorSchema: Schema.Codec<Cursor, unknown, never, never>,
   cursor: string
@@ -696,6 +773,12 @@ const makeFailedStubReferenceState = ({
 }): FailedItemState => ({
   definitionId,
   sourceIdentity,
+  ...(previousState?.sourceVersionContractFingerprint === undefined
+    ? {}
+    : {
+        sourceVersionContractFingerprint:
+          previousState.sourceVersionContractFingerprint,
+      }),
   ...(previousState?.sourceVersion === undefined
     ? {}
     : { sourceVersion: previousState.sourceVersion }),
@@ -736,6 +819,12 @@ const makeNeedsUpdateStubReferenceState = ({
 }): NeedsUpdateItemState => ({
   definitionId,
   sourceIdentity,
+  ...(previousState?.sourceVersionContractFingerprint === undefined
+    ? {}
+    : {
+        sourceVersionContractFingerprint:
+          previousState.sourceVersionContractFingerprint,
+      }),
   ...(previousState?.sourceVersion === undefined
     ? {}
     : { sourceVersion: previousState.sourceVersion }),
@@ -856,6 +945,12 @@ const makeSourceLookupFailedItemState = (
 ): FailedItemState => ({
   definitionId,
   sourceIdentity: previousState.sourceIdentity,
+  ...(previousState.sourceVersionContractFingerprint === undefined
+    ? {}
+    : {
+        sourceVersionContractFingerprint:
+          previousState.sourceVersionContractFingerprint,
+      }),
   ...(previousState.sourceVersion === undefined
     ? {}
     : { sourceVersion: previousState.sourceVersion }),
@@ -1346,6 +1441,10 @@ type StubReferenceError =
   | MigrationReferenceLookupError
   | MigrationStoreError;
 
+type StubDefinitionRunError =
+  | MigrationReferenceLookupError
+  | MigrationStoreError;
+
 interface StubDefinitionRunLease {
   readonly definitionId: MigrationDefinitionId;
   failed: boolean;
@@ -1373,13 +1472,42 @@ const stubReferenceKey = (
   sourceIdentity: EncodedSourceIdentity
 ) => `${definitionId}\u0000${sourceIdentity}`;
 
+const isMigrationRuntimeError = (
+  error: unknown
+): error is MigrationRuntimeError =>
+  Predicate.isTagged(error, "MigrationRuntimeError");
+
+const validateStubMigrationContract = (
+  store: typeof MigrationStore.Service,
+  definition: AnyMigrationDefinition
+): Effect.Effect<void, StubDefinitionRunError> =>
+  validateMigrationContract(store, definition).pipe(
+    Effect.mapError((error) =>
+      isMigrationRuntimeError(error)
+        ? new MigrationReferenceLookupError({
+            message: error.message,
+            cause: error,
+          })
+        : error
+    )
+  );
+
 const startStubDefinitionRun = (
   definition: AnyMigrationDefinition
-): Effect.Effect<StubDefinitionRunLease, MigrationStoreError> =>
+): Effect.Effect<StubDefinitionRunLease, StubDefinitionRunError> =>
   Effect.gen(function* () {
     const store = yield* MigrationStore;
     const runId = yield* store.createRunId;
     const locks = yield* acquireDefinitionLocks(store, runId, [definition.id]);
+
+    yield* validateStubMigrationContract(store, definition).pipe(
+      Effect.catch((error) =>
+        releaseDefinitionLocks(store, locks, Exit.fail(error)).pipe(
+          Effect.flatMap(() => Effect.fail(error))
+        )
+      )
+    );
+
     const runState = yield* store
       .beginRun(runId, [definition.id])
       .pipe(
@@ -1429,7 +1557,7 @@ const makeStubRunScope = (activeRun: ActiveStubRunScope): StubRunScope => {
   const leases = new Map<MigrationDefinitionId, StubDefinitionRunLease>();
   const leaseRequests = new Map<
     MigrationDefinitionId,
-    Deferred.Deferred<StubDefinitionRunLease, MigrationStoreError>
+    Deferred.Deferred<StubDefinitionRunLease, StubDefinitionRunError>
   >();
   const stubRequests = new Map<
     string,
@@ -1449,7 +1577,7 @@ const makeStubRunScope = (activeRun: ActiveStubRunScope): StubRunScope => {
 
   const getStubDefinitionRun = (
     definition: AnyMigrationDefinition
-  ): Effect.Effect<StubDefinitionRunLease, MigrationStoreError> =>
+  ): Effect.Effect<StubDefinitionRunLease, StubDefinitionRunError> =>
     Effect.gen(function* () {
       const activeLease = leases.get(definition.id);
 
@@ -1469,7 +1597,7 @@ const makeStubRunScope = (activeRun: ActiveStubRunScope): StubRunScope => {
 
         const deferred = Deferred.makeUnsafe<
           StubDefinitionRunLease,
-          MigrationStoreError
+          StubDefinitionRunError
         >();
         leaseRequests.set(definition.id, deferred);
 
@@ -1625,7 +1753,7 @@ const runMigrationDefinition = <
   createStubReference: CreateMigrationReferenceStub
 ): Effect.Effect<
   MigrationDefinitionRunSummary,
-  RunMigrationDefinitionError | SourceLayerError,
+  RunMigrationError | SourceLayerError,
   SourceRequirements
 > => {
   const program = Effect.gen(function* () {
@@ -2261,33 +2389,37 @@ const runMigrationsWithRequest = <
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
 
-    const run = yield* executeMigrationRun(store, definitionIds, (runId) =>
-      withStubRunScope(
-        {
-          definitionIds,
-          runId,
-          store,
-        },
-        (stubRunScope) =>
-          Effect.gen(function* () {
-            const summaries: MigrationDefinitionRunSummary[] = [];
+    const run = yield* executeMigrationRun(
+      store,
+      definitionIds,
+      (runId) =>
+        withStubRunScope(
+          {
+            definitionIds,
+            runId,
+            store,
+          },
+          (stubRunScope) =>
+            Effect.gen(function* () {
+              const summaries: MigrationDefinitionRunSummary[] = [];
 
-            for (const definition of orderedDefinitions.definitions) {
-              const summary = yield* runMigrationDefinition(
-                definition,
-                runId,
-                request.mode ?? normalRunMode,
-                stubRunScope.createStubReference
-              );
-              summaries.push(summary);
-            }
+              for (const definition of orderedDefinitions.definitions) {
+                const summary = yield* runMigrationDefinition(
+                  definition,
+                  runId,
+                  request.mode ?? normalRunMode,
+                  stubRunScope.createStubReference
+                );
+                summaries.push(summary);
+              }
 
-            return {
-              status: runStatusForDefinitions(summaries),
-              value: summaries,
-            };
-          })
-      )
+              return {
+                status: runStatusForDefinitions(summaries),
+                value: summaries,
+              };
+            })
+        ),
+      () => validateMigrationContracts(store, orderedDefinitions.definitions)
     );
 
     return {
@@ -2387,30 +2519,35 @@ export const runMigration = <
     const store = yield* MigrationStore;
     const definitionIds = [definition.id];
 
-    const run = yield* executeMigrationRun(store, definitionIds, (runId) => {
-      const activeRun = {
-        definitionIds,
-        runId,
-        store,
-      };
-
-      return withStubRunScope(activeRun, (stubRunScope) =>
-        runMigrationDefinition(
-          definition,
+    const run = yield* executeMigrationRun(
+      store,
+      definitionIds,
+      (runId) => {
+        const activeRun = {
+          definitionIds,
           runId,
-          normalRunMode,
-          stubRunScope.createStubReference
-        ).pipe(
-          Effect.map((summary) => ({
-            status:
-              summary.status === "failed"
-                ? ("failed" as const)
-                : ("succeeded" as const),
-            value: [summary],
-          }))
-        )
-      );
-    });
+          store,
+        };
+
+        return withStubRunScope(activeRun, (stubRunScope) =>
+          runMigrationDefinition(
+            definition,
+            runId,
+            normalRunMode,
+            stubRunScope.createStubReference
+          ).pipe(
+            Effect.map((summary) => ({
+              status:
+                summary.status === "failed"
+                  ? ("failed" as const)
+                  : ("succeeded" as const),
+              value: [summary],
+            }))
+          )
+        );
+      },
+      () => validateMigrationContract(store, definition)
+    );
 
     return {
       runId: run.runState.runId,

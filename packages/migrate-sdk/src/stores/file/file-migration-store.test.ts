@@ -15,6 +15,7 @@ import {
   InMemorySourcePlugin,
 } from "migrate-sdk/sources/in-memory";
 import { FileMigrationStore } from "migrate-sdk/stores/file";
+import { makeSourceVersionContractFingerprint } from "../../domain/migration-contract.ts";
 import {
   type DestinationCommand,
   type DestinationCommandContext,
@@ -321,6 +322,38 @@ const makeArticlesMigration = (options: {
   });
 
 describe("FileMigrationStore", () => {
+  it.effect("persists Migration Contract across fresh store instances", () =>
+    withTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("articles");
+        const sourceVersionContractFingerprint =
+          makeSourceVersionContractFingerprint({
+            kind: "field",
+            field: "updatedAt",
+          });
+        const contract = {
+          definitionId,
+          sourceIdentityContractFingerprint: TestSourceIdentity.fingerprint,
+          sourceVersionContractFingerprint,
+        };
+
+        yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          yield* store.upsertMigrationContract(contract);
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        const stored = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.getMigrationContract(definitionId);
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        expect(stored).toEqual(contract);
+      })
+    )
+  );
+
   it.effect("persists Migration Item State across fresh store instances", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {

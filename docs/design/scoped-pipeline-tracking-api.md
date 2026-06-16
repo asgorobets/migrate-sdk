@@ -1022,7 +1022,6 @@ The migration store records a migration contract fingerprint for each migration
 definition. The fingerprint includes:
 
 - source identity contract
-- source version contract
 - tracking mode
 - tracking contract id
 - tracking record schema fingerprint, when the tracking mode is
@@ -1032,6 +1031,16 @@ If the current migration contract differs from the stored contract and any item
 state exists for the migration definition, execution is blocked. The user must
 roll back, clear durable migration state, or run a future explicit rekey/reset
 operation.
+
+Source version contracts are handled as item-level comparability metadata rather
+than as hard migration contract blockers. Each item state records the source
+version contract fingerprint that produced its `sourceVersion`. A migrated item
+is counted as unchanged only when both the `sourceVersion` value and the stored
+source version contract fingerprint match the current source item and
+definition. When only the source version contract changes, runs process read
+source items and rewrite their item state with the current source version
+contract fingerprint. A future cursor reset or full-rescan mode can force every
+stored item through this rekey path.
 
 ## Open Questions
 

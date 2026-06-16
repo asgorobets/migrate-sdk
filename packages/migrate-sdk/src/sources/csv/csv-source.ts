@@ -18,6 +18,10 @@ import {
   type SourceIdentitySnapshotKey,
 } from "../../domain/ids.ts";
 import {
+  makeSourceIdentityContractFingerprint,
+  makeSourceVersionContractFingerprint,
+} from "../../domain/migration-contract.ts";
+import {
   encodeSourceIdentityKey,
   type SourceItemInput,
 } from "../../domain/source.ts";
@@ -573,6 +577,26 @@ const makeCsvIdentityDefinition = <
     schema: identity.schema,
   });
 
+const makeCsvSourceIdentityContractFingerprint = <
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: CsvParserOptions<IdentityKey>,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+) =>
+  makeSourceIdentityContractFingerprint({
+    dialect: options.dialect,
+    headers: options.headers,
+    identity: identityDefinition.fingerprint,
+    key: options.identity.key,
+    source: "csv@v1",
+  });
+
+const makeCsvSourceVersionContractFingerprint = (version: CsvVersion) =>
+  makeSourceVersionContractFingerprint({
+    source: "csv@v1",
+    version,
+  });
+
 const decodeIdentityKey = <IdentityKey extends SourceIdentitySnapshotKey>(
   identity: SourceIdentityDefinition<IdentityKey>,
   key: unknown,
@@ -915,11 +939,16 @@ const makeLayerWithoutPlatform = <
     Effect.gen(function* () {
       const fs = yield* FileSystem;
       const path = yield* Path;
+      const identityDefinition = makeCsvIdentityDefinition(options.identity);
       const configured = defineSourcePlugin({
         cursorSchema: CsvSourceCursor,
-        identity: makeCsvIdentityDefinition(options.identity),
+        identity: identityDefinition,
         make: () => makeImplementation(options, fs, path),
+        sourceIdentityContractFingerprint:
+          makeCsvSourceIdentityContractFingerprint(options, identityDefinition),
         sourceSchema: options.sourceSchema,
+        sourceVersionContractFingerprint:
+          makeCsvSourceVersionContractFingerprint(options.version),
       });
 
       return yield* SourcePlugin.pipe(Effect.provide(configured.layer));
@@ -933,12 +962,22 @@ const makeLayer = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
 
 const make = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
   options: CsvSourceOptions<Source, IdentityKey>
-): ConfiguredSourcePlugin<Source, CsvSourceCursor, IdentityKey, unknown> =>
-  defineSourcePluginLayer({
-    identity: makeCsvIdentityDefinition(options.identity),
+): ConfiguredSourcePlugin<Source, CsvSourceCursor, IdentityKey, unknown> => {
+  const identityDefinition = makeCsvIdentityDefinition(options.identity);
+
+  return defineSourcePluginLayer({
+    identity: identityDefinition,
     layer: makeLayer(options),
+    sourceIdentityContractFingerprint: makeCsvSourceIdentityContractFingerprint(
+      options,
+      identityDefinition
+    ),
     sourceSchema: options.sourceSchema,
+    sourceVersionContractFingerprint: makeCsvSourceVersionContractFingerprint(
+      options.version
+    ),
   });
+};
 
 export const CsvParserCore = {
   parse: parseDocument,

@@ -149,6 +149,7 @@ export const JsonPlaceholderPostSourcePlugin = {
       },
       lookup: makePostDirectLookup(apiLayer),
       version: {
+        id: "jsonplaceholder-post-version@v1",
         kind: "value",
         value: ({ item }) =>
           `jsonplaceholder-post:${item.id}:${item.title.length}:${item.body.length}`,

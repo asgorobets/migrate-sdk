@@ -163,6 +163,48 @@ describe("JsonFileSourcePlugin source entrypoint", () => {
 });
 
 describe("JsonFileSourcePlugin", () => {
+  it("includes document value version contract ids in the source version contract fingerprint", () => {
+    const makeSource = (versionId: string) =>
+      JsonFileSourcePlugin.make({
+        documentSchema: JsonCompaniesDocument,
+        identity: JsonBusinessUnitIdentity,
+        items: {
+          selector: (document) => document.businessUnits,
+        },
+        path: "not-read-in-contract-test.json",
+        platform: testPlatformLayer,
+        version: {
+          id: versionId,
+          kind: "value",
+          value: ({ item }) => item.status,
+        },
+      });
+
+    expect(
+      makeSource("business-status@v1").sourceVersionContractFingerprint
+    ).not.toBe(
+      makeSource("business-updated-at@v1").sourceVersionContractFingerprint
+    );
+  });
+
+  it("includes configured item path in the source identity contract fingerprint", () => {
+    const makeSource = (itemsPath: string) =>
+      JsonFileSourcePlugin.make({
+        identity: JsonArticleIdentity,
+        items: { path: itemsPath },
+        path: "not-read-in-contract-test.json",
+        platform: testPlatformLayer,
+        sourceSchema: JsonArticleSource,
+        version: { field: "version", kind: "field" },
+      });
+
+    expect(
+      makeSource("$.data.articles").sourceIdentityContractFingerprint
+    ).not.toBe(
+      makeSource("$.data.archivedArticles").sourceIdentityContractFingerprint
+    );
+  });
+
   it.effect("reads decoded records from a configured JSON path", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem;
@@ -385,6 +427,7 @@ describe("JsonFileSourcePlugin", () => {
       path: "not-read-in-type-test.json",
       platform: testPlatformLayer,
       version: {
+        id: "json-document-version@v1",
         kind: "value",
         value: ({ item, parent }) => `${parent.key}:${item.key}`,
       },
@@ -419,6 +462,7 @@ describe("JsonFileSourcePlugin", () => {
       path: "not-read-in-type-test.json",
       platform: testPlatformLayer,
       version: {
+        id: "json-document-version@v1",
         kind: "value",
         value: ({ item }) => item.status,
       },
@@ -558,6 +602,7 @@ describe("JsonFileSourcePlugin", () => {
           path: filePath,
           platform: testPlatformLayer,
           version: {
+            id: "json-document-version@v1",
             kind: "value",
             value: ({ item }) => item.status,
           },

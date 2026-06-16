@@ -16,6 +16,7 @@ import type {
   SourceIdentityTarget,
   SourceVersionInput,
 } from "../../domain/ids.ts";
+import type { SourceVersionContractFingerprint } from "../../domain/migration-contract.ts";
 import {
   encodeSourceIdentityKey,
   type SourceItemInput,
@@ -102,6 +103,8 @@ export interface SqlSourceOptions<
   >;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly lookup: SqlSourceLookup<SourceInput, IdentityKey>;
+  readonly sourceIdentityContractFingerprint?: SourceIdentityDefinition<IdentityKey>["fingerprint"];
+  readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
 }
 
 const executeStatement = <Row>(
@@ -347,14 +350,38 @@ const make = <
           cursorSchema: options.cursorSchema,
           identity: options.identity,
           make: () => makeImplementation(options, sql, options.identity),
+          ...(options.sourceIdentityContractFingerprint === undefined
+            ? {}
+            : {
+                sourceIdentityContractFingerprint:
+                  options.sourceIdentityContractFingerprint,
+              }),
           sourceSchema: options.sourceSchema,
+          ...(options.sourceVersionContractFingerprint === undefined
+            ? {}
+            : {
+                sourceVersionContractFingerprint:
+                  options.sourceVersionContractFingerprint,
+              }),
         });
 
         return yield* SourcePluginService.pipe(Effect.provide(source.layer));
       })
     ),
     identity: options.identity,
+    ...(options.sourceIdentityContractFingerprint === undefined
+      ? {}
+      : {
+          sourceIdentityContractFingerprint:
+            options.sourceIdentityContractFingerprint,
+        }),
     sourceSchema: options.sourceSchema,
+    ...(options.sourceVersionContractFingerprint === undefined
+      ? {}
+      : {
+          sourceVersionContractFingerprint:
+            options.sourceVersionContractFingerprint,
+        }),
   });
 };
 

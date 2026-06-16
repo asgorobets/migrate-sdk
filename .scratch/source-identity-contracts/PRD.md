@@ -46,11 +46,18 @@ source lookup, pipeline code, status rendering, future reset or rekey tools, and
 source-aware diagnostics.
 
 The migration store records a Migration Contract for each migration definition.
-The contract includes the source identity contract fingerprint and the source
-version contract fingerprint. If the current contract differs from stored state
-and any migration item state exists, execution is blocked until the user
-intentionally clears state, rolls back, or uses a future explicit rekey or reset
-operation.
+The hard compatibility check is the source identity contract fingerprint: if it
+differs from stored state and any migration item state exists, execution is
+blocked until the user intentionally clears state, rolls back, or uses a future
+explicit rekey or reset operation.
+
+Source version contracts are tracked separately as comparability metadata. The
+store may record the current source version contract metadata on the Migration
+Contract for inspection, but each Migration Item State records the source
+version contract fingerprint that produced its `sourceVersion`. A stored source
+version is treated as unchanged only when both the version value and the
+per-item source version contract fingerprint match the current source item and
+definition.
 
 ## User Stories
 
@@ -84,13 +91,13 @@ operation.
    identity, so that identity answers "which source item" and version answers
    "which observed revision".
 
-10. As a migration author, I want source version semantics included in contract
-    drift detection, so that unchanged detection is not silently changed under
-    existing item state.
+10. As a migration author, I want the source version contract recorded with each
+    observed item state, so that unchanged detection is invalidated when source
+    version semantics change.
 
-11. As a migration author, I want a contract mismatch to block execution, so
-    that an accidental source identity or source version change cannot corrupt
-    retries, skips, rollbacks, or status.
+11. As a migration author, I want source identity contract mismatches to block
+    execution, so that accidental identity changes cannot corrupt targeting,
+    dedupe, retries, skips, rollbacks, or status.
 
 12. As a migration author, I want function-based identity derivation to require
     an explicit contract version bump when semantics change, so that the SDK
@@ -236,8 +243,11 @@ operation.
   the source item. Source Version identifies the observed source revision used
   by unchanged detection.
 
-- Add a Source Version Contract fingerprint to the Migration Contract, even
+- Add a Source Version Contract fingerprint to Migration Item State, even
   though source version is not part of source identity.
+
+- Treat Source Version Contract fingerprints as comparability metadata for
+  unchanged detection, not as a hard definition-level execution blocker.
 
 - Keep the common source plugin identity envelope as id, schema, and key
   derivation.
@@ -305,18 +315,28 @@ operation.
 
 - Validate CLI-targeted identities before source lookup starts.
 
-- Add Migration Contract persistence for source identity contract fingerprint
-  and source version contract fingerprint.
+- Add Migration Contract persistence for the source identity contract
+  fingerprint and current source version contract metadata.
 
-- Block execution when the stored Migration Contract differs from the current
-  contract and any Migration Item State exists for the migration definition.
+- Persist the source version contract fingerprint with each observed Migration
+  Item State that stores a `sourceVersion`.
+
+- Block execution when the stored Migration Contract source identity fingerprint
+  differs from the current definition and any Migration Item State exists for
+  the migration definition.
+
+- Do not block execution when only source version contract semantics change.
+  Instead, treat previously stored source versions as non-comparable when their
+  source items are read, and rewrite item state with the current source version
+  contract fingerprint.
 
 - Treat all item states as relevant for contract blocking, including failed,
   skipped, migrated, and in-progress records.
 
-- Keep reset, rekey, and state-clearing operations explicit future work. This
-  PRD only adds the blocking behavior and the durable data needed by those
-  operations.
+- Keep reset, rekey, and state-clearing operations explicit future work for
+  source identity contract changes. Source version contract changes rekey
+  item-by-item as subsequent runs process source items. A future cursor reset or
+  full rescan mode can force every stored item through this path.
 
 - Preserve current source boundary behavior from the existing source validation
   work: identity and version are required before an item can be recorded as an

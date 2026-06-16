@@ -69,11 +69,16 @@ for `Tracking.untracked()`.
 Retries are authored inline at the destination helper call site. A pipeline can retry exactly the effect it wants to retry, such as `ct.products.upsert(input).pipe(RetryOnNetwork)`, instead of relying on a destination-command-plan retry loop outside the pipeline.
 
 The migration store records a migration contract for each migration definition.
-The contract covers the source identity contract, source version contract,
-tracking mode, tracking contract id, and the tracking record schema fingerprint
-when `Tracking.record(...)` is used. If the current contract differs from the
+The hard migration contract covers the source identity contract, tracking mode,
+tracking contract id, and the tracking record schema fingerprint when
+`Tracking.record(...)` is used. If the current hard contract differs from the
 stored contract and any migration item state exists for the definition,
 execution is blocked until the user intentionally rolls back or clears state.
+Source version contracts are recorded with item state as comparability metadata:
+when only source version semantics change, unchanged detection is invalidated
+for read source items, and processed item state is rewritten with the current
+source version contract fingerprint. A future cursor reset or full-rescan mode
+can force every stored item through this rekey path.
 
 Effect PubSub is not the canonical tracking mechanism. It is useful for optional observability, but its subscriber timing, replay, and backpressure semantics are the wrong guarantees for a durable per-item migration ledger. The runtime-owned scoped journal is the source of truth for destination changes.
 
@@ -201,7 +206,10 @@ tracking: Tracking.untracked()
 - Rollback remains state-driven, but rollbackability is based on durable journal changes and optional tracking records rather than one singular primary destination identity.
 - Migration reference lookup is tracking-mode-driven: `Tracking.record(...)` exposes a typed record plus journal, `Tracking.journal(...)` exposes typed journal access only, and `Tracking.untracked()` is not lookupable by default.
 - `Tracking.record(...)` is the recommended mode for migrations that are expected to become stable references for downstream migrations.
-- Changing a source identity contract, source version contract, tracking mode, or tracking contract is treated as a mapping-breaking migration definition change.
+- Changing a source identity contract, tracking mode, or tracking contract is treated as a mapping-breaking migration definition change.
+- Changing a source version contract is treated as an unchanged-detection
+  boundary: previously stored source versions are non-comparable when their
+  source items are processed with the current source version contract.
 - Source identity schema changes, tuple part changes, and declarative source-to-key mapping changes can be detected mechanically through the migration contract fingerprint.
 - Function-based source identity changes rely on explicit contract versioning because JavaScript function bodies are not stable durable contracts.
 - Contract mismatches block execution when any item state exists, including failed or skipped state, because targeting, dedupe, retry, and reporting all depend on the same source identity semantics.

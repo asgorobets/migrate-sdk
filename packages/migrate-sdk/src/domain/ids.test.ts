@@ -226,4 +226,42 @@ describe("SourceIdentity", () => {
 
     expect(stringDefinition.fingerprint).not.toBe(numberDefinition.fingerprint);
   });
+
+  it("includes tuple part positions in the contract fingerprint", () => {
+    const businessAddress = SourceIdentity.make({
+      id: "business-address@v1",
+      schema: SourceIdentity.tuple([
+        SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
+        SourceIdentity.part("addressKey", Schema.NonEmptyString),
+      ]),
+    });
+    const addressBusiness = SourceIdentity.make({
+      id: "business-address@v1",
+      schema: SourceIdentity.tuple([
+        SourceIdentity.part("addressKey", Schema.NonEmptyString),
+        SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
+      ]),
+    });
+
+    expect(businessAddress.fingerprint).not.toBe(addressBusiness.fingerprint);
+  });
+
+  it("includes tuple part names in the contract fingerprint", () => {
+    const businessAddress = SourceIdentity.make({
+      id: "business-address@v1",
+      schema: SourceIdentity.tuple([
+        SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
+        SourceIdentity.part("addressKey", Schema.NonEmptyString),
+      ]),
+    });
+    const customerAddress = SourceIdentity.make({
+      id: "business-address@v1",
+      schema: SourceIdentity.tuple([
+        SourceIdentity.part("customerKey", Schema.NonEmptyString),
+        SourceIdentity.part("addressKey", Schema.NonEmptyString),
+      ]),
+    });
+
+    expect(businessAddress.fingerprint).not.toBe(customerAddress.fingerprint);
+  });
 });

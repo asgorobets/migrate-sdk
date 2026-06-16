@@ -7,6 +7,7 @@ import {
   SourceIdentitySnapshot,
   SourceVersion,
 } from "./ids.ts";
+import { SourceVersionContractFingerprint } from "./migration-contract.ts";
 
 const MigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionId,
@@ -16,6 +17,9 @@ const MigrationItemStateBaseFields = {
 } as const;
 
 const ObservedSourceVersionFields = {
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: SourceVersion,
 } as const;
 
@@ -59,6 +63,9 @@ export type SkippedItemState = typeof SkippedItemState.Type;
 
 export const FailedItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: Schema.optional(SourceVersion),
   destinationIdentity: Schema.optional(DestinationIdentity),
   destinationVersion: Schema.optional(DestinationVersion),
@@ -69,6 +76,9 @@ export type FailedItemState = typeof FailedItemState.Type;
 
 export const NeedsUpdateItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: Schema.optional(SourceVersion),
   destinationIdentity: DestinationIdentity,
   destinationVersion: Schema.optional(DestinationVersion),
@@ -90,6 +100,7 @@ export interface MigrationItemStateBase {
   readonly lastRunId: MigrationRunId;
   readonly sourceIdentity: SourceIdentitySnapshot;
   readonly sourceVersion?: SourceVersion;
+  readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
   readonly updatedAt: Date;
 }
 

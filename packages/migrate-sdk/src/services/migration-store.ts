@@ -8,6 +8,7 @@ import type {
   MigrationRunId,
 } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
+import type { MigrationContract } from "../domain/migration-contract.ts";
 import type { MigrationRunState } from "../domain/run.ts";
 import type { MigrationItemState } from "../domain/state.ts";
 import type { MigrationItemStateSummary } from "../domain/status.ts";
@@ -22,6 +23,14 @@ export class MigrationStore extends Service<
     readonly setSourceCursor: (
       definitionId: MigrationDefinitionId,
       cursor: EncodedSourceCursor
+    ) => Effect.Effect<void, MigrationStoreError>;
+
+    readonly getMigrationContract: (
+      definitionId: MigrationDefinitionId
+    ) => Effect.Effect<MigrationContract | null, MigrationStoreError>;
+
+    readonly upsertMigrationContract: (
+      contract: MigrationContract
     ) => Effect.Effect<void, MigrationStoreError>;
 
     readonly getItemState: (

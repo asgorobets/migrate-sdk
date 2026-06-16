@@ -2,6 +2,7 @@ import { Effect, Schema, SchemaAST } from "effect";
 import {
   type ConfiguredSourcePlugin,
   defineSourcePlugin,
+  defineSourcePluginLayer,
   type SourcePluginImplementation,
 } from "../../domain/definition.ts";
 import { SourcePluginError } from "../../domain/errors.ts";
@@ -14,6 +15,12 @@ import type {
   SourceVersionInput,
 } from "../../domain/ids.ts";
 import { SourceIdentity } from "../../domain/ids.ts";
+import {
+  makeSourceIdentityContractFingerprint,
+  makeSourceVersionContractFingerprint,
+  SourceVersionContractId,
+  type SourceVersionContractIdInput,
+} from "../../domain/migration-contract.ts";
 import {
   encodeSourceIdentityKey,
   type SourceItemInput,
@@ -132,6 +139,7 @@ export type DocumentSourceVersion<Source> =
       readonly kind: "content-hash";
     }
   | {
+      readonly id: SourceVersionContractIdInput;
       readonly kind: "value";
       readonly value: (item: Source) => DocumentSourceIdentityValue;
     };
@@ -707,6 +715,32 @@ const makeDocumentSourceIdentityDefinition = <
   SourceIdentity.make({
     id: identity.id,
     schema: identity.schema,
+  });
+
+const makeDocumentSourceIdentityContractFingerprint = <
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+) =>
+  makeSourceIdentityContractFingerprint({
+    identity: identityDefinition.fingerprint,
+    source: "document@v1",
+  });
+
+const makeDocumentSourceVersionContractFingerprint = <Source>(
+  version: DocumentSourceVersion<Source>
+) =>
+  makeSourceVersionContractFingerprint({
+    source: "document@v1",
+    version:
+      version.kind === "value"
+        ? {
+            id: SourceVersionContractId.make(version.id),
+            kind: version.kind,
+          }
+        : {
+            kind: version.kind,
+          },
   });
 
 const buildIdentity = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
@@ -1312,19 +1346,22 @@ function makeSource<
     cursorSchema,
     identity,
     make: () => makeImplementation(compiledOptions),
+    sourceIdentityContractFingerprint:
+      makeDocumentSourceIdentityContractFingerprint(identity),
     sourceSchema: compiledSelector.sourceSchema,
+    sourceVersionContractFingerprint:
+      makeDocumentSourceVersionContractFingerprint(options.version),
   });
 
-  return {
-    layer: configured.layer,
+  return defineSourcePluginLayer({
     identity: configured.identity,
+    layer: configured.layer,
+    sourceIdentityContractFingerprint:
+      configured.sourceIdentityContractFingerprint,
     sourceSchema: compiledSelector.sourceSchema,
-  } as ConfiguredSourcePlugin<
-    Source,
-    DocumentSourceCursor<FetcherCursor>,
-    IdentityKey,
-    unknown
-  >;
+    sourceVersionContractFingerprint:
+      configured.sourceVersionContractFingerprint,
+  });
 }
 
 export const DocumentSourcePlugin = {

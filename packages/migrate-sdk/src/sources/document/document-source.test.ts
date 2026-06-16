@@ -190,6 +190,40 @@ const writeCompaniesFile = (filePath: string) =>
   });
 
 describe("DocumentSourcePlugin", () => {
+  it("includes value version contract ids in the source version contract fingerprint", () => {
+    const fetcher: DocumentFetcher<string, null> = {
+      cursorSchema: Schema.Null,
+      read: () =>
+        Effect.succeed({
+          resource: JSON.stringify({ businessUnits: [], exportedAt: "" }),
+        }),
+    };
+    const makeSource = (versionId: string) =>
+      DocumentSourcePlugin.make({
+        fetcher,
+        parser: DocumentParsers.json(CompaniesDocument),
+        selector: {
+          item: (document) => document.businessUnits,
+        },
+        identity: {
+          ...BusinessUnitIdentity,
+          key: ({ item }) => item.key,
+        },
+        lookup: { kind: "scan" },
+        version: {
+          id: versionId,
+          kind: "value",
+          value: ({ item }) => item.status,
+        },
+      });
+
+    expect(
+      makeSource("business-status@v1").sourceVersionContractFingerprint
+    ).not.toBe(
+      makeSource("business-updated-at@v1").sourceVersionContractFingerprint
+    );
+  });
+
   it.effect(
     "composes an effect-native fetcher with a materialized schema parser",
     () =>
@@ -232,6 +266,7 @@ describe("DocumentSourcePlugin", () => {
           },
           lookup: { kind: "scan" },
           version: {
+            id: "document-version@v1",
             kind: "value",
             value: ({ item }) => item.title,
           },
@@ -286,6 +321,7 @@ describe("DocumentSourcePlugin", () => {
         },
         lookup: { kind: "scan" },
         version: {
+          id: "document-version@v1",
           kind: "value",
           value: ({ item }) => item.status,
         },
@@ -472,6 +508,7 @@ describe("DocumentSourcePlugin", () => {
             read: () => Effect.succeed(lookupResult),
           },
           version: {
+            id: "document-version@v1",
             kind: "value",
             value: ({ item }) => item.version,
           },
@@ -540,6 +577,7 @@ describe("DocumentSourcePlugin", () => {
                 : Effect.succeed(null),
           },
           version: {
+            id: "document-version@v1",
             kind: "value",
             value: ({ item }) => item.email,
           },
@@ -594,6 +632,7 @@ describe("DocumentSourcePlugin", () => {
           },
           lookup: { kind: "scan" },
           version: {
+            id: "document-version@v1",
             kind: "value",
             value: ({ item }) => item.email,
           },
@@ -665,6 +704,7 @@ describe("DocumentSourcePlugin", () => {
         },
         lookup: { kind: "scan" },
         version: {
+          id: "document-version@v1",
           kind: "value",
           value: ({ item }) => item.version,
         },
@@ -726,6 +766,7 @@ describe("DocumentSourcePlugin", () => {
           read: () => Effect.succeed({ resource: duplicatedResource }),
         },
         version: {
+          id: "document-version@v1",
           kind: "value",
           value: ({ item }) => item.status,
         },
@@ -781,6 +822,7 @@ describe("DocumentSourcePlugin", () => {
             }),
         },
         version: {
+          id: "document-version@v1",
           kind: "value",
           value: ({ item }) => item.status,
         },
@@ -834,6 +876,7 @@ describe("DocumentSourcePlugin", () => {
             ),
         },
         version: {
+          id: "document-version@v1",
           kind: "value",
           value: ({ item }) => item.status,
         },
