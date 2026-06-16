@@ -1,7 +1,9 @@
 import { Effect, Layer, Schema } from "effect";
-import type {
-  EncodedSourceIdentity,
-  MigrationDefinitionId,
+import {
+  type EncodedSourceIdentity,
+  type MigrationDefinitionId,
+  SourceIdentityKeyScalar,
+  type SourceIdentitySnapshotKey,
 } from "../domain/ids.ts";
 import type { AnyMigrationDefinition } from "../domain/run.ts";
 import type { SourceItem } from "../domain/source.ts";
@@ -17,6 +19,7 @@ import {
   type MigrationStatusRequestInput,
   type MigrationStatusWarning,
   makeMigrationStatusRequest,
+  type SourceIdentityStatusPart,
   summarizeMigrationItemStates,
 } from "../domain/status.ts";
 import { MigrationStore } from "../services/migration-store.ts";
@@ -39,6 +42,60 @@ const invalidStatusRequestError = (cause: unknown) =>
         message: "Status request contains invalid input",
         cause,
       });
+
+const isSourceIdentityKeyScalar = (
+  value: unknown
+): value is SourceIdentityKeyScalar =>
+  Schema.is(SourceIdentityKeyScalar)(value);
+
+const makeSourceIdentityStatusPart = (
+  name: string,
+  value: unknown
+): SourceIdentityStatusPart | null =>
+  isSourceIdentityKeyScalar(value) ? { name, value } : null;
+
+const describeSourceIdentityParts = (
+  definition: AnyMigrationDefinition,
+  key: SourceIdentitySnapshotKey
+): readonly SourceIdentityStatusPart[] | undefined => {
+  const identity = definition.source.identity;
+
+  if (identity.kind === "scalar") {
+    const part = identity.parts[0];
+
+    if (part === undefined) {
+      return undefined;
+    }
+
+    const statusPart = makeSourceIdentityStatusPart(part.name, key);
+
+    return statusPart === null ? undefined : [statusPart];
+  }
+
+  if (!Array.isArray(key)) {
+    return undefined;
+  }
+
+  const parts: SourceIdentityStatusPart[] = [];
+
+  for (let index = 0; index < identity.parts.length; index++) {
+    const part = identity.parts[index];
+
+    if (part === undefined) {
+      return undefined;
+    }
+
+    const statusPart = makeSourceIdentityStatusPart(part.name, key[index]);
+
+    if (statusPart === null) {
+      return undefined;
+    }
+
+    parts.push(statusPart);
+  }
+
+  return parts;
+};
 
 const selectDefinitions = (
   definitions: readonly AnyMigrationDefinition[],
@@ -138,6 +195,10 @@ const scanSourceInventory = (
     const seenSourceIdentities = new Set<EncodedSourceIdentity>();
     const currentSourceIdentities = new Set<EncodedSourceIdentity>();
     const duplicateCounts = new Map<EncodedSourceIdentity, number>();
+    const duplicateKeys = new Map<
+      EncodedSourceIdentity,
+      SourceIdentitySnapshotKey
+    >();
     const warnings: MigrationStatusWarning[] = [];
     let invalid = 0;
     let duplicate = 0;
@@ -164,6 +225,7 @@ const scanSourceInventory = (
           sourceItem.identity.encoded,
           (duplicateCounts.get(sourceItem.identity.encoded) ?? 0) + 1
         );
+        duplicateKeys.set(sourceItem.identity.encoded, sourceItem.identity.key);
         continue;
       }
 
@@ -177,11 +239,18 @@ const scanSourceInventory = (
     }
 
     for (const [sourceIdentity, count] of duplicateCounts) {
+      const duplicateKey = duplicateKeys.get(sourceIdentity);
+      const sourceIdentityParts =
+        duplicateKey === undefined
+          ? undefined
+          : describeSourceIdentityParts(definition, duplicateKey);
+
       warnings.push(
         new DuplicateSourceIdentityStatusWarning({
           count,
           definitionId: definition.id,
           sourceIdentity,
+          ...(sourceIdentityParts === undefined ? {} : { sourceIdentityParts }),
         })
       );
     }

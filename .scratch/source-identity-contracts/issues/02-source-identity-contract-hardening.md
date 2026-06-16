@@ -1,6 +1,6 @@
 # Source Identity Contract Hardening
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Parent
 
@@ -17,37 +17,41 @@ records, duplicate source identities, and targeted id parsing behavior.
 
 ## Acceptance criteria
 
-- [ ] Raw struct schemas are rejected as canonical source identity keys.
-- [ ] Tuple source identity schemas with unnamed parts are rejected.
-- [ ] Tuple source identity schemas with optional elements are rejected.
-- [ ] Tuple source identity schemas with rest elements are rejected.
-- [ ] Unsupported nested source identity key parts are rejected unless the
+- [x] Raw struct schemas are rejected as canonical source identity keys.
+- [x] Tuple source identity schemas with unnamed parts are rejected.
+- [x] Tuple source identity schemas with optional elements are rejected.
+- [x] Tuple source identity schemas with rest elements are rejected.
+- [x] Unsupported nested source identity key parts are rejected unless the
       current implementation explicitly supports their canonical encoding.
-- [ ] Invalid source identity keys emitted by source plugins fail before item
+- [x] Source identity codecs are supported when both decoded and encoded key
+      parts remain scalar values.
+- [x] Decoded source identity keys are canonicalized through the schema encoder
+      before durable encoded identities are persisted or compared.
+- [x] Invalid source identity keys emitted by source plugins fail before item
       state lookup, duplicate detection, or pipeline execution.
-- [ ] Invalid emitted identity failures preserve enough source boundary context
+- [x] Invalid emitted identity failures preserve enough source boundary context
       for durable item errors when a record can safely be written.
-- [ ] Malformed durable source identity records fail decoding instead of being
+- [x] Malformed durable source identity records fail decoding instead of being
       silently accepted.
-- [ ] Duplicate source identity detection uses encoded source identity for both
+- [x] Duplicate source identity detection uses encoded source identity for both
       scalar and tuple keys.
-- [ ] Duplicate source identity diagnostics include human-readable source
+- [x] Duplicate source identity diagnostics include human-readable source
       identity part information where available.
-- [ ] Tuple part names appear in validation errors and operator-facing
+- [x] Tuple part names appear in validation errors and operator-facing
       diagnostics where those surfaces already exist.
-- [ ] Scalar targeted ids parse as one CLI value through the selected
+- [x] Scalar targeted ids parse as one CLI value through the selected
       migration definition's source identity schema.
-- [ ] Tuple targeted ids parse positionally through the selected migration
+- [x] Tuple targeted ids parse positionally through the selected migration
       definition's source identity schema.
-- [ ] Malformed targeted ids fail before source lookup starts.
-- [ ] Repeated targeted ids are deduplicated and surfaced as operator feedback.
-- [ ] Comma-separated id lists are not introduced as a primary targeting API.
-- [ ] Scan-based targeted lookup can find a tuple source identity by comparing
-      encoded identities.
-- [ ] Direct targeted lookup receives structured tuple key parts.
-- [ ] Cursor positions, page numbers, and offsets are not required in source
+- [x] Malformed targeted ids fail before source lookup starts.
+- [x] Repeated targeted ids are deduplicated and surfaced as operator feedback.
+- [x] Comma-separated id lists are not introduced as a primary targeting API.
+- [x] Source plugins that implement scan-backed `readByIdentity` can find a
+      tuple source identity by comparing encoded identities internally.
+- [x] Direct targeted lookup receives structured tuple key parts.
+- [x] Cursor positions, page numbers, and offsets are not required in source
       identity for scan lookup.
-- [ ] Hardening tests cover behavior at runtime, store, source plugin, and CLI
+- [x] Hardening tests cover behavior at runtime, store, source plugin, and CLI
       boundaries without asserting private helper internals.
 
 ## Blocked by

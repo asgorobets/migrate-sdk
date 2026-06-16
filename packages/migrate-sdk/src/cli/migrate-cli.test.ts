@@ -7,6 +7,11 @@ import { isFailure, isSuccess } from "effect/Exit";
 import { TestConsole } from "effect/testing";
 import { CliOutput, Command } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import {
+  DuplicateSourceIdentityStatusWarning,
+  toEncodedSourceIdentity,
+  toMigrationDefinitionId,
+} from "migrate-sdk";
 import { MigrationCliRuntime, migrateCommand } from "migrate-sdk/cli/testing";
 import { renderStatusReport } from "./render.ts";
 
@@ -1278,6 +1283,60 @@ describe("migrate CLI", () => {
 
     expect(output).toContain("\x1b[36mpending");
     expect(output).toContain("\x1b[32msucceeded");
+  });
+
+  it("renders named source identity parts in duplicate status warnings", () => {
+    const definitionId = toMigrationDefinitionId("business-addresses");
+    const output = renderStatusReport(
+      {
+        definitions: [
+          {
+            definitionId,
+            durable: {
+              failed: 0,
+              migrated: 0,
+              needsUpdate: 0,
+              skipped: 0,
+            },
+            lastRun: null,
+            source: {
+              duplicate: 1,
+              invalid: 0,
+              orphaned: 0,
+              total: 2,
+              unprocessed: 1,
+            },
+            warnings: [],
+          },
+        ],
+        includedDefinitionIds: [definitionId],
+        notices: [],
+        requestedDefinitionIds: [definitionId],
+        scanSource: true,
+        warnings: [
+          new DuplicateSourceIdentityStatusWarning({
+            count: 1,
+            definitionId,
+            sourceIdentity: toEncodedSourceIdentity('["bu-1",0]'),
+            sourceIdentityParts: [
+              {
+                name: "businessUnitKey",
+                value: "bu-1",
+              },
+              {
+                name: "addressIndex",
+                value: 0,
+              },
+            ],
+          }),
+        ],
+      },
+      { colors: false }
+    );
+
+    expect(output).toContain(
+      'Duplicate source identity in business-addresses: ["bu-1",0] (businessUnitKey=bu-1, addressIndex=0)'
+    );
   });
 
   it.effect(

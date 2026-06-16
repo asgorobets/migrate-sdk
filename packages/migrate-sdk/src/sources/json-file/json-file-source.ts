@@ -922,7 +922,7 @@ const decodeIdentityKey = <IdentityKey extends SourceIdentitySnapshotKey>(
 ): Effect.Effect<IdentityKey, SourcePluginError> =>
   Effect.try({
     try: () => {
-      const decoded = definition.schema.decode(value);
+      const decoded = SourceIdentity.decode(definition, value);
 
       return SourceIdentity.fromKey(definition, decoded).key;
     },

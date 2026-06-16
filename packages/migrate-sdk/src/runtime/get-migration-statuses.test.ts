@@ -17,6 +17,7 @@ import {
   MigrationStore,
   MigrationStoreError,
   SourceIdentity,
+  type SourceIdentitySnapshotKey,
   SourcePlugin,
   SourcePluginError,
   toDestinationIdentity,
@@ -72,14 +73,14 @@ const makeStatusOnlyDefinition = (
     pipeline: () => ({ kind: "Noop" }),
   });
 
-const makeStatusScanDefinition = (
+const makeStatusScanDefinition = <
+  Source,
+  Cursor,
+  IdentityKey extends SourceIdentitySnapshotKey,
+  SourceInput,
+>(
   store: ReturnType<typeof InMemoryMigrationStore.layer>,
-  source: ConfiguredSourcePlugin<
-    typeof ArticleSource.Type,
-    unknown,
-    string,
-    unknown
-  >,
+  source: ConfiguredSourcePlugin<Source, Cursor, IdentityKey, SourceInput>,
   id = "articles"
 ) =>
   defineMigration({
@@ -618,6 +619,12 @@ describe("getMigrationStatuses", () => {
           new DuplicateSourceIdentityStatusWarning({
             count: 1,
             definitionId,
+            sourceIdentityParts: [
+              {
+                name: "id",
+                value: "article-duplicate",
+              },
+            ],
             sourceIdentity: SourceIdentity.fromKey(
               ArticleSourceIdentity,
               "article-duplicate"
@@ -625,6 +632,80 @@ describe("getMigrationStatuses", () => {
           })
         );
         expect(report.warnings).toEqual(report.definitions[0]?.warnings);
+      })
+  );
+
+  it.effect(
+    "reports duplicate tuple source identities by encoded identity",
+    () =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("business-addresses");
+        const businessAddressIdentity = SourceIdentity.make({
+          id: "business-address@v1",
+          schema: SourceIdentity.tuple([
+            SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
+            SourceIdentity.part("addressIndex", Schema.Number),
+          ]),
+        });
+        const BusinessAddress = Schema.Struct({
+          city: Schema.String,
+        });
+        const definition = makeStatusScanDefinition(
+          InMemoryMigrationStore.layer(InMemoryMigrationStore.makeState()),
+          InMemorySourcePlugin.make({
+            identity: businessAddressIdentity,
+            sourceSchema: BusinessAddress,
+            items: [
+              {
+                identityKey: ["bu-1", 0],
+                item: { city: "Kyiv" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: ["bu-1", 0],
+                item: { city: "Lviv" },
+                version: "source-version-2",
+              },
+            ],
+          }),
+          "business-addresses"
+        );
+
+        const report = yield* getMigrationStatuses({
+          definitions: [definition],
+          scanSource: true,
+        });
+
+        expect(report.definitions[0]).toMatchObject({
+          definitionId,
+          source: {
+            duplicate: 1,
+            invalid: 0,
+            orphaned: 0,
+            total: 2,
+            unprocessed: 1,
+          },
+        });
+        expect(report.warnings).toEqual([
+          new DuplicateSourceIdentityStatusWarning({
+            count: 1,
+            definitionId,
+            sourceIdentityParts: [
+              {
+                name: "businessUnitKey",
+                value: "bu-1",
+              },
+              {
+                name: "addressIndex",
+                value: 0,
+              },
+            ],
+            sourceIdentity: SourceIdentity.fromKey(businessAddressIdentity, [
+              "bu-1",
+              0,
+            ]).encoded,
+          }),
+        ]);
       })
   );
 

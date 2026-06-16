@@ -579,7 +579,7 @@ const decodeIdentityKey = <IdentityKey extends SourceIdentitySnapshotKey>(
   record: LogicalCsvRecord
 ): Effect.Effect<IdentityKey, SourcePluginError> =>
   Effect.try({
-    try: () => identity.schema.decode(key),
+    try: () => SourceIdentity.decode(identity, key),
     catch: (cause) =>
       csvError("CSV identity key did not match Source Identity Schema", {
         cause,

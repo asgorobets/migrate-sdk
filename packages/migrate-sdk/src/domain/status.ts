@@ -7,6 +7,7 @@ import type {
 import {
   EncodedSourceIdentity,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
+  SourceIdentityKeyScalar,
   toMigrationDefinitionId,
 } from "./ids.ts";
 import type { AnyMigrationDefinition } from "./run.ts";
@@ -35,12 +36,21 @@ export const MigrationDefinitionSourceStatus = Schema.Struct({
 export type MigrationDefinitionSourceStatus =
   typeof MigrationDefinitionSourceStatus.Type;
 
+export const SourceIdentityStatusPart = Schema.Struct({
+  name: Schema.NonEmptyString,
+  value: SourceIdentityKeyScalar,
+});
+export type SourceIdentityStatusPart = typeof SourceIdentityStatusPart.Type;
+
 export class DuplicateSourceIdentityStatusWarning extends Schema.TaggedClass<DuplicateSourceIdentityStatusWarning>()(
   "DuplicateSourceIdentityStatusWarning",
   {
     count: StatusCount,
     definitionId: MigrationDefinitionIdSchema,
     sourceIdentity: EncodedSourceIdentity,
+    sourceIdentityParts: Schema.optional(
+      Schema.Array(SourceIdentityStatusPart)
+    ),
   }
 ) {}
 

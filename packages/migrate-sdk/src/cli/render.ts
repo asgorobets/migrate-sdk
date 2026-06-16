@@ -801,8 +801,16 @@ const renderStatusWarning = (
   warning: MigrationDefinitionRegistryStatusReport["warnings"][number]
 ): string => {
   switch (warning._tag) {
-    case "DuplicateSourceIdentityStatusWarning":
-      return `Duplicate source identity in ${warning.definitionId}: ${warning.sourceIdentity} (${warning.count} duplicate item(s)). Check the source plugin identity mapping.`;
+    case "DuplicateSourceIdentityStatusWarning": {
+      const sourceIdentityParts =
+        warning.sourceIdentityParts === undefined
+          ? ""
+          : ` (${warning.sourceIdentityParts
+              .map((part) => `${part.name}=${String(part.value)}`)
+              .join(", ")})`;
+
+      return `Duplicate source identity in ${warning.definitionId}: ${warning.sourceIdentity}${sourceIdentityParts} (${warning.count} duplicate item(s)). Check the source plugin identity mapping.`;
+    }
     case "InvalidSourceItemStatusWarning":
       return `Invalid source item in ${warning.definitionId}: ${warning.sourceIdentity}. ${warning.message}. Check the Source Payload Schema and source data.`;
     default: {

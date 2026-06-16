@@ -170,8 +170,7 @@ time:
 - tuples with unnamed parts
 - optional tuple elements
 - tuple rest elements
-- nested object, array, or record parts unless a future identity codec
-  explicitly supports them
+- nested object, array, or record parts on either the decoded or encoded side
 
 Structs remain useful for source payload schemas and destination tracking records.
 They are not the canonical source identity key shape because source identity is
@@ -200,10 +199,18 @@ identity schema contract:
 ```ts
 interface SourceIdentityDefinition<Key> {
   readonly id: SourceIdentityContractId
+  readonly kind: "scalar" | "tuple"
+  readonly parts: readonly SourceIdentityPartMetadata[]
   readonly schema: SourceIdentitySchema<Key>
   readonly fingerprint: SourceIdentityContractFingerprint
 }
 ```
+
+`SourceIdentitySchema<Key>` is still an Effect Schema. The
+`SourceIdentity.key(...)`, `SourceIdentity.part(...)`, and
+`SourceIdentity.tuple(...)` helpers construct annotated Effect schemas and the
+SDK derives `kind` and `parts` from that helper metadata when the identity
+definition is made.
 
 The source plugin supplies the source selection shape. The reusable identity
 definition supplies the durable key shape:
@@ -318,10 +325,11 @@ const BusinessAddressIdentitySchema = SourceIdentity.tuple([
 ])
 ```
 
-Prefer scalar schemas or fixed tuple parts with primitive, literal, branded, or
-well-known refinement schemas. Avoid arbitrary transformations in source
-identity key schemas. If a source value needs parsing, the source plugin should
-parse it before producing the key:
+Prefer scalar schemas or fixed tuple parts with primitive, literal, branded,
+refinement, or codec schemas whose decoded and encoded forms are still scalar.
+The decoded key is the public key used by source plugins, lookup methods, and
+pipelines. The encoded key is the durable lookup/index key persisted by stores
+and compared by the runtime:
 
 ```ts
 identity: {
@@ -429,8 +437,9 @@ migrate run business-addresses --id 'bu%3Awest:1'
 ```
 
 The API contract is positional: the first token is decoded with tuple part 0,
-the second token with tuple part 1, and so on. The schema validates the decoded
-tuple before targeting starts.
+the second token with tuple part 1, and so on. CLI tokens are parsed as encoded
+schema input, decoded into the structured key, then canonicalized through the
+schema encoder before targeting starts.
 
 The CLI flow is:
 

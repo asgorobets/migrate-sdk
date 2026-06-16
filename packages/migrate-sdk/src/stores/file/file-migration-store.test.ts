@@ -250,6 +250,42 @@ const writeCorruptItemStateRecord = (directory: string) =>
     yield* fs.writeFileString(itemStatePath, "{not valid json");
   });
 
+const writeMalformedSourceIdentityItemStateRecord = (directory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem;
+    const path = yield* Path;
+    const itemStatePath = path.join(
+      directory,
+      "definitions",
+      "articles",
+      "items",
+      "article-malformed-source-identity.json"
+    );
+
+    yield* fs.makeDirectory(path.dirname(itemStatePath), { recursive: true });
+    yield* fs.writeFileString(
+      itemStatePath,
+      JSON.stringify({
+        formatVersion: 1,
+        recordKind: "migration-item-state",
+        state: {
+          definitionId: "articles",
+          destinationIdentity: "entry-malformed-source-identity",
+          lastRunId: "run-1",
+          sourceIdentity: {
+            encoded: "article-malformed-source-identity",
+            fingerprint: TestSourceIdentity.fingerprint,
+            id: TestSourceIdentity.id,
+            key: { id: "article-malformed-source-identity" },
+          },
+          sourceVersion: "source-version-1",
+          status: "migrated",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      })
+    );
+  });
+
 const makeArticlesMigration = (options: {
   readonly directory: string;
   readonly destinationState: ReturnType<
@@ -708,6 +744,34 @@ describe("FileMigrationStore", () => {
         );
       })
     )
+  );
+
+  it.effect(
+    "returns MigrationStoreError for malformed persisted source identity records",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          yield* writeMalformedSourceIdentityItemStateRecord(directory);
+
+          const error = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            return yield* store.getItemState(
+              toMigrationDefinitionId("articles"),
+              toEncodedSourceIdentity("article-malformed-source-identity")
+            );
+          }).pipe(Effect.provide(fileStoreLayer(directory)), Effect.flip);
+
+          expect(error).toEqual(
+            expect.objectContaining({
+              _tag: "MigrationStoreError",
+              message: expect.stringContaining(
+                "Unable to decode migration store record"
+              ),
+            })
+          );
+        })
+      )
   );
 
   it.effect(
