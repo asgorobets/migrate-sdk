@@ -1,6 +1,12 @@
-# Scoped Pipeline Tracking With Composite Records
+# Scoped Process Tracking With Composite Records
 
-Migration definitions will use composite-capable source identities, scoped pipeline execution, and explicit tracking modes instead of relying on destination plugins or returned command plans to decide durable tracking state. The runtime owns migration item state, while the pipeline performs destination effects inside a scope that records destination changes in a journal; the migration definition then decides whether to persist the journal, stage a materialized tracking record, or omit destination tracking.
+Migration definitions will use composite-capable source identities, scoped
+process execution, and optional tracking record contracts instead of relying on
+destination plugins or returned command plans to decide durable tracking state.
+The runtime owns migration item state, while the process pipeline performs
+destination effects inside a scope that records destination changes and
+diagnostics in a journal; the migration definition decides whether successful
+items must stage a materialized tracking record.
 
 ## Status
 
@@ -8,19 +14,19 @@ Accepted
 
 ## External Reference
 
-This decision is inspired by Drupal Migrate's map-table model, where source plugins declare source ID schemas, destination plugins declare destination ID schemas, and the framework-owned ID map records source IDs, destination IDs, row status, rollback action, and row hashes. The SDK keeps the same durable-ledger idea, but adapts it for Effect pipelines, TypeScript authoring, composite tracking records, explicit tracking modes, and optional per-migration tracking record contracts.
+This decision is inspired by Drupal Migrate's map-table model, where source plugins declare source ID schemas, destination plugins declare destination ID schemas, and the framework-owned ID map records source IDs, destination IDs, row status, rollback action, and row hashes. The SDK keeps the same durable-ledger idea, but adapts it for Effect process pipelines, TypeScript authoring, composite tracking records, and optional per-migration tracking record contracts.
 
 The API direction is expanded in
-[Scoped Pipeline Tracking API](../design/scoped-pipeline-tracking-api.md) and
-[Effectful Pipeline Destination Capabilities](../design/effectful-pipeline-destination-capabilities.md).
+[Scoped Process Tracking API](../design/scoped-pipeline-tracking-api.md) and
+[Effectful Process Destination Capabilities](../design/effectful-pipeline-destination-capabilities.md).
 
 ## Considered Options
 
-- Keep the current command-plan model where a transformation pipeline returns destination commands and the runtime infers one primary destination identity from identity-bearing command results.
+- Keep the current command-plan model where a process pipeline returns destination commands and the runtime infers one primary destination identity from identity-bearing command results.
 - Let destination plugins decide whether their commands are tracked or untracked.
-- Require transformation pipelines to return final migration outcomes.
+- Require process pipelines to return final migration outcomes.
 - Use an Effect PubSub as the canonical tracking mechanism for destination changes.
-- Run pipelines inside a scoped runtime journal, let destination helpers record changes, persist the journal as the canonical destination tracking state, and allow migration definitions to stage an optional schema-validated tracking record.
+- Run process pipelines inside a scoped tracking service, let destination helpers record successful changes and failed-attempt diagnostics, persist journal evidence for failed items, and allow migration definitions to stage an optional schema-validated tracking record for successful items.
 
 ## Decision
 
@@ -40,38 +46,72 @@ part names attached through schema metadata, not `Schema.Struct` objects.
 
 Destination tracking is structured and may be composite. A single source item may affect multiple named destination resources, such as a product and an inventory entry, and those resources may be tracked together as one durable tracking record for that migration item. The tracking record is not limited to identity fields; it may contain created resources, affected resources, rollback buckets, audit references, or any other durable state the migration author chooses.
 
-Transformation pipelines run in a per-item pipeline execution scope. Destination helpers are still destination-owned, schema-backed Effect operations, but they are invoked inline instead of being returned as a command plan. The runtime provides a scoped destination journal, implemented as runtime-owned state such as a Ref-backed service, so destination helpers can record changes as they succeed. Because the journal belongs to the runtime scope, changes are still available when the pipeline short-circuits with a typed failure.
+Process pipelines run in a per-item process execution scope.
+Destination helpers are still destination-owned, schema-backed Effect
+operations, but they are invoked inline instead of being returned as a command
+plan. The runtime provides a scoped tracking service, implemented as
+runtime-owned state such as a Ref-backed service over a destination journal and
+staged tracking record slot, so destination helpers can record changes as they
+succeed and diagnostics when a failed attempt needs durable context. Because the
+journal belongs to the runtime scope, evidence is still available when the
+process short-circuits with a typed failure.
 
-Destination plugins become Effect capability modules. They own destination helpers, change descriptors, dependency layers, retryable error classification, and optional rollback helpers, but they do not own migration tracking. They are used as regular values inside the pipeline and do not need a top-level `destination`, `destinations`, or `provide` slot on the migration definition unless the runtime has a concrete behavior that needs to inspect one.
+Rollback pipelines run with their own scoped tracking service. The execution
+scope separates live rollback evidence from the original process
+evidence while the rollback attempt runs. If the rollback attempt fails, the
+runtime preserves the original item state and appends a failed rollback attempt
+journal segment. If the rollback attempt succeeds, the runtime deletes the item
+state and no rollback journal evidence remains durable for that item.
 
-Tracking is static on the migration definition. A migration definition chooses
-one of three modes:
+Destination plugins become Effect capability modules. They own destination helpers, change descriptors, dependency layers, retryable error classification, and optional rollback helpers, but they do not own migration tracking. They are used as regular values inside the process pipeline and do not need a top-level `destination`, `destinations`, or `provide` slot on the migration definition unless the runtime has a concrete behavior that needs to inspect one.
 
-- `Tracking.journal({ id })` persists the destination journal as the canonical
-  destination tracking state.
-- `Tracking.record({ id, schema })` persists the destination journal plus one
-  schema-validated materialized tracking record staged by the pipeline.
-- `Tracking.untracked()` persists item progress without destination tracking.
-
-Untracked does not mean ephemeral. The runtime still persists migration item state for untracked migration definitions, including source identity, source version, item status, and failure metadata. Untracked only opts out of destination tracking.
+Tracking record contracts are static on the migration definition. A migration
+definition may declare `Tracking.record({ id, schema })`; if it does, a
+successful item must stage exactly one schema-validated materialized tracking
+record. A definition without `Tracking.record(...)` still persists migration
+item progress, including source identity, source version, item status, and
+failure metadata, but successful items do not persist durable destination
+tracking.
 
 Destination change kinds are exposed as typed destination change descriptors
-owned by destination capability modules. Journal reads and rollback helpers
-reference those descriptors rather than raw change kind strings, so TypeScript
-can infer change value types without requiring a custom pipeline DSL. The SDK
-does not try to prove that arbitrary Effect pipeline code records every
+owned by destination capability modules. Rollback code receives decoded
+journal entries in journal order and narrows them with descriptor-owned
+predicates rather than raw change kind strings or query methods, so TypeScript
+can infer change value types without requiring a custom process DSL. The SDK
+does not try to prove that arbitrary Effect process code records every
 possible destination change. Required destination work belongs in normal Effect
-control flow. The item success boundary only enforces the selected tracking
-mode: journal persistence for `Tracking.journal(...)`, staged record presence
-and schema validation for `Tracking.record(...)`, and no destination tracking
-for `Tracking.untracked()`.
+control flow. The item success boundary only enforces staged record presence and
+schema validation when `Tracking.record(...)` is declared.
 
-Retries are authored inline at the destination helper call site. A pipeline can retry exactly the effect it wants to retry, such as `ct.products.upsert(input).pipe(RetryOnNetwork)`, instead of relying on a destination-command-plan retry loop outside the pipeline.
+Journal diagnostics are separate from destination changes. A failed destination
+helper must not record a success change unless it knows the destination effect
+completed, but it may record one generic serializable diagnostic message so
+failed item state remains useful when logs are missing or unstructured.
+Migration authors and destination helpers map their own Effect errors, provider
+errors, or domain context into that generic diagnostic shape. Diagnostic
+messages require `severity` and `message`. Severity values are `info`,
+`warning`, and `error`, and the public helper maps severity to the
+corresponding Effect log level. Diagnostic messages do not require stable ids or
+descriptor-backed detail schemas in this slice; their details are a generic JSON
+object rather than validation-oriented item error details. Durable
+diagnostics do not persist raw Effect causes, thrown objects, or unstable
+provider response objects.
+
+Diagnostic authoring is compatible with Effect's logging model, not the
+`Console` service. `Tracking.logDiagnostic(...)` is the public authoring API for
+durable diagnostic journal entries, and the runtime may also emit SDK-marked
+Effect log events for observability. The marker stays internal to the SDK in
+this slice. Because `Tracking.logDiagnostic(...)` is an explicit item-state
+operation, its durable journal append is not suppressed by Effect's configured
+minimum log level. Ordinary logs remain observability output and do not become
+migration item state.
+
+Retries are authored inline at the destination helper call site. A process pipeline can retry exactly the effect it wants to retry, such as `ct.products.upsert(input).pipe(RetryOnNetwork)`, instead of relying on a destination-command-plan retry loop outside the process.
 
 The migration store records a migration contract for each migration definition.
-The hard migration contract covers the source identity contract, tracking mode,
-tracking contract id, and the tracking record schema fingerprint when
-`Tracking.record(...)` is used. If the current hard contract differs from the
+The hard migration contract covers the source identity contract, tracking
+contract id, and the tracking record schema fingerprint when
+`Tracking.record(...)` is declared. If the current hard contract differs from the
 stored contract and any migration item state exists for the definition,
 execution is blocked until the user intentionally rolls back or clears state.
 Source version contracts are recorded with item state as comparability metadata:
@@ -80,7 +120,7 @@ for read source items, and processed item state is rewritten with the current
 source version contract fingerprint. A future cursor reset or full-rescan mode
 can force every stored item through this rekey path.
 
-Effect PubSub is not the canonical tracking mechanism. It is useful for optional observability, but its subscriber timing, replay, and backpressure semantics are the wrong guarantees for a durable per-item migration ledger. The runtime-owned scoped journal is the source of truth for destination changes.
+Effect PubSub is not the canonical tracking mechanism. It is useful for optional observability, but its subscriber timing, replay, and backpressure semantics are the wrong guarantees for a durable per-item migration ledger. The runtime-owned scoped tracking service and journal are the source of truth for per-item destination evidence.
 
 Source identity contract fingerprints are SDK-owned, not delegated to Effect as
 a public hashing API. Effect Schema can provide a canonical representation of
@@ -162,7 +202,7 @@ tracking: Tracking.record({
 })
 ```
 
-The pipeline stages the materialized record after the required destination work:
+The process stages the materialized record after the required destination work:
 
 ```ts
 const product = yield* ct.products.upsert(source.item.product).pipe(RetryOnNetwork)
@@ -178,35 +218,23 @@ yield* Tracking.setRecord({
 })
 ```
 
-When destination-native journal entries are enough, no materialized record is
-needed:
-
-```ts
-tracking: Tracking.journal({ id: "products@v1" })
-```
-
-Side-effect-only migrations are explicit too:
-
-```ts
-tracking: Tracking.untracked()
-```
-
 ## Consequences
 
-- The framework can persist partial destination changes for failed items without requiring user code to return a final outcome.
-- A successful `Tracking.journal(...)` item persists the journal as its durable destination tracking state.
-- A successful `Tracking.record(...)` item persists the journal and a schema-validated materialized tracking record.
-- A successful untracked migration item persists item progress but omits destination tracking.
-- An untracked migration item cannot be rolled back through destination tracking unless the user records other durable state intentionally.
+- The framework can persist partial destination changes and diagnostics for failed items without requiring user code to return a final outcome.
+- A successful `Tracking.record(...)` item persists a schema-validated materialized tracking record.
+- A successful item without `Tracking.record(...)` persists item progress but omits destination tracking.
+- A successful progress-only item cannot be rolled back through destination tracking.
 - Destination plugins become Effect capability modules rather than tracking policy owners.
-- Plugin authors still own destination-native helper schemas, request construction, response parsing, change recording, dependency layers, and retryable error classification.
-- Migration authors own orchestration, inline retries, and the explicit decision to persist journal tracking, a materialized tracking record, or no destination tracking.
-- Journal reads and rollback helpers reference typed change descriptors, not raw change kind strings.
+- Plugin authors still own destination-native helper schemas, request construction, response parsing, change and diagnostic recording, dependency layers, and retryable error classification.
+- Migration authors own orchestration, inline retries, and the explicit decision to require a materialized tracking record for successful items.
+- New destination-tracking implementation work should rename the public authoring slot from `pipeline` to `process`; existing examples may keep `pipeline` only where they reflect pre-implementation code.
+- Rollback reads decoded ordered journal entries from the process journal segment and narrows them with typed change descriptors and diagnostic records, not raw change kind strings.
+- Failed rollback attempts preserve their own journal segments separately from the process journal segment.
 - TypeScript can infer change shapes for journal reads and tracking record staging, but runtime enforcement remains responsible for staged record presence and schema validation.
 - Rollback remains state-driven, but rollbackability is based on durable journal changes and optional tracking records rather than one singular primary destination identity.
-- Migration reference lookup is tracking-mode-driven: `Tracking.record(...)` exposes a typed record plus journal, `Tracking.journal(...)` exposes typed journal access only, and `Tracking.untracked()` is not lookupable by default.
+- Migration reference lookup is tracking-record-driven: `Tracking.record(...)` exposes a typed record, and definitions without `Tracking.record(...)` are not lookupable by default.
 - `Tracking.record(...)` is the recommended mode for migrations that are expected to become stable references for downstream migrations.
-- Changing a source identity contract, tracking mode, or tracking contract is treated as a mapping-breaking migration definition change.
+- Changing a source identity contract or tracking record contract is treated as a mapping-breaking migration definition change.
 - Changing a source version contract is treated as an unchanged-detection
   boundary: previously stored source versions are non-comparable when their
   source items are processed with the current source version contract.

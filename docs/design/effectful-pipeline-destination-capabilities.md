@@ -1,31 +1,37 @@
-# Effectful Pipeline Destination Capabilities
+# Effectful Process Destination Capabilities
 
 Audience: SDK users authoring migrations and plugin authors implementing
 destination helper modules.
 
 Status: draft design direction.
 
-This document captures the revised destination API direction where the
-transformation pipeline is the destination execution unit. It intentionally does
-not rewrite the older command-plan design documents yet.
+This document captures the revised destination API direction where the process
+pipeline is the destination execution unit. It intentionally does not rewrite
+the older command-plan design documents yet.
 
 Change descriptors, journal tracking, optional materialized tracking records,
 and journal persistence are specified in
-[Scoped Pipeline Tracking API](./scoped-pipeline-tracking-api.md). This document
-only describes how destination helpers participate in effectful pipelines.
+[Scoped Process Tracking API](./scoped-pipeline-tracking-api.md). This document
+only describes how destination helpers participate in effectful process
+pipelines.
+
+The domain term is **Process Pipeline**; examples may still show the current
+`pipeline` property until implementation renames that authoring slot to
+`process`.
 
 ## Summary
 
-Destination command plans should collapse into normal Effect pipelines.
+Destination command plans should collapse into normal Effect process pipelines.
 Destination plugins should become Effect capability modules: they expose
 effectful destination helpers, typed change descriptors, dependency layers, and
 optional rollback helpers. The migration definition does not need a
 `destination`, `destinations`, or `provide` key unless the runtime has a concrete
 reason to read it.
 
-The runtime owns migration item execution. For each source item it provides a
-scoped destination journal, runs the user pipeline, snapshots the journal on
-success or failure, and delegates tracking evaluation to the tracking model.
+The runtime owns migration item execution. For each source item it provides the
+scoped tracking service, runs the user process, preserves the process journal
+segment when failed-state evidence is needed, and delegates tracking record
+evaluation to the tracking model.
 
 ## Target Authoring Shape
 
@@ -34,7 +40,10 @@ const ct = CommercetoolsDestination.make({
   projectKey: "catalog",
 }).provide(CommercetoolsLive.layer)
 
-const ProductTracking = Tracking.journal({ id: "products@v1" })
+const ProductTracking = Tracking.record({
+  id: "products@v1",
+  schema: ProductTrackingRecord,
+})
 
 const products = defineMigration({
   id: "products",
@@ -42,20 +51,25 @@ const products = defineMigration({
   store,
   tracking: ProductTracking,
   pipeline: Effect.fn("products.pipeline")(function* (source) {
-    yield* ct.products
+    const product = yield* ct.products
       .upsert({
         key: source.item.key,
         name: source.item.name,
       })
       .pipe(RetryOnNetwork)
+
+    yield* Tracking.setRecord({
+      productId: product.id,
+      productKey: product.key,
+    })
   }),
 })
 ```
 
-The migration definition describes the source, store, tracking mode, and
-pipeline. Destination capability modules are regular values used by the
-pipeline. Their non-framework requirements are satisfied with normal Effect
-composition.
+The migration definition describes the source, store, optional tracking record
+contract, and process pipeline. Destination capability modules are regular
+values used by the process. Their non-framework requirements are satisfied with normal
+Effect composition.
 
 ## Destination Capability Module
 
@@ -91,7 +105,7 @@ interface CommercetoolsDestination<Requirements> {
     ) => Effect.Effect<
       Product,
       CommercetoolsError,
-      Requirements | DestinationJournal
+      Requirements | Tracking
     >
   }
   readonly inventory: {
@@ -100,7 +114,7 @@ interface CommercetoolsDestination<Requirements> {
     ) => Effect.Effect<
       InventoryEntry,
       CommercetoolsError,
-      Requirements | DestinationJournal
+      Requirements | Tracking
     >
   }
   readonly provide: DestinationProvide<Requirements>
@@ -109,7 +123,7 @@ interface CommercetoolsDestination<Requirements> {
 
 Destination helpers may require destination services such as clients,
 credentials, rate limiters, and telemetry services. Helpers that produce
-trackable changes also require the framework-provided `DestinationJournal` so
+trackable changes also require the framework-provided `Tracking` service so
 they can record changes when destination operations succeed.
 
 ## Providing Requirements
@@ -125,7 +139,7 @@ const ct = CommercetoolsDestination.make({
 }).provide(CommercetoolsLive.layer)
 ```
 
-Pipeline-local provision remains valid for advanced cases:
+Process-local provision remains valid for advanced cases:
 
 ```ts
 const productsPipeline = Effect.fn("products.pipeline")(function* (source) {
@@ -134,7 +148,7 @@ const productsPipeline = Effect.fn("products.pipeline")(function* (source) {
 ```
 
 Run-level provision can also work if the returned migration definition preserves
-pipeline requirements in its type:
+process requirements in its type:
 
 ```ts
 runMigration(products).pipe(Effect.provide(CommercetoolsLive.layer))
@@ -146,7 +160,7 @@ execution:
 - source runtime services
 - migration store services
 - migration item context
-- destination journal
+- scoped tracking service
 - tracking evaluation
 
 Destination client layers are user/plugin requirements, not migration definition
@@ -161,9 +175,9 @@ changes into the framework-provided journal.
 yield* ct.products.upsert(productDraft).pipe(RetryOnNetwork)
 ```
 
-This document does not define tracking modes, materialized tracking records,
-aliases, custom changes, or failed item state persistence. Those rules belong to
-the scoped pipeline tracking spec.
+This document does not define tracking record contracts, journal diagnostics, or
+failed item state persistence. Those rules belong to the scoped process
+tracking spec.
 
 ## Hand-Rolled Effects
 
@@ -175,10 +189,10 @@ yield* Effect.tryPromise(() =>
 )
 ```
 
-That is valid pipeline code, but it is not a destination helper from a
+That is valid process code, but it is not a destination helper from a
 capability module and records no destination-native change by default. The
-tracking consequences and explicit custom-change escape hatches are specified
-by the tracking spec.
+tracking consequences, diagnostic logging, and optional tracking record contract
+are specified by the tracking spec.
 
 ## Why Not `destination` On The Definition
 
@@ -192,12 +206,13 @@ runtime -> execute through DestinationPlugin service
 runtime -> infer destination identity
 ```
 
-In the effectful pipeline model, the pipeline runs destination effects itself:
+In the effectful process model, the process pipeline runs destination effects
+itself:
 
 ```ts
-pipeline -> Effect<void, error, requirements | DestinationJournal>
-runtime -> provide item scope and journal
-runtime -> snapshot journal and evaluate tracking
+process -> Effect<void, error, requirements | Tracking>
+runtime -> provide item scope and tracking service
+runtime -> preserve failed-state journal evidence and evaluate tracking records
 ```
 
 If the runtime does not execute destination command plans, a top-level
@@ -207,13 +222,13 @@ moves those decisions into normal Effect composition and the tracking model.
 
 The migration definition may still need to carry source and store because the
 runner reads source items and persists item state. It does not need to carry
-destination modules just so the pipeline can call them.
+destination modules just so the process pipeline can call them.
 
 ## Why Not `destinations` As A Registry
 
 A `destinations: { ct }` registry could support validation that change
 descriptors come from registered modules, but it would mostly duplicate values
-already referenced by the pipeline and tracking model.
+already referenced by the process pipeline and tracking model.
 
 ```ts
 const products = defineMigration({
@@ -221,7 +236,10 @@ const products = defineMigration({
   source,
   store,
   destinations: { ct },
-  tracking: Tracking.journal({ id: "products@v1" }),
+  tracking: Tracking.record({
+    id: "products@v1",
+    schema: ProductTrackingRecord,
+  }),
   pipeline,
 })
 ```
@@ -236,7 +254,7 @@ Possible future reasons to add a registry:
 - runtime inspection of destination capabilities
 - automatic operator reports grouped by destination system
 - preflight checks against destination systems
-- plugin lifecycle hooks outside the pipeline
+- plugin lifecycle hooks outside the process
 - policy enforcement that all tracking descriptors originate from declared
   capability modules
 
@@ -248,44 +266,42 @@ For each source item, the runner does this:
 
 ```ts
 const itemProgram = Effect.gen(function* () {
-  const journal = yield* DestinationJournal
+  const trackingService = yield* Tracking
 
   const exit = yield* pipeline(sourceItem).pipe(Effect.exit)
-  const journalSnapshot = yield* journal.snapshot
+  const journal = yield* trackingService.snapshot
 
   if (Exit.isFailure(exit)) {
     return yield* storeFailedItemState({
       sourceItem,
-      journal: journalSnapshot,
+      processJournal: journal,
       failure: exit.cause,
     })
   }
 
-  if (tracking._tag === "Untracked") {
+  if (definition.tracking === undefined) {
     return yield* storeMigratedItemState({
       sourceItem,
     })
   }
 
-  const trackingState = yield* Tracking.evaluate({
+  const trackingState = yield* trackingService.evaluateRecordContract({
     sourceItem,
-    journalSnapshot,
-    tracking,
+    tracking: definition.tracking,
   })
 
   return yield* storeMigratedItemState({
     sourceItem,
     trackingState,
-    journal: journalSnapshot,
   })
 }).pipe(
-  Effect.provide(DestinationJournal.layerScoped()),
+  Effect.provide(Tracking.layerProcessScope()),
   Effect.provide(MigrationItemContext.layer(sourceItem))
 )
 ```
 
 The exact implementation can differ, but the ownership boundary should hold:
-the user pipeline executes effects; the runtime owns item state persistence and
+the user process executes effects; the runtime owns item state persistence and
 journal capture. Detailed tracking evaluation is delegated to the sibling
 tracking spec.
 
@@ -294,4 +310,4 @@ tracking spec.
 - Should change descriptors carry a module id for diagnostics and
   fingerprinting, even without a destination registry?
 - Should plugin-local `.provide(...)` be the only documented dependency style,
-  while pipeline-level and run-level provision remain advanced Effect usage?
+  while process-level and run-level provision remain advanced Effect usage?
