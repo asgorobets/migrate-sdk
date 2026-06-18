@@ -4,15 +4,14 @@ import {
   type ConfiguredDestinationPlugin,
   type ConfiguredSourcePlugin,
   type DestinationCommand,
-  type DestinationIdentity,
   defineMigration,
   type MigrationDefinitionId,
+  type MigrationItemState,
   type MigrationRunId,
   type MigrationStore,
   type MigrationStoreError,
   makeRollbackMigrationOptions,
   makeRollbackRequest,
-  type RollbackableMigrationItemState,
   type RollbackContext,
   type RollbackDefinitionRunSummary,
   type RollbackMigrationOptionsInput,
@@ -186,11 +185,13 @@ describe("rollback public API", () => {
 });
 
 expectTypeOf<
-  RollbackableMigrationItemState["destinationIdentity"]
->().toEqualTypeOf<DestinationIdentity>();
-expectTypeOf<
-  Extract<RollbackableMigrationItemState, { status: "skipped" }>
->().toEqualTypeOf<never>();
+  Parameters<RollbackPipeline<DeleteArticleCommand>>[0]
+>().toEqualTypeOf<typeof MigrationItemState.Type>();
+const effectVoidRollbackPipeline: RollbackPipeline<DeleteArticleCommand> = () =>
+  Effect.void;
+expectTypeOf(effectVoidRollbackPipeline).toEqualTypeOf<
+  RollbackPipeline<DeleteArticleCommand>
+>();
 expectTypeOf<RollbackContext>().toEqualTypeOf<{
   readonly definitionId: MigrationDefinitionId;
   readonly runId: MigrationRunId;

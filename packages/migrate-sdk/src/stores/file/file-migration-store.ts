@@ -31,7 +31,11 @@ import type { MigrationRunState } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { MigrationItemError } from "../../domain/state.ts";
 import { summarizeMigrationItemStates } from "../../domain/status.ts";
-import { DestinationJournal, TrackingRecord } from "../../domain/tracking.ts";
+import {
+  DestinationJournalEntry,
+  DestinationJournalRollbackAttemptError,
+  TrackingRecord,
+} from "../../domain/tracking.ts";
 import { MigrationStore } from "../../services/migration-store.ts";
 
 export interface FileMigrationStoreOptions {
@@ -92,12 +96,34 @@ const PersistedObservedSourceVersionFields = {
   sourceVersion: SourceVersionSchema,
 } as const;
 
+const PersistedDestinationJournalSegmentFields = {
+  entries: Schema.Array(DestinationJournalEntry),
+  runId: MigrationRunIdSchema,
+} as const;
+
+const PersistedDestinationJournalSegment = Schema.Struct(
+  PersistedDestinationJournalSegmentFields
+);
+
+const PersistedDestinationRollbackAttemptJournalSegment = Schema.Struct({
+  ...PersistedDestinationJournalSegmentFields,
+  error: DestinationJournalRollbackAttemptError,
+  failedAt: Schema.DateFromString,
+});
+
+const PersistedDestinationJournal = Schema.Struct({
+  process: PersistedDestinationJournalSegment,
+  rollbackAttempts: Schema.Array(
+    PersistedDestinationRollbackAttemptJournalSegment
+  ),
+});
+
 const PersistedMigratedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
   ...PersistedObservedSourceVersionFields,
   destinationIdentity: Schema.optional(DestinationIdentitySchema),
   destinationVersion: Schema.optional(DestinationVersionSchema),
-  journal: Schema.optional(DestinationJournal),
+  journal: Schema.optional(PersistedDestinationJournal),
   status: Schema.Literal("migrated"),
   trackingRecord: Schema.optional(TrackingRecord),
 });
@@ -105,7 +131,7 @@ const PersistedMigratedItemState = Schema.Struct({
 const PersistedSkippedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
   ...PersistedObservedSourceVersionFields,
-  journal: Schema.optional(DestinationJournal),
+  journal: Schema.optional(PersistedDestinationJournal),
   skipReason: Schema.String,
   status: Schema.Literal("skipped"),
 });
@@ -119,7 +145,7 @@ const PersistedFailedItemState = Schema.Struct({
   destinationIdentity: Schema.optional(DestinationIdentitySchema),
   destinationVersion: Schema.optional(DestinationVersionSchema),
   error: MigrationItemError,
-  journal: Schema.optional(DestinationJournal),
+  journal: Schema.optional(PersistedDestinationJournal),
   status: Schema.Literal("failed"),
 });
 
@@ -131,7 +157,7 @@ const PersistedNeedsUpdateItemState = Schema.Struct({
   sourceVersion: Schema.optional(SourceVersionSchema),
   destinationIdentity: Schema.optional(DestinationIdentitySchema),
   destinationVersion: Schema.optional(DestinationVersionSchema),
-  journal: Schema.optional(DestinationJournal),
+  journal: Schema.optional(PersistedDestinationJournal),
   reason: Schema.String,
   status: Schema.Literal("needs-update"),
   trackingRecord: Schema.optional(TrackingRecord),

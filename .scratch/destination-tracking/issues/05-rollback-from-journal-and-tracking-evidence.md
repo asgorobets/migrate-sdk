@@ -14,10 +14,10 @@ Rewrite rollback examples/tests away from destination identity and command-plan 
 
 ## Acceptance criteria
 
-- [ ] Rollbackable Migration Item State is based on durable destination tracking evidence, not singular `destinationIdentity`.
+- [ ] Rollback requires an explicit rollback pipeline when selected item state exists; runtime no longer exports a status-derived rollback type based on status or `destinationIdentity`.
 - [ ] Rollback input exposes decoded process journal entries and a tracking record when present.
 - [ ] Rollback code can narrow process journal entries with Destination Change Descriptors.
-- [ ] Progress-only successful items are not rollbackable through destination tracking.
+- [ ] Progress-only successful items are passed to rollback when selected and a rollback pipeline exists; an empty journal or missing tracking record is a user-authored no-op or cleanup decision.
 - [ ] A failed rollback preserves the original item state.
 - [ ] A failed rollback appends a separate rollback-attempt journal segment with attempt evidence and failure metadata.
 - [ ] A later rollback retry can see the original process segment and previous failed rollback-attempt segments.

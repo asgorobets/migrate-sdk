@@ -548,7 +548,7 @@ const validateProcessAuthoring = (definition: {
   if (
     definition.destination === undefined &&
     (hasPipeline ||
-      definition.rollback !== undefined ||
+      (definition.rollback !== undefined && !hasProcess) ||
       (definition.stub !== undefined && !hasProcess))
   ) {
     throw new Error(

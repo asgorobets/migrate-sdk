@@ -1,4 +1,5 @@
 import { type Effect, Schema } from "effect";
+import type { Tracking } from "../services/tracking.ts";
 import type { MigrationDefinition } from "./definition.ts";
 import type {
   DestinationCommand,
@@ -6,7 +7,6 @@ import type {
 } from "./destination.ts";
 import { RollbackRequestError } from "./errors.ts";
 import type {
-  DestinationIdentity,
   EncodedSourceIdentity,
   EncodedSourceIdentityInput,
   MigrationDefinitionIdInput,
@@ -18,22 +18,7 @@ import {
   toEncodedSourceIdentity,
   toMigrationDefinitionId,
 } from "./ids.ts";
-import type {
-  FailedItemState,
-  MigratedItemState,
-  NeedsUpdateItemState,
-} from "./state.ts";
-
-export type RollbackableMigrationItemState =
-  | (MigratedItemState & {
-      readonly destinationIdentity: DestinationIdentity;
-    })
-  | (NeedsUpdateItemState & {
-      readonly destinationIdentity: DestinationIdentity;
-    })
-  | (FailedItemState & {
-      readonly destinationIdentity: DestinationIdentity;
-    });
+import type { MigrationItemState } from "./state.ts";
 
 export interface RollbackContext {
   readonly definitionId: MigrationDefinitionId;
@@ -45,15 +30,20 @@ export const RollbackContext = Schema.Struct({
   runId: MigrationRunId,
 });
 
+export type RollbackPipelineSuccess<Command extends DestinationCommand> =
+  | undefined
+  | DestinationCommandPlan<Command>;
+
 export type RollbackPipeline<
   Command extends DestinationCommand,
   RollbackError = never,
 > = (
-  state: RollbackableMigrationItemState,
+  state: MigrationItemState,
   context: RollbackContext
 ) =>
-  | DestinationCommandPlan<Command>
-  | Effect.Effect<DestinationCommandPlan<Command>, RollbackError>;
+  | RollbackPipelineSuccess<Command>
+  | Effect.Effect<RollbackPipelineSuccess<Command>, RollbackError, Tracking>
+  | Effect.Effect<void, RollbackError, Tracking>;
 
 export type AnyRollbackMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous rollback requests.

@@ -64,7 +64,7 @@ destination identity inference as the target model for new work.
 
 3. As a migration author, I want record-backed migrations to provide a stable, schema-validated reference contract, so that downstream migrations can depend on durable fields.
 
-4. As a migration author, I want successful progress-only items not to look rollbackable through destination tracking, so that destructive cleanup scope stays explicit.
+4. As a migration author, I want rollback cleanup to require an explicit rollback pipeline, so that destructive cleanup scope stays migration-owned.
 
 5. As a migration author, I want progress-only migrations to still record item state, so that skipped, failed, migrated, and unchanged behavior remains durable.
 
@@ -126,7 +126,7 @@ destination identity inference as the target model for new work.
 
 34. As a plugin author, I want process-level and run-level provision to remain possible advanced Effect usage, so that unusual dependency composition is not blocked.
 
-35. As a runtime maintainer, I want a scoped tracking service, so that journal entries and staged records are isolated to one source item or rollbackable item state.
+35. As a runtime maintainer, I want a scoped tracking service, so that journal entries and staged records are isolated to one source item or stored migration item state.
 
 36. As a runtime maintainer, I want process and rollback pipelines to capture journal entries in separate scoped tracking services, so that live destination evidence is not mixed across pipeline executions.
 
@@ -142,7 +142,7 @@ destination identity inference as the target model for new work.
 
 42. As a runtime maintainer, I want successful item state with a tracking record contract to persist the schema-valid record and any recorded process journal evidence, so that lookup can expose the public record without discarding execution evidence.
 
-43. As a runtime maintainer, I want successful items with no tracking record and no journal entries to remain progress-only, so that state does not look rollbackable by accident.
+43. As a runtime maintainer, I want successful items with no tracking record and no journal entries to remain progress-only while still being selectable by an explicit rollback pipeline, so that cleanup policy stays in user code.
 
 44. As a runtime maintainer, I want a migration contract to include tracking contract id and tracking record schema fingerprint when declared, so that tracking drift is detected before source reads begin.
 
@@ -162,13 +162,13 @@ destination identity inference as the target model for new work.
 
 52. As a status consumer, I want status to keep avoiding destination initialization, so that read-only inspection cannot accidentally execute destination-side work.
 
-53. As a rollback author, I want rollbackable item state to be based on durable destination tracking evidence and optional tracking records, so that my rollback effect can decide how to compensate composite destination effects.
+53. As a rollback author, I want rollback input to include durable destination tracking evidence and optional tracking records for any selected item state, so that my rollback effect can decide how to compensate composite destination effects.
 
 54. As a rollback author, I want rollback pipelines to receive decoded ordered process journal entries and narrow them with destination change descriptors, so that compensation code does not parse raw persisted records.
 
 55. As a rollback author, I want failed rollback attempt journal segments to be available separately from process journal entries, so that retry and manual correction logic can account for previous compensation attempts.
 
-56. As a rollback author, I want successful progress-only items not to be rollbackable through destination tracking, so that destructive cleanup scope is explicit.
+56. As a rollback author, I want successful progress-only items to be passed to rollback when I provide a pipeline, so that an empty journal and missing tracking record can intentionally no-op or clear state.
 
 57. As an SDK maintainer, I want this destination tracking slice to keep serializable migration specs out of scope, so that executable TypeScript migration definitions remain the first implementation path.
 
@@ -290,7 +290,7 @@ destination identity inference as the target model for new work.
 
 - Definitions without a tracking record contract are rejected by lookup by default because there is no durable destination reference surface.
 
-- Update rollbackability to mean item state with durable destination tracking evidence that can be passed to the user-authored rollback effect, not item state with a singular destination identity and not runtime proof that compensation is required.
+- Rollback selection is not defined by status or durable destination evidence. Any selected item state may be passed to the user-authored rollback effect when the definition provides one; journal and tracking evidence inform the effect but do not gate runtime rollback eligibility.
 
 - The rollback effect owns journal interpretation. It may use process destination changes, previous failed rollback-attempt segments, tracking records, current item status, and provider helpers to compensate, no-op, or fail for manual correction.
 
@@ -352,7 +352,7 @@ destination identity inference as the target model for new work.
 
 - Add migration reference lookup tests for record-backed and progress-only referenced definitions.
 
-- Add rollback-preparation tests proving rollbackable state is based on persisted destination tracking evidence.
+- Add rollback-preparation tests proving rollback requires a rollback pipeline for any selected item state and dependency safety accounts for any omitted dependent item state.
 
 - Add rollback lifecycle tests proving successful rollback over durable destination evidence removes item state, while failed rollback preserves the original item state.
 

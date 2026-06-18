@@ -1379,7 +1379,7 @@ describe("MigrationDefinitionRegistry", () => {
         expect(error).toEqual(
           expect.objectContaining({
             message:
-              "Rollback would leave dependent Migration Definition state rollbackable",
+              "Rollback would leave dependent Migration Definition item state",
           })
         );
         expect(storeState.latestRunStates.size).toBe(0);
@@ -1421,7 +1421,7 @@ describe("MigrationDefinitionRegistry", () => {
         expect(error).toEqual(
           expect.objectContaining({
             message:
-              "Rollback would leave dependent Migration Definition state rollbackable",
+              "Rollback would leave dependent Migration Definition item state",
           })
         );
         expect(storeState.latestRunStates.size).toBe(0);

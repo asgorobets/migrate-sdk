@@ -183,9 +183,9 @@ export {
 export type {
   AnyRollbackMigrationDefinition,
   MigrationDefinitionRollbackPipelineError,
-  RollbackableMigrationItemState,
   RollbackMigrationOptionsInput,
   RollbackPipeline,
+  RollbackPipelineSuccess,
   RollbackRequest,
   RollbackRequestInput,
 } from "./domain/rollback.ts";
@@ -223,7 +223,9 @@ export {
   DestinationJournalDiagnosticInput,
   DestinationJournalDiagnosticSeverity,
   DestinationJournalEntry,
+  DestinationJournalRollbackAttemptError,
   DestinationJournalSegment,
+  DestinationRollbackAttemptJournalSegment,
   TrackingRecord,
   TrackingRecordContract,
 } from "./domain/tracking.ts";
@@ -235,7 +237,9 @@ export type {
   DestinationJournalDiagnosticInput as DestinationJournalDiagnosticInputType,
   DestinationJournalDiagnosticSeverity as DestinationJournalDiagnosticSeverityType,
   DestinationJournalEntry as DestinationJournalEntryType,
+  DestinationJournalRollbackAttemptError as DestinationJournalRollbackAttemptErrorType,
   DestinationJournalSegment as DestinationJournalSegmentType,
+  DestinationRollbackAttemptJournalSegment as DestinationRollbackAttemptJournalSegmentType,
   TrackingRecordContract as TrackingRecordContractType,
   TrackingRecordContractInput,
   TrackingRecordValue,

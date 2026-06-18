@@ -79,22 +79,59 @@ export const DestinationJournalEntry = Schema.Union([
   DestinationJournalDiagnosticEntry,
 ]);
 
-export const DestinationJournalSegment = Schema.Struct({
+const DestinationJournalSegmentFields = {
   entries: Schema.Array(DestinationJournalEntry),
   runId: MigrationRunIdSchema,
-});
+} as const;
+
+export const DestinationJournalSegment = Schema.Struct(
+  DestinationJournalSegmentFields
+);
 export interface DestinationJournalSegment {
   readonly entries: readonly DestinationJournalEntry[];
   readonly runId: MigrationRunId;
 }
 
+const DestinationJournalRollbackAttemptErrorDetail = Schema.Struct({
+  path: Schema.optional(Schema.String),
+  message: Schema.String,
+});
+
+export const DestinationJournalRollbackAttemptError = Schema.Struct({
+  kind: Schema.Literals([
+    "source",
+    "tracking",
+    "process",
+    "pipeline",
+    "destination",
+  ]),
+  errorTag: Schema.String,
+  message: Schema.String,
+  details: Schema.optional(
+    Schema.Array(DestinationJournalRollbackAttemptErrorDetail)
+  ),
+});
+export type DestinationJournalRollbackAttemptError =
+  typeof DestinationJournalRollbackAttemptError.Type;
+
+export const DestinationRollbackAttemptJournalSegment = Schema.Struct({
+  ...DestinationJournalSegmentFields,
+  error: DestinationJournalRollbackAttemptError,
+  failedAt: Schema.Date,
+});
+export interface DestinationRollbackAttemptJournalSegment
+  extends DestinationJournalSegment {
+  readonly error: DestinationJournalRollbackAttemptError;
+  readonly failedAt: Date;
+}
+
 export const DestinationJournal = Schema.Struct({
   process: DestinationJournalSegment,
-  rollbackAttempts: Schema.Array(DestinationJournalSegment),
+  rollbackAttempts: Schema.Array(DestinationRollbackAttemptJournalSegment),
 });
 export interface DestinationJournal {
   readonly process: DestinationJournalSegment;
-  readonly rollbackAttempts: readonly DestinationJournalSegment[];
+  readonly rollbackAttempts: readonly DestinationRollbackAttemptJournalSegment[];
 }
 
 export type TrackingRecordValue = Schema.JsonObject;

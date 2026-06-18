@@ -31,15 +31,15 @@ describe("file store runtime example", () => {
 
         expect(rollbackSummary.status).toBe("succeeded");
         expect(rollbackSummary.definitions[0]?.counts).toEqual({
-          rolledBack: 2,
-          skipped: 1,
+          rolledBack: 3,
+          skipped: 0,
           failed: 0,
         });
         expect(
           rollback.destinationFixture
             .executions()
             .map((execution) => execution.command.kind)
-        ).toEqual(["DeleteEntry", "DeleteEntry"]);
+        ).toEqual(["DeleteEntry", "DeleteEntry", "DeleteEntry"]);
         expect(rollback.destinationFixture.entries().size).toBe(0);
 
         const secondRun = makeFileStoreArticlesMigration({ storeDirectory });
@@ -63,8 +63,8 @@ describe("file store runtime example", () => {
 
         expect(secondRollbackSummary.status).toBe("succeeded");
         expect(secondRollbackSummary.definitions[0]?.counts).toEqual({
-          rolledBack: 2,
-          skipped: 1,
+          rolledBack: 3,
+          skipped: 0,
           failed: 0,
         });
 
@@ -78,7 +78,7 @@ describe("file store runtime example", () => {
         expect(thirdRollbackSummary.status).toBe("succeeded");
         expect(thirdRollbackSummary.definitions[0]?.counts).toEqual({
           rolledBack: 0,
-          skipped: 1,
+          skipped: 0,
           failed: 0,
         });
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))

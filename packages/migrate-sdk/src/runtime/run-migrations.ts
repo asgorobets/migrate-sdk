@@ -1,9 +1,6 @@
 import { Deferred, Effect, Exit, Layer, Predicate, Schema } from "effect";
 import type { MigrationDefinition } from "../domain/definition.ts";
-import type {
-  DestinationCommand,
-  DestinationCommandPlan,
-} from "../domain/destination.ts";
+import type { DestinationCommand } from "../domain/destination.ts";
 import {
   DestinationPluginError,
   MigrationReferenceLookupError,
@@ -30,11 +27,11 @@ import type {
   EncodedRollbackMigrationOptions,
   EncodedRollbackRequest,
   EncodedRollbackRequestInput,
-  RollbackableMigrationItemState,
   RollbackDefinitionRunSummary,
   RollbackMigrationOptions,
   RollbackMigrationOptionsInput,
   RollbackPipeline,
+  RollbackPipelineSuccess,
   RollbackRequestInput,
   RollbackRunSummary,
 } from "../domain/rollback.ts";
@@ -68,6 +65,8 @@ import type {
   NeedsUpdateItemState,
 } from "../domain/state.ts";
 import type {
+  DestinationJournal,
+  DestinationRollbackAttemptJournalSegment,
   TrackingRecord,
   TrackingRecordContract,
 } from "../domain/tracking.ts";
@@ -78,7 +77,11 @@ import {
   getSourcePlugin,
   type SourcePlugin,
 } from "../services/source-plugin.ts";
-import { makeProcessScope, Tracking } from "../services/tracking.ts";
+import {
+  makeProcessScope,
+  Tracking,
+  type TrackingService,
+} from "../services/tracking.ts";
 import { executeDestinationCommandPlan } from "./destination-command-plan.ts";
 import { normalizeItemError } from "./item-error.ts";
 import {
@@ -254,20 +257,19 @@ const encodeRollbackMigrationOptions = (
   });
 };
 
-const missingRollbackPipelineError = (definitionId: MigrationDefinitionId) =>
-  new RollbackPreflightError({
-    message: "Migration Definition does not define a rollback pipeline",
-    cause: { definitionId },
-  });
-
 const unsafeDependentRollbackError = (
   definitionId: MigrationDefinitionId,
   dependentDefinitionId: MigrationDefinitionId
 ) =>
   new RollbackPreflightError({
-    message:
-      "Rollback would leave dependent Migration Definition state rollbackable",
+    message: "Rollback would leave dependent Migration Definition item state",
     cause: { definitionId, dependentDefinitionId },
+  });
+
+const missingRollbackPipelineError = (definitionId: MigrationDefinitionId) =>
+  new RollbackPreflightError({
+    message: "Migration Definition does not define a rollback pipeline",
+    cause: { definitionId },
   });
 
 const rollbackDependencyStoreError = (
@@ -948,22 +950,12 @@ const addOutcomeToCounts = (
   }
 };
 
-const isRollbackableItemState = (
-  itemState: MigrationItemState
-): itemState is RollbackableMigrationItemState =>
-  (itemState.status === "migrated" &&
-    itemState.destinationIdentity !== undefined) ||
-  (itemState.status === "needs-update" &&
-    itemState.destinationIdentity !== undefined) ||
-  (itemState.status === "failed" &&
-    itemState.destinationIdentity !== undefined);
-
 const runRollbackPipeline = <Command extends DestinationCommand, RollbackError>(
   rollback: RollbackPipeline<Command, RollbackError>,
   definitionId: MigrationDefinitionId,
-  itemState: RollbackableMigrationItemState,
+  itemState: MigrationItemState,
   runId: MigrationRunId
-): Effect.Effect<DestinationCommandPlan<Command>, RollbackError> =>
+): Effect.Effect<RollbackPipelineSuccess<Command>, RollbackError, Tracking> =>
   Effect.try({
     try: () =>
       rollback(itemState, {
@@ -975,12 +967,48 @@ const runRollbackPipeline = <Command extends DestinationCommand, RollbackError>(
     Effect.flatMap((planOrEffect) =>
       Effect.isEffect(planOrEffect)
         ? (planOrEffect as Effect.Effect<
-            DestinationCommandPlan<Command>,
-            RollbackError
+            RollbackPipelineSuccess<Command>,
+            RollbackError,
+            Tracking
           >)
-        : Effect.succeed(planOrEffect)
+        : Effect.succeed(planOrEffect as RollbackPipelineSuccess<Command>)
     )
   );
+
+const emptyProcessJournalSegment = (
+  itemState: MigrationItemState
+): DestinationJournal["process"] => ({
+  entries: [],
+  runId: itemState.lastRunId,
+});
+
+const appendFailedRollbackAttempt = (
+  itemState: MigrationItemState,
+  runId: MigrationRunId,
+  tracking: TrackingService,
+  error: MigrationItemError
+): Effect.Effect<MigrationItemState> =>
+  Effect.gen(function* () {
+    const rollbackJournal = yield* tracking.snapshot;
+    const rollbackAttempt: DestinationRollbackAttemptJournalSegment = {
+      entries: rollbackJournal?.entries ?? [],
+      error,
+      failedAt: new Date(),
+      runId,
+    };
+
+    return {
+      ...itemState,
+      journal: {
+        process:
+          itemState.journal?.process ?? emptyProcessJournalSegment(itemState),
+        rollbackAttempts: [
+          ...(itemState.journal?.rollbackAttempts ?? []),
+          rollbackAttempt,
+        ],
+      },
+    };
+  });
 
 const rollbackItemState = <
   Source,
@@ -1016,25 +1044,21 @@ const rollbackItemState = <
   readonly store: typeof MigrationStore.Service;
 }) =>
   Effect.gen(function* () {
-    if (!isRollbackableItemState(itemState)) {
-      counts.skipped += 1;
-      return;
-    }
-
     const rollback = definition.rollback;
 
     if (rollback === undefined) {
       return yield* missingRollbackPipelineError(definition.id);
     }
 
-    const destinationDefinition = definition.destination;
-
-    if (destinationDefinition === undefined) {
-      counts.failed += 1;
-      return;
-    }
-
-    const destination = yield* DestinationPlugin;
+    const tracking = yield* makeProcessScope({
+      definitionId: definition.id,
+      previousState: itemState,
+      runId,
+      sourceIdentity: itemState.sourceIdentity.encoded,
+      ...(itemState.sourceVersion === undefined
+        ? {}
+        : { sourceVersion: itemState.sourceVersion }),
+    });
 
     const pipelineOutcome = yield* runRollbackPipeline(
       rollback,
@@ -1042,21 +1066,66 @@ const rollbackItemState = <
       itemState,
       runId
     ).pipe(
-      Effect.map((plan) => ({
-        kind: "command" as const,
-        plan,
-      })),
-      Effect.catch(() =>
+      Effect.provide(Layer.succeed(Tracking, tracking)),
+      Effect.map((plan) =>
+        plan === undefined
+          ? ({
+              kind: "process" as const,
+            } as const)
+          : ({
+              kind: "command" as const,
+              plan,
+            } as const)
+      ),
+      Effect.catch((error) =>
         Effect.succeed({
           kind: "pipeline-failed" as const,
+          error,
         })
       )
     );
 
     if (pipelineOutcome.kind === "pipeline-failed") {
+      const updatedState = yield* appendFailedRollbackAttempt(
+        itemState,
+        runId,
+        tracking,
+        normalizeItemError("process", pipelineOutcome.error)
+      );
+      yield* store.upsertItemState(updatedState);
       counts.failed += 1;
       return;
     }
+
+    if (pipelineOutcome.kind === "process") {
+      yield* store.deleteItemState(
+        definition.id,
+        itemState.sourceIdentity.encoded
+      );
+      counts.rolledBack += 1;
+      return;
+    }
+
+    const destinationDefinition = definition.destination;
+
+    if (destinationDefinition === undefined) {
+      const updatedState = yield* appendFailedRollbackAttempt(
+        itemState,
+        runId,
+        tracking,
+        normalizeItemError(
+          "destination",
+          new DestinationPluginError({
+            message: "Migration Definition does not define a destination",
+          })
+        )
+      );
+      yield* store.upsertItemState(updatedState);
+      counts.failed += 1;
+      return;
+    }
+
+    const destination = yield* DestinationPlugin;
 
     const destinationOutcome = yield* executeDestinationCommandPlan({
       commandDefinitions: destinationDefinition.commandDefinitions,
@@ -1076,6 +1145,13 @@ const rollbackItemState = <
     });
 
     if (destinationOutcome.kind === "failed") {
+      const updatedState = yield* appendFailedRollbackAttempt(
+        itemState,
+        runId,
+        tracking,
+        destinationOutcome.error
+      );
+      yield* store.upsertItemState(updatedState);
       counts.failed += 1;
       return;
     }
@@ -1845,7 +1921,7 @@ const runRollbackMigrationDefinition = <
   return program.pipe(Effect.provide(layer));
 };
 
-const hasSelectedRollbackableItemState = (
+const hasSelectedItemState = (
   store: typeof MigrationStore.Service,
   definition: AnyMigrationDefinition,
   options: EncodedRollbackMigrationOptions
@@ -1858,7 +1934,7 @@ const hasSelectedRollbackableItemState = (
           sourceIdentity
         );
 
-        if (itemState !== null && isRollbackableItemState(itemState)) {
+        if (itemState !== null) {
           return true;
         }
       }
@@ -1868,7 +1944,7 @@ const hasSelectedRollbackableItemState = (
 
     const itemStates = yield* store.listItemStates(definition.id);
 
-    return itemStates.some(isRollbackableItemState);
+    return itemStates.length > 0;
   });
 
 const validateRollbackPipelinePreflight = (
@@ -1878,13 +1954,13 @@ const validateRollbackPipelinePreflight = (
 ): Effect.Effect<void, MigrationStoreError | RollbackPreflightError> =>
   definition.rollback === undefined
     ? Effect.gen(function* () {
-        const hasRollbackableState = yield* hasSelectedRollbackableItemState(
+        const hasItemState = yield* hasSelectedItemState(
           store,
           definition,
           options
         );
 
-        if (hasRollbackableState) {
+        if (hasItemState) {
           return yield* missingRollbackPipelineError(definition.id);
         }
       })
@@ -1953,14 +2029,13 @@ const validateRollbackDependencyPreflight = (
           }
 
           if (!selectedDefinitionIds.has(dependentDefinition.id)) {
-            const hasRollbackableState =
-              yield* hasSelectedRollbackableItemState(
-                store,
-                dependentDefinition,
-                {}
-              );
+            const hasDependentItemState = yield* hasSelectedItemState(
+              store,
+              dependentDefinition,
+              {}
+            );
 
-            if (hasRollbackableState) {
+            if (hasDependentItemState) {
               return yield* unsafeDependentRollbackError(
                 selectedDefinition.id,
                 dependentDefinition.id

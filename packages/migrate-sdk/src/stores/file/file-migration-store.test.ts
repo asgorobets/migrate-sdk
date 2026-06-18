@@ -477,6 +477,67 @@ describe("FileMigrationStore", () => {
     )
   );
 
+  it.effect(
+    "round-trips failed rollback attempt journals across fresh store instances",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const definitionId = toMigrationDefinitionId("articles");
+          const sourceIdentity = toEncodedSourceIdentity(
+            "article-rollback-failed"
+          );
+          const failedAt = new Date("2026-01-01T00:00:03.000Z");
+          const itemState = {
+            definitionId,
+            destinationIdentity: toDestinationIdentity("entry-rollback-failed"),
+            journal: {
+              process: {
+                entries: [],
+                runId: toMigrationRunId("run-process"),
+              },
+              rollbackAttempts: [
+                {
+                  entries: [],
+                  error: {
+                    errorTag: "RollbackFailureTestError",
+                    kind: "process" as const,
+                    message: "Rollback failed",
+                  },
+                  failedAt,
+                  runId: toMigrationRunId("run-rollback"),
+                },
+              ],
+            },
+            lastRunId: toMigrationRunId("run-process"),
+            sourceIdentity: SourceIdentity.fromEncoded(
+              TestSourceIdentity,
+              sourceIdentity
+            ),
+            sourceVersion: toSourceVersion("source-version-1"),
+            status: "migrated" as const,
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          };
+
+          yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            yield* store.upsertItemState(itemState);
+          }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          const stored = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            return yield* store.getItemState(definitionId, sourceIdentity);
+          }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          expect(stored).toEqual(itemState);
+          expect(stored?.journal?.rollbackAttempts[0]?.failedAt).toBeInstanceOf(
+            Date
+          );
+        })
+      )
+  );
+
   it.effect("deletes persisted Migration Item State", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
