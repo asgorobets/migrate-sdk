@@ -406,6 +406,19 @@ export type SourceRetryStrategy = <A>(
   effect: Effect.Effect<A, SourcePluginError>
 ) => Effect.Effect<A, SourcePluginError>;
 
+export type ProcessPipeline<
+  Source,
+  ProcessError,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> = (
+  source: SourceItem<Source, IdentityKey>,
+  context: PipelineContext
+) => void | Effect.Effect<
+  void,
+  ProcessError | SkipItem,
+  MigrationReferenceLookup
+>;
+
 export interface DestinationStubInput {
   readonly sourceIdentity: EncodedSourceIdentity;
 }
@@ -428,10 +441,15 @@ export interface MigrationDefinition<
 > {
   readonly dependencies?: MigrationDefinitionDependencies;
   readonly dependsOn?: readonly MigrationDefinitionId[];
-  readonly destination: ConfiguredDestinationPlugin<Command>;
+  readonly destination?: ConfiguredDestinationPlugin<Command>;
   readonly destinationRetry?: DestinationRetryStrategy;
   readonly id: MigrationDefinitionId;
-  readonly pipeline: (
+  /**
+   * @deprecated Use `process` for new Migration Definitions. The command-plan
+   * pipeline path is temporary bridge behavior while process-based destination
+   * tracking replaces command plans.
+   */
+  readonly pipeline?: (
     source: SourceItem<Source, IdentityKey>,
     context: PipelineContext
   ) =>
@@ -441,6 +459,7 @@ export interface MigrationDefinition<
         PipelineError | SkipItem,
         MigrationReferenceLookup
       >;
+  readonly process?: ProcessPipeline<Source, PipelineError, IdentityKey>;
   readonly rollback?: RollbackPipeline<Command, RollbackPipelineError>;
   readonly source: ConfiguredSourcePlugin<
     Source,
@@ -500,6 +519,36 @@ export interface MigrationDefinitionInput<
   readonly id: MigrationDefinitionIdInput;
 }
 
+const validateProcessAuthoring = (definition: {
+  readonly destination?: unknown;
+  readonly pipeline?: unknown;
+  readonly rollback?: unknown;
+  readonly process?: unknown;
+  readonly stub?: unknown;
+}) => {
+  const hasPipeline = definition.pipeline !== undefined;
+  const hasProcess = definition.process !== undefined;
+
+  if (hasPipeline === hasProcess) {
+    throw new Error(
+      hasPipeline
+        ? "Migration Definition must declare either process or pipeline, not both"
+        : "Migration Definition must declare a process"
+    );
+  }
+
+  if (
+    definition.destination === undefined &&
+    (hasPipeline ||
+      definition.rollback !== undefined ||
+      definition.stub !== undefined)
+  ) {
+    throw new Error(
+      "Migration Definition command-plan pipeline, rollback, and stub paths require a destination"
+    );
+  }
+};
+
 const normalizeMigrationDefinitionIds = (
   values: readonly MigrationDefinitionIdInput[]
 ): readonly MigrationDefinitionId[] => {
@@ -554,6 +603,7 @@ export const defineMigration = <
   SourceRequirements
 > => {
   const { dependencies, dependsOn, id, ...rest } = definition;
+  validateProcessAuthoring(definition);
   const requiredDependencies = normalizeMigrationDefinitionIds([
     ...(dependencies?.required ?? []),
     ...(dependsOn ?? []),

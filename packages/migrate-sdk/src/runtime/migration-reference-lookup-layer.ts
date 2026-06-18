@@ -104,7 +104,8 @@ const stubDefinitionFromInput = (
 const referenceFromState = (
   state: MigrationItemState | null
 ): MigrationReference | null =>
-  state?.status === "migrated" || state?.status === "needs-update"
+  (state?.status === "migrated" || state?.status === "needs-update") &&
+  state.destinationIdentity !== undefined
     ? {
         definitionId: state.definitionId,
         destinationIdentity: state.destinationIdentity,

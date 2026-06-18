@@ -904,6 +904,229 @@ describe("runMigration", () => {
   );
 
   it.effect(
+    "runs a progress-only Process Pipeline without destination tracking",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const processCalls: ArticleSource[] = [];
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Hello, process",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (source) =>
+            Effect.sync(() => {
+              processCalls.push(source.item);
+            }),
+        });
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(processCalls).toEqual([{ title: "Hello, process" }]);
+
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+
+        expect(itemState).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            sourceVersion: "source-version-1",
+            lastRunId: summary.runId,
+          })
+        );
+        expect(itemState).not.toHaveProperty("destinationIdentity");
+        expect(itemState).not.toHaveProperty("destinationVersion");
+      })
+  );
+
+  it.effect("records skipped item state from a Process Pipeline", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+
+      const definition = defineMigration({
+        id: "articles",
+        source: makeTestInMemorySource({
+          items: [
+            {
+              identityKey: "article-1",
+              version: "source-version-1",
+              item: {
+                title: "Skip me",
+              },
+            },
+          ],
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        process: () => Effect.fail(skipItem("Not ready")),
+      });
+
+      const summary = yield* runMigration(definition);
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 0,
+        skipped: 1,
+        failed: 0,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        )
+      ).toEqual(
+        expect.objectContaining({
+          status: "skipped",
+          skipReason: "Not ready",
+          sourceVersion: "source-version-1",
+          lastRunId: summary.runId,
+        })
+      );
+    })
+  );
+
+  it.effect("records failed item state from a Process Pipeline", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const processError: PipelineFailureTestError = {
+        _tag: "PipelineFailureTestError",
+        code: "process-failed",
+        message: "Process failed",
+      };
+
+      const definition = defineMigration({
+        id: "articles",
+        source: makeTestInMemorySource({
+          items: [
+            {
+              identityKey: "article-1",
+              version: "source-version-1",
+              item: {
+                title: "Fail me",
+              },
+            },
+          ],
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        process: () => Effect.fail(processError),
+      });
+
+      const summary = yield* runMigration(definition);
+
+      expect(summary.status).toBe("failed");
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 0,
+        skipped: 0,
+        failed: 1,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        )
+      ).toEqual(
+        expect.objectContaining({
+          status: "failed",
+          sourceVersion: "source-version-1",
+          lastRunId: summary.runId,
+          error: expect.objectContaining({
+            kind: "process",
+            errorTag: "PipelineFailureTestError",
+            message: "Process failed",
+          }),
+        })
+      );
+    })
+  );
+
+  it.effect("treats progress-only Process Pipeline state as unchanged", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const processCalls: string[] = [];
+
+      const definition = defineMigration({
+        id: "articles",
+        source: makeTestInMemorySource({
+          items: [
+            {
+              identityKey: "article-1",
+              version: "source-version-1",
+              item: {
+                title: "Run once",
+              },
+            },
+          ],
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        process: (source) =>
+          Effect.sync(() => {
+            processCalls.push(source.identity.encoded);
+          }),
+      });
+
+      const firstSummary = yield* runMigration(definition);
+      const secondSummary = yield* runMigration(definition);
+
+      expect(firstSummary.definitions[0]?.counts).toEqual({
+        migrated: 1,
+        skipped: 0,
+        failed: 0,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(secondSummary.definitions[0]?.counts).toEqual({
+        migrated: 0,
+        skipped: 0,
+        failed: 0,
+        unchanged: 1,
+        needsUpdate: 0,
+      });
+      expect(processCalls).toEqual(["article-1"]);
+    })
+  );
+
+  it("rejects a Migration Definition with both process and pipeline", () => {
+    expect(() =>
+      defineMigration({
+        id: "articles",
+        source: makeTestInMemorySource({
+          items: [],
+        }),
+        destination: makeTestUpsertEntryDestination({}),
+        store: InMemoryMigrationStore.layer(),
+        process: () => Effect.void,
+        pipeline: () => ({
+          kind: "UpsertEntry" as const,
+          contentType: "article",
+          fields: {
+            title: "Ambiguous",
+          },
+        }),
+      })
+    ).toThrow("Migration Definition must declare either process or pipeline");
+  });
+
+  it.effect(
     "blocks execution before source reads when existing item state uses a different source identity contract",
     () =>
       Effect.gen(function* () {
@@ -6024,7 +6247,6 @@ describe("runMigration", () => {
     "acquires and releases the full Migration Definition Lock set around the run",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const lockObservations: string[] = [];
@@ -6052,21 +6274,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
+          process: () =>
             Effect.sync(() => {
               observeLocks("authors");
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "author",
-                fields: {
-                  name: source.item.name,
-                },
-              };
             }),
         });
         const articles = defineMigration({
@@ -6081,21 +6292,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
+          process: () =>
             Effect.sync(() => {
               observeLocks("articles");
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              };
             }),
         });
 
@@ -6116,7 +6316,6 @@ describe("runMigration", () => {
 
   it.effect("preserves the primary error when failRun cleanup fails", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const sourceError = new SourcePluginError({
         message: "Source read failed",
@@ -6135,16 +6334,8 @@ describe("runMigration", () => {
           read: () => Effect.fail(sourceError),
           readByIdentity: () => Effect.succeed(null),
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: failRunFailingStoreLayer(storeState, failRunError),
-        pipeline: () =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {},
-          }),
+        process: () => Effect.void,
       });
 
       const error = yield* Effect.flip(runMigration(definition));
@@ -6163,7 +6354,6 @@ describe("runMigration", () => {
       );
       expect(cause?.primaryError).toBe(sourceError);
       expect(cause?.failRunError).toBe(failRunError);
-      expect(destinationState.executions).toEqual([]);
       expect(storeState.definitionLocks.size).toBe(0);
     })
   );

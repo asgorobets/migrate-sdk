@@ -93,6 +93,10 @@ export const makeDefinedDestinationCommands = <
   };
 };
 
+/**
+ * @deprecated New destination work should use process-scoped destination
+ * helpers instead of returning command plans.
+ */
 export type DestinationCommandPlan<Command extends DestinationCommand> =
   | Command
   | readonly Command[];

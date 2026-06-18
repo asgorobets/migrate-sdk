@@ -25,7 +25,9 @@ import type {
 } from "./state.ts";
 
 export type RollbackableMigrationItemState =
-  | MigratedItemState
+  | (MigratedItemState & {
+      readonly destinationIdentity: DestinationIdentity;
+    })
   | NeedsUpdateItemState
   | (FailedItemState & {
       readonly destinationIdentity: DestinationIdentity;

@@ -94,7 +94,7 @@ const PersistedObservedSourceVersionFields = {
 const PersistedMigratedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
   ...PersistedObservedSourceVersionFields,
-  destinationIdentity: DestinationIdentitySchema,
+  destinationIdentity: Schema.optional(DestinationIdentitySchema),
   destinationVersion: Schema.optional(DestinationVersionSchema),
   status: Schema.Literal("migrated"),
 });

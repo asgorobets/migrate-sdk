@@ -151,44 +151,43 @@ const makeFailedItemState = <Source>(
     readonly destinationIdentity?: FailedItemState["destinationIdentity"];
     readonly destinationVersion?: FailedItemState["destinationVersion"];
   }
-): FailedItemState => ({
-  ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
-  ...((latestDestination?.destinationIdentity ??
-    previousDestinationIdentity(previousState)) === undefined
-    ? {}
-    : {
-        destinationIdentity:
-          latestDestination?.destinationIdentity ??
-          previousDestinationIdentity(previousState),
-      }),
-  ...((latestDestination?.destinationVersion ??
-    previousDestinationVersion(previousState)) === undefined
-    ? {}
-    : {
-        destinationVersion:
-          latestDestination?.destinationVersion ??
-          previousDestinationVersion(previousState),
-      }),
-  status: "failed",
-  error,
-});
+): FailedItemState => {
+  const destinationIdentity =
+    latestDestination?.destinationIdentity ??
+    previousDestinationIdentity(previousState);
+  const destinationVersion =
+    latestDestination?.destinationVersion ??
+    previousDestinationVersion(previousState);
+
+  return {
+    ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
+    ...(destinationIdentity === undefined ? {} : { destinationIdentity }),
+    ...(destinationVersion === undefined ? {} : { destinationVersion }),
+    status: "failed",
+    error,
+  };
+};
 
 const makeMigratedItemState = <Source>(
   sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>,
   result: {
-    readonly destinationIdentity: MigratedItemState["destinationIdentity"];
+    readonly destinationIdentity?: MigratedItemState["destinationIdentity"];
     readonly destinationVersion?: MigratedItemState["destinationVersion"];
   }
-): MigratedItemState => ({
-  ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
-  status: "migrated",
-  destinationIdentity: result.destinationIdentity,
-  ...(result.destinationVersion === undefined
-    ? {}
-    : { destinationVersion: result.destinationVersion }),
-});
+): MigratedItemState => {
+  return {
+    ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
+    status: "migrated",
+    ...(result.destinationIdentity === undefined
+      ? {}
+      : { destinationIdentity: result.destinationIdentity }),
+    ...(result.destinationVersion === undefined
+      ? {}
+      : { destinationVersion: result.destinationVersion }),
+  };
+};
 
 const missingDestinationIdentityError = (): DestinationPluginError =>
   new DestinationPluginErrorClass({
@@ -322,7 +321,15 @@ const runPipeline = <
   context: PipelineContext
 ) =>
   Effect.try({
-    try: () => definition.pipeline(sourceItem, context),
+    try: () => {
+      const pipeline = definition.pipeline;
+
+      if (pipeline === undefined) {
+        throw new Error("Migration Definition must declare a pipeline");
+      }
+
+      return pipeline(sourceItem, context);
+    },
     catch: (error) => error as PipelineError | SkipItem,
   }).pipe(
     Effect.flatMap((planOrEffect) =>
@@ -333,6 +340,45 @@ const runPipeline = <
             MigrationReferenceLookup
           >)
         : Effect.succeed(planOrEffect)
+    )
+  );
+
+const runProcess = <
+  Source,
+  Command extends DestinationCommand,
+  PipelineError,
+  Cursor = unknown,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+  SourceInput = Source,
+  SourceLayerError = never,
+  SourceRequirements = never,
+>(
+  definition: MigrationDefinition<
+    Source,
+    Command,
+    PipelineError,
+    Cursor,
+    IdentityKey,
+    unknown,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
+  >,
+  sourceItem: SourceItem<Source, IdentityKey>,
+  context: PipelineContext
+) =>
+  Effect.try({
+    try: () => definition.process?.(sourceItem, context),
+    catch: (error) => error as PipelineError | SkipItem,
+  }).pipe(
+    Effect.flatMap((voidOrEffect) =>
+      Effect.isEffect(voidOrEffect)
+        ? (voidOrEffect as Effect.Effect<
+            void,
+            PipelineError | SkipItem,
+            MigrationReferenceLookup
+          >)
+        : Effect.void
     )
   );
 
@@ -366,7 +412,6 @@ export const processSourceItem = <
   DestinationPlugin | MigrationReferenceLookup | MigrationStore
 > =>
   Effect.gen(function* () {
-    const destination = yield* DestinationPlugin;
     const store = yield* MigrationStore;
     const sourceVersionContractContext = {
       definitionId: definition.id,
@@ -417,6 +462,57 @@ export const processSourceItem = <
       ...(previousState === null ? {} : { previousState }),
     };
 
+    if (definition.process !== undefined) {
+      const processOutcome = yield* runProcess(
+        definition,
+        decodedSourceItem,
+        pipelineContext
+      ).pipe(
+        Effect.as({ kind: "migrated" as const }),
+        Effect.catchIf(isSkipItem, (skip) =>
+          Effect.succeed({
+            kind: "skipped",
+            reason: skip.reason,
+          } satisfies Exclude<
+            PipelineOutcome<Command>,
+            { readonly kind: "command" }
+          >)
+        ),
+        Effect.catchIf(isMigrationStoreError, (error) => Effect.fail(error)),
+        Effect.catch((error) =>
+          Effect.succeed({
+            kind: "failed",
+            error: normalizeItemError("process", error),
+          } satisfies Exclude<
+            PipelineOutcome<Command>,
+            { readonly kind: "command" }
+          >)
+        )
+      );
+
+      if (processOutcome.kind !== "migrated") {
+        return yield* persistNonCommandPipelineOutcome({
+          decodedSourceItem,
+          outcome: processOutcome,
+          previousState,
+          runId,
+          sourceVersionContractContext,
+          store,
+        });
+      }
+
+      yield* store.upsertItemState(
+        makeMigratedItemState(
+          sourceVersionContractContext,
+          runId,
+          decodedSourceItem,
+          {}
+        )
+      );
+
+      return "migrated" as const;
+    }
+
     const pipelineOutcome: PipelineOutcome<Command> = yield* runPipeline(
       definition,
       decodedSourceItem,
@@ -454,6 +550,15 @@ export const processSourceItem = <
       });
     }
 
+    const destinationDefinition = definition.destination;
+
+    if (destinationDefinition === undefined) {
+      throw new Error(
+        "Migration Definition command-plan pipeline requires a destination"
+      );
+    }
+
+    const destination = yield* DestinationPlugin;
     const destinationContext: DestinationCommandContext = {
       definitionId: definition.id,
       runId,
@@ -463,7 +568,7 @@ export const processSourceItem = <
     };
 
     const destinationOutcome = yield* executeDestinationCommandPlan({
-      commandDefinitions: definition.destination.commandDefinitions,
+      commandDefinitions: destinationDefinition.commandDefinitions,
       context: destinationContext,
       destination,
       destinationRetry: definition.destinationRetry,

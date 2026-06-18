@@ -5,7 +5,7 @@ import type {
   DestinationCommandPlan,
 } from "../domain/destination.ts";
 import {
-  type DestinationPluginError,
+  DestinationPluginError,
   MigrationReferenceLookupError,
   MigrationRuntimeError,
   MigrationStoreError,
@@ -103,6 +103,15 @@ export type RollbackMigrationError =
 
 const emptyRunError = new MigrationRuntimeError({
   message: "Run request must include at least one Migration Definition",
+});
+
+const unavailableDestinationLayer = Layer.succeed(DestinationPlugin, {
+  execute: () =>
+    Effect.fail(
+      new DestinationPluginError({
+        message: "Migration Definition does not define a destination",
+      })
+    ),
 });
 
 const missingDefinitionError = (definitionId: MigrationDefinitionId) =>
@@ -891,11 +900,17 @@ const executeStubPlan = <Command extends DestinationCommand, PipelineError>(
       )
     );
 
+    const destinationDefinition = definition.destination;
+
+    if (destinationDefinition === undefined) {
+      return yield* stubNotConfiguredError(definition.id);
+    }
+
     const outcome = yield* Effect.gen(function* () {
       const destination = yield* DestinationPlugin;
 
       return yield* executeDestinationCommandPlan({
-        commandDefinitions: definition.destination.commandDefinitions,
+        commandDefinitions: destinationDefinition.commandDefinitions,
         context: {
           definitionId: definition.id,
           runId,
@@ -906,7 +921,7 @@ const executeStubPlan = <Command extends DestinationCommand, PipelineError>(
         destinationRetry: definition.destinationRetry,
         plan,
       });
-    }).pipe(Effect.provide(definition.destination.layer));
+    }).pipe(Effect.provide(destinationDefinition.layer));
 
     if (outcome.kind === "failed") {
       return {
@@ -1001,7 +1016,8 @@ const addOutcomeToCounts = (
 const isRollbackableItemState = (
   itemState: MigrationItemState
 ): itemState is RollbackableMigrationItemState =>
-  itemState.status === "migrated" ||
+  (itemState.status === "migrated" &&
+    itemState.destinationIdentity !== undefined) ||
   itemState.status === "needs-update" ||
   (itemState.status === "failed" &&
     itemState.destinationIdentity !== undefined);
@@ -1075,6 +1091,13 @@ const rollbackItemState = <
       return yield* missingRollbackPipelineError(definition.id);
     }
 
+    const destinationDefinition = definition.destination;
+
+    if (destinationDefinition === undefined) {
+      counts.failed += 1;
+      return;
+    }
+
     const destination = yield* DestinationPlugin;
 
     const pipelineOutcome = yield* runRollbackPipeline(
@@ -1100,7 +1123,7 @@ const rollbackItemState = <
     }
 
     const destinationOutcome = yield* executeDestinationCommandPlan({
-      commandDefinitions: definition.destination.commandDefinitions,
+      commandDefinitions: destinationDefinition.commandDefinitions,
       context: {
         definitionId: definition.id,
         previousState: itemState,
@@ -1805,9 +1828,11 @@ const runMigrationDefinition = <
   const lookupLayer = makeMigrationReferenceLookupLayer({
     createStubReference,
   });
+  const destinationLayer =
+    definition.destination?.layer ?? unavailableDestinationLayer;
   const layer = Layer.mergeAll(
     definition.source.layer,
-    definition.destination.layer,
+    destinationLayer,
     definition.store,
     lookupLayer
   );
@@ -1888,7 +1913,9 @@ const runRollbackMigrationDefinition = <
     };
   });
 
-  const layer = Layer.mergeAll(definition.destination.layer, definition.store);
+  const destinationLayer =
+    definition.destination?.layer ?? unavailableDestinationLayer;
+  const layer = Layer.mergeAll(destinationLayer, definition.store);
 
   return program.pipe(Effect.provide(layer));
 };

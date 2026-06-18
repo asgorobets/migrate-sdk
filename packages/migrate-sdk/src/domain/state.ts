@@ -25,6 +25,7 @@ const ObservedSourceVersionFields = {
 
 export const MigrationItemErrorKind = Schema.Literals([
   "source",
+  "process",
   "pipeline",
   "destination",
 ]);
@@ -47,7 +48,7 @@ export type MigrationItemError = typeof MigrationItemError.Type;
 export const MigratedItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
   ...ObservedSourceVersionFields,
-  destinationIdentity: DestinationIdentity,
+  destinationIdentity: Schema.optional(DestinationIdentity),
   destinationVersion: Schema.optional(DestinationVersion),
   status: Schema.Literal("migrated"),
 });
