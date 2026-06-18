@@ -209,6 +209,22 @@ export type {
   MigrationItemStateBase,
 } from "./domain/state.ts";
 
+export {
+  DestinationChangeDescriptor,
+  DestinationChangeDescriptorId,
+  DestinationJournal,
+  DestinationJournalChangeEntry,
+  DestinationJournalEntry,
+  DestinationJournalSegment,
+} from "./domain/tracking.ts";
+export type {
+  DestinationChangeDescriptor as DestinationChangeDescriptorType,
+  DestinationChangeValue,
+  DestinationJournalChangeEntry as DestinationJournalChangeEntryType,
+  DestinationJournalEntry as DestinationJournalEntryType,
+  DestinationJournalSegment as DestinationJournalSegmentType,
+} from "./domain/tracking.ts";
+
 export { DestinationPlugin } from "./services/destination-plugin.ts";
 export { MigrationReferenceLookup } from "./services/migration-reference-lookup.ts";
 export type {
@@ -218,6 +234,11 @@ export type {
 } from "./services/migration-reference-lookup.ts";
 export { MigrationStore } from "./services/migration-store.ts";
 export { SourcePlugin } from "./services/source-plugin.ts";
+export { Tracking } from "./services/tracking.ts";
+export type {
+  TrackingProcessContext,
+  TrackingService,
+} from "./services/tracking.ts";
 
 export { getMigrationStatuses } from "./runtime/get-migration-statuses.ts";
 export {
@@ -231,10 +252,15 @@ export type {
   RunMigrationError,
 } from "./runtime/run-migrations.ts";
 
-export { InMemoryDestinationPlugin } from "./destinations/in-memory/in-memory-destination.ts";
+export {
+  InMemoryDestination,
+  InMemoryDestinationPlugin,
+} from "./destinations/in-memory/in-memory-destination.ts";
 export type {
   InMemoryDeleteEntryCommand,
   InMemoryDeleteEntryCommandOptions,
+  InMemoryEntryDestinationModule,
+  InMemoryEntryDestinationModuleOptions,
   InMemoryEntryCommand,
   InMemoryEntryDestination,
   InMemoryEntryDestinationCommandOptions,
@@ -244,6 +270,7 @@ export type {
   InMemoryPublishEntryCommand,
   InMemoryPublishEntryCommandOptions,
   InMemoryDestinationTransientFailures,
+  InMemoryEntryUpsertedChange,
   InMemoryUpsertEntryCommand,
   InMemoryUpsertEntryCommandOptions,
 } from "./destinations/in-memory/in-memory-destination.ts";

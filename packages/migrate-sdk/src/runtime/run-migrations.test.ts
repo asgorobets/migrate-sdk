@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Schedule, Schema } from "effect";
+import type { InMemoryEntryUpsertedChange } from "migrate-sdk/destinations/in-memory";
 import {
   type InMemoryDestinationEntry,
   type InMemoryDestinationExecute,
@@ -13,6 +14,7 @@ import {
   makeSourceVersionContractFingerprint,
 } from "../domain/migration-contract.ts";
 import {
+  DestinationChangeDescriptor,
   type DestinationCommand,
   type DestinationCommandContext,
   type DestinationCommandResultInput,
@@ -24,6 +26,7 @@ import {
   defineDestinationPlugin,
   defineMigration,
   defineSourcePlugin,
+  InMemoryDestination,
   InMemoryDestinationPlugin,
   type InMemoryDestinationTransientFailures,
   type InMemoryEntryCommand,
@@ -57,6 +60,7 @@ import {
   SourcePluginError,
   type SourcePluginImplementation,
   skipItem,
+  Tracking,
   toDestinationIdentity,
   toDestinationVersion,
   toEncodedSourceCursor,
@@ -153,6 +157,7 @@ const seedArticleMigrationContract = (
 const ArticleEntryFields = Schema.Struct({
   title: Schema.String,
 });
+type ArticleEntryFields = typeof ArticleEntryFields.Type;
 const ArticleStatsEntryFields = Schema.Struct({
   title: Schema.String,
   views: Schema.Number,
@@ -955,6 +960,511 @@ describe("runMigration", () => {
         );
         expect(itemState).not.toHaveProperty("destinationIdentity");
         expect(itemState).not.toHaveProperty("destinationVersion");
+      })
+  );
+
+  it.effect(
+    "persists helper-authored process journal entries when a later Process step fails",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const destination = InMemoryDestination.makeEntries({
+          contentType: "article",
+          fields: ArticleEntryFields,
+        });
+        const processError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          code: "process-failed",
+          message: "Process failed after destination work",
+        };
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Journaled article",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (source) =>
+            Effect.gen(function* () {
+              yield* destination.entries.upsert({
+                title: source.item.title,
+              });
+              return yield* Effect.fail(processError);
+            }),
+        });
+
+        const summary = yield* runMigration(definition);
+
+        expect(summary.status).toBe("failed");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 0,
+          skipped: 0,
+          failed: 1,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+
+        expect(itemState).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            sourceVersion: "source-version-1",
+            lastRunId: summary.runId,
+          })
+        );
+        const journalEntries =
+          itemState?.status === "failed"
+            ? (itemState.journal?.process.entries ?? [])
+            : [];
+        expect(journalEntries).toHaveLength(1);
+
+        const entry = journalEntries[0];
+        if (entry === undefined) {
+          throw new Error("Expected one destination journal entry");
+        }
+
+        expect(destination.changes.entryUpserted.is(entry)).toBe(true);
+
+        const decodedEntry =
+          yield* destination.changes.entryUpserted.decode(entry);
+
+        expect(decodedEntry.sequence).toBe(0);
+        expectTypeOf(decodedEntry.value).toEqualTypeOf<
+          InMemoryEntryUpsertedChange<"article", ArticleEntryFields>
+        >();
+        expect(decodedEntry.value).toEqual({
+          contentType: "article",
+          destinationIdentity: "entry:article:article-1",
+          destinationVersion: "version:1",
+          fields: {
+            title: "Journaled article",
+          },
+          published: false,
+          sourceIdentity: "article-1",
+        });
+      })
+  );
+
+  it.effect(
+    "persists helper-authored process journal entries when the Process succeeds",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const destination = InMemoryDestination.makeEntries({
+          contentType: "article",
+          fields: ArticleEntryFields,
+        });
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Migrated article",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (source) =>
+            destination.entries.upsert({
+              title: source.item.title,
+            }),
+        });
+
+        const summary = yield* runMigration(definition);
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+        const journalEntries =
+          itemState?.status === "migrated"
+            ? (itemState.journal?.process.entries ?? [])
+            : [];
+
+        expect(summary.status).toBe("succeeded");
+        expect(itemState).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+          })
+        );
+        expect(journalEntries).toHaveLength(1);
+        expect(journalEntries[0]).toEqual(
+          expect.objectContaining({
+            descriptorId: destination.changes.entryUpserted.id,
+            sequence: 0,
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "persists helper-authored process journal entries when the Process later skips",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const destination = InMemoryDestination.makeEntries({
+          contentType: "article",
+          fields: ArticleEntryFields,
+        });
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Skipped article",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (source) =>
+            Effect.gen(function* () {
+              yield* destination.entries.upsert({
+                title: source.item.title,
+              });
+              return yield* skipItem("No longer eligible");
+            }),
+        });
+
+        const summary = yield* runMigration(definition);
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+        const journalEntries =
+          itemState?.status === "skipped"
+            ? (itemState.journal?.process.entries ?? [])
+            : [];
+
+        expect(summary.status).toBe("succeeded");
+        expect(itemState).toEqual(
+          expect.objectContaining({
+            skipReason: "No longer eligible",
+            status: "skipped",
+          })
+        );
+        expect(journalEntries).toHaveLength(1);
+        expect(journalEntries[0]).toEqual(
+          expect.objectContaining({
+            descriptorId: destination.changes.entryUpserted.id,
+            sequence: 0,
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "does not record a helper success change when the helper fails before the destination effect completes",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const destination = InMemoryDestination.makeEntries({
+          contentType: "article",
+          fields: ArticleEntryFields,
+          transientFailures: {
+            execute: 1,
+          },
+        });
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Failed helper article",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (source) =>
+            destination.entries.upsert({
+              title: source.item.title,
+            }),
+        });
+
+        const summary = yield* runMigration(definition);
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+
+        expect(summary.status).toBe("failed");
+        expect(itemState).toEqual(
+          expect.objectContaining({
+            status: "failed",
+          })
+        );
+        expect(itemState).not.toHaveProperty("journal");
+      })
+  );
+
+  it.effect(
+    "allows inline retry of a destination helper and records one successful change",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const destination = InMemoryDestination.makeEntries({
+          contentType: "article",
+          fields: ArticleEntryFields,
+          transientFailures: {
+            execute: 1,
+          },
+        });
+        const processError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          code: "process-failed",
+          message: "Process failed after retry",
+        };
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Retried article",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (source) =>
+            Effect.gen(function* () {
+              yield* destination.entries
+                .upsert({
+                  title: source.item.title,
+                })
+                .pipe(Effect.retry(Schedule.recurs(1)));
+              return yield* Effect.fail(processError);
+            }),
+        });
+
+        const summary = yield* runMigration(definition);
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+        const journalEntries =
+          itemState?.status === "failed"
+            ? (itemState.journal?.process.entries ?? [])
+            : [];
+
+        expect(summary.status).toBe("failed");
+        expect(journalEntries).toHaveLength(1);
+        expect(journalEntries[0]).toEqual(
+          expect.objectContaining({
+            descriptorId: destination.changes.entryUpserted.id,
+            sequence: 0,
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "preserves repeated same-descriptor change payloads in journal order",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const destination = InMemoryDestination.makeEntries({
+          contentType: "article",
+          fields: ArticleEntryFields,
+        });
+        const processError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          code: "process-failed",
+          message: "Process failed after repeated destination work",
+        };
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "First title",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (source) =>
+            Effect.gen(function* () {
+              yield* destination.entries.upsert({
+                title: source.item.title,
+              });
+              yield* destination.entries.upsert({
+                title: "Second title",
+              });
+              return yield* Effect.fail(processError);
+            }),
+        });
+
+        yield* runMigration(definition);
+
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+        const journalEntries =
+          itemState?.status === "failed"
+            ? (itemState.journal?.process.entries ?? [])
+            : [];
+        const upsertedChanges = yield* Effect.forEach(
+          journalEntries.filter(destination.changes.entryUpserted.is),
+          destination.changes.entryUpserted.decode
+        );
+
+        expect(upsertedChanges.map((entry) => entry.sequence)).toEqual([0, 1]);
+        expect(upsertedChanges.map((entry) => entry.value.fields)).toEqual([
+          { title: "First title" },
+          { title: "Second title" },
+        ]);
+        expect(
+          upsertedChanges.map((entry) => entry.value.destinationVersion)
+        ).toEqual(["version:1", "version:2"]);
+      })
+  );
+
+  it.effect(
+    "validates destination change payloads before appending them to the process journal",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const malformedChange = DestinationChangeDescriptor.make(
+          "test.malformed-change",
+          Schema.Struct({
+            id: Schema.String,
+          })
+        );
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Malformed change",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () =>
+            Tracking.recordChange(malformedChange, {
+              id: 123,
+            } as never),
+        });
+
+        const summary = yield* runMigration(definition);
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+
+        expect(summary.status).toBe("failed");
+        expect(itemState).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            error: expect.objectContaining({
+              errorTag: "SchemaError",
+              kind: "process",
+            }),
+          })
+        );
+        expect(itemState).not.toHaveProperty("journal");
+      })
+  );
+
+  it.effect(
+    "decodes transformed descriptor payloads instead of narrowing encoded journal values",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const QuantityChange = Schema.Struct({
+          quantity: Schema.NumberFromString,
+        });
+        type QuantityChange = typeof QuantityChange.Type;
+        const quantityChanged = DestinationChangeDescriptor.make(
+          "test.quantity-changed",
+          QuantityChange
+        );
+        const processError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          code: "process-failed",
+          message: "Process failed after transformed tracking record",
+        };
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Transformed tracking",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () =>
+            Effect.gen(function* () {
+              yield* Tracking.recordChange(quantityChanged, {
+                quantity: 7,
+              });
+              return yield* Effect.fail(processError);
+            }),
+        });
+
+        yield* runMigration(definition);
+
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+        const entry =
+          itemState?.status === "failed"
+            ? itemState.journal?.process.entries[0]
+            : undefined;
+
+        if (entry === undefined) {
+          throw new Error("Expected one transformed destination journal entry");
+        }
+
+        expect(quantityChanged.is(entry)).toBe(true);
+        expect(entry.value).toEqual({
+          quantity: "7",
+        });
+
+        const decodedEntry = yield* quantityChanged.decode(entry);
+
+        expectTypeOf(decodedEntry.value).toEqualTypeOf<QuantityChange>();
+        expect(decodedEntry.value).toEqual({
+          quantity: 7,
+        });
       })
   );
 

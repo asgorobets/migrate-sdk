@@ -786,13 +786,13 @@ The process pipeline does not return the tracking record as its success value. I
 the record in the item execution scope with `Tracking.setRecord(...)`. The
 runtime commits that staged record only after the process succeeds. If the
 process fails before or after staging a record, the item is recorded as failed
-and the staged record is not committed. The process journal segment is still
-available for failed-state persistence.
+and the staged record is not committed. The process journal segment remains
+available for durable persistence whenever entries were recorded.
 
 This makes the tracking record the stable contract for successful item state.
 The journal remains durable evidence for inspection and rollback, especially
-when a process partially succeeds and then fails before a successful record can
-be committed.
+when a process performs destination effects that may later need compensation or
+inspection.
 
 If `Tracking.record(...)` is declared and the process succeeds without staging
 a record, the item is recorded as failed with a tracking contract error. The
@@ -938,10 +938,10 @@ When a destination helper succeeds, it records its native change in the journal.
 When a destination helper fails, it may record a diagnostic but must not record
 a success change for that helper unless it knows the destination effect
 completed.
-When a process fails after one or more successful destination helpers, the
-runtime persists failed item state with the recorded process journal segment.
-The same failed-state path can persist diagnostics even when no destination
-change was recorded.
+When a process records destination changes or diagnostics, the runtime persists
+the recorded process journal segment on the terminal item state. The journal is
+durable execution evidence for inspection and rollback; it is separate from the
+materialized tracking record success contract.
 
 When a process succeeds for `Tracking.record(...)`, the runtime evaluates the
 staged tracking record:
@@ -956,23 +956,26 @@ staged tracking record:
   tracking contract error
 
 When a process succeeds without `Tracking.record(...)`, the runtime persists
-migrated item progress without destination tracking.
+migrated item progress and any non-empty process journal segment. If no helper
+or diagnostic recorded journal entries, the item remains lightweight
+progress-only state without durable destination tracking evidence.
 
 ## TypeScript Model
 
 Destination helper return values stay typed by the helper. Rollback receives a
-decoded destination journal with a process segment and any previous failed
+destination journal with a process segment and any previous failed
 rollback-attempt segments. Entries inside each segment are ordered oldest to
-newest. Destination change descriptors provide predicates for narrowing entries
-to typed change entries whose `value` is the descriptor payload:
+newest. Destination change descriptors provide predicates for identifying
+matching entries and decoders for reading typed descriptor payloads:
 
 ```ts
-const products = state.journal.process.entries.filter(
-  ct.changes.productUpserted.is
+const productEntries = state.journal.process.entries.filter(
+  ct.changes.productUpserted.is,
 )
-const product = products.at(-1)
+const productEntry = productEntries.at(-1)
 
-if (product) {
+if (productEntry) {
+  const product = yield* ct.changes.productUpserted.decode(productEntry)
   product.value.id
   product.value.version
 }

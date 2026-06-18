@@ -1,4 +1,4 @@
-import { Effect, Predicate, Schema } from "effect";
+import { Effect, Layer, Predicate, Schema } from "effect";
 import type {
   MigrationDefinition,
   SourcePayloadSchema,
@@ -31,9 +31,11 @@ import type {
   MigrationItemStateBase,
   SkippedItemState,
 } from "../domain/state.ts";
+import type { DestinationJournalSegment } from "../domain/tracking.ts";
 import { DestinationPlugin } from "../services/destination-plugin.ts";
 import type { MigrationReferenceLookup } from "../services/migration-reference-lookup.ts";
 import { MigrationStore } from "../services/migration-store.ts";
+import { makeProcessScope, Tracking } from "../services/tracking.ts";
 import { executeDestinationCommandPlan } from "./destination-command-plan.ts";
 import {
   normalizeItemError,
@@ -114,9 +116,11 @@ const makeSkippedItemState = <Source>(
   sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>,
-  reason: string
+  reason: string,
+  journal?: SkippedItemState["journal"]
 ): SkippedItemState => ({
   ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
+  ...(journal === undefined ? {} : { journal }),
   status: "skipped",
   skipReason: reason,
 });
@@ -150,7 +154,8 @@ const makeFailedItemState = <Source>(
   latestDestination?: {
     readonly destinationIdentity?: FailedItemState["destinationIdentity"];
     readonly destinationVersion?: FailedItemState["destinationVersion"];
-  }
+  },
+  journal?: FailedItemState["journal"]
 ): FailedItemState => {
   const destinationIdentity =
     latestDestination?.destinationIdentity ??
@@ -163,6 +168,7 @@ const makeFailedItemState = <Source>(
     ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
     ...(destinationIdentity === undefined ? {} : { destinationIdentity }),
     ...(destinationVersion === undefined ? {} : { destinationVersion }),
+    ...(journal === undefined ? {} : { journal }),
     status: "failed",
     error,
   };
@@ -175,6 +181,7 @@ const makeMigratedItemState = <Source>(
   result: {
     readonly destinationIdentity?: MigratedItemState["destinationIdentity"];
     readonly destinationVersion?: MigratedItemState["destinationVersion"];
+    readonly journal?: MigratedItemState["journal"];
   }
 ): MigratedItemState => {
   return {
@@ -186,8 +193,19 @@ const makeMigratedItemState = <Source>(
     ...(result.destinationVersion === undefined
       ? {}
       : { destinationVersion: result.destinationVersion }),
+    ...(result.journal === undefined ? {} : { journal: result.journal }),
   };
 };
+
+const makeProcessJournal = (
+  process: DestinationJournalSegment | null
+): FailedItemState["journal"] | undefined =>
+  process === null
+    ? undefined
+    : {
+        process,
+        rollbackAttempts: [],
+      };
 
 const missingDestinationIdentityError = (): DestinationPluginError =>
   new DestinationPluginErrorClass({
@@ -224,6 +242,7 @@ const persistNonCommandPipelineOutcome = <
   decodedSourceItem,
   outcome,
   previousState,
+  processJournal,
   runId,
   sourceVersionContractContext,
   store,
@@ -234,6 +253,7 @@ const persistNonCommandPipelineOutcome = <
     { readonly kind: "command" }
   >;
   readonly previousState: MigrationItemState | null;
+  readonly processJournal?: FailedItemState["journal"];
   readonly runId: MigrationRunId;
   readonly sourceVersionContractContext: SourceVersionContractContext;
   readonly store: typeof MigrationStore.Service;
@@ -245,7 +265,8 @@ const persistNonCommandPipelineOutcome = <
           sourceVersionContractContext,
           runId,
           decodedSourceItem,
-          outcome.reason
+          outcome.reason,
+          processJournal
         )
       )
       .pipe(Effect.as("skipped" as const));
@@ -258,7 +279,9 @@ const persistNonCommandPipelineOutcome = <
         runId,
         decodedSourceItem,
         outcome.error,
-        previousState
+        previousState,
+        undefined,
+        processJournal
       )
     )
     .pipe(Effect.as("failed" as const));
@@ -376,7 +399,7 @@ const runProcess = <
         ? (voidOrEffect as Effect.Effect<
             void,
             PipelineError | SkipItem,
-            MigrationReferenceLookup
+            MigrationReferenceLookup | Tracking
           >)
         : Effect.void
     )
@@ -463,11 +486,19 @@ export const processSourceItem = <
     };
 
     if (definition.process !== undefined) {
+      const tracking = yield* makeProcessScope({
+        definitionId: definition.id,
+        runId,
+        sourceIdentity: decodedSourceItem.identity.encoded,
+        sourceVersion: decodedSourceItem.version,
+        ...(previousState === null ? {} : { previousState }),
+      });
       const processOutcome = yield* runProcess(
         definition,
         decodedSourceItem,
         pipelineContext
       ).pipe(
+        Effect.provide(Layer.succeed(Tracking, tracking)),
         Effect.as({ kind: "migrated" as const }),
         Effect.catchIf(isSkipItem, (skip) =>
           Effect.succeed({
@@ -489,12 +520,15 @@ export const processSourceItem = <
           >)
         )
       );
+      const processJournalSegment = yield* tracking.snapshot;
+      const processJournal = makeProcessJournal(processJournalSegment);
 
       if (processOutcome.kind !== "migrated") {
         return yield* persistNonCommandPipelineOutcome({
           decodedSourceItem,
           outcome: processOutcome,
           previousState,
+          processJournal,
           runId,
           sourceVersionContractContext,
           store,
@@ -506,7 +540,7 @@ export const processSourceItem = <
           sourceVersionContractContext,
           runId,
           decodedSourceItem,
-          {}
+          processJournal === undefined ? {} : { journal: processJournal }
         )
       );
 

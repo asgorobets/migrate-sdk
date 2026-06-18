@@ -25,10 +25,18 @@ import type {
   EncodedSourceIdentity,
 } from "../../domain/ids.ts";
 import {
+  DestinationIdentity as DestinationIdentitySchema,
+  DestinationVersion as DestinationVersionSchema,
+  EncodedSourceIdentity as EncodedSourceIdentitySchema,
   toDestinationIdentity,
   toDestinationVersion,
 } from "../../domain/ids.ts";
+import {
+  DestinationChangeDescriptor,
+  type DestinationChangeDescriptor as DestinationChangeDescriptorType,
+} from "../../domain/tracking.ts";
 import { DestinationPlugin } from "../../services/destination-plugin.ts";
+import { Tracking } from "../../services/tracking.ts";
 
 export interface InMemoryDestinationExecution<C extends DestinationCommand> {
   readonly command: C;
@@ -254,6 +262,48 @@ export interface InMemoryEntryDestinationOptions<
     InMemoryEntryDestinationCommandOptionsFor<Commands>;
   readonly contentType: NonEmptyString<ContentType>;
   readonly transientFailures?: InMemoryDestinationTransientFailures;
+}
+
+export interface InMemoryEntryDestinationModuleOptions<
+  ContentType extends string,
+  Fields extends Schema.JsonObject,
+> {
+  readonly contentType: NonEmptyString<ContentType>;
+  readonly fields: InMemoryEntryFieldSchema<Fields>;
+  readonly transientFailures?: InMemoryDestinationTransientFailures;
+}
+
+export interface InMemoryEntryUpsertedChange<
+  ContentType extends string = string,
+  Fields extends Schema.JsonObject = Schema.JsonObject,
+> {
+  readonly contentType: ContentType;
+  readonly destinationIdentity: DestinationIdentity;
+  readonly destinationVersion: DestinationVersion;
+  readonly fields: Fields;
+  readonly published: boolean;
+  readonly sourceIdentity: EncodedSourceIdentity;
+  readonly [key: string]: Schema.Json;
+}
+
+export interface InMemoryEntryDestinationModule<
+  ContentType extends string,
+  Fields extends Schema.JsonObject,
+> {
+  readonly changes: {
+    readonly entryUpserted: DestinationChangeDescriptorType<
+      InMemoryEntryUpsertedChange<ContentType, Fields>
+    >;
+  };
+  readonly entries: {
+    readonly upsert: (
+      fields: Fields
+    ) => Effect.Effect<
+      InMemoryDestinationEntry,
+      DestinationPluginError | Schema.SchemaError,
+      Tracking
+    >;
+  };
 }
 
 export type InMemoryEntryDestination<
@@ -987,6 +1037,118 @@ const fixtureEntries = <
     ...makeInspection(state),
   };
 };
+
+const makeProcessEntries = <
+  const ContentType extends string,
+  const Fields extends Schema.JsonObject,
+>(
+  options: InMemoryEntryDestinationModuleOptions<ContentType, Fields>
+): InMemoryEntryDestinationModule<ContentType, Fields> => {
+  assertInMemoryEntryDestinationOptions({
+    commands: {
+      upsertEntry: { fields: options.fields },
+    },
+    contentType: options.contentType,
+    ...(options.transientFailures === undefined
+      ? {}
+      : { transientFailures: options.transientFailures }),
+  } as InMemoryEntryDestinationInternalOptions<
+    ContentType,
+    { readonly upsertEntry: InMemoryUpsertEntryCommandOptions<Fields> }
+  >);
+
+  const state = makeState<InMemoryRuntimeEntryCommand>();
+  let remainingExecuteFailures = options.transientFailures?.execute ?? 0;
+  const entryUpserted = DestinationChangeDescriptor.make(
+    `in-memory.entry.${options.contentType}.upserted`,
+    Schema.Struct({
+      contentType: Schema.Literal(options.contentType),
+      destinationIdentity: DestinationIdentitySchema,
+      destinationVersion: DestinationVersionSchema,
+      fields: options.fields,
+      published: Schema.Boolean,
+      sourceIdentity: EncodedSourceIdentitySchema,
+    })
+  );
+
+  const upsert = Effect.fn("InMemoryDestination.entries.upsert")(function* (
+    fields: Fields
+  ) {
+    const context = yield* Tracking.currentContext;
+    const decodedFields = yield* Schema.decodeUnknownEffect(options.fields, {
+      errors: "all",
+    })(fields);
+
+    state.executeAttempts += 1;
+
+    if (remainingExecuteFailures > 0) {
+      remainingExecuteFailures -= 1;
+      return yield* transientDestinationError();
+    }
+
+    const key = inMemoryEntryKey(options.contentType, context.sourceIdentity);
+    const existing = state.entries.get(key);
+    const previousDestinationIdentity =
+      context.previousState !== undefined &&
+      "destinationIdentity" in context.previousState
+        ? context.previousState.destinationIdentity
+        : undefined;
+    const destinationIdentity =
+      existing?.destinationIdentity ??
+      previousDestinationIdentity ??
+      toDestinationIdentity(
+        `entry:${options.contentType}:${context.sourceIdentity}`
+      );
+    const destinationVersion = nextEntryVersion(state);
+    const entry: InMemoryDestinationEntry = {
+      contentType: options.contentType,
+      destinationIdentity,
+      destinationVersion,
+      fields: decodedFields,
+      published: existing?.published ?? false,
+      sourceIdentity: context.sourceIdentity,
+    };
+    const change: InMemoryEntryUpsertedChange<ContentType, Fields> = {
+      contentType: options.contentType,
+      destinationIdentity,
+      destinationVersion,
+      fields: decodedFields,
+      published: existing?.published ?? false,
+      sourceIdentity: context.sourceIdentity,
+    };
+
+    state.entries.set(key, entry);
+    state.executions.push({
+      command: {
+        contentType: options.contentType,
+        fields: decodedFields,
+        kind: "UpsertEntry",
+      },
+      context,
+      result: makeDestinationCommandResult({
+        destinationIdentity,
+        destinationVersion,
+      }),
+    });
+
+    yield* Tracking.recordChange(entryUpserted, change);
+
+    return entry;
+  });
+
+  return {
+    changes: {
+      entryUpserted,
+    },
+    entries: {
+      upsert,
+    },
+  };
+};
+
+export const InMemoryDestination = {
+  makeEntries: makeProcessEntries,
+} as const;
 
 export const InMemoryDestinationPlugin = {
   makeEntries,

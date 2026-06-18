@@ -6,7 +6,7 @@ import {
   SourceIdentity,
   skipItem,
 } from "migrate-sdk";
-import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
+import { InMemoryDestination } from "migrate-sdk/destinations/in-memory";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 
@@ -52,12 +52,9 @@ const sourceItems = [
 ] as const;
 
 export const makeInMemoryArticlesMigration = () => {
-  const destination = InMemoryDestinationPlugin.makeEntries({
+  const destination = InMemoryDestination.makeEntries({
     contentType: "article",
-    commands: {
-      publishEntry: true,
-      upsertEntry: { fields: ArticleEntryFields },
-    },
+    fields: ArticleEntryFields,
   });
 
   return defineMigration({
@@ -67,19 +64,15 @@ export const makeInMemoryArticlesMigration = () => {
       items: sourceItems,
       sourceSchema: Article,
     }),
-    destination,
     store: InMemoryMigrationStore.layer(),
-    pipeline: Effect.fn("articles.pipeline")(function* (source) {
+    process: Effect.fn("articles.process")(function* (source) {
       if (!source.item.publish) {
         return yield* skipItem("Article is not published");
       }
 
-      return [
-        destination.commands.upsertEntry({
-          title: source.item.title,
-        }),
-        destination.commands.publishEntry(),
-      ];
+      yield* destination.entries.upsert({
+        title: source.item.title,
+      });
     }),
   });
 };

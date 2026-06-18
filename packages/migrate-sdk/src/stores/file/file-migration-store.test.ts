@@ -287,6 +287,62 @@ const writeMalformedSourceIdentityItemStateRecord = (directory: string) =>
     );
   });
 
+const writeMalformedJournalItemStateRecord = (directory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem;
+    const path = yield* Path;
+    const itemStatePath = path.join(
+      directory,
+      "definitions",
+      "articles",
+      "items",
+      "article-malformed-journal.json"
+    );
+
+    yield* fs.makeDirectory(path.dirname(itemStatePath), { recursive: true });
+    yield* fs.writeFileString(
+      itemStatePath,
+      JSON.stringify({
+        formatVersion: 1,
+        recordKind: "migration-item-state",
+        state: {
+          definitionId: "articles",
+          error: {
+            errorTag: "PipelineFailureTestError",
+            kind: "process",
+            message: "Process failed",
+          },
+          journal: {
+            process: {
+              entries: [
+                {
+                  descriptorId: "in-memory.entry.article.upserted",
+                  kind: "change",
+                  sequence: "not-a-number",
+                  value: {
+                    contentType: "article",
+                  },
+                },
+              ],
+              runId: "run-1",
+            },
+            rollbackAttempts: [],
+          },
+          lastRunId: "run-1",
+          sourceIdentity: {
+            encoded: "article-malformed-journal",
+            fingerprint: TestSourceIdentity.fingerprint,
+            id: TestSourceIdentity.id,
+            key: "article-malformed-journal",
+          },
+          sourceVersion: "source-version-1",
+          status: "failed",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      })
+    );
+  });
+
 const makeArticlesMigration = (options: {
   readonly directory: string;
   readonly destinationState: ReturnType<
@@ -792,6 +848,34 @@ describe("FileMigrationStore", () => {
             return yield* store.getItemState(
               toMigrationDefinitionId("articles"),
               toEncodedSourceIdentity("article-malformed-source-identity")
+            );
+          }).pipe(Effect.provide(fileStoreLayer(directory)), Effect.flip);
+
+          expect(error).toEqual(
+            expect.objectContaining({
+              _tag: "MigrationStoreError",
+              message: expect.stringContaining(
+                "Unable to decode migration store record"
+              ),
+            })
+          );
+        })
+      )
+  );
+
+  it.effect(
+    "returns MigrationStoreError for malformed persisted destination journal records",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          yield* writeMalformedJournalItemStateRecord(directory);
+
+          const error = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            return yield* store.getItemState(
+              toMigrationDefinitionId("articles"),
+              toEncodedSourceIdentity("article-malformed-journal")
             );
           }).pipe(Effect.provide(fileStoreLayer(directory)), Effect.flip);
 

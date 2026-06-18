@@ -138,15 +138,15 @@ destination identity inference as the target model for new work.
 
 40. As a runtime maintainer, I want failed item state to preserve destination journal evidence when destination effects or diagnostics happened before failure, so that rollback and diagnostics can see partial work.
 
-41. As a runtime maintainer, I want successful item state without a tracking record contract to persist progress without destination tracking, so that progress-only migrations remain lightweight.
+41. As a runtime maintainer, I want successful item state without a tracking record contract to persist progress and any recorded process journal evidence, so that lightweight progress-only migrations and journaled destination effects are both represented accurately.
 
-42. As a runtime maintainer, I want successful item state with a tracking record contract to persist the schema-valid record, so that lookup can expose the public record.
+42. As a runtime maintainer, I want successful item state with a tracking record contract to persist the schema-valid record and any recorded process journal evidence, so that lookup can expose the public record without discarding execution evidence.
 
-43. As a runtime maintainer, I want successful progress-only item state to omit destination tracking, so that progress-only state does not look rollbackable by accident.
+43. As a runtime maintainer, I want successful items with no tracking record and no journal entries to remain progress-only, so that state does not look rollbackable by accident.
 
 44. As a runtime maintainer, I want a migration contract to include tracking contract id and tracking record schema fingerprint when declared, so that tracking drift is detected before source reads begin.
 
-45. As a runtime maintainer, I want helper-authored changes and generic diagnostics to participate in journal serialization, so that failed-state evidence survives durable persistence.
+45. As a runtime maintainer, I want helper-authored changes and generic diagnostics to participate in journal serialization, so that destination evidence survives durable persistence across terminal outcomes.
 
 46. As a runtime maintainer, I want destination journal entries to be schema-validated before persistence, so that malformed helper output cannot corrupt the migration store.
 
@@ -212,9 +212,9 @@ destination identity inference as the target model for new work.
 
 - Add a tracking record module as a deep module. It should own tracking record contract construction, staged tracking record behavior, record validation, and success-gate evaluation.
 
-- Definitions without a tracking record contract persist successful item progress without destination tracking.
+- Definitions without a tracking record contract persist successful item progress and any non-empty process journal segment.
 
-- Successful progress-only items do not persist destination journal segments as diagnostic durable data in this slice.
+- Successful progress-only items with no journal entries remain lightweight and do not persist destination journal segments.
 
 - Definitions with a tracking record contract require exactly one staged schema-valid tracking record before successful item state can be persisted.
 
@@ -226,7 +226,7 @@ destination identity inference as the target model for new work.
 
 - Durable journal diagnostics do not persist raw Effect causes, raw thrown objects, or provider response objects that are not stable serialized data.
 
-- Failed items may persist process journal segments when destination changes or diagnostics were recorded before failure, because failed-state evidence is needed for diagnostics and rollback analysis.
+- Terminal item states may persist process journal segments when destination changes or diagnostics were recorded, because durable evidence is needed for diagnostics and rollback analysis.
 
 - Failed item state does not expose a staged tracking record as a successful item contract. Rollback over partial failures reads durable journal evidence and any existing item-state metadata.
 

@@ -31,6 +31,7 @@ import type { MigrationRunState } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { MigrationItemError } from "../../domain/state.ts";
 import { summarizeMigrationItemStates } from "../../domain/status.ts";
+import { DestinationJournal } from "../../domain/tracking.ts";
 import { MigrationStore } from "../../services/migration-store.ts";
 
 export interface FileMigrationStoreOptions {
@@ -96,12 +97,14 @@ const PersistedMigratedItemState = Schema.Struct({
   ...PersistedObservedSourceVersionFields,
   destinationIdentity: Schema.optional(DestinationIdentitySchema),
   destinationVersion: Schema.optional(DestinationVersionSchema),
+  journal: Schema.optional(DestinationJournal),
   status: Schema.Literal("migrated"),
 });
 
 const PersistedSkippedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
   ...PersistedObservedSourceVersionFields,
+  journal: Schema.optional(DestinationJournal),
   skipReason: Schema.String,
   status: Schema.Literal("skipped"),
 });
@@ -115,6 +118,7 @@ const PersistedFailedItemState = Schema.Struct({
   destinationIdentity: Schema.optional(DestinationIdentitySchema),
   destinationVersion: Schema.optional(DestinationVersionSchema),
   error: MigrationItemError,
+  journal: Schema.optional(DestinationJournal),
   status: Schema.Literal("failed"),
 });
 
@@ -126,6 +130,7 @@ const PersistedNeedsUpdateItemState = Schema.Struct({
   sourceVersion: Schema.optional(SourceVersionSchema),
   destinationIdentity: DestinationIdentitySchema,
   destinationVersion: Schema.optional(DestinationVersionSchema),
+  journal: Schema.optional(DestinationJournal),
   reason: Schema.String,
   status: Schema.Literal("needs-update"),
 });

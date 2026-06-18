@@ -30,8 +30,8 @@ reason to read it.
 
 The runtime owns migration item execution. For each source item it provides the
 scoped tracking service, runs the user process, preserves the process journal
-segment when failed-state evidence is needed, and delegates tracking record
-evaluation to the tracking model.
+segment when entries were recorded, and delegates tracking record evaluation to
+the tracking model.
 
 ## Target Authoring Shape
 

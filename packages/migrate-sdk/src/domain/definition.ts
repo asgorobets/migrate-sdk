@@ -7,6 +7,7 @@ import {
   type SourcePlugin,
   SourcePlugin as SourcePluginService,
 } from "../services/source-plugin.ts";
+import type { Tracking } from "../services/tracking.ts";
 import type {
   DefinedDestinationCommands,
   DestinationCommand,
@@ -416,7 +417,7 @@ export type ProcessPipeline<
 ) => void | Effect.Effect<
   void,
   ProcessError | SkipItem,
-  MigrationReferenceLookup
+  MigrationReferenceLookup | Tracking
 >;
 
 export interface DestinationStubInput {

@@ -70,18 +70,20 @@ definition may declare `Tracking.record({ id, schema })`; if it does, a
 successful item must stage exactly one schema-validated materialized tracking
 record. A definition without `Tracking.record(...)` still persists migration
 item progress, including source identity, source version, item status, and
-failure metadata, but successful items do not persist durable destination
-tracking.
+failure metadata. A successful item may also persist a process journal segment
+when destination helpers or diagnostics recorded one; the journal is durable
+execution evidence, while the tracking record is the user-shaped success
+contract.
 
 Destination change kinds are exposed as typed destination change descriptors
-owned by destination capability modules. Rollback code receives decoded
-journal entries in journal order and narrows them with descriptor-owned
-predicates rather than raw change kind strings or query methods, so TypeScript
-can infer change value types without requiring a custom process DSL. The SDK
-does not try to prove that arbitrary Effect process code records every
-possible destination change. Required destination work belongs in normal Effect
-control flow. The item success boundary only enforces staged record presence and
-schema validation when `Tracking.record(...)` is declared.
+owned by destination capability modules. Rollback code receives journal entries
+in journal order, identifies entries with descriptor-owned predicates, and
+decodes typed change values through the descriptor rather than parsing raw change
+kind strings or query methods. The SDK does not try to prove that arbitrary
+Effect process code records every possible destination change. Required
+destination work belongs in normal Effect control flow. The item success
+boundary only enforces staged record presence and schema validation when
+`Tracking.record(...)` is declared.
 
 Journal diagnostics are separate from destination changes. A failed destination
 helper must not record a success change unless it knows the destination effect

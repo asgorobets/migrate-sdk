@@ -8,6 +8,7 @@ import {
   SourceVersion,
 } from "./ids.ts";
 import { SourceVersionContractFingerprint } from "./migration-contract.ts";
+import { DestinationJournal } from "./tracking.ts";
 
 const MigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionId,
@@ -50,6 +51,7 @@ export const MigratedItemState = Schema.Struct({
   ...ObservedSourceVersionFields,
   destinationIdentity: Schema.optional(DestinationIdentity),
   destinationVersion: Schema.optional(DestinationVersion),
+  journal: Schema.optional(DestinationJournal),
   status: Schema.Literal("migrated"),
 });
 export type MigratedItemState = typeof MigratedItemState.Type;
@@ -57,6 +59,7 @@ export type MigratedItemState = typeof MigratedItemState.Type;
 export const SkippedItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
   ...ObservedSourceVersionFields,
+  journal: Schema.optional(DestinationJournal),
   skipReason: Schema.String,
   status: Schema.Literal("skipped"),
 });
@@ -71,6 +74,7 @@ export const FailedItemState = Schema.Struct({
   destinationIdentity: Schema.optional(DestinationIdentity),
   destinationVersion: Schema.optional(DestinationVersion),
   error: MigrationItemError,
+  journal: Schema.optional(DestinationJournal),
   status: Schema.Literal("failed"),
 });
 export type FailedItemState = typeof FailedItemState.Type;
@@ -83,6 +87,7 @@ export const NeedsUpdateItemState = Schema.Struct({
   sourceVersion: Schema.optional(SourceVersion),
   destinationIdentity: DestinationIdentity,
   destinationVersion: Schema.optional(DestinationVersion),
+  journal: Schema.optional(DestinationJournal),
   reason: Schema.String,
   status: Schema.Literal("needs-update"),
 });
