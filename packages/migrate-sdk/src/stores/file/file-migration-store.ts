@@ -31,7 +31,7 @@ import type { MigrationRunState } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { MigrationItemError } from "../../domain/state.ts";
 import { summarizeMigrationItemStates } from "../../domain/status.ts";
-import { DestinationJournal } from "../../domain/tracking.ts";
+import { DestinationJournal, TrackingRecord } from "../../domain/tracking.ts";
 import { MigrationStore } from "../../services/migration-store.ts";
 
 export interface FileMigrationStoreOptions {
@@ -99,6 +99,7 @@ const PersistedMigratedItemState = Schema.Struct({
   destinationVersion: Schema.optional(DestinationVersionSchema),
   journal: Schema.optional(DestinationJournal),
   status: Schema.Literal("migrated"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 
 const PersistedSkippedItemState = Schema.Struct({
@@ -128,11 +129,12 @@ const PersistedNeedsUpdateItemState = Schema.Struct({
     SourceVersionContractFingerprint
   ),
   sourceVersion: Schema.optional(SourceVersionSchema),
-  destinationIdentity: DestinationIdentitySchema,
+  destinationIdentity: Schema.optional(DestinationIdentitySchema),
   destinationVersion: Schema.optional(DestinationVersionSchema),
   journal: Schema.optional(DestinationJournal),
   reason: Schema.String,
   status: Schema.Literal("needs-update"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 
 const PersistedMigrationItemState = Schema.Union([

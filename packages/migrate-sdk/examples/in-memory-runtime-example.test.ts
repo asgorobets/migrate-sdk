@@ -112,7 +112,9 @@ describe("in-memory runtime example", () => {
               key: "book:future-catalog",
             }),
             status: "needs-update",
-            destinationIdentity: "entry:book:book:future-catalog",
+            trackingRecord: {
+              entryId: "entry:book:book:future-catalog",
+            },
           })
         );
         expect(result.authorState).toEqual(
@@ -125,7 +127,9 @@ describe("in-memory runtime example", () => {
             }),
             sourceVersion: "author-version-1",
             status: "migrated",
-            destinationIdentity: "entry:author:author:maya-chen",
+            trackingRecord: {
+              entryId: "entry:author:author:maya-chen",
+            },
           })
         );
         expect(output).toContain("Circular Book and Author Stub Example");

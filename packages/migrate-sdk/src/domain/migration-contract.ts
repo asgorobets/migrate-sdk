@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Schema, SchemaRepresentation } from "effect";
 import {
   MigrationDefinitionId,
   SourceIdentityContractFingerprint,
@@ -19,10 +19,29 @@ export type SourceVersionContractFingerprintInput =
   | string
   | SourceVersionContractFingerprint;
 
+export const TrackingRecordContractId = Schema.NonEmptyString.pipe(
+  Schema.brand("TrackingRecordContractId")
+);
+export type TrackingRecordContractId = typeof TrackingRecordContractId.Type;
+export type TrackingRecordContractIdInput = string | TrackingRecordContractId;
+
+export const TrackingRecordContractFingerprint = Schema.NonEmptyString.pipe(
+  Schema.brand("TrackingRecordContractFingerprint")
+);
+export type TrackingRecordContractFingerprint =
+  typeof TrackingRecordContractFingerprint.Type;
+export type TrackingRecordContractFingerprintInput =
+  | string
+  | TrackingRecordContractFingerprint;
+
 export const MigrationContract = Schema.Struct({
   definitionId: MigrationDefinitionId,
   sourceIdentityContractFingerprint: SourceIdentityContractFingerprint,
   sourceVersionContractFingerprint: SourceVersionContractFingerprint,
+  trackingRecordContractFingerprint: Schema.optional(
+    TrackingRecordContractFingerprint
+  ),
+  trackingRecordContractId: Schema.optional(TrackingRecordContractId),
 });
 export type MigrationContract = typeof MigrationContract.Type;
 
@@ -41,3 +60,10 @@ export const makeSourceVersionContractFingerprint = (
   input: unknown
 ): SourceVersionContractFingerprint =>
   SourceVersionContractFingerprint.make(stringifyContractInput(input));
+
+export const makeTrackingRecordContractFingerprint = (
+  schema: Schema.Codec<unknown, unknown, never, never>
+): TrackingRecordContractFingerprint =>
+  TrackingRecordContractFingerprint.make(
+    stringifyContractInput(SchemaRepresentation.fromAST(schema.ast))
+  );

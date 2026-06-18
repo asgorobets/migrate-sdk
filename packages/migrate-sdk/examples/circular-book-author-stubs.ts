@@ -11,9 +11,12 @@ import {
   runMigrations,
   SourceIdentity,
   type SourceIdentityDefinition,
+  Tracking,
 } from "migrate-sdk";
-import type { InMemoryEntryCommand } from "migrate-sdk/destinations/in-memory";
-import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
+import {
+  InMemoryDestination,
+  type InMemoryEntryUpsertedChange,
+} from "migrate-sdk/destinations/in-memory";
 import {
   type InMemorySourceCursor,
   InMemorySourcePlugin,
@@ -62,127 +65,114 @@ const BookEntryFields = Schema.Struct({
   authorReferenceStatuses: Schema.Array(Schema.String),
   categorySlugs: Schema.Array(Schema.String),
   format: Schema.String,
-  isStub: Schema.optional(Schema.Boolean),
+  isStub: Schema.optionalKey(Schema.Boolean),
   isbn: Schema.String,
   listPriceAmount: Schema.Number,
   listPriceCurrency: Schema.String,
   publicationYear: Schema.Number,
-  subtitle: Schema.optional(Schema.String),
+  subtitle: Schema.optionalKey(Schema.String),
   title: Schema.String,
 });
 
 const AuthorEntryFields = Schema.Struct({
   biography: Schema.String,
   displayName: Schema.String,
-  isStub: Schema.optional(Schema.Boolean),
+  isStub: Schema.optionalKey(Schema.Boolean),
   popularBookEntries: Schema.Array(Schema.String),
   popularBookReferenceStatuses: Schema.Array(Schema.String),
   specialties: Schema.Array(Schema.String),
-  website: Schema.optional(Schema.String),
+  website: Schema.optionalKey(Schema.String),
+});
+
+const BookTrackingRecord = Schema.Struct({
+  entryId: Schema.String,
+});
+
+const AuthorTrackingRecord = Schema.Struct({
+  entryId: Schema.String,
+});
+
+const bookTracking = Tracking.record({
+  id: "book-entry@v1",
+  schema: BookTrackingRecord,
+});
+
+const authorTracking = Tracking.record({
+  id: "author-entry@v1",
+  schema: AuthorTrackingRecord,
 });
 
 const makeBookstoreDestinationFixture = () => {
-  const author = InMemoryDestinationTesting.fixtureEntries({
+  const authorDestination = InMemoryDestination.makeEntries({
     contentType: "author",
-    commands: {
-      publishEntry: true,
-      upsertEntry: { fields: AuthorEntryFields },
-    },
+    fields: AuthorEntryFields,
   });
-  const book = InMemoryDestinationTesting.fixtureEntries({
+  const bookDestination = InMemoryDestination.makeEntries({
     contentType: "book",
-    commands: {
-      publishEntry: true,
-      upsertEntry: { fields: BookEntryFields },
-    },
+    fields: BookEntryFields,
   });
 
   return {
-    authorDestination: author.destination,
-    bookDestination: book.destination,
-    executions: () => [...book.executions(), ...author.executions()],
+    authorDestination,
+    bookDestination,
   };
 };
 
 type BookstoreDestinationFixture = ReturnType<
   typeof makeBookstoreDestinationFixture
 >;
-type BookstoreExecution = ReturnType<
-  BookstoreDestinationFixture["executions"]
->[number];
-type BookstoreCommand = BookstoreExecution["command"];
-type UpsertBookstoreCommand = Extract<
-  BookstoreCommand,
-  { readonly kind: "UpsertEntry" }
+type BookEntryFieldsValue = typeof BookEntryFields.Type;
+type AuthorEntryFieldsValue = typeof AuthorEntryFields.Type;
+type BookUpsertChange = InMemoryEntryUpsertedChange<
+  "book",
+  BookEntryFieldsValue
 >;
-type UpsertBookEntryCommand = Extract<
-  BookstoreCommand,
-  { readonly contentType: "book"; readonly kind: "UpsertEntry" }
+type AuthorUpsertChange = InMemoryEntryUpsertedChange<
+  "author",
+  AuthorEntryFieldsValue
 >;
-type UpsertAuthorEntryCommand = Extract<
-  BookstoreCommand,
-  { readonly contentType: "author"; readonly kind: "UpsertEntry" }
->;
-type UpsertBookstoreExecution = BookstoreExecution & {
-  readonly command: UpsertBookstoreCommand;
-};
-type BookUpsertExecution = BookstoreExecution & {
-  readonly command: UpsertBookEntryCommand;
-};
-type AuthorUpsertExecution = BookstoreExecution & {
-  readonly command: UpsertAuthorEntryCommand;
-};
+type BookstoreUpsertChange = BookUpsertChange | AuthorUpsertChange;
 type SourceIdentityKey<Definition> =
   Definition extends SourceIdentityDefinition<infer Key> ? Key : never;
 
-interface BookEntryCommandOptions {
-  readonly publishEntry: true;
-  readonly upsertEntry: { readonly fields: typeof BookEntryFields };
-}
-interface AuthorEntryCommandOptions {
-  readonly publishEntry: true;
-  readonly upsertEntry: { readonly fields: typeof AuthorEntryFields };
-}
-type BookMigrationCommand = InMemoryEntryCommand<
-  "book",
-  BookEntryCommandOptions
->;
-type AuthorMigrationCommand = InMemoryEntryCommand<
-  "author",
-  AuthorEntryCommandOptions
->;
 type ReferenceLookupPipelineError =
   | DestinationPluginError
   | MigrationReferenceLookupError
-  | MigrationStoreError;
+  | MigrationStoreError
+  | Schema.SchemaError;
 type BookMigration = MigrationDefinition<
   typeof BookSource.Type,
-  BookMigrationCommand,
+  never,
   ReferenceLookupPipelineError,
   InMemorySourceCursor,
   SourceIdentityKey<typeof BookSourceIdentity>,
   ReferenceLookupPipelineError,
-  unknown
+  unknown,
+  never,
+  never,
+  typeof bookTracking
 >;
 type AuthorMigration = MigrationDefinition<
   typeof AuthorSource.Type,
-  AuthorMigrationCommand,
+  never,
   ReferenceLookupPipelineError,
   InMemorySourceCursor,
   SourceIdentityKey<typeof AuthorSourceIdentity>,
   ReferenceLookupPipelineError,
-  unknown
+  unknown,
+  never,
+  never,
+  typeof authorTracking
 >;
 
 export interface CircularBookAuthorStubsExampleResult {
-  readonly authorEntryFields: UpsertAuthorEntryCommand["fields"] | null;
+  readonly authorEntryFields: AuthorEntryFieldsValue | null;
   readonly authorState: MigrationItemState | null;
-  readonly bookEntryFields: UpsertBookEntryCommand["fields"] | null;
+  readonly bookEntryFields: BookEntryFieldsValue | null;
   readonly bookStubState: MigrationItemState | null;
-  readonly executions: readonly BookstoreExecution[];
   readonly itemStates: readonly MigrationItemState[];
   readonly summary: MigrationRunSummary;
-  readonly upsertExecutions: readonly UpsertBookstoreExecution[];
+  readonly upsertChanges: readonly BookstoreUpsertChange[];
 }
 
 const bookSourceItems = [
@@ -223,18 +213,55 @@ const authorSourceItems = [
 ] as const;
 
 const isUpsertExecution = (
-  execution: BookstoreExecution
-): execution is UpsertBookstoreExecution =>
-  execution.command.kind === "UpsertEntry";
+  change: BookstoreUpsertChange
+): change is BookstoreUpsertChange => change.contentType !== undefined;
 
-const isBookUpsertExecution = (
-  execution: UpsertBookstoreExecution
-): execution is BookUpsertExecution => execution.command.contentType === "book";
+const isBookUpsertChange = (
+  change: BookstoreUpsertChange
+): change is BookUpsertChange => change.contentType === "book";
 
-const isAuthorUpsertExecution = (
-  execution: UpsertBookstoreExecution
-): execution is AuthorUpsertExecution =>
-  execution.command.contentType === "author";
+const isAuthorUpsertChange = (
+  change: BookstoreUpsertChange
+): change is AuthorUpsertChange => change.contentType === "author";
+
+const processJournalEntries = (itemState: MigrationItemState) =>
+  itemState.status === "migrated" ||
+  itemState.status === "failed" ||
+  itemState.status === "needs-update" ||
+  itemState.status === "skipped"
+    ? (itemState.journal?.process.entries ?? [])
+    : [];
+
+const collectUpsertChanges = (
+  destinationFixture: BookstoreDestinationFixture,
+  itemStates: readonly MigrationItemState[]
+): Effect.Effect<readonly BookstoreUpsertChange[], Schema.SchemaError> =>
+  Effect.gen(function* () {
+    const changes: BookstoreUpsertChange[] = [];
+
+    for (const entry of itemStates.flatMap(processJournalEntries)) {
+      if (destinationFixture.bookDestination.changes.entryUpserted.is(entry)) {
+        const decoded =
+          yield* destinationFixture.bookDestination.changes.entryUpserted.decode(
+            entry
+          );
+        changes.push(decoded.value);
+        continue;
+      }
+
+      if (
+        destinationFixture.authorDestination.changes.entryUpserted.is(entry)
+      ) {
+        const decoded =
+          yield* destinationFixture.authorDestination.changes.entryUpserted.decode(
+            entry
+          );
+        changes.push(decoded.value);
+      }
+    }
+
+    return changes;
+  });
 
 export const makeCircularBookAuthorStubMigrations = () => {
   const storeState = InMemoryMigrationStore.makeState();
@@ -249,25 +276,28 @@ export const makeCircularBookAuthorStubMigrations = () => {
       items: bookSourceItems,
       sourceSchema: BookSource,
     }),
-    destination: bookDestination,
     store,
-    // This hook is used when another migration looks up a Book with `stub: true`.
-    // The Author pipeline below uses it for `book:future-catalog`, creating a
-    // minimal Book entry until that source item appears in a later run.
+    tracking: bookTracking,
     stub: ({ sourceIdentity }) =>
-      bookDestination.commands.upsertEntry({
-        authorEntries: [],
-        authorReferenceStatuses: [],
-        categorySlugs: [],
-        format: "unknown",
-        isStub: true,
-        isbn: "pending",
-        listPriceAmount: 0,
-        listPriceCurrency: "USD",
-        publicationYear: 0,
-        title: `Stub book for ${sourceIdentity}`,
+      Effect.gen(function* () {
+        const entry = yield* bookDestination.entries.upsert({
+          authorEntries: [],
+          authorReferenceStatuses: [],
+          categorySlugs: [],
+          format: "unknown",
+          isStub: true,
+          isbn: "pending",
+          listPriceAmount: 0,
+          listPriceCurrency: "USD",
+          publicationYear: 0,
+          title: `Stub book for ${sourceIdentity}`,
+        });
+
+        yield* Tracking.setRecord({
+          entryId: entry.destinationIdentity,
+        });
       }),
-    pipeline: Effect.fn("books.pipeline")(function* (source) {
+    process: Effect.fn("books.process")(function* (source) {
       const references = yield* MigrationReferenceLookup;
       const authorReferences = yield* Effect.all(
         source.item.authorIds.map((authorId) =>
@@ -279,25 +309,28 @@ export const makeCircularBookAuthorStubMigrations = () => {
         )
       );
 
-      return [
-        bookDestination.commands.upsertEntry({
-          authorEntries: authorReferences.flatMap((reference) =>
-            reference === null ? [] : [reference.destinationIdentity]
-          ),
-          authorReferenceStatuses: authorReferences.flatMap((reference) =>
-            reference === null ? [] : [reference.status]
-          ),
-          categorySlugs: source.item.categories,
-          format: source.item.format,
-          isbn: source.item.isbn,
-          listPriceAmount: source.item.listPrice.amount,
-          listPriceCurrency: source.item.listPrice.currency,
-          publicationYear: source.item.publicationYear,
-          subtitle: source.item.subtitle,
-          title: source.item.title,
-        }),
-        bookDestination.commands.publishEntry(),
-      ];
+      const entry = yield* bookDestination.entries.upsert({
+        authorEntries: authorReferences.flatMap((reference) =>
+          reference === null ? [] : [reference.trackingRecord.entryId]
+        ),
+        authorReferenceStatuses: authorReferences.flatMap((reference) =>
+          reference === null ? [] : [reference.status]
+        ),
+        categorySlugs: source.item.categories,
+        format: source.item.format,
+        isbn: source.item.isbn,
+        listPriceAmount: source.item.listPrice.amount,
+        listPriceCurrency: source.item.listPrice.currency,
+        publicationYear: source.item.publicationYear,
+        ...(source.item.subtitle === undefined
+          ? {}
+          : { subtitle: source.item.subtitle }),
+        title: source.item.title,
+      });
+
+      yield* Tracking.setRecord({
+        entryId: entry.destinationIdentity,
+      });
     }),
   });
 
@@ -308,21 +341,24 @@ export const makeCircularBookAuthorStubMigrations = () => {
       items: authorSourceItems,
       sourceSchema: AuthorSource,
     }),
-    destination: authorDestination,
     store,
-    // This hook is used when another migration looks up an Author with
-    // `stub: true`. The Book pipeline above uses it before Authors have run,
-    // then this Author migration updates the same destination entry.
+    tracking: authorTracking,
     stub: ({ sourceIdentity }) =>
-      authorDestination.commands.upsertEntry({
-        biography: "Pending author profile",
-        displayName: `Stub author for ${sourceIdentity}`,
-        isStub: true,
-        popularBookEntries: [],
-        popularBookReferenceStatuses: [],
-        specialties: [],
+      Effect.gen(function* () {
+        const entry = yield* authorDestination.entries.upsert({
+          biography: "Pending author profile",
+          displayName: `Stub author for ${sourceIdentity}`,
+          isStub: true,
+          popularBookEntries: [],
+          popularBookReferenceStatuses: [],
+          specialties: [],
+        });
+
+        yield* Tracking.setRecord({
+          entryId: entry.destinationIdentity,
+        });
       }),
-    pipeline: Effect.fn("authors.pipeline")(function* (source) {
+    process: Effect.fn("authors.process")(function* (source) {
       const references = yield* MigrationReferenceLookup;
       const popularBookReferences = yield* Effect.all(
         source.item.popularBookIds.map((bookId) =>
@@ -334,21 +370,24 @@ export const makeCircularBookAuthorStubMigrations = () => {
         )
       );
 
-      return [
-        authorDestination.commands.upsertEntry({
-          biography: source.item.biography,
-          displayName: source.item.displayName,
-          popularBookEntries: popularBookReferences.flatMap((reference) =>
-            reference === null ? [] : [reference.destinationIdentity]
-          ),
-          popularBookReferenceStatuses: popularBookReferences.flatMap(
-            (reference) => (reference === null ? [] : [reference.status])
-          ),
-          specialties: source.item.specialties,
-          website: source.item.links.website,
-        }),
-        authorDestination.commands.publishEntry(),
-      ];
+      const entry = yield* authorDestination.entries.upsert({
+        biography: source.item.biography,
+        displayName: source.item.displayName,
+        popularBookEntries: popularBookReferences.flatMap((reference) =>
+          reference === null ? [] : [reference.trackingRecord.entryId]
+        ),
+        popularBookReferenceStatuses: popularBookReferences.flatMap(
+          (reference) => (reference === null ? [] : [reference.status])
+        ),
+        specialties: source.item.specialties,
+        ...(source.item.links.website === undefined
+          ? {}
+          : { website: source.item.links.website }),
+      });
+
+      yield* Tracking.setRecord({
+        entryId: entry.destinationIdentity,
+      });
     }),
   });
 
@@ -372,37 +411,38 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
     definitions,
     definitionIds: ["books", "authors"],
   });
-  const upsertExecutions = destinationFixture
-    .executions()
-    .filter(isUpsertExecution);
+  const itemStates = Array.from(storeState.itemStates.values());
+  const upsertChanges = (yield* collectUpsertChanges(
+    destinationFixture,
+    itemStates
+  )).filter(isUpsertExecution);
 
   return {
     authorEntryFields:
-      upsertExecutions.find(
-        (execution): execution is AuthorUpsertExecution =>
-          isAuthorUpsertExecution(execution) &&
-          execution.context.sourceIdentity === "author:maya-chen" &&
-          execution.command.fields.isStub !== true
-      )?.command.fields ?? null,
+      upsertChanges.find(
+        (change): change is AuthorUpsertChange =>
+          isAuthorUpsertChange(change) &&
+          change.sourceIdentity === "author:maya-chen" &&
+          change.fields.isStub !== true
+      )?.fields ?? null,
     authorState:
       storeState.itemStates.get(
         InMemoryMigrationStore.itemStateKey("authors", "author:maya-chen")
       ) ?? null,
     bookEntryFields:
-      upsertExecutions.find(
-        (execution): execution is BookUpsertExecution =>
-          isBookUpsertExecution(execution) &&
-          execution.context.sourceIdentity === "book:effectful-architecture" &&
-          execution.command.fields.isStub !== true
-      )?.command.fields ?? null,
+      upsertChanges.find(
+        (change): change is BookUpsertChange =>
+          isBookUpsertChange(change) &&
+          change.sourceIdentity === "book:effectful-architecture" &&
+          change.fields.isStub !== true
+      )?.fields ?? null,
     bookStubState:
       storeState.itemStates.get(
         InMemoryMigrationStore.itemStateKey("books", "book:future-catalog")
       ) ?? null,
-    executions: destinationFixture.executions(),
-    itemStates: Array.from(storeState.itemStates.values()),
+    itemStates,
     summary,
-    upsertExecutions,
+    upsertChanges,
   } satisfies CircularBookAuthorStubsExampleResult;
 });
 
@@ -414,12 +454,12 @@ export const formatCircularBookAuthorStubsExampleResult = (
     formatMigrationRunSummary(result.summary),
     "",
     "Destination Upserts",
-    ...result.upsertExecutions.map((execution) =>
+    ...result.upsertChanges.map((change) =>
       [
-        `${execution.context.definitionId}:${execution.context.sourceIdentity}`,
-        `  contentType: ${execution.command.contentType}`,
-        `  destinationIdentity: ${execution.result.destinationIdentity}`,
-        `  fields: ${JSON.stringify(execution.command.fields)}`,
+        `${change.contentType}:${change.sourceIdentity}`,
+        `  contentType: ${change.contentType}`,
+        `  destinationIdentity: ${change.destinationIdentity}`,
+        `  fields: ${JSON.stringify(change.fields)}`,
       ].join("\n")
     ),
     "",

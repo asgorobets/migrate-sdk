@@ -6,27 +6,42 @@ import type {
   MigrationStoreError,
 } from "../domain/errors.ts";
 import type {
-  DestinationIdentity,
-  DestinationVersion,
   EncodedSourceIdentity,
   MigrationDefinitionId,
 } from "../domain/ids.ts";
 import type {
   AnyMigrationDefinition,
   MigrationDefinitionSourceIdentityKey,
+  MigrationDefinitionTrackingContract,
+  MigrationDefinitionTrackingRecord,
 } from "../domain/run.ts";
+import type {
+  TrackingRecord,
+  TrackingRecordContract,
+} from "../domain/tracking.ts";
 
 const migrationReferenceLookupTargetTypeId: unique symbol = Symbol.for(
   "@migrate-sdk/MigrationReferenceLookupTarget"
 );
 
-export interface MigrationReference {
+export interface MigrationReferenceBase {
   readonly definitionId: MigrationDefinitionId;
-  readonly destinationIdentity: DestinationIdentity;
-  readonly destinationVersion?: DestinationVersion;
   readonly sourceIdentity: EncodedSourceIdentity;
   readonly status: "migrated" | "needs-update";
 }
+
+export interface MigrationReference<
+  Record extends TrackingRecord = TrackingRecord,
+> extends MigrationReferenceBase {
+  readonly trackingRecord: Record;
+}
+
+export type MigrationReferenceForDefinition<
+  Definition extends AnyMigrationDefinition,
+> =
+  MigrationDefinitionTrackingContract<Definition> extends TrackingRecordContract
+    ? MigrationReference<MigrationDefinitionTrackingRecord<Definition>>
+    : never;
 
 export type MigrationReferenceLookupStubInput<
   Definition extends AnyMigrationDefinition,
@@ -93,8 +108,10 @@ export type MigrationReferenceLookupInput<
 export type AnyMigrationReferenceLookupInput =
   MigrationReferenceLookupInput<AnyMigrationDefinition>;
 
-type MigrationReferenceLookupEffect = Effect.Effect<
-  MigrationReference | null,
+type MigrationReferenceLookupEffect<
+  Reference extends MigrationReference = MigrationReference,
+> = Effect.Effect<
+  Reference | null,
   DestinationPluginError | MigrationReferenceLookupError | MigrationStoreError
 >;
 
@@ -102,10 +119,14 @@ export interface MigrationReferenceLookupService {
   readonly lookup: {
     <Definition extends AnyMigrationDefinition>(
       input: MigrationReferenceLookupSingleInput<Definition>
-    ): MigrationReferenceLookupEffect;
+    ): MigrationReferenceLookupEffect<
+      MigrationReferenceForDefinition<Definition>
+    >;
     <const Targets extends MigrationReferenceLookupTargetSet>(
       input: MigrationReferenceLookupTargetsInput<Targets>
-    ): MigrationReferenceLookupEffect;
+    ): MigrationReferenceLookupEffect<
+      MigrationReferenceForDefinition<Targets[number]["definition"]>
+    >;
   };
   readonly target: <Definition extends AnyMigrationDefinition>(
     definition: Definition,

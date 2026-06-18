@@ -42,6 +42,7 @@ import type {
   SourceReadResult,
 } from "./source.ts";
 import { makeSourceItemEffect } from "./source.ts";
+import type { TrackingRecordContract } from "./tracking.ts";
 
 const configuredSourcePluginTypeId: unique symbol = Symbol.for(
   "@migrate-sdk/ConfiguredSourcePlugin"
@@ -439,6 +440,9 @@ export interface MigrationDefinition<
   SourceInput = Source,
   SourceLayerError = never,
   SourceRequirements = never,
+  TrackingContract extends TrackingRecordContract | undefined =
+    | TrackingRecordContract
+    | undefined,
 > {
   readonly dependencies?: MigrationDefinitionDependencies;
   readonly dependsOn?: readonly MigrationDefinitionId[];
@@ -476,9 +480,8 @@ export interface MigrationDefinition<
   readonly stub?: (
     input: DestinationStubInput,
     context: DestinationStubContext
-  ) =>
-    | DestinationCommandPlan<Command>
-    | Effect.Effect<DestinationCommandPlan<Command>, PipelineError | SkipItem>;
+  ) => void | Effect.Effect<void, PipelineError | SkipItem, Tracking>;
+  readonly tracking?: TrackingContract;
 }
 
 export interface MigrationDefinitionDependencies {
@@ -501,6 +504,9 @@ export interface MigrationDefinitionInput<
   SourceInput = Source,
   SourceLayerError = never,
   SourceRequirements = never,
+  TrackingContract extends TrackingRecordContract | undefined =
+    | TrackingRecordContract
+    | undefined,
 > extends Omit<
     MigrationDefinition<
       Source,
@@ -511,7 +517,8 @@ export interface MigrationDefinitionInput<
       RollbackPipelineError,
       SourceInput,
       SourceLayerError,
-      SourceRequirements
+      SourceRequirements,
+      TrackingContract
     >,
     "dependencies" | "dependsOn" | "id"
   > {
@@ -542,10 +549,10 @@ const validateProcessAuthoring = (definition: {
     definition.destination === undefined &&
     (hasPipeline ||
       definition.rollback !== undefined ||
-      definition.stub !== undefined)
+      (definition.stub !== undefined && !hasProcess))
   ) {
     throw new Error(
-      "Migration Definition command-plan pipeline, rollback, and stub paths require a destination"
+      "Migration Definition command-plan pipeline, rollback, and legacy stub paths require a destination"
     );
   }
 };
@@ -580,6 +587,7 @@ export const defineMigration = <
   SourceInput = Source,
   SourceLayerError = never,
   SourceRequirements = never,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
 >(
   definition: MigrationDefinitionInput<
     Source,
@@ -590,7 +598,8 @@ export const defineMigration = <
     RollbackPipelineError,
     SourceInput,
     SourceLayerError,
-    SourceRequirements
+    SourceRequirements,
+    TrackingContract
   >
 ): MigrationDefinition<
   Source,
@@ -601,7 +610,8 @@ export const defineMigration = <
   RollbackPipelineError,
   SourceInput,
   SourceLayerError,
-  SourceRequirements
+  SourceRequirements,
+  TrackingContract
 > => {
   const { dependencies, dependsOn, id, ...rest } = definition;
   validateProcessAuthoring(definition);

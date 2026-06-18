@@ -95,13 +95,18 @@ export type {
   MigrationContract,
   SourceVersionContractIdInput,
   SourceVersionContractFingerprintInput,
+  TrackingRecordContractIdInput,
+  TrackingRecordContractFingerprintInput,
 } from "./domain/migration-contract.ts";
 export {
   SourceVersionContractId,
   SourceVersionContractFingerprint,
+  TrackingRecordContractId,
+  TrackingRecordContractFingerprint,
   defaultSourceVersionContractFingerprint,
   makeSourceIdentityContractFingerprint,
   makeSourceVersionContractFingerprint,
+  makeTrackingRecordContractFingerprint,
 } from "./domain/migration-contract.ts";
 
 export { MigrationDefinitionLock } from "./domain/lock.ts";
@@ -216,6 +221,8 @@ export {
   DestinationJournalChangeEntry,
   DestinationJournalEntry,
   DestinationJournalSegment,
+  TrackingRecord,
+  TrackingRecordContract,
 } from "./domain/tracking.ts";
 export type {
   DestinationChangeDescriptor as DestinationChangeDescriptorType,
@@ -223,12 +230,16 @@ export type {
   DestinationJournalChangeEntry as DestinationJournalChangeEntryType,
   DestinationJournalEntry as DestinationJournalEntryType,
   DestinationJournalSegment as DestinationJournalSegmentType,
+  TrackingRecordContract as TrackingRecordContractType,
+  TrackingRecordContractInput,
+  TrackingRecordValue,
 } from "./domain/tracking.ts";
 
 export { DestinationPlugin } from "./services/destination-plugin.ts";
 export { MigrationReferenceLookup } from "./services/migration-reference-lookup.ts";
 export type {
   MigrationReference,
+  MigrationReferenceForDefinition,
   MigrationReferenceLookupInput,
   MigrationReferenceLookupTarget,
 } from "./services/migration-reference-lookup.ts";

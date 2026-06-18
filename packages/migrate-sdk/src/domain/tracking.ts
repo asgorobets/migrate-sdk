@@ -1,6 +1,12 @@
 import { Effect, Exit, Schema } from "effect";
 import type { MigrationRunId } from "./ids.ts";
 import { MigrationRunId as MigrationRunIdSchema } from "./ids.ts";
+import {
+  makeTrackingRecordContractFingerprint,
+  type TrackingRecordContractFingerprint,
+  TrackingRecordContractId,
+  type TrackingRecordContractIdInput,
+} from "./migration-contract.ts";
 
 export const DestinationChangeDescriptorId = Schema.NonEmptyString.pipe(
   Schema.brand("DestinationChangeDescriptorId")
@@ -46,6 +52,28 @@ export const DestinationJournal = Schema.Struct({
 export interface DestinationJournal {
   readonly process: DestinationJournalSegment;
   readonly rollbackAttempts: readonly DestinationJournalSegment[];
+}
+
+export type TrackingRecordValue = Schema.JsonObject;
+
+export const TrackingRecord = Schema.Record(Schema.String, Schema.Json);
+export type TrackingRecord = typeof TrackingRecord.Type;
+
+export interface TrackingRecordContract<
+  Value extends TrackingRecordValue = TrackingRecordValue,
+  Encoded extends TrackingRecordValue = TrackingRecordValue,
+> {
+  readonly fingerprint: TrackingRecordContractFingerprint;
+  readonly id: TrackingRecordContractId;
+  readonly schema: Schema.Codec<Value, Encoded, never, never>;
+}
+
+export interface TrackingRecordContractInput<
+  Value extends TrackingRecordValue,
+  Encoded extends TrackingRecordValue,
+> {
+  readonly id: TrackingRecordContractIdInput;
+  readonly schema: Schema.Codec<Value, Encoded, never, never>;
 }
 
 export interface DestinationChangeDescriptor<
@@ -104,4 +132,19 @@ const make = <
 
 export const DestinationChangeDescriptor = {
   make,
+} as const;
+
+const record = <
+  Value extends TrackingRecordValue,
+  Encoded extends TrackingRecordValue,
+>(
+  input: TrackingRecordContractInput<Value, Encoded>
+): TrackingRecordContract<Value, Encoded> => ({
+  fingerprint: makeTrackingRecordContractFingerprint(input.schema),
+  id: TrackingRecordContractId.make(input.id),
+  schema: input.schema,
+});
+
+export const TrackingRecordContract = {
+  make: record,
 } as const;

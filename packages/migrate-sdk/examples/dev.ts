@@ -28,7 +28,7 @@ const example = process.argv[2] ?? "in-memory";
 const shouldReset = process.argv.includes("--reset");
 const nodePlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
 
-const makeProgram = () => {
+const makeProgram = (): Effect.Effect<string, unknown, never> => {
   if (example === "file-store") {
     return runFileStoreExample({ reset: shouldReset }).pipe(
       Effect.provide(nodePlatformLayer),

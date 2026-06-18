@@ -12,6 +12,7 @@ import {
 } from "./ids.ts";
 import type { EncodedRunModeInput, RunMode, RunModeInput } from "./run-mode.ts";
 import { makeEncodedRunMode } from "./run-mode.ts";
+import type { TrackingRecordContract } from "./tracking.ts";
 
 export type AnyMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous run requests.
@@ -30,6 +31,8 @@ export type AnyMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Source layer error is re-extracted by MigrationDefinitionSourceLayerError.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Source requirements are re-extracted by MigrationDefinitionSourceRequirements.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Tracking contract is existential across heterogeneous run requests.
   any
 >;
 
@@ -43,7 +46,8 @@ export type MigrationDefinitionPipelineError<Definition> =
     infer _RollbackPipelineError,
     infer _SourceInput,
     infer _SourceLayerError,
-    infer _SourceRequirements
+    infer _SourceRequirements,
+    infer _TrackingContract
   >
     ? PipelineError
     : never;
@@ -58,7 +62,8 @@ export type MigrationDefinitionSourceLayerError<Definition> =
     infer _RollbackPipelineError,
     infer _SourceInput,
     infer SourceLayerError,
-    infer _SourceRequirements
+    infer _SourceRequirements,
+    infer _TrackingContract
   >
     ? SourceLayerError
     : never;
@@ -73,7 +78,8 @@ export type MigrationDefinitionSourceRequirements<Definition> =
     infer _RollbackPipelineError,
     infer _SourceInput,
     infer _SourceLayerError,
-    infer SourceRequirements
+    infer SourceRequirements,
+    infer _TrackingContract
   >
     ? SourceRequirements
     : never;
@@ -88,9 +94,34 @@ export type MigrationDefinitionSourceIdentityKey<Definition> =
     infer _RollbackPipelineError,
     infer _SourceInput,
     infer _SourceLayerError,
-    infer _SourceRequirements
+    infer _SourceRequirements,
+    infer _TrackingContract
   >
     ? IdentityKey
+    : never;
+
+export type MigrationDefinitionTrackingContract<Definition> =
+  Definition extends MigrationDefinition<
+    infer _Source,
+    infer _Command,
+    infer _PipelineError,
+    infer _Cursor,
+    infer _IdentityKey,
+    infer _RollbackPipelineError,
+    infer _SourceInput,
+    infer _SourceLayerError,
+    infer _SourceRequirements,
+    infer TrackingContract
+  >
+    ? TrackingContract
+    : never;
+
+export type MigrationDefinitionTrackingRecord<Definition> =
+  MigrationDefinitionTrackingContract<Definition> extends TrackingRecordContract<
+    infer Value,
+    infer _Encoded
+  >
+    ? Value
     : never;
 
 export type RunRequestSourceLayerError<

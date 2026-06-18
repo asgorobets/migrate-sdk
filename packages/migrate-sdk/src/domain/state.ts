@@ -8,7 +8,7 @@ import {
   SourceVersion,
 } from "./ids.ts";
 import { SourceVersionContractFingerprint } from "./migration-contract.ts";
-import { DestinationJournal } from "./tracking.ts";
+import { DestinationJournal, TrackingRecord } from "./tracking.ts";
 
 const MigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionId,
@@ -26,6 +26,7 @@ const ObservedSourceVersionFields = {
 
 export const MigrationItemErrorKind = Schema.Literals([
   "source",
+  "tracking",
   "process",
   "pipeline",
   "destination",
@@ -53,6 +54,7 @@ export const MigratedItemState = Schema.Struct({
   destinationVersion: Schema.optional(DestinationVersion),
   journal: Schema.optional(DestinationJournal),
   status: Schema.Literal("migrated"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 export type MigratedItemState = typeof MigratedItemState.Type;
 
@@ -85,11 +87,12 @@ export const NeedsUpdateItemState = Schema.Struct({
     SourceVersionContractFingerprint
   ),
   sourceVersion: Schema.optional(SourceVersion),
-  destinationIdentity: DestinationIdentity,
+  destinationIdentity: Schema.optional(DestinationIdentity),
   destinationVersion: Schema.optional(DestinationVersion),
   journal: Schema.optional(DestinationJournal),
   reason: Schema.String,
   status: Schema.Literal("needs-update"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 export type NeedsUpdateItemState = typeof NeedsUpdateItemState.Type;
 

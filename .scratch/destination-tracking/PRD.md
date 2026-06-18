@@ -316,7 +316,7 @@ destination identity inference as the target model for new work.
 
 - Add schema tests proving missing or invalid diagnostic severity is rejected before persistence.
 
-- Add focused tests for tracking record evaluation: progress-only success, record-backed success, missing record failure, duplicate staged record failure, schema failure, and failed-process segment behavior.
+- Add focused tests for tracking record evaluation: progress-only success, record-backed success, missing record failure, multiple staged records failure, schema failure, and failed-process segment behavior.
 
 - Add migration contract tests for tracking record contract drift with existing item state.
 

@@ -28,7 +28,9 @@ export type RollbackableMigrationItemState =
   | (MigratedItemState & {
       readonly destinationIdentity: DestinationIdentity;
     })
-  | NeedsUpdateItemState
+  | (NeedsUpdateItemState & {
+      readonly destinationIdentity: DestinationIdentity;
+    })
   | (FailedItemState & {
       readonly destinationIdentity: DestinationIdentity;
     });

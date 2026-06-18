@@ -4,6 +4,7 @@ import type {
   MigrationItemErrorDetail,
   MigrationItemErrorKind,
 } from "../domain/state.ts";
+import type { TrackingRecordContract } from "../domain/tracking.ts";
 
 const errorTag = (error: unknown, fallback: string): string => {
   if (
@@ -97,6 +98,8 @@ const collectSchemaErrorDetails = (
     case "Filter": {
       return collectSchemaErrorDetails(issue.issue, path, details);
     }
+    default:
+      break;
   }
 
   if (details.length < maxSchemaErrorDetails) {
@@ -134,4 +137,57 @@ export const normalizeSourcePayloadSchemaError = (
   errorTag: sourcePayloadSchemaErrorTag,
   message: "Source payload did not match Source Payload Schema",
   details: schemaErrorDetails(error),
+});
+
+export const trackingRecordContractErrorTag = "TrackingRecordContractError";
+
+const trackingRecordContractDetails = (
+  contract: TrackingRecordContract,
+  details: readonly MigrationItemErrorDetail[] = []
+): readonly MigrationItemErrorDetail[] => [
+  { path: "trackingRecordContractId", message: contract.id },
+  {
+    path: "trackingRecordContractFingerprint",
+    message: contract.fingerprint,
+  },
+  ...details,
+];
+
+export const normalizeTrackingRecordSchemaError = (
+  contract: TrackingRecordContract,
+  error: Schema.SchemaError
+): MigrationItemError => ({
+  kind: "tracking",
+  errorTag: trackingRecordContractErrorTag,
+  message: "Tracking record did not match Tracking Record Contract",
+  details: trackingRecordContractDetails(contract, schemaErrorDetails(error)),
+});
+
+export const normalizeTrackingRecordCountError = (
+  contract: TrackingRecordContract,
+  count: number
+): MigrationItemError => ({
+  kind: "tracking",
+  errorTag: trackingRecordContractErrorTag,
+  message: "Tracking Record Contract requires exactly one staged record",
+  details: trackingRecordContractDetails(contract, [
+    {
+      path: "stagedRecords",
+      message: `Expected exactly one staged tracking record, received ${count}`,
+    },
+  ]),
+});
+
+export const normalizeUnexpectedTrackingRecordError = (
+  count: number
+): MigrationItemError => ({
+  kind: "tracking",
+  errorTag: trackingRecordContractErrorTag,
+  message: "Tracking record was staged without a Tracking Record Contract",
+  details: [
+    {
+      path: "stagedRecords",
+      message: `Expected no staged tracking records without a Tracking Record Contract, received ${count}`,
+    },
+  ],
 });
