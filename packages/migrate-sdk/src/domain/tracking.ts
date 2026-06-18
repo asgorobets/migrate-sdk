@@ -32,9 +32,52 @@ export const DestinationJournalChangeEntry = Schema.Struct({
   value: Schema.Json,
 });
 
-export type DestinationJournalEntry = DestinationJournalChangeEntry;
+export const DestinationJournalDiagnosticSeverity = Schema.Literals([
+  "info",
+  "warning",
+  "error",
+]);
+export type DestinationJournalDiagnosticSeverity =
+  typeof DestinationJournalDiagnosticSeverity.Type;
 
-export const DestinationJournalEntry = DestinationJournalChangeEntry;
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
+
+export interface DestinationJournalDiagnosticInput {
+  readonly details?: Schema.JsonObject | undefined;
+  readonly message: string;
+  readonly severity: DestinationJournalDiagnosticSeverity;
+}
+
+const DestinationJournalDiagnosticFields = {
+  details: Schema.optional(JsonObject),
+  message: Schema.String,
+  severity: DestinationJournalDiagnosticSeverity,
+} as const;
+
+export const DestinationJournalDiagnosticInput = Schema.Struct(
+  DestinationJournalDiagnosticFields
+);
+
+export interface DestinationJournalDiagnosticEntry
+  extends DestinationJournalDiagnosticInput {
+  readonly kind: "diagnostic";
+  readonly sequence: number;
+}
+
+export const DestinationJournalDiagnosticEntry = Schema.Struct({
+  ...DestinationJournalDiagnosticFields,
+  kind: Schema.Literal("diagnostic"),
+  sequence: Schema.Int,
+});
+
+export type DestinationJournalEntry =
+  | DestinationJournalChangeEntry
+  | DestinationJournalDiagnosticEntry;
+
+export const DestinationJournalEntry = Schema.Union([
+  DestinationJournalChangeEntry,
+  DestinationJournalDiagnosticEntry,
+]);
 
 export const DestinationJournalSegment = Schema.Struct({
   entries: Schema.Array(DestinationJournalEntry),

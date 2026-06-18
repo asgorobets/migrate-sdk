@@ -11,12 +11,17 @@ import type {
   DestinationChangeDescriptor,
   DestinationChangeValue,
   DestinationJournalChangeEntry,
+  DestinationJournalDiagnosticEntry,
+  DestinationJournalDiagnosticInput,
   DestinationJournalEntry,
   DestinationJournalSegment,
   TrackingRecordContractInput,
   TrackingRecordValue,
 } from "../domain/tracking.ts";
-import { TrackingRecordContract } from "../domain/tracking.ts";
+import {
+  DestinationJournalDiagnosticInput as DestinationJournalDiagnosticInputSchema,
+  TrackingRecordContract,
+} from "../domain/tracking.ts";
 
 export interface TrackingProcessContext {
   readonly definitionId: MigrationDefinitionId;
@@ -32,6 +37,25 @@ interface TrackingState {
   readonly records: readonly TrackingRecordValue[];
 }
 
+const diagnosticLogLevel = (
+  severity: DestinationJournalDiagnosticInput["severity"]
+) => {
+  switch (severity) {
+    case "error":
+      return "Error";
+    case "warning":
+      return "Warn";
+    case "info":
+      return "Info";
+  }
+};
+
+const logDiagnosticEvent = (entry: DestinationJournalDiagnosticEntry) =>
+  Effect.logWithLevel(diagnosticLogLevel(entry.severity))(
+    entry.message,
+    ...(entry.details === undefined ? [] : [entry.details])
+  );
+
 export interface TrackingService {
   readonly context: TrackingProcessContext;
   readonly recordChange: <
@@ -41,6 +65,9 @@ export interface TrackingService {
     descriptor: DestinationChangeDescriptor<Value, Encoded>,
     value: Value
   ) => Effect.Effect<DestinationJournalChangeEntry<Value>, Schema.SchemaError>;
+  readonly logDiagnostic: (
+    input: DestinationJournalDiagnosticInput
+  ) => Effect.Effect<DestinationJournalDiagnosticEntry, Schema.SchemaError>;
   readonly records: Effect.Effect<readonly TrackingRecordValue[]>;
   readonly setRecord: <Value extends TrackingRecordValue>(
     value: Value
@@ -71,6 +98,9 @@ export class Tracking extends Service<Tracking, TrackingService>()(
     Tracking,
     (tracking) => tracking.snapshot
   );
+
+  static readonly logDiagnostic = (input: DestinationJournalDiagnosticInput) =>
+    Effect.flatMap(Tracking, (tracking) => tracking.logDiagnostic(input));
 
   static readonly record = <
     Value extends TrackingRecordValue,
@@ -142,6 +172,35 @@ export const makeProcessScope = (
         )
       );
 
+    const logDiagnostic = (input: DestinationJournalDiagnosticInput) =>
+      Schema.decodeUnknownEffect(DestinationJournalDiagnosticInputSchema, {
+        errors: "all",
+      })(input).pipe(
+        Effect.flatMap((diagnostic) =>
+          Ref.modify(stateRef, (state) => {
+            const entry: DestinationJournalDiagnosticEntry = {
+              kind: "diagnostic",
+              message: diagnostic.message,
+              sequence: state.nextSequence,
+              severity: diagnostic.severity,
+              ...(diagnostic.details === undefined
+                ? {}
+                : { details: diagnostic.details }),
+            };
+
+            return [
+              entry,
+              {
+                entries: [...state.entries, entry],
+                nextSequence: state.nextSequence + 1,
+                records: state.records,
+              },
+            ] as const;
+          })
+        ),
+        Effect.tap(logDiagnosticEvent)
+      );
+
     const setRecord = <Value extends TrackingRecordValue>(value: Value) =>
       Ref.update(stateRef, (state) => ({
         ...state,
@@ -165,6 +224,7 @@ export const makeProcessScope = (
 
     return {
       context,
+      logDiagnostic,
       recordChange,
       records,
       setRecord,

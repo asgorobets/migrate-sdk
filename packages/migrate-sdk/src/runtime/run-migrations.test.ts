@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schedule, Schema } from "effect";
+import { Console, Effect, Layer, Schedule, Schema } from "effect";
+import * as References from "effect/References";
 import type { InMemoryEntryUpsertedChange } from "migrate-sdk/destinations/in-memory";
 import {
   type InMemoryDestinationEntry,
@@ -1364,6 +1365,270 @@ describe("runMigration", () => {
   );
 
   it.effect(
+    "persists process-authored diagnostic journal entries when the Process fails",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const processError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          code: "process-failed",
+          message: "Process failed after diagnostic",
+        };
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Diagnostic article",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (source) =>
+            Effect.gen(function* () {
+              yield* Tracking.logDiagnostic({
+                severity: "error",
+                message: "Could not normalize article before destination work",
+                details: {
+                  sourceIdentity: source.identity.encoded,
+                  title: source.item.title,
+                },
+              });
+              return yield* Effect.fail(processError);
+            }),
+        });
+
+        const summary = yield* runMigration(definition);
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+        const journalEntries =
+          itemState?.status === "failed"
+            ? (itemState.journal?.process.entries ?? [])
+            : [];
+
+        expect(summary.status).toBe("failed");
+        expect(journalEntries).toEqual([
+          {
+            kind: "diagnostic",
+            sequence: 0,
+            severity: "error",
+            message: "Could not normalize article before destination work",
+            details: {
+              sourceIdentity: "article-1",
+              title: "Diagnostic article",
+            },
+          },
+        ]);
+      })
+  );
+
+  it.effect(
+    "rejects invalid diagnostic severity before appending to the process journal",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Invalid diagnostic article",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () =>
+            Tracking.logDiagnostic({
+              severity: "fatal" as never,
+              message: "Invalid diagnostic severity",
+            }),
+        });
+
+        const summary = yield* runMigration(definition);
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+
+        expect(summary.status).toBe("failed");
+        expect(itemState).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            error: expect.objectContaining({
+              errorTag: "SchemaError",
+              kind: "process",
+            }),
+          })
+        );
+        expect(itemState).not.toHaveProperty("journal");
+      })
+  );
+
+  it.effect(
+    "rejects missing diagnostic severity before appending to the process journal",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Missing diagnostic severity article",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () =>
+            Tracking.logDiagnostic({
+              message: "Missing diagnostic severity",
+            } as never),
+        });
+
+        const summary = yield* runMigration(definition);
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+
+        expect(summary.status).toBe("failed");
+        expect(itemState).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            error: expect.objectContaining({
+              errorTag: "SchemaError",
+              kind: "process",
+            }),
+          })
+        );
+        expect(itemState).not.toHaveProperty("journal");
+      })
+  );
+
+  it.effect(
+    "persists diagnostics when log-level configuration would suppress the matching observability log",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const processError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          code: "process-failed",
+          message: "Process failed after suppressed diagnostic",
+        };
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Suppressed diagnostic article",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () =>
+            Effect.gen(function* () {
+              yield* Tracking.logDiagnostic({
+                severity: "info",
+                message: "Suppressed observability diagnostic",
+              });
+              return yield* Effect.fail(processError);
+            }),
+        });
+
+        yield* runMigration(definition).pipe(
+          Effect.provideService(References.MinimumLogLevel, "Error")
+        );
+
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+        const journalEntries =
+          itemState?.status === "failed"
+            ? (itemState.journal?.process.entries ?? [])
+            : [];
+
+        expect(journalEntries).toEqual([
+          {
+            kind: "diagnostic",
+            sequence: 0,
+            severity: "info",
+            message: "Suppressed observability diagnostic",
+          },
+        ]);
+      })
+  );
+
+  it.effect(
+    "does not persist ordinary Effect logs or Console output as diagnostics",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const processError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          code: "process-failed",
+          message: "Process failed after ordinary logs",
+        };
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Logged article",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () =>
+            Effect.gen(function* () {
+              yield* Effect.logError("Ordinary Effect log");
+              yield* Console.log("Ordinary Console output");
+              return yield* Effect.fail(processError);
+            }),
+        });
+
+        const summary = yield* runMigration(definition);
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1")
+        );
+
+        expect(summary.status).toBe("failed");
+        expect(itemState).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            error: expect.objectContaining({
+              message: "Process failed after ordinary logs",
+            }),
+          })
+        );
+        expect(itemState).not.toHaveProperty("journal");
+      })
+  );
+
+  it.effect(
     "persists helper-authored process journal entries when the Process succeeds",
     () =>
       Effect.gen(function* () {
@@ -1478,7 +1743,7 @@ describe("runMigration", () => {
   );
 
   it.effect(
-    "does not record a helper success change when the helper fails before the destination effect completes",
+    "records a helper diagnostic without a success change when the helper fails before the destination effect completes",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
@@ -1521,7 +1786,29 @@ describe("runMigration", () => {
             status: "failed",
           })
         );
-        expect(itemState).not.toHaveProperty("journal");
+        const journalEntries =
+          itemState?.status === "failed"
+            ? (itemState.journal?.process.entries ?? [])
+            : [];
+
+        expect(journalEntries).toEqual([
+          {
+            kind: "diagnostic",
+            sequence: 0,
+            severity: "error",
+            message: "In-memory destination execute failed transiently",
+            details: {
+              contentType: "article",
+              operation: "entries.upsert",
+              sourceIdentity: "article-1",
+            },
+          },
+        ]);
+        expect(
+          journalEntries.some((entry) =>
+            destination.changes.entryUpserted.is(entry)
+          )
+        ).toBe(false);
       })
   );
 
@@ -1578,11 +1865,28 @@ describe("runMigration", () => {
             : [];
 
         expect(summary.status).toBe("failed");
-        expect(journalEntries).toHaveLength(1);
-        expect(journalEntries[0]).toEqual(
+        expect(journalEntries).toHaveLength(2);
+        expect(journalEntries[0]).toEqual({
+          kind: "diagnostic",
+          sequence: 0,
+          severity: "error",
+          message: "In-memory destination execute failed transiently",
+          details: {
+            contentType: "article",
+            operation: "entries.upsert",
+            sourceIdentity: "article-1",
+          },
+        });
+
+        const upsertedChanges = journalEntries.filter(
+          destination.changes.entryUpserted.is
+        );
+
+        expect(upsertedChanges).toHaveLength(1);
+        expect(upsertedChanges[0]).toEqual(
           expect.objectContaining({
             descriptorId: destination.changes.entryUpserted.id,
-            sequence: 0,
+            sequence: 1,
           })
         );
       })
@@ -1761,7 +2065,10 @@ describe("runMigration", () => {
           throw new Error("Expected one transformed destination journal entry");
         }
 
-        expect(quantityChanged.is(entry)).toBe(true);
+        if (!quantityChanged.is(entry)) {
+          throw new Error("Expected transformed destination journal entry");
+        }
+
         expect(entry.value).toEqual({
           quantity: "7",
         });

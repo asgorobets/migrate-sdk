@@ -1083,6 +1083,15 @@ const makeProcessEntries = <
 
     if (remainingExecuteFailures > 0) {
       remainingExecuteFailures -= 1;
+      yield* Tracking.logDiagnostic({
+        severity: "error",
+        message: "In-memory destination execute failed transiently",
+        details: {
+          contentType: options.contentType,
+          operation: "entries.upsert",
+          sourceIdentity: context.sourceIdentity,
+        },
+      });
       return yield* transientDestinationError();
     }
 
