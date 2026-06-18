@@ -8,6 +8,10 @@ import {
   runCircularBookAuthorStubsExample,
 } from "./circular-book-author-stubs.ts";
 import {
+  formatCompaniesDocumentSourceExampleResult,
+  runCompaniesDocumentSourceExample,
+} from "./document-source/companies-document-source.ts";
+import {
   formatFileStoreExampleResult,
   runFileStoreExample,
 } from "./file-store-runtime.ts";
@@ -15,10 +19,6 @@ import {
   formatMigrationRunSummary,
   runInMemoryExample,
 } from "./in-memory-runtime.ts";
-import {
-  formatCompaniesJsonSourceExampleResult,
-  runCompaniesJsonSourceExample,
-} from "./json-file-source/companies-json-source.ts";
 import {
   formatNestedArticleSchemaExampleResult,
   runNestedArticleSchemaExample,
@@ -54,10 +54,10 @@ const makeProgram = () => {
     );
   }
 
-  if (example === "json-file-source") {
-    return runCompaniesJsonSourceExample({
+  if (example === "document-source") {
+    return runCompaniesDocumentSourceExample({
       platform: nodePlatformLayer,
-    }).pipe(Effect.map(formatCompaniesJsonSourceExampleResult));
+    }).pipe(Effect.map(formatCompaniesDocumentSourceExampleResult));
   }
 
   return runInMemoryExample().pipe(Effect.map(formatMigrationRunSummary));

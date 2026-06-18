@@ -299,15 +299,15 @@ export const makeAddressesMigration = (
   });
 };
 
-export interface CompaniesJsonSourceExampleResult {
+export interface CompaniesDocumentSourceExampleResult {
   readonly addressEntries: readonly InMemoryDestinationEntry[];
   readonly businessUnitEntries: readonly InMemoryDestinationEntry[];
   readonly contactEntries: readonly InMemoryDestinationEntry[];
   readonly summary: MigrationRunSummary;
 }
 
-export const runCompaniesJsonSourceExample = Effect.fn(
-  "runCompaniesJsonSourceExample"
+export const runCompaniesDocumentSourceExample = Effect.fn(
+  "runCompaniesDocumentSourceExample"
 )(function* (options?: {
   readonly filePath?: string;
   readonly platform?: DocumentFetcherPlatform;
@@ -343,14 +343,14 @@ export const runCompaniesJsonSourceExample = Effect.fn(
     businessUnitEntries: Array.from(businessUnitDestination.entries().values()),
     contactEntries: Array.from(contactDestination.entries().values()),
     summary,
-  } satisfies CompaniesJsonSourceExampleResult;
+  } satisfies CompaniesDocumentSourceExampleResult;
 });
 
-export const formatCompaniesJsonSourceExampleResult = (
-  result: CompaniesJsonSourceExampleResult
+export const formatCompaniesDocumentSourceExampleResult = (
+  result: CompaniesDocumentSourceExampleResult
 ): string =>
   [
-    "Companies JSON Source Example",
+    "Companies Document Source Example",
     `status: ${result.summary.status}`,
     `businessUnitEntries: ${result.businessUnitEntries.length}`,
     ...result.businessUnitEntries.map(
