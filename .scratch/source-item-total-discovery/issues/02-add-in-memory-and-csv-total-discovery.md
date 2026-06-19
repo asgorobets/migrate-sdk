@@ -1,6 +1,6 @@
 # Add In-Memory And CSV Total Discovery
 
-Status: ready-for-agent
+Status: ready-for-human
 Type: AFK
 
 ## Parent

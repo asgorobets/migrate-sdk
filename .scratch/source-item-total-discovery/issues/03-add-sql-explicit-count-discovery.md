@@ -1,6 +1,6 @@
 # Add SQL Explicit Count Discovery
 
-Status: ready-for-agent
+Status: ready-for-human
 Type: AFK
 
 ## Parent

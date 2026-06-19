@@ -1,6 +1,6 @@
 # Add Source Item Total Discovery Contract
 
-Status: ready-for-agent
+Status: ready-for-human
 Type: AFK
 
 ## Parent
