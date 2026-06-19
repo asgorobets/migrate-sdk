@@ -5,7 +5,15 @@ import { Effect, Layer, Schema } from "effect";
 import { Service } from "effect/Context";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
-import { SourcePluginError } from "migrate-sdk";
+import {
+  defineMigration,
+  InMemoryMigrationStore,
+  MigrationProgress,
+  type MigrationProgressEvent,
+  runMigration,
+  SourceItemTotal,
+  SourcePluginError,
+} from "migrate-sdk";
 import {
   type DocumentFetcher,
   DocumentFetchers,
@@ -405,6 +413,353 @@ describe("DocumentSourcePlugin", () => {
       expect(found?.item.parent.name).toBe("River Market");
       expect(found?.item.item.email).toBe("riley@example.com");
     }).pipe(Effect.provide(testPlatformLayer))
+  );
+
+  it.effect(
+    "discovers callback-provided Source Item totals without reading the source",
+    () =>
+      Effect.gen(function* () {
+        let readCalls = 0;
+        const source = DocumentSourcePlugin.make({
+          discoverSourceItemTotal: () =>
+            Effect.succeed(SourceItemTotal.known(42)),
+          fetcher: {
+            cursorSchema: Schema.Null,
+            read: () =>
+              Effect.sync(() => {
+                readCalls += 1;
+
+                return {
+                  resource: JSON.stringify({
+                    businessUnits: [],
+                    exportedAt: "2026-05-14",
+                  }),
+                };
+              }),
+          },
+          parser: DocumentParsers.json(CompaniesDocument),
+          selector: {
+            item: (document) => document.businessUnits,
+          },
+          identity: {
+            ...BusinessUnitIdentity,
+            key: ({ item }) => item.key,
+          },
+          lookup: { kind: "scan" },
+          version: {
+            id: "document-version@v1",
+            kind: "value",
+            value: ({ item }) => item.status,
+          },
+        });
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+        if (plugin.discoverSourceItemTotal === undefined) {
+          throw new Error("Expected document source total discovery");
+        }
+
+        const total = yield* plugin.discoverSourceItemTotal();
+
+        expect(total).toEqual(SourceItemTotal.known(42));
+        expect(readCalls).toBe(0);
+      })
+  );
+
+  it.effect(
+    "lets total callbacks count final selected items from a source resource",
+    () =>
+      Effect.gen(function* () {
+        const source = DocumentSourcePlugin.make({
+          discoverSourceItemTotal: ({ countResource }) =>
+            countResource({
+              resource: JSON.stringify({
+                businessUnits: [
+                  {
+                    addresses: [],
+                    contacts: [],
+                    key: "BU-100",
+                    name: "Orbit Labs",
+                    status: "active",
+                  },
+                  {
+                    addresses: [],
+                    contacts: [],
+                    key: "BU-200",
+                    name: "River Market",
+                    status: "inactive",
+                  },
+                ],
+                exportedAt: "2026-05-14",
+              }),
+            }),
+          fetcher: {
+            cursorSchema: Schema.Null,
+            read: () =>
+              Effect.fail(
+                new SourcePluginError({
+                  message: "Discovery callback should not use source read",
+                })
+              ),
+          },
+          parser: DocumentParsers.json(CompaniesDocument),
+          selector: {
+            item: (document) => document.businessUnits,
+          },
+          identity: {
+            ...BusinessUnitIdentity,
+            key: ({ item }) => item.key,
+          },
+          lookup: { kind: "scan" },
+          version: {
+            id: "document-version@v1",
+            kind: "value",
+            value: ({ item }) => item.status,
+          },
+        });
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+        if (plugin.discoverSourceItemTotal === undefined) {
+          throw new Error("Expected document source total discovery");
+        }
+
+        const total = yield* plugin.discoverSourceItemTotal();
+
+        expect(total).toEqual(SourceItemTotal.known(2));
+      })
+  );
+
+  it.effect("discovers local JSON file totals with item selectors", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem;
+      const path = yield* Path;
+      const directory = yield* fs.makeTempDirectoryScoped({
+        prefix: "migrate-sdk-document-source-",
+      });
+      const filePath = path.join(directory, "companies.json");
+      yield* writeCompaniesFile(filePath);
+
+      const source = DocumentSourcePlugin.make({
+        fetcher: DocumentFetchers.fileText({
+          path: filePath,
+          platform: testPlatformLayer,
+        }),
+        parser: DocumentParsers.json(CompaniesDocument),
+        selector: {
+          item: (document) => document.businessUnits,
+        },
+        identity: {
+          ...BusinessUnitIdentity,
+          key: ({ item }) => item.key,
+        },
+        lookup: { kind: "scan" },
+        version: {
+          id: "document-version@v1",
+          kind: "value",
+          value: ({ item }) => item.status,
+        },
+      });
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+      if (plugin.discoverSourceItemTotal === undefined) {
+        throw new Error("Expected document source total discovery");
+      }
+
+      const total = yield* plugin.discoverSourceItemTotal();
+
+      expect(total).toEqual(SourceItemTotal.known(2));
+    }).pipe(Effect.provide(testPlatformLayer))
+  );
+
+  it.effect("discovers local JSON file totals with subitem selectors", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem;
+      const path = yield* Path;
+      const directory = yield* fs.makeTempDirectoryScoped({
+        prefix: "migrate-sdk-document-source-",
+      });
+      const filePath = path.join(directory, "companies.json");
+      yield* writeCompaniesFile(filePath);
+
+      const source = DocumentSourcePlugin.make({
+        fetcher: DocumentFetchers.fileText({
+          path: filePath,
+          platform: testPlatformLayer,
+        }),
+        parser: DocumentParsers.json(CompaniesDocument),
+        selector: {
+          parent: (document) => document.businessUnits,
+          item: (businessUnit) => businessUnit.contacts,
+        },
+        identity: {
+          ...BusinessUnitContactIdentity,
+          key: ({ item, parent }) => tuple2(parent.key, item.key),
+        },
+        lookup: { kind: "scan" },
+        version: { kind: "content-hash" },
+      });
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+      if (plugin.discoverSourceItemTotal === undefined) {
+        throw new Error("Expected document source total discovery");
+      }
+
+      const total = yield* plugin.discoverSourceItemTotal();
+
+      expect(total).toEqual(SourceItemTotal.known(3));
+    }).pipe(Effect.provide(testPlatformLayer))
+  );
+
+  it.effect(
+    "returns unknown totals for paginated document sources without callbacks",
+    () =>
+      Effect.gen(function* () {
+        let readCalls = 0;
+        const PageDocument = Schema.Struct({
+          items: Schema.Array(
+            Schema.Struct({
+              key: Schema.String,
+              version: Schema.String,
+            })
+          ),
+        });
+        const fetcher: DocumentFetcher<string, number> = {
+          cursorSchema: Schema.Number,
+          read: () =>
+            Effect.sync(() => {
+              readCalls += 1;
+
+              return {
+                nextCursor: 1,
+                resource: JSON.stringify({
+                  items: [{ key: "page-1-item", version: "v1" }],
+                }),
+              };
+            }),
+        };
+        const source = DocumentSourcePlugin.make({
+          fetcher,
+          parser: DocumentParsers.json(PageDocument),
+          selector: {
+            item: (document) => document.items,
+          },
+          identity: {
+            ...ResourceItemIdentity,
+            key: ({ item }) => item.key,
+          },
+          lookup: { kind: "scan" },
+          version: {
+            id: "document-version@v1",
+            kind: "value",
+            value: ({ item }) => item.version,
+          },
+        });
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+        if (plugin.discoverSourceItemTotal === undefined) {
+          throw new Error("Expected document source total discovery");
+        }
+
+        const total = yield* plugin.discoverSourceItemTotal();
+
+        expect(total).toEqual(
+          SourceItemTotal.unknown({
+            message:
+              "Document Source Item total discovery needs a source-native total callback",
+            reason: "too-expensive",
+          })
+        );
+        expect(readCalls).toBe(0);
+      })
+  );
+
+  it.effect(
+    "continues migration execution when document total discovery fails",
+    () =>
+      Effect.gen(function* () {
+        const discoveryError = new SourcePluginError({
+          message: "Manifest count failed",
+        });
+        const progressEvents: MigrationProgressEvent[] = [];
+        const storeState = InMemoryMigrationStore.makeState();
+        const source = DocumentSourcePlugin.make({
+          discoverSourceItemTotal: () => Effect.fail(discoveryError),
+          fetcher: {
+            cursorSchema: Schema.Null,
+            read: () =>
+              Effect.succeed({
+                resource: JSON.stringify({
+                  businessUnits: [
+                    {
+                      addresses: [],
+                      contacts: [],
+                      key: "BU-100",
+                      name: "Orbit Labs",
+                      status: "active",
+                    },
+                  ],
+                  exportedAt: "2026-05-14",
+                }),
+              }),
+          },
+          parser: DocumentParsers.json(CompaniesDocument),
+          selector: {
+            item: (document) => document.businessUnits,
+          },
+          identity: {
+            ...BusinessUnitIdentity,
+            key: ({ item }) => item.key,
+          },
+          lookup: { kind: "scan" },
+          version: {
+            id: "document-version@v1",
+            kind: "value",
+            value: ({ item }) => item.status,
+          },
+        });
+        const definition = defineMigration({
+          id: "document-business-units",
+          process: () => Effect.void,
+          source,
+          store: InMemoryMigrationStore.layer(storeState),
+        });
+        const progressLayer = Layer.succeed(MigrationProgress, {
+          discoverSourceItemTotals: true,
+          emit: (event) =>
+            Effect.sync(() => {
+              progressEvents.push(event);
+            }),
+        });
+
+        const summary = yield* runMigration(definition).pipe(
+          Effect.provide(progressLayer)
+        );
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(storeState.itemStates.size).toBe(1);
+        expect(Array.from(storeState.itemStates.values())[0]?.status).toBe(
+          "migrated"
+        );
+        expect(progressEvents).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              definitionId: definition.id,
+              kind: "source-item-total-discovered",
+              sourceItemTotal: SourceItemTotal.unknown({
+                cause: discoveryError,
+                message: "Document Source Item total discovery failed",
+                reason: "failed",
+              }),
+            }),
+          ])
+        );
+      })
   );
 
   it.effect(

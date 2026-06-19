@@ -12,6 +12,7 @@ export type {
   DocumentEffectFetcherOptions,
   DocumentFetcher,
   DocumentFetcherPlatform,
+  DocumentFetcherTotalDiscoveryCapability,
   DocumentFetchResult,
   DocumentFileTextFetcherOptions,
 } from "./document-fetcher.ts";
@@ -30,5 +31,7 @@ export type {
   DocumentSourceSelectedItem,
   DocumentSourceSelectedSubitem,
   DocumentSourceSubitemSelector,
+  DocumentSourceTotalCallback,
+  DocumentSourceTotalContext,
   DocumentSourceVersion,
 } from "./document-source.ts";
