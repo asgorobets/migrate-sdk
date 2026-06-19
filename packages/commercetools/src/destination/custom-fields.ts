@@ -6,7 +6,7 @@ import { Effect, Schema } from "effect";
 import {
   type NonEmptyUpdateActions,
   nonEmptyUpdateActions,
-} from "./update-command-builder.ts";
+} from "./update-action-builder.ts";
 
 export type CommercetoolsCustomFieldSchema =
   Schema.Struct<Schema.Struct.Fields> &

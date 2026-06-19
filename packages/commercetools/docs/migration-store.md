@@ -75,7 +75,7 @@ reference for both the destination and store wiring:
 
 ```ts
 import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
-import { CommercetoolsDestinationPlugin } from "@migrate-sdk/commercetools/destination";
+import { CommercetoolsDestination } from "@migrate-sdk/commercetools/destination";
 import {
   CommercetoolsMigrationStore,
 } from "@migrate-sdk/commercetools/migration-store";
@@ -91,9 +91,7 @@ const storeLayer = CommercetoolsMigrationStore.layer({
   namespace: "catalog-import",
 }).pipe(Layer.provide(commercetoolsSdkLayer));
 
-const destination = CommercetoolsDestinationPlugin.make({
-  sdkLayer: commercetoolsSdkLayer,
-});
+const ct = CommercetoolsDestination.make().provide(commercetoolsSdkLayer);
 ```
 
 Pass `storeLayer` to every migration definition in the same `runMigrations`
@@ -120,7 +118,7 @@ not be written to the destination project:
 
 ```ts
 import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
-import { CommercetoolsDestinationPlugin } from "@migrate-sdk/commercetools/destination";
+import { CommercetoolsDestination } from "@migrate-sdk/commercetools/destination";
 import {
   CommercetoolsMigrationStore,
 } from "@migrate-sdk/commercetools/migration-store";
@@ -141,13 +139,11 @@ const storeLayer = CommercetoolsMigrationStore.layer({
   namespace: "catalog-import",
 }).pipe(Layer.provide(stateSdkLayer));
 
-const destination = CommercetoolsDestinationPlugin.make({
-  sdkLayer: destinationSdkLayer,
-});
+const ct = CommercetoolsDestination.make().provide(destinationSdkLayer);
 ```
 
 The state project needs Custom Object read/write scopes. The destination
-project needs whatever scopes the destination commands require, such as product
+project needs whatever scopes the destination helpers require, such as product
 write scopes for product catalog migrations.
 
 ## Public API
@@ -598,7 +594,7 @@ The package includes a credential-free product catalog example at
 It uses:
 
 - `InMemorySourcePlugin` for a small product catalog source fixture
-- `CommercetoolsDestinationPlugin` for product draft creation
+- `CommercetoolsDestination` for product creation inside `process`
 - `CommercetoolsMigrationStore` for Custom Object-backed cursors, item state,
   run state, and locks
 - the scripted Commercetools SDK and scripted Custom Object routes from the
@@ -638,7 +634,8 @@ The package also includes a CLI-driven live Business Unit scratchpad at
 It wires one real Commercetools API root into:
 
 - `CommercetoolsSourcePlugin` for loading existing Business Units
-- `CommercetoolsDestinationPlugin` for updating those Business Units
+- `CommercetoolsDestination` for updating those Business Units inside
+  `process`
 - `CommercetoolsMigrationStore` for storing migration state in Commercetools
   Custom Objects
 

@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import type {
   NonEmptyUpdateActions,
   UpdateActionBase,
-} from "../update-command-builder.ts";
+} from "../update-action-builder.ts";
 
 export type UnknownRecord = Readonly<Record<string, unknown>>;
 

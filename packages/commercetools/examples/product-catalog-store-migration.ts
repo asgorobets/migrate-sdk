@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import type { Product, ProductData } from "@commercetools/platform-sdk";
 import type { CommercetoolsSdkLayer } from "@migrate-sdk/commercetools";
 import type { ProductDraftInput } from "@migrate-sdk/commercetools/destination";
-import { CommercetoolsDestinationPlugin } from "@migrate-sdk/commercetools/destination";
+import { CommercetoolsDestination } from "@migrate-sdk/commercetools/destination";
 import { CommercetoolsMigrationStore } from "@migrate-sdk/commercetools/migration-store";
 import {
   makeScriptedCommercetoolsSdk,
@@ -26,7 +26,9 @@ import {
   type MigrationStoreError,
   type RunMigrationError,
   runMigrations,
+  SourceIdentity,
   type SourceItemInput,
+  Tracking,
   toMigrationDefinitionId,
 } from "migrate-sdk";
 
@@ -50,6 +52,19 @@ export const CatalogProductSource = Schema.Struct({
 });
 type CatalogProductSource = typeof CatalogProductSource.Type;
 
+export const CatalogProductSourceIdentity = SourceIdentity.make({
+  id: "commercetools-catalog-product@v1",
+  schema: SourceIdentity.key("key", Schema.NonEmptyString),
+});
+
+export const CatalogProductTrackingRecord = Tracking.record({
+  id: "commercetools-catalog-product-tracking@v1",
+  schema: Schema.Struct({
+    productId: Schema.String,
+    productKey: Schema.String,
+  }),
+});
+
 export const CatalogProductAttributes = Schema.Struct({
   displayFamily: Schema.optional(Schema.String),
   searchable: Schema.Boolean,
@@ -63,7 +78,7 @@ export const CatalogVariantAttributes = Schema.Struct({
 
 const catalogProducts: readonly SourceItemInput<CatalogProductSource>[] = [
   {
-    identity: "book:effectful-architecture",
+    identityKey: "effectful-architecture",
     version: "source-version-1",
     item: {
       displayFamily: "software-architecture",
@@ -166,33 +181,33 @@ export const runProductCatalogStoreMigration: (
   ProductCatalogStoreMigrationExampleResult,
   MigrationStoreError | RunMigrationError
 > = Effect.fn("runProductCatalogStoreMigration")(function* (options) {
-  const destination = CommercetoolsDestinationPlugin.make({
+  const ct = CommercetoolsDestination.make({
     productTypes: {
       book: {
         attributes: CatalogVariantAttributes,
         productAttributes: CatalogProductAttributes,
       },
     },
-    sdkLayer: options.sdkLayer,
-  });
+  }).provide(options.sdkLayer);
 
   const products = defineMigration({
     id: catalogDefinitionId,
     source: InMemorySourcePlugin.make({
+      identity: CatalogProductSourceIdentity,
       items: catalogProducts,
       sourceSchema: CatalogProductSource,
     }),
-    destination,
     store: options.storeLayer,
-    pipeline: Effect.fn("products.pipeline")(function* (source) {
-      const productAttributes = yield* destination.helpers.products
+    tracking: CatalogProductTrackingRecord,
+    process: Effect.fn("products.process")(function* (source) {
+      const productAttributes = yield* ct.products
         .productAttributes("book")
         .withAttributes({
           displayFamily: source.item.displayFamily,
           searchable: source.item.searchable,
         })
         .toDraft();
-      const variantAttributes = yield* destination.helpers.products
+      const variantAttributes = yield* ct.products
         .attributes("book")
         .withAttributes({
           format: source.item.format,
@@ -218,8 +233,12 @@ export const runProductCatalogStoreMigration: (
           "en-US": source.item.slug,
         },
       } satisfies ProductDraftInput;
+      const product = yield* ct.products.create(draft);
 
-      return [destination.commands.products.createDraft(draft)];
+      yield* Tracking.setRecord({
+        productId: product.id,
+        productKey: product.key ?? source.item.key,
+      });
     }),
   });
 
@@ -247,8 +266,8 @@ export const runProductCatalogStoreMigrationExample: () => Effect.Effect<
     projectKey: "example-catalog-project",
     routes: [
       ...customObjects.routes,
-      scriptedCommercetoolsSdkRoute("products.createDraft").replyWith(
-        (request) => productResponse(request.body as ProductDraftInput)
+      scriptedCommercetoolsSdkRoute("products.create").replyWith((request) =>
+        productResponse(request.body as ProductDraftInput)
       ),
     ],
   });

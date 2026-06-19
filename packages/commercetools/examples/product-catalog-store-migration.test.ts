@@ -71,12 +71,29 @@ describe("product catalog store migration example", () => {
         expect(result.itemStates).toHaveLength(1);
         expect(itemState).toMatchObject({
           definitionId: "products",
-          destinationIdentity: "recording-product-id",
-          destinationVersion: "1",
-          sourceIdentity: "book:effectful-architecture",
+          sourceIdentity: {
+            encoded: "effectful-architecture",
+            key: "effectful-architecture",
+          },
           sourceVersion: "source-version-1",
           status: "migrated",
+          trackingRecord: {
+            productId: "recording-product-id",
+            productKey: "effectful-architecture",
+          },
         });
+        expect(itemState?.journal?.process.entries).toEqual([
+          expect.objectContaining({
+            descriptorId: "commercetools.product.created",
+            kind: "change",
+            sequence: 0,
+            value: expect.objectContaining({
+              resourceId: "recording-product-id",
+              resourceKey: "effectful-architecture",
+              resourceType: "product",
+            }),
+          }),
+        ]);
       })
   );
 

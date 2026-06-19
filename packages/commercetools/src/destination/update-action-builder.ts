@@ -7,17 +7,6 @@ export type NonEmptyUpdateActions<Action extends UpdateActionBase> = readonly [
   ...Action[],
 ];
 
-export interface UpdateCommandShape<
-  Kind extends string,
-  Selector,
-  Action extends UpdateActionBase,
-> {
-  readonly actions: NonEmptyUpdateActions<Action>;
-  readonly kind: Kind;
-  readonly selector: Selector;
-  readonly version: number;
-}
-
 export interface UpdateInput<Selector> {
   readonly selector: Selector;
   readonly version: number;
@@ -31,55 +20,50 @@ export interface UpdateWithActionsInput<
 }
 
 interface UpdateActionMethod<
-  Kind extends string,
   Selector,
   ActionUnion extends UpdateActionBase,
   CurrentAction extends ActionUnion = never,
 > {
   readonly action: <const Action extends ActionUnion>(
     action: Action
-  ) => UpdateActionBuilder<Kind, Selector, ActionUnion, CurrentAction | Action>;
+  ) => UpdateActionBuilder<Selector, ActionUnion, CurrentAction | Action>;
 }
 
 export interface EmptyUpdateActionBuilder<
-  Kind extends string,
   Selector,
   ActionUnion extends UpdateActionBase,
-> extends UpdateActionMethod<Kind, Selector, ActionUnion> {
+> extends UpdateActionMethod<Selector, ActionUnion> {
   readonly actions: readonly [];
   readonly withActions: <const Action extends ActionUnion>(
     actions: NonEmptyUpdateActions<Action>
-  ) => UpdateActionBuilder<Kind, Selector, ActionUnion, Action>;
+  ) => UpdateActionBuilder<Selector, ActionUnion, Action>;
 }
 
 export interface UpdateActionBuilder<
-  Kind extends string,
   Selector,
   ActionUnion extends UpdateActionBase,
   Action extends ActionUnion = ActionUnion,
-> extends UpdateActionMethod<Kind, Selector, ActionUnion, Action> {
+> extends UpdateActionMethod<Selector, ActionUnion, Action> {
   readonly actions: NonEmptyUpdateActions<Action>;
-  readonly command: () => UpdateCommandShape<Kind, Selector, Action>;
+  readonly input: () => UpdateWithActionsInput<Selector, Action>;
   readonly withActions: <const NextAction extends ActionUnion>(
     actions: readonly NextAction[]
-  ) => UpdateActionBuilder<Kind, Selector, ActionUnion, Action | NextAction>;
+  ) => UpdateActionBuilder<Selector, ActionUnion, Action | NextAction>;
 }
 
-export interface UpdateCommandFactory<
-  Kind extends string,
+export interface UpdateActionFactory<
   Selector,
   ActionUnion extends UpdateActionBase,
 > {
   readonly withActions: <const Action extends ActionUnion>(
     input: UpdateWithActionsInput<Selector, Action>
-  ) => UpdateActionBuilder<Kind, Selector, ActionUnion, Action>;
+  ) => UpdateActionBuilder<Selector, ActionUnion, Action>;
   (
     input: UpdateInput<Selector>
-  ): EmptyUpdateActionBuilder<Kind, Selector, ActionUnion>;
+  ): EmptyUpdateActionBuilder<Selector, ActionUnion>;
 }
 
-interface UpdateCommandFactoryOptions<Kind extends string> {
-  readonly kind: Kind;
+interface UpdateActionFactoryOptions {
   readonly label: string;
 }
 
@@ -99,30 +83,29 @@ export const nonEmptyUpdateActions = <Action extends UpdateActionBase>(
 const emptyUpdateActions: readonly [] = [];
 
 const makeUpdateActionBuilder = <
-  const Kind extends string,
   Selector,
   ActionUnion extends UpdateActionBase,
   CurrentAction extends ActionUnion = never,
 >(
-  options: UpdateCommandFactoryOptions<Kind>,
+  options: UpdateActionFactoryOptions,
   input: UpdateInput<Selector> & {
     readonly actions: readonly CurrentAction[];
   }
-): UpdateActionMethod<Kind, Selector, ActionUnion, CurrentAction> & {
+): UpdateActionMethod<Selector, ActionUnion, CurrentAction> & {
   readonly withActions: <const Action extends ActionUnion>(
     actions: readonly Action[]
-  ) => UpdateActionBuilder<Kind, Selector, ActionUnion, CurrentAction | Action>;
+  ) => UpdateActionBuilder<Selector, ActionUnion, CurrentAction | Action>;
 } => {
   const append = <const Action extends ActionUnion>(
     action: Action
-  ): UpdateActionBuilder<Kind, Selector, ActionUnion, CurrentAction | Action> =>
+  ): UpdateActionBuilder<Selector, ActionUnion, CurrentAction | Action> =>
     makeUpdateActionBuilderWithActions(options, {
       ...input,
       actions: nonEmptyUpdateActions([...input.actions, action], options.label),
     });
   const appendMany = <const Action extends ActionUnion>(
     actions: readonly Action[]
-  ): UpdateActionBuilder<Kind, Selector, ActionUnion, CurrentAction | Action> =>
+  ): UpdateActionBuilder<Selector, ActionUnion, CurrentAction | Action> =>
     makeUpdateActionBuilderWithActions(options, {
       ...input,
       actions: nonEmptyUpdateActions(
@@ -138,37 +121,34 @@ const makeUpdateActionBuilder = <
 };
 
 const makeUpdateActionBuilderWithActions = <
-  const Kind extends string,
   Selector,
   ActionUnion extends UpdateActionBase,
   Action extends ActionUnion,
 >(
-  options: UpdateCommandFactoryOptions<Kind>,
+  options: UpdateActionFactoryOptions,
   input: UpdateInput<Selector> & {
     readonly actions: NonEmptyUpdateActions<Action>;
   }
-): UpdateActionBuilder<Kind, Selector, ActionUnion, Action> => ({
+): UpdateActionBuilder<Selector, ActionUnion, Action> => ({
   ...makeUpdateActionBuilder(options, input),
   actions: input.actions,
-  command: () => ({
+  input: () => ({
     actions: input.actions,
-    kind: options.kind,
     selector: input.selector,
     version: input.version,
   }),
 });
 
-export const makeUpdateCommandFactory = <
-  const Kind extends string,
+export const makeUpdateActionFactory = <
   Selector,
   ActionUnion extends UpdateActionBase,
 >(
-  options: UpdateCommandFactoryOptions<Kind>
-): UpdateCommandFactory<Kind, Selector, ActionUnion> =>
+  options: UpdateActionFactoryOptions
+): UpdateActionFactory<Selector, ActionUnion> =>
   Object.assign(
     (
       input: UpdateInput<Selector>
-    ): EmptyUpdateActionBuilder<Kind, Selector, ActionUnion> => ({
+    ): EmptyUpdateActionBuilder<Selector, ActionUnion> => ({
       ...makeUpdateActionBuilder(options, {
         ...input,
         actions: emptyUpdateActions,
@@ -178,10 +158,10 @@ export const makeUpdateCommandFactory = <
     {
       withActions: <const Action extends ActionUnion>(
         input: UpdateWithActionsInput<Selector, Action>
-      ): UpdateActionBuilder<Kind, Selector, ActionUnion, Action> =>
+      ): UpdateActionBuilder<Selector, ActionUnion, Action> =>
         makeUpdateActionBuilderWithActions(options, {
           ...input,
           actions: nonEmptyUpdateActions(input.actions, options.label),
         }),
     }
-  ) satisfies UpdateCommandFactory<Kind, Selector, ActionUnion>;
+  ) satisfies UpdateActionFactory<Selector, ActionUnion>;

@@ -1,5 +1,5 @@
 import type { CommercetoolsSdkLayer } from "@migrate-sdk/commercetools";
-import { CommercetoolsDestinationPlugin } from "@migrate-sdk/commercetools/destination";
+import { CommercetoolsDestination } from "@migrate-sdk/commercetools/destination";
 import { CommercetoolsSourcePlugin } from "@migrate-sdk/commercetools/source";
 import { Effect, type Layer } from "effect";
 import {
@@ -25,9 +25,7 @@ export interface BusinessUnitStaticFieldMigrationOptions {
 export const makeBusinessUnitStaticFieldMigration = (
   options: BusinessUnitStaticFieldMigrationOptions
 ) => {
-  const destination = CommercetoolsDestinationPlugin.make({
-    sdkLayer: options.sdkLayer,
-  });
+  const ct = CommercetoolsDestination.make().provide(options.sdkLayer);
   const source = CommercetoolsSourcePlugin.businessUnits({
     batchSize: options.batchSize ?? 20,
     identity: "key",
@@ -36,9 +34,8 @@ export const makeBusinessUnitStaticFieldMigration = (
   return defineMigration({
     id: businessUnitStaticFieldDefinitionId,
     source,
-    destination,
     store: options.storeLayer,
-    pipeline: Effect.fn("businessUnitsStaticField.pipeline")(
+    process: Effect.fn("businessUnitsStaticField.process")(
       function* (sourceItem) {
         const businessUnit = sourceItem.item;
         const contactEmail = businessUnit.contactEmail;
@@ -49,21 +46,19 @@ export const makeBusinessUnitStaticFieldMigration = (
           );
         }
 
-        return destination.commands.businessUnits.update
-          .withActions({
-            actions: [
-              {
-                action: "setContactEmail",
-                contactEmail,
-              },
-            ],
-            selector: {
-              key: businessUnit.key,
-              kind: "key",
+        yield* ct.businessUnits.update({
+          actions: [
+            {
+              action: "setContactEmail",
+              contactEmail,
             },
-            version: businessUnit.version,
-          })
-          .command();
+          ],
+          selector: {
+            key: businessUnit.key,
+            kind: "key",
+          },
+          version: businessUnit.version,
+        });
       }
     ),
   });
