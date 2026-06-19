@@ -438,6 +438,28 @@ const getExecutionProbe = (): CliExecutionProbe => {
   return probe as CliExecutionProbe;
 };
 
+interface CliTotalDiscoveryProbe {
+  totalDiscoveryAttempts: number;
+}
+
+const totalDiscoveryProbeGlobal = "__migrateSdkCliTotalDiscoveryProbe";
+
+const resetTotalDiscoveryProbe = () => {
+  delete (globalThis as Record<string, unknown>)[totalDiscoveryProbeGlobal];
+};
+
+const getTotalDiscoveryProbe = (): CliTotalDiscoveryProbe => {
+  const probe = (globalThis as Record<string, unknown>)[
+    totalDiscoveryProbeGlobal
+  ];
+
+  if (typeof probe !== "object" || probe === null) {
+    throw new Error("CLI total discovery probe was not initialized");
+  }
+
+  return probe as CliTotalDiscoveryProbe;
+};
+
 const executionConfigSource = (): string => `
   import { Schema } from "effect";
   import {
@@ -541,6 +563,155 @@ const progressExecutionConfigSource = (): string => `
         }
       ]
     }),
+    store,
+    process: () => undefined
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [articles]
+    })
+  });
+`;
+
+const progressUnknownTotalConfigSource = (): string => `
+  import { Effect, Schema } from "effect";
+  import {
+    defineMigration,
+    defineSourcePlugin,
+    InMemoryMigrationStore,
+    MigrationDefinitionRegistry,
+    SourceIdentity,
+    toMigrationDefinitionId
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntrySourceIdentity = SourceIdentity.make({
+    id: "entry@v1",
+    schema: SourceIdentity.key("id", Schema.NonEmptyString)
+  });
+  const store = InMemoryMigrationStore.layer();
+  const source = defineSourcePlugin({
+    cursorSchema: Schema.Null,
+    identity: EntrySourceIdentity,
+    lookupStrategy: "scan",
+    read: () =>
+      Effect.succeed({
+        items: [
+          {
+            identityKey: "article-1",
+            version: "source-version-1",
+            item: { title: "Article 1" }
+          }
+        ]
+      }),
+    readByIdentity: () => Effect.succeed(null),
+    sourceSchema: EntrySource
+  });
+
+  const articles = defineMigration({
+    id: toMigrationDefinitionId("articles"),
+    source,
+    store,
+    process: () => undefined
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [articles]
+    })
+  });
+`;
+
+const progressZeroTotalConfigSource = (): string => `
+  import { Schema } from "effect";
+  import {
+    defineMigration,
+    InMemoryMigrationStore,
+    InMemorySourcePlugin,
+    MigrationDefinitionRegistry,
+    SourceIdentity,
+    toMigrationDefinitionId
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntrySourceIdentity = SourceIdentity.make({
+    id: "entry@v1",
+    schema: SourceIdentity.key("id", Schema.NonEmptyString)
+  });
+  const store = InMemoryMigrationStore.layer();
+
+  const articles = defineMigration({
+    id: toMigrationDefinitionId("articles"),
+    source: InMemorySourcePlugin.make({
+      identity: EntrySourceIdentity,
+      sourceSchema: EntrySource,
+      items: []
+    }),
+    store,
+    process: () => undefined
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [articles]
+    })
+  });
+`;
+
+const progressTotalDiscoveryProbeConfigSource = (): string => `
+  import { Effect, Schema } from "effect";
+  import {
+    defineMigration,
+    defineSourcePlugin,
+    InMemoryMigrationStore,
+    MigrationDefinitionRegistry,
+    SourceIdentity,
+    SourceItemTotal,
+    toMigrationDefinitionId
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntrySourceIdentity = SourceIdentity.make({
+    id: "entry@v1",
+    schema: SourceIdentity.key("id", Schema.NonEmptyString)
+  });
+  const store = InMemoryMigrationStore.layer();
+  const probe = {
+    totalDiscoveryAttempts: 0
+  };
+
+  globalThis.${totalDiscoveryProbeGlobal} = probe;
+
+  const source = defineSourcePlugin({
+    cursorSchema: Schema.Null,
+    discoverSourceItemTotal: () =>
+      Effect.sync(() => {
+        probe.totalDiscoveryAttempts += 1;
+        return SourceItemTotal.known(1);
+      }),
+    identity: EntrySourceIdentity,
+    lookupStrategy: "scan",
+    read: () =>
+      Effect.succeed({
+        items: [
+          {
+            identityKey: "article-1",
+            version: "source-version-1",
+            item: { title: "Article 1" }
+          }
+        ]
+      }),
+    readByIdentity: () => Effect.succeed(null),
+    sourceSchema: EntrySource
+  });
+
+  const articles = defineMigration({
+    id: toMigrationDefinitionId("articles"),
+    source,
     store,
     process: () => undefined
   });
@@ -2631,14 +2802,57 @@ describe("migrate CLI", () => {
       expect(progressLines).toEqual([
         "[progress] Run started definitions=articles",
         "[progress] Definition started definition=articles",
-        "[progress] Source Cursor Window completed definition=articles itemsRead=2 migrated=2 skipped=0 failed=0 unchanged=0 needsUpdate=0",
-        "[progress] Source Cursor Window completed definition=articles itemsRead=3 migrated=3 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Source Item total discovered definition=articles total=3",
+        "[progress] Source Cursor Window completed definition=articles itemsRead=2 progress=[#############-------] processed=2 total=3 percentage=67% migrated=2 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Source Cursor Window completed definition=articles itemsRead=3 progress=[####################] processed=3 total=3 percentage=100% migrated=3 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Definition completed definition=articles status=succeeded migrated=3 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Run completed status=succeeded definitions=articles",
       ]);
       expect(result.stdout).toContain("Run Completed succeeded");
-      expect(result.stdout).not.toContain("Source Item");
       expect(result.stdout).not.toContain("offset");
+      expect(result.stdout).not.toContain("sourceCursor=");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("keeps progress logs indeterminate for unknown totals", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        progressUnknownTotalConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--progress",
+          "log",
+          "articles",
+        ],
+        project
+      );
+      const progressLines = result.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("[progress]"));
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(progressLines).toEqual([
+        "[progress] Run started definitions=articles",
+        "[progress] Definition started definition=articles",
+        "[progress] Source Cursor Window completed definition=articles itemsRead=1 migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Definition completed definition=articles status=succeeded migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Run completed status=succeeded definitions=articles",
+      ]);
+      expect(progressLines.join("\n")).not.toContain("total=");
+      expect(progressLines.join("\n")).not.toContain("percentage=");
+      expect(progressLines.join("\n")).not.toContain("progress=[");
+      expect(progressLines.join("\n")).not.toContain("offset");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -2669,6 +2883,38 @@ describe("migrate CLI", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Run Completed succeeded");
       expect(result.stdout).not.toContain("[progress]");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("does not discover totals when progress mode is none", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetTotalDiscoveryProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        progressTotalDiscoveryProbeConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--progress",
+          "none",
+          "articles",
+        ],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run Completed succeeded");
+      expect(result.stdout).not.toContain("[progress]");
+      expect(getTotalDiscoveryProbe().totalDiscoveryAttempts).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -2720,13 +2966,86 @@ describe("migrate CLI", () => {
         expect(result.progressOutput).toContain("Migration Progress");
         expect(result.progressOutput).toContain("definition=articles");
         expect(result.progressOutput).toContain("processed=3");
+        expect(result.progressOutput).toContain("total=3");
+        expect(result.progressOutput).toContain("percentage=100%");
+        expect(result.progressOutput).toContain(
+          "progress=[####################]"
+        );
         expect(result.progressOutput).toContain("sourceCursorWindows=2");
         expect(result.progressOutput).toContain("migrated=3");
-        expect(result.progressOutput).not.toContain("%");
         expect(result.progressOutput.endsWith("\r\u001B[2K\n")).toBe(true);
         expect(result.stdout).toContain("Run Completed succeeded");
         expect(result.stdout).toMatch(progressArticleRunSummaryPattern);
         expect(result.stdout).not.toContain("[progress]");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "renders interactive progress without totals for unknown totals",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          progressUnknownTotalConfigSource()
+        );
+
+        const result = yield* runCliInteractive(
+          ["run", "--config", "migrate.config.ts", "articles"],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.progressOutput).toContain("Migration Progress");
+        expect(result.progressOutput).toContain("definition=articles");
+        expect(result.progressOutput).toContain("processed=1");
+        expect(result.progressOutput).toContain("sourceCursorWindows=1");
+        expect(result.progressOutput).toContain("migrated=1");
+        expect(result.progressOutput).not.toContain("progress=[");
+        expect(result.progressOutput).not.toContain("total=");
+        expect(result.progressOutput).not.toContain("percentage=");
+        expect(result.progressOutput).not.toContain("%");
+        expect(result.progressOutput.endsWith("\r\u001B[2K\n")).toBe(true);
+        expect(result.stdout).toContain("Run Completed succeeded");
+        expect(result.stdout).not.toContain("[progress]");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "renders interactive known zero totals without division artifacts",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          progressZeroTotalConfigSource()
+        );
+
+        const result = yield* runCliInteractive(
+          ["run", "--config", "migrate.config.ts", "articles"],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.progressOutput).toContain("Migration Progress");
+        expect(result.progressOutput).toContain("processed=0");
+        expect(result.progressOutput).toContain("total=0");
+        expect(result.progressOutput).toContain("percentage=100%");
+        expect(result.progressOutput).toContain(
+          "progress=[####################]"
+        );
+        expect(result.progressOutput).not.toContain("NaN");
+        expect(result.progressOutput).not.toContain("Infinity");
+        expect(result.progressOutput.endsWith("\r\u001B[2K\n")).toBe(true);
+        expect(result.stdout).toContain("Run Completed succeeded");
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -2944,13 +3263,16 @@ describe("migrate CLI", () => {
       expect(progressLines).toEqual([
         "[progress] Run started definitions=tags,authors,articles",
         "[progress] Definition started definition=tags",
-        "[progress] Source Cursor Window completed definition=tags itemsRead=1 migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Source Item total discovered definition=tags total=1",
+        "[progress] Source Cursor Window completed definition=tags itemsRead=1 progress=[####################] processed=1 total=1 percentage=100% migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Definition completed definition=tags status=succeeded migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Definition started definition=authors",
-        "[progress] Source Cursor Window completed definition=authors itemsRead=1 migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Source Item total discovered definition=authors total=1",
+        "[progress] Source Cursor Window completed definition=authors itemsRead=1 progress=[####################] processed=1 total=1 percentage=100% migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Definition completed definition=authors status=succeeded migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Definition started definition=articles",
-        "[progress] Source Cursor Window completed definition=articles itemsRead=1 migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Source Item total discovered definition=articles total=1",
+        "[progress] Source Cursor Window completed definition=articles itemsRead=1 progress=[####################] processed=1 total=1 percentage=100% migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Definition completed definition=articles status=succeeded migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Run completed status=succeeded definitions=tags,authors,articles",
       ]);
@@ -3021,6 +3343,7 @@ describe("migrate CLI", () => {
       expect(progressLines).toEqual([
         "[progress] Run started definitions=articles",
         "[progress] Definition started definition=articles",
+        "[progress] Source Item total discovered definition=articles total=1",
         "[progress] Run failed definitions=articles",
       ]);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))

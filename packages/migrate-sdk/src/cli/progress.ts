@@ -25,6 +25,7 @@ const terminalEraseLine = "\u001B[2K";
 const terminalMoveToLineStart = "\r";
 const terminalMoveUpOneLine = "\u001B[1A";
 const newlinePattern = /\r?\n/;
+const progressBarWidth = 20;
 
 const formatCounts = (counts: MigrationProgressCounts): string =>
   `migrated=${counts.migrated} skipped=${counts.skipped} failed=${counts.failed} unchanged=${counts.unchanged} needsUpdate=${counts.needsUpdate}`;
@@ -38,6 +39,48 @@ const countProcessedItems = (counts: MigrationProgressCounts): number =>
   counts.failed +
   counts.unchanged +
   counts.needsUpdate;
+
+const percentageForKnownTotal = (processed: number, total: number): number => {
+  if (total === 0) {
+    return 100;
+  }
+
+  return Math.min(100, Math.round((Math.min(processed, total) / total) * 100));
+};
+
+const renderProgressBar = (percentage: number): string => {
+  const filled = Math.round((percentage / 100) * progressBarWidth);
+
+  return `[${"#".repeat(filled)}${"-".repeat(progressBarWidth - filled)}]`;
+};
+
+const formatKnownTotalProgress = (processed: number, total: number): string => {
+  const percentage = percentageForKnownTotal(processed, total);
+
+  return `progress=${renderProgressBar(percentage)} processed=${processed} total=${total} percentage=${percentage}%`;
+};
+
+const formatInteractiveProcessedItems = (
+  definition: MigrationDefinitionProgressState
+): string => {
+  const processed = countProcessedItems(definition.counts);
+  const total = definition.sourceItemTotal;
+
+  return total?.kind === "known"
+    ? formatKnownTotalProgress(processed, total.count)
+    : `processed=${processed}`;
+};
+
+const formatLogTotalProgress = (
+  definition: MigrationDefinitionProgressState | undefined,
+  processed: number
+): string => {
+  const total = definition?.sourceItemTotal;
+
+  return total?.kind === "known"
+    ? ` ${formatKnownTotalProgress(processed, total.count)}`
+    : "";
+};
 
 const countTerminalRows = (
   text: string,
@@ -95,13 +138,21 @@ const renderProgressLogLine = (
       return `[progress] Run started definitions=${event.definitionIds.join(",")}`;
     case "definition-started":
       return `[progress] Definition started definition=${event.definitionId}`;
+    case "source-item-total-discovered":
+      return event.sourceItemTotal.kind === "known"
+        ? `[progress] Source Item total discovered definition=${event.definitionId} total=${event.sourceItemTotal.count}`
+        : null;
     case "source-item-completed":
       return null;
     case "source-cursor-window-completed": {
       const definition = findDefinitionState(state, event.definitionId);
       const itemsRead = definition?.itemsRead ?? event.itemsRead;
+      const processed =
+        definition === undefined
+          ? countProcessedItems(event.counts)
+          : countProcessedItems(definition.counts);
 
-      return `[progress] Source Cursor Window completed definition=${event.definitionId} itemsRead=${itemsRead} ${formatCounts(event.counts)}`;
+      return `[progress] Source Cursor Window completed definition=${event.definitionId} itemsRead=${itemsRead}${formatLogTotalProgress(definition, processed)} ${formatCounts(event.counts)}`;
     }
     case "definition-completed":
       return `[progress] Definition completed definition=${event.definitionId} status=${event.status} ${formatCounts(event.counts)}`;
@@ -148,7 +199,7 @@ const renderInteractiveProgressLine = (
     return null;
   }
 
-  return `Migration Progress definition=${definition.definitionId} processed=${countProcessedItems(definition.counts)} sourceCursorWindows=${definition.cursorWindowsCompleted} ${formatCounts(definition.counts)}`;
+  return `Migration Progress definition=${definition.definitionId} ${formatInteractiveProcessedItems(definition)} sourceCursorWindows=${definition.cursorWindowsCompleted} ${formatCounts(definition.counts)}`;
 };
 
 const renderInteractiveRollbackProgressLine = (
@@ -206,6 +257,7 @@ const logProgressLayer = Layer.effect(
     const stateRef = yield* SubscriptionRef.make(initialMigrationProgressState);
 
     return {
+      discoverSourceItemTotals: true,
       emit: (event) =>
         SubscriptionRef.modify(stateRef, (state) => {
           const nextState = reduceMigrationProgressState(state, event);
@@ -272,6 +324,7 @@ const makeInteractiveProgressLayer = (
       yield* Effect.addFinalizer(() => cleanupRenderedProgress);
 
       return {
+        discoverSourceItemTotals: true,
         emit: (event) =>
           SubscriptionRef.modify(stateRef, (state) => {
             const nextState = reduceMigrationProgressState(state, event);
