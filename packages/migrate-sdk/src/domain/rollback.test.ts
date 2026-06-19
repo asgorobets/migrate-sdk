@@ -1,21 +1,17 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, type Layer, Schema } from "effect";
 import {
-  type ConfiguredDestinationPlugin,
   type ConfiguredSourcePlugin,
-  type DestinationCommand,
-  type DestinationIdentity,
   defineMigration,
   type MigrationDefinitionId,
+  type MigrationItemState,
   type MigrationRunId,
   type MigrationStore,
   type MigrationStoreError,
   makeRollbackMigrationOptions,
   makeRollbackRequest,
-  type RollbackableMigrationItemState,
   type RollbackContext,
   type RollbackDefinitionRunSummary,
-  type RollbackMigrationOptions,
   type RollbackMigrationOptionsInput,
   type RollbackPipeline,
   RollbackPreflightError,
@@ -23,49 +19,40 @@ import {
   RollbackRequestError,
   type RollbackRequestInput,
   RollbackRunSummary,
-  type SourceIdentity,
-  type SourceIdentityInput,
+  type SourceIdentitySnapshotKey,
   toMigrationDefinitionId,
   toMigrationRunId,
-  toSourceIdentity,
 } from "migrate-sdk";
 import { expectTypeOf } from "vitest";
+import type { RollbackMigrationOptions } from "./rollback.ts";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
 });
 type ArticleSource = typeof ArticleSource.Type;
 
-interface DeleteArticleCommand extends DestinationCommand {
-  readonly kind: "DeleteArticle";
-}
-
 interface RollbackPipelineError {
   readonly _tag: "RollbackPipelineError";
 }
 
-const source = {} as ConfiguredSourcePlugin<ArticleSource, unknown>;
-const destination = {} as ConfiguredDestinationPlugin<DeleteArticleCommand>;
+const source = {} as ConfiguredSourcePlugin<ArticleSource, unknown, string>;
 const store = {} as Layer.Layer<MigrationStore, MigrationStoreError>;
 
 describe("rollback public API", () => {
   it("normalizes rollback request and option inputs", () => {
-    const rollbackPipeline: RollbackPipeline<
-      DeleteArticleCommand,
-      RollbackPipelineError
-    > = () => Effect.succeed({ kind: "DeleteArticle" });
+    const rollbackPipeline: RollbackPipeline<RollbackPipelineError> = () =>
+      Effect.void;
     const definition = defineMigration<
       ArticleSource,
-      DeleteArticleCommand,
       never,
       unknown,
+      string,
       RollbackPipelineError
     >({
       id: "articles",
       source,
-      destination,
       store,
-      pipeline: () => ({ kind: "DeleteArticle" }),
+      process: () => Effect.void,
       rollback: rollbackPipeline,
     });
 
@@ -76,28 +63,26 @@ describe("rollback public API", () => {
     });
     const requestWithSourceIdentities = makeRollbackRequest({
       definitions,
-      sourceIdentities: ["article-1"],
+      sourceIdentityKeys: ["article-1"],
     });
     const options = makeRollbackMigrationOptions({
-      sourceIdentities: ["article-1"],
+      sourceIdentityKeys: ["article-1"],
     });
-    const dynamicSourceIdentities: SourceIdentityInput[] = ["article-2"];
+    const dynamicSourceIdentities: string[] = ["article-2"];
     const dynamicOptions = makeRollbackMigrationOptions({
-      sourceIdentities: dynamicSourceIdentities,
+      sourceIdentityKeys: dynamicSourceIdentities,
     });
 
     expect(definition.rollback).toBe(rollbackPipeline);
     expect(requestWithSourceIdentities.definitions).toBe(definitions);
-    expect(requestWithSourceIdentities.sourceIdentities).toEqual([
-      toSourceIdentity("article-1"),
+    expect(requestWithSourceIdentities.sourceIdentityKeys).toEqual([
+      "article-1",
     ]);
     expect(request.definitionIds).toEqual([
       toMigrationDefinitionId("articles"),
     ]);
-    expect(options.sourceIdentities).toEqual([toSourceIdentity("article-1")]);
-    expect(dynamicOptions.sourceIdentities).toEqual([
-      toSourceIdentity("article-2"),
-    ]);
+    expect(options.sourceIdentityKeys).toEqual(["article-1"]);
+    expect(dynamicOptions.sourceIdentityKeys).toEqual(["article-2"]);
   });
 
   it("exposes distinct rollback runtime errors", () => {
@@ -112,19 +97,20 @@ describe("rollback public API", () => {
   it("rejects empty targeted source identities", () => {
     expect(() =>
       makeRollbackMigrationOptions({
-        sourceIdentities: [],
+        sourceIdentityKeys: [],
       })
     ).toThrow(RollbackRequestError);
   });
 
-  it("deduplicates targeted source identities in first occurrence order", () => {
+  it("keeps targeted source identity keys for definition-aware encoding", () => {
     const options = makeRollbackMigrationOptions({
-      sourceIdentities: ["article-1", "article-2", "article-1"],
+      sourceIdentityKeys: ["article-1", "article-2", "article-1"],
     });
 
-    expect(options.sourceIdentities).toEqual([
-      toSourceIdentity("article-1"),
-      toSourceIdentity("article-2"),
+    expect(options.sourceIdentityKeys).toEqual([
+      "article-1",
+      "article-2",
+      "article-1",
     ]);
   });
 
@@ -188,11 +174,12 @@ describe("rollback public API", () => {
 });
 
 expectTypeOf<
-  RollbackableMigrationItemState["destinationIdentity"]
->().toEqualTypeOf<DestinationIdentity>();
-expectTypeOf<
-  Extract<RollbackableMigrationItemState, { status: "skipped" }>
->().toEqualTypeOf<never>();
+  Parameters<RollbackPipeline>[0]
+>().toEqualTypeOf<typeof MigrationItemState.Type>();
+const effectVoidRollbackPipeline: RollbackPipeline = () => Effect.void;
+expectTypeOf(effectVoidRollbackPipeline).toEqualTypeOf<
+  RollbackPipeline
+>();
 expectTypeOf<RollbackContext>().toEqualTypeOf<{
   readonly definitionId: MigrationDefinitionId;
   readonly runId: MigrationRunId;
@@ -205,9 +192,10 @@ expectTypeOf<RollbackDefinitionRunSummary["counts"]>().toEqualTypeOf<{
 expectTypeOf<RollbackRunSummary["kind"]>().toEqualTypeOf<"rollback">();
 expectTypeOf<RollbackRequest>().toMatchTypeOf<RollbackRequestInput>();
 expectTypeOf<RollbackMigrationOptions>().toMatchTypeOf<RollbackMigrationOptionsInput>();
-expectTypeOf<RollbackMigrationOptions["sourceIdentities"]>().toEqualTypeOf<
-  readonly [SourceIdentity, ...SourceIdentity[]] | undefined
+expectTypeOf<RollbackMigrationOptions["sourceIdentityKeys"]>().toEqualTypeOf<
+  | readonly [SourceIdentitySnapshotKey, ...SourceIdentitySnapshotKey[]]
+  | undefined
 >();
-expectTypeOf<RollbackMigrationOptionsInput["sourceIdentities"]>().toEqualTypeOf<
-  readonly SourceIdentityInput[] | undefined
->();
+expectTypeOf<
+  RollbackMigrationOptionsInput["sourceIdentityKeys"]
+>().toEqualTypeOf<readonly SourceIdentitySnapshotKey[] | undefined>();

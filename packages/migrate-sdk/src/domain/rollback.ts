@@ -1,34 +1,20 @@
 import { type Effect, Schema } from "effect";
+import type { Tracking } from "../services/tracking.ts";
 import type { MigrationDefinition } from "./definition.ts";
-import type {
-  DestinationCommand,
-  DestinationCommandPlan,
-} from "./destination.ts";
 import { RollbackRequestError } from "./errors.ts";
 import type {
-  DestinationIdentity,
+  EncodedSourceIdentity,
+  EncodedSourceIdentityInput,
   MigrationDefinitionIdInput,
-  SourceIdentityInput,
+  SourceIdentitySnapshotKey,
 } from "./ids.ts";
 import {
   MigrationDefinitionId,
   MigrationRunId,
-  SourceIdentity,
+  toEncodedSourceIdentity,
   toMigrationDefinitionId,
-  toSourceIdentity,
 } from "./ids.ts";
-import type {
-  FailedItemState,
-  MigratedItemState,
-  NeedsUpdateItemState,
-} from "./state.ts";
-
-export type RollbackableMigrationItemState =
-  | MigratedItemState
-  | NeedsUpdateItemState
-  | (FailedItemState & {
-      readonly destinationIdentity: DestinationIdentity;
-    });
+import type { MigrationItemState } from "./state.ts";
 
 export interface RollbackContext {
   readonly definitionId: MigrationDefinitionId;
@@ -40,25 +26,23 @@ export const RollbackContext = Schema.Struct({
   runId: MigrationRunId,
 });
 
-export type RollbackPipeline<
-  Command extends DestinationCommand,
-  RollbackError = never,
-> = (
-  state: RollbackableMigrationItemState,
+export type RollbackPipeline<RollbackError = never> = (
+  state: MigrationItemState,
   context: RollbackContext
 ) =>
-  | DestinationCommandPlan<Command>
-  | Effect.Effect<DestinationCommandPlan<Command>, RollbackError>;
+  | void
+  | Effect.Effect<void, RollbackError, Tracking>;
 
 export type AnyRollbackMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous rollback requests.
   any,
-  DestinationCommand,
-  // biome-ignore lint/suspicious/noExplicitAny: Forward pipeline error is not relevant to rollback request shape.
+  // biome-ignore lint/suspicious/noExplicitAny: Forward process error is not relevant to rollback request shape.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Cursor is existential across heterogeneous rollback requests.
   any,
-  // biome-ignore lint/suspicious/noExplicitAny: Rollback pipeline error is re-extracted by callers when execution exists.
+  // biome-ignore lint/suspicious/noExplicitAny: Source identity key is existential across heterogeneous rollback requests.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Rollback process error is re-extracted by callers when execution exists.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Source input is not relevant to rollback request shape.
   any,
@@ -71,9 +55,9 @@ export type AnyRollbackMigrationDefinition = MigrationDefinition<
 export type MigrationDefinitionRollbackPipelineError<Definition> =
   Definition extends MigrationDefinition<
     infer _Source,
-    infer _Command,
     infer _PipelineError,
     infer _Cursor,
+    infer _IdentityKey,
     infer RollbackPipelineError,
     infer _SourceInput,
     infer _SourceLayerError,
@@ -82,13 +66,30 @@ export type MigrationDefinitionRollbackPipelineError<Definition> =
     ? RollbackPipelineError
     : never;
 
+export type RollbackMigrationDefinitionSourceIdentityKey<Definition> =
+  Definition extends MigrationDefinition<
+    infer _Source,
+    infer _PipelineError,
+    infer _Cursor,
+    infer IdentityKey,
+    infer _RollbackPipelineError,
+    infer _SourceInput,
+    infer _SourceLayerError,
+    infer _SourceRequirements
+  >
+    ? IdentityKey
+    : never;
+
 export interface RollbackRequest<
   Definitions extends
     readonly AnyRollbackMigrationDefinition[] = readonly AnyRollbackMigrationDefinition[],
 > {
   readonly definitionIds?: readonly MigrationDefinitionId[];
   readonly definitions: Definitions;
-  readonly sourceIdentities?: readonly [SourceIdentity, ...SourceIdentity[]];
+  readonly sourceIdentityKeys?: readonly [
+    RollbackMigrationDefinitionSourceIdentityKey<Definitions[number]>,
+    ...RollbackMigrationDefinitionSourceIdentityKey<Definitions[number]>[],
+  ];
 }
 
 export interface RollbackRequestInput<
@@ -97,7 +98,9 @@ export interface RollbackRequestInput<
 > {
   readonly definitionIds?: readonly MigrationDefinitionIdInput[];
   readonly definitions: Definitions;
-  readonly sourceIdentities?: readonly SourceIdentityInput[];
+  readonly sourceIdentityKeys?: readonly RollbackMigrationDefinitionSourceIdentityKey<
+    Definitions[number]
+  >[];
 }
 
 export const makeRollbackRequest = <
@@ -106,9 +109,9 @@ export const makeRollbackRequest = <
   input: RollbackRequestInput<Definitions>
 ): RollbackRequest<Definitions> => {
   const options = makeRollbackMigrationOptions(
-    input.sourceIdentities === undefined
+    input.sourceIdentityKeys === undefined
       ? {}
-      : { sourceIdentities: input.sourceIdentities }
+      : { sourceIdentityKeys: input.sourceIdentityKeys }
   );
 
   return {
@@ -116,47 +119,115 @@ export const makeRollbackRequest = <
     ...(input.definitionIds === undefined
       ? {}
       : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
-    ...(options.sourceIdentities === undefined
+    ...(options.sourceIdentityKeys === undefined
       ? {}
-      : { sourceIdentities: options.sourceIdentities }),
+      : { sourceIdentityKeys: options.sourceIdentityKeys }),
   };
 };
 
-export interface RollbackMigrationOptions {
-  readonly sourceIdentities?: readonly [SourceIdentity, ...SourceIdentity[]];
+export interface RollbackMigrationOptions<
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> {
+  readonly sourceIdentityKeys?: readonly [IdentityKey, ...IdentityKey[]];
 }
 
 export const RollbackMigrationOptions = Schema.Struct({
-  sourceIdentities: Schema.optional(
-    Schema.TupleWithRest(Schema.Tuple([SourceIdentity]), [SourceIdentity])
+  sourceIdentityKeys: Schema.optional(
+    Schema.TupleWithRest(Schema.Tuple([Schema.Unknown]), [Schema.Unknown])
   ),
 });
 
-export interface RollbackMigrationOptionsInput {
-  readonly sourceIdentities?: readonly SourceIdentityInput[];
+export interface RollbackMigrationOptionsInput<
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> {
+  readonly sourceIdentityKeys?: readonly IdentityKey[];
 }
 
-export const makeRollbackMigrationOptions = (
-  input: RollbackMigrationOptionsInput = {}
-): RollbackMigrationOptions => {
+export const makeRollbackMigrationOptions = <
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  input: RollbackMigrationOptionsInput<IdentityKey> = {}
+): RollbackMigrationOptions<IdentityKey> => {
   if (
-    input.sourceIdentities !== undefined &&
-    input.sourceIdentities.length === 0
+    input.sourceIdentityKeys !== undefined &&
+    input.sourceIdentityKeys.length === 0
   ) {
     throw new RollbackRequestError({
-      message: "Rollback sourceIdentities must include at least one identity",
+      message: "Rollback sourceIdentityKeys must include at least one identity",
     });
   }
 
-  if (input.sourceIdentities === undefined) {
+  if (input.sourceIdentityKeys === undefined) {
     return {};
   }
 
-  const sourceIdentities: SourceIdentity[] = [];
-  const seenSourceIdentities = new Set<SourceIdentity>();
+  const [firstKey, ...remainingKeys] = input.sourceIdentityKeys;
 
-  for (const sourceIdentityInput of input.sourceIdentities) {
-    const sourceIdentity = toSourceIdentity(sourceIdentityInput);
+  if (firstKey === undefined) {
+    throw new RollbackRequestError({
+      message: "Rollback sourceIdentityKeys must include at least one identity",
+    });
+  }
+
+  return {
+    sourceIdentityKeys: [firstKey, ...remainingKeys],
+  };
+};
+
+export interface EncodedRollbackRequest<
+  Definitions extends
+    readonly AnyRollbackMigrationDefinition[] = readonly AnyRollbackMigrationDefinition[],
+> {
+  readonly definitionIds?: readonly MigrationDefinitionId[];
+  readonly definitions: Definitions;
+  readonly encodedSourceIdentities?: readonly [
+    EncodedSourceIdentity,
+    ...EncodedSourceIdentity[],
+  ];
+}
+
+export interface EncodedRollbackRequestInput<
+  Definitions extends
+    readonly AnyRollbackMigrationDefinition[] = readonly AnyRollbackMigrationDefinition[],
+> {
+  readonly definitionIds?: readonly MigrationDefinitionIdInput[];
+  readonly definitions: Definitions;
+  readonly encodedSourceIdentities?: readonly EncodedSourceIdentityInput[];
+}
+
+export interface EncodedRollbackMigrationOptions {
+  readonly encodedSourceIdentities?: readonly [
+    EncodedSourceIdentity,
+    ...EncodedSourceIdentity[],
+  ];
+}
+
+export interface EncodedRollbackMigrationOptionsInput {
+  readonly encodedSourceIdentities?: readonly EncodedSourceIdentityInput[];
+}
+
+export const makeEncodedRollbackMigrationOptions = (
+  input: EncodedRollbackMigrationOptionsInput = {}
+): EncodedRollbackMigrationOptions => {
+  if (
+    input.encodedSourceIdentities !== undefined &&
+    input.encodedSourceIdentities.length === 0
+  ) {
+    throw new RollbackRequestError({
+      message:
+        "Rollback encodedSourceIdentities must include at least one identity",
+    });
+  }
+
+  if (input.encodedSourceIdentities === undefined) {
+    return {};
+  }
+
+  const sourceIdentities: EncodedSourceIdentity[] = [];
+  const seenSourceIdentities = new Set<EncodedSourceIdentity>();
+
+  for (const sourceIdentityInput of input.encodedSourceIdentities) {
+    const sourceIdentity = toEncodedSourceIdentity(sourceIdentityInput);
 
     if (seenSourceIdentities.has(sourceIdentity)) {
       continue;
@@ -170,12 +241,35 @@ export const makeRollbackMigrationOptions = (
 
   if (firstIdentity === undefined) {
     throw new RollbackRequestError({
-      message: "Rollback sourceIdentities must include at least one identity",
+      message:
+        "Rollback encodedSourceIdentities must include at least one identity",
     });
   }
 
   return {
-    sourceIdentities: [firstIdentity, ...remainingIdentities],
+    encodedSourceIdentities: [firstIdentity, ...remainingIdentities],
+  };
+};
+
+export const makeEncodedRollbackRequest = <
+  Definitions extends readonly AnyRollbackMigrationDefinition[],
+>(
+  input: EncodedRollbackRequestInput<Definitions>
+): EncodedRollbackRequest<Definitions> => {
+  const options = makeEncodedRollbackMigrationOptions(
+    input.encodedSourceIdentities === undefined
+      ? {}
+      : { encodedSourceIdentities: input.encodedSourceIdentities }
+  );
+
+  return {
+    definitions: input.definitions,
+    ...(input.definitionIds === undefined
+      ? {}
+      : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
+    ...(options.encodedSourceIdentities === undefined
+      ? {}
+      : { encodedSourceIdentities: options.encodedSourceIdentities }),
   };
 };
 

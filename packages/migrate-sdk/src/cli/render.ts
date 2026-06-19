@@ -295,8 +295,8 @@ const renderPlanNotice = (notice: MigrationDefinitionPlanNotice): string => {
   switch (notice._tag) {
     case "MigrationDefinitionDuplicateRequestedDefinitionIgnored":
       return `Duplicate requested definition ignored: ${notice.definitionId}`;
-    case "MigrationDefinitionDuplicateTargetIdIgnored":
-      return `Duplicate target id ignored: ${notice.sourceIdentity}`;
+    case "MigrationDefinitionDuplicateSourceIdentityTargetIgnored":
+      return `Duplicate source identity target ignored: ${notice.sourceIdentity}`;
     case "MigrationDefinitionOptionalDependencyCycleIgnored":
       return `Ignored optional dependency cycle: ${notice.definitionIds.join(
         " -> "
@@ -339,7 +339,7 @@ const renderPlanScope = (
   ...(input.mode === undefined ? [] : [`Mode       ${input.mode}`]),
   ...(input.sourceIdentities === undefined
     ? []
-    : [`Target ids ${input.sourceIdentities.join(", ")}`]),
+    : [`Target source identities ${input.sourceIdentities.join(", ")}`]),
 ];
 
 export const renderRunPlan = (
@@ -801,8 +801,16 @@ const renderStatusWarning = (
   warning: MigrationDefinitionRegistryStatusReport["warnings"][number]
 ): string => {
   switch (warning._tag) {
-    case "DuplicateSourceIdentityStatusWarning":
-      return `Duplicate source identity in ${warning.definitionId}: ${warning.sourceIdentity} (${warning.count} duplicate item(s)). Check the source plugin identity mapping.`;
+    case "DuplicateSourceIdentityStatusWarning": {
+      const sourceIdentityParts =
+        warning.sourceIdentityParts === undefined
+          ? ""
+          : ` (${warning.sourceIdentityParts
+              .map((part) => `${part.name}=${String(part.value)}`)
+              .join(", ")})`;
+
+      return `Duplicate source identity in ${warning.definitionId}: ${warning.sourceIdentity}${sourceIdentityParts} (${warning.count} duplicate item(s)). Check the source plugin identity mapping.`;
+    }
     case "InvalidSourceItemStatusWarning":
       return `Invalid source item in ${warning.definitionId}: ${warning.sourceIdentity}. ${warning.message}. Check the Source Payload Schema and source data.`;
     default: {

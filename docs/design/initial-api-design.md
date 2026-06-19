@@ -37,7 +37,7 @@ Schema ownership is split by boundary:
 - Source Payload Schemas live at the source boundary. They may decode
   source-native values, such as CSV strings, into the pipeline-facing values
   migration authors receive.
-- Destination Command Schemas and Destination Entry Field Schemas live at the
+- Destination Entry Field Schemas and typed change descriptors live at the
   destination boundary. They validate pipeline-facing values and must keep the
   same TypeScript shape on both sides of the schema. Destination-native
   encoding belongs inside the destination plugin.

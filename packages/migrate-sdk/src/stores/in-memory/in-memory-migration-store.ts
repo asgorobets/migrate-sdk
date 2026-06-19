@@ -2,19 +2,20 @@ import { Effect, Layer } from "effect";
 import { MigrationStoreError } from "../../domain/errors.ts";
 import type {
   EncodedSourceCursor,
+  EncodedSourceIdentity,
+  EncodedSourceIdentityInput,
   MigrationDefinitionId,
   MigrationDefinitionIdInput,
   MigrationRunId,
-  SourceIdentity,
-  SourceIdentityInput,
 } from "../../domain/ids.ts";
 import {
   MigrationRunId as MigrationRunIdSchema,
+  toEncodedSourceIdentity,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
-  toSourceIdentity,
 } from "../../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../../domain/lock.ts";
+import type { MigrationContract } from "../../domain/migration-contract.ts";
 import type { MigrationRunState } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { summarizeMigrationItemStates } from "../../domain/status.ts";
@@ -24,6 +25,7 @@ export interface InMemoryMigrationStoreState {
   readonly definitionLocks: Map<MigrationDefinitionId, MigrationDefinitionLock>;
   readonly itemStates: Map<string, MigrationItemState>;
   readonly latestRunStates: Map<MigrationDefinitionId, MigrationRunState>;
+  readonly migrationContracts: Map<MigrationDefinitionId, MigrationContract>;
   nextLockNumber: number;
   nextRunNumber: number;
   readonly sourceCursorCommits: {
@@ -35,13 +37,14 @@ export interface InMemoryMigrationStoreState {
 
 const itemStateKey = (
   definitionId: MigrationDefinitionIdInput,
-  identity: SourceIdentityInput
+  identity: EncodedSourceIdentityInput
 ) =>
-  `${toMigrationDefinitionId(definitionId)}\u0000${toSourceIdentity(identity)}`;
+  `${toMigrationDefinitionId(definitionId)}\u0000${toEncodedSourceIdentity(identity)}`;
 
 const makeState = (): InMemoryMigrationStoreState => ({
   itemStates: new Map(),
   latestRunStates: new Map(),
+  migrationContracts: new Map(),
   sourceCursors: new Map(),
   sourceCursorCommits: [],
   definitionLocks: new Map(),
@@ -104,11 +107,25 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
     );
 
     const getItemState = Effect.fn("InMemoryMigrationStore.getItemState")(
-      (definitionId: MigrationDefinitionId, identity: SourceIdentity) =>
+      (definitionId: MigrationDefinitionId, identity: EncodedSourceIdentity) =>
         Effect.sync(
           () =>
             state.itemStates.get(itemStateKey(definitionId, identity)) ?? null
         )
+    );
+
+    const getMigrationContract = Effect.fn(
+      "InMemoryMigrationStore.getMigrationContract"
+    )((definitionId: MigrationDefinitionId) =>
+      Effect.sync(() => state.migrationContracts.get(definitionId) ?? null)
+    );
+
+    const upsertMigrationContract = Effect.fn(
+      "InMemoryMigrationStore.upsertMigrationContract"
+    )((contract: MigrationContract) =>
+      Effect.sync(() => {
+        state.migrationContracts.set(contract.definitionId, contract);
+      })
     );
 
     const listItemStates = Effect.fn("InMemoryMigrationStore.listItemStates")(
@@ -129,7 +146,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
     });
 
     const deleteItemState = Effect.fn("InMemoryMigrationStore.deleteItemState")(
-      (definitionId: MigrationDefinitionId, identity: SourceIdentity) =>
+      (definitionId: MigrationDefinitionId, identity: EncodedSourceIdentity) =>
         Effect.sync(() => {
           state.itemStates.delete(itemStateKey(definitionId, identity));
         })
@@ -139,7 +156,10 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       (itemState: MigrationItemState) =>
         Effect.sync(() => {
           state.itemStates.set(
-            itemStateKey(itemState.definitionId, itemState.sourceIdentity),
+            itemStateKey(
+              itemState.definitionId,
+              itemState.sourceIdentity.encoded
+            ),
             itemState
           );
         })
@@ -272,6 +292,8 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
     return {
       getSourceCursor,
       setSourceCursor,
+      getMigrationContract,
+      upsertMigrationContract,
       getItemState,
       listItemStates,
       getItemStateSummary,

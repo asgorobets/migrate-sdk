@@ -1,6 +1,6 @@
-import { Cause, Effect, type Layer, Schedule } from "effect";
+import { Cause, Effect, type Layer, Schedule, Schema } from "effect";
 import { HttpClientError } from "effect/unstable/http";
-import type { SourcePluginError } from "migrate-sdk";
+import { SourceIdentity, type SourcePluginError } from "migrate-sdk";
 import {
   DocumentFetchers,
   DocumentParsers,
@@ -30,12 +30,6 @@ const defaultRetrySchedule = Schedule.exponential("50 millis").pipe(
 const transientHttpStatuses = [408, 429, 500, 502, 503, 504];
 
 type ResilientApiError = JsonPlaceholderApiError | Cause.TimeoutError;
-
-const identityToPostId = (identity: string): number | null => {
-  const postId = Number(identity);
-
-  return Number.isInteger(postId) && postId > 0 ? postId : null;
-};
 
 const isTransientHttpClientError = (
   error: unknown
@@ -115,12 +109,12 @@ const makePostPageFetcher = (apiLayer: Layer.Layer<JsonPlaceholderApi>) =>
 
 const makePostDirectLookup = (apiLayer: Layer.Layer<JsonPlaceholderApi>) => ({
   kind: "direct" as const,
-  read: (identity: string) =>
+  read: (identity: { readonly key: number }) =>
     Effect.gen(function* () {
       const api = yield* JsonPlaceholderApi;
-      const postId = identityToPostId(identity);
+      const postId = identity.key;
 
-      if (postId === null) {
+      if (!Number.isInteger(postId) || postId <= 0) {
         return null;
       }
 
@@ -148,9 +142,14 @@ export const JsonPlaceholderPostSourcePlugin = {
       selector: {
         item: (document) => document.posts,
       },
-      identity: ({ item }) => item.id,
+      identity: {
+        id: "jsonplaceholder-post@v1",
+        schema: SourceIdentity.key("postId", Schema.Number),
+        key: ({ item }) => item.id,
+      },
       lookup: makePostDirectLookup(apiLayer),
       version: {
+        id: "jsonplaceholder-post-version@v1",
         kind: "value",
         value: ({ item }) =>
           `jsonplaceholder-post:${item.id}:${item.title.length}:${item.body.length}`,

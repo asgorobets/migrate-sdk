@@ -16,7 +16,7 @@ import {
   DocumentSourcePlugin,
 } from "migrate-sdk/sources/document";
 import { expectTypeOf } from "vitest";
-import { toSourceIdentity } from "../../domain/ids.ts";
+import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
 import { SourcePlugin } from "../../services/source-plugin.ts";
 
 const CompanyContact = Schema.Struct({
@@ -126,6 +126,35 @@ const makeApiPostsLayer = (state: ApiPostsState): Layer.Layer<ApiPosts> =>
 
 const testPlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
 const sha256HexPattern = /^[a-f0-9]{64}$/;
+const tuple2 = <A, B>(first: A, second: B): readonly [A, B] => [first, second];
+
+const ApiPostIdentity = {
+  id: "api-post@v1",
+  schema: SourceIdentity.key("postId", Schema.Number),
+};
+
+const BusinessUnitIdentity = {
+  id: "business-unit@v1",
+  schema: SourceIdentity.key("businessUnitKey", Schema.NonEmptyString),
+};
+
+const BusinessUnitContactIdentity = {
+  id: "business-unit-contact@v1",
+  schema: SourceIdentity.tuple([
+    SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
+    SourceIdentity.part("contactKey", Schema.NonEmptyString),
+  ]),
+};
+
+const InventoryItemIdentity = {
+  id: "inventory-item@v1",
+  schema: SourceIdentity.key("inventoryItemKey", Schema.NonEmptyString),
+};
+
+const ResourceItemIdentity = {
+  id: "resource-item@v1",
+  schema: SourceIdentity.key("resourceItemKey", Schema.NonEmptyString),
+};
 
 const writeCompaniesFile = (filePath: string) =>
   Effect.gen(function* () {
@@ -161,6 +190,40 @@ const writeCompaniesFile = (filePath: string) =>
   });
 
 describe("DocumentSourcePlugin", () => {
+  it("includes value version contract ids in the source version contract fingerprint", () => {
+    const fetcher: DocumentFetcher<string, null> = {
+      cursorSchema: Schema.Null,
+      read: () =>
+        Effect.succeed({
+          resource: JSON.stringify({ businessUnits: [], exportedAt: "" }),
+        }),
+    };
+    const makeSource = (versionId: string) =>
+      DocumentSourcePlugin.make({
+        fetcher,
+        parser: DocumentParsers.json(CompaniesDocument),
+        selector: {
+          item: (document) => document.businessUnits,
+        },
+        identity: {
+          ...BusinessUnitIdentity,
+          key: ({ item }) => item.key,
+        },
+        lookup: { kind: "scan" },
+        version: {
+          id: versionId,
+          kind: "value",
+          value: ({ item }) => item.status,
+        },
+      });
+
+    expect(
+      makeSource("business-status@v1").sourceVersionContractFingerprint
+    ).not.toBe(
+      makeSource("business-updated-at@v1").sourceVersionContractFingerprint
+    );
+  });
+
   it.effect(
     "composes an effect-native fetcher with a materialized schema parser",
     () =>
@@ -193,13 +256,17 @@ describe("DocumentSourcePlugin", () => {
           selector: {
             item: (document) => document.posts,
           },
-          identity: ({ item }) => {
-            expectTypeOf(item.body).toEqualTypeOf<string>();
+          identity: {
+            ...ApiPostIdentity,
+            key: ({ item }) => {
+              expectTypeOf(item.body).toEqualTypeOf<string>();
 
-            return item.id;
+              return item.id;
+            },
           },
           lookup: { kind: "scan" },
           version: {
+            id: "document-version@v1",
             kind: "value",
             value: ({ item }) => item.title,
           },
@@ -207,7 +274,12 @@ describe("DocumentSourcePlugin", () => {
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
         const read = yield* plugin.read(null);
 
-        expect(read.items).toEqual([
+        expect(
+          read.items.map((item) => ({
+            ...item,
+            identity: item.identity.encoded,
+          }))
+        ).toEqual([
           {
             identity: "1",
             item: { item: { body: "First body", id: 1, title: "First" } },
@@ -243,9 +315,13 @@ describe("DocumentSourcePlugin", () => {
         selector: {
           item: (document) => document.businessUnits,
         },
-        identity: ({ item }) => item.key,
+        identity: {
+          ...BusinessUnitIdentity,
+          key: ({ item }) => item.key,
+        },
         lookup: { kind: "scan" },
         version: {
+          id: "document-version@v1",
           kind: "value",
           value: ({ item }) => item.status,
         },
@@ -253,10 +329,9 @@ describe("DocumentSourcePlugin", () => {
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
       const read = yield* plugin.read(null);
 
-      expect(read.items.map((sourceItem) => sourceItem.identity)).toEqual([
-        "BU-100",
-        "BU-200",
-      ]);
+      expect(
+        read.items.map((sourceItem) => sourceItem.identity.encoded)
+      ).toEqual(["BU-100", "BU-200"]);
       expect(read.items[0]?.version).toBe("active");
       expect(read.items[0]?.item).toEqual({
         item: {
@@ -296,11 +371,14 @@ describe("DocumentSourcePlugin", () => {
           parent: (document) => document.businessUnits,
           item: (businessUnit) => businessUnit.contacts,
         },
-        identity: ({ item, parent }) => {
-          expectTypeOf(parent.name).toEqualTypeOf<string>();
-          expectTypeOf(item.email).toEqualTypeOf<string>();
+        identity: {
+          ...BusinessUnitContactIdentity,
+          key: ({ item, parent }) => {
+            expectTypeOf(parent.name).toEqualTypeOf<string>();
+            expectTypeOf(item.email).toEqualTypeOf<string>();
 
-          return [parent.key, item.key];
+            return tuple2(parent.key, item.key);
+          },
         },
         lookup: { kind: "scan" },
         version: { kind: "content-hash" },
@@ -308,10 +386,15 @@ describe("DocumentSourcePlugin", () => {
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
       const read = yield* plugin.read(null);
       const found = yield* plugin.readByIdentity(
-        toSourceIdentity(JSON.stringify(["BU-200", "CONTACT-200-1"]))
+        SourceIdentity.fromEncoded(
+          plugin.identity,
+          toEncodedSourceIdentity(JSON.stringify(["BU-200", "CONTACT-200-1"]))
+        )
       );
 
-      expect(read.items.map((sourceItem) => sourceItem.identity)).toEqual([
+      expect(
+        read.items.map((sourceItem) => sourceItem.identity.encoded)
+      ).toEqual([
         JSON.stringify(["BU-100", "CONTACT-100-1"]),
         JSON.stringify(["BU-100", "CONTACT-100-2"]),
         JSON.stringify(["BU-200", "CONTACT-200-1"]),
@@ -350,14 +433,17 @@ describe("DocumentSourcePlugin", () => {
           selector: {
             item: (document) => document.items,
           },
-          identity: ({ item }) => item.key,
+          identity: {
+            ...InventoryItemIdentity,
+            key: ({ item }) => item.key,
+          },
           lookup: { kind: "scan" },
           version: { kind: "content-hash" },
         });
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
         const read = yield* plugin.read(null);
 
-        expect(read.items[0]?.identity).toBe("sku-1");
+        expect(read.items[0]?.identity.encoded).toBe("sku-1");
         expect(read.items[0]?.item.item.inventory).toBe(42n);
         expect(read.items[0]?.version).toMatch(sha256HexPattern);
       }).pipe(Effect.provide(testPlatformLayer))
@@ -413,18 +499,27 @@ describe("DocumentSourcePlugin", () => {
           selector: {
             item: (document) => document.resource.items,
           },
-          identity: ({ item }) => item.key,
+          identity: {
+            ...ResourceItemIdentity,
+            key: ({ item }) => item.key,
+          },
           lookup: {
             kind: "direct",
             read: () => Effect.succeed(lookupResult),
           },
           version: {
+            id: "document-version@v1",
             kind: "value",
             value: ({ item }) => item.version,
           },
         });
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const found = yield* plugin.readByIdentity(toSourceIdentity("item-1"));
+        const found = yield* plugin.readByIdentity(
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("item-1")
+          )
+        );
 
         expect(found?.item.item.key).toBe("item-1");
         expect(found?.version).toBe("v1");
@@ -451,38 +546,54 @@ describe("DocumentSourcePlugin", () => {
             parent: (document) => document.businessUnits,
             item: (businessUnit) => businessUnit.contacts,
           },
-          identity: ({ item, parent }) => [parent.key, item.key],
+          identity: {
+            ...BusinessUnitContactIdentity,
+            key: ({ item, parent }) => tuple2(parent.key, item.key),
+          },
           lookup: {
             kind: "direct",
-            read: () =>
-              Effect.succeed({
-                resource: JSON.stringify({
-                  businessUnits: [
-                    {
-                      addresses: [],
-                      contacts: [
-                        { email: "riley@example.com", key: "CONTACT-200-1" },
+            read: (identity) =>
+              identity.key[0] === "BU-200" &&
+              identity.key[1] === "CONTACT-200-1"
+                ? Effect.succeed({
+                    resource: JSON.stringify({
+                      businessUnits: [
+                        {
+                          addresses: [],
+                          contacts: [
+                            {
+                              email: "riley@example.com",
+                              key: identity.key[1],
+                            },
+                          ],
+                          key: identity.key[0],
+                          name: "River Market",
+                          status: "inactive",
+                        },
                       ],
-                      key: "BU-200",
-                      name: "River Market",
-                      status: "inactive",
-                    },
-                  ],
-                  exportedAt: "2026-05-14",
-                }),
-              }),
+                      exportedAt: "2026-05-14",
+                    }),
+                  })
+                : Effect.succeed(null),
           },
           version: {
+            id: "document-version@v1",
             kind: "value",
             value: ({ item }) => item.email,
           },
         });
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
         const found = yield* plugin.readByIdentity(
-          toSourceIdentity(JSON.stringify(["BU-200", "CONTACT-200-1"]))
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity(JSON.stringify(["BU-200", "CONTACT-200-1"]))
+          )
         );
         const missing = yield* plugin.readByIdentity(
-          toSourceIdentity(JSON.stringify(["BU-200", "missing"]))
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity(JSON.stringify(["BU-200", "missing"]))
+          )
         );
 
         expect(found?.item.parent.name).toBe("River Market");
@@ -515,9 +626,13 @@ describe("DocumentSourcePlugin", () => {
             parent: (document) => document.businessUnits,
             item: (businessUnit) => businessUnit.contacts,
           },
-          identity: ({ item, parent }) => [parent.key, item.key],
+          identity: {
+            ...BusinessUnitContactIdentity,
+            key: ({ item, parent }) => tuple2(parent.key, item.key),
+          },
           lookup: { kind: "scan" },
           version: {
+            id: "document-version@v1",
             kind: "value",
             value: ({ item }) => item.email,
           },
@@ -526,7 +641,9 @@ describe("DocumentSourcePlugin", () => {
         const first = yield* plugin.read(null);
         const second = yield* plugin.read(first.nextCursor ?? null);
 
-        expect(first.items.map((sourceItem) => sourceItem.identity)).toEqual([
+        expect(
+          first.items.map((sourceItem) => sourceItem.identity.encoded)
+        ).toEqual([
           JSON.stringify(["BU-100", "CONTACT-100-1"]),
           JSON.stringify(["BU-100", "CONTACT-100-2"]),
         ]);
@@ -538,9 +655,9 @@ describe("DocumentSourcePlugin", () => {
           })
         );
         expect(first.nextCursor?.resourceFingerprint).toMatch(sha256HexPattern);
-        expect(second.items.map((sourceItem) => sourceItem.identity)).toEqual([
-          JSON.stringify(["BU-200", "CONTACT-200-1"]),
-        ]);
+        expect(
+          second.items.map((sourceItem) => sourceItem.identity.encoded)
+        ).toEqual([JSON.stringify(["BU-200", "CONTACT-200-1"])]);
         expect(second.nextCursor).toBeUndefined();
       }).pipe(Effect.provide(testPlatformLayer))
   );
@@ -581,9 +698,13 @@ describe("DocumentSourcePlugin", () => {
         selector: {
           item: (document) => document.items,
         },
-        identity: ({ item }) => item.key,
+        identity: {
+          ...ResourceItemIdentity,
+          key: ({ item }) => item.key,
+        },
         lookup: { kind: "scan" },
         version: {
+          id: "document-version@v1",
           kind: "value",
           value: ({ item }) => item.version,
         },
@@ -598,7 +719,7 @@ describe("DocumentSourcePlugin", () => {
         nextDocumentIndex: 0,
         nextItemIndex: 0,
       });
-      expect(nextPage.items.map((item) => item.identity)).toEqual([
+      expect(nextPage.items.map((item) => item.identity.encoded)).toEqual([
         "page-2-item",
       ]);
       expect(nextPage.nextCursor).toBeUndefined();
@@ -636,12 +757,16 @@ describe("DocumentSourcePlugin", () => {
         selector: {
           item: (document) => document.businessUnits,
         },
-        identity: ({ item }) => item.key,
+        identity: {
+          ...BusinessUnitIdentity,
+          key: ({ item }) => item.key,
+        },
         lookup: {
           kind: "direct",
           read: () => Effect.succeed({ resource: duplicatedResource }),
         },
         version: {
+          id: "document-version@v1",
           kind: "value",
           value: ({ item }) => item.status,
         },
@@ -649,7 +774,12 @@ describe("DocumentSourcePlugin", () => {
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
       const readExit = yield* Effect.exit(plugin.read(null));
       const lookupExit = yield* Effect.exit(
-        plugin.readByIdentity(toSourceIdentity("BU-DUP"))
+        plugin.readByIdentity(
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("BU-DUP")
+          )
+        )
       );
 
       expect(readExit._tag).toBe("Failure");
@@ -679,7 +809,10 @@ describe("DocumentSourcePlugin", () => {
         selector: {
           item: (document) => document.businessUnits,
         },
-        identity: ({ item }) => item.key,
+        identity: {
+          ...BusinessUnitIdentity,
+          key: ({ item }) => item.key,
+        },
         lookup: {
           kind: "direct",
           read: () =>
@@ -689,13 +822,19 @@ describe("DocumentSourcePlugin", () => {
             }),
         },
         version: {
+          id: "document-version@v1",
           kind: "value",
           value: ({ item }) => item.status,
         },
       });
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
       const error = yield* plugin
-        .readByIdentity(toSourceIdentity("BU-100"))
+        .readByIdentity(
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("BU-100")
+          )
+        )
         .pipe(Effect.flip);
 
       expect(error).toBeInstanceOf(SourcePluginError);
@@ -723,7 +862,10 @@ describe("DocumentSourcePlugin", () => {
         selector: {
           item: (document) => document.businessUnits,
         },
-        identity: ({ item }) => item.key,
+        identity: {
+          ...BusinessUnitIdentity,
+          key: ({ item }) => item.key,
+        },
         lookup: {
           kind: "direct",
           read: () =>
@@ -734,13 +876,19 @@ describe("DocumentSourcePlugin", () => {
             ),
         },
         version: {
+          id: "document-version@v1",
           kind: "value",
           value: ({ item }) => item.status,
         },
       });
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
       const error = yield* plugin
-        .readByIdentity(toSourceIdentity("BU-100"))
+        .readByIdentity(
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("BU-100")
+          )
+        )
         .pipe(Effect.flip);
 
       expect(error).toBeInstanceOf(SourcePluginError);

@@ -5,8 +5,9 @@ import type {
   MigrationDefinitionIdInput,
 } from "./ids.ts";
 import {
+  EncodedSourceIdentity,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
-  SourceIdentity,
+  SourceIdentityKeyScalar,
   toMigrationDefinitionId,
 } from "./ids.ts";
 import type { AnyMigrationDefinition } from "./run.ts";
@@ -35,12 +36,21 @@ export const MigrationDefinitionSourceStatus = Schema.Struct({
 export type MigrationDefinitionSourceStatus =
   typeof MigrationDefinitionSourceStatus.Type;
 
+export const SourceIdentityStatusPart = Schema.Struct({
+  name: Schema.NonEmptyString,
+  value: SourceIdentityKeyScalar,
+});
+export type SourceIdentityStatusPart = typeof SourceIdentityStatusPart.Type;
+
 export class DuplicateSourceIdentityStatusWarning extends Schema.TaggedClass<DuplicateSourceIdentityStatusWarning>()(
   "DuplicateSourceIdentityStatusWarning",
   {
     count: StatusCount,
     definitionId: MigrationDefinitionIdSchema,
-    sourceIdentity: SourceIdentity,
+    sourceIdentity: EncodedSourceIdentity,
+    sourceIdentityParts: Schema.optional(
+      Schema.Array(SourceIdentityStatusPart)
+    ),
   }
 ) {}
 
@@ -50,7 +60,7 @@ export class InvalidSourceItemStatusWarning extends Schema.TaggedClass<InvalidSo
     definitionId: MigrationDefinitionIdSchema,
     details: Schema.optional(Schema.Array(MigrationItemErrorDetail)),
     message: Schema.String,
-    sourceIdentity: SourceIdentity,
+    sourceIdentity: EncodedSourceIdentity,
   }
 ) {}
 

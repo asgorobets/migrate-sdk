@@ -1,27 +1,31 @@
 import { Schema } from "effect";
 import {
-  DestinationIdentity,
-  DestinationVersion,
   MigrationDefinitionId,
   MigrationRunId,
-  SourceIdentity,
+  SourceIdentitySnapshot,
   SourceVersion,
 } from "./ids.ts";
+import { SourceVersionContractFingerprint } from "./migration-contract.ts";
+import { DestinationJournal, TrackingRecord } from "./tracking.ts";
 
 const MigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionId,
   lastRunId: MigrationRunId,
-  sourceIdentity: SourceIdentity,
+  sourceIdentity: SourceIdentitySnapshot,
   updatedAt: Schema.Date,
 } as const;
 
 const ObservedSourceVersionFields = {
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: SourceVersion,
 } as const;
 
 export const MigrationItemErrorKind = Schema.Literals([
   "source",
-  "pipeline",
+  "tracking",
+  "process",
   "destination",
 ]);
 export type MigrationItemErrorKind = typeof MigrationItemErrorKind.Type;
@@ -43,15 +47,16 @@ export type MigrationItemError = typeof MigrationItemError.Type;
 export const MigratedItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
   ...ObservedSourceVersionFields,
-  destinationIdentity: DestinationIdentity,
-  destinationVersion: Schema.optional(DestinationVersion),
+  journal: Schema.optional(DestinationJournal),
   status: Schema.Literal("migrated"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 export type MigratedItemState = typeof MigratedItemState.Type;
 
 export const SkippedItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
   ...ObservedSourceVersionFields,
+  journal: Schema.optional(DestinationJournal),
   skipReason: Schema.String,
   status: Schema.Literal("skipped"),
 });
@@ -59,21 +64,26 @@ export type SkippedItemState = typeof SkippedItemState.Type;
 
 export const FailedItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: Schema.optional(SourceVersion),
-  destinationIdentity: Schema.optional(DestinationIdentity),
-  destinationVersion: Schema.optional(DestinationVersion),
   error: MigrationItemError,
+  journal: Schema.optional(DestinationJournal),
   status: Schema.Literal("failed"),
 });
 export type FailedItemState = typeof FailedItemState.Type;
 
 export const NeedsUpdateItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: Schema.optional(SourceVersion),
-  destinationIdentity: DestinationIdentity,
-  destinationVersion: Schema.optional(DestinationVersion),
+  journal: Schema.optional(DestinationJournal),
   reason: Schema.String,
   status: Schema.Literal("needs-update"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 export type NeedsUpdateItemState = typeof NeedsUpdateItemState.Type;
 
@@ -88,8 +98,9 @@ export type MigrationItemState = typeof MigrationItemState.Type;
 export interface MigrationItemStateBase {
   readonly definitionId: MigrationDefinitionId;
   readonly lastRunId: MigrationRunId;
-  readonly sourceIdentity: SourceIdentity;
+  readonly sourceIdentity: SourceIdentitySnapshot;
   readonly sourceVersion?: SourceVersion;
+  readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
   readonly updatedAt: Date;
 }
 

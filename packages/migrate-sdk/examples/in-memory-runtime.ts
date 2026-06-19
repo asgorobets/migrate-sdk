@@ -3,9 +3,10 @@ import {
   defineMigration,
   type MigrationRunSummary,
   runMigration,
+  SourceIdentity,
   skipItem,
 } from "migrate-sdk";
-import { InMemoryDestinationPlugin } from "migrate-sdk/destinations/in-memory";
+import { InMemoryDestination } from "migrate-sdk/destinations/in-memory";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 
@@ -18,9 +19,14 @@ const ArticleEntryFields = Schema.Struct({
   title: Schema.String,
 });
 
+const ArticleSourceIdentity = SourceIdentity.make({
+  id: "example-article@v1",
+  schema: SourceIdentity.key("articleId", Schema.NonEmptyString),
+});
+
 const sourceItems = [
   {
-    identity: "article-1",
+    identityKey: "article-1",
     version: "source-version-1",
     item: {
       publish: true,
@@ -28,7 +34,7 @@ const sourceItems = [
     },
   },
   {
-    identity: "article-2",
+    identityKey: "article-2",
     version: "source-version-1",
     item: {
       publish: false,
@@ -36,7 +42,7 @@ const sourceItems = [
     },
   },
   {
-    identity: "article-3",
+    identityKey: "article-3",
     version: "source-version-1",
     item: {
       publish: true,
@@ -46,33 +52,27 @@ const sourceItems = [
 ] as const;
 
 export const makeInMemoryArticlesMigration = () => {
-  const destination = InMemoryDestinationPlugin.makeEntries({
+  const destination = InMemoryDestination.makeEntries({
     contentType: "article",
-    commands: {
-      publishEntry: true,
-      upsertEntry: { fields: ArticleEntryFields },
-    },
+    fields: ArticleEntryFields,
   });
 
   return defineMigration({
     id: "articles",
     source: InMemorySourcePlugin.make({
+      identity: ArticleSourceIdentity,
       items: sourceItems,
       sourceSchema: Article,
     }),
-    destination,
     store: InMemoryMigrationStore.layer(),
-    pipeline: Effect.fn("articles.pipeline")(function* (source) {
+    process: Effect.fn("articles.process")(function* (source) {
       if (!source.item.publish) {
         return yield* skipItem("Article is not published");
       }
 
-      return [
-        destination.commands.upsertEntry({
-          title: source.item.title,
-        }),
-        destination.commands.publishEntry(),
-      ];
+      yield* destination.entries.upsert({
+        title: source.item.title,
+      });
     }),
   });
 };

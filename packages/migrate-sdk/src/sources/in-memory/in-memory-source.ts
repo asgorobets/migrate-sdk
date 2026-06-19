@@ -5,10 +5,17 @@ import {
   type SourcePluginImplementation,
 } from "../../domain/definition.ts";
 import { SourcePluginError } from "../../domain/errors.ts";
-import type { SourceIdentityInput } from "../../domain/ids.ts";
 import type {
-  SourceItemInput,
-  SourceLookupStrategy,
+  SourceIdentity,
+  SourceIdentityContractFingerprint,
+  SourceIdentityDefinition,
+  SourceIdentitySnapshotKey,
+} from "../../domain/ids.ts";
+import type { SourceVersionContractFingerprint } from "../../domain/migration-contract.ts";
+import {
+  encodeSourceIdentityKey,
+  type SourceItemInput,
+  type SourceLookupStrategy,
 } from "../../domain/source.ts";
 import type { AnySourcePlugin } from "../../services/source-plugin.ts";
 
@@ -18,14 +25,25 @@ export const InMemorySourceCursor = Schema.Struct({
 
 export type InMemorySourceCursor = typeof InMemorySourceCursor.Type;
 
-export interface InMemorySourceOptions<A> {
+interface InMemorySourceBaseOptions<
+  A,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> {
   readonly batchSize?: number;
-  readonly items: readonly SourceItemInput<A>[];
+  readonly identity: SourceIdentityDefinition<IdentityKey>;
+  readonly items: readonly SourceItemInput<A, IdentityKey>[];
   readonly lookupStrategy?: SourceLookupStrategy;
+  readonly sourceIdentityContractFingerprint?: SourceIdentityContractFingerprint;
   readonly sourceSchema: Schema.Codec<A, unknown, never, never>;
+  readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
   readonly state?: InMemorySourceState;
   readonly transientFailures?: InMemorySourceTransientFailures;
 }
+
+export interface InMemorySourceOptions<
+  A,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> extends InMemorySourceBaseOptions<A, IdentityKey> {}
 
 export interface InMemorySourceState {
   readAttempts: number;
@@ -53,9 +71,10 @@ const transientSourceError = (operation: string): SourcePluginError =>
     message: `In-memory source ${operation} failed transiently`,
   });
 
-const makeImplementation = <A>(
-  options: InMemorySourceOptions<A>
-): SourcePluginImplementation<A, InMemorySourceCursor> => {
+const makeImplementation = <A, IdentityKey extends SourceIdentitySnapshotKey>(
+  options: InMemorySourceBaseOptions<A, IdentityKey>,
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+): SourcePluginImplementation<A, InMemorySourceCursor, IdentityKey, A> => {
   const items = options.items;
   const batchSize = options.batchSize ?? items.length;
   const lookupStrategy = options.lookupStrategy ?? "direct";
@@ -101,7 +120,7 @@ const makeImplementation = <A>(
   });
 
   const readByIdentity = Effect.fn("InMemorySource.readByIdentity")(function* (
-    identity: SourceIdentityInput
+    identity: SourceIdentity<IdentityKey>
   ) {
     state.readByIdentityAttempts += 1;
 
@@ -110,9 +129,18 @@ const makeImplementation = <A>(
       return yield* transientSourceError("readByIdentity");
     }
 
-    return yield* Effect.sync(
-      () => items.find((item) => item.identity === identity) ?? null
-    );
+    for (const item of items) {
+      const encodedIdentity = yield* encodeSourceIdentityKey(
+        identityDefinition,
+        item.identityKey
+      );
+
+      if (encodedIdentity === identity.encoded) {
+        return item;
+      }
+    }
+
+    return null;
   });
 
   return {
@@ -122,18 +150,32 @@ const makeImplementation = <A>(
   };
 };
 
-const makeLayer = <A>(
-  options: InMemorySourceOptions<A>
-): Layer.Layer<AnySourcePlugin> => make(options).layer;
-
-const make = <A>(
-  options: InMemorySourceOptions<A>
-): ConfiguredSourcePlugin<A, InMemorySourceCursor, unknown> =>
-  defineSourcePlugin({
+const make = <A, IdentityKey extends SourceIdentitySnapshotKey>(
+  options: InMemorySourceOptions<A, IdentityKey>
+): ConfiguredSourcePlugin<A, InMemorySourceCursor, IdentityKey, unknown> => {
+  return defineSourcePlugin({
     cursorSchema: InMemorySourceCursor,
-    make: () => makeImplementation(options),
+    identity: options.identity,
+    make: () => makeImplementation(options, options.identity),
     sourceSchema: options.sourceSchema,
+    ...(options.sourceIdentityContractFingerprint === undefined
+      ? {}
+      : {
+          sourceIdentityContractFingerprint:
+            options.sourceIdentityContractFingerprint,
+        }),
+    ...(options.sourceVersionContractFingerprint === undefined
+      ? {}
+      : {
+          sourceVersionContractFingerprint:
+            options.sourceVersionContractFingerprint,
+        }),
   });
+};
+
+const makeLayer = <A, IdentityKey extends SourceIdentitySnapshotKey>(
+  options: InMemorySourceOptions<A, IdentityKey>
+): Layer.Layer<AnySourcePlugin> => make(options).layer;
 
 export const InMemorySourcePlugin = {
   layer: makeLayer,

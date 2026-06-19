@@ -12,7 +12,7 @@ export const formatApiSourceExampleResult = (
     `list calls: ${result.inspection.listCalls}`,
     `detail calls: ${result.inspection.detailCalls.join(", ")}`,
     "",
-    "Migrated Destination Command Fields",
+    "Migrated Destination Entry Fields",
     ...result.inspection.commandFields.map((fields, index) =>
       [
         `post ${index + 1}: ${fields.title}`,

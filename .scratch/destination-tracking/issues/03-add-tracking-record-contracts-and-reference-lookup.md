@@ -1,0 +1,35 @@
+# Add Tracking Record Contracts And Reference Lookup
+
+Status: done
+
+## Parent
+
+[Destination Tracking](../PRD.md)
+
+## What to build
+
+Add `Tracking.record({ id, schema })` as the optional successful-item contract and `Tracking.setRecord(...)` as the process-scoped staging API. A record-backed process must stage exactly one schema-valid record before a successful item can be persisted. Migration reference lookup should return the schema-validated tracking record for record-backed definitions and reject progress-only definitions by default because they do not expose a durable destination reference surface.
+
+Add process-path identity/reference tests that use tracking records instead of singular `tracking record`. This slice should support progress-only process definitions, record-backed process definitions, and record-backed lookup stubs without adding any new removed destination model coverage. Existing removed destination model bridge tests may keep asserting legacy `tracking record` behavior until that bridge is removed.
+
+## Acceptance criteria
+
+- [x] A Migration Definition can declare a Tracking Record Contract with stable id and schema.
+- [x] `Tracking.setRecord(...)` stages a record inside the current process execution scope.
+- [x] A successful record-backed process persists exactly one schema-valid tracking record.
+- [x] A successful record-backed process with no staged record records a failed item state with tracking contract details.
+- [x] A process that stages more than one record records a failed item state with tracking contract details.
+- [x] A process that stages a schema-invalid record records a failed item state with validation details.
+- [x] A failed process does not expose its staged record as a successful tracking record contract.
+- [x] Migration contract state includes tracking contract id and tracking record schema fingerprint when declared.
+- [x] Tracking contract drift blocks execution when item state exists.
+- [x] Migration reference lookup returns source identity, item status, and tracking record for record-backed definitions.
+- [x] `stub: true` works for record-backed process definitions by persisting `needs-update` state with one schema-valid tracking record.
+- [x] Migration reference lookup rejects definitions without a tracking record contract by default.
+- [x] New process reference lookup examples/tests use tracking records instead of singular `tracking record`.
+- [x] No new removed destination model behavior, examples, or tests are added.
+- [x] Existing typecheck and tests pass after the migrated coverage is updated.
+
+## Blocked by
+
+- Issue 01: Introduce Process Execution And Quarantine Removed Destination Models

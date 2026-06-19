@@ -7,25 +7,33 @@ import { Path } from "effect/Path";
 import type { PlatformError } from "effect/PlatformError";
 import { MigrationStoreError } from "../../domain/errors.ts";
 import {
-  DestinationIdentity as DestinationIdentitySchema,
-  DestinationVersion as DestinationVersionSchema,
   EncodedSourceCursor,
   type EncodedSourceCursor as EncodedSourceCursorType,
+  type EncodedSourceIdentity,
   type MigrationDefinitionId,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
   MigrationDefinitionLockToken as MigrationDefinitionLockTokenSchema,
   type MigrationRunId,
   MigrationRunId as MigrationRunIdSchema,
-  type SourceIdentity,
-  SourceIdentity as SourceIdentitySchema,
+  SourceIdentitySnapshot as SourceIdentitySnapshotSchema,
   SourceVersion as SourceVersionSchema,
   toMigrationDefinitionLockToken,
 } from "../../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../../domain/lock.ts";
+import {
+  MigrationContract,
+  type MigrationContract as MigrationContractType,
+  SourceVersionContractFingerprint,
+} from "../../domain/migration-contract.ts";
 import type { MigrationRunState } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { MigrationItemError } from "../../domain/state.ts";
 import { summarizeMigrationItemStates } from "../../domain/status.ts";
+import {
+  DestinationJournalEntry,
+  DestinationJournalRollbackAttemptError,
+  TrackingRecord,
+} from "../../domain/tracking.ts";
 import { MigrationStore } from "../../services/migration-store.ts";
 
 export interface FileMigrationStoreOptions {
@@ -66,48 +74,85 @@ const EncodedSourceCursorRecord = Schema.Struct({
   state: EncodedSourceCursor,
 });
 
+const MigrationContractRecord = Schema.Struct({
+  formatVersion: Schema.Literal(formatVersion),
+  recordKind: Schema.Literal("migration-contract"),
+  state: MigrationContract,
+});
+
 const PersistedMigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionIdSchema,
   lastRunId: MigrationRunIdSchema,
-  sourceIdentity: SourceIdentitySchema,
+  sourceIdentity: SourceIdentitySnapshotSchema,
   updatedAt: Schema.DateFromString,
 } as const;
 
 const PersistedObservedSourceVersionFields = {
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: SourceVersionSchema,
 } as const;
+
+const PersistedDestinationJournalSegmentFields = {
+  entries: Schema.Array(DestinationJournalEntry),
+  runId: MigrationRunIdSchema,
+} as const;
+
+const PersistedDestinationJournalSegment = Schema.Struct(
+  PersistedDestinationJournalSegmentFields
+);
+
+const PersistedDestinationRollbackAttemptJournalSegment = Schema.Struct({
+  ...PersistedDestinationJournalSegmentFields,
+  error: DestinationJournalRollbackAttemptError,
+  failedAt: Schema.DateFromString,
+});
+
+const PersistedDestinationJournal = Schema.Struct({
+  process: PersistedDestinationJournalSegment,
+  rollbackAttempts: Schema.Array(
+    PersistedDestinationRollbackAttemptJournalSegment
+  ),
+});
 
 const PersistedMigratedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
   ...PersistedObservedSourceVersionFields,
-  destinationIdentity: DestinationIdentitySchema,
-  destinationVersion: Schema.optional(DestinationVersionSchema),
+  journal: Schema.optional(PersistedDestinationJournal),
   status: Schema.Literal("migrated"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 
 const PersistedSkippedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
   ...PersistedObservedSourceVersionFields,
+  journal: Schema.optional(PersistedDestinationJournal),
   skipReason: Schema.String,
   status: Schema.Literal("skipped"),
 });
 
 const PersistedFailedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: Schema.optional(SourceVersionSchema),
-  destinationIdentity: Schema.optional(DestinationIdentitySchema),
-  destinationVersion: Schema.optional(DestinationVersionSchema),
   error: MigrationItemError,
+  journal: Schema.optional(PersistedDestinationJournal),
   status: Schema.Literal("failed"),
 });
 
 const PersistedNeedsUpdateItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: Schema.optional(SourceVersionSchema),
-  destinationIdentity: DestinationIdentitySchema,
-  destinationVersion: Schema.optional(DestinationVersionSchema),
+  journal: Schema.optional(PersistedDestinationJournal),
   reason: Schema.String,
   status: Schema.Literal("needs-update"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 
 const PersistedMigrationItemState = Schema.Union([
@@ -367,11 +412,13 @@ const makePaths = (path: Path, directory: string) => {
       path.join(definitionDirectory(definitionId), "latest-run.json"),
     sourceCursor: (definitionId: MigrationDefinitionId) =>
       path.join(definitionDirectory(definitionId), "cursor.json"),
+    migrationContract: (definitionId: MigrationDefinitionId) =>
+      path.join(definitionDirectory(definitionId), "contract.json"),
     itemStatesDirectory: (definitionId: MigrationDefinitionId) =>
       path.join(definitionDirectory(definitionId), "items"),
     itemState: (
       definitionId: MigrationDefinitionId,
-      identity: SourceIdentity
+      identity: EncodedSourceIdentity
     ) =>
       path.join(
         definitionDirectory(definitionId),
@@ -466,7 +513,7 @@ const makeLayerWithoutPlatform = (
       const getItemState = Effect.fn("FileMigrationStore.getItemState")(
         function* (
           definitionId: MigrationDefinitionId,
-          identity: SourceIdentity
+          identity: EncodedSourceIdentity
         ) {
           const record = yield* readRecordOptional(
             fs,
@@ -476,6 +523,34 @@ const makeLayerWithoutPlatform = (
 
           return record?.state ?? null;
         }
+      );
+
+      const getMigrationContract = Effect.fn(
+        "FileMigrationStore.getMigrationContract"
+      )(function* (definitionId: MigrationDefinitionId) {
+        const record = yield* readRecordOptional(
+          fs,
+          paths.migrationContract(definitionId),
+          MigrationContractRecord
+        );
+
+        return record?.state ?? null;
+      });
+
+      const upsertMigrationContract = Effect.fn(
+        "FileMigrationStore.upsertMigrationContract"
+      )((contract: MigrationContractType) =>
+        writeRecordAtomic(
+          fs,
+          path,
+          paths.migrationContract(contract.definitionId),
+          MigrationContractRecord,
+          {
+            formatVersion,
+            recordKind: "migration-contract",
+            state: contract,
+          }
+        )
       );
 
       const listItemStates = Effect.fn("FileMigrationStore.listItemStates")(
@@ -512,8 +587,10 @@ const makeLayerWithoutPlatform = (
       });
 
       const deleteItemState = Effect.fn("FileMigrationStore.deleteItemState")(
-        (definitionId: MigrationDefinitionId, identity: SourceIdentity) =>
-          removeFileIfExists(fs, paths.itemState(definitionId, identity))
+        (
+          definitionId: MigrationDefinitionId,
+          identity: EncodedSourceIdentity
+        ) => removeFileIfExists(fs, paths.itemState(definitionId, identity))
       );
 
       const upsertItemState = Effect.fn("FileMigrationStore.upsertItemState")(
@@ -521,7 +598,7 @@ const makeLayerWithoutPlatform = (
           writeRecordAtomic(
             fs,
             path,
-            paths.itemState(state.definitionId, state.sourceIdentity),
+            paths.itemState(state.definitionId, state.sourceIdentity.encoded),
             MigrationItemStateRecord,
             {
               formatVersion,
@@ -699,6 +776,8 @@ const makeLayerWithoutPlatform = (
       return {
         getSourceCursor,
         setSourceCursor,
+        getMigrationContract,
+        upsertMigrationContract,
         getItemState,
         listItemStates,
         getItemStateSummary,

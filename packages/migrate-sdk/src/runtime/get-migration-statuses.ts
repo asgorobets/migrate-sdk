@@ -1,15 +1,15 @@
 import { Effect, Layer, Schema } from "effect";
-import type { MigrationDefinitionId, SourceIdentity } from "../domain/ids.ts";
-import type {
-  AnyMigrationDefinition,
-  RunRequestSourceLayerError,
-  RunRequestSourceRequirements,
-} from "../domain/run.ts";
+import {
+  type EncodedSourceIdentity,
+  type MigrationDefinitionId,
+  SourceIdentityKeyScalar,
+  type SourceIdentitySnapshotKey,
+} from "../domain/ids.ts";
+import type { AnyMigrationDefinition } from "../domain/run.ts";
 import type { SourceItem } from "../domain/source.ts";
 import type { MigrationItemState } from "../domain/state.ts";
 import {
   DuplicateSourceIdentityStatusWarning,
-  type DurableMigrationStatusRequestInput,
   type GetMigrationStatusesError,
   InvalidSourceItemStatusWarning,
   type MigrationDefinitionSourceStatus,
@@ -18,8 +18,8 @@ import {
   MigrationStatusRequestError,
   type MigrationStatusRequestInput,
   type MigrationStatusWarning,
-  type SourceScanMigrationStatusRequestInput,
   makeMigrationStatusRequest,
+  type SourceIdentityStatusPart,
   summarizeMigrationItemStates,
 } from "../domain/status.ts";
 import { MigrationStore } from "../services/migration-store.ts";
@@ -28,14 +28,6 @@ import {
   SourcePlugin,
 } from "../services/source-plugin.ts";
 import { normalizeSourcePayloadSchemaError } from "./item-error.ts";
-
-type GetMigrationStatusesImplementationEffect = Effect.Effect<
-  MigrationStatusReport,
-  // biome-ignore lint/suspicious/noExplicitAny: Hidden implementation signature; public overloads keep precise status errors.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Hidden implementation signature; public overloads keep precise status requirements.
-  any
->;
 
 const missingDefinitionError = (definitionId: MigrationDefinitionId) =>
   new MigrationStatusRequestError({
@@ -51,13 +43,65 @@ const invalidStatusRequestError = (cause: unknown) =>
         cause,
       });
 
-const selectDefinitions = <
-  Definitions extends readonly AnyMigrationDefinition[],
->(
-  definitions: Definitions,
+const isSourceIdentityKeyScalar = (
+  value: unknown
+): value is SourceIdentityKeyScalar =>
+  Schema.is(SourceIdentityKeyScalar)(value);
+
+const makeSourceIdentityStatusPart = (
+  name: string,
+  value: unknown
+): SourceIdentityStatusPart | null =>
+  isSourceIdentityKeyScalar(value) ? { name, value } : null;
+
+const describeSourceIdentityParts = (
+  definition: AnyMigrationDefinition,
+  key: SourceIdentitySnapshotKey
+): readonly SourceIdentityStatusPart[] | undefined => {
+  const identity = definition.source.identity;
+
+  if (identity.kind === "scalar") {
+    const part = identity.parts[0];
+
+    if (part === undefined) {
+      return undefined;
+    }
+
+    const statusPart = makeSourceIdentityStatusPart(part.name, key);
+
+    return statusPart === null ? undefined : [statusPart];
+  }
+
+  if (!Array.isArray(key)) {
+    return undefined;
+  }
+
+  const parts: SourceIdentityStatusPart[] = [];
+
+  for (let index = 0; index < identity.parts.length; index++) {
+    const part = identity.parts[index];
+
+    if (part === undefined) {
+      return undefined;
+    }
+
+    const statusPart = makeSourceIdentityStatusPart(part.name, key[index]);
+
+    if (statusPart === null) {
+      return undefined;
+    }
+
+    parts.push(statusPart);
+  }
+
+  return parts;
+};
+
+const selectDefinitions = (
+  definitions: readonly AnyMigrationDefinition[],
   definitionIds?: readonly MigrationDefinitionId[]
 ): Effect.Effect<
-  readonly Definitions[number][],
+  readonly AnyMigrationDefinition[],
   MigrationStatusRequestError
 > => {
   if (definitionIds === undefined) {
@@ -129,7 +173,7 @@ const validateSourceItem = (
         new InvalidSourceItemStatusWarning({
           definitionId,
           message: normalized.message,
-          sourceIdentity: sourceItem.identity,
+          sourceIdentity: sourceItem.identity.encoded,
           ...(normalized.details === undefined
             ? {}
             : { details: normalized.details }),
@@ -146,18 +190,22 @@ const scanSourceInventory = (
   Effect.gen(function* () {
     const sourceItems = yield* readSourceInventory(definition, source);
     const durableSourceIdentities = new Set(
-      itemStates.map((itemState) => itemState.sourceIdentity)
+      itemStates.map((itemState) => itemState.sourceIdentity.encoded)
     );
-    const seenSourceIdentities = new Set<SourceIdentity>();
-    const currentSourceIdentities = new Set<SourceIdentity>();
-    const duplicateCounts = new Map<SourceIdentity, number>();
+    const seenSourceIdentities = new Set<EncodedSourceIdentity>();
+    const currentSourceIdentities = new Set<EncodedSourceIdentity>();
+    const duplicateCounts = new Map<EncodedSourceIdentity, number>();
+    const duplicateKeys = new Map<
+      EncodedSourceIdentity,
+      SourceIdentitySnapshotKey
+    >();
     const warnings: MigrationStatusWarning[] = [];
     let invalid = 0;
     let duplicate = 0;
     let unprocessed = 0;
 
     for (const sourceItem of sourceItems) {
-      currentSourceIdentities.add(sourceItem.identity);
+      currentSourceIdentities.add(sourceItem.identity.encoded);
 
       const validationWarning = yield* validateSourceItem(
         definition.id,
@@ -171,34 +219,45 @@ const scanSourceInventory = (
         warnings.push(validationWarning);
       }
 
-      if (seenSourceIdentities.has(sourceItem.identity)) {
+      if (seenSourceIdentities.has(sourceItem.identity.encoded)) {
         duplicate += 1;
         duplicateCounts.set(
-          sourceItem.identity,
-          (duplicateCounts.get(sourceItem.identity) ?? 0) + 1
+          sourceItem.identity.encoded,
+          (duplicateCounts.get(sourceItem.identity.encoded) ?? 0) + 1
         );
+        duplicateKeys.set(sourceItem.identity.encoded, sourceItem.identity.key);
         continue;
       }
 
-      seenSourceIdentities.add(sourceItem.identity);
+      seenSourceIdentities.add(sourceItem.identity.encoded);
 
-      if (!(isInvalid || durableSourceIdentities.has(sourceItem.identity))) {
+      if (
+        !(isInvalid || durableSourceIdentities.has(sourceItem.identity.encoded))
+      ) {
         unprocessed += 1;
       }
     }
 
     for (const [sourceIdentity, count] of duplicateCounts) {
+      const duplicateKey = duplicateKeys.get(sourceIdentity);
+      const sourceIdentityParts =
+        duplicateKey === undefined
+          ? undefined
+          : describeSourceIdentityParts(definition, duplicateKey);
+
       warnings.push(
         new DuplicateSourceIdentityStatusWarning({
           count,
           definitionId: definition.id,
           sourceIdentity,
+          ...(sourceIdentityParts === undefined ? {} : { sourceIdentityParts }),
         })
       );
     }
 
     const orphaned = itemStates.filter(
-      (itemState) => !currentSourceIdentities.has(itemState.sourceIdentity)
+      (itemState) =>
+        !currentSourceIdentities.has(itemState.sourceIdentity.encoded)
     ).length;
 
     return {
@@ -229,13 +288,9 @@ const getDurableDefinitionStatus = (
     };
   }).pipe(Effect.provide(definition.store));
 
-const getScannedDefinitionStatus = <Definition extends AnyMigrationDefinition>(
-  definition: Definition
-): Effect.Effect<
-  MigrationDefinitionStatus,
-  GetMigrationStatusesError | RunRequestSourceLayerError<readonly [Definition]>,
-  RunRequestSourceRequirements<readonly [Definition]>
-> => {
+const getScannedDefinitionStatus = (
+  definition: AnyMigrationDefinition
+): Effect.Effect<MigrationDefinitionStatus, GetMigrationStatusesError> => {
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
     const source = yield* SourcePlugin;
@@ -253,45 +308,30 @@ const getScannedDefinitionStatus = <Definition extends AnyMigrationDefinition>(
     };
   });
 
+  const sourceLayer = definition.source.layer as Layer.Layer<
+    AnySourcePlugin,
+    GetMigrationStatusesError
+  >;
+
   return program.pipe(
-    Effect.provide(
-      definition.source.layer.pipe(Layer.provideMerge(definition.store))
-    )
+    Effect.provide(Layer.mergeAll(sourceLayer, definition.store))
   );
 };
 
-export function getMigrationStatuses<
-  Definitions extends readonly AnyMigrationDefinition[],
->(
-  input: DurableMigrationStatusRequestInput<Definitions>
-): Effect.Effect<MigrationStatusReport, GetMigrationStatusesError, never>;
-export function getMigrationStatuses<
-  Definitions extends readonly AnyMigrationDefinition[],
->(
-  input: SourceScanMigrationStatusRequestInput<Definitions>
-): Effect.Effect<
-  MigrationStatusReport,
-  GetMigrationStatusesError | RunRequestSourceLayerError<Definitions>,
-  RunRequestSourceRequirements<Definitions>
->;
-export function getMigrationStatuses<
+const getDefinitionStatus = (
+  definition: AnyMigrationDefinition,
+  scanSource: boolean
+): Effect.Effect<MigrationDefinitionStatus, GetMigrationStatusesError> =>
+  scanSource
+    ? getScannedDefinitionStatus(definition)
+    : getDurableDefinitionStatus(definition);
+
+export const getMigrationStatuses = <
   Definitions extends readonly AnyMigrationDefinition[],
 >(
   input: MigrationStatusRequestInput<Definitions>
-): Effect.Effect<
-  MigrationStatusReport,
-  GetMigrationStatusesError | RunRequestSourceLayerError<Definitions>,
-  RunRequestSourceRequirements<Definitions>
->;
-export function getMigrationStatuses<
-  Definitions extends readonly AnyMigrationDefinition[],
->(
-  input:
-    | DurableMigrationStatusRequestInput<Definitions>
-    | SourceScanMigrationStatusRequestInput<Definitions>
-    | MigrationStatusRequestInput<Definitions>
-): GetMigrationStatusesImplementationEffect {
-  return Effect.gen(function* () {
+): Effect.Effect<MigrationStatusReport, GetMigrationStatusesError> =>
+  Effect.gen(function* () {
     const request = yield* Effect.try({
       try: () => makeMigrationStatusRequest(input),
       catch: invalidStatusRequestError,
@@ -301,31 +341,15 @@ export function getMigrationStatuses<
       request.definitions,
       request.definitionIds
     );
-
-    if (request.scanSource) {
-      const definitions = yield* Effect.forEach(
-        selectedDefinitions,
-        getScannedDefinitionStatus,
-        { concurrency: request.concurrency }
-      );
-
-      return {
-        definitions,
-        scanSource: true,
-        warnings: definitions.flatMap((definition) => definition.warnings),
-      };
-    }
-
     const definitions = yield* Effect.forEach(
       selectedDefinitions,
-      getDurableDefinitionStatus,
-      { concurrency: 1 }
+      (definition) => getDefinitionStatus(definition, request.scanSource),
+      { concurrency: request.scanSource ? request.concurrency : 1 }
     );
 
     return {
       definitions,
-      scanSource: false,
+      scanSource: request.scanSource,
       warnings: definitions.flatMap((definition) => definition.warnings),
     };
-  }) as GetMigrationStatusesImplementationEffect;
-}
+  });

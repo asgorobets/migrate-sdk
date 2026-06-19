@@ -1,24 +1,17 @@
-import { Effect, Predicate, Schema } from "effect";
+import { Effect, Layer, Predicate, Schema } from "effect";
 import type {
   MigrationDefinition,
   SourcePayloadSchema,
 } from "../domain/definition.ts";
-import type {
-  DestinationCommand,
-  DestinationCommandContext,
-  DestinationCommandPlan,
-} from "../domain/destination.ts";
-import type { DestinationPluginError, SkipItem } from "../domain/errors.ts";
-import {
-  DestinationPluginError as DestinationPluginErrorClass,
-  type MigrationStoreError,
-} from "../domain/errors.ts";
+import type { MigrationStoreError, SkipItem } from "../domain/errors.ts";
 import type {
   MigrationDefinitionId,
   MigrationRunId,
+  SourceIdentitySnapshotKey,
   SourceVersion,
 } from "../domain/ids.ts";
-import type { PipelineContext } from "../domain/pipeline.ts";
+import type { SourceVersionContractFingerprint } from "../domain/migration-contract.ts";
+import type { ProcessContext } from "../domain/pipeline.ts";
 import type { SourceItem } from "../domain/source.ts";
 import type {
   FailedItemState,
@@ -29,29 +22,42 @@ import type {
   MigrationItemStateBase,
   SkippedItemState,
 } from "../domain/state.ts";
-import { DestinationPlugin } from "../services/destination-plugin.ts";
+import type {
+  DestinationJournalSegment,
+  TrackingRecord,
+  TrackingRecordContract,
+  TrackingRecordValue,
+} from "../domain/tracking.ts";
+import { TrackingRecord as TrackingRecordSchema } from "../domain/tracking.ts";
 import type { MigrationReferenceLookup } from "../services/migration-reference-lookup.ts";
 import { MigrationStore } from "../services/migration-store.ts";
-import { executeDestinationCommandPlan } from "./destination-command-plan.ts";
+import {
+  makeProcessScope,
+  Tracking,
+  type TrackingService,
+} from "../services/tracking.ts";
 import {
   normalizeItemError,
   normalizeSourcePayloadSchemaError,
+  normalizeTrackingRecordCountError,
+  normalizeTrackingRecordSchemaError,
+  normalizeUnexpectedTrackingRecordError,
 } from "./item-error.ts";
 
 export interface ProcessSourceItemOptions<
   Source,
-  Command extends DestinationCommand,
   PipelineError,
   Cursor = unknown,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
   SourceInput = unknown,
   SourceLayerError = never,
   SourceRequirements = never,
 > {
   readonly definition: MigrationDefinition<
     Source,
-    Command,
     PipelineError,
     Cursor,
+    IdentityKey,
     unknown,
     SourceInput,
     SourceLayerError,
@@ -59,17 +65,13 @@ export interface ProcessSourceItemOptions<
   >;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
-  readonly sourceItem: SourceItem<SourceInput>;
+  readonly sourceItem: SourceItem<SourceInput, IdentityKey>;
   readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
 }
 
 export type ProcessSourceItemError = MigrationStoreError;
 
-type PipelineOutcome<Command extends DestinationCommand> =
-  | {
-      readonly kind: "command";
-      readonly plan: DestinationCommandPlan<Command>;
-    }
+type ProcessOutcome =
   | {
       readonly kind: "skipped";
       readonly reason: string;
@@ -87,155 +89,190 @@ const isSkipItem = (error: unknown): error is SkipItem =>
 const isMigrationStoreError = (error: unknown): error is MigrationStoreError =>
   Predicate.isTagged(error, "MigrationStoreError");
 
+interface SourceVersionContractContext {
+  readonly definitionId: MigrationDefinitionId;
+  readonly sourceVersionContractFingerprint: SourceVersionContractFingerprint;
+}
+
 const makeItemStateBase = <Source>(
-  definitionId: MigrationDefinitionId,
+  sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>
 ): MigrationItemStateBase & { readonly sourceVersion: SourceVersion } => ({
-  definitionId,
+  definitionId: sourceVersionContractContext.definitionId,
   sourceIdentity: sourceItem.identity,
+  sourceVersionContractFingerprint:
+    sourceVersionContractContext.sourceVersionContractFingerprint,
   sourceVersion: sourceItem.version,
   lastRunId: runId,
   updatedAt: new Date(),
 });
 
 const makeSkippedItemState = <Source>(
-  definitionId: MigrationDefinitionId,
+  sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>,
-  reason: string
+  reason: string,
+  journal?: SkippedItemState["journal"]
 ): SkippedItemState => ({
-  ...makeItemStateBase(definitionId, runId, sourceItem),
+  ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
+  ...(journal === undefined ? {} : { journal }),
   status: "skipped",
   skipReason: reason,
 });
 
-const previousDestinationIdentity = (
-  previousState: MigrationItemState | null
-) =>
-  previousState !== null &&
-  (previousState.status === "migrated" ||
-    previousState.status === "failed" ||
-    previousState.status === "needs-update")
-    ? previousState.destinationIdentity
-    : undefined;
-
-const previousDestinationVersion = (
-  previousState: MigrationItemState | null
-) =>
-  previousState !== null &&
-  (previousState.status === "migrated" ||
-    previousState.status === "failed" ||
-    previousState.status === "needs-update")
-    ? previousState.destinationVersion
-    : undefined;
-
 const makeFailedItemState = <Source>(
-  definitionId: MigrationDefinitionId,
+  sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>,
   error: MigrationItemError,
   previousState: MigrationItemState | null = null,
-  latestDestination?: {
-    readonly destinationIdentity?: FailedItemState["destinationIdentity"];
-    readonly destinationVersion?: FailedItemState["destinationVersion"];
-  }
+  journal?: FailedItemState["journal"]
 ): FailedItemState => ({
-  ...makeItemStateBase(definitionId, runId, sourceItem),
-  ...((latestDestination?.destinationIdentity ??
-    previousDestinationIdentity(previousState)) === undefined
+  ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
+  ...(previousState?.journal === undefined || journal !== undefined
     ? {}
-    : {
-        destinationIdentity:
-          latestDestination?.destinationIdentity ??
-          previousDestinationIdentity(previousState),
-      }),
-  ...((latestDestination?.destinationVersion ??
-    previousDestinationVersion(previousState)) === undefined
-    ? {}
-    : {
-        destinationVersion:
-          latestDestination?.destinationVersion ??
-          previousDestinationVersion(previousState),
-      }),
+    : { journal: previousState.journal }),
+  ...(journal === undefined ? {} : { journal }),
   status: "failed",
   error,
 });
 
 const makeMigratedItemState = <Source>(
-  definitionId: MigrationDefinitionId,
+  sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>,
   result: {
-    readonly destinationIdentity: MigratedItemState["destinationIdentity"];
-    readonly destinationVersion?: MigratedItemState["destinationVersion"];
+    readonly journal?: MigratedItemState["journal"];
+    readonly trackingRecord?: MigratedItemState["trackingRecord"];
   }
-): MigratedItemState => ({
-  ...makeItemStateBase(definitionId, runId, sourceItem),
-  status: "migrated",
-  destinationIdentity: result.destinationIdentity,
-  ...(result.destinationVersion === undefined
-    ? {}
-    : { destinationVersion: result.destinationVersion }),
-});
+): MigratedItemState => {
+  return {
+    ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
+    status: "migrated",
+    ...(result.journal === undefined ? {} : { journal: result.journal }),
+    ...(result.trackingRecord === undefined
+      ? {}
+      : { trackingRecord: result.trackingRecord }),
+  };
+};
 
-const missingDestinationIdentityError = (): DestinationPluginError =>
-  new DestinationPluginErrorClass({
-    message: "Destination Command Plan did not produce a Destination Identity",
-  });
+export const makeProcessJournal = (
+  process: DestinationJournalSegment | null
+): FailedItemState["journal"] | undefined =>
+  process === null
+    ? undefined
+    : {
+        process,
+        rollbackAttempts: [],
+      };
 
-const persistMissingDestinationIdentityFailure = <Source>({
-  decodedSourceItem,
-  definitionId,
-  previousState,
-  runId,
-  store,
-}: {
-  readonly decodedSourceItem: SourceItem<Source>;
-  readonly definitionId: MigrationDefinitionId;
-  readonly previousState: MigrationItemState | null;
-  readonly runId: MigrationRunId;
-  readonly store: typeof MigrationStore.Service;
-}) =>
-  store.upsertItemState(
-    makeFailedItemState(
-      definitionId,
-      runId,
-      decodedSourceItem,
-      normalizeItemError("destination", missingDestinationIdentityError()),
-      previousState
+export const validateStagedTrackingRecord = (
+  contract: TrackingRecordContract | undefined,
+  records: readonly TrackingRecordValue[]
+): Effect.Effect<TrackingRecord | undefined, MigrationItemError, never> => {
+  if (contract === undefined) {
+    return records.length === 0
+      ? Effect.as(Effect.void, undefined as TrackingRecord | undefined)
+      : Effect.fail(normalizeUnexpectedTrackingRecordError(records.length));
+  }
+
+  if (records.length !== 1) {
+    return Effect.fail(
+      normalizeTrackingRecordCountError(contract, records.length)
+    );
+  }
+
+  const record = records[0] as TrackingRecordValue;
+
+  return Schema.encodeEffect(contract.schema, { errors: "all" })(record).pipe(
+    Effect.flatMap((encoded) =>
+      Schema.decodeUnknownEffect(TrackingRecordSchema, { errors: "all" })(
+        encoded
+      )
+    ),
+    Effect.tap((encodedRecord) =>
+      Schema.decodeUnknownEffect(contract.schema, { errors: "all" })(
+        encodedRecord
+      )
+    ),
+    Effect.mapError((error) =>
+      normalizeTrackingRecordSchemaError(contract, error)
     )
   );
+};
 
-const persistNonCommandPipelineOutcome = <
-  Source,
-  Command extends DestinationCommand,
->({
+const resolveProcessTrackingRecord = <Source>({
   decodedSourceItem,
-  definitionId,
+  definition,
+  previousState,
+  processJournal,
+  runId,
+  sourceVersionContractContext,
+  store,
+  tracking,
+}: {
+  readonly decodedSourceItem: SourceItem<Source>;
+  readonly definition: {
+    readonly tracking?: TrackingRecordContract | undefined;
+  };
+  readonly previousState: MigrationItemState | null;
+  readonly processJournal?: FailedItemState["journal"];
+  readonly runId: MigrationRunId;
+  readonly sourceVersionContractContext: SourceVersionContractContext;
+  readonly store: typeof MigrationStore.Service;
+  readonly tracking: TrackingService;
+}) =>
+  Effect.gen(function* () {
+    const trackingRecords = yield* tracking.records;
+
+    return yield* validateStagedTrackingRecord(
+      definition.tracking,
+      trackingRecords
+    ).pipe(
+      Effect.catch((error) =>
+        store
+          .upsertItemState(
+            makeFailedItemState(
+              sourceVersionContractContext,
+              runId,
+            decodedSourceItem,
+            error,
+            previousState,
+            processJournal
+          )
+          )
+          .pipe(Effect.as(null))
+      )
+    );
+  });
+
+const persistProcessOutcome = <Source>({
+  decodedSourceItem,
   outcome,
   previousState,
+  processJournal,
   runId,
+  sourceVersionContractContext,
   store,
 }: {
   readonly decodedSourceItem: SourceItem<Source>;
-  readonly definitionId: MigrationDefinitionId;
-  readonly outcome: Exclude<
-    PipelineOutcome<Command>,
-    { readonly kind: "command" }
-  >;
+  readonly outcome: ProcessOutcome;
   readonly previousState: MigrationItemState | null;
+  readonly processJournal?: FailedItemState["journal"];
   readonly runId: MigrationRunId;
+  readonly sourceVersionContractContext: SourceVersionContractContext;
   readonly store: typeof MigrationStore.Service;
 }) => {
   if (outcome.kind === "skipped") {
     return store
       .upsertItemState(
         makeSkippedItemState(
-          definitionId,
+          sourceVersionContractContext,
           runId,
           decodedSourceItem,
-          outcome.reason
+          outcome.reason,
+          processJournal
         )
       )
       .pipe(Effect.as("skipped" as const));
@@ -244,80 +281,241 @@ const persistNonCommandPipelineOutcome = <
   return store
     .upsertItemState(
       makeFailedItemState(
-        definitionId,
+        sourceVersionContractContext,
         runId,
         decodedSourceItem,
         outcome.error,
-        previousState
+        previousState,
+        processJournal
       )
     )
     .pipe(Effect.as("failed" as const));
 };
 
-const isUnchangedTerminalState = <Source>(
+const isUnchangedTerminalState = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  sourceVersionContractFingerprint: SourceVersionContractFingerprint,
   previousState: MigrationItemState | null,
-  sourceItem: SourceItem<Source>
+  sourceItem: SourceItem<Source, IdentityKey>
 ): boolean =>
   previousState?.status === "migrated" &&
+  previousState.sourceVersionContractFingerprint ===
+    sourceVersionContractFingerprint &&
   previousState.sourceVersion === sourceItem.version;
 
-const decodeSourceItem = <Source, SourceInput>(
+const decodeSourceItem = <
+  Source,
+  SourceInput,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   sourceSchema: SourcePayloadSchema<Source, SourceInput>,
-  sourceItem: SourceItem<SourceInput>
+  sourceItem: SourceItem<SourceInput, IdentityKey>
 ) =>
   Schema.decodeUnknownEffect(sourceSchema, { errors: "all" })(
     sourceItem.item
   ).pipe(
     Effect.map(
-      (item): SourceItem<Source> => ({
+      (item): SourceItem<Source, IdentityKey> => ({
         ...sourceItem,
         item,
       })
     )
   );
 
-const runPipeline = <
+const decodeSourceItemOrPersistFailure = <
   Source,
-  Command extends DestinationCommand,
+  SourceInput,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>({
+  previousState,
+  runId,
+  sourceItem,
+  sourceSchema,
+  sourceVersionContractContext,
+  store,
+}: {
+  readonly previousState: MigrationItemState | null;
+  readonly runId: MigrationRunId;
+  readonly sourceItem: SourceItem<SourceInput, IdentityKey>;
+  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceVersionContractContext: SourceVersionContractContext;
+  readonly store: typeof MigrationStore.Service;
+}): Effect.Effect<
+  SourceItem<Source, IdentityKey> | null,
+  MigrationStoreError
+> =>
+  decodeSourceItem(sourceSchema, sourceItem).pipe(
+    Effect.catch((error) =>
+      store
+        .upsertItemState(
+          makeFailedItemState(
+            sourceVersionContractContext,
+            runId,
+            sourceItem,
+            normalizeSourcePayloadSchemaError(error),
+            previousState
+          )
+        )
+        .pipe(Effect.as(null))
+    )
+  );
+
+const runProcess = <
+  Source,
   PipelineError,
   Cursor = unknown,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
   SourceInput = Source,
   SourceLayerError = never,
   SourceRequirements = never,
 >(
   definition: MigrationDefinition<
     Source,
-    Command,
     PipelineError,
     Cursor,
+    IdentityKey,
     unknown,
     SourceInput,
     SourceLayerError,
     SourceRequirements
   >,
-  sourceItem: SourceItem<Source>,
-  context: PipelineContext
+  sourceItem: SourceItem<Source, IdentityKey>,
+  context: ProcessContext
 ) =>
   Effect.try({
-    try: () => definition.pipeline(sourceItem, context),
+    try: () => definition.process?.(sourceItem, context),
     catch: (error) => error as PipelineError | SkipItem,
   }).pipe(
-    Effect.flatMap((planOrEffect) =>
-      Effect.isEffect(planOrEffect)
-        ? (planOrEffect as Effect.Effect<
-            DestinationCommandPlan<Command>,
+    Effect.flatMap((voidOrEffect) =>
+      Effect.isEffect(voidOrEffect)
+        ? (voidOrEffect as Effect.Effect<
+            void,
             PipelineError | SkipItem,
-            MigrationReferenceLookup
+            MigrationReferenceLookup | Tracking
           >)
-        : Effect.succeed(planOrEffect)
+        : Effect.void
     )
   );
 
-export const processSourceItem = <
+const processWithProcessPipeline = <
   Source,
-  Command extends DestinationCommand,
   PipelineError,
   Cursor,
+  IdentityKey extends SourceIdentitySnapshotKey,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements,
+>({
+  decodedSourceItem,
+  definition,
+  processContext,
+  previousState,
+  runId,
+  sourceVersionContractContext,
+  store,
+}: {
+  readonly decodedSourceItem: SourceItem<Source, IdentityKey>;
+  readonly definition: MigrationDefinition<
+    Source,
+    PipelineError,
+    Cursor,
+    IdentityKey,
+    unknown,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements
+  >;
+  readonly processContext: ProcessContext;
+  readonly previousState: MigrationItemState | null;
+  readonly runId: MigrationRunId;
+  readonly sourceVersionContractContext: SourceVersionContractContext;
+  readonly store: typeof MigrationStore.Service;
+}): Effect.Effect<
+  MigrationItemOutcome,
+  ProcessSourceItemError,
+  MigrationReferenceLookup
+> =>
+  Effect.gen(function* () {
+    const tracking = yield* makeProcessScope({
+      definitionId: definition.id,
+      runId,
+      sourceIdentity: decodedSourceItem.identity.encoded,
+      sourceVersion: decodedSourceItem.version,
+      ...(previousState === null ? {} : { previousState }),
+    });
+    const processOutcome = yield* runProcess(
+      definition,
+      decodedSourceItem,
+      processContext
+    ).pipe(
+      Effect.provide(Layer.succeed(Tracking, tracking)),
+      Effect.as({ kind: "migrated" as const }),
+      Effect.catchIf(isSkipItem, (skip) =>
+        Effect.succeed({
+          kind: "skipped",
+          reason: skip.reason,
+        } satisfies ProcessOutcome)
+      ),
+      Effect.catchIf(isMigrationStoreError, (error) => Effect.fail(error)),
+      Effect.catch((error) =>
+        Effect.succeed({
+          kind: "failed",
+          error: normalizeItemError("process", error),
+        } satisfies ProcessOutcome)
+      )
+    );
+    const processJournalSegment = yield* tracking.snapshot;
+    const processJournal = makeProcessJournal(processJournalSegment);
+
+    if (processOutcome.kind !== "migrated") {
+      return yield* persistProcessOutcome({
+        decodedSourceItem,
+        outcome: processOutcome,
+        previousState,
+        processJournal,
+        runId,
+        sourceVersionContractContext,
+        store,
+      });
+    }
+
+    const trackingRecord = yield* resolveProcessTrackingRecord({
+      decodedSourceItem,
+      definition,
+      previousState,
+      processJournal,
+      runId,
+      sourceVersionContractContext,
+      store,
+      tracking,
+    });
+
+    if (trackingRecord === null) {
+      return "failed" as const;
+    }
+
+    yield* store.upsertItemState(
+      makeMigratedItemState(
+        sourceVersionContractContext,
+        runId,
+        decodedSourceItem,
+        {
+          ...(processJournal === undefined ? {} : { journal: processJournal }),
+          ...(trackingRecord === undefined ? {} : { trackingRecord }),
+        }
+      )
+    );
+
+    return "migrated" as const;
+  });
+
+export const processSourceItem = <
+  Source,
+  PipelineError,
+  Cursor,
+  IdentityKey extends SourceIdentitySnapshotKey,
   SourceInput,
   SourceLayerError,
   SourceRequirements,
@@ -329,42 +527,36 @@ export const processSourceItem = <
   sourceItem,
 }: ProcessSourceItemOptions<
   Source,
-  Command,
   PipelineError,
   Cursor,
+  IdentityKey,
   SourceInput,
   SourceLayerError,
   SourceRequirements
 >): Effect.Effect<
   MigrationItemOutcome,
   ProcessSourceItemError,
-  DestinationPlugin | MigrationReferenceLookup | MigrationStore
+  MigrationReferenceLookup | MigrationStore
 > =>
   Effect.gen(function* () {
-    const destination = yield* DestinationPlugin;
     const store = yield* MigrationStore;
+    const sourceVersionContractContext = {
+      definitionId: definition.id,
+      sourceVersionContractFingerprint:
+        definition.source.sourceVersionContractFingerprint,
+    };
     const previousState = yield* store.getItemState(
       definition.id,
-      sourceItem.identity
+      sourceItem.identity.encoded
     );
-    const decodedSourceItem = yield* decodeSourceItem(
+    const decodedSourceItem = yield* decodeSourceItemOrPersistFailure({
+      previousState,
+      runId,
+      sourceItem,
       sourceSchema,
-      sourceItem
-    ).pipe(
-      Effect.catch((error) =>
-        store
-          .upsertItemState(
-            makeFailedItemState(
-              definition.id,
-              runId,
-              sourceItem,
-              normalizeSourcePayloadSchemaError(error),
-              previousState
-            )
-          )
-          .pipe(Effect.andThen(Effect.succeed(null)))
-      )
-    );
+      sourceVersionContractContext,
+      store,
+    });
 
     if (decodedSourceItem === null) {
       return "failed" as const;
@@ -372,110 +564,28 @@ export const processSourceItem = <
 
     if (
       !reprocessUnchangedTerminal &&
-      isUnchangedTerminalState(previousState, decodedSourceItem)
+      isUnchangedTerminalState(
+        sourceVersionContractContext.sourceVersionContractFingerprint,
+        previousState,
+        decodedSourceItem
+      )
     ) {
       return "unchanged" as const;
     }
 
-    const pipelineContext: PipelineContext = {
+    const processContext: ProcessContext = {
       definitionId: definition.id,
       runId,
       ...(previousState === null ? {} : { previousState }),
     };
 
-    const pipelineOutcome: PipelineOutcome<Command> = yield* runPipeline(
-      definition,
+    return yield* processWithProcessPipeline({
       decodedSourceItem,
-      pipelineContext
-    ).pipe(
-      Effect.map(
-        (plan): PipelineOutcome<Command> => ({
-          kind: "command",
-          plan,
-        })
-      ),
-      Effect.catchIf(isSkipItem, (skip) =>
-        Effect.succeed({
-          kind: "skipped",
-          reason: skip.reason,
-        } satisfies PipelineOutcome<Command>)
-      ),
-      Effect.catchIf(isMigrationStoreError, (error) => Effect.fail(error)),
-      Effect.catch((error) =>
-        Effect.succeed({
-          kind: "failed",
-          error: normalizeItemError("pipeline", error),
-        } satisfies PipelineOutcome<Command>)
-      )
-    );
-
-    if (pipelineOutcome.kind !== "command") {
-      return yield* persistNonCommandPipelineOutcome({
-        decodedSourceItem,
-        definitionId: definition.id,
-        outcome: pipelineOutcome,
-        previousState,
-        runId,
-        store,
-      });
-    }
-
-    const destinationContext: DestinationCommandContext = {
-      definitionId: definition.id,
+      definition,
+      processContext,
+      previousState,
       runId,
-      sourceIdentity: decodedSourceItem.identity,
-      sourceVersion: decodedSourceItem.version,
-      ...(previousState === null ? {} : { previousState }),
-    };
-
-    const destinationOutcome = yield* executeDestinationCommandPlan({
-      commandDefinitions: definition.destination.commandDefinitions,
-      context: destinationContext,
-      destination,
-      destinationRetry: definition.destinationRetry,
-      plan: pipelineOutcome.plan,
+      sourceVersionContractContext,
+      store,
     });
-
-    if (destinationOutcome.kind === "failed") {
-      yield* store.upsertItemState(
-        makeFailedItemState(
-          definition.id,
-          runId,
-          decodedSourceItem,
-          destinationOutcome.error,
-          previousState,
-          destinationOutcome
-        )
-      );
-
-      return "failed" as const;
-    }
-
-    const destinationIdentity =
-      destinationOutcome.destinationIdentity ??
-      previousDestinationIdentity(previousState);
-    const destinationVersion =
-      destinationOutcome.destinationVersion ??
-      previousDestinationVersion(previousState);
-
-    if (destinationIdentity === undefined) {
-      yield* persistMissingDestinationIdentityFailure({
-        decodedSourceItem,
-        definitionId: definition.id,
-        previousState,
-        runId,
-        store,
-      });
-
-      return "failed" as const;
-    }
-
-    yield* store.upsertItemState(
-      makeMigratedItemState(definition.id, runId, decodedSourceItem, {
-        destinationIdentity,
-        ...(destinationVersion === undefined ? {} : { destinationVersion }),
-      })
-    );
-
-    return "migrated" as const;
   });

@@ -3,11 +3,12 @@ import { Effect, Layer, Schema } from "effect";
 import { Service } from "effect/Context";
 import {
   defineSourcePlugin,
+  SourceIdentity,
+  type SourceIdentityTarget,
   type SourceItem,
   SourcePluginError,
   type SourceReadResult,
   type SourceReadResultInput,
-  toSourceIdentity,
 } from "migrate-sdk";
 import { expectTypeOf } from "vitest";
 import {
@@ -28,6 +29,13 @@ const RemoteArticleCursor = Schema.Struct({
 });
 
 type RemoteArticleCursor = typeof RemoteArticleCursor.Type;
+
+const RemoteArticleIdentity = SourceIdentity.make({
+  id: "remote-article@v1",
+  schema: SourceIdentity.key("articleId", Schema.NonEmptyString),
+});
+
+const tuple2 = <A, B>(first: A, second: B): readonly [A, B] => [first, second];
 
 expectTypeOf<
   ReturnType<SourcePluginContract<RemoteArticle, RemoteArticleCursor>["read"]>
@@ -128,13 +136,14 @@ describe("defineSourcePlugin", () => {
       Effect.gen(function* () {
         const source = defineSourcePlugin({
           cursorSchema: RemoteArticleCursor,
+          identity: RemoteArticleIdentity,
           sourceSchema: RemoteArticle,
           lookupStrategy: "direct",
           read: () =>
             Effect.succeed({
               items: [
                 {
-                  identity: "article-1",
+                  identityKey: "article-1",
                   version: "2026-06-05T10:00:00.000Z",
                   item: {
                     id: "article-1",
@@ -149,7 +158,7 @@ describe("defineSourcePlugin", () => {
             >),
           readByIdentity: (identity) =>
             Effect.succeed({
-              identity,
+              identityKey: identity.key,
               version: "2026-06-05T10:00:00.000Z",
               item: {
                 id: "article-1",
@@ -170,11 +179,136 @@ describe("defineSourcePlugin", () => {
         const item = yield* plugin.readByIdentity(firstItem.identity);
 
         expect(plugin.cursorSchema).toBe(RemoteArticleCursor);
+        expect(plugin.identity).toBe(RemoteArticleIdentity);
         expect(plugin.sourceSchema).toBe(RemoteArticle);
         expect(plugin.lookupStrategy).toBe("direct");
-        expect(page.items[0]?.identity).toBe("article-1");
+        expect(page.items[0]?.identity).toEqual(
+          SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
+        );
         expect(page.items[0]?.version).toBe("2026-06-05T10:00:00.000Z");
-        expect(item?.identity).toBe("article-1");
+        expect(item?.identity).toEqual(
+          SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
+        );
+      })
+  );
+
+  it.effect(
+    "fails source reads with SourcePluginError when identity keys do not match the Source Identity Schema",
+    () =>
+      Effect.gen(function* () {
+        const source = defineSourcePlugin({
+          cursorSchema: RemoteArticleCursor,
+          identity: RemoteArticleIdentity,
+          sourceSchema: RemoteArticle,
+          lookupStrategy: "direct",
+          read: () =>
+            Effect.succeed({
+              items: [
+                {
+                  identityKey: "",
+                  version: "2026-06-05T10:00:00.000Z",
+                  item: {
+                    id: "article-1",
+                    title: "One",
+                    updatedAt: "2026-06-05T10:00:00.000Z",
+                  },
+                },
+              ],
+            }),
+          readByIdentity: (identity) =>
+            Effect.succeed({
+              identityKey: identity.key,
+              version: "2026-06-05T10:00:00.000Z",
+              item: {
+                id: "article-1",
+                title: "One",
+                updatedAt: "2026-06-05T10:00:00.000Z",
+              },
+            }),
+        });
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const error = yield* Effect.flip(plugin.read(null));
+
+        expect(error).toBeInstanceOf(SourcePluginError);
+        expect(error.message).toContain("Source item metadata");
+      })
+  );
+
+  it.effect(
+    "fails source identity lookups with SourcePluginError when returned identity keys do not match the Source Identity Schema",
+    () =>
+      Effect.gen(function* () {
+        const source = defineSourcePlugin({
+          cursorSchema: RemoteArticleCursor,
+          identity: RemoteArticleIdentity,
+          sourceSchema: RemoteArticle,
+          lookupStrategy: "direct",
+          read: () =>
+            Effect.succeed({
+              items: [],
+            }),
+          readByIdentity: () =>
+            Effect.succeed({
+              identityKey: "",
+              version: "2026-06-05T10:00:00.000Z",
+              item: {
+                id: "article-1",
+                title: "One",
+                updatedAt: "2026-06-05T10:00:00.000Z",
+              },
+            }),
+        });
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const identity = SourceIdentity.fromKey(
+          RemoteArticleIdentity,
+          "article-1"
+        );
+        const error = yield* Effect.flip(plugin.readByIdentity(identity));
+
+        expect(error).toBeInstanceOf(SourcePluginError);
+        expect(error.message).toContain("Source item metadata");
+      })
+  );
+
+  it.effect(
+    "fails source identity lookups when the returned item identity does not match the requested target",
+    () =>
+      Effect.gen(function* () {
+        const source = defineSourcePlugin({
+          cursorSchema: RemoteArticleCursor,
+          identity: RemoteArticleIdentity,
+          sourceSchema: RemoteArticle,
+          lookupStrategy: "direct",
+          read: () =>
+            Effect.succeed({
+              items: [],
+            }),
+          readByIdentity: () =>
+            Effect.succeed({
+              identityKey: "article-2",
+              version: "2026-06-05T10:05:00.000Z",
+              item: {
+                id: "article-2",
+                title: "Two",
+                updatedAt: "2026-06-05T10:05:00.000Z",
+              },
+            }),
+        });
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const identity = SourceIdentity.fromKey(
+          RemoteArticleIdentity,
+          "article-1"
+        );
+        const error = yield* Effect.flip(plugin.readByIdentity(identity));
+
+        expect(error).toBeInstanceOf(SourcePluginError);
+        expect(error.message).toBe(
+          "Source identity lookup returned a different Source Identity"
+        );
+        expect(error.cause).toEqual({
+          requestedSourceIdentity: "article-1",
+          returnedSourceIdentity: "article-2",
+        });
       })
   );
 
@@ -191,6 +325,7 @@ describe("defineSourcePlugin", () => {
 
         const source = defineSourcePlugin({
           cursorSchema: RemoteArticleCursor,
+          identity: RemoteArticleIdentity,
           sourceSchema: RemoteArticle,
           make: () => ({
             lookupStrategy: "direct",
@@ -205,7 +340,7 @@ describe("defineSourcePlugin", () => {
                       (entry) =>
                         api.getDetails(entry.id).pipe(
                           Effect.map((article) => ({
-                            identity: article.id,
+                            identityKey: article.id,
                             version: article.updatedAt,
                             item: article,
                           }))
@@ -221,14 +356,14 @@ describe("defineSourcePlugin", () => {
                 )
             ),
             readByIdentity: Effect.fn("TestArticleSource.readByIdentity")(
-              (identity) =>
+              (identity: SourceIdentityTarget<string>) =>
                 withArticleApi(
                   Effect.gen(function* () {
                     const api = yield* ArticleApi;
-                    const article = yield* api.getDetails(identity);
+                    const article = yield* api.getDetails(identity.key);
 
                     return {
-                      identity: article.id,
+                      identityKey: article.id,
                       version: article.updatedAt,
                       item: article,
                     };
@@ -241,12 +376,12 @@ describe("defineSourcePlugin", () => {
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
         const page = yield* plugin.read(null);
         const item = yield* plugin.readByIdentity(
-          toSourceIdentity("article-2")
+          SourceIdentity.fromKey(RemoteArticleIdentity, "article-2")
         );
 
         expect(page.items.map((sourceItem) => sourceItem.identity)).toEqual([
-          "article-1",
-          "article-2",
+          SourceIdentity.fromKey(RemoteArticleIdentity, "article-1"),
+          SourceIdentity.fromKey(RemoteArticleIdentity, "article-2"),
         ]);
         expect(page.nextCursor).toEqual({ page: 2 });
         expect(item?.item.title).toBe("Two");
@@ -256,5 +391,70 @@ describe("defineSourcePlugin", () => {
           "article-2",
         ]);
       })
+  );
+
+  it.effect("normalizes tuple source identity keys", () =>
+    Effect.gen(function* () {
+      const BusinessAddressIdentity = SourceIdentity.make({
+        id: "business-address@v1",
+        schema: SourceIdentity.tuple([
+          SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
+          SourceIdentity.part("addressIndex", Schema.Int),
+        ]),
+      });
+      const BusinessAddress = Schema.Struct({
+        addressIndex: Schema.Int,
+        businessUnitKey: Schema.String,
+        city: Schema.String,
+      });
+
+      const source = defineSourcePlugin({
+        cursorSchema: Schema.Null,
+        identity: BusinessAddressIdentity,
+        sourceSchema: BusinessAddress,
+        lookupStrategy: "direct",
+        read: () =>
+          Effect.succeed({
+            items: [
+              {
+                identityKey: tuple2("bu-1", 0),
+                version: "2026-06-05T10:00:00.000Z",
+                item: {
+                  addressIndex: 0,
+                  businessUnitKey: "bu-1",
+                  city: "Kyiv",
+                },
+              },
+            ],
+          }),
+        readByIdentity: (identity) =>
+          Effect.succeed({
+            identityKey: identity.key,
+            version: "2026-06-05T10:00:00.000Z",
+            item: {
+              addressIndex: identity.key[1],
+              businessUnitKey: identity.key[0],
+              city: "Kyiv",
+            },
+          }),
+      });
+
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const page = yield* plugin.read(null);
+      const firstItem = page.items[0];
+
+      if (firstItem === undefined) {
+        throw new Error("Expected tuple source read to return one item");
+      }
+
+      const item = yield* plugin.readByIdentity(firstItem.identity);
+
+      expect(firstItem.identity).toEqual(
+        SourceIdentity.fromKey(BusinessAddressIdentity, ["bu-1", 0])
+      );
+      expect(item?.identity).toEqual(
+        SourceIdentity.fromKey(BusinessAddressIdentity, ["bu-1", 0])
+      );
+    })
   );
 });

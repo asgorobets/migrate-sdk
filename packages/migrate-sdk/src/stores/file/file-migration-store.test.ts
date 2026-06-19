@@ -4,158 +4,41 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
-import type { InMemoryDestinationEntry } from "migrate-sdk/destinations/in-memory/testing";
-import {
-  type InMemoryDestinationExecution,
-  type InMemoryDestinationInspection,
-  InMemoryDestinationTesting,
-} from "migrate-sdk/destinations/in-memory/testing";
 import {
   InMemorySourceCursor,
   InMemorySourcePlugin,
 } from "migrate-sdk/sources/in-memory";
 import { FileMigrationStore } from "migrate-sdk/stores/file";
+import { makeSourceVersionContractFingerprint } from "../../domain/migration-contract.ts";
 import {
-  type DestinationCommand,
-  type DestinationCommandContext,
-  type DestinationCommandResultInput,
-  defineDestinationCommand,
   defineMigration,
   defineSourcePlugin,
   MigrationStore,
-  makeDestinationCommandResult,
   runMigration,
   runMigrations,
+  SourceIdentity,
+  type SourceItemInput,
   SourcePluginError,
   skipItem,
-  toDestinationIdentity,
   toEncodedSourceCursor,
+  toEncodedSourceIdentity,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
   toMigrationRunId,
-  toSourceIdentity,
   toSourceVersion,
 } from "../../index.ts";
 
-const UpsertEntryCommand = Schema.Struct({
-  kind: Schema.Literal("UpsertEntry"),
-  contentType: Schema.String,
-  fields: Schema.Record(Schema.String, Schema.Unknown),
+const TestSourceIdentity = SourceIdentity.make({
+  id: "test-source@v1",
+  schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
-
-type UpsertEntryCommand = typeof UpsertEntryCommand.Type;
-
-const upsertEntryCommand = defineDestinationCommand("UpsertEntry", {
-  identity: true,
-  schema: UpsertEntryCommand,
-});
-
-const executeTestUpsertEntryCommand = (
-  _command: UpsertEntryCommand,
-  context: DestinationCommandContext
-): DestinationCommandResultInput => ({
-  destinationIdentity: `entry-${context.sourceIdentity}`,
-  destinationVersion: "destination-version-1",
-});
-
-interface TestDestinationState<C extends DestinationCommand> {
-  readonly bind: (inspection: InMemoryDestinationInspection<C>) => void;
-  readonly entries: ReadonlyMap<string, InMemoryDestinationEntry>;
-  readonly executeAttempts: number;
-  readonly executions: readonly InMemoryDestinationExecution<C>[];
-  readonly record: (execution: InMemoryDestinationExecution<C>) => void;
-}
-
-const makeTestDestinationState = <
-  C extends DestinationCommand,
->(): TestDestinationState<C> => {
-  const inspections: InMemoryDestinationInspection<C>[] = [];
-  const executions: InMemoryDestinationExecution<C>[] = [];
-  const boundInspections = () => {
-    if (inspections.length === 0) {
-      throw new Error("Destination fixture was not bound to the test state");
-    }
-
-    return inspections;
-  };
-
-  return {
-    get entries() {
-      const entries = new Map<string, InMemoryDestinationEntry>();
-
-      for (const inspection of boundInspections()) {
-        for (const [key, entry] of inspection.entries()) {
-          entries.set(key, entry);
-        }
-      }
-
-      return entries;
-    },
-    get executeAttempts() {
-      return boundInspections().reduce(
-        (attempts, inspection) => attempts + inspection.executeAttempts(),
-        0
-      );
-    },
-    get executions() {
-      return executions.length === 0
-        ? boundInspections().flatMap((inspection) => [
-            ...inspection.executions(),
-          ])
-        : executions;
-    },
-    bind: (inspection) => {
-      inspections.push(inspection);
-    },
-    record: (execution) => {
-      executions.push(execution);
-    },
-  };
-};
-
-const trackDestinationExecute =
-  <C extends DestinationCommand>(
-    state: TestDestinationState<C> | undefined,
-    execute: (
-      command: C,
-      context: DestinationCommandContext
-    ) => DestinationCommandResultInput
-  ) =>
-  (command: C, context: DestinationCommandContext) => {
-    const resultInput = execute(command, context);
-
-    state?.record({
-      command,
-      context,
-      result: makeDestinationCommandResult(resultInput),
-    });
-
-    return resultInput;
-  };
-
-const makeTestUpsertEntryDestination = (
-  options: {
-    readonly state?: ReturnType<
-      typeof makeTestDestinationState<UpsertEntryCommand>
-    >;
-  } = {}
-) => {
-  const fixture = InMemoryDestinationTesting.fixture({
-    command: upsertEntryCommand,
-    execute: trackDestinationExecute(
-      options.state,
-      executeTestUpsertEntryCommand
-    ),
-  });
-  options.state?.bind(fixture);
-
-  return fixture.destination;
-};
 
 const ArticleSource = Schema.Struct({
   publish: Schema.optional(Schema.Boolean),
   title: Schema.String,
 });
+type ArticleSource = typeof ArticleSource.Type;
+type ArticleSourceItem = SourceItemInput<ArticleSource, string>;
 
 const encodedInMemoryCursor = (offset: number) =>
   toEncodedSourceCursor(JSON.stringify({ offset }));
@@ -241,60 +124,167 @@ const writeCorruptItemStateRecord = (directory: string) =>
     yield* fs.writeFileString(itemStatePath, "{not valid json");
   });
 
+const writeMalformedSourceIdentityItemStateRecord = (directory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem;
+    const path = yield* Path;
+    const itemStatePath = path.join(
+      directory,
+      "definitions",
+      "articles",
+      "items",
+      "article-malformed-source-identity.json"
+    );
+
+    yield* fs.makeDirectory(path.dirname(itemStatePath), { recursive: true });
+    yield* fs.writeFileString(
+      itemStatePath,
+      JSON.stringify({
+        formatVersion: 1,
+        recordKind: "migration-item-state",
+        state: {
+          definitionId: "articles",
+          lastRunId: "run-1",
+          sourceIdentity: {
+            encoded: "article-malformed-source-identity",
+            fingerprint: TestSourceIdentity.fingerprint,
+            id: TestSourceIdentity.id,
+            key: { id: "article-malformed-source-identity" },
+          },
+          sourceVersion: "source-version-1",
+          status: "migrated",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      })
+    );
+  });
+
+const writeMalformedJournalItemStateRecord = (directory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem;
+    const path = yield* Path;
+    const itemStatePath = path.join(
+      directory,
+      "definitions",
+      "articles",
+      "items",
+      "article-malformed-journal.json"
+    );
+
+    yield* fs.makeDirectory(path.dirname(itemStatePath), { recursive: true });
+    yield* fs.writeFileString(
+      itemStatePath,
+      JSON.stringify({
+        formatVersion: 1,
+        recordKind: "migration-item-state",
+        state: {
+          definitionId: "articles",
+          error: {
+            errorTag: "PipelineFailureTestError",
+            kind: "process",
+            message: "Process failed",
+          },
+          journal: {
+            process: {
+              entries: [
+                {
+                  descriptorId: "in-memory.entry.article.upserted",
+                  kind: "change",
+                  sequence: "not-a-number",
+                  value: {
+                    contentType: "article",
+                  },
+                },
+              ],
+              runId: "run-1",
+            },
+            rollbackAttempts: [],
+          },
+          lastRunId: "run-1",
+          sourceIdentity: {
+            encoded: "article-malformed-journal",
+            fingerprint: TestSourceIdentity.fingerprint,
+            id: TestSourceIdentity.id,
+            key: "article-malformed-journal",
+          },
+          sourceVersion: "source-version-1",
+          status: "failed",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      })
+    );
+  });
+
 const makeArticlesMigration = (options: {
   readonly directory: string;
-  readonly destinationState: ReturnType<
-    typeof makeTestDestinationState<UpsertEntryCommand>
-  >;
-  readonly items: readonly {
-    readonly identity: string;
-    readonly item: { readonly publish?: boolean; readonly title: string };
-    readonly version: string;
-  }[];
+  readonly items: readonly ArticleSourceItem[];
+  readonly processCalls?: string[];
 }) =>
   defineMigration({
     id: "articles",
     source: InMemorySourcePlugin.make({
+      identity: TestSourceIdentity,
       sourceSchema: ArticleSource,
       items: options.items,
     }),
-    destination: makeTestUpsertEntryDestination({
-      state: options.destinationState,
-    }),
     store: fileStoreLayer(options.directory),
-    pipeline: (source) =>
+    process: (source, context) =>
       Effect.gen(function* () {
         if (source.item.publish === false) {
           return yield* skipItem("Article is not published");
         }
 
-        return {
-          kind: "UpsertEntry" as const,
-          contentType: "article",
-          fields: {
-            title: source.item.title,
-          },
-        };
+        options.processCalls?.push(source.identity.encoded);
+        void context;
       }),
   });
 
 describe("FileMigrationStore", () => {
+  it.effect("persists Migration Contract across fresh store instances", () =>
+    withTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("articles");
+        const sourceVersionContractFingerprint =
+          makeSourceVersionContractFingerprint({
+            kind: "field",
+            field: "updatedAt",
+          });
+        const contract = {
+          definitionId,
+          sourceIdentityContractFingerprint: TestSourceIdentity.fingerprint,
+          sourceVersionContractFingerprint,
+        };
+
+        yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          yield* store.upsertMigrationContract(contract);
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        const stored = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.getMigrationContract(definitionId);
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        expect(stored).toEqual(contract);
+      })
+    )
+  );
+
   it.effect("persists Migration Item State across fresh store instances", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
-        const firstDestinationState =
-          makeTestDestinationState<UpsertEntryCommand>();
         const firstDefinition = makeArticlesMigration({
           directory,
-          destinationState: firstDestinationState,
           items: [
             {
-              identity: "article:1:en-US",
+              identityKey: "article:1:en-US",
               version: "source-version-1",
               item: { title: "First article" },
             },
             {
-              identity: "article:2:en-US",
+              identityKey: "article:2:en-US",
               version: "source-version-1",
               item: { title: "Second article" },
             },
@@ -312,23 +302,22 @@ describe("FileMigrationStore", () => {
           needsUpdate: 0,
         });
 
-        const secondDestinationState =
-          makeTestDestinationState<UpsertEntryCommand>();
+        const secondProcessCalls: string[] = [];
         const secondDefinition = makeArticlesMigration({
           directory,
-          destinationState: secondDestinationState,
           items: [
             {
-              identity: "article:1:en-US",
+              identityKey: "article:1:en-US",
               version: "source-version-1",
               item: { title: "First article" },
             },
             {
-              identity: "article:2:en-US",
+              identityKey: "article:2:en-US",
               version: "source-version-1",
               item: { title: "Second article" },
             },
           ],
+          processCalls: secondProcessCalls,
         });
 
         const secondSummary = yield* runMigration(secondDefinition);
@@ -341,21 +330,83 @@ describe("FileMigrationStore", () => {
           unchanged: 2,
           needsUpdate: 0,
         });
-        expect(secondDestinationState.executions).toEqual([]);
+        expect(secondProcessCalls).toEqual([]);
       })
     )
+  );
+
+  it.effect(
+    "round-trips failed rollback attempt journals across fresh store instances",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const definitionId = toMigrationDefinitionId("articles");
+          const sourceIdentity = toEncodedSourceIdentity(
+            "article-rollback-failed"
+          );
+          const failedAt = new Date("2026-01-01T00:00:03.000Z");
+          const itemState = {
+            definitionId,
+            journal: {
+              process: {
+                entries: [],
+                runId: toMigrationRunId("run-process"),
+              },
+              rollbackAttempts: [
+                {
+                  entries: [],
+                  error: {
+                    errorTag: "RollbackFailureTestError",
+                    kind: "process" as const,
+                    message: "Rollback failed",
+                  },
+                  failedAt,
+                  runId: toMigrationRunId("run-rollback"),
+                },
+              ],
+            },
+            lastRunId: toMigrationRunId("run-process"),
+            sourceIdentity: SourceIdentity.fromEncoded(
+              TestSourceIdentity,
+              sourceIdentity
+            ),
+            sourceVersion: toSourceVersion("source-version-1"),
+            status: "migrated" as const,
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          };
+
+          yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            yield* store.upsertItemState(itemState);
+          }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          const stored = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            return yield* store.getItemState(definitionId, sourceIdentity);
+          }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          expect(stored).toEqual(itemState);
+          expect(stored?.journal?.rollbackAttempts[0]?.failedAt).toBeInstanceOf(
+            Date
+          );
+        })
+      )
   );
 
   it.effect("deletes persisted Migration Item State", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
         const definitionId = toMigrationDefinitionId("articles");
-        const sourceIdentity = toSourceIdentity("article-delete-file");
+        const sourceIdentity = toEncodedSourceIdentity("article-delete-file");
         const itemState = {
           definitionId,
-          destinationIdentity: toDestinationIdentity("entry-delete-file"),
           lastRunId: toMigrationRunId("run-delete-file"),
-          sourceIdentity,
+          sourceIdentity: SourceIdentity.fromEncoded(
+            TestSourceIdentity,
+            sourceIdentity
+          ),
           sourceVersion: toSourceVersion("source-version-1"),
           status: "migrated" as const,
           updatedAt: new Date("2026-01-01T00:00:00.000Z"),
@@ -390,37 +441,27 @@ describe("FileMigrationStore", () => {
   it.effect("persists encoded Source Cursor across fresh store instances", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const definition = defineMigration({
           id: "articles",
           source: InMemorySourcePlugin.make({
+            identity: TestSourceIdentity,
             sourceSchema: ArticleSource,
             batchSize: 1,
             items: [
               {
-                identity: "article:1:en-US",
+                identityKey: "article:1:en-US",
                 version: "source-version-1",
                 item: { title: "First article" },
               },
               {
-                identity: "article:2:en-US",
+                identityKey: "article:2:en-US",
                 version: "source-version-1",
                 item: { title: "Second article" },
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: fileStoreLayer(directory),
-          pipeline: (source) =>
-            Effect.succeed({
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {
-                title: source.item.title,
-              },
-            }),
+          process: () => Effect.void,
         });
 
         yield* runMigration(definition);
@@ -441,13 +482,11 @@ describe("FileMigrationStore", () => {
   it.effect("persists latest run state per Migration Definition", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const definition = makeArticlesMigration({
           directory,
-          destinationState,
           items: [
             {
-              identity: "article:latest-run:en-US",
+              identityKey: "article:latest-run:en-US",
               version: "source-version-1",
               item: { title: "Latest run article" },
             },
@@ -484,9 +523,11 @@ describe("FileMigrationStore", () => {
 
           yield* store.upsertItemState({
             definitionId,
-            destinationIdentity: toDestinationIdentity("entry-status-1"),
             lastRunId: runId,
-            sourceIdentity: toSourceIdentity("article-status-1"),
+            sourceIdentity: SourceIdentity.fromKey(
+              TestSourceIdentity,
+              "article-status-1"
+            ),
             sourceVersion: toSourceVersion("source-version-1"),
             status: "migrated",
             updatedAt,
@@ -495,7 +536,10 @@ describe("FileMigrationStore", () => {
             definitionId,
             lastRunId: runId,
             skipReason: "Not published",
-            sourceIdentity: toSourceIdentity("article-status-2"),
+            sourceIdentity: SourceIdentity.fromKey(
+              TestSourceIdentity,
+              "article-status-2"
+            ),
             sourceVersion: toSourceVersion("source-version-2"),
             status: "skipped",
             updatedAt,
@@ -503,21 +547,26 @@ describe("FileMigrationStore", () => {
           yield* store.upsertItemState({
             definitionId,
             error: {
-              errorTag: "PipelineError",
-              kind: "pipeline",
-              message: "Pipeline failed",
+              errorTag: "ProcessError",
+              kind: "process",
+              message: "Process failed",
             },
             lastRunId: runId,
-            sourceIdentity: toSourceIdentity("article-status-3"),
+            sourceIdentity: SourceIdentity.fromKey(
+              TestSourceIdentity,
+              "article-status-3"
+            ),
             status: "failed",
             updatedAt,
           });
           yield* store.upsertItemState({
             definitionId,
-            destinationIdentity: toDestinationIdentity("entry-status-4"),
             lastRunId: runId,
             reason: "Stub requires update",
-            sourceIdentity: toSourceIdentity("article-status-4"),
+            sourceIdentity: SourceIdentity.fromKey(
+              TestSourceIdentity,
+              "article-status-4"
+            ),
             status: "needs-update",
             updatedAt,
           });
@@ -539,37 +588,35 @@ describe("FileMigrationStore", () => {
   it.effect("uses persisted skipped item state in skipped mode", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
-        const firstDestinationState =
-          makeTestDestinationState<UpsertEntryCommand>();
+        const firstProcessCalls: string[] = [];
         const firstDefinition = makeArticlesMigration({
           directory,
-          destinationState: firstDestinationState,
           items: [
             {
-              identity: "article:draft:en-US",
+              identityKey: "article:draft:en-US",
               version: "source-version-1",
               item: { publish: false, title: "Draft article" },
             },
           ],
+          processCalls: firstProcessCalls,
         });
 
         const firstSummary = yield* runMigration(firstDefinition);
 
         expect(firstSummary.definitions[0]?.counts.skipped).toBe(1);
-        expect(firstDestinationState.executions).toEqual([]);
+        expect(firstProcessCalls).toEqual([]);
 
-        const secondDestinationState =
-          makeTestDestinationState<UpsertEntryCommand>();
+        const secondProcessCalls: string[] = [];
         const secondDefinition = makeArticlesMigration({
           directory,
-          destinationState: secondDestinationState,
           items: [
             {
-              identity: "article:draft:en-US",
+              identityKey: "article:draft:en-US",
               version: "source-version-1",
               item: { publish: true, title: "Published draft article" },
             },
           ],
+          processCalls: secondProcessCalls,
         });
 
         const secondSummary = yield* runMigrations({
@@ -585,7 +632,7 @@ describe("FileMigrationStore", () => {
           unchanged: 0,
           needsUpdate: 0,
         });
-        expect(secondDestinationState.executions).toHaveLength(1);
+        expect(secondProcessCalls).toEqual(["article:draft:en-US"]);
       })
     )
   );
@@ -595,14 +642,11 @@ describe("FileMigrationStore", () => {
     () =>
       withTempDirectory((directory) =>
         Effect.gen(function* () {
-          const destinationState =
-            makeTestDestinationState<UpsertEntryCommand>();
           const definition = makeArticlesMigration({
             directory,
-            destinationState,
             items: [
               {
-                identity: "article:locked:success",
+                identityKey: "article:locked:success",
                 version: "source-version-1",
                 item: { title: "Successful article" },
               },
@@ -621,7 +665,6 @@ describe("FileMigrationStore", () => {
   it.effect("releases the Migration Definition Lock after a failed run", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const sourceError = new SourcePluginError({
           message: "Source read failed",
         });
@@ -629,21 +672,14 @@ describe("FileMigrationStore", () => {
           id: "articles",
           source: defineSourcePlugin({
             cursorSchema: InMemorySourceCursor,
+            identity: TestSourceIdentity,
             sourceSchema: Schema.Unknown,
             lookupStrategy: "scan",
             read: () => Effect.fail(sourceError),
             readByIdentity: () => Effect.succeed(null),
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: fileStoreLayer(directory),
-          pipeline: () =>
-            Effect.succeed({
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {},
-            }),
+          process: () => Effect.void,
         });
 
         const error = yield* Effect.flip(runMigration(definition));
@@ -656,7 +692,6 @@ describe("FileMigrationStore", () => {
           })
         );
         expect(hasLockFile).toBe(false);
-        expect(destinationState.executions).toEqual([]);
       })
     )
   );
@@ -671,7 +706,7 @@ describe("FileMigrationStore", () => {
 
           return yield* store.getItemState(
             toMigrationDefinitionId("articles"),
-            toSourceIdentity("article:corrupt:en-US")
+            toEncodedSourceIdentity("article:corrupt:en-US")
           );
         }).pipe(Effect.provide(fileStoreLayer(directory)), Effect.flip);
 
@@ -685,6 +720,62 @@ describe("FileMigrationStore", () => {
         );
       })
     )
+  );
+
+  it.effect(
+    "returns MigrationStoreError for malformed persisted source identity records",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          yield* writeMalformedSourceIdentityItemStateRecord(directory);
+
+          const error = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            return yield* store.getItemState(
+              toMigrationDefinitionId("articles"),
+              toEncodedSourceIdentity("article-malformed-source-identity")
+            );
+          }).pipe(Effect.provide(fileStoreLayer(directory)), Effect.flip);
+
+          expect(error).toEqual(
+            expect.objectContaining({
+              _tag: "MigrationStoreError",
+              message: expect.stringContaining(
+                "Unable to decode migration store record"
+              ),
+            })
+          );
+        })
+      )
+  );
+
+  it.effect(
+    "returns MigrationStoreError for malformed persisted destination journal records",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          yield* writeMalformedJournalItemStateRecord(directory);
+
+          const error = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            return yield* store.getItemState(
+              toMigrationDefinitionId("articles"),
+              toEncodedSourceIdentity("article-malformed-journal")
+            );
+          }).pipe(Effect.provide(fileStoreLayer(directory)), Effect.flip);
+
+          expect(error).toEqual(
+            expect.objectContaining({
+              _tag: "MigrationStoreError",
+              message: expect.stringContaining(
+                "Unable to decode migration store record"
+              ),
+            })
+          );
+        })
+      )
   );
 
   it.effect(
@@ -721,17 +812,17 @@ describe("FileMigrationStore", () => {
           );
         }).pipe(Effect.provide(fileStoreLayer(directory)));
 
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
+        const processCalls: string[] = [];
         const definition = makeArticlesMigration({
           directory,
-          destinationState,
           items: [
             {
-              identity: "article:locked:en-US",
+              identityKey: "article:locked:en-US",
               version: "source-version-1",
               item: { title: "Locked article" },
             },
           ],
+          processCalls,
         });
 
         const error = yield* Effect.flip(runMigration(definition));
@@ -743,7 +834,7 @@ describe("FileMigrationStore", () => {
             message: "Migration definition is already locked",
           })
         );
-        expect(destinationState.executions).toEqual([]);
+        expect(processCalls).toEqual([]);
       })
     )
   );

@@ -1,0 +1,35 @@
+# Persist Explicit Journal Diagnostics
+
+Status: done
+
+## Parent
+
+[Destination Tracking](../PRD.md)
+
+## What to build
+
+Add explicit durable diagnostics for process and destination-helper failure context. `Tracking.logDiagnostic(...)` should append a generic diagnostic entry with required severity, required message, and optional JSON-object details to the scoped Destination Journal. Destination helpers may use the same path internally when a failed operation needs durable context, but ordinary Effect logs and Console output must not become durable item-state evidence.
+
+Update failure examples/tests so durable diagnostics are inspected through failed Migration Item State journal evidence, not removed destination model errors.
+
+## Acceptance criteria
+
+- [x] `Tracking.logDiagnostic(...)` accepts required severity and message plus optional JSON-object details.
+- [x] Valid diagnostic entries append to the scoped process journal.
+- [x] Missing or invalid diagnostic severity is rejected before persistence.
+- [x] Destination helpers can record a diagnostic on failure without recording a success change.
+- [x] Process-authored diagnostics recorded before failure persist in failed item state.
+- [x] Durable diagnostic append still happens when Effect log-level configuration would suppress the corresponding observability log event.
+- [x] Ordinary `Effect.log*` and `Console.*` output is not persisted as a Destination Journal Diagnostic.
+- [x] Diagnostic entries do not require stable ids or descriptor-backed detail schemas.
+- [x] Failure examples/tests are migrated to inspect failed item state journal diagnostics.
+- [x] No new removed destination model behavior, examples, or tests are added.
+- [x] Existing typecheck and tests pass after the migrated coverage is updated.
+
+## Future CLI/status note
+
+This slice adds durable item-state evidence but does not expose Destination Journal Diagnostics through the CLI. Current CLI status tests cover definition-level durable counts and source-scan warnings only; the migration-status PRD keeps item-level status inspection, run logs, and run diagnostics out of scope. A future CLI slice should decide whether diagnostics surface through an item-state detail command, a JSON status mode, or another inspection command before adding CLI rendering tests.
+
+## Blocked by
+
+- [Run Destination Helpers Inline And Record Journaled Changes](./02-run-destination-helpers-inline-and-record-journaled-changes.md)

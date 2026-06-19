@@ -1,33 +1,43 @@
-import { Effect, Layer } from "effect";
+import { Cache, Duration, Effect, Exit, Layer, Option, Schema } from "effect";
 import {
-  type DestinationPluginError,
   MigrationReferenceLookupError,
   type MigrationStoreError,
 } from "../domain/errors.ts";
-import type { MigrationDefinitionId, SourceIdentity } from "../domain/ids.ts";
-import { toMigrationDefinitionId, toSourceIdentity } from "../domain/ids.ts";
+import type {
+  EncodedSourceIdentity,
+  MigrationDefinitionId,
+} from "../domain/ids.ts";
+import { SourceIdentity } from "../domain/ids.ts";
 import type { AnyMigrationDefinition } from "../domain/run.ts";
 import type { MigrationItemState } from "../domain/state.ts";
+import type {
+  TrackingRecord,
+  TrackingRecordContract,
+} from "../domain/tracking.ts";
 import {
+  type AnyMigrationReferenceLookupInput,
   type MigrationReference,
   MigrationReferenceLookup,
-  type MigrationReferenceLookupInput,
+  type MigrationReferenceLookupService,
+  type MigrationReferenceLookupTarget,
+  type MigrationReferenceLookupTargetSet,
+  makeMigrationReferenceLookupTarget,
 } from "../services/migration-reference-lookup.ts";
 import { MigrationStore } from "../services/migration-store.ts";
+import {
+  isMigrationRuntimeError,
+  validateMigrationContract,
+} from "./migration-contract-validation.ts";
+
+const lookupContractValidationCacheCapacity = 100;
 
 export type CreateMigrationReferenceStub = (input: {
   readonly definition: AnyMigrationDefinition;
-  readonly sourceIdentity: SourceIdentity;
+  readonly sourceIdentity: EncodedSourceIdentity;
 }) => Effect.Effect<
   MigrationReference,
-  DestinationPluginError | MigrationReferenceLookupError | MigrationStoreError
+  MigrationReferenceLookupError | MigrationStoreError
 >;
-
-const definitionNotFoundError = (definitionId: MigrationDefinitionId) =>
-  new MigrationReferenceLookupError({
-    message: "Migration Reference Lookup definition was not found",
-    cause: { definitionId },
-  });
 
 const stubDefinitionNotInLookupError = (
   definitionId: MigrationDefinitionId,
@@ -35,54 +45,167 @@ const stubDefinitionNotInLookupError = (
 ) =>
   new MigrationReferenceLookupError({
     message:
-      "Migration Reference Lookup stub definition must be one of the lookup definitions",
+      "Migration Reference Lookup stub definition must be one of the lookup targets",
     cause: { definitionId, definitionIds },
   });
 
-const definitionIdsFromInput = (
-  input: MigrationReferenceLookupInput
-): readonly MigrationDefinitionId[] =>
-  "definitionIds" in input && input.definitionIds !== undefined
-    ? input.definitionIds.map(toMigrationDefinitionId)
-    : [toMigrationDefinitionId(input.definitionId)];
+const missingTrackingRecordContractError = (
+  definitionId: MigrationDefinitionId
+) =>
+  new MigrationReferenceLookupError({
+    message:
+      "Migration Reference Lookup requires referenced Migration Definition to declare a Tracking Record Contract",
+    cause: { definitionId },
+  });
 
-const sourceIdentityFromInput = (
-  input: MigrationReferenceLookupInput
-): SourceIdentity => toSourceIdentity(input.sourceIdentity);
+const invalidTrackingRecordError = (
+  definitionId: MigrationDefinitionId,
+  sourceIdentity: EncodedSourceIdentity,
+  cause: Schema.SchemaError
+) =>
+  new MigrationReferenceLookupError({
+    message:
+      "Migration Reference tracking record did not match Tracking Record Contract",
+    cause: { definitionId, sourceIdentity, cause },
+  });
 
-const stubDefinitionIdFromInput = (
-  input: MigrationReferenceLookupInput,
-  definitionIds: readonly MigrationDefinitionId[]
-): MigrationDefinitionId | null => {
-  if (input.stub !== true && typeof input.stub !== "object") {
-    return null;
+const missingTrackingRecordError = (
+  definitionId: MigrationDefinitionId,
+  sourceIdentity: EncodedSourceIdentity
+) =>
+  new MigrationReferenceLookupError({
+    message:
+      "Migration Reference tracking record is missing from migrated item state",
+    cause: { definitionId, sourceIdentity },
+  });
+
+const targetsFromInput = (
+  input: AnyMigrationReferenceLookupInput
+): MigrationReferenceLookupTargetSet =>
+  "targets" in input && input.targets !== undefined
+    ? input.targets
+    : [
+        makeMigrationReferenceLookupTarget(
+          input.definition,
+          input.sourceIdentityKey
+        ),
+      ];
+
+const sourceIdentityForTarget = (
+  target: MigrationReferenceLookupTarget<AnyMigrationDefinition>
+): Effect.Effect<EncodedSourceIdentity, MigrationReferenceLookupError> =>
+  Effect.try({
+    try: () =>
+      SourceIdentity.fromKey(
+        target.definition.source.identity,
+        target.sourceIdentityKey
+      ).encoded,
+    catch: (cause) =>
+      new MigrationReferenceLookupError({
+        message:
+          "Migration Reference Lookup source identity key did not match Source Identity Schema",
+        cause,
+      }),
+  });
+
+const stubDefinitionFromInput = (
+  input: AnyMigrationReferenceLookupInput,
+  targets: MigrationReferenceLookupTargetSet
+): Effect.Effect<
+  MigrationReferenceLookupTarget<AnyMigrationDefinition> | null,
+  MigrationReferenceLookupError
+> => {
+  const stub = input.stub;
+
+  if (stub !== true && typeof stub !== "object") {
+    return Effect.succeed(null);
   }
 
-  if (typeof input.stub === "object" && input.stub.definitionId !== undefined) {
-    return toMigrationDefinitionId(input.stub.definitionId);
+  if (stub !== true && stub.definition !== undefined) {
+    const target = targets.find(
+      (lookupTarget) => lookupTarget.definition === stub.definition
+    );
+
+    if (target !== undefined) {
+      return Effect.succeed(target);
+    }
+
+    return Effect.fail(
+      stubDefinitionNotInLookupError(
+        stub.definition.id,
+        targets.map((lookupTarget) => lookupTarget.definition.id)
+      )
+    );
   }
 
-  return definitionIds[0] ?? null;
+  return Effect.succeed(targets[0]);
+};
+
+const isLookupableState = (
+  state: MigrationItemState | null
+): state is Extract<
+  MigrationItemState,
+  { readonly status: "migrated" | "needs-update" }
+> => state?.status === "migrated" || state?.status === "needs-update";
+
+const referenceFromTrackingRecordState = (
+  definition: AnyMigrationDefinition,
+  state: Extract<
+    MigrationItemState,
+    { readonly status: "migrated" | "needs-update" }
+  >
+): Effect.Effect<MigrationReference | null, MigrationReferenceLookupError> => {
+  const contract = definition.tracking as TrackingRecordContract | undefined;
+
+  if (contract === undefined) {
+    return Effect.fail(missingTrackingRecordContractError(definition.id));
+  }
+
+  if (state.trackingRecord === undefined) {
+    return Effect.fail(
+      missingTrackingRecordError(definition.id, state.sourceIdentity.encoded)
+    );
+  }
+
+  return Schema.decodeUnknownEffect(contract.schema, { errors: "all" })(
+    state.trackingRecord
+  ).pipe(
+    Effect.map(
+      (trackingRecord): MigrationReference => ({
+        definitionId: state.definitionId,
+        sourceIdentity: state.sourceIdentity.encoded,
+        status: state.status,
+        trackingRecord: trackingRecord as TrackingRecord,
+      })
+    ),
+    Effect.mapError((cause) =>
+      invalidTrackingRecordError(
+        definition.id,
+        state.sourceIdentity.encoded,
+        cause
+      )
+    )
+  );
 };
 
 const referenceFromState = (
+  definition: AnyMigrationDefinition,
   state: MigrationItemState | null
-): MigrationReference | null =>
-  state?.status === "migrated" || state?.status === "needs-update"
-    ? {
-        definitionId: state.definitionId,
-        destinationIdentity: state.destinationIdentity,
-        ...(state.destinationVersion === undefined
-          ? {}
-          : { destinationVersion: state.destinationVersion }),
-        sourceIdentity: state.sourceIdentity,
-        status: state.status,
-      }
-    : null;
+): Effect.Effect<MigrationReference | null, MigrationReferenceLookupError> => {
+  if (!isLookupableState(state)) {
+    if (definition.tracking === undefined) {
+      return Effect.fail(missingTrackingRecordContractError(definition.id));
+    }
+
+    return Effect.succeed(null);
+  }
+
+  return referenceFromTrackingRecordState(definition, state);
+};
 
 const getReferenceState = (
   definition: AnyMigrationDefinition,
-  sourceIdentity: SourceIdentity
+  sourceIdentity: EncodedSourceIdentity
 ) =>
   Effect.gen(function* () {
     const store = yield* MigrationStore;
@@ -90,21 +213,58 @@ const getReferenceState = (
     return yield* store.getItemState(definition.id, sourceIdentity);
   }).pipe(Effect.provide(definition.store));
 
-const findExistingReference = (
-  definitionsById: ReadonlyMap<MigrationDefinitionId, AnyMigrationDefinition>,
-  definitionIds: readonly MigrationDefinitionId[],
-  sourceIdentity: SourceIdentity
-) =>
+const validateLookupTargetContract = (definition: AnyMigrationDefinition) =>
   Effect.gen(function* () {
-    for (const definitionId of definitionIds) {
-      const definition = definitionsById.get(definitionId);
+    const store = yield* MigrationStore;
 
-      if (definition === undefined) {
-        return yield* definitionNotFoundError(definitionId);
-      }
+    yield* validateMigrationContract(store, definition).pipe(
+      Effect.mapError((error) =>
+        isMigrationRuntimeError(error)
+          ? new MigrationReferenceLookupError({
+              message: error.message,
+              cause: error,
+            })
+          : error
+      )
+    );
+  }).pipe(Effect.provide(definition.store));
 
-      const state = yield* getReferenceState(definition, sourceIdentity);
-      const reference = referenceFromState(state);
+type LookupContractValidationCache = Cache.Cache<
+  AnyMigrationDefinition,
+  void,
+  MigrationReferenceLookupError | MigrationStoreError
+>;
+
+const lookupContractValidationTimeToLive = (
+  exit: Exit.Exit<void, MigrationReferenceLookupError | MigrationStoreError>
+) => {
+  const error = Exit.findErrorOption(exit);
+
+  return Option.isSome(error) && error.value._tag === "MigrationStoreError"
+    ? Duration.zero
+    : Duration.infinity;
+};
+
+const makeLookupContractValidationCache = () =>
+  Cache.makeWith(validateLookupTargetContract, {
+    capacity: lookupContractValidationCacheCapacity,
+    timeToLive: lookupContractValidationTimeToLive,
+  });
+
+const validateLookupTargetContracts = (
+  cache: LookupContractValidationCache,
+  targets: MigrationReferenceLookupTargetSet
+) =>
+  Effect.forEach(targets, (target) => Cache.get(cache, target.definition)).pipe(
+    Effect.asVoid
+  );
+
+const findExistingReference = (targets: MigrationReferenceLookupTargetSet) =>
+  Effect.gen(function* () {
+    for (const target of targets) {
+      const sourceIdentity = yield* sourceIdentityForTarget(target);
+      const state = yield* getReferenceState(target.definition, sourceIdentity);
+      const reference = yield* referenceFromState(target.definition, state);
 
       if (reference !== null) {
         return reference;
@@ -114,67 +274,47 @@ const findExistingReference = (
     return null;
   });
 
-const validateStubDefinitionId = (
-  stubDefinitionId: MigrationDefinitionId,
-  definitionIds: readonly MigrationDefinitionId[]
-) =>
-  definitionIds.includes(stubDefinitionId)
-    ? Effect.succeed(stubDefinitionId)
-    : Effect.fail(
-        stubDefinitionNotInLookupError(stubDefinitionId, definitionIds)
-      );
-
 export const makeMigrationReferenceLookupLayer = ({
   createStubReference,
-  definitions,
 }: {
   readonly createStubReference: CreateMigrationReferenceStub;
-  readonly definitions: readonly AnyMigrationDefinition[];
 }): Layer.Layer<MigrationReferenceLookup> =>
   Layer.effect(
     MigrationReferenceLookup,
     Effect.gen(function* () {
-      const definitionsById = new Map(
-        definitions.map((definition) => [definition.id, definition])
-      );
+      const contractValidationCache =
+        yield* makeLookupContractValidationCache();
 
-      const lookup = Effect.fn("MigrationReferenceLookup.lookup")(function* (
-        input: MigrationReferenceLookupInput
-      ) {
-        const definitionIds = definitionIdsFromInput(input);
-        const sourceIdentity = sourceIdentityFromInput(input);
-        const existingReference = yield* findExistingReference(
-          definitionsById,
-          definitionIds,
-          sourceIdentity
-        );
+      return {
+        lookup: Effect.fn("MigrationReferenceLookup.lookup")(function* (
+          input: AnyMigrationReferenceLookupInput
+        ) {
+          const targets = targetsFromInput(input);
+          yield* validateLookupTargetContracts(
+            contractValidationCache,
+            targets
+          );
 
-        if (existingReference !== null) {
-          return existingReference;
-        }
+          const existingReference = yield* findExistingReference(targets);
 
-        const stubDefinitionId = stubDefinitionIdFromInput(
-          input,
-          definitionIds
-        );
+          if (existingReference !== null) {
+            return existingReference;
+          }
 
-        if (stubDefinitionId === null) {
-          return null;
-        }
+          const stubTarget = yield* stubDefinitionFromInput(input, targets);
 
-        yield* validateStubDefinitionId(stubDefinitionId, definitionIds);
-        const stubDefinition = definitionsById.get(stubDefinitionId);
+          if (stubTarget === null) {
+            return null;
+          }
 
-        if (stubDefinition === undefined) {
-          return yield* definitionNotFoundError(stubDefinitionId);
-        }
+          const sourceIdentity = yield* sourceIdentityForTarget(stubTarget);
 
-        return yield* createStubReference({
-          definition: stubDefinition,
-          sourceIdentity,
-        });
-      });
-
-      return { lookup };
+          return yield* createStubReference({
+            definition: stubTarget.definition,
+            sourceIdentity,
+          });
+        }) as MigrationReferenceLookupService["lookup"],
+        target: makeMigrationReferenceLookupTarget,
+      };
     })
   );

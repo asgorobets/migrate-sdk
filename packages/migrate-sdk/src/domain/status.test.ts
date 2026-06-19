@@ -6,8 +6,8 @@ import {
   MigrationStatusRequestError,
   MigrationStatusWarning,
   makeMigrationStatusRequest,
+  toEncodedSourceIdentity,
   toMigrationDefinitionId,
-  toSourceIdentity,
 } from "migrate-sdk";
 
 describe("migration status public API", () => {
@@ -63,13 +63,13 @@ describe("migration status public API", () => {
         new DuplicateSourceIdentityStatusWarning({
           count: 2,
           definitionId: toMigrationDefinitionId("articles"),
-          sourceIdentity: toSourceIdentity("article-1"),
+          sourceIdentity: toEncodedSourceIdentity("article-1"),
         }),
         new InvalidSourceItemStatusWarning({
           definitionId: toMigrationDefinitionId("articles"),
           details: [{ message: "Expected string", path: "title" }],
           message: "Source item payload is invalid",
-          sourceIdentity: toSourceIdentity("article-2"),
+          sourceIdentity: toEncodedSourceIdentity("article-2"),
         }),
       ];
 

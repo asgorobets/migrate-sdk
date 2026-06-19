@@ -5,19 +5,19 @@ import { SqlClient, type Statement } from "effect/unstable/sql";
 import {
   type ConfiguredSourcePlugin,
   defineMigration,
-  InMemoryDestinationPlugin,
+  type EncodedSourceIdentityInput,
   InMemoryMigrationStore,
   type MigrationRunSummary,
   type RunMigrationError,
   runMigration,
-  type SourceIdentityInput,
+  SourceIdentity,
   type SourcePayloadSchema,
   SourcePlugin,
   SourcePluginError,
   type SourceVersionInput,
-  toSourceIdentity,
+  toEncodedSourceIdentity,
 } from "migrate-sdk";
-import { SqlSourcePlugin } from "migrate-sdk/sources/sql";
+import { SqlIdentity, SqlSourcePlugin } from "migrate-sdk/sources/sql";
 import { expectTypeOf } from "vitest";
 
 const SqlArticleRow = Schema.Struct({
@@ -37,9 +37,9 @@ const SqlArticleCursor = Schema.Struct({
 
 type SqlArticleCursor = typeof SqlArticleCursor.Type;
 
-const ArticleEntryFields = Schema.Struct({
-  title: Schema.String,
-  views: Schema.Number,
+const SqlArticleColumnIdentity = SqlIdentity.columns({
+  id: "sql-article@v1",
+  columns: [SqlIdentity.column("id", Schema.NonEmptyString)],
 });
 
 const SqliteArticleRow = Schema.Struct({
@@ -51,6 +51,49 @@ const SqliteArticleRow = Schema.Struct({
 });
 
 type SqliteArticleRow = Schema.Codec.Encoded<typeof SqliteArticleRow>;
+
+const NumericSqlArticleRow = Schema.Struct({
+  content_hash: Schema.String,
+  id: Schema.Number,
+  title: Schema.String,
+  updated_at: Schema.String,
+});
+
+type NumericSqlArticleRow = typeof NumericSqlArticleRow.Type;
+
+const StringEncodedNumericArticleRow = Schema.Struct({
+  id: Schema.NumberFromString,
+  title: Schema.String,
+  updated_at: Schema.String,
+});
+
+type StringEncodedNumericArticleRow = Schema.Codec.Encoded<
+  typeof StringEncodedNumericArticleRow
+>;
+
+const TenantUserRow = Schema.Struct({
+  email_key: Schema.NonEmptyString,
+  name: Schema.String,
+  tenant_id: Schema.NonEmptyString,
+  updated_at: Schema.String,
+});
+
+type TenantUserRow = typeof TenantUserRow.Type;
+
+const TenantUserCursor = Schema.Struct({
+  email_key: Schema.String,
+  tenant_id: Schema.String,
+});
+
+type TenantUserCursor = typeof TenantUserCursor.Type;
+
+const TenantUserIdentity = SqlIdentity.columns({
+  id: "tenant-user@v1",
+  columns: [
+    SqlIdentity.column("tenant_id", Schema.NonEmptyString),
+    SqlIdentity.column("email_key", Schema.NonEmptyString),
+  ],
+});
 
 const metadataFailure = {
   kind: "failure" as const,
@@ -248,7 +291,6 @@ const getSqlArticleMetadata = (
           id: row.id,
           updated_at: row.updated_at,
         },
-        identity: row.id satisfies SourceIdentityInput,
         version: row.updated_at satisfies SourceVersionInput,
       };
 };
@@ -263,9 +305,10 @@ const makeSqlArticleSource = (
     batchSize: options.batchSize ?? 2,
     cursorSchema: SqlArticleCursor,
     getSourceMetadata: options.getSourceMetadata ?? getSqlArticleMetadata,
+    identity: SqlArticleColumnIdentity,
     lookup: (sql, identity) => {
-      expectTypeOf(identity).toEqualTypeOf<SourceIdentityInput>();
-      return sql<SqlArticleRow>`select id, title, updated_at, views from articles where id = ${identity}`;
+      expectTypeOf(identity.key).toEqualTypeOf<string>();
+      return sql<SqlArticleRow>`select id, title, updated_at, views from articles where id = ${identity.key}`;
     },
     read: (sql, cursor, limit) => {
       expectTypeOf(cursor).toEqualTypeOf<SqlArticleCursor | null>();
@@ -291,6 +334,7 @@ describe("SqlSourcePlugin", () => {
       ConfiguredSourcePlugin<
         SqlArticle,
         SqlArticleCursor,
+        string,
         SqlArticleRow,
         never,
         SqlClient.SqlClient
@@ -300,24 +344,100 @@ describe("SqlSourcePlugin", () => {
       ConfiguredSourcePlugin<
         SqlArticle,
         SqlArticleCursor,
+        string,
         SqlArticleRow,
         never,
         never
       >
     >();
+
+    const expectMissingIdentityColumnToFailTypeCheck = () => {
+      // @ts-expect-error SQL identity columns must exist on the source schema input side.
+      SqlSourcePlugin.make({
+        batchSize: 2,
+        cursorSchema: SqlArticleCursor,
+        getSourceMetadata: (row: SqlArticleRow) => ({
+          kind: "success",
+          cursor: {
+            id: row.id,
+            updated_at: row.updated_at,
+          },
+          version: row.updated_at,
+        }),
+        identity: SqlIdentity.columns({
+          id: "bad-sql-article@v1",
+          columns: [SqlIdentity.column("articleId", Schema.NonEmptyString)],
+        }),
+        lookup: (sql: SqlClient.SqlClient, identity: SourceIdentity<string>) =>
+          sql<SqlArticleRow>`select id, title, updated_at, views from articles where id = ${identity.key}`,
+        read: (
+          sql: SqlClient.SqlClient,
+          cursor: SqlArticleCursor | null,
+          limit: number
+        ) =>
+          cursor === null
+            ? sql<SqlArticleRow>`select id, title, updated_at, views from articles order by updated_at, id limit ${limit}`
+            : sql<SqlArticleRow>`select id, title, updated_at, views from articles where (updated_at, id) > (${cursor.updated_at}, ${cursor.id}) order by updated_at, id limit ${limit}`,
+        sourceSchema: SqlArticleRow,
+      });
+    };
+
+    expectTypeOf(expectMissingIdentityColumnToFailTypeCheck).toBeFunction();
+
+    const expectMismatchedIdentityColumnSchemaToFailTypeCheck = () => {
+      // @ts-expect-error SQL identity column schemas must match the source schema input side.
+      SqlSourcePlugin.make({
+        batchSize: 2,
+        cursorSchema: SqlArticleCursor,
+        getSourceMetadata: (row: NumericSqlArticleRow) => ({
+          kind: "success",
+          cursor: {
+            id: String(row.id),
+            updated_at: row.updated_at,
+          },
+          version: row.content_hash,
+        }),
+        identity: SqlIdentity.columns({
+          id: "bad-numeric-sql-article@v1",
+          columns: [SqlIdentity.column("id", Schema.NonEmptyString)],
+        }),
+        lookup: (sql: SqlClient.SqlClient, identity: SourceIdentity<number>) =>
+          sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles where id = ${identity.key}`,
+        read: (
+          sql: SqlClient.SqlClient,
+          cursor: SqlArticleCursor | null,
+          limit: number
+        ) =>
+          cursor === null
+            ? sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles order by updated_at, id limit ${limit}`
+            : sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles where (updated_at, id) > (${cursor.updated_at}, ${cursor.id}) order by updated_at, id limit ${limit}`,
+        sourceSchema: NumericSqlArticleRow,
+      });
+    };
+
+    expectTypeOf(
+      expectMismatchedIdentityColumnSchemaToFailTypeCheck
+    ).toBeFunction();
   });
 
   it.effect(
     "reads source items and looks up identities through a provided SQL client",
     () =>
       Effect.gen(function* () {
+        const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([articleRows, [articleRows[1]]]);
-        const source = makeSqlArticleSource().provide(fakeSql.layer);
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const plugin = yield* SourcePlugin.pipe(
+          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+        );
 
         const page = yield* plugin.read(null);
 
-        expect(page.items).toEqual([
+        expect(
+          page.items.map((sourceItem) => ({
+            ...sourceItem,
+            identity: sourceItem.identity.encoded,
+          }))
+        ).toEqual([
           {
             identity: "article-1",
             item: articleRows[0],
@@ -336,11 +456,14 @@ describe("SqlSourcePlugin", () => {
         expect(fakeSql.calls[0]?.values).toEqual([2]);
 
         const item = yield* plugin.readByIdentity(
-          toSourceIdentity("article-2")
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("article-2")
+          )
         );
 
         expect(item).toEqual({
-          identity: "article-2",
+          identity: SourceIdentity.fromKey(plugin.identity, "article-2"),
           item: articleRows[1],
           version: "2026-01-02T00:00:00.000Z",
         });
@@ -349,28 +472,208 @@ describe("SqlSourcePlugin", () => {
       })
   );
 
+  it.effect("supports explicit non-string source identity contracts", () =>
+    Effect.gen(function* () {
+      const NumericArticleIdentity = SqlIdentity.columns({
+        id: "numeric-sql-article@v1",
+        columns: [SqlIdentity.column("id", Schema.Number)],
+      });
+      const rows = [
+        {
+          content_hash: "hash-101",
+          id: 101,
+          title: "First numeric article",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        },
+        {
+          content_hash: "hash-102",
+          id: 102,
+          title: "Second numeric article",
+          updated_at: "2026-01-02T00:00:00.000Z",
+        },
+      ] satisfies readonly NumericSqlArticleRow[];
+      const source = SqlSourcePlugin.make({
+        batchSize: 2,
+        cursorSchema: SqlArticleCursor,
+        getSourceMetadata: (row) => ({
+          kind: "success",
+          cursor: {
+            id: String(row.id),
+            updated_at: row.updated_at,
+          },
+          version: row.content_hash,
+        }),
+        identity: NumericArticleIdentity,
+        lookup: (sql, identity) => {
+          expectTypeOf(identity.key).toEqualTypeOf<number>();
+          return sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles where id = ${identity.key}`;
+        },
+        read: (sql, cursor, limit) =>
+          cursor === null
+            ? sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles order by updated_at, id limit ${limit}`
+            : sql<NumericSqlArticleRow>`select id, title, updated_at, content_hash from articles where (updated_at, id) > (${cursor.updated_at}, ${cursor.id}) order by updated_at, id limit ${limit}`,
+        sourceSchema: NumericSqlArticleRow,
+      });
+      expectTypeOf(source).toMatchTypeOf<
+        ConfiguredSourcePlugin<
+          NumericSqlArticleRow,
+          SqlArticleCursor,
+          number,
+          NumericSqlArticleRow,
+          never,
+          SqlClient.SqlClient
+        >
+      >();
+      const fakeSql = makeFakeSqlClient([rows, [rows[1]]]);
+      const plugin = yield* SourcePlugin.pipe(
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+      );
+
+      const page = yield* plugin.read(null);
+      const lookupItem = yield* plugin.readByIdentity(
+        SourceIdentity.fromKey(plugin.identity, 102)
+      );
+
+      expect(page.items.map((item) => item.identity.encoded)).toEqual([
+        "101",
+        "102",
+      ]);
+      expect(lookupItem?.identity.key).toBe(102);
+      expect(fakeSql.calls[0]?.values).toEqual([2]);
+      expect(fakeSql.calls[1]?.values).toEqual([102]);
+    })
+  );
+
+  it.effect("derives codec source identities from encoded SQL row values", () =>
+    Effect.gen(function* () {
+      const CodecArticleIdentity = SqlIdentity.columns({
+        id: "codec-sql-article@v1",
+        columns: [SqlIdentity.column("id", Schema.NumberFromString)],
+      });
+      const rows = [
+        {
+          id: "101",
+          title: "First codec article",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        },
+      ] satisfies readonly StringEncodedNumericArticleRow[];
+      const source = SqlSourcePlugin.make({
+        batchSize: 2,
+        cursorSchema: SqlArticleCursor,
+        getSourceMetadata: (row) => ({
+          kind: "success",
+          cursor: {
+            id: row.id,
+            updated_at: row.updated_at,
+          },
+          version: row.updated_at,
+        }),
+        identity: CodecArticleIdentity,
+        lookup: (sql, identity) => {
+          expectTypeOf(identity.key).toEqualTypeOf<number>();
+
+          return sql<StringEncodedNumericArticleRow>`select id, title, updated_at from articles where id = ${String(identity.key)}`;
+        },
+        read: (sql, cursor, limit) =>
+          cursor === null
+            ? sql<StringEncodedNumericArticleRow>`select id, title, updated_at from articles order by updated_at, id limit ${limit}`
+            : sql<StringEncodedNumericArticleRow>`select id, title, updated_at from articles where (updated_at, id) > (${cursor.updated_at}, ${cursor.id}) order by updated_at, id limit ${limit}`,
+        sourceSchema: StringEncodedNumericArticleRow,
+      });
+      const fakeSql = makeFakeSqlClient([rows, rows]);
+      const plugin = yield* SourcePlugin.pipe(
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+      );
+
+      const page = yield* plugin.read(null);
+      const lookupItem = yield* plugin.readByIdentity(
+        SourceIdentity.fromKey(plugin.identity, 101)
+      );
+
+      expect(page.items[0]?.identity.key).toBe(101);
+      expect(page.items[0]?.identity.encoded).toBe("101");
+      expect(lookupItem?.identity.key).toBe(101);
+      expect(fakeSql.calls[1]?.values).toEqual(["101"]);
+    })
+  );
+
+  it.effect("derives composite source identities from SQL row aliases", () =>
+    Effect.gen(function* () {
+      const rows = [
+        {
+          email_key: "ada@example.com",
+          name: "Ada",
+          tenant_id: "tenant-1",
+          updated_at: "2026-01-01T00:00:00.000Z",
+        },
+      ] satisfies readonly TenantUserRow[];
+      const source = SqlSourcePlugin.make({
+        batchSize: 2,
+        cursorSchema: TenantUserCursor,
+        getSourceMetadata: (row) => ({
+          kind: "success",
+          cursor: {
+            email_key: row.email_key,
+            tenant_id: row.tenant_id,
+          },
+          version: row.updated_at,
+        }),
+        identity: TenantUserIdentity,
+        lookup: (sql, identity) => {
+          expectTypeOf(identity.key).toMatchTypeOf<readonly [string, string]>();
+          const [tenantId, emailKey] = identity.key;
+
+          return sql<TenantUserRow>`select tenant_id, email_key, name, updated_at from users where tenant_id = ${tenantId} and email_key = ${emailKey}`;
+        },
+        read: (sql, cursor, limit) =>
+          cursor === null
+            ? sql<TenantUserRow>`select tenant_id, email_key, name, updated_at from users order by tenant_id, email_key limit ${limit}`
+            : sql<TenantUserRow>`select tenant_id, email_key, name, updated_at from users where (tenant_id, email_key) > (${cursor.tenant_id}, ${cursor.email_key}) order by tenant_id, email_key limit ${limit}`,
+        sourceSchema: TenantUserRow,
+      });
+      expectTypeOf(source).toMatchTypeOf<
+        ConfiguredSourcePlugin<
+          TenantUserRow,
+          TenantUserCursor,
+          readonly [string, string],
+          TenantUserRow,
+          never,
+          SqlClient.SqlClient
+        >
+      >();
+      const fakeSql = makeFakeSqlClient([rows, rows]);
+      const plugin = yield* SourcePlugin.pipe(
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+      );
+
+      const page = yield* plugin.read(null);
+      const lookupItem = yield* plugin.readByIdentity(
+        SourceIdentity.fromKey(plugin.identity, ["tenant-1", "ada@example.com"])
+      );
+
+      expect(page.items.map((item) => item.identity.encoded)).toEqual([
+        '["tenant-1","ada@example.com"]',
+      ]);
+      expect(page.items[0]?.identity.key).toEqual([
+        "tenant-1",
+        "ada@example.com",
+      ]);
+      expect(lookupItem?.identity.encoded).toBe(
+        '["tenant-1","ada@example.com"]'
+      );
+      expect(fakeSql.calls[1]?.values).toEqual(["tenant-1", "ada@example.com"]);
+    })
+  );
+
   it.effect("can close SQL client requirements on the source plugin", () =>
     Effect.gen(function* () {
       const fakeSql = makeFakeSqlClient([[articleRows[0]], []]);
       const source = makeSqlArticleSource().provide(fakeSql.layer);
       const storeState = InMemoryMigrationStore.makeState();
-      const destination = InMemoryDestinationPlugin.makeEntries({
-        commands: {
-          upsertEntry: {
-            fields: ArticleEntryFields,
-          },
-        },
-        contentType: "article",
-      });
 
       const definition = defineMigration({
-        destination,
         id: "sql-articles",
-        pipeline: (sourceItem) =>
-          destination.commands.upsertEntry({
-            title: sourceItem.item.title,
-            views: sourceItem.item.views,
-          }),
+        process: () => Effect.void,
         source,
         store: InMemoryMigrationStore.layer(storeState),
       });
@@ -395,11 +698,11 @@ describe("SqlSourcePlugin", () => {
 
   it.effect("fails reads when batchSize is not a positive integer", () =>
     Effect.gen(function* () {
+      const source = makeSqlArticleSource({ batchSize: 0 });
       const fakeSql = makeFakeSqlClient([articleRows]);
-      const source = makeSqlArticleSource({ batchSize: 0 }).provide(
-        fakeSql.layer
+      const plugin = yield* SourcePlugin.pipe(
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
       );
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
       const error = yield* Effect.flip(plugin.read(null));
 
@@ -416,14 +719,16 @@ describe("SqlSourcePlugin", () => {
     "fails read windows when a returned row has no cursor metadata",
     () =>
       Effect.gen(function* () {
-        const fakeSql = makeFakeSqlClient([[articleRows[0]]]);
         const source = makeSqlArticleSource({
           getSourceMetadata: (row, context) => ({
             ...getSqlArticleMetadata(row, context),
             cursor: undefined as unknown as SqlArticleCursor,
           }),
-        }).provide(fakeSql.layer);
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        });
+        const fakeSql = makeFakeSqlClient([[articleRows[0]]]);
+        const plugin = yield* SourcePlugin.pipe(
+          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+        );
 
         const error = yield* Effect.flip(plugin.read(null));
 
@@ -442,6 +747,7 @@ describe("SqlSourcePlugin", () => {
     "fails read windows when metadata extraction returns a failure",
     () =>
       Effect.gen(function* () {
+        const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([
           [
             {
@@ -450,8 +756,9 @@ describe("SqlSourcePlugin", () => {
             },
           ],
         ]);
-        const source = makeSqlArticleSource().provide(fakeSql.layer);
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const plugin = yield* SourcePlugin.pipe(
+          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+        );
 
         const error = yield* Effect.flip(plugin.read(null));
 
@@ -464,6 +771,7 @@ describe("SqlSourcePlugin", () => {
 
   it.effect("fails lookups when metadata extraction returns a failure", () =>
     Effect.gen(function* () {
+      const source = makeSqlArticleSource();
       const fakeSql = makeFakeSqlClient([
         [
           {
@@ -472,11 +780,17 @@ describe("SqlSourcePlugin", () => {
           },
         ],
       ]);
-      const source = makeSqlArticleSource().provide(fakeSql.layer);
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const plugin = yield* SourcePlugin.pipe(
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+      );
 
       const error = yield* Effect.flip(
-        plugin.readByIdentity(toSourceIdentity("article-1"))
+        plugin.readByIdentity(
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("article-1")
+          )
+        )
       );
 
       expect(error).toBeInstanceOf(SourcePluginError);
@@ -495,9 +809,11 @@ describe("SqlSourcePlugin", () => {
           id: articleRows[0].id,
         },
       ] satisfies readonly SqlArticleRow[];
+      const source = makeSqlArticleSource();
       const fakeSql = makeFakeSqlClient([duplicateRows]);
-      const source = makeSqlArticleSource().provide(fakeSql.layer);
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const plugin = yield* SourcePlugin.pipe(
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+      );
 
       const error = yield* Effect.flip(plugin.read(null));
 
@@ -515,12 +831,19 @@ describe("SqlSourcePlugin", () => {
 
   it.effect("fails lookups when the SQL statement returns multiple rows", () =>
     Effect.gen(function* () {
+      const source = makeSqlArticleSource();
       const fakeSql = makeFakeSqlClient([articleRows]);
-      const source = makeSqlArticleSource().provide(fakeSql.layer);
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const plugin = yield* SourcePlugin.pipe(
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+      );
 
       const error = yield* Effect.flip(
-        plugin.readByIdentity(toSourceIdentity("article-1"))
+        plugin.readByIdentity(
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("article-1")
+          )
+        )
       );
 
       expect(error).toBeInstanceOf(SourcePluginError);
@@ -538,12 +861,19 @@ describe("SqlSourcePlugin", () => {
     "fails lookups when returned metadata does not match the requested identity",
     () =>
       Effect.gen(function* () {
+        const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([[articleRows[1]]]);
-        const source = makeSqlArticleSource().provide(fakeSql.layer);
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const plugin = yield* SourcePlugin.pipe(
+          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+        );
 
         const error = yield* Effect.flip(
-          plugin.readByIdentity(toSourceIdentity("article-1"))
+          plugin.readByIdentity(
+            SourceIdentity.fromEncoded(
+              plugin.identity,
+              toEncodedSourceIdentity("article-1")
+            )
+          )
         );
 
         expect(error).toBeInstanceOf(SourcePluginError);
@@ -575,8 +905,8 @@ describe("SqlSourcePlugin", () => {
       const legacyPage = yield* legacyPlugin.read(null);
       const crmPage = yield* crmPlugin.read(null);
 
-      expect(legacyPage.items[0]?.identity).toBe("legacy-article");
-      expect(crmPage.items[0]?.identity).toBe("crm-article");
+      expect(legacyPage.items[0]?.identity.encoded).toBe("legacy-article");
+      expect(crmPage.items[0]?.identity.encoded).toBe("crm-article");
       expect(legacySql.calls).toHaveLength(1);
       expect(crmSql.calls).toHaveLength(1);
     })
@@ -586,12 +916,19 @@ describe("SqlSourcePlugin", () => {
     "returns no cursor for empty reads and no item for empty lookups",
     () =>
       Effect.gen(function* () {
+        const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([[], []]);
-        const source = makeSqlArticleSource().provide(fakeSql.layer);
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const plugin = yield* SourcePlugin.pipe(
+          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+        );
 
         const page = yield* plugin.read(null);
-        const item = yield* plugin.readByIdentity(toSourceIdentity("missing"));
+        const item = yield* plugin.readByIdentity(
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("missing")
+          )
+        );
 
         expect(page).toEqual({ items: [] });
         expect(page.nextCursor).toBeUndefined();
@@ -602,10 +939,12 @@ describe("SqlSourcePlugin", () => {
 
   it.effect("normalizes SQL execution failures through SourcePluginError", () =>
     Effect.gen(function* () {
+      const source = makeSqlArticleSource();
       const cause = new Error("database unavailable");
       const fakeSql = makeFakeSqlClient([sqlFailure(cause)]);
-      const source = makeSqlArticleSource().provide(fakeSql.layer);
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const plugin = yield* SourcePlugin.pipe(
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+      );
 
       const error = yield* Effect.flip(plugin.read(null));
 
@@ -616,42 +955,35 @@ describe("SqlSourcePlugin", () => {
   );
 
   it.effect(
-    "passes decoded SQL rows into the transformation pipeline through the runner",
+    "passes decoded SQL rows into the process through the runner",
     () =>
       Effect.gen(function* () {
+        const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([[articleRows[0]], []]);
-        const source = makeSqlArticleSource().provide(fakeSql.layer);
         const storeState = InMemoryMigrationStore.makeState();
-        const destination = InMemoryDestinationPlugin.makeEntries({
-          commands: {
-            upsertEntry: {
-              fields: ArticleEntryFields,
-            },
-          },
-          contentType: "article",
-        });
         let decodedViews: number | undefined;
 
         const definition = defineMigration({
-          destination,
           id: "sql-articles",
-          pipeline: (sourceItem) => {
+          process: (sourceItem) =>
+            Effect.sync(() => {
             decodedViews = sourceItem.item.views;
-
-            return destination.commands.upsertEntry({
-              title: sourceItem.item.title,
-              views: sourceItem.item.views,
-            });
-          },
+            }),
           source,
           store: InMemoryMigrationStore.layer(storeState),
         });
 
         expectTypeOf(runMigration(definition)).toMatchTypeOf<
-          Effect.Effect<MigrationRunSummary, RunMigrationError, never>
+          Effect.Effect<
+            MigrationRunSummary,
+            RunMigrationError,
+            SqlClient.SqlClient
+          >
         >();
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runMigration(definition).pipe(
+          Effect.provide(fakeSql.layer)
+        );
 
         expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts).toEqual({
@@ -702,14 +1034,14 @@ describe("SqlSourcePlugin", () => {
               id: row.id,
               updated_at: row.updated_at,
             },
-            identity: row.id,
             version: row.content_hash,
           }),
+          identity: SqlArticleColumnIdentity,
           lookup: (sql, identity) =>
             sql<SqliteArticleRow>`
               select id, updated_at, content_hash, title, views
               from articles
-              where id = ${identity}
+              where id = ${identity.key}
             `,
           read: (sql, cursor, limit) =>
             cursor === null
@@ -729,29 +1061,16 @@ describe("SqlSourcePlugin", () => {
           sourceSchema: SqliteArticleRow,
         }).provide(sqlite.layer);
         const storeState = InMemoryMigrationStore.makeState();
-        const destination = InMemoryDestinationPlugin.makeEntries({
-          commands: {
-            upsertEntry: {
-              fields: ArticleEntryFields,
-            },
-          },
-          contentType: "article",
-        });
-        const pipelineItems: string[] = [];
+        const processItems: string[] = [];
 
         const definition = defineMigration({
-          destination,
           id: "sqlite-articles",
-          pipeline: (sourceItem) => {
-            pipelineItems.push(
-              `${sourceItem.identity}:${sourceItem.version}:${sourceItem.item.views}`
+          process: (sourceItem) =>
+            Effect.sync(() => {
+            processItems.push(
+              `${sourceItem.identity.encoded}:${sourceItem.version}:${sourceItem.item.views}`
             );
-
-            return destination.commands.upsertEntry({
-              title: sourceItem.item.title,
-              views: sourceItem.item.views,
-            });
-          },
+            }),
           source,
           store: InMemoryMigrationStore.layer(storeState),
         });
@@ -759,7 +1078,10 @@ describe("SqlSourcePlugin", () => {
         const summary = yield* runMigration(definition);
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
         const lookupItem = yield* plugin.readByIdentity(
-          toSourceIdentity("article-b")
+          SourceIdentity.fromEncoded(
+            plugin.identity,
+            toEncodedSourceIdentity("article-b")
+          )
         );
         const sqlTexts = sqlite.calls.map((call) =>
           normalizeSqlText(call.strings)
@@ -767,10 +1089,10 @@ describe("SqlSourcePlugin", () => {
 
         expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts.migrated).toBe(3);
-        expect(pipelineItems).toEqual([
-          "article-a:hash-1:1",
-          "article-b:hash-2:2",
-          "article-c:hash-3:3",
+      expect(processItems).toEqual([
+        "article-a:hash-1:1",
+        "article-b:hash-2:2",
+        "article-c:hash-3:3",
         ]);
         expect(
           sqlite.calls
@@ -783,7 +1105,7 @@ describe("SqlSourcePlugin", () => {
         expect(sqlTexts.every((text) => !text.includes("limit 1"))).toBe(true);
         expect(sqlTexts.some((text) => text.includes("where id ="))).toBe(true);
         expect(lookupItem).toEqual({
-          identity: "article-b",
+          identity: SourceIdentity.fromKey(plugin.identity, "article-b"),
           item: rows[1],
           version: "hash-2",
         });
@@ -820,14 +1142,14 @@ describe("SqlSourcePlugin", () => {
             id: row.id,
             updated_at: row.updated_at,
           },
-          identity: row.id,
           version: row.content_hash,
         }),
+        identity: SqlArticleColumnIdentity,
         lookup: (sql, identity) =>
           sql<SqliteArticleRow>`
               select id, updated_at, content_hash, title, views
               from articles
-              where id = ${identity}
+              where id = ${identity.key}
             `,
         read: (sql, cursor, limit) =>
           cursor === null
@@ -847,35 +1169,22 @@ describe("SqlSourcePlugin", () => {
         sourceSchema: SqliteArticleRow,
       });
       const storeState = InMemoryMigrationStore.makeState();
-      const destination = InMemoryDestinationPlugin.makeEntries({
-        commands: {
-          upsertEntry: {
-            fields: ArticleEntryFields,
-          },
-        },
-        contentType: "article",
-      });
-      const pipelineItems: Array<{
-        readonly identity: SourceIdentityInput;
+      const processItems: Array<{
+        readonly sourceIdentity: EncodedSourceIdentityInput;
         readonly valueType: string;
         readonly views: number;
       }> = [];
 
       const definition = defineMigration({
-        destination,
         id: "sqlite-real-articles",
-        pipeline: (sourceItem) => {
-          pipelineItems.push({
-            identity: sourceItem.identity,
+        process: (sourceItem) =>
+          Effect.sync(() => {
+          processItems.push({
+            sourceIdentity: sourceItem.identity.encoded,
             valueType: typeof sourceItem.item.views,
             views: sourceItem.item.views,
           });
-
-          return destination.commands.upsertEntry({
-            title: sourceItem.item.title,
-            views: sourceItem.item.views,
-          });
-        },
+          }),
         source,
         store: InMemoryMigrationStore.layer(storeState),
       });
@@ -883,18 +1192,21 @@ describe("SqlSourcePlugin", () => {
       const summary = yield* runMigration(definition);
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
       const lookupItem = yield* plugin.readByIdentity(
-        toSourceIdentity("article-b")
+        SourceIdentity.fromEncoded(
+          plugin.identity,
+          toEncodedSourceIdentity("article-b")
+        )
       );
 
       expect(summary.status).toBe("succeeded");
       expect(summary.definitions[0]?.counts.migrated).toBe(3);
-      expect(pipelineItems).toEqual([
-        { identity: "article-a", valueType: "number", views: 1 },
-        { identity: "article-b", valueType: "number", views: 2 },
-        { identity: "article-c", valueType: "number", views: 3 },
+      expect(processItems).toEqual([
+        { sourceIdentity: "article-a", valueType: "number", views: 1 },
+        { sourceIdentity: "article-b", valueType: "number", views: 2 },
+        { sourceIdentity: "article-c", valueType: "number", views: 3 },
       ]);
       expect(lookupItem).toEqual({
-        identity: "article-b",
+        identity: SourceIdentity.fromKey(plugin.identity, "article-b"),
         item: {
           content_hash: "hash-2",
           id: "article-b",
@@ -918,46 +1230,35 @@ describe("SqlSourcePlugin", () => {
     "stores invalid SQL row payloads as failed item state through the runner",
     () =>
       Effect.gen(function* () {
+        const source = makeSqlArticleSource();
         const invalidRow = {
           ...articleRows[0],
           views: null as unknown as string,
         } satisfies SqlArticleRow;
         const fakeSql = makeFakeSqlClient([[invalidRow], []]);
-        const source = makeSqlArticleSource().provide(fakeSql.layer);
         const storeState = InMemoryMigrationStore.makeState();
-        const destination = InMemoryDestinationPlugin.makeEntries({
-          commands: {
-            upsertEntry: {
-              fields: ArticleEntryFields,
-            },
-          },
-          contentType: "article",
-        });
-        let pipelineCalls = 0;
+        let processCalls = 0;
 
         const definition = defineMigration({
-          destination,
           id: "sql-articles",
-          pipeline: (sourceItem) => {
-            pipelineCalls += 1;
-
-            return destination.commands.upsertEntry({
-              title: sourceItem.item.title,
-              views: sourceItem.item.views,
-            });
-          },
+          process: () =>
+            Effect.sync(() => {
+              processCalls += 1;
+            }),
           source,
           store: InMemoryMigrationStore.layer(storeState),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runMigration(definition).pipe(
+          Effect.provide(fakeSql.layer)
+        );
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("sql-articles", "article-1")
         );
 
         expect(summary.status).toBe("failed");
         expect(summary.definitions[0]?.counts.failed).toBe(1);
-        expect(pipelineCalls).toBe(0);
+        expect(processCalls).toBe(0);
         expect(itemState).toEqual(
           expect.objectContaining({
             status: "failed",

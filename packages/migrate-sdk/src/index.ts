@@ -2,9 +2,7 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public package entrypoint intentionally re-exports the SDK surface.
 
 export type {
-  ConfiguredDestinationPlugin,
   ConfiguredSourcePlugin,
-  DestinationRetryStrategy,
   MigrationDefinitionDependencies,
   MigrationDefinitionDependenciesInput,
   MigrationDefinition,
@@ -21,30 +19,6 @@ export {
   defineSourcePlugin,
 } from "./domain/definition.ts";
 
-export type {
-  DefinedDestinationCommands,
-  DestinationCommand,
-  DestinationCommandContext,
-  DestinationCommandDefinition,
-  DestinationCommandPlan,
-  DestinationCommandResult,
-  DestinationCommandResultInput,
-  DestinationCommandSchema,
-} from "./domain/destination.ts";
-export { makeDestinationCommandResult } from "./domain/destination.ts";
-
-export type {
-  DefinedDestinationCommandGroup,
-  DefinedDestinationCommand,
-  DestinationCommandHandler,
-  DestinationCommandHandlerContext,
-} from "./domain/destination-plugin-definition.ts";
-export {
-  defineDestinationCommand,
-  defineDestinationCommandGroup,
-  defineDestinationPlugin,
-} from "./domain/destination-plugin-definition.ts";
-
 export {
   DestinationPluginError,
   makeSkipItem,
@@ -59,37 +33,56 @@ export {
 } from "./domain/errors.ts";
 
 export type {
-  DestinationIdentityInput,
-  DestinationVersionInput,
+  EncodedSourceIdentityInput,
   EncodedSourceCursorInput,
   MigrationDefinitionIdInput,
   MigrationDefinitionLockTokenInput,
   MigrationRunIdInput,
-  SourceIdentityInput,
+  SourceIdentityContractFingerprint,
+  SourceIdentityDefinition,
+  SourceIdentitySchema,
+  SourceIdentitySnapshot,
+  SourceIdentitySnapshotKey,
+  SourceIdentityTarget,
   SourceVersionInput,
 } from "./domain/ids.ts";
 export {
-  DestinationIdentity,
-  DestinationVersion,
+  EncodedSourceIdentity,
   EncodedSourceCursor,
   MigrationDefinitionId,
   MigrationDefinitionLockToken,
   MigrationRunId,
   SourceIdentity,
   SourceVersion,
-  toDestinationIdentity,
-  toDestinationVersion,
   toEncodedSourceCursor,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
   toMigrationRunId,
-  toSourceIdentity,
+  toEncodedSourceIdentity,
   toSourceVersion,
 } from "./domain/ids.ts";
 
+export type {
+  MigrationContract,
+  SourceVersionContractIdInput,
+  SourceVersionContractFingerprintInput,
+  TrackingRecordContractIdInput,
+  TrackingRecordContractFingerprintInput,
+} from "./domain/migration-contract.ts";
+export {
+  SourceVersionContractId,
+  SourceVersionContractFingerprint,
+  TrackingRecordContractId,
+  TrackingRecordContractFingerprint,
+  defaultSourceVersionContractFingerprint,
+  makeSourceIdentityContractFingerprint,
+  makeSourceVersionContractFingerprint,
+  makeTrackingRecordContractFingerprint,
+} from "./domain/migration-contract.ts";
+
 export { MigrationDefinitionLock } from "./domain/lock.ts";
 
-export type { PipelineContext } from "./domain/pipeline.ts";
+export type { ProcessContext } from "./domain/pipeline.ts";
 
 export { MigrationRunState } from "./domain/run.ts";
 export type {
@@ -121,7 +114,7 @@ export type {
 export {
   DuplicateMigrationDefinitionId,
   MigrationDefinitionDuplicateRequestedDefinitionIgnored,
-  MigrationDefinitionDuplicateTargetIdIgnored,
+  MigrationDefinitionDuplicateSourceIdentityTargetIgnored,
   MigrationDefinitionOptionalDependencyCycleIgnored,
   MigrationDefinitionPlanNotice,
   MigrationDefinitionRegistry,
@@ -165,14 +158,13 @@ export {
 export type {
   AnyRollbackMigrationDefinition,
   MigrationDefinitionRollbackPipelineError,
-  RollbackableMigrationItemState,
   RollbackMigrationOptionsInput,
   RollbackPipeline,
   RollbackRequest,
   RollbackRequestInput,
 } from "./domain/rollback.ts";
 
-export type { RunMode, RunModeInput } from "./domain/run-mode.ts";
+export type { RunModeInput } from "./domain/run-mode.ts";
 
 export type {
   SourceItem,
@@ -196,14 +188,51 @@ export type {
   MigrationItemStateBase,
 } from "./domain/state.ts";
 
-export { DestinationPlugin } from "./services/destination-plugin.ts";
+export {
+  DestinationChangeDescriptor,
+  DestinationChangeDescriptorId,
+  DestinationJournal,
+  DestinationJournalChangeEntry,
+  DestinationJournalDiagnosticEntry,
+  DestinationJournalDiagnosticInput,
+  DestinationJournalDiagnosticSeverity,
+  DestinationJournalEntry,
+  DestinationJournalRollbackAttemptError,
+  DestinationJournalSegment,
+  DestinationRollbackAttemptJournalSegment,
+  TrackingRecord,
+  TrackingRecordContract,
+} from "./domain/tracking.ts";
+export type {
+  DestinationChangeDescriptor as DestinationChangeDescriptorType,
+  DestinationChangeValue,
+  DestinationJournalChangeEntry as DestinationJournalChangeEntryType,
+  DestinationJournalDiagnosticEntry as DestinationJournalDiagnosticEntryType,
+  DestinationJournalDiagnosticInput as DestinationJournalDiagnosticInputType,
+  DestinationJournalDiagnosticSeverity as DestinationJournalDiagnosticSeverityType,
+  DestinationJournalEntry as DestinationJournalEntryType,
+  DestinationJournalRollbackAttemptError as DestinationJournalRollbackAttemptErrorType,
+  DestinationJournalSegment as DestinationJournalSegmentType,
+  DestinationRollbackAttemptJournalSegment as DestinationRollbackAttemptJournalSegmentType,
+  TrackingRecordContract as TrackingRecordContractType,
+  TrackingRecordContractInput,
+  TrackingRecordValue,
+} from "./domain/tracking.ts";
+
 export { MigrationReferenceLookup } from "./services/migration-reference-lookup.ts";
 export type {
   MigrationReference,
+  MigrationReferenceForDefinition,
   MigrationReferenceLookupInput,
+  MigrationReferenceLookupTarget,
 } from "./services/migration-reference-lookup.ts";
 export { MigrationStore } from "./services/migration-store.ts";
 export { SourcePlugin } from "./services/source-plugin.ts";
+export { Tracking } from "./services/tracking.ts";
+export type {
+  TrackingProcessContext,
+  TrackingService,
+} from "./services/tracking.ts";
 
 export { getMigrationStatuses } from "./runtime/get-migration-statuses.ts";
 export {
@@ -217,21 +246,15 @@ export type {
   RunMigrationError,
 } from "./runtime/run-migrations.ts";
 
-export { InMemoryDestinationPlugin } from "./destinations/in-memory/in-memory-destination.ts";
+export {
+  InMemoryDestination,
+} from "./destinations/in-memory/in-memory-destination.ts";
 export type {
-  InMemoryDeleteEntryCommand,
-  InMemoryDeleteEntryCommandOptions,
-  InMemoryEntryCommand,
-  InMemoryEntryDestination,
-  InMemoryEntryDestinationCommandOptions,
-  InMemoryEntryDestinationCommands,
-  InMemoryEntryDestinationOptions,
+  InMemoryEntryDestinationModule,
+  InMemoryEntryDestinationModuleOptions,
   InMemoryEntryFieldSchema,
-  InMemoryPublishEntryCommand,
-  InMemoryPublishEntryCommandOptions,
   InMemoryDestinationTransientFailures,
-  InMemoryUpsertEntryCommand,
-  InMemoryUpsertEntryCommandOptions,
+  InMemoryEntryUpsertedChange,
 } from "./destinations/in-memory/in-memory-destination.ts";
 
 export { InMemorySourcePlugin } from "./sources/in-memory/in-memory-source.ts";
@@ -243,24 +266,32 @@ export type {
 } from "./sources/in-memory/in-memory-source.ts";
 
 export {
+  CsvIdentity,
   CsvSourceCursor,
   CsvSourcePlugin,
 } from "./sources/csv/csv-source.ts";
 export type {
+  CsvCompositeIdentityKey,
   CsvDialect,
   CsvEmptyRows,
   CsvHeaders,
-  CsvIdentity,
+  CsvIdentityDefinition,
+  CsvIdentityKeySelector,
   CsvSourceOptions,
   CsvSourcePlatform,
   CsvVersion,
 } from "./sources/csv/csv-source.ts";
 
 export {
+  SqlIdentity,
   SqlSourcePlugin,
   SqlSourcePluginName,
 } from "./sources/sql/sql-source.ts";
 export type {
+  AnySqlIdentityDefinition,
+  SqlIdentityColumn,
+  SqlIdentityColumns,
+  SqlIdentityDefinition,
   SqlSourceLookup,
   SqlSourceMetadata,
   SqlSourceMetadataContext,

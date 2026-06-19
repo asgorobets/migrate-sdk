@@ -3,11 +3,12 @@ import { Service } from "effect/Context";
 import type { MigrationStoreError } from "../domain/errors.ts";
 import type {
   EncodedSourceCursor,
+  EncodedSourceIdentity,
   MigrationDefinitionId,
   MigrationRunId,
-  SourceIdentity,
 } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
+import type { MigrationContract } from "../domain/migration-contract.ts";
 import type { MigrationRunState } from "../domain/run.ts";
 import type { MigrationItemState } from "../domain/state.ts";
 import type { MigrationItemStateSummary } from "../domain/status.ts";
@@ -24,9 +25,17 @@ export class MigrationStore extends Service<
       cursor: EncodedSourceCursor
     ) => Effect.Effect<void, MigrationStoreError>;
 
+    readonly getMigrationContract: (
+      definitionId: MigrationDefinitionId
+    ) => Effect.Effect<MigrationContract | null, MigrationStoreError>;
+
+    readonly upsertMigrationContract: (
+      contract: MigrationContract
+    ) => Effect.Effect<void, MigrationStoreError>;
+
     readonly getItemState: (
       definitionId: MigrationDefinitionId,
-      identity: SourceIdentity
+      identity: EncodedSourceIdentity
     ) => Effect.Effect<MigrationItemState | null, MigrationStoreError>;
 
     readonly listItemStates: (
@@ -39,7 +48,7 @@ export class MigrationStore extends Service<
 
     readonly deleteItemState: (
       definitionId: MigrationDefinitionId,
-      identity: SourceIdentity
+      identity: EncodedSourceIdentity
     ) => Effect.Effect<void, MigrationStoreError>;
 
     readonly upsertItemState: (

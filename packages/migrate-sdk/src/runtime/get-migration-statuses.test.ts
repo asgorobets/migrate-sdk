@@ -1,40 +1,35 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Schedule, Schema } from "effect";
-import { expectTypeOf } from "vitest";
 import {
-  type ConfiguredDestinationPlugin,
   type ConfiguredSourcePlugin,
-  type DestinationCommand,
-  DestinationPlugin,
   DuplicateSourceIdentityStatusWarning,
   defineMigration,
   defineSourcePlugin,
-  type GetMigrationStatusesError,
   getMigrationStatuses,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
   InvalidSourceItemStatusWarning,
   type MigrationItemState,
-  type MigrationStatusReport,
   MigrationStatusRequestError,
   MigrationStore,
   MigrationStoreError,
+  SourceIdentity,
+  type SourceIdentitySnapshotKey,
   SourcePlugin,
   SourcePluginError,
-  toDestinationIdentity,
   toEncodedSourceCursor,
   toMigrationDefinitionId,
   toMigrationRunId,
-  toSourceIdentity,
   toSourceVersion,
 } from "migrate-sdk";
 
-interface NoopCommand extends DestinationCommand {
-  readonly kind: "Noop";
-}
-
 const ArticleSource = Schema.Struct({
   title: Schema.String,
+});
+
+const ArticleSourceIdentity = SourceIdentity.make({
+  id: "test-article@v1",
+  schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 
 const failingSource = {
@@ -45,29 +40,9 @@ const failingSource = {
 } as unknown as ConfiguredSourcePlugin<
   typeof ArticleSource.Type,
   unknown,
+  string,
   unknown
 >;
-
-interface RequiredStatusSourceService {
-  readonly _tag: "RequiredStatusSourceService";
-}
-
-const sourceRequiringService = failingSource as ConfiguredSourcePlugin<
-  typeof ArticleSource.Type,
-  unknown,
-  unknown,
-  never,
-  RequiredStatusSourceService
->;
-
-const failingDestination = {
-  commandDefinitions: {},
-  layer: Layer.sync(DestinationPlugin, () => {
-    throw new Error(
-      "durable-only status must not initialize destination plugins"
-    );
-  }),
-} as unknown as ConfiguredDestinationPlugin<NoopCommand>;
 
 const makeStatusOnlyDefinition = (
   store: ReturnType<typeof InMemoryMigrationStore.layer>,
@@ -76,34 +51,25 @@ const makeStatusOnlyDefinition = (
   defineMigration({
     id,
     source: failingSource,
-    destination: failingDestination,
     store,
-    pipeline: () => ({ kind: "Noop" }),
+    process: () => Effect.void,
   });
 
-const makeStatusScanDefinition = (
+const makeStatusScanDefinition = <
+  Source,
+  Cursor,
+  IdentityKey extends SourceIdentitySnapshotKey,
+  SourceInput,
+>(
   store: ReturnType<typeof InMemoryMigrationStore.layer>,
-  source: ConfiguredSourcePlugin<typeof ArticleSource.Type, unknown, unknown>,
+  source: ConfiguredSourcePlugin<Source, Cursor, IdentityKey, SourceInput>,
   id = "articles"
 ) =>
   defineMigration({
     id,
     source,
-    destination: failingDestination,
     store,
-    pipeline: () => ({ kind: "Noop" }),
-  });
-
-const makeSourceRequiredStatusDefinition = (
-  store: ReturnType<typeof InMemoryMigrationStore.layer>,
-  id = "articles"
-) =>
-  defineMigration({
-    id,
-    source: sourceRequiringService,
-    destination: failingDestination,
-    store,
-    pipeline: () => ({ kind: "Noop" }),
+    process: () => Effect.void,
   });
 
 const makeObservableSource = ({
@@ -126,6 +92,7 @@ const makeObservableSource = ({
     cursorSchema: Schema.Struct({
       offset: Schema.Number,
     }),
+    identity: ArticleSourceIdentity,
     sourceSchema: ArticleSource,
     lookupStrategy: "direct",
     read: () =>
@@ -146,7 +113,7 @@ const makeObservableSource = ({
         return {
           items: [
             {
-              identity: `${id}-1`,
+              identityKey: `${id}-1`,
               item: { title: `${id} article` },
               version: "source-version-1",
             },
@@ -157,32 +124,6 @@ const makeObservableSource = ({
   });
 
 describe("getMigrationStatuses", () => {
-  it("keeps durable-only status source requirements out of the public type", () => {
-    const definition = makeSourceRequiredStatusDefinition(
-      InMemoryMigrationStore.layer()
-    );
-
-    expectTypeOf(
-      getMigrationStatuses({
-        definitions: [definition] as const,
-      })
-    ).toMatchTypeOf<
-      Effect.Effect<MigrationStatusReport, GetMigrationStatusesError, never>
-    >();
-    expectTypeOf(
-      getMigrationStatuses({
-        definitions: [definition] as const,
-        scanSource: true,
-      })
-    ).toMatchTypeOf<
-      Effect.Effect<
-        MigrationStatusReport,
-        GetMigrationStatusesError,
-        RequiredStatusSourceService
-      >
-    >();
-  });
-
   it.effect("returns latest run lifecycle and durable item-state counts", () =>
     Effect.gen(function* () {
       const definitionId = toMigrationDefinitionId("articles");
@@ -199,9 +140,11 @@ describe("getMigrationStatuses", () => {
       const itemStates: readonly MigrationItemState[] = [
         {
           definitionId,
-          destinationIdentity: toDestinationIdentity("entry-1"),
           lastRunId: runId,
-          sourceIdentity: toSourceIdentity("article-1"),
+          sourceIdentity: SourceIdentity.fromKey(
+            ArticleSourceIdentity,
+            "article-1"
+          ),
           sourceVersion: toSourceVersion("source-version-1"),
           status: "migrated",
           updatedAt,
@@ -210,7 +153,10 @@ describe("getMigrationStatuses", () => {
           definitionId,
           lastRunId: runId,
           skipReason: "No title",
-          sourceIdentity: toSourceIdentity("article-2"),
+          sourceIdentity: SourceIdentity.fromKey(
+            ArticleSourceIdentity,
+            "article-2"
+          ),
           sourceVersion: toSourceVersion("source-version-2"),
           status: "skipped",
           updatedAt,
@@ -218,21 +164,26 @@ describe("getMigrationStatuses", () => {
         {
           definitionId,
           error: {
-            errorTag: "PipelineError",
-            kind: "pipeline",
-            message: "Pipeline failed",
+            errorTag: "ProcessError",
+            kind: "process",
+            message: "Process failed",
           },
           lastRunId: runId,
-          sourceIdentity: toSourceIdentity("article-3"),
+          sourceIdentity: SourceIdentity.fromKey(
+            ArticleSourceIdentity,
+            "article-3"
+          ),
           status: "failed",
           updatedAt,
         },
         {
           definitionId,
-          destinationIdentity: toDestinationIdentity("entry-4"),
           lastRunId: runId,
           reason: "Stub requires update",
-          sourceIdentity: toSourceIdentity("article-4"),
+          sourceIdentity: SourceIdentity.fromKey(
+            ArticleSourceIdentity,
+            "article-4"
+          ),
           status: "needs-update",
           updatedAt,
         },
@@ -243,7 +194,7 @@ describe("getMigrationStatuses", () => {
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey(
             itemState.definitionId,
-            itemState.sourceIdentity
+            itemState.sourceIdentity.encoded
           ),
           itemState
         );
@@ -333,6 +284,8 @@ describe("getMigrationStatuses", () => {
           }),
         getSourceCursor: () => fail("getSourceCursor"),
         setSourceCursor: () => fail("setSourceCursor"),
+        getMigrationContract: () => fail("getMigrationContract"),
+        upsertMigrationContract: () => fail("upsertMigrationContract"),
         getItemState: () => fail("getItemState"),
         listItemStates: () => fail("listItemStates"),
         deleteItemState: () => fail("deleteItemState"),
@@ -385,9 +338,11 @@ describe("getMigrationStatuses", () => {
         const storedCursor = toEncodedSourceCursor('{"offset":1}');
         const migratedState: MigrationItemState = {
           definitionId,
-          destinationIdentity: toDestinationIdentity("entry-1"),
           lastRunId: runId,
-          sourceIdentity: toSourceIdentity("article-1"),
+          sourceIdentity: SourceIdentity.fromKey(
+            ArticleSourceIdentity,
+            "article-1"
+          ),
           sourceVersion: toSourceVersion("source-version-1"),
           status: "migrated",
           updatedAt,
@@ -396,7 +351,7 @@ describe("getMigrationStatuses", () => {
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey(
             definitionId,
-            migratedState.sourceIdentity
+            migratedState.sourceIdentity.encoded
           ),
           migratedState
         );
@@ -404,14 +359,15 @@ describe("getMigrationStatuses", () => {
           InMemoryMigrationStore.layer(storeState),
           InMemorySourcePlugin.make({
             batchSize: 1,
+            identity: ArticleSourceIdentity,
             items: [
               {
-                identity: "article-1",
+                identityKey: "article-1",
                 item: { title: "First article" },
                 version: "source-version-1",
               },
               {
-                identity: "article-2",
+                identityKey: "article-2",
                 item: { title: "Second article" },
                 version: "source-version-1",
               },
@@ -484,6 +440,8 @@ describe("getMigrationStatuses", () => {
         getItemStateSummary: () => fail("getItemStateSummary"),
         getSourceCursor: () => fail("getSourceCursor"),
         setSourceCursor: () => fail("setSourceCursor"),
+        getMigrationContract: () => fail("getMigrationContract"),
+        upsertMigrationContract: () => fail("upsertMigrationContract"),
         getItemState: () => fail("getItemState"),
         deleteItemState: () => fail("deleteItemState"),
         upsertItemState: () => fail("upsertItemState"),
@@ -497,9 +455,10 @@ describe("getMigrationStatuses", () => {
       const definition = makeStatusScanDefinition(
         store,
         InMemorySourcePlugin.make({
+          identity: ArticleSourceIdentity,
           items: [
             {
-              identity: "article-1",
+              identityKey: "article-1",
               item: { title: "First article" },
               version: "source-version-1",
             },
@@ -538,9 +497,11 @@ describe("getMigrationStatuses", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const migratedState: MigrationItemState = {
           definitionId,
-          destinationIdentity: toDestinationIdentity("entry-migrated"),
           lastRunId: runId,
-          sourceIdentity: toSourceIdentity("article-migrated"),
+          sourceIdentity: SourceIdentity.fromKey(
+            ArticleSourceIdentity,
+            "article-migrated"
+          ),
           sourceVersion: toSourceVersion("source-version-1"),
           status: "migrated",
           updatedAt,
@@ -549,7 +510,10 @@ describe("getMigrationStatuses", () => {
           definitionId,
           lastRunId: runId,
           skipReason: "Removed upstream",
-          sourceIdentity: toSourceIdentity("article-orphaned"),
+          sourceIdentity: SourceIdentity.fromKey(
+            ArticleSourceIdentity,
+            "article-orphaned"
+          ),
           sourceVersion: toSourceVersion("source-version-1"),
           status: "skipped",
           updatedAt,
@@ -558,7 +522,7 @@ describe("getMigrationStatuses", () => {
           storeState.itemStates.set(
             InMemoryMigrationStore.itemStateKey(
               itemState.definitionId,
-              itemState.sourceIdentity
+              itemState.sourceIdentity.encoded
             ),
             itemState
           );
@@ -566,29 +530,30 @@ describe("getMigrationStatuses", () => {
         const definition = makeStatusScanDefinition(
           InMemoryMigrationStore.layer(storeState),
           InMemorySourcePlugin.make({
+            identity: ArticleSourceIdentity,
             items: [
               {
-                identity: "article-migrated",
+                identityKey: "article-migrated",
                 item: { title: "Migrated article" },
                 version: "source-version-1",
               },
               {
-                identity: "article-unprocessed",
+                identityKey: "article-unprocessed",
                 item: { title: "New article" },
                 version: "source-version-1",
               },
               {
-                identity: "article-invalid",
+                identityKey: "article-invalid",
                 item: { title: 123 } as unknown as typeof ArticleSource.Type,
                 version: "source-version-1",
               },
               {
-                identity: "article-duplicate",
+                identityKey: "article-duplicate",
                 item: { title: "First duplicate" },
                 version: "source-version-1",
               },
               {
-                identity: "article-duplicate",
+                identityKey: "article-duplicate",
                 item: { title: "Second duplicate" },
                 version: "source-version-2",
               },
@@ -625,17 +590,103 @@ describe("getMigrationStatuses", () => {
         expect(report.definitions[0]?.warnings[0]).toMatchObject({
           definitionId,
           message: "Source payload did not match Source Payload Schema",
-          sourceIdentity: toSourceIdentity("article-invalid"),
+          sourceIdentity: SourceIdentity.fromKey(
+            ArticleSourceIdentity,
+            "article-invalid"
+          ).encoded,
         });
         expect(report.definitions[0]?.warnings[0]).toHaveProperty("details");
         expect(report.definitions[0]?.warnings[1]).toEqual(
           new DuplicateSourceIdentityStatusWarning({
             count: 1,
             definitionId,
-            sourceIdentity: toSourceIdentity("article-duplicate"),
+            sourceIdentityParts: [
+              {
+                name: "id",
+                value: "article-duplicate",
+              },
+            ],
+            sourceIdentity: SourceIdentity.fromKey(
+              ArticleSourceIdentity,
+              "article-duplicate"
+            ).encoded,
           })
         );
         expect(report.warnings).toEqual(report.definitions[0]?.warnings);
+      })
+  );
+
+  it.effect(
+    "reports duplicate tuple source identities by encoded identity",
+    () =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("business-addresses");
+        const businessAddressIdentity = SourceIdentity.make({
+          id: "business-address@v1",
+          schema: SourceIdentity.tuple([
+            SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
+            SourceIdentity.part("addressIndex", Schema.Number),
+          ]),
+        });
+        const BusinessAddress = Schema.Struct({
+          city: Schema.String,
+        });
+        const definition = makeStatusScanDefinition(
+          InMemoryMigrationStore.layer(InMemoryMigrationStore.makeState()),
+          InMemorySourcePlugin.make({
+            identity: businessAddressIdentity,
+            sourceSchema: BusinessAddress,
+            items: [
+              {
+                identityKey: ["bu-1", 0],
+                item: { city: "Kyiv" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: ["bu-1", 0],
+                item: { city: "Lviv" },
+                version: "source-version-2",
+              },
+            ],
+          }),
+          "business-addresses"
+        );
+
+        const report = yield* getMigrationStatuses({
+          definitions: [definition],
+          scanSource: true,
+        });
+
+        expect(report.definitions[0]).toMatchObject({
+          definitionId,
+          source: {
+            duplicate: 1,
+            invalid: 0,
+            orphaned: 0,
+            total: 2,
+            unprocessed: 1,
+          },
+        });
+        expect(report.warnings).toEqual([
+          new DuplicateSourceIdentityStatusWarning({
+            count: 1,
+            definitionId,
+            sourceIdentityParts: [
+              {
+                name: "businessUnitKey",
+                value: "bu-1",
+              },
+              {
+                name: "addressIndex",
+                value: 0,
+              },
+            ],
+            sourceIdentity: SourceIdentity.fromKey(businessAddressIdentity, [
+              "bu-1",
+              0,
+            ]).encoded,
+          }),
+        ]);
       })
   );
 
@@ -646,9 +697,10 @@ describe("getMigrationStatuses", () => {
         const definition = makeStatusScanDefinition(
           InMemoryMigrationStore.layer(),
           InMemorySourcePlugin.make({
+            identity: ArticleSourceIdentity,
             items: [
               {
-                identity: "article-1",
+                identityKey: "article-1",
                 item: { title: "First article" },
                 version: "source-version-1",
               },
@@ -674,9 +726,10 @@ describe("getMigrationStatuses", () => {
       const definition = defineMigration({
         id: "articles",
         source: InMemorySourcePlugin.make({
+          identity: ArticleSourceIdentity,
           items: [
             {
-              identity: "article-1",
+              identityKey: "article-1",
               item: { title: "Retryable article" },
               version: "source-version-1",
             },
@@ -687,9 +740,8 @@ describe("getMigrationStatuses", () => {
         }),
         sourceCursorRetry: (effect) =>
           effect.pipe(Effect.retry(Schedule.recurs(1))),
-        destination: failingDestination,
         store: InMemoryMigrationStore.layer(),
-        pipeline: () => ({ kind: "Noop" }),
+        process: () => Effect.void,
       });
 
       const report = yield* getMigrationStatuses({

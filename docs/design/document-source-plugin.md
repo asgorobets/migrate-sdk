@@ -1,6 +1,9 @@
 # Document Source Plugin Design
 
-Status: draft
+Status: draft, with source identity authoring updated for
+[ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md).
+Document source identity examples use the new `identity.id`,
+`identity.schema`, and `identity.key` contract shape.
 
 Audience: maintainers and migration authors working with first-party source
 plugins that read structured documents from files or remote APIs.
@@ -108,7 +111,11 @@ const businessUnitsSource = DocumentSourcePlugin.make({
   selector: {
     item: (document) => document.businessUnits,
   },
-  identity: ({ item }) => item.key,
+  identity: {
+    id: "business-unit@v1",
+    schema: SourceIdentity.key("businessUnitKey", Schema.NonEmptyString),
+    key: ({ item }) => item.key,
+  },
   lookup: { kind: "scan" },
   version: { kind: "content-hash" },
 });
@@ -117,6 +124,11 @@ const businessUnitsSource = DocumentSourcePlugin.make({
 Nested document selection with parent context:
 
 ```ts
+const tuple2 = <A, B>(first: A, second: B): readonly [A, B] => [
+  first,
+  second,
+];
+
 const contactsSource = DocumentSourcePlugin.make({
   fetcher: DocumentFetchers.fileText({
     path: "./examples/document-source/companies.json",
@@ -127,24 +139,30 @@ const contactsSource = DocumentSourcePlugin.make({
     parent: (document) => document.businessUnits,
     item: (businessUnit) => businessUnit.contacts,
   },
-  identity: ({ parent, item }) => [parent.key, item.key],
+  identity: {
+    id: "business-unit-contact@v1",
+    schema: SourceIdentity.tuple([
+      SourceIdentity.part("businessUnitKey", Schema.NonEmptyString),
+      SourceIdentity.part("contactKey", Schema.NonEmptyString),
+    ]),
+    key: ({ parent, item }) => tuple2(parent.key, item.key),
+  },
   lookup: { kind: "scan" },
   version: { kind: "content-hash" },
 });
 ```
 
-The pipeline receives the selected shape:
+The process receives the selected shape:
 
 ```ts
 const contactsMigration = defineMigration({
   id: "import-company-contacts",
   source: contactsSource,
-  destination,
   store,
-  pipeline: (sourceItem) => {
+  process: (sourceItem) => {
     const { item, parent } = sourceItem.item;
 
-    return destination.commands.upsertEntry({
+    return destination.entries.upsert({
       businessUnitKey: parent.key,
       businessUnitName: parent.name,
       email: item.email,
@@ -164,10 +182,9 @@ The same migration can also be written inline:
 const contactsMigration = defineMigration({
   id: "import-company-contacts",
   source: contactsSource,
-  destination,
   store,
-  pipeline: ({ item: { item, parent } }) =>
-    destination.commands.upsertEntry({
+  process: ({ item: { item, parent } }) =>
+    destination.entries.upsert({
       businessUnitKey: parent.key,
       businessUnitName: parent.name,
       email: item.email,
@@ -178,7 +195,7 @@ const contactsMigration = defineMigration({
 ```
 
 The source preserves parent context, but destination projection remains in the
-pipeline. The source does not extract arbitrary individual fields on behalf of a
+process. The source does not extract arbitrary individual fields on behalf of a
 destination.
 
 ## Future Effect-Native Fetchers
@@ -223,13 +240,17 @@ const postsSource = DocumentSourcePlugin.make({
   selector: {
     item: (document) => document.posts,
   },
-  identity: ({ item }) => String(item.id),
+  identity: {
+    id: "jsonplaceholder-post@v1",
+    schema: SourceIdentity.key("postId", Schema.NonEmptyString),
+    key: ({ item }) => String(item.id),
+  },
   lookup: {
     kind: "direct",
-    read: (identity) =>
+    read: ({ key }) =>
       Effect.gen(function* () {
         const api = yield* JsonPlaceholderApi;
-        const postId = Number(identity);
+        const postId = Number(key);
 
         if (!Number.isInteger(postId)) {
           return null;
@@ -282,7 +303,11 @@ const postsSource = DocumentSourcePlugin.make({
   selector: {
     item: (document) => document.posts,
   },
-  identity: ({ item }) => String(item.id),
+  identity: {
+    id: "jsonplaceholder-post@v1",
+    schema: SourceIdentity.key("postId", Schema.NonEmptyString),
+    key: ({ item }) => String(item.id),
+  },
   lookup: { kind: "scan" },
   version: { kind: "content-hash" },
 });

@@ -8,6 +8,10 @@ import {
   runCircularBookAuthorStubsExample,
 } from "./circular-book-author-stubs.ts";
 import {
+  formatCompaniesDocumentSourceExampleResult,
+  runCompaniesDocumentSourceExample,
+} from "./document-source/companies-document-source.ts";
+import {
   formatFileStoreExampleResult,
   runFileStoreExample,
 } from "./file-store-runtime.ts";
@@ -15,10 +19,6 @@ import {
   formatMigrationRunSummary,
   runInMemoryExample,
 } from "./in-memory-runtime.ts";
-import {
-  formatCompaniesJsonSourceExampleResult,
-  runCompaniesJsonSourceExample,
-} from "./json-file-source/companies-json-source.ts";
 import {
   formatNestedArticleSchemaExampleResult,
   runNestedArticleSchemaExample,
@@ -28,7 +28,7 @@ const example = process.argv[2] ?? "in-memory";
 const shouldReset = process.argv.includes("--reset");
 const nodePlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
 
-const makeProgram = () => {
+const makeProgram = (): Effect.Effect<string, unknown, never> => {
   if (example === "file-store") {
     return runFileStoreExample({ reset: shouldReset }).pipe(
       Effect.provide(nodePlatformLayer),
@@ -54,10 +54,10 @@ const makeProgram = () => {
     );
   }
 
-  if (example === "json-file-source") {
-    return runCompaniesJsonSourceExample({
+  if (example === "document-source") {
+    return runCompaniesDocumentSourceExample({
       platform: nodePlatformLayer,
-    }).pipe(Effect.map(formatCompaniesJsonSourceExampleResult));
+    }).pipe(Effect.map(formatCompaniesDocumentSourceExampleResult));
   }
 
   return runInMemoryExample().pipe(Effect.map(formatMigrationRunSummary));

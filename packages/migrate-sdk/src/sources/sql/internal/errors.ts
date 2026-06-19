@@ -1,5 +1,5 @@
 import { SourcePluginError } from "../../../domain/errors.ts";
-import type { SourceIdentityInput } from "../../../domain/ids.ts";
+import type { EncodedSourceIdentityInput } from "../../../domain/ids.ts";
 
 export type SqlSourceOperation = "read" | "readByIdentity";
 
@@ -21,7 +21,7 @@ export const makeSqlSourceExecutionError = (
   });
 
 export const makeSqlSourceLookupMultipleRowsError = (
-  identity: SourceIdentityInput,
+  identity: EncodedSourceIdentityInput,
   rowCount: number
 ): SourcePluginError =>
   new SourcePluginError({
@@ -33,8 +33,8 @@ export const makeSqlSourceLookupMultipleRowsError = (
   });
 
 export const makeSqlSourceLookupIdentityMismatchError = (
-  requestedIdentity: SourceIdentityInput,
-  returnedIdentity: SourceIdentityInput
+  requestedIdentity: EncodedSourceIdentityInput,
+  returnedIdentity: EncodedSourceIdentityInput
 ): SourcePluginError =>
   new SourcePluginError({
     cause: {

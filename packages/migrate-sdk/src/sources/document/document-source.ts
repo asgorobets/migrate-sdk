@@ -2,14 +2,29 @@ import { Effect, Schema, SchemaAST } from "effect";
 import {
   type ConfiguredSourcePlugin,
   defineSourcePlugin,
+  defineSourcePluginLayer,
   type SourcePluginImplementation,
 } from "../../domain/definition.ts";
 import { SourcePluginError } from "../../domain/errors.ts";
 import type {
-  SourceIdentityInput,
+  SourceIdentityContractIdInput,
+  SourceIdentityDefinition,
+  SourceIdentitySchema,
+  SourceIdentitySnapshotKey,
+  SourceIdentityTarget,
   SourceVersionInput,
 } from "../../domain/ids.ts";
-import type { SourceItemInput } from "../../domain/source.ts";
+import { SourceIdentity } from "../../domain/ids.ts";
+import {
+  makeSourceIdentityContractFingerprint,
+  makeSourceVersionContractFingerprint,
+  SourceVersionContractId,
+  type SourceVersionContractIdInput,
+} from "../../domain/migration-contract.ts";
+import {
+  encodeSourceIdentityKey,
+  type SourceItemInput,
+} from "../../domain/source.ts";
 import type {
   DocumentFetcher,
   DocumentFetchResult,
@@ -110,37 +125,52 @@ export interface DocumentSourceSubitemSelector<
   ) => DocumentSourceSchemaSelection<ParentSelection>;
 }
 
-export type DocumentSourceIdentity<Source> = (
-  item: Source
-) => DocumentSourceIdentityValue;
+export interface DocumentSourceIdentity<
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> {
+  readonly id: SourceIdentityContractIdInput;
+  readonly key: (item: Source) => IdentityKey;
+  readonly schema: SourceIdentitySchema<IdentityKey>;
+}
 
 export type DocumentSourceVersion<Source> =
   | {
       readonly kind: "content-hash";
     }
   | {
+      readonly id: SourceVersionContractIdInput;
       readonly kind: "value";
       readonly value: (item: Source) => DocumentSourceIdentityValue;
     };
 
-export type DocumentSourceLookup<Resource, FetcherCursor> =
+export type DocumentSourceLookup<
+  Resource,
+  FetcherCursor,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> =
   | {
       readonly kind: "scan";
     }
   | {
       readonly kind: "direct";
       readonly read: (
-        identity: SourceIdentityInput
+        identity: SourceIdentityTarget<IdentityKey>
       ) => Effect.Effect<
         DocumentSourceDirectLookupResult<Resource, FetcherCursor> | null,
         SourcePluginError
       >;
     };
 
-export interface DocumentSourceBaseOptions<Resource, FetcherCursor, Document> {
+export interface DocumentSourceBaseOptions<
+  Resource,
+  FetcherCursor,
+  Document,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> {
   readonly batchSize?: number;
   readonly fetcher: DocumentFetcher<Resource, FetcherCursor>;
-  readonly lookup: DocumentSourceLookup<Resource, FetcherCursor>;
+  readonly lookup: DocumentSourceLookup<Resource, FetcherCursor, IdentityKey>;
   readonly parser: DocumentParser<Resource, Document>;
 }
 
@@ -149,9 +179,16 @@ export interface DocumentSourceItemOptions<
   FetcherCursor,
   Document,
   Selection,
-> extends DocumentSourceBaseOptions<Resource, FetcherCursor, Document> {
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> extends DocumentSourceBaseOptions<
+    Resource,
+    FetcherCursor,
+    Document,
+    IdentityKey
+  > {
   readonly identity: DocumentSourceIdentity<
-    DocumentSourceSelectedItem<DocumentSourceCursorFocus<Selection>>
+    DocumentSourceSelectedItem<DocumentSourceCursorFocus<Selection>>,
+    IdentityKey
   >;
   readonly selector: DocumentSourceItemSelector<Document, Selection>;
   readonly version: DocumentSourceVersion<
@@ -165,12 +202,19 @@ export interface DocumentSourceSubitemOptions<
   Document,
   ParentSelection,
   Selection,
-> extends DocumentSourceBaseOptions<Resource, FetcherCursor, Document> {
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> extends DocumentSourceBaseOptions<
+    Resource,
+    FetcherCursor,
+    Document,
+    IdentityKey
+  > {
   readonly identity: DocumentSourceIdentity<
     DocumentSourceSelectedSubitem<
       DocumentSourceCursorFocus<ParentSelection>,
       DocumentSourceCursorFocus<Selection>
-    >
+    >,
+    IdentityKey
   >;
   readonly selector: DocumentSourceSubitemSelector<
     Document,
@@ -185,16 +229,28 @@ export interface DocumentSourceSubitemOptions<
   >;
 }
 
-interface DocumentSourceCompiledOptions<Resource, FetcherCursor, Source>
-  extends DocumentSourceBaseOptions<Resource, FetcherCursor, unknown> {
-  readonly identity: DocumentSourceIdentity<Source>;
+interface DocumentSourceCompiledOptions<
+  Resource,
+  FetcherCursor,
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> extends DocumentSourceBaseOptions<
+    Resource,
+    FetcherCursor,
+    unknown,
+    IdentityKey
+  > {
+  readonly identity: DocumentSourceIdentity<Source, IdentityKey>;
   readonly selector: DocumentSourceCompiledSelector<Source>;
   readonly version: DocumentSourceVersion<Source>;
 }
 
-interface DocumentSourceLoadedItem<Source> {
+interface DocumentSourceLoadedItem<
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> {
   readonly documentIndex: number;
-  readonly item: SourceItemInput<Source>;
+  readonly item: SourceItemInput<Source, IdentityKey>;
   readonly itemIndex: number;
 }
 
@@ -203,10 +259,14 @@ interface DocumentSourceSelectionFrame {
   readonly value: unknown;
 }
 
-interface DocumentSourceLoadedResource<Source, FetcherCursor> {
+interface DocumentSourceLoadedResource<
+  Source,
+  FetcherCursor,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> {
   readonly fetcherCursor: FetcherCursor | null;
   readonly fingerprint?: string | undefined;
-  readonly items: readonly DocumentSourceLoadedItem<Source>[];
+  readonly items: readonly DocumentSourceLoadedItem<Source, IdentityKey>[];
   readonly nextFetcherCursor?: FetcherCursor | undefined;
 }
 
@@ -573,18 +633,21 @@ const compileSelector = <Document>(
 
 const makeCursorSchema = <FetcherCursor>(
   fetcherCursorSchema: Schema.Codec<FetcherCursor, unknown, never, never>
-): Schema.Codec<DocumentSourceCursor<FetcherCursor>, unknown, never, never> =>
-  Schema.Struct({
-    fetcherCursor: Schema.NullOr(fetcherCursorSchema),
-    nextDocumentIndex: Schema.Int,
-    nextItemIndex: Schema.Int,
-    resourceFingerprint: Schema.optional(Schema.String),
-  }) as unknown as Schema.Codec<
+): Schema.Codec<DocumentSourceCursor<FetcherCursor>, unknown, never, never> => {
+  const schema: Schema.Codec<
     DocumentSourceCursor<FetcherCursor>,
     unknown,
     never,
     never
-  >;
+  > = Schema.Struct({
+    fetcherCursor: Schema.NullOr(fetcherCursorSchema),
+    nextDocumentIndex: Schema.Int,
+    nextItemIndex: Schema.Int,
+    resourceFingerprint: Schema.optional(Schema.String),
+  });
+
+  return schema;
+};
 
 const stringifyIdentityValue = (
   value: DocumentSourceIdentityScalar,
@@ -643,23 +706,56 @@ const normalizeIdentityValue = (
     return yield* stringifyIdentityValue(value, itemIndex, label);
   });
 
-const buildIdentity = <Source>(
+const makeDocumentSourceIdentityDefinition = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  identity: DocumentSourceIdentity<Source, IdentityKey>
+): SourceIdentityDefinition<IdentityKey> =>
+  SourceIdentity.make({
+    id: identity.id,
+    schema: identity.schema,
+  });
+
+const makeDocumentSourceIdentityContractFingerprint = <
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  identityDefinition: SourceIdentityDefinition<IdentityKey>
+) =>
+  makeSourceIdentityContractFingerprint({
+    identity: identityDefinition.fingerprint,
+    source: "document@v1",
+  });
+
+const makeDocumentSourceVersionContractFingerprint = <Source>(
+  version: DocumentSourceVersion<Source>
+) =>
+  makeSourceVersionContractFingerprint({
+    source: "document@v1",
+    version:
+      version.kind === "value"
+        ? {
+            id: SourceVersionContractId.make(version.id),
+            kind: version.kind,
+          }
+        : {
+            kind: version.kind,
+          },
+  });
+
+const buildIdentity = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
   item: Source,
-  identity: DocumentSourceIdentity<Source>,
+  identity: DocumentSourceIdentity<Source, IdentityKey>,
   itemIndex: number
-): Effect.Effect<SourceIdentityInput, SourcePluginError> =>
+): Effect.Effect<IdentityKey, SourcePluginError> =>
   Effect.try({
-    try: () => identity(item),
+    try: () => identity.key(item),
     catch: (cause) =>
       documentSourceError("Unable to build document source identity", {
         cause,
         itemIndex,
       }),
-  }).pipe(
-    Effect.flatMap((identityValue) =>
-      normalizeIdentityValue(identityValue, itemIndex, "identity")
-    )
-  );
+  });
 
 const encodeSourceItemJson = <Source>(
   item: Source,
@@ -744,12 +840,18 @@ const buildVersion = <Source>(
     }
   });
 
-const buildSelectedSourceItem = <Source>(
+const buildSelectedSourceItem = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   rawItem: unknown,
   documentIndex: number,
   itemIndex: number,
-  options: DocumentSourceCompiledOptions<unknown, unknown, Source>
-): Effect.Effect<DocumentSourceLoadedItem<Source>, SourcePluginError> =>
+  options: DocumentSourceCompiledOptions<unknown, unknown, Source, IdentityKey>
+): Effect.Effect<
+  DocumentSourceLoadedItem<Source, IdentityKey>,
+  SourcePluginError
+> =>
   Effect.gen(function* () {
     const item = rawItem as Source;
     const identity = yield* buildIdentity(item, options.identity, itemIndex);
@@ -763,7 +865,7 @@ const buildSelectedSourceItem = <Source>(
     return {
       documentIndex,
       item: {
-        identity,
+        identityKey: identity,
         item,
         version,
       },
@@ -771,14 +873,22 @@ const buildSelectedSourceItem = <Source>(
     };
   });
 
-const ensureUniqueIdentities = <Source>(
-  items: readonly DocumentSourceLoadedItem<Source>[]
+const ensureUniqueIdentities = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  identityDefinition: SourceIdentityDefinition<IdentityKey>,
+  items: readonly DocumentSourceLoadedItem<Source, IdentityKey>[]
 ): Effect.Effect<void, SourcePluginError> =>
   Effect.gen(function* () {
     const identityIndexes = new Map<string, number>();
 
     for (const [index, loadedItem] of items.entries()) {
-      const existingIndex = identityIndexes.get(loadedItem.item.identity);
+      const encodedIdentity = yield* encodeSourceIdentityKey(
+        identityDefinition,
+        loadedItem.item.identityKey
+      );
+      const existingIndex = identityIndexes.get(encodedIdentity);
 
       if (existingIndex !== undefined) {
         return yield* documentSourceError(
@@ -786,13 +896,41 @@ const ensureUniqueIdentities = <Source>(
           {
             duplicateItemIndex: index,
             firstItemIndex: existingIndex,
-            sourceIdentity: loadedItem.item.identity,
+            sourceIdentity: encodedIdentity,
           }
         );
       }
 
-      identityIndexes.set(loadedItem.item.identity, index);
+      identityIndexes.set(encodedIdentity, index);
     }
+  });
+
+const matchingLoadedItems = <
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  identityDefinition: SourceIdentityDefinition<IdentityKey>,
+  items: readonly DocumentSourceLoadedItem<Source, IdentityKey>[],
+  identity: SourceIdentity<IdentityKey>
+): Effect.Effect<
+  readonly DocumentSourceLoadedItem<Source, IdentityKey>[],
+  SourcePluginError
+> =>
+  Effect.gen(function* () {
+    const matches: DocumentSourceLoadedItem<Source, IdentityKey>[] = [];
+
+    for (const loadedItem of items) {
+      const encodedIdentity = yield* encodeSourceIdentityKey(
+        identityDefinition,
+        loadedItem.item.identityKey
+      );
+
+      if (encodedIdentity === identity.encoded) {
+        matches.push(loadedItem);
+      }
+    }
+
+    return matches;
   });
 
 const parseResourceDocuments = <Resource, Document, FetcherCursor>(
@@ -814,23 +952,36 @@ const parseResourceDocuments = <Resource, Document, FetcherCursor>(
     )
   );
 
-const loadResourceResult = <Resource, FetcherCursor, Source>(
-  options: DocumentSourceCompiledOptions<Resource, FetcherCursor, Source>,
+const loadResourceResult = <
+  Resource,
+  FetcherCursor,
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: DocumentSourceCompiledOptions<
+    Resource,
+    FetcherCursor,
+    Source,
+    IdentityKey
+  >,
   fetcherCursor: FetcherCursor | null,
   resourceResult: DocumentFetchResult<Resource, FetcherCursor>,
   context?: Record<string, unknown>
 ): Effect.Effect<
-  DocumentSourceLoadedResource<Source, FetcherCursor>,
+  DocumentSourceLoadedResource<Source, FetcherCursor, IdentityKey>,
   SourcePluginError
 > =>
   Effect.gen(function* () {
+    const identityDefinition = makeDocumentSourceIdentityDefinition(
+      options.identity
+    );
     const documents = yield* parseResourceDocuments(
       options.parser,
       resourceResult,
       fetcherCursor,
       context
     );
-    const loadedItems: DocumentSourceLoadedItem<Source>[] = [];
+    const loadedItems: DocumentSourceLoadedItem<Source, IdentityKey>[] = [];
 
     for (const [documentIndex, document] of documents.entries()) {
       const selectedItems = yield* options.selector.select(document);
@@ -841,13 +992,18 @@ const loadResourceResult = <Resource, FetcherCursor, Source>(
             item,
             documentIndex,
             itemIndex,
-            options as DocumentSourceCompiledOptions<unknown, unknown, Source>
+            options as DocumentSourceCompiledOptions<
+              unknown,
+              unknown,
+              Source,
+              IdentityKey
+            >
           )
       );
       loadedItems.push(...decodedItems);
     }
 
-    yield* ensureUniqueIdentities(loadedItems);
+    yield* ensureUniqueIdentities(identityDefinition, loadedItems);
 
     return {
       fetcherCursor,
@@ -857,11 +1013,21 @@ const loadResourceResult = <Resource, FetcherCursor, Source>(
     };
   });
 
-const loadResource = <Resource, FetcherCursor, Source>(
-  options: DocumentSourceCompiledOptions<Resource, FetcherCursor, Source>,
+const loadResource = <
+  Resource,
+  FetcherCursor,
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: DocumentSourceCompiledOptions<
+    Resource,
+    FetcherCursor,
+    Source,
+    IdentityKey
+  >,
   fetcherCursor: FetcherCursor | null
 ): Effect.Effect<
-  DocumentSourceLoadedResource<Source, FetcherCursor>,
+  DocumentSourceLoadedResource<Source, FetcherCursor, IdentityKey>,
   SourcePluginError
 > =>
   Effect.gen(function* () {
@@ -887,8 +1053,12 @@ const configuredBatchSize = (
       );
 };
 
-const startIndexForCursor = <Source, FetcherCursor>(
-  resource: DocumentSourceLoadedResource<Source, FetcherCursor>,
+const startIndexForCursor = <
+  Source,
+  FetcherCursor,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  resource: DocumentSourceLoadedResource<Source, FetcherCursor, IdentityKey>,
   cursor: DocumentSourceCursor<FetcherCursor> | null
 ): number => {
   if (
@@ -919,9 +1089,27 @@ const nextResourceCursor = <FetcherCursor>(
         nextItemIndex: 0,
       };
 
-const makeImplementation = <Resource, FetcherCursor, Source>(
-  options: DocumentSourceCompiledOptions<Resource, FetcherCursor, Source>
-): SourcePluginImplementation<Source, DocumentSourceCursor<FetcherCursor>> => {
+const makeImplementation = <
+  Resource,
+  FetcherCursor,
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: DocumentSourceCompiledOptions<
+    Resource,
+    FetcherCursor,
+    Source,
+    IdentityKey
+  >
+): SourcePluginImplementation<
+  Source,
+  DocumentSourceCursor<FetcherCursor>,
+  IdentityKey
+> => {
+  const identityDefinition = makeDocumentSourceIdentityDefinition(
+    options.identity
+  );
+
   const read = Effect.fn("DocumentSource.read")(function* (
     cursor: DocumentSourceCursor<FetcherCursor> | null
   ) {
@@ -960,7 +1148,7 @@ const makeImplementation = <Resource, FetcherCursor, Source>(
   });
 
   const readByIdentity = Effect.fn("DocumentSource.readByIdentity")(function* (
-    identity: SourceIdentityInput
+    identity: SourceIdentity<IdentityKey>
   ) {
     if (options.lookup.kind === "direct") {
       const resourceResult = yield* options.lookup.read(identity);
@@ -974,18 +1162,20 @@ const makeImplementation = <Resource, FetcherCursor, Source>(
         null,
         resourceResult,
         {
-          sourceIdentity: identity,
+          sourceIdentity: identity.encoded,
         }
       );
-      const matches = resource.items.filter(
-        (loadedItem) => loadedItem.item.identity === identity
+      const matches = yield* matchingLoadedItems(
+        identityDefinition,
+        resource.items,
+        identity
       );
 
       if (matches.length > 1) {
         return yield* documentSourceError(
           "Duplicate document source identity",
           {
-            sourceIdentity: identity,
+            sourceIdentity: identity.encoded,
           }
         );
       }
@@ -994,21 +1184,25 @@ const makeImplementation = <Resource, FetcherCursor, Source>(
     }
 
     let fetcherCursor: FetcherCursor | null = null;
-    let found: SourceItemInput<Source> | null = null;
+    let found: SourceItemInput<Source, IdentityKey> | null = null;
 
     while (true) {
-      const resource: DocumentSourceLoadedResource<Source, FetcherCursor> =
-        yield* loadResource(options, fetcherCursor);
-      const matches: readonly DocumentSourceLoadedItem<Source>[] =
-        resource.items.filter(
-          (loadedItem) => loadedItem.item.identity === identity
-        );
+      const resource: DocumentSourceLoadedResource<
+        Source,
+        FetcherCursor,
+        IdentityKey
+      > = yield* loadResource(options, fetcherCursor);
+      const matches = yield* matchingLoadedItems(
+        identityDefinition,
+        resource.items,
+        identity
+      );
 
       if (matches.length > 1 || (matches.length === 1 && found !== null)) {
         return yield* documentSourceError(
           "Duplicate document source identity",
           {
-            sourceIdentity: identity,
+            sourceIdentity: identity.encoded,
           }
         );
       }
@@ -1032,10 +1226,22 @@ const makeImplementation = <Resource, FetcherCursor, Source>(
   };
 };
 
-function makeSource<Resource, FetcherCursor, Document, Selection>(
-  options: DocumentSourceBaseOptions<Resource, FetcherCursor, Document> & {
+function makeSource<
+  Resource,
+  FetcherCursor,
+  Document,
+  Selection,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: DocumentSourceBaseOptions<
+    Resource,
+    FetcherCursor,
+    Document,
+    IdentityKey
+  > & {
     readonly identity: DocumentSourceIdentity<
-      DocumentSourceSelectedItem<DocumentSourceCursorFocus<Selection>>
+      DocumentSourceSelectedItem<DocumentSourceCursorFocus<Selection>>,
+      IdentityKey
     >;
     readonly selector: DocumentSourceItemSelector<Document, Selection>;
     readonly version: DocumentSourceVersion<
@@ -1044,7 +1250,9 @@ function makeSource<Resource, FetcherCursor, Document, Selection>(
   }
 ): ConfiguredSourcePlugin<
   DocumentSourceSelectedItem<DocumentSourceCursorFocus<Selection>>,
-  DocumentSourceCursor<FetcherCursor>
+  DocumentSourceCursor<FetcherCursor>,
+  IdentityKey,
+  unknown
 >;
 function makeSource<
   Resource,
@@ -1052,13 +1260,20 @@ function makeSource<
   Document,
   ParentSelection,
   Selection,
+  IdentityKey extends SourceIdentitySnapshotKey,
 >(
-  options: DocumentSourceBaseOptions<Resource, FetcherCursor, Document> & {
+  options: DocumentSourceBaseOptions<
+    Resource,
+    FetcherCursor,
+    Document,
+    IdentityKey
+  > & {
     readonly identity: DocumentSourceIdentity<
       DocumentSourceSelectedSubitem<
         DocumentSourceCursorFocus<ParentSelection>,
         DocumentSourceCursorFocus<Selection>
-      >
+      >,
+      IdentityKey
     >;
     readonly selector: DocumentSourceSubitemSelector<
       Document,
@@ -1077,19 +1292,39 @@ function makeSource<
     DocumentSourceCursorFocus<ParentSelection>,
     DocumentSourceCursorFocus<Selection>
   >,
-  DocumentSourceCursor<FetcherCursor>
+  DocumentSourceCursor<FetcherCursor>,
+  IdentityKey,
+  unknown
 >;
-function makeSource<Resource, FetcherCursor, Document, Source>(
+function makeSource<
+  Resource,
+  FetcherCursor,
+  Document,
+  Source,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
   options:
-    | DocumentSourceItemOptions<Resource, FetcherCursor, Document, unknown>
+    | DocumentSourceItemOptions<
+        Resource,
+        FetcherCursor,
+        Document,
+        unknown,
+        IdentityKey
+      >
     | DocumentSourceSubitemOptions<
         Resource,
         FetcherCursor,
         Document,
         unknown,
-        unknown
+        unknown,
+        IdentityKey
       >
-): ConfiguredSourcePlugin<Source, DocumentSourceCursor<FetcherCursor>> {
+): ConfiguredSourcePlugin<
+  Source,
+  DocumentSourceCursor<FetcherCursor>,
+  IdentityKey,
+  unknown
+> {
   const compiledSelector = compileSelector(
     options.parser.documentSchema,
     options.selector
@@ -1097,18 +1332,36 @@ function makeSource<Resource, FetcherCursor, Document, Source>(
   const compiledOptions = {
     ...options,
     selector: compiledSelector,
-  } as DocumentSourceCompiledOptions<Resource, FetcherCursor, Source>;
+  } as DocumentSourceCompiledOptions<
+    Resource,
+    FetcherCursor,
+    Source,
+    IdentityKey
+  >;
   const cursorSchema = makeCursorSchema(options.fetcher.cursorSchema);
+  const identity = makeDocumentSourceIdentityDefinition(
+    compiledOptions.identity
+  );
   const configured = defineSourcePlugin({
     cursorSchema,
+    identity,
     make: () => makeImplementation(compiledOptions),
+    sourceIdentityContractFingerprint:
+      makeDocumentSourceIdentityContractFingerprint(identity),
     sourceSchema: compiledSelector.sourceSchema,
+    sourceVersionContractFingerprint:
+      makeDocumentSourceVersionContractFingerprint(options.version),
   });
 
-  return {
+  return defineSourcePluginLayer({
+    identity: configured.identity,
     layer: configured.layer,
+    sourceIdentityContractFingerprint:
+      configured.sourceIdentityContractFingerprint,
     sourceSchema: compiledSelector.sourceSchema,
-  } as ConfiguredSourcePlugin<Source, DocumentSourceCursor<FetcherCursor>>;
+    sourceVersionContractFingerprint:
+      configured.sourceVersionContractFingerprint,
+  });
 }
 
 export const DocumentSourcePlugin = {
