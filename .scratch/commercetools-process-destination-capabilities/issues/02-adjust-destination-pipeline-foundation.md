@@ -1,6 +1,6 @@
 # Adjust Destination Pipeline Foundation
 
-Status: ready-for-agent
+Status: done
 
 Type: AFK
 
@@ -33,23 +33,23 @@ plans, `destination`, or `pipeline`.
 
 ## Acceptance criteria
 
-- [ ] A minimal Commercetools destination module exposes at least one effectful helper callable from `process`.
-- [ ] The destination module supports plugin-local `.provide(commercetoolsSdkLayer)` and erases the SDK requirement from the provided module.
-- [ ] Provided Commercetools helpers still require the framework `Tracking` service during process execution.
-- [ ] Descriptor ids use stable Commercetools-prefixed public ids.
-- [ ] The descriptor catalog is exported beside the helper that records it.
-- [ ] Successful helper execution records exactly one descriptor-backed Destination Change after the fake SDK operation succeeds.
-- [ ] Failed helper execution records no success change when the fake SDK operation fails before completion.
-- [ ] Failed helper execution can record a safe Destination Journal Diagnostic with normalized Commercetools context.
-- [ ] Diagnostics do not persist raw thrown objects, raw SDK responses, credentials, tokens, request headers, or unstable provider internals.
-- [ ] Repeated helper calls preserve journal order through the core Tracking service.
-- [ ] Descriptor predicates or decoders can narrow journal entries for rollback code.
-- [ ] A focused process integration test runs `defineMigration`, `process`, the Commercetools helper, `Tracking.record`, and `Tracking.setRecord`.
-- [ ] A failure-path process test proves ordered journal evidence survives when a later process step fails.
-- [ ] No Commercetools-specific runtime hook is added to the core `migrate-sdk` package.
-- [ ] No destination registry or `MigrationDefinition.provide` API is added.
-- [ ] `pnpm --filter migrate-sdk check-types` passes.
-- [ ] `pnpm --filter @migrate-sdk/commercetools check-types` no longer fails for the destination foundation added in this slice.
+- [x] A minimal Commercetools destination module exposes at least one effectful helper callable from `process`.
+- [x] The destination module supports plugin-local `.provide(commercetoolsSdkLayer)` and erases the SDK requirement from the provided module.
+- [x] Provided Commercetools helpers still require the framework `Tracking` service during process execution.
+- [x] Descriptor ids use stable Commercetools-prefixed public ids.
+- [x] The descriptor catalog is exported beside the helper that records it.
+- [x] Successful helper execution records exactly one descriptor-backed Destination Change after the fake SDK operation succeeds.
+- [x] Failed helper execution records no success change when the fake SDK operation fails before completion.
+- [x] Failed helper execution can record a safe Destination Journal Diagnostic with normalized Commercetools context.
+- [x] Diagnostics do not persist raw thrown objects, raw SDK responses, credentials, tokens, request headers, or unstable provider internals.
+- [x] Repeated helper calls preserve journal order through the core Tracking service.
+- [x] Descriptor predicates or decoders can narrow journal entries for rollback code.
+- [x] A focused process integration test runs `defineMigration`, `process`, the Commercetools helper, `Tracking.record`, and `Tracking.setRecord`.
+- [x] A failure-path process test proves ordered journal evidence survives when a later process step fails.
+- [x] No Commercetools-specific runtime hook is added to the core `migrate-sdk` package.
+- [x] No destination registry or `MigrationDefinition.provide` API is added.
+- [x] `pnpm --filter migrate-sdk check-types` passes.
+- [x] `pnpm --filter @migrate-sdk/commercetools check-types` no longer fails for the destination foundation added in this slice.
 
 ## Blocked by
 
@@ -57,3 +57,6 @@ plans, `destination`, or `pipeline`.
 
 ## Comments
 
+- Implemented the tracer-bullet destination capability module with `CommercetoolsDestination.make().provide(sdkLayer).productSelections.create(...)`, descriptor-backed `Tracking.recordChange`, and safe diagnostic logging.
+- Added focused TDD coverage in `packages/commercetools/src/destination/capabilities.test.ts` for process integration, plugin-local SDK provisioning, Tracking-only provided helper requirements, success journaling, failure diagnostics, descriptor decoding, and ordered repeated changes when a later process step fails.
+- `pnpm --filter migrate-sdk check-types`, the focused Commercetools destination test, touched-file Ultracite, and `git diff --check` pass. `pnpm --filter @migrate-sdk/commercetools check-types` still fails on legacy destination command APIs and examples scheduled for follow-up issue 3, but the reported failures no longer include the new destination capability foundation files.
