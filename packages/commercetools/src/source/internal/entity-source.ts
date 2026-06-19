@@ -102,7 +102,7 @@ const makeImplementation = <
     const items = yield* Effect.forEach(page.results, (resource) =>
       sourceItem(descriptor, options, resource)
     );
-    const nextCursor = nextCursorFromPage(descriptor, page, limit);
+    const nextCursor = nextCursorFromPage(descriptor, page);
 
     return {
       items,

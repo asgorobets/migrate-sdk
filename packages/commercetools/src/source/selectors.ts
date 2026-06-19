@@ -143,10 +143,9 @@ export const nextCursorFromPage = <
   Page extends CommercetoolsPagedQueryResponse<Resource>,
 >(
   descriptor: CommercetoolsEntitySourceDescriptor<Resource, Page>,
-  page: Page,
-  limit: number
+  page: Page
 ): CommercetoolsSourceCursor | undefined => {
-  if (page.results.length < limit) {
+  if (page.results.length === 0) {
     return undefined;
   }
 

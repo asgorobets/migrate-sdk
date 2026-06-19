@@ -452,6 +452,76 @@ describe("CommercetoolsSourcePlugin", () => {
       })
   );
 
+  it.effect(
+    "returns a final checkpoint cursor for terminal business unit pages",
+    () =>
+      Effect.gen(function* () {
+        const businessUnits = Array.from({ length: 24 }, (_, index) => {
+          const sequence = `${index + 1}`.padStart(2, "0");
+          const key = `example-business-unit-${sequence}`;
+
+          return {
+            ...businessUnitResponse({
+              key,
+              name: `Example Business Unit ${sequence}`,
+              unitType: "Company",
+            }),
+            id: `recording-business-unit-${sequence}`,
+          } satisfies BusinessUnit;
+        });
+        const recording = makeSourceSdk({ businessUnits });
+        const source = CommercetoolsSourcePlugin.businessUnits({
+          batchSize: 20,
+        }).provide(recording.layer);
+
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const firstPage = yield* plugin.read(null);
+        const secondPage = yield* plugin.read(firstPage.nextCursor ?? null);
+        const thirdPage = yield* plugin.read(secondPage.nextCursor ?? null);
+
+        expect(firstPage.items).toHaveLength(20);
+        expect(firstPage.nextCursor).toEqual({
+          lastId: "recording-business-unit-20",
+        });
+        expect(secondPage.items).toHaveLength(4);
+        expect(secondPage.nextCursor).toEqual({
+          lastId: "recording-business-unit-24",
+        });
+        expect(thirdPage.items).toHaveLength(0);
+        expect(thirdPage.nextCursor).toBeUndefined();
+        expect(recording.requests).toMatchObject([
+          {
+            operation: "businessUnits.source.read",
+            queryParams: {
+              limit: 20,
+              sort: "id asc",
+              withTotal: false,
+            },
+          },
+          {
+            operation: "businessUnits.source.read",
+            queryParams: {
+              limit: 20,
+              sort: "id asc",
+              "var.lastId": "recording-business-unit-20",
+              where: "id > :lastId",
+              withTotal: false,
+            },
+          },
+          {
+            operation: "businessUnits.source.read",
+            queryParams: {
+              limit: 20,
+              sort: "id asc",
+              "var.lastId": "recording-business-unit-24",
+              where: "id > :lastId",
+              withTotal: false,
+            },
+          },
+        ]);
+      })
+  );
+
   it.effect("returns null when direct product lookup misses", () =>
     Effect.gen(function* () {
       const recording = makeSourceSdk();
