@@ -7,17 +7,24 @@ import {
   defineMigration,
   type EncodedSourceIdentityInput,
   InMemoryMigrationStore,
+  MigrationProgress,
+  type MigrationProgressEvent,
   type MigrationRunSummary,
   type RunMigrationError,
   runMigration,
   SourceIdentity,
+  SourceItemTotal,
   type SourcePayloadSchema,
   SourcePlugin,
   SourcePluginError,
   type SourceVersionInput,
   toEncodedSourceIdentity,
 } from "migrate-sdk";
-import { SqlIdentity, SqlSourcePlugin } from "migrate-sdk/sources/sql";
+import {
+  SqlIdentity,
+  type SqlSourceCount,
+  SqlSourcePlugin,
+} from "migrate-sdk/sources/sql";
 import { expectTypeOf } from "vitest";
 
 const SqlArticleRow = Schema.Struct({
@@ -298,11 +305,13 @@ const getSqlArticleMetadata = (
 const makeSqlArticleSource = (
   options: {
     readonly batchSize?: number;
+    readonly count?: SqlSourceCount<{ readonly total: number }>;
     readonly getSourceMetadata?: typeof getSqlArticleMetadata;
   } = {}
 ) =>
   SqlSourcePlugin.make({
     batchSize: options.batchSize ?? 2,
+    ...(options.count === undefined ? {} : { count: options.count }),
     cursorSchema: SqlArticleCursor,
     getSourceMetadata: options.getSourceMetadata ?? getSqlArticleMetadata,
     identity: SqlArticleColumnIdentity,
@@ -469,6 +478,213 @@ describe("SqlSourcePlugin", () => {
         });
         expect(fakeSql.calls[1]?.values).toEqual(["article-2"]);
         expect(fakeSql.transactionCount()).toBe(0);
+      })
+  );
+
+  it.effect(
+    "discovers known Source Item totals from an explicit count statement",
+    () =>
+      Effect.gen(function* () {
+        let readCalls = 0;
+        let lookupCalls = 0;
+        const source = SqlSourcePlugin.make({
+          batchSize: 2,
+          count: {
+            getCount: (row: Readonly<{ readonly total: number }>) => row.total,
+            kind: "statement",
+            statement: (sql) =>
+              sql<{
+                readonly total: number;
+              }>`select count(*) as total from articles where status = ${"published"}`,
+          },
+          cursorSchema: SqlArticleCursor,
+          getSourceMetadata: getSqlArticleMetadata,
+          identity: SqlArticleColumnIdentity,
+          lookup: (sql, identity) => {
+            lookupCalls += 1;
+
+            return sql<SqlArticleRow>`select id, title, updated_at, views from articles where id = ${identity.key}`;
+          },
+          read: (sql, cursor, limit) => {
+            readCalls += 1;
+
+            return cursor === null
+              ? sql<SqlArticleRow>`select id, title, updated_at, views from articles order by updated_at, id limit ${limit}`
+              : sql<SqlArticleRow>`select id, title, updated_at, views from articles where (updated_at, id) > (${cursor.updated_at}, ${cursor.id}) order by updated_at, id limit ${limit}`;
+          },
+          sourceSchema: SqlArticleRow,
+        });
+        const fakeSql = makeFakeSqlClient([[{ total: 2 }]]);
+        const plugin = yield* SourcePlugin.pipe(
+          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+        );
+
+        if (plugin.discoverSourceItemTotal === undefined) {
+          throw new Error("Expected SQL source total discovery");
+        }
+
+        const total = yield* plugin.discoverSourceItemTotal();
+
+        expect(total).toEqual(SourceItemTotal.known(2));
+        expect(readCalls).toBe(0);
+        expect(lookupCalls).toBe(0);
+        expect(fakeSql.calls).toHaveLength(1);
+        expect(normalizeSqlText(fakeSql.calls[0]?.strings ?? [])).toBe(
+          "select count(*) as total from articles where status = ?"
+        );
+        expect(fakeSql.calls[0]?.values).toEqual(["published"]);
+      })
+  );
+
+  it.effect("discovers zero totals from an explicit count effect", () =>
+    Effect.gen(function* () {
+      const source = makeSqlArticleSource({
+        count: {
+          effect: (_sql) => Effect.succeed(0),
+          kind: "effect",
+        },
+      });
+      const fakeSql = makeFakeSqlClient([]);
+      const plugin = yield* SourcePlugin.pipe(
+        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+      );
+
+      if (plugin.discoverSourceItemTotal === undefined) {
+        throw new Error("Expected SQL source total discovery");
+      }
+
+      const total = yield* plugin.discoverSourceItemTotal();
+
+      expect(total).toEqual(SourceItemTotal.known(0));
+      expect(fakeSql.calls).toHaveLength(0);
+    })
+  );
+
+  it.effect(
+    "discovers count totals through a locally provided SQL client",
+    () =>
+      Effect.gen(function* () {
+        const fakeSql = makeFakeSqlClient([[{ total: 2 }]]);
+        const source = makeSqlArticleSource({
+          count: {
+            getCount: (row) => row.total,
+            kind: "statement",
+            statement: (sql) =>
+              sql<{
+                readonly total: number;
+              }>`select count(*) as total from articles`,
+          },
+        }).provide(fakeSql.layer);
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+        if (plugin.discoverSourceItemTotal === undefined) {
+          throw new Error("Expected SQL source total discovery");
+        }
+
+        const total = yield* plugin.discoverSourceItemTotal();
+
+        expect(total).toEqual(SourceItemTotal.known(2));
+        expect(fakeSql.calls).toHaveLength(1);
+      })
+  );
+
+  it.effect(
+    "returns unknown disabled total when no SQL count operation is configured",
+    () =>
+      Effect.gen(function* () {
+        const source = makeSqlArticleSource();
+        const fakeSql = makeFakeSqlClient([]);
+        const plugin = yield* SourcePlugin.pipe(
+          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
+        );
+
+        if (plugin.discoverSourceItemTotal === undefined) {
+          throw new Error("Expected SQL source total discovery");
+        }
+
+        const total = yield* plugin.discoverSourceItemTotal();
+
+        expect(total).toEqual(
+          SourceItemTotal.unknown({
+            message: "SQL Source Item total discovery was not configured",
+            reason: "disabled",
+          })
+        );
+        expect(fakeSql.calls).toHaveLength(0);
+      })
+  );
+
+  it.effect(
+    "continues migration execution when SQL count discovery fails",
+    () =>
+      Effect.gen(function* () {
+        const countFailure = new Error("count timed out");
+        const fakeSql = makeFakeSqlClient([
+          sqlFailure(countFailure),
+          [articleRows[0]],
+          [],
+        ]);
+        const source = makeSqlArticleSource({
+          count: {
+            getCount: (row) => row.total,
+            kind: "statement",
+            statement: (sql) =>
+              sql<{
+                readonly total: number;
+              }>`select count(*) as total from articles`,
+          },
+        });
+        const storeState = InMemoryMigrationStore.makeState();
+        const progressEvents: MigrationProgressEvent[] = [];
+        const definition = defineMigration({
+          id: "sql-articles",
+          process: () => Effect.void,
+          source,
+          store: InMemoryMigrationStore.layer(storeState),
+        });
+        const progressLayer = Layer.succeed(MigrationProgress, {
+          discoverSourceItemTotals: true,
+          emit: (event) =>
+            Effect.sync(() => {
+              progressEvents.push(event);
+            }),
+        });
+
+        const summary = yield* runMigration(definition).pipe(
+          Effect.provide(Layer.mergeAll(fakeSql.layer, progressLayer))
+        );
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(storeState.itemStates.size).toBe(1);
+        expect(Array.from(storeState.itemStates.values())[0]?.status).toBe(
+          "migrated"
+        );
+        expect(progressEvents).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              definitionId: definition.id,
+              kind: "source-item-total-discovered",
+              sourceItemTotal: expect.objectContaining({
+                kind: "unknown",
+                message: "SQL Source Item total discovery failed",
+                reason: "failed",
+              }),
+            }),
+          ])
+        );
+        expect(normalizeSqlText(fakeSql.calls[0]?.strings ?? [])).toBe(
+          "select count(*) as total from articles"
+        );
+        expect(normalizeSqlText(fakeSql.calls[1]?.strings ?? [])).toContain(
+          "order by updated_at"
+        );
       })
   );
 
@@ -954,47 +1170,45 @@ describe("SqlSourcePlugin", () => {
     })
   );
 
-  it.effect(
-    "passes decoded SQL rows into the process through the runner",
-    () =>
-      Effect.gen(function* () {
-        const source = makeSqlArticleSource();
-        const fakeSql = makeFakeSqlClient([[articleRows[0]], []]);
-        const storeState = InMemoryMigrationStore.makeState();
-        let decodedViews: number | undefined;
+  it.effect("passes decoded SQL rows into the process through the runner", () =>
+    Effect.gen(function* () {
+      const source = makeSqlArticleSource();
+      const fakeSql = makeFakeSqlClient([[articleRows[0]], []]);
+      const storeState = InMemoryMigrationStore.makeState();
+      let decodedViews: number | undefined;
 
-        const definition = defineMigration({
-          id: "sql-articles",
-          process: (sourceItem) =>
-            Effect.sync(() => {
+      const definition = defineMigration({
+        id: "sql-articles",
+        process: (sourceItem) =>
+          Effect.sync(() => {
             decodedViews = sourceItem.item.views;
-            }),
-          source,
-          store: InMemoryMigrationStore.layer(storeState),
-        });
+          }),
+        source,
+        store: InMemoryMigrationStore.layer(storeState),
+      });
 
-        expectTypeOf(runMigration(definition)).toMatchTypeOf<
-          Effect.Effect<
-            MigrationRunSummary,
-            RunMigrationError,
-            SqlClient.SqlClient
-          >
-        >();
+      expectTypeOf(runMigration(definition)).toMatchTypeOf<
+        Effect.Effect<
+          MigrationRunSummary,
+          RunMigrationError,
+          SqlClient.SqlClient
+        >
+      >();
 
-        const summary = yield* runMigration(definition).pipe(
-          Effect.provide(fakeSql.layer)
-        );
+      const summary = yield* runMigration(definition).pipe(
+        Effect.provide(fakeSql.layer)
+      );
 
-        expect(summary.status).toBe("succeeded");
-        expect(summary.definitions[0]?.counts).toEqual({
-          failed: 0,
-          migrated: 1,
-          needsUpdate: 0,
-          skipped: 0,
-          unchanged: 0,
-        });
-        expect(decodedViews).toBe(7);
-      })
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions[0]?.counts).toEqual({
+        failed: 0,
+        migrated: 1,
+        needsUpdate: 0,
+        skipped: 0,
+        unchanged: 0,
+      });
+      expect(decodedViews).toBe(7);
+    })
   );
 
   it.effect(
@@ -1067,9 +1281,9 @@ describe("SqlSourcePlugin", () => {
           id: "sqlite-articles",
           process: (sourceItem) =>
             Effect.sync(() => {
-            processItems.push(
-              `${sourceItem.identity.encoded}:${sourceItem.version}:${sourceItem.item.views}`
-            );
+              processItems.push(
+                `${sourceItem.identity.encoded}:${sourceItem.version}:${sourceItem.item.views}`
+              );
             }),
           source,
           store: InMemoryMigrationStore.layer(storeState),
@@ -1089,10 +1303,10 @@ describe("SqlSourcePlugin", () => {
 
         expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts.migrated).toBe(3);
-      expect(processItems).toEqual([
-        "article-a:hash-1:1",
-        "article-b:hash-2:2",
-        "article-c:hash-3:3",
+        expect(processItems).toEqual([
+          "article-a:hash-1:1",
+          "article-b:hash-2:2",
+          "article-c:hash-3:3",
         ]);
         expect(
           sqlite.calls
@@ -1179,11 +1393,11 @@ describe("SqlSourcePlugin", () => {
         id: "sqlite-real-articles",
         process: (sourceItem) =>
           Effect.sync(() => {
-          processItems.push({
-            sourceIdentity: sourceItem.identity.encoded,
-            valueType: typeof sourceItem.item.views,
-            views: sourceItem.item.views,
-          });
+            processItems.push({
+              sourceIdentity: sourceItem.identity.encoded,
+              valueType: typeof sourceItem.item.views,
+              views: sourceItem.item.views,
+            });
           }),
         source,
         store: InMemoryMigrationStore.layer(storeState),

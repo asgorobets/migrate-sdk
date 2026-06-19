@@ -1,7 +1,7 @@
 import { SourcePluginError } from "../../../domain/errors.ts";
 import type { EncodedSourceIdentityInput } from "../../../domain/ids.ts";
 
-export type SqlSourceOperation = "read" | "readByIdentity";
+export type SqlSourceOperation = "count" | "read" | "readByIdentity";
 
 export const makeSqlSourceBatchSizeError = (
   batchSize: number

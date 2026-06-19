@@ -8,7 +8,7 @@ import {
   type SourcePluginImplementation,
   type SourceReadResultInput,
 } from "../../domain/definition.ts";
-import type { SourcePluginError } from "../../domain/errors.ts";
+import { SourcePluginError } from "../../domain/errors.ts";
 import {
   SourceIdentity,
   type SourceIdentityContractIdInput,
@@ -28,6 +28,7 @@ import {
 import {
   encodeSourceIdentityKey,
   type SourceItemInput,
+  SourceItemTotal,
 } from "../../domain/source.ts";
 import {
   type AnySourcePlugin,
@@ -76,6 +77,29 @@ export type SqlSourceLookup<
   sql: SqlClient.SqlClient,
   identity: SourceIdentityTarget<IdentityKey>
 ) => Statement.Statement<Row>;
+
+export type SqlSourceCountStatement<Row> = (
+  sql: SqlClient.SqlClient
+) => Statement.Statement<Row>;
+
+export type SqlSourceCountEffect = (
+  sql: SqlClient.SqlClient
+) => Effect.Effect<number, SourcePluginError>;
+
+export interface SqlSourceStatementCount<Row = { readonly count: number }> {
+  readonly getCount: (row: Readonly<Row>) => number;
+  readonly kind: "statement";
+  readonly statement: SqlSourceCountStatement<Row>;
+}
+
+export interface SqlSourceEffectCount {
+  readonly effect: SqlSourceCountEffect;
+  readonly kind: "effect";
+}
+
+export type SqlSourceCount<Row = { readonly count: number }> =
+  | SqlSourceEffectCount
+  | SqlSourceStatementCount<Row>;
 
 export type SqlSourceMetadata<Row, Cursor> = (
   row: Readonly<Row>,
@@ -186,10 +210,11 @@ type SqlSourceOptionsForIdentity<
   Cursor,
   SourceInput,
   Identity extends AnySqlIdentityDefinition,
+  CountRow = unknown,
 > =
   SqlIdentityForSourceInput<SourceInput, Identity> extends never
     ? never
-    : SqlSourceOptions<Source, Cursor, SourceInput, Identity>;
+    : SqlSourceOptions<Source, Cursor, SourceInput, Identity, CountRow>;
 
 const makeSqlIdentityColumn = <
   const Name extends string,
@@ -241,8 +266,14 @@ export const SqlIdentity = {
   columns: makeSqlColumnsIdentity,
 } as const;
 
-interface SqlSourceBaseOptions<Source, Cursor, SourceInput = unknown> {
+interface SqlSourceBaseOptions<
+  Source,
+  Cursor,
+  SourceInput = unknown,
+  CountRow = unknown,
+> {
   readonly batchSize: number;
+  readonly count?: SqlSourceCount<CountRow>;
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly read: SqlSourceRead<SourceInput, Cursor>;
   readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
@@ -253,7 +284,8 @@ export interface SqlSourceOptions<
   Cursor,
   SourceInput = unknown,
   Identity extends AnySqlIdentityDefinition = AnySqlIdentityDefinition,
-> extends SqlSourceBaseOptions<Source, Cursor, SourceInput> {
+  CountRow = unknown,
+> extends SqlSourceBaseOptions<Source, Cursor, SourceInput, CountRow> {
   readonly getSourceMetadata: SqlSourceMetadata<SourceInput, Cursor>;
   readonly identity: Identity;
   readonly lookup: SqlSourceLookup<
@@ -264,7 +296,7 @@ export interface SqlSourceOptions<
 }
 
 const executeStatement = <Row>(
-  operation: "read" | "readByIdentity",
+  operation: "count" | "read" | "readByIdentity",
   statement: Statement.Statement<Row>
 ): Effect.Effect<readonly Row[], SourcePluginError> =>
   statement.pipe(
@@ -339,8 +371,9 @@ const extractMetadata = <
   Cursor,
   SourceInput,
   Identity extends AnySqlIdentityDefinition,
+  CountRow = unknown,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity>,
+  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity, CountRow>,
   operation: "read" | "readByIdentity",
   row: SourceInput,
   rowIndex: number
@@ -361,8 +394,9 @@ const sourceItemFromRow = <
   Cursor,
   SourceInput,
   Identity extends AnySqlIdentityDefinition,
+  CountRow = unknown,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity>,
+  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity, CountRow>,
   identityDefinition: SourceIdentityDefinition<
     SqlIdentityDefinitionKey<Identity>
   >,
@@ -407,8 +441,9 @@ const readRows = <
   Cursor,
   SourceInput,
   Identity extends AnySqlIdentityDefinition,
+  CountRow = unknown,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity>,
+  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity, CountRow>,
   identityDefinition: SourceIdentityDefinition<
     SqlIdentityDefinitionKey<Identity>
   >,
@@ -503,13 +538,96 @@ const readRows = <
     };
   });
 
+const makeSqlSourceCountRowError = (rowCount: number): SourcePluginError =>
+  new SourcePluginError({
+    cause: { rowCount },
+    message: "SQL source plugin count must return exactly one row",
+  });
+
+const makeFailedSqlSourceItemTotalDiscovery = (
+  cause: unknown
+): SourceItemTotal =>
+  SourceItemTotal.unknown({
+    cause,
+    message: "SQL Source Item total discovery failed",
+    reason: "failed",
+  });
+
+const makeKnownSqlSourceItemTotal = (
+  count: number
+): Effect.Effect<SourceItemTotal, SourcePluginError> =>
+  Effect.try({
+    try: () => SourceItemTotal.known(count),
+    catch: (cause) =>
+      cause instanceof SourcePluginError
+        ? cause
+        : new SourcePluginError({
+            cause,
+            message: "SQL source plugin count returned an invalid total",
+          }),
+  });
+
+const readSqlSourceCount = <CountRow>(
+  count: SqlSourceCount<CountRow>,
+  sql: SqlClient.SqlClient
+): Effect.Effect<number, SourcePluginError> => {
+  if (count.kind === "effect") {
+    return count.effect(sql);
+  }
+
+  return Effect.gen(function* () {
+    const rows = yield* executeStatement("count", count.statement(sql));
+
+    if (rows.length !== 1) {
+      return yield* makeSqlSourceCountRowError(rows.length);
+    }
+
+    const [row] = rows;
+
+    if (row === undefined) {
+      return yield* makeSqlSourceCountRowError(0);
+    }
+
+    return yield* Effect.try({
+      try: () => count.getCount(row),
+      catch: (cause) =>
+        new SourcePluginError({
+          cause,
+          message: "SQL source plugin count extractor failed",
+        }),
+    });
+  });
+};
+
+const discoverSqlSourceItemTotal = <CountRow>(
+  count: SqlSourceCount<CountRow> | undefined,
+  sql: SqlClient.SqlClient
+): Effect.Effect<SourceItemTotal, never> => {
+  if (count === undefined) {
+    return Effect.succeed(
+      SourceItemTotal.unknown({
+        message: "SQL Source Item total discovery was not configured",
+        reason: "disabled",
+      })
+    );
+  }
+
+  return readSqlSourceCount(count, sql).pipe(
+    Effect.flatMap(makeKnownSqlSourceItemTotal),
+    Effect.catch((cause) =>
+      Effect.succeed(makeFailedSqlSourceItemTotalDiscovery(cause))
+    )
+  );
+};
+
 const makeImplementation = <
   Source,
   Cursor,
   SourceInput,
   Identity extends AnySqlIdentityDefinition,
+  CountRow,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity>,
+  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity, CountRow>,
   sql: SqlClient.SqlClient,
   identityDefinition: SourceIdentityDefinition<
     SqlIdentityDefinitionKey<Identity>
@@ -523,6 +641,10 @@ const makeImplementation = <
   const read = Effect.fn("SqlSource.read")((cursor: Cursor | null) =>
     readRows(options, identityDefinition, sql, cursor)
   );
+
+  const discoverSourceItemTotal = Effect.fn(
+    "SqlSource.discoverSourceItemTotal"
+  )(() => discoverSqlSourceItemTotal(options.count, sql));
 
   const readByIdentity = Effect.fn("SqlSource.readByIdentity")(function* (
     identity: SourceIdentity<SqlIdentityDefinitionKey<Identity>>
@@ -573,6 +695,7 @@ const makeImplementation = <
   });
 
   return {
+    discoverSourceItemTotal,
     lookupStrategy: "direct",
     read,
     readByIdentity,
@@ -585,12 +708,14 @@ const make = <
   SourceInput,
   IdentityKey extends SourceIdentitySnapshotKey,
   Columns extends SqlIdentityColumns,
+  CountRow = unknown,
 >(
   options: SqlSourceOptionsForIdentity<
     Source,
     Cursor,
     SourceInput,
-    SqlIdentityDefinition<IdentityKey, Columns>
+    SqlIdentityDefinition<IdentityKey, Columns>,
+    CountRow
   >
 ): ConfiguredSourcePlugin<
   Source,
@@ -632,7 +757,8 @@ const make = <
               Source,
               Cursor,
               SourceInput,
-              SqlIdentityDefinition<IdentityKey, Columns>
+              SqlIdentityDefinition<IdentityKey, Columns>,
+              CountRow
             >(options, sql, identityDefinition),
           sourceIdentityContractFingerprint,
           sourceSchema: options.sourceSchema,
@@ -665,15 +791,18 @@ const makeLayer = <
   SourceInput,
   IdentityKey extends SourceIdentitySnapshotKey,
   Columns extends SqlIdentityColumns,
+  CountRow = unknown,
 >(
   options: SqlSourceOptionsForIdentity<
     Source,
     Cursor,
     SourceInput,
-    SqlIdentityDefinition<IdentityKey, Columns>
+    SqlIdentityDefinition<IdentityKey, Columns>,
+    CountRow
   >
 ): Layer.Layer<AnySourcePlugin, never, SqlClient.SqlClient> =>
-  make<Source, Cursor, SourceInput, IdentityKey, Columns>(options).layer;
+  make<Source, Cursor, SourceInput, IdentityKey, Columns, CountRow>(options)
+    .layer;
 
 export const SqlSourcePlugin = {
   make,

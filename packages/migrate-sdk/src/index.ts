@@ -333,6 +333,10 @@ export type {
   SqlIdentityColumn,
   SqlIdentityColumns,
   SqlIdentityDefinition,
+  SqlSourceCount,
+  SqlSourceCountEffect,
+  SqlSourceCountStatement,
+  SqlSourceEffectCount,
   SqlSourceLookup,
   SqlSourceMetadata,
   SqlSourceMetadataContext,
@@ -341,6 +345,7 @@ export type {
   SqlSourceMetadataSuccess,
   SqlSourceOptions,
   SqlSourceRead,
+  SqlSourceStatementCount,
 } from "./sources/sql/sql-source.ts";
 
 export { InMemoryMigrationStore } from "./stores/in-memory/in-memory-migration-store.ts";
