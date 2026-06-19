@@ -9,6 +9,7 @@ import type {
 } from "../domain/ids.ts";
 import type {
   SourceItem,
+  SourceItemTotal,
   SourceLookupStrategy,
   SourceReadResult,
 } from "../domain/source.ts";
@@ -20,6 +21,10 @@ export interface SourcePlugin<
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
 > {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
+  readonly discoverSourceItemTotal?: () => Effect.Effect<
+    SourceItemTotal,
+    SourcePluginError
+  >;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (

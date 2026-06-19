@@ -74,3 +74,74 @@ export interface SourceReadResult<
 }
 
 export type SourceLookupStrategy = "direct" | "scan";
+
+export type SourceItemTotalUnknownReason =
+  | "disabled"
+  | "failed"
+  | "too-expensive"
+  | "unsupported";
+
+export type SourceItemTotal =
+  | {
+      readonly count: number;
+      readonly kind: "known";
+    }
+  | {
+      readonly cause?: unknown;
+      readonly kind: "unknown";
+      readonly message?: string;
+      readonly reason: SourceItemTotalUnknownReason;
+    };
+
+const sourceItemTotalCountError = (count: number) =>
+  new SourcePluginError({
+    message: "Source Item total must be a non-negative integer",
+    cause: { count },
+  });
+
+const makeKnownSourceItemTotal = (count: number): SourceItemTotal => {
+  if (!Number.isInteger(count) || count < 0) {
+    throw sourceItemTotalCountError(count);
+  }
+
+  return {
+    count,
+    kind: "known",
+  };
+};
+
+const makeUnknownSourceItemTotal = (
+  input: Omit<Extract<SourceItemTotal, { readonly kind: "unknown" }>, "kind">
+): SourceItemTotal => ({
+  kind: "unknown",
+  ...input,
+});
+
+export const SourceItemTotal = {
+  known: makeKnownSourceItemTotal,
+  unknown: makeUnknownSourceItemTotal,
+} as const;
+
+export const normalizeSourceItemTotal = (
+  total: SourceItemTotal
+): Effect.Effect<SourceItemTotal, SourcePluginError> =>
+  total.kind === "known"
+    ? Effect.try({
+        try: () => SourceItemTotal.known(total.count),
+        catch: (cause) =>
+          cause instanceof SourcePluginError
+            ? cause
+            : sourceItemTotalCountError(total.count),
+      })
+    : Effect.succeed(SourceItemTotal.unknown(total));
+
+export const capSourceItemTotal = (
+  total: SourceItemTotal,
+  itemLimit: number | undefined
+): SourceItemTotal => {
+  if (total.kind !== "known" || itemLimit === undefined) {
+    return total;
+  }
+
+  return SourceItemTotal.known(Math.min(total.count, itemLimit));
+};

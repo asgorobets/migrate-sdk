@@ -33,10 +33,11 @@ import type { RollbackPipeline } from "./rollback.ts";
 import type {
   SourceItem,
   SourceItemInput,
+  SourceItemTotal,
   SourceLookupStrategy,
   SourceReadResult,
 } from "./source.ts";
-import { makeSourceItemEffect } from "./source.ts";
+import { makeSourceItemEffect, normalizeSourceItemTotal } from "./source.ts";
 import type { TrackingRecordContract } from "./tracking.ts";
 
 const configuredSourcePluginTypeId: unique symbol = Symbol.for(
@@ -101,6 +102,10 @@ export interface SourcePluginImplementation<
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
   SourceInput = Source,
 > {
+  readonly discoverSourceItemTotal?: () => Effect.Effect<
+    SourceItemTotal,
+    SourcePluginError
+  >;
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
@@ -259,6 +264,9 @@ export const defineSourcePlugin = <
           lookupStrategy: input.lookupStrategy,
           read: input.read,
           readByIdentity: input.readByIdentity,
+          ...(input.discoverSourceItemTotal === undefined
+            ? {}
+            : { discoverSourceItemTotal: input.discoverSourceItemTotal }),
         });
 
   return makeConfiguredSourcePlugin({
@@ -266,6 +274,7 @@ export const defineSourcePlugin = <
       SourcePluginService,
       (): SourcePlugin<Source, Cursor, SourceInput, IdentityKey> => {
         const implementation = makeImplementation();
+        const discoverSourceItemTotal = implementation.discoverSourceItemTotal;
 
         return {
           cursorSchema: input.cursorSchema,
@@ -293,6 +302,14 @@ export const defineSourcePlugin = <
                       )
                 )
               ),
+          ...(discoverSourceItemTotal === undefined
+            ? {}
+            : {
+                discoverSourceItemTotal: () =>
+                  discoverSourceItemTotal().pipe(
+                    Effect.flatMap(normalizeSourceItemTotal)
+                  ),
+              }),
           sourceSchema: input.sourceSchema,
         };
       }

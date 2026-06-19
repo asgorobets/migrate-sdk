@@ -3,6 +3,7 @@ import {
   initialMigrationProgressState,
   type MigrationProgressEvent,
   reduceMigrationProgressState,
+  SourceItemTotal,
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "../index.ts";
@@ -77,6 +78,7 @@ describe("Migration Progress state", () => {
           definitionId: articles,
           itemsRead: 2,
           status: "succeeded",
+          warnings: [],
         },
         {
           counts: {
@@ -90,6 +92,7 @@ describe("Migration Progress state", () => {
           definitionId: authors,
           itemsRead: 0,
           status: "running",
+          warnings: [],
         },
       ],
       runId,
@@ -146,5 +149,124 @@ describe("Migration Progress state", () => {
     expect(completedState.activeDefinitionId).toBeUndefined();
     expect(terminalState.activeDefinitionId).toBeUndefined();
     expect(failedState.activeDefinitionId).toBeUndefined();
+  });
+
+  it("stores known and unknown Source Item totals per active Migration Definition", () => {
+    const runId = toMigrationRunId("run-progress");
+    const articles = toMigrationDefinitionId("articles");
+    const authors = toMigrationDefinitionId("authors");
+    const events: readonly MigrationProgressEvent[] = [
+      {
+        definitionIds: [articles, authors],
+        kind: "run-started",
+        runId,
+      },
+      {
+        definitionId: articles,
+        kind: "definition-started",
+        runId,
+      },
+      {
+        definitionId: articles,
+        kind: "source-item-total-discovered",
+        runId,
+        sourceItemTotal: SourceItemTotal.known(3),
+      },
+      {
+        definitionId: authors,
+        kind: "definition-started",
+        runId,
+      },
+      {
+        definitionId: authors,
+        kind: "source-item-total-discovered",
+        runId,
+        sourceItemTotal: SourceItemTotal.unknown({
+          reason: "unsupported",
+        }),
+      },
+    ];
+
+    const state = events.reduce(
+      reduceMigrationProgressState,
+      initialMigrationProgressState
+    );
+
+    expect(state.definitions).toEqual([
+      expect.objectContaining({
+        definitionId: articles,
+        sourceItemTotal: SourceItemTotal.known(3),
+        warnings: [],
+      }),
+      expect.objectContaining({
+        definitionId: authors,
+        sourceItemTotal: SourceItemTotal.unknown({
+          reason: "unsupported",
+        }),
+        warnings: [],
+      }),
+    ]);
+  });
+
+  it("caps known Source Item totals by the active item limit without deriving percentages", () => {
+    const runId = toMigrationRunId("run-progress");
+    const articles = toMigrationDefinitionId("articles");
+    const state = reduceMigrationProgressState(
+      reduceMigrationProgressState(initialMigrationProgressState, {
+        definitionIds: [articles],
+        kind: "run-started",
+        runId,
+      }),
+      {
+        definitionId: articles,
+        itemLimit: 2,
+        kind: "source-item-total-discovered",
+        runId,
+        sourceItemTotal: SourceItemTotal.known(5),
+      }
+    );
+    const definition = state.definitions[0] as
+      | (typeof state.definitions)[number]
+      | undefined;
+    const rawDefinition = definition as Record<string, unknown> | undefined;
+
+    expect(definition?.sourceItemTotal).toEqual(SourceItemTotal.known(2));
+    expect(rawDefinition?.percentage).toBeUndefined();
+    expect(rawDefinition?.remaining).toBeUndefined();
+  });
+
+  it("records a progress warning when Source Item total discovery fails", () => {
+    const runId = toMigrationRunId("run-progress");
+    const articles = toMigrationDefinitionId("articles");
+    const cause = new Error("count failed");
+    const state = reduceMigrationProgressState(initialMigrationProgressState, {
+      definitionId: articles,
+      kind: "source-item-total-discovered",
+      runId,
+      sourceItemTotal: SourceItemTotal.unknown({
+        cause,
+        message: "Unable to count articles",
+        reason: "failed",
+      }),
+    });
+
+    expect(state.definitions[0]).toEqual(
+      expect.objectContaining({
+        definitionId: articles,
+        sourceItemTotal: SourceItemTotal.unknown({
+          cause,
+          message: "Unable to count articles",
+          reason: "failed",
+        }),
+        warnings: [
+          {
+            cause,
+            definitionId: articles,
+            kind: "source-item-total-discovery-failed",
+            message: "Unable to count articles",
+          },
+        ],
+      })
+    );
   });
 });

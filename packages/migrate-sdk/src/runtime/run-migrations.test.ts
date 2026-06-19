@@ -51,6 +51,8 @@ import {
   runMigrations,
   SourceIdentity,
   type SourceIdentityDefinition,
+  type SourceItemInput,
+  SourceItemTotal,
   SourcePlugin,
   SourcePluginError,
   type SourcePluginImplementation,
@@ -181,6 +183,67 @@ const makeTestInMemorySource = <A>(
     identity: ArticleSourceIdentity,
     sourceSchema: Schema.Unknown as Schema.Codec<A, unknown, never, never>,
     ...options,
+  });
+
+interface ObservableTotalDiscoverySourceState {
+  readAttempts: number;
+  readByIdentityAttempts: number;
+  totalDiscoveryAttempts: number;
+}
+
+const makeObservableTotalDiscoverySource = ({
+  batchSize,
+  items,
+  sourceItemTotal,
+  state,
+}: {
+  readonly batchSize?: number;
+  readonly items: readonly SourceItemInput<ArticleSource, string>[];
+  readonly sourceItemTotal?: Effect.Effect<SourceItemTotal, SourcePluginError>;
+  readonly state: ObservableTotalDiscoverySourceState;
+}) =>
+  defineSourcePlugin({
+    cursorSchema: InMemorySourceCursor,
+    identity: ArticleSourceIdentity,
+    sourceSchema: ArticleSource,
+    lookupStrategy: "direct",
+    read: (cursor: InMemorySourceCursor | null) =>
+      Effect.sync(() => {
+        state.readAttempts += 1;
+        const offset = cursor?.offset ?? 0;
+        const nextOffset = offset + (batchSize ?? items.length);
+
+        return {
+          items: items.slice(offset, nextOffset),
+          ...(nextOffset < items.length
+            ? {
+                nextCursor: {
+                  offset: nextOffset,
+                },
+              }
+            : {}),
+        };
+      }),
+    readByIdentity: (identity) =>
+      Effect.sync(() => {
+        state.readByIdentityAttempts += 1;
+
+        return (
+          items.find(
+            (item) =>
+              SourceIdentity.fromKey(ArticleSourceIdentity, item.identityKey)
+                .encoded === identity.encoded
+          ) ?? null
+        );
+      }),
+    ...(sourceItemTotal === undefined
+      ? {}
+      : {
+          discoverSourceItemTotal: () =>
+            Effect.sync(() => {
+              state.totalDiscoveryAttempts += 1;
+            }).pipe(Effect.andThen(sourceItemTotal)),
+        }),
   });
 
 interface PipelineTestError {
@@ -4625,6 +4688,228 @@ describe("runMigration", () => {
                 unchanged: 0,
                 needsUpdate: 0,
               },
+            }),
+          ])
+        );
+      })
+  );
+
+  it.effect("discovers a known Source Item total when progress opts in", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const sourceState: ObservableTotalDiscoverySourceState = {
+        readAttempts: 0,
+        readByIdentityAttempts: 0,
+        totalDiscoveryAttempts: 0,
+      };
+      const events: MigrationProgressEvent[] = [];
+      const definition = defineMigration({
+        id: "articles",
+        source: makeObservableTotalDiscoverySource({
+          batchSize: 2,
+          items: [
+            {
+              identityKey: "article-1",
+              version: "source-version-1",
+              item: { title: "Article 1" },
+            },
+            {
+              identityKey: "article-2",
+              version: "source-version-1",
+              item: { title: "Article 2" },
+            },
+            {
+              identityKey: "article-3",
+              version: "source-version-1",
+              item: { title: "Article 3" },
+            },
+          ],
+          sourceItemTotal: Effect.succeed(SourceItemTotal.known(3)),
+          state: sourceState,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        process: () => Effect.void,
+      });
+      const progressLayer = Layer.succeed(MigrationProgress, {
+        discoverSourceItemTotals: true,
+        emit: (event) =>
+          Effect.sync(() => {
+            events.push(event);
+          }),
+      });
+
+      const summary = yield* runMigration(definition).pipe(
+        Effect.provide(progressLayer)
+      );
+
+      expect(summary.status).toBe("succeeded");
+      expect(sourceState.totalDiscoveryAttempts).toBe(1);
+      expect(sourceState.readByIdentityAttempts).toBe(0);
+      expect(events.map((event) => event.kind)).toEqual([
+        "run-started",
+        "definition-started",
+        "source-item-total-discovered",
+        "source-item-completed",
+        "source-item-completed",
+        "source-cursor-window-completed",
+        "source-item-completed",
+        "source-cursor-window-completed",
+        "definition-completed",
+        "run-completed",
+      ]);
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            definitionId: definition.id,
+            kind: "source-item-total-discovered",
+            sourceItemTotal: SourceItemTotal.known(3),
+          }),
+        ])
+      );
+    })
+  );
+
+  it.effect(
+    "emits an unsupported unknown Source Item total for sources without discovery",
+    () =>
+      Effect.gen(function* () {
+        const events: MigrationProgressEvent[] = [];
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: { title: "Article 1" },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(),
+          process: () => Effect.void,
+        });
+        const progressLayer = Layer.succeed(MigrationProgress, {
+          discoverSourceItemTotals: true,
+          emit: (event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+        });
+
+        const summary = yield* runMigration(definition).pipe(
+          Effect.provide(progressLayer)
+        );
+
+        expect(summary.status).toBe("succeeded");
+        expect(events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              definitionId: definition.id,
+              kind: "source-item-total-discovered",
+              sourceItemTotal: SourceItemTotal.unknown({
+                message:
+                  "Source plugin does not support Source Item total discovery",
+                reason: "unsupported",
+              }),
+            }),
+          ])
+        );
+      })
+  );
+
+  it.effect("does not discover Source Item totals for no-op progress", () =>
+    Effect.gen(function* () {
+      const sourceState: ObservableTotalDiscoverySourceState = {
+        readAttempts: 0,
+        readByIdentityAttempts: 0,
+        totalDiscoveryAttempts: 0,
+      };
+      const definition = defineMigration({
+        id: "articles",
+        source: makeObservableTotalDiscoverySource({
+          items: [
+            {
+              identityKey: "article-1",
+              version: "source-version-1",
+              item: { title: "Article 1" },
+            },
+          ],
+          sourceItemTotal: Effect.succeed(SourceItemTotal.known(1)),
+          state: sourceState,
+        }),
+        store: InMemoryMigrationStore.layer(),
+        process: () => Effect.void,
+      });
+
+      const summary = yield* runMigration(definition);
+
+      expect(summary.status).toBe("succeeded");
+      expect(sourceState.totalDiscoveryAttempts).toBe(0);
+      expect(sourceState.readAttempts).toBe(1);
+    })
+  );
+
+  it.effect(
+    "continues with an unknown failed Source Item total when discovery fails",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const sourceState: ObservableTotalDiscoverySourceState = {
+          readAttempts: 0,
+          readByIdentityAttempts: 0,
+          totalDiscoveryAttempts: 0,
+        };
+        const events: MigrationProgressEvent[] = [];
+        const discoveryError = new SourcePluginError({
+          message: "Count endpoint failed",
+        });
+        const definition = defineMigration({
+          id: "articles",
+          source: makeObservableTotalDiscoverySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: { title: "Article 1" },
+              },
+            ],
+            sourceItemTotal: Effect.fail(discoveryError),
+            state: sourceState,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () => Effect.void,
+        });
+        const progressLayer = Layer.succeed(MigrationProgress, {
+          discoverSourceItemTotals: true,
+          emit: (event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+        });
+
+        const summary = yield* runMigration(definition).pipe(
+          Effect.provide(progressLayer)
+        );
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(sourceState.totalDiscoveryAttempts).toBe(1);
+        expect(events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              definitionId: definition.id,
+              kind: "source-item-total-discovered",
+              sourceItemTotal: SourceItemTotal.unknown({
+                cause: discoveryError,
+                message: "Source Item total discovery failed",
+                reason: "failed",
+              }),
             }),
           ])
         );

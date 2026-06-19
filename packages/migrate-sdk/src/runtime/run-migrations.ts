@@ -60,6 +60,7 @@ import {
   normalRunMode,
   type RunMode,
 } from "../domain/run-mode.ts";
+import { SourceItemTotal } from "../domain/source.ts";
 import type {
   FailedItemState,
   MigratedItemState,
@@ -1071,6 +1072,63 @@ const recordMigrationOutcome = ({
     )
   );
 
+const discoverDefinitionSourceItemTotal = <
+  Source,
+  Cursor,
+  IdentityKey extends SourceIdentitySnapshotKey,
+  SourceInput,
+>({
+  definitionId,
+  itemLimit,
+  runId,
+  source,
+}: {
+  readonly definitionId: MigrationDefinitionId;
+  readonly itemLimit?: number;
+  readonly runId: MigrationRunId;
+  readonly source: SourcePlugin<Source, Cursor, SourceInput, IdentityKey>;
+}) =>
+  MigrationProgress.shouldDiscoverSourceItemTotals.pipe(
+    Effect.flatMap((shouldDiscoverTotals) => {
+      if (!shouldDiscoverTotals) {
+        return Effect.void;
+      }
+
+      const discovery =
+        source.discoverSourceItemTotal === undefined
+          ? Effect.succeed(
+              SourceItemTotal.unknown({
+                message:
+                  "Source plugin does not support Source Item total discovery",
+                reason: "unsupported",
+              })
+            )
+          : source.discoverSourceItemTotal().pipe(
+              Effect.catch((error) =>
+                Effect.succeed(
+                  SourceItemTotal.unknown({
+                    cause: error,
+                    message: "Source Item total discovery failed",
+                    reason: "failed",
+                  })
+                )
+              )
+            );
+
+      return discovery.pipe(
+        Effect.flatMap((sourceItemTotal) =>
+          MigrationProgress.emit({
+            definitionId,
+            ...(itemLimit === undefined ? {} : { itemLimit }),
+            kind: "source-item-total-discovered",
+            runId,
+            sourceItemTotal,
+          })
+        )
+      );
+    })
+  );
+
 const addRollbackOutcomeToCounts = (
   counts: MutableRollbackDefinitionCounts,
   outcome: RollbackItemOutcome
@@ -1917,6 +1975,12 @@ const runMigrationDefinition = <
       definitionId: definition.id,
       kind: "definition-started",
       runId,
+    });
+    yield* discoverDefinitionSourceItemTotal({
+      definitionId: definition.id,
+      ...(mode.kind === "item" ? { itemLimit: 1 } : {}),
+      runId,
+      source,
     });
 
     if (update) {

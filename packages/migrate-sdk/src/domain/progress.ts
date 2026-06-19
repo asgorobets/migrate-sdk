@@ -1,5 +1,7 @@
 import type { MigrationDefinitionId, MigrationRunId } from "./ids.ts";
 import type { MigrationDefinitionRunSummary } from "./run.ts";
+import type { SourceItemTotal } from "./source.ts";
+import { capSourceItemTotal } from "./source.ts";
 import type { MigrationItemOutcome } from "./state.ts";
 
 export type MigrationProgressCounts = MigrationDefinitionRunSummary["counts"];
@@ -14,6 +16,13 @@ export type MigrationProgressEvent =
       readonly definitionId: MigrationDefinitionId;
       readonly kind: "definition-started";
       readonly runId: MigrationRunId;
+    }
+  | {
+      readonly definitionId: MigrationDefinitionId;
+      readonly itemLimit?: number;
+      readonly kind: "source-item-total-discovered";
+      readonly runId: MigrationRunId;
+      readonly sourceItemTotal: SourceItemTotal;
     }
   | {
       readonly counts: MigrationProgressCounts;
@@ -62,12 +71,21 @@ export type MigrationProgressDefinitionStatus =
   | "failed"
   | "skipped";
 
+export interface MigrationProgressWarning {
+  readonly cause?: unknown;
+  readonly definitionId: MigrationDefinitionId;
+  readonly kind: "source-item-total-discovery-failed";
+  readonly message: string;
+}
+
 export interface MigrationDefinitionProgressState {
   readonly counts: MigrationProgressCounts;
   readonly cursorWindowsCompleted: number;
   readonly definitionId: MigrationDefinitionId;
   readonly itemsRead: number;
+  readonly sourceItemTotal?: SourceItemTotal;
   readonly status: MigrationProgressDefinitionStatus;
+  readonly warnings: readonly MigrationProgressWarning[];
 }
 
 export interface MigrationProgressState {
@@ -100,7 +118,29 @@ const initialDefinitionState = (
   definitionId,
   itemsRead: 0,
   status: "pending",
+  warnings: [],
 });
+
+const sourceItemTotalDiscoveryWarning = (
+  definitionId: MigrationDefinitionId,
+  sourceItemTotal: SourceItemTotal
+): MigrationProgressWarning | null => {
+  if (
+    sourceItemTotal.kind !== "unknown" ||
+    sourceItemTotal.reason !== "failed"
+  ) {
+    return null;
+  }
+
+  return {
+    ...(sourceItemTotal.cause === undefined
+      ? {}
+      : { cause: sourceItemTotal.cause }),
+    definitionId,
+    kind: "source-item-total-discovery-failed",
+    message: sourceItemTotal.message ?? "Source Item total discovery failed",
+  };
+};
 
 const upsertDefinition = (
   state: MigrationProgressState,
@@ -162,6 +202,33 @@ export const reduceMigrationProgressState = (
         ),
         runId: state.runId ?? event.runId,
         status: "running",
+      };
+    case "source-item-total-discovered":
+      return {
+        ...state,
+        definitions: upsertDefinition(
+          state,
+          event.definitionId,
+          (definition) => {
+            const sourceItemTotal = capSourceItemTotal(
+              event.sourceItemTotal,
+              event.itemLimit
+            );
+            const warning = sourceItemTotalDiscoveryWarning(
+              event.definitionId,
+              sourceItemTotal
+            );
+
+            return {
+              ...definition,
+              sourceItemTotal,
+              ...(warning === null
+                ? {}
+                : { warnings: [...definition.warnings, warning] }),
+            };
+          }
+        ),
+        runId: state.runId ?? event.runId,
       };
     case "source-item-completed":
       return {

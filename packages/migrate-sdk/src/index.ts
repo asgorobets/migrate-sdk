@@ -209,10 +209,11 @@ export type { RunModeInput } from "./domain/run-mode.ts";
 export type {
   SourceItem,
   SourceItemInput,
+  SourceItemTotalUnknownReason,
   SourceLookupStrategy,
   SourceReadResult,
 } from "./domain/source.ts";
-export { makeSourceItem } from "./domain/source.ts";
+export { makeSourceItem, SourceItemTotal } from "./domain/source.ts";
 
 export {
   FailedItemState,

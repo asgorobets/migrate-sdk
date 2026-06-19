@@ -6,6 +6,7 @@ import {
   SourceIdentity,
   type SourceIdentityTarget,
   type SourceItem,
+  SourceItemTotal,
   SourcePluginError,
   type SourceReadResult,
   type SourceReadResultInput,
@@ -53,6 +54,17 @@ expectTypeOf<
 >().toEqualTypeOf<
   Effect.Effect<SourceItem<RemoteArticle> | null, SourcePluginError>
 >();
+
+expectTypeOf<
+  ReturnType<
+    NonNullable<
+      SourcePluginContract<
+        RemoteArticle,
+        RemoteArticleCursor
+      >["discoverSourceItemTotal"]
+    >
+  >
+>().toEqualTypeOf<Effect.Effect<SourceItemTotal, SourcePluginError>>();
 
 interface ArticleListEntry {
   readonly id: string;
@@ -182,6 +194,7 @@ describe("defineSourcePlugin", () => {
         expect(plugin.identity).toBe(RemoteArticleIdentity);
         expect(plugin.sourceSchema).toBe(RemoteArticle);
         expect(plugin.lookupStrategy).toBe("direct");
+        expect(plugin.discoverSourceItemTotal).toBeUndefined();
         expect(page.items[0]?.identity).toEqual(
           SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
         );
@@ -190,6 +203,32 @@ describe("defineSourcePlugin", () => {
           SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
         );
       })
+  );
+
+  it.effect("exposes optional Source Item total discovery", () =>
+    Effect.gen(function* () {
+      const source = defineSourcePlugin({
+        cursorSchema: RemoteArticleCursor,
+        identity: RemoteArticleIdentity,
+        sourceSchema: RemoteArticle,
+        lookupStrategy: "direct",
+        read: () =>
+          Effect.succeed({
+            items: [],
+          }),
+        readByIdentity: () => Effect.succeed(null),
+        discoverSourceItemTotal: () => Effect.succeed(SourceItemTotal.known(0)),
+      });
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+      if (plugin.discoverSourceItemTotal === undefined) {
+        throw new Error("Expected source plugin to expose total discovery");
+      }
+
+      const total = yield* plugin.discoverSourceItemTotal();
+
+      expect(total).toEqual(SourceItemTotal.known(0));
+    })
   );
 
   it.effect(
