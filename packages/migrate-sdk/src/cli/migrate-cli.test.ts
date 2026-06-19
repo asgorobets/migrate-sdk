@@ -734,6 +734,91 @@ const modeExecutionConfigSource = (): string => `
   });
 `;
 
+const updateExecutionConfigSource = (): string => `
+  import { Schema } from "effect";
+  import {
+    defaultSourceVersionContractFingerprint,
+    defineMigration,
+    InMemoryMigrationStore,
+    InMemorySourcePlugin,
+    MigrationDefinitionRegistry,
+    SourceIdentity,
+    toEncodedSourceCursor,
+    toMigrationDefinitionId,
+    toMigrationRunId,
+    toSourceVersion
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntrySourceIdentity = SourceIdentity.make({
+    id: "entry@v1",
+    schema: SourceIdentity.key("id", Schema.NonEmptyString)
+  });
+  const definitionId = toMigrationDefinitionId("articles");
+  const storeState = InMemoryMigrationStore.makeState();
+  const store = InMemoryMigrationStore.layer(storeState);
+  const probe = {
+    executions: [],
+    storeState
+  };
+
+  globalThis.${executionProbeGlobal} = probe;
+
+  const previousRunId = toMigrationRunId("run-previous");
+  const previousDate = new Date("2026-01-01T00:00:00.000Z");
+
+  storeState.migrationContracts.set(definitionId, {
+    definitionId,
+    sourceIdentityContractFingerprint: EntrySourceIdentity.fingerprint,
+    sourceVersionContractFingerprint: defaultSourceVersionContractFingerprint
+  });
+  storeState.sourceCursors.set(definitionId, toEncodedSourceCursor("{\\"offset\\":1}"));
+  storeState.itemStates.set(
+    InMemoryMigrationStore.itemStateKey(definitionId, "article-migrated"),
+    {
+      definitionId,
+      sourceIdentity: SourceIdentity.fromKey(EntrySourceIdentity, "article-migrated"),
+      sourceVersion: toSourceVersion("source-version-1"),
+      sourceVersionContractFingerprint: defaultSourceVersionContractFingerprint,
+      lastRunId: previousRunId,
+      updatedAt: previousDate,
+      status: "migrated"
+    }
+  );
+
+  const articles = defineMigration({
+    id: definitionId,
+    source: InMemorySourcePlugin.make({
+      identity: EntrySourceIdentity,
+      sourceSchema: EntrySource,
+      batchSize: 1,
+      items: [
+        {
+          identityKey: "article-migrated",
+          version: "source-version-1",
+          item: { title: "Already migrated" }
+        },
+        {
+          identityKey: "article-new",
+          version: "source-version-1",
+          item: { title: "New article" }
+        }
+      ]
+    }),
+    store,
+    process: (sourceItem) => {
+      probe.executions.push(sourceItem.identity.encoded);
+    }
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [articles]
+    })
+  });
+`;
+
 const rollbackExecutionConfigSource = (): string => `
   import { Schema } from "effect";
   import {
@@ -1506,6 +1591,41 @@ describe("migrate CLI", () => {
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
+  it.effect("renders update intent in run plans without executing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--update",
+          "--with-dependencies",
+          "articles",
+        ],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run Plan");
+      expect(result.stdout).toContain("Requested  articles");
+      expect(result.stdout).toContain("Included   articles, authors");
+      expect(result.stdout).toContain("Update     yes");
+      expect(result.stdout).toMatch(authorsArticlesOrderPattern);
+      expect(result.stdout).not.toContain("executed");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
   it.effect("renders a rollback plan with source identity targets", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -1734,6 +1854,38 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
+  it.effect("preserves update flags in missing dependency suggestions", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--update",
+          "articles",
+        ],
+        project
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        "migrate run --plan --update --with-dependencies articles"
+      );
+      expect(result.stderr).toContain(
+        "migrate run --plan --update authors articles"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
   it.effect(
     "does not render missing dependency suggestions for targeted plans",
     () =>
@@ -1784,6 +1936,101 @@ describe("migrate CLI", () => {
           expect(result.stderr).not.toContain("authors articles");
         }
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("accepts update run scopes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        executionConfigSource()
+      );
+
+      for (const args of [
+        ["run", "--config", "migrate.config.ts", "--update", "tags"],
+        ["run", "--config", "migrate.config.ts", "--update", "--all"],
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--update",
+          "--with-dependencies",
+          "articles",
+        ],
+      ] as const) {
+        const result = yield* runCli(args, project);
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Run Completed succeeded");
+      }
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects unsupported update run flag combinations", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const failedResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--update",
+          "--failed",
+          "articles",
+        ],
+        project
+      );
+      const skippedResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--update",
+          "--skipped",
+          "articles",
+        ],
+        project
+      );
+      const targetResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--update",
+          "--id",
+          "article-1",
+          "articles",
+        ],
+        project
+      );
+
+      expect(failedResult.exitCode).toBe(1);
+      expect(failedResult.stderr).toContain(
+        "Update run planning cannot combine with failed mode"
+      );
+      expect(skippedResult.exitCode).toBe(1);
+      expect(skippedResult.stderr).toContain(
+        "Update run planning cannot combine with skipped mode"
+      );
+      expect(targetResult.exitCode).toBe(1);
+      expect(targetResult.stderr).toContain(
+        "Update run planning cannot target source identities"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
   it.effect(
@@ -2711,6 +2958,34 @@ describe("migrate CLI", () => {
         "tags",
         "authors",
         "articles",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("executes update runs through the CLI runtime path", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        updateExecutionConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--update", "articles"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run Completed succeeded");
+      expect(result.stdout).toContain("articles");
+      expect(getExecutionProbe().executions).toEqual([
+        "article-migrated",
+        "article-new",
       ]);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );

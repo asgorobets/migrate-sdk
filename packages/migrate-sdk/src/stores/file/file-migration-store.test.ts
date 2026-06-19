@@ -228,14 +228,13 @@ const makeArticlesMigration = (options: {
       items: options.items,
     }),
     store: fileStoreLayer(options.directory),
-    process: (source, context) =>
+    process: (source) =>
       Effect.gen(function* () {
         if (source.item.publish === false) {
           return yield* skipItem("Article is not published");
         }
 
         options.processCalls?.push(source.identity.encoded);
-        void context;
       }),
   });
 
@@ -336,13 +335,19 @@ describe("FileMigrationStore", () => {
   );
 
   it.effect(
-    "round-trips failed rollback attempt journals across fresh store instances",
+    "round-trips item-state evidence across fresh store instances",
     () =>
       withTempDirectory((directory) =>
         Effect.gen(function* () {
           const definitionId = toMigrationDefinitionId("articles");
           const sourceIdentity = toEncodedSourceIdentity(
             "article-rollback-failed"
+          );
+          const skippedSourceIdentity = toEncodedSourceIdentity(
+            "article-skipped-tracked"
+          );
+          const failedSourceIdentity = toEncodedSourceIdentity(
+            "article-failed-tracked"
           );
           const failedAt = new Date("2026-01-01T00:00:03.000Z");
           const itemState = {
@@ -374,23 +379,69 @@ describe("FileMigrationStore", () => {
             status: "migrated" as const,
             updatedAt: new Date("2026-01-01T00:00:00.000Z"),
           };
+          const skippedItemState = {
+            definitionId,
+            lastRunId: toMigrationRunId("run-skipped"),
+            skipReason: "Update no longer needed",
+            sourceIdentity: SourceIdentity.fromEncoded(
+              TestSourceIdentity,
+              skippedSourceIdentity
+            ),
+            sourceVersion: toSourceVersion("source-version-2"),
+            status: "skipped" as const,
+            trackingRecord: {
+              entryId: "entry-skipped",
+              locale: "en-US",
+            },
+            updatedAt: new Date("2026-01-01T00:00:01.000Z"),
+          };
+          const failedItemState = {
+            definitionId,
+            error: {
+              errorTag: "PipelineFailureTestError",
+              kind: "process" as const,
+              message: "Update failed",
+            },
+            lastRunId: toMigrationRunId("run-failed"),
+            sourceIdentity: SourceIdentity.fromEncoded(
+              TestSourceIdentity,
+              failedSourceIdentity
+            ),
+            sourceVersion: toSourceVersion("source-version-2"),
+            status: "failed" as const,
+            trackingRecord: {
+              entryId: "entry-failed",
+              locale: "en-US",
+            },
+            updatedAt: new Date("2026-01-01T00:00:02.000Z"),
+          };
 
           yield* Effect.gen(function* () {
             const store = yield* MigrationStore;
 
             yield* store.upsertItemState(itemState);
+            yield* store.upsertItemState(skippedItemState);
+            yield* store.upsertItemState(failedItemState);
           }).pipe(Effect.provide(fileStoreLayer(directory)));
 
-          const stored = yield* Effect.gen(function* () {
-            const store = yield* MigrationStore;
+          const [stored, storedSkipped, storedFailed] = yield* Effect.gen(
+            function* () {
+              const store = yield* MigrationStore;
 
-            return yield* store.getItemState(definitionId, sourceIdentity);
-          }).pipe(Effect.provide(fileStoreLayer(directory)));
+              return yield* Effect.all([
+                store.getItemState(definitionId, sourceIdentity),
+                store.getItemState(definitionId, skippedSourceIdentity),
+                store.getItemState(definitionId, failedSourceIdentity),
+              ]);
+            }
+          ).pipe(Effect.provide(fileStoreLayer(directory)));
 
           expect(stored).toEqual(itemState);
           expect(stored?.journal?.rollbackAttempts[0]?.failedAt).toBeInstanceOf(
             Date
           );
+          expect(storedSkipped).toEqual(skippedItemState);
+          expect(storedFailed).toEqual(failedItemState);
         })
       )
   );

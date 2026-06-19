@@ -140,6 +140,7 @@ export interface RunRequest<
   readonly mode?: RunModeInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
+  readonly update?: boolean;
 }
 
 export interface RunRequestInput<
@@ -152,6 +153,7 @@ export interface RunRequestInput<
   readonly mode?: RunModeInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
+  readonly update?: boolean;
 }
 
 export const makeRunRequest = <
@@ -164,6 +166,7 @@ export const makeRunRequest = <
     ? {}
     : { execution: normalizeMigrationExecutionOptions(input.execution) }),
   ...(input.mode === undefined ? {} : { mode: input.mode }),
+  ...(input.update === undefined ? {} : { update: input.update }),
   ...(input.definitionIds === undefined
     ? {}
     : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
@@ -177,6 +180,7 @@ export interface EncodedRunRequest<
   readonly definitions: Definitions;
   readonly execution?: NormalizedMigrationExecutionOptions;
   readonly mode?: RunMode;
+  readonly update?: boolean;
 }
 
 export interface EncodedRunRequestInput<
@@ -187,6 +191,7 @@ export interface EncodedRunRequestInput<
   readonly definitions: Definitions;
   readonly execution?: MigrationExecutionOptions;
   readonly mode?: EncodedRunModeInput;
+  readonly update?: boolean;
 }
 
 export const makeEncodedRunRequest = <
@@ -199,6 +204,7 @@ export const makeEncodedRunRequest = <
     ? {}
     : { execution: normalizeMigrationExecutionOptions(input.execution) }),
   ...(input.mode === undefined ? {} : { mode: makeEncodedRunMode(input.mode) }),
+  ...(input.update === undefined ? {} : { update: input.update }),
   ...(input.definitionIds === undefined
     ? {}
     : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),

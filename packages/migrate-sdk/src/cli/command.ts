@@ -196,6 +196,10 @@ const skipped = Flag.boolean("skipped").pipe(
   Flag.withDescription("Plan a rerun of skipped items")
 );
 
+const update = Flag.boolean("update").pipe(
+  Flag.withDescription("Plan an update run")
+);
+
 const id = Flag.string("id").pipe(
   Flag.atMost(Number.MAX_SAFE_INTEGER),
   Flag.optional,
@@ -247,12 +251,18 @@ const makeRunPlanInput = (input: {
   readonly execution?: MigrationExecutionOptions;
   readonly mode?: "failed" | "skipped";
   readonly sourceIdentities?: readonly string[];
+  readonly update: boolean;
   readonly withDependencies: boolean;
 }): MigrationDefinitionRegistryRunInput => {
+  const updateInput: { readonly update?: true } = input.update
+    ? { update: true }
+    : {};
+
   if (input.all) {
     return input.definitionIds.length === 0
       ? {
           all: true,
+          ...updateInput,
           ...(input.sourceIdentities === undefined
             ? {}
             : { sourceIdentities: input.sourceIdentities }),
@@ -265,6 +275,7 @@ const makeRunPlanInput = (input: {
       : ({
           all: true,
           definitionIds: input.definitionIds,
+          ...updateInput,
           ...(input.sourceIdentities === undefined
             ? {}
             : { sourceIdentities: input.sourceIdentities }),
@@ -273,13 +284,14 @@ const makeRunPlanInput = (input: {
             : { execution: input.execution }),
           ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
           withDependencies: input.withDependencies,
-        } as MigrationDefinitionRegistryRunInput);
+        } as unknown as MigrationDefinitionRegistryRunInput);
   }
 
   return input.definitionIds.length === 0
     ? ({} as MigrationDefinitionRegistryRunInput)
     : {
         definitionIds: input.definitionIds as [string, ...string[]],
+        ...updateInput,
         ...(input.sourceIdentities === undefined
           ? {}
           : { sourceIdentities: input.sourceIdentities }),
@@ -395,6 +407,7 @@ const renderRunCommandError = (
     readonly definitionIds: readonly string[];
     readonly hasTarget: boolean;
     readonly mode?: "failed" | "skipped";
+    readonly update: boolean;
   }
 ): string =>
   isPlanningError(error)
@@ -403,6 +416,7 @@ const renderRunCommandError = (
         definitionIds: input.definitionIds,
         hasTarget: input.hasTarget,
         ...(input.mode === undefined ? {} : { mode: input.mode }),
+        update: input.update,
       })
     : renderRuntimeError(error);
 
@@ -491,6 +505,7 @@ const runCommand = Command.make(
     progress,
     concurrency: processConcurrency,
     skipped,
+    update,
     withDependencies,
   },
   (input) =>
@@ -532,6 +547,7 @@ const runCommand = Command.make(
         ...(execution === undefined ? {} : { execution }),
         ...(mode === undefined ? {} : { mode }),
         ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
+        update: input.update,
         withDependencies: input.withDependencies,
       });
 
@@ -544,6 +560,7 @@ const runCommand = Command.make(
                 definitionIds: input.definitions,
                 hasTarget: sourceIdentities !== undefined,
                 ...(mode === undefined ? {} : { mode }),
+                update: input.update,
               })
             )
           )
@@ -567,6 +584,7 @@ const runCommand = Command.make(
               definitionIds: input.definitions,
               hasTarget: sourceIdentities !== undefined,
               ...(mode === undefined ? {} : { mode }),
+              update: input.update,
             })
           )
         )

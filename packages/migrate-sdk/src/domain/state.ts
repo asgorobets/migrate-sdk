@@ -59,6 +59,7 @@ export const SkippedItemState = Schema.Struct({
   journal: Schema.optional(DestinationJournal),
   skipReason: Schema.String,
   status: Schema.Literal("skipped"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 export type SkippedItemState = typeof SkippedItemState.Type;
 
@@ -71,6 +72,7 @@ export const FailedItemState = Schema.Struct({
   error: MigrationItemError,
   journal: Schema.optional(DestinationJournal),
   status: Schema.Literal("failed"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 export type FailedItemState = typeof FailedItemState.Type;
 

@@ -62,6 +62,7 @@ import {
 } from "../domain/run-mode.ts";
 import type {
   FailedItemState,
+  MigratedItemState,
   MigrationItemError,
   MigrationItemOutcome,
   MigrationItemState,
@@ -147,6 +148,14 @@ const invalidRunRequestError = (cause: unknown) =>
   new MigrationRuntimeError({
     message: "Run request contains invalid input",
     cause,
+  });
+
+const invalidUpdateRunModeError = (mode: RunMode) =>
+  new MigrationRuntimeError({
+    message:
+      mode.kind === "item"
+        ? "Update run cannot target source identities"
+        : `Update run cannot combine with ${mode.kind} mode`,
   });
 
 const invalidRollbackRequestError = (cause: unknown) =>
@@ -645,10 +654,79 @@ const validateSharedStore = (
   return null;
 };
 
+const validateUpdateRunRequest = (
+  request: EncodedRunRequest<readonly AnyMigrationDefinition[]>
+): MigrationRuntimeError | null => {
+  if (request.update !== true) {
+    return null;
+  }
+
+  const mode = request.mode ?? normalRunMode;
+
+  return mode.kind === "normal" ? null : invalidUpdateRunModeError(mode);
+};
+
 const isTargetedMode = (mode: RunMode): boolean => mode.kind !== "normal";
 
 const shouldReprocessUnchangedTerminal = (mode: RunMode): boolean =>
   mode.kind === "skipped" || mode.kind === "item";
+
+const updateRunScheduleReason = "Scheduled by update run";
+
+const previousTrackingRecord = (
+  previousState: MigrationItemState | null
+): TrackingRecord | undefined =>
+  previousState !== null && "trackingRecord" in previousState
+    ? previousState.trackingRecord
+    : undefined;
+
+const makeUpdateRunNeedsUpdateState = (
+  itemState: MigratedItemState,
+  runId: MigrationRunId
+): NeedsUpdateItemState => ({
+  definitionId: itemState.definitionId,
+  sourceIdentity: itemState.sourceIdentity,
+  ...(itemState.sourceVersionContractFingerprint === undefined
+    ? {}
+    : {
+        sourceVersionContractFingerprint:
+          itemState.sourceVersionContractFingerprint,
+      }),
+  sourceVersion: itemState.sourceVersion,
+  ...(itemState.journal === undefined ? {} : { journal: itemState.journal }),
+  lastRunId: runId,
+  updatedAt: new Date(),
+  reason: updateRunScheduleReason,
+  status: "needs-update",
+  ...(itemState.trackingRecord === undefined
+    ? {}
+    : { trackingRecord: itemState.trackingRecord }),
+});
+
+const prepareUpdateRunDefinition = ({
+  definitionId,
+  itemStates,
+  runId,
+  store,
+}: {
+  readonly definitionId: MigrationDefinitionId;
+  readonly itemStates: readonly MigrationItemState[];
+  readonly runId: MigrationRunId;
+  readonly store: typeof MigrationStore.Service;
+}): Effect.Effect<void, MigrationStoreError> =>
+  Effect.gen(function* () {
+    for (const itemState of itemStates) {
+      if (itemState.status !== "migrated") {
+        continue;
+      }
+
+      yield* store.upsertItemState(
+        makeUpdateRunNeedsUpdateState(itemState, runId)
+      );
+    }
+
+    yield* store.deleteSourceCursor(definitionId);
+  });
 
 const selectBacklogStates = (
   mode: RunMode,
@@ -727,24 +805,30 @@ const makeFailedStubReferenceState = ({
   readonly previousState: MigrationItemState | null;
   readonly runId: MigrationRunId;
   readonly sourceIdentity: SourceIdentityValue;
-}): FailedItemState => ({
-  definitionId,
-  sourceIdentity,
-  ...(previousState?.sourceVersionContractFingerprint === undefined
-    ? {}
-    : {
-        sourceVersionContractFingerprint:
-          previousState.sourceVersionContractFingerprint,
-      }),
-  ...(previousState?.sourceVersion === undefined
-    ? {}
-    : { sourceVersion: previousState.sourceVersion }),
-  ...(journal === undefined ? {} : { journal }),
-  lastRunId: runId,
-  updatedAt: new Date(),
-  status: "failed",
-  error,
-});
+}): FailedItemState => {
+  const preservedJournal = previousState?.journal ?? journal;
+  const trackingRecord = previousTrackingRecord(previousState);
+
+  return {
+    definitionId,
+    sourceIdentity,
+    ...(previousState?.sourceVersionContractFingerprint === undefined
+      ? {}
+      : {
+          sourceVersionContractFingerprint:
+            previousState.sourceVersionContractFingerprint,
+        }),
+    ...(previousState?.sourceVersion === undefined
+      ? {}
+      : { sourceVersion: previousState.sourceVersion }),
+    ...(preservedJournal === undefined ? {} : { journal: preservedJournal }),
+    lastRunId: runId,
+    updatedAt: new Date(),
+    status: "failed",
+    error,
+    ...(trackingRecord === undefined ? {} : { trackingRecord }),
+  };
+};
 
 const makeNeedsUpdateStubReferenceState = ({
   definitionId,
@@ -760,25 +844,32 @@ const makeNeedsUpdateStubReferenceState = ({
   readonly runId: MigrationRunId;
   readonly sourceIdentity: SourceIdentityValue;
   readonly trackingRecord?: TrackingRecord;
-}): NeedsUpdateItemState => ({
-  definitionId,
-  sourceIdentity,
-  ...(previousState?.sourceVersionContractFingerprint === undefined
-    ? {}
-    : {
-        sourceVersionContractFingerprint:
-          previousState.sourceVersionContractFingerprint,
-      }),
-  ...(previousState?.sourceVersion === undefined
-    ? {}
-    : { sourceVersion: previousState.sourceVersion }),
-  ...(journal === undefined ? {} : { journal }),
-  lastRunId: runId,
-  updatedAt: new Date(),
-  reason: "Migration Reference Stub requires update",
-  status: "needs-update",
-  ...(trackingRecord === undefined ? {} : { trackingRecord }),
-});
+}): NeedsUpdateItemState => {
+  const resolvedTrackingRecord =
+    trackingRecord ?? previousTrackingRecord(previousState);
+
+  return {
+    definitionId,
+    sourceIdentity,
+    ...(previousState?.sourceVersionContractFingerprint === undefined
+      ? {}
+      : {
+          sourceVersionContractFingerprint:
+            previousState.sourceVersionContractFingerprint,
+        }),
+    ...(previousState?.sourceVersion === undefined
+      ? {}
+      : { sourceVersion: previousState.sourceVersion }),
+    ...(journal === undefined ? {} : { journal }),
+    lastRunId: runId,
+    updatedAt: new Date(),
+    reason: "Migration Reference Stub requires update",
+    status: "needs-update",
+    ...(resolvedTrackingRecord === undefined
+      ? {}
+      : { trackingRecord: resolvedTrackingRecord }),
+  };
+};
 
 type TrackingStubOutcome =
   | {
@@ -896,23 +987,31 @@ const makeSourceLookupFailedItemState = (
   runId: MigrationRunId,
   previousState: MigrationItemState,
   error: unknown
-): FailedItemState => ({
-  definitionId,
-  sourceIdentity: previousState.sourceIdentity,
-  ...(previousState.sourceVersionContractFingerprint === undefined
-    ? {}
-    : {
-        sourceVersionContractFingerprint:
-          previousState.sourceVersionContractFingerprint,
-      }),
-  ...(previousState.sourceVersion === undefined
-    ? {}
-    : { sourceVersion: previousState.sourceVersion }),
-  lastRunId: runId,
-  updatedAt: new Date(),
-  status: "failed",
-  error: normalizeItemError("source", error),
-});
+): FailedItemState => {
+  const trackingRecord = previousTrackingRecord(previousState);
+
+  return {
+    definitionId,
+    sourceIdentity: previousState.sourceIdentity,
+    ...(previousState.sourceVersionContractFingerprint === undefined
+      ? {}
+      : {
+          sourceVersionContractFingerprint:
+            previousState.sourceVersionContractFingerprint,
+        }),
+    ...(previousState.sourceVersion === undefined
+      ? {}
+      : { sourceVersion: previousState.sourceVersion }),
+    lastRunId: runId,
+    updatedAt: new Date(),
+    status: "failed",
+    error: normalizeItemError("source", error),
+    ...(previousState.journal === undefined
+      ? {}
+      : { journal: previousState.journal }),
+    ...(trackingRecord === undefined ? {} : { trackingRecord }),
+  };
+};
 
 const addOutcomeToCounts = (
   counts: MutableDefinitionCounts,
@@ -1318,6 +1417,7 @@ interface ProcessCursorDiscoveryOptions<
   >;
   readonly excludedSourceIdentities: readonly EncodedSourceIdentity[];
   readonly processConcurrency: PipelineExecutionConcurrency;
+  readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
   readonly source: SourcePlugin<Source, Cursor, SourceInput, IdentityKey>;
   readonly store: typeof MigrationStore.Service;
@@ -1336,6 +1436,7 @@ const processCursorDiscovery = <
   definition,
   excludedSourceIdentities,
   processConcurrency,
+  reprocessUnchangedTerminal = false,
   runId,
   source,
   store,
@@ -1372,6 +1473,7 @@ const processCursorDiscovery = <
             : Effect.gen(function* () {
                 const outcome = yield* processSourceItem({
                   definition,
+                  reprocessUnchangedTerminal,
                   runId,
                   sourceSchema: source.sourceSchema,
                   sourceItem,
@@ -1787,6 +1889,7 @@ const runMigrationDefinition = <
   >,
   runId: MigrationRunId,
   mode: RunMode,
+  update: boolean,
   createStubReference: CreateMigrationReferenceStub,
   processExecution?: PipelineExecutionOptions
 ): Effect.Effect<
@@ -1815,6 +1918,43 @@ const runMigrationDefinition = <
       kind: "definition-started",
       runId,
     });
+
+    if (update) {
+      yield* prepareUpdateRunDefinition({
+        definitionId: definition.id,
+        itemStates,
+        runId,
+        store,
+      });
+
+      yield* processCursorDiscovery({
+        counts,
+        definition,
+        excludedSourceIdentities: [],
+        processConcurrency,
+        reprocessUnchangedTerminal: true,
+        runId,
+        source,
+        store,
+      });
+
+      const summary = {
+        definitionId: definition.id,
+        status:
+          counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
+        counts,
+      };
+
+      yield* MigrationProgress.emit({
+        counts: snapshotCounts(counts),
+        definitionId: definition.id,
+        kind: "definition-completed",
+        runId,
+        status: summary.status,
+      });
+
+      return summary;
+    }
 
     const attemptedSourceIdentities = yield* processTargetedSourceIdentities({
       counts,
@@ -2538,6 +2678,12 @@ const runMigrationsWithRequest = <
     return Effect.fail(emptyRunError);
   }
 
+  const updateRunRequestError = validateUpdateRunRequest(request);
+
+  if (updateRunRequestError !== null) {
+    return Effect.fail(updateRunRequestError);
+  }
+
   const orderedDefinitions = orderDefinitions(
     request.definitions,
     request.definitionIds
@@ -2585,6 +2731,7 @@ const runMigrationsWithRequest = <
                   definition,
                   runId,
                   request.mode ?? normalRunMode,
+                  request.update === true,
                   stubRunScope.createStubReference,
                   request.execution?.process
                 );
@@ -2665,6 +2812,7 @@ export const runMigrations = <
             ? {}
             : { execution: request.execution }),
           mode,
+          ...(request.update === undefined ? {} : { update: request.update }),
         })
     );
   });
@@ -2717,6 +2865,7 @@ export const runMigration = <
               definition,
               runId,
               normalRunMode,
+              false,
               stubRunScope.createStubReference,
               execution?.process
             ).pipe(

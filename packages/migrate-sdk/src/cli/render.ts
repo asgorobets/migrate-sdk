@@ -387,6 +387,7 @@ const renderPlanScope = (
       | MigrationDefinitionRunPlan["requestedDefinitionIds"]
       | MigrationDefinitionRollbackPlan["requestedDefinitionIds"];
     readonly sourceIdentities?: readonly string[];
+    readonly update?: boolean;
   },
   options: RenderOptions
 ): readonly string[] => [
@@ -394,6 +395,7 @@ const renderPlanScope = (
   `Requested  ${renderRequestedDefinitionIdsInline(input.requestedDefinitionIds)}`,
   `Included   ${renderDefinitionIdInlineList(input.includedDefinitionIds)}`,
   ...(input.mode === undefined ? [] : [`Mode       ${input.mode}`]),
+  ...(input.update === true ? ["Update     yes"] : []),
   ...(input.sourceIdentities === undefined
     ? []
     : [`Target source identities ${input.sourceIdentities.join(", ")}`]),
@@ -417,6 +419,7 @@ export const renderRunPlan = (
         ...(plan.target === undefined
           ? {}
           : { sourceIdentities: plan.target.sourceIdentities }),
+        ...(plan.update === undefined ? {} : { update: plan.update }),
       },
       options
     ),
@@ -949,6 +952,7 @@ export const renderPlanningError = (
     readonly definitionIds: readonly string[];
     readonly hasTarget: boolean;
     readonly mode?: "failed" | "skipped";
+    readonly update?: boolean;
   }
 ): string => {
   switch (error._tag) {
@@ -963,6 +967,10 @@ export const renderPlanningError = (
       ]);
       const modeFlags =
         input.mode === undefined ? [] : ([`--${input.mode}`] as const);
+      const runOptionFlags =
+        input.command === "run" && input.update === true
+          ? ["--update", ...modeFlags]
+          : modeFlags;
       const message = [
         error.message,
         `${error.definitionId} is missing required dependencies: ${error.missingDependencyIds.join(
@@ -980,12 +988,12 @@ export const renderPlanningError = (
         "Try:",
         formatPlanCommand(
           input.command,
-          missingDependencyExpansionFlags(input.command, modeFlags),
+          missingDependencyExpansionFlags(input.command, runOptionFlags),
           input.definitionIds
         ),
         formatPlanCommand(
           input.command,
-          missingDependencyExplicitFlags(input.command, modeFlags),
+          missingDependencyExplicitFlags(input.command, runOptionFlags),
           definitionIdsWithMissingDependencies
         ),
       ].join("\n");
