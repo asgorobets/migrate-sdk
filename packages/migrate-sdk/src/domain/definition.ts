@@ -7,11 +7,13 @@ import {
   SourcePlugin as SourcePluginService,
 } from "../services/source-plugin.ts";
 import type { Tracking } from "../services/tracking.ts";
-import type {
-  MigrationStoreError,
-  SkipItem,
-} from "./errors.ts";
+import type { MigrationStoreError, SkipItem } from "./errors.ts";
 import { SourcePluginError } from "./errors.ts";
+import type {
+  MigrationExecutionOptions,
+  NormalizedMigrationExecutionOptions,
+} from "./execution.ts";
+import { normalizeMigrationExecutionOptions } from "./execution.ts";
 import {
   type EncodedSourceIdentity,
   type MigrationDefinitionId,
@@ -427,6 +429,7 @@ export interface MigrationDefinition<
 > {
   readonly dependencies?: MigrationDefinitionDependencies;
   readonly dependsOn?: readonly MigrationDefinitionId[];
+  readonly execution?: NormalizedMigrationExecutionOptions;
   readonly id: MigrationDefinitionId;
   readonly process: ProcessPipeline<Source, PipelineError, IdentityKey>;
   readonly rollback?: RollbackPipeline<RollbackPipelineError>;
@@ -482,10 +485,11 @@ export interface MigrationDefinitionInput<
       SourceRequirements,
       TrackingContract
     >,
-    "dependencies" | "dependsOn" | "id"
+    "dependencies" | "dependsOn" | "execution" | "id"
   > {
   readonly dependencies?: MigrationDefinitionDependenciesInput;
   readonly dependsOn?: readonly MigrationDefinitionIdInput[];
+  readonly execution?: MigrationExecutionOptions;
   readonly id: MigrationDefinitionIdInput;
 }
 
@@ -550,8 +554,18 @@ export const defineMigration = <
   SourceRequirements,
   TrackingContract
 > => {
-  const { dependencies, dependsOn, id, ...rest } = definition;
+  const {
+    dependencies,
+    dependsOn,
+    execution: executionInput,
+    id,
+    ...rest
+  } = definition;
   validateProcessAuthoring(definition);
+  const execution =
+    executionInput === undefined
+      ? undefined
+      : normalizeMigrationExecutionOptions(executionInput);
   const requiredDependencies = normalizeMigrationDefinitionIds([
     ...(dependencies?.required ?? []),
     ...(dependsOn ?? []),
@@ -564,6 +578,7 @@ export const defineMigration = <
 
   return {
     ...rest,
+    ...(execution === undefined ? {} : { execution }),
     id: toMigrationDefinitionId(id),
     ...(hasDependencies
       ? {

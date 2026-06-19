@@ -12,6 +12,7 @@ import {
   MigrationDefinitionRegistryLookupError,
   MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
   MigrationDefinitionRegistryUnknownDefinitionError,
+  type MigrationExecutionOptions,
   type MigrationStore,
   type MigrationStoreError,
   type RollbackPipeline,
@@ -35,6 +36,7 @@ const ArticleSourceIdentity = SourceIdentity.make({
 interface TestDefinitionInput {
   readonly dependencies?: MigrationDefinitionDependenciesInput;
   readonly dependsOn?: readonly MigrationDefinitionIdInput[];
+  readonly execution?: MigrationExecutionOptions;
   readonly id: MigrationDefinitionIdInput;
   readonly rollback?: RollbackPipeline;
 }
@@ -53,6 +55,7 @@ const makeDefinition = (input: TestDefinitionInput) =>
       ? {}
       : { dependencies: input.dependencies }),
     ...(input.dependsOn === undefined ? {} : { dependsOn: input.dependsOn }),
+    ...(input.execution === undefined ? {} : { execution: input.execution }),
     source,
     store,
     process: () => Effect.void,
@@ -404,6 +407,23 @@ describe("MigrationDefinitionRegistry", () => {
             toMigrationDefinitionId("authors"),
             toMigrationDefinitionId("articles"),
           ],
+          executionPolicy: [
+            {
+              definitionId: toMigrationDefinitionId("tags"),
+              processConcurrency: 1,
+              rollbackConcurrency: 1,
+            },
+            {
+              definitionId: toMigrationDefinitionId("authors"),
+              processConcurrency: 1,
+              rollbackConcurrency: 1,
+            },
+            {
+              definitionId: toMigrationDefinitionId("articles"),
+              processConcurrency: 1,
+              rollbackConcurrency: 1,
+            },
+          ],
           optionalDependencyEdges: [
             {
               fromDefinitionId: toMigrationDefinitionId("articles"),
@@ -415,6 +435,51 @@ describe("MigrationDefinitionRegistry", () => {
           notices: [],
           withDependencies: true,
         });
+      })
+  );
+
+  it.effect(
+    "plans effective execution policy from request overrides and definition defaults",
+    () =>
+      Effect.gen(function* () {
+        const articles = makeDefinition({
+          id: "articles",
+          execution: {
+            process: { concurrency: 2 },
+            rollback: { concurrency: 3 },
+          },
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles] as const,
+        });
+
+        const runPlan = yield* registry.planRun({
+          definitionIds: ["articles"],
+          execution: {
+            process: { concurrency: "unbounded" },
+          },
+        });
+        const rollbackPlan = yield* registry.planRollback({
+          definitionIds: ["articles"],
+          execution: {
+            rollback: { concurrency: 5 },
+          },
+        });
+
+        expect(runPlan.executionPolicy).toEqual([
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            processConcurrency: "unbounded",
+            rollbackConcurrency: 3,
+          },
+        ]);
+        expect(rollbackPlan.executionPolicy).toEqual([
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            processConcurrency: 2,
+            rollbackConcurrency: 5,
+          },
+        ]);
       })
   );
 
@@ -865,6 +930,13 @@ describe("MigrationDefinitionRegistry", () => {
         requestedDefinitionIds: [toMigrationDefinitionId("articles")],
         includedDefinitionIds: [toMigrationDefinitionId("articles")],
         executionDefinitionIds: [toMigrationDefinitionId("articles")],
+        executionPolicy: [
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            processConcurrency: 1,
+            rollbackConcurrency: 1,
+          },
+        ],
         optionalDependencyEdges: [],
         definitions: [articles],
         target: {
@@ -1001,7 +1073,8 @@ describe("MigrationDefinitionRegistry", () => {
         });
         const businessAddresses = defineMigration({
           id: "business-addresses",
-          source: businessAddressSource,          store,
+          source: businessAddressSource,
+          store,
           process: () => Effect.void,
         });
         const registry = MigrationDefinitionRegistry.make({
@@ -1040,7 +1113,8 @@ describe("MigrationDefinitionRegistry", () => {
         });
         const businessAddresses = defineMigration({
           id: "business-addresses",
-          source: businessAddressSource,          store,
+          source: businessAddressSource,
+          store,
           process: () => Effect.void,
         });
         const registry = MigrationDefinitionRegistry.make({

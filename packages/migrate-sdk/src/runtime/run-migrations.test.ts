@@ -1,6 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Console, Effect, Layer, Schedule, Schema } from "effect";
+import {
+  Console,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Schedule,
+  Schema,
+} from "effect";
 import { MinimumLogLevel } from "effect/References";
+import { TestClock } from "effect/testing";
 import type { InMemoryEntryUpsertedChange } from "migrate-sdk/destinations/in-memory";
 import { expectTypeOf } from "vitest";
 import {
@@ -25,6 +34,7 @@ import {
   MigrationReferenceLookup,
   MigrationRunState,
   type MigrationRunSummary,
+  MigrationRuntimeError,
   MigrationStore,
   MigrationStoreError,
   type RollbackContext,
@@ -114,28 +124,30 @@ const ArticleEntryDestinationForTypes = InMemoryDestination.makeEntries({
   contentType: "article",
   fields: ArticleEntryFields,
 });
-expectTypeOf(ArticleEntryDestinationForTypes.entries.upsert).parameter(0).toEqualTypeOf<{
-  readonly title: string;
-}>();
+expectTypeOf(ArticleEntryDestinationForTypes.entries.upsert)
+  .parameter(0)
+  .toEqualTypeOf<{
+    readonly title: string;
+  }>();
 const _validEntryFields: Parameters<
   typeof ArticleEntryDestinationForTypes.entries.upsert
 >[0] = {
   title: "Typed article",
 };
-void _validEntryFields;
+expect(_validEntryFields).toBeDefined();
 const _invalidEntryFields: Parameters<
   typeof ArticleEntryDestinationForTypes.entries.upsert
 >[0] = {
   // @ts-expect-error upsert fields must match the configured content type schema.
   headline: "Wrong field",
 };
-void _invalidEntryFields;
+expect(_invalidEntryFields).toBeDefined();
 const _invalidEntryDestination = InMemoryDestination.makeEntries({
   contentType: "article",
   // @ts-expect-error destination entry schemas validate process values without decoding.
   fields: DecodingArticleEntryFields,
 });
-void _invalidEntryDestination;
+expect(_invalidEntryDestination).toBeDefined();
 
 const ArticleStatsSource = Schema.Struct({
   title: Schema.Trim,
@@ -611,6 +623,175 @@ describe("runMigration", () => {
         );
         expect(itemState).not.toHaveProperty(`destination${"Identity"}`);
         expect(itemState).not.toHaveProperty(`destination${"Version"}`);
+      })
+  );
+
+  it.effect(
+    "bounds concurrent Process Pipeline execution for Source Items",
+    () =>
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>();
+        const state = {
+          active: 0,
+          maxActive: 0,
+        };
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: { title: "Concurrent article 1" },
+              },
+              {
+                identityKey: "article-2",
+                version: "source-version-1",
+                item: { title: "Concurrent article 2" },
+              },
+              {
+                identityKey: "article-3",
+                version: "source-version-1",
+                item: { title: "Concurrent article 3" },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(),
+          process: () =>
+            Effect.gen(function* () {
+              state.active += 1;
+              state.maxActive = Math.max(state.maxActive, state.active);
+              yield* Deferred.succeed(firstStarted, undefined);
+              yield* Effect.sleep("1 second");
+              state.active -= 1;
+            }),
+        });
+
+        const fiber = yield* runMigration(definition, {
+          execution: { process: { concurrency: 2 } },
+        }).pipe(Effect.forkChild);
+
+        yield* Deferred.await(firstStarted);
+        yield* TestClock.adjust("500 millis");
+
+        expect(state.maxActive).toBe(2);
+
+        yield* TestClock.adjust("3 seconds");
+        const summary = yield* Fiber.join(fiber);
+
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 3,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+      })
+  );
+
+  it.effect("runs Process Pipeline execution unbounded when requested", () =>
+    Effect.gen(function* () {
+      const firstStarted = yield* Deferred.make<void>();
+      const state = {
+        active: 0,
+        maxActive: 0,
+      };
+      const definition = defineMigration({
+        id: "articles",
+        source: makeTestInMemorySource({
+          items: [
+            {
+              identityKey: "article-1",
+              version: "source-version-1",
+              item: { title: "Unbounded article 1" },
+            },
+            {
+              identityKey: "article-2",
+              version: "source-version-1",
+              item: { title: "Unbounded article 2" },
+            },
+            {
+              identityKey: "article-3",
+              version: "source-version-1",
+              item: { title: "Unbounded article 3" },
+            },
+            {
+              identityKey: "article-4",
+              version: "source-version-1",
+              item: { title: "Unbounded article 4" },
+            },
+          ],
+        }),
+        store: InMemoryMigrationStore.layer(),
+        process: () =>
+          Effect.gen(function* () {
+            state.active += 1;
+            state.maxActive = Math.max(state.maxActive, state.active);
+            yield* Deferred.succeed(firstStarted, undefined);
+            yield* Effect.sleep("1 second");
+            state.active -= 1;
+          }),
+      });
+
+      const fiber = yield* runMigration(definition, {
+        execution: { process: { concurrency: "unbounded" } },
+      }).pipe(Effect.forkChild);
+
+      yield* Deferred.await(firstStarted);
+      yield* TestClock.adjust("500 millis");
+
+      expect(state.maxActive).toBe(4);
+
+      yield* TestClock.adjust("2 seconds");
+      const summary = yield* Fiber.join(fiber);
+
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 4,
+        skipped: 0,
+        failed: 0,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+    })
+  );
+
+  it.effect(
+    "rejects invalid Process Pipeline concurrency before opening a run",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        let processCalled = false;
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: { title: "Invalid concurrency article" },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () =>
+            Effect.sync(() => {
+              processCalled = true;
+            }),
+        });
+
+        const error = yield* Effect.flip(
+          runMigration(definition, {
+            execution: { process: { concurrency: 0 } },
+          })
+        );
+
+        expect(error).toBeInstanceOf(MigrationRuntimeError);
+        expect(error.message).toBe("Run request contains invalid input");
+        expect(processCalled).toBe(false);
+        expect(storeState.latestRunStates.size).toBe(0);
+        expect(storeState.definitionLocks.size).toBe(0);
+        expect(storeState.itemStates.size).toBe(0);
       })
   );
 
@@ -3723,7 +3904,7 @@ describe("runMigration", () => {
   );
 
   it.effect(
-    "persists process failures and continues processing Source Items",
+    "aggregates concurrent process failures and continues processing Source Items",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
@@ -3763,7 +3944,9 @@ describe("runMigration", () => {
                 }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runMigration(definition, {
+          execution: { process: { concurrency: 2 } },
+        });
 
         expect(summary.status).toBe("failed");
         expect(summary.definitions[0]?.status).toBe("failed");
@@ -4121,8 +4304,7 @@ describe("runMigration", () => {
           ],
         }),
         store: InMemoryMigrationStore.layer(storeState),
-        process: () =>
-          Effect.void,
+        process: () => Effect.void,
       });
 
       yield* runMigration(definition);
@@ -4214,43 +4396,41 @@ describe("runMigration", () => {
     })
   );
 
-  it.effect(
-    "passes decoded source payloads to the process pipeline",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const decodedPayloads: ArticleStatsSource[] = [];
+  it.effect("passes decoded source payloads to the process pipeline", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const decodedPayloads: ArticleStatsSource[] = [];
 
-        const definition = defineMigration({
-          id: "articles",
-          source: InMemorySourcePlugin.make({
-            identity: ArticleSourceIdentity,
-            sourceSchema: ArticleStatsSource,
-            items: [
-              {
-                identityKey: "article-stats",
-                version: "source-version-1",
-                item: asArticleStatsSource({
-                  title: "  Decoded article  ",
-                  views: "42",
-                }),
-              },
-            ],
+      const definition = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          identity: ArticleSourceIdentity,
+          sourceSchema: ArticleStatsSource,
+          items: [
+            {
+              identityKey: "article-stats",
+              version: "source-version-1",
+              item: asArticleStatsSource({
+                title: "  Decoded article  ",
+                views: "42",
+              }),
+            },
+          ],
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        process: (source) =>
+          Effect.sync(() => {
+            decodedPayloads.push(source.item);
           }),
-          store: InMemoryMigrationStore.layer(storeState),
-          process: (source) =>
-            Effect.sync(() => {
-              decodedPayloads.push(source.item);
-            }),
-        });
+      });
 
-        const summary = yield* runMigration(definition);
+      const summary = yield* runMigration(definition);
 
-        expect(summary.status).toBe("succeeded");
-        expect(decodedPayloads).toEqual([
-          { title: "Decoded article", views: 42 },
-        ]);
-      })
+      expect(summary.status).toBe("succeeded");
+      expect(decodedPayloads).toEqual([
+        { title: "Decoded article", views: 42 },
+      ]);
+    })
   );
 
   it.effect("rejects non-positive in-memory Source batch sizes", () =>
@@ -5179,8 +5359,7 @@ describe("runMigration", () => {
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
-      const previousStates: (typeof MigrationItemState.Type | undefined)[] =
-        [];
+      const previousStates: (typeof MigrationItemState.Type | undefined)[] = [];
 
       const definition = defineMigration({
         id: "articles",
@@ -5838,7 +6017,10 @@ describe("runMigration", () => {
             message: "Unable to release Migration Definition Lock set",
           })
         );
-        expect(processCalls).toEqual(["authors:author-1", "articles:article-1"]);
+        expect(processCalls).toEqual([
+          "authors:author-1",
+          "articles:article-1",
+        ]);
         expect(releasedDefinitionIds).toEqual([
           toMigrationDefinitionId("authors"),
           toMigrationDefinitionId("articles"),
@@ -6181,6 +6363,114 @@ describe("rollbackMigration", () => {
           outcome: "rolled-back",
           runId: summary.runId,
         });
+      })
+  );
+
+  it.effect(
+    "bounds concurrent Rollback Pipeline execution for item states",
+    () =>
+      Effect.gen(function* () {
+        const firstStarted = yield* Deferred.make<void>();
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const definitionId = toMigrationDefinitionId("articles");
+        const state = {
+          active: 0,
+          maxActive: 0,
+        };
+
+        for (const sourceIdentity of [
+          "article-rollback-1",
+          "article-rollback-2",
+          "article-rollback-3",
+        ]) {
+          storeState.itemStates.set(
+            InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity),
+            {
+              definitionId,
+              lastRunId: toMigrationRunId("run-previous"),
+              sourceIdentity: SourceIdentity.fromEncoded(
+                ArticleSourceIdentity,
+                toEncodedSourceIdentity(sourceIdentity)
+              ),
+              sourceVersion: toSourceVersion("source-version-1"),
+              status: "migrated" as const,
+              updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            }
+          );
+        }
+
+        const definition = defineMigration({
+          id: definitionId,
+          source: makeTestInMemorySource({
+            items: [],
+            sourceSchema: ArticleSource,
+          }),
+          store,
+          process: () => Effect.void,
+          rollback: () =>
+            Effect.gen(function* () {
+              state.active += 1;
+              state.maxActive = Math.max(state.maxActive, state.active);
+              yield* Deferred.succeed(firstStarted, undefined);
+              yield* Effect.sleep("1 second");
+              state.active -= 1;
+            }),
+        });
+
+        const fiber = yield* rollbackMigration(definition, {
+          execution: { rollback: { concurrency: 2 } },
+        }).pipe(Effect.forkChild);
+
+        yield* Deferred.await(firstStarted);
+        yield* TestClock.adjust("500 millis");
+
+        expect(state.maxActive).toBe(2);
+
+        yield* TestClock.adjust("3 seconds");
+        const summary = yield* Fiber.join(fiber);
+
+        expect(summary.definitions[0]?.counts).toEqual({
+          rolledBack: 3,
+          failed: 0,
+          skipped: 0,
+        });
+      })
+  );
+
+  it.effect(
+    "rejects invalid Rollback Pipeline concurrency before opening a run",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        let rollbackCalled = false;
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [],
+            sourceSchema: ArticleSource,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () => Effect.void,
+          rollback: () =>
+            Effect.sync(() => {
+              rollbackCalled = true;
+            }),
+        });
+
+        const error = yield* Effect.flip(
+          rollbackMigration(definition, {
+            execution: { rollback: { concurrency: 0 } },
+          })
+        );
+
+        expect(error).toBeInstanceOf(RollbackRequestError);
+        expect(error.message).toBe("Rollback request contains invalid input");
+        expect(rollbackCalled).toBe(false);
+        expect(storeState.latestRunStates.size).toBe(0);
+        expect(storeState.definitionLocks.size).toBe(0);
+        expect(storeState.itemStates.size).toBe(0);
       })
   );
 });
@@ -6639,8 +6929,6 @@ describe("rollbackMigrations", () => {
         process: () => Effect.void,
         rollback: () => {
           observeLocks();
-
-
         },
       });
       const articles = defineMigration({

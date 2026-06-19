@@ -7,6 +7,11 @@ import {
   runMigrationsWithEncodedRunMode,
 } from "../runtime/run-migrations.ts";
 import type {
+  MigrationExecutionOptions,
+  PipelineExecutionConcurrency,
+} from "./execution.ts";
+import { resolvePipelineExecutionOptions } from "./execution.ts";
+import type {
   EncodedSourceIdentity,
   MigrationDefinitionId,
   MigrationDefinitionIdInput,
@@ -67,12 +72,14 @@ export type MigrationDefinitionRegistrySelectionInput =
 
 export type MigrationDefinitionRegistryRunInput =
   MigrationDefinitionRegistrySelectionInput & {
+    readonly execution?: MigrationExecutionOptions;
     readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
     readonly sourceIdentities?: readonly string[];
   };
 
 export type MigrationDefinitionRegistryRollbackInput =
   MigrationDefinitionRegistrySelectionInput & {
+    readonly execution?: MigrationExecutionOptions;
     readonly sourceIdentities?: readonly string[];
   };
 
@@ -152,9 +159,16 @@ export interface MigrationDefinitionPlanTarget {
   ];
 }
 
+export interface MigrationDefinitionExecutionPolicy {
+  readonly definitionId: MigrationDefinitionId;
+  readonly processConcurrency: PipelineExecutionConcurrency;
+  readonly rollbackConcurrency: PipelineExecutionConcurrency;
+}
+
 export interface MigrationDefinitionRunPlan {
   readonly definitions: readonly AnyMigrationDefinition[];
   readonly executionDefinitionIds: readonly MigrationDefinitionId[];
+  readonly executionPolicy: readonly MigrationDefinitionExecutionPolicy[];
   readonly includedDefinitionIds: readonly MigrationDefinitionId[];
   readonly kind: "run";
   readonly notices: readonly MigrationDefinitionPlanNotice[];
@@ -167,6 +181,7 @@ export interface MigrationDefinitionRunPlan {
 export interface MigrationDefinitionRollbackPlan {
   readonly definitions: readonly AnyRollbackMigrationDefinition[];
   readonly executionDefinitionIds: readonly MigrationDefinitionId[];
+  readonly executionPolicy: readonly MigrationDefinitionExecutionPolicy[];
   readonly includedDefinitionIds: readonly MigrationDefinitionId[];
   readonly kind: "rollback";
   readonly notices: readonly MigrationDefinitionPlanNotice[];
@@ -688,6 +703,37 @@ const resolveDefinitionPlanDetails = (
   };
 };
 
+const resolveDefinitionExecutionPolicy = (
+  definitions: readonly AnyMigrationDefinition[],
+  execution: MigrationExecutionOptions | undefined
+): Effect.Effect<
+  readonly MigrationDefinitionExecutionPolicy[],
+  MigrationDefinitionRegistryInvalidSelectionError
+> =>
+  Effect.try({
+    try: () =>
+      definitions.map((definition) => ({
+        definitionId: definition.id,
+        processConcurrency: resolvePipelineExecutionOptions(
+          execution?.process,
+          definition.execution?.process,
+          "Process Pipeline Execution"
+        ).concurrency,
+        rollbackConcurrency: resolvePipelineExecutionOptions(
+          execution?.rollback,
+          definition.execution?.rollback,
+          "Rollback Pipeline Execution"
+        ).concurrency,
+      })),
+    catch: (cause) =>
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message:
+          cause instanceof Error
+            ? cause.message
+            : 'Migration execution concurrency must be a positive integer or "unbounded"',
+      }),
+  });
+
 const normalizeRunTarget = (
   input: MigrationDefinitionRegistryRunInput,
   selection: ResolvedRegistrySelection,
@@ -1089,6 +1135,10 @@ export class MigrationDefinitionRegistry<
       const planDefinitions = planDetails.executionDefinitionIds.map(
         (definitionId) => definitionsById.get(definitionId)
       ) as readonly AnyMigrationDefinition[];
+      const executionPolicy = yield* resolveDefinitionExecutionPolicy(
+        planDefinitions,
+        input.execution
+      );
       const target = Option.getOrUndefined(targetOption);
 
       return {
@@ -1096,6 +1146,7 @@ export class MigrationDefinitionRegistry<
         requestedDefinitionIds: selection.requestedDefinitionIds,
         includedDefinitionIds: planDetails.includedDefinitionIdsInRegistryOrder,
         executionDefinitionIds: planDetails.executionDefinitionIds,
+        executionPolicy,
         optionalDependencyEdges: planDetails.optionalDependencyEdges,
         definitions: planDefinitions,
         ...(target === undefined ? {} : { target }),
@@ -1141,6 +1192,10 @@ export class MigrationDefinitionRegistry<
       const planDefinitions = executionDefinitionIds.map((definitionId) =>
         definitionsById.get(definitionId)
       ) as readonly AnyRollbackMigrationDefinition[];
+      const executionPolicy = yield* resolveDefinitionExecutionPolicy(
+        planDefinitions,
+        input.execution
+      );
       const target = Option.getOrUndefined(targetOption);
 
       return {
@@ -1148,6 +1203,7 @@ export class MigrationDefinitionRegistry<
         requestedDefinitionIds: selection.requestedDefinitionIds,
         includedDefinitionIds: planDetails.includedDefinitionIdsInRegistryOrder,
         executionDefinitionIds,
+        executionPolicy,
         optionalDependencyEdges: planDetails.optionalDependencyEdges,
         definitions: planDefinitions,
         ...(target === undefined ? {} : { target }),
@@ -1170,10 +1226,16 @@ export class MigrationDefinitionRegistry<
         plan.target === undefined
           ? {
               definitions: plan.definitions as Definitions,
+              ...(input.execution === undefined
+                ? {}
+                : { execution: input.execution }),
               ...(input.mode === undefined ? {} : { mode: input.mode }),
             }
           : {
               definitions: plan.definitions as Definitions,
+              ...(input.execution === undefined
+                ? {}
+                : { execution: input.execution }),
               mode: {
                 kind: "item" as const,
                 encodedSourceIdentity: plan.target.sourceIdentities[0],
@@ -1196,6 +1258,9 @@ export class MigrationDefinitionRegistry<
       rollbackMigrationsWithEncodedSourceIdentities({
         definitions,
         definitionIds: [...plan.executionDefinitionIds].reverse(),
+        ...(input.execution === undefined
+          ? {}
+          : { execution: input.execution }),
         ...(plan.target === undefined
           ? {}
           : { encodedSourceIdentities: plan.target.sourceIdentities }),
@@ -1210,6 +1275,7 @@ export class MigrationDefinitionRegistry<
     MigrationDefinitionRegistryStatusError,
     never
   >;
+  // biome-ignore lint/style/useUnifiedTypeSignatures: overloads preserve precise source-scan requirements.
   status(
     input: MigrationDefinitionRegistrySourceScanStatusInput
   ): Effect.Effect<

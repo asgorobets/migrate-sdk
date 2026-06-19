@@ -1,5 +1,9 @@
 import { Console, Effect, Option, Runtime } from "effect";
 import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
+import type {
+  MigrationExecutionOptions,
+  PipelineExecutionConcurrency,
+} from "../domain/execution.ts";
 import {
   type MigrationDefinitionId,
   toMigrationDefinitionId,
@@ -162,9 +166,26 @@ const scanSource = Flag.boolean("scan-source").pipe(
   Flag.withDescription("Scan source inventory while reading status")
 );
 
-const concurrency = Flag.integer("concurrency").pipe(
+const statusConcurrency = Flag.integer("concurrency").pipe(
   Flag.optional,
+  Flag.withAlias("c"),
   Flag.withDescription("Maximum concurrent source scans")
+);
+
+const processConcurrency = Flag.string("concurrency").pipe(
+  Flag.optional,
+  Flag.withAlias("c"),
+  Flag.withDescription(
+    'Maximum concurrent Process Pipeline executions; use a positive integer or "unbounded"'
+  )
+);
+
+const rollbackConcurrency = Flag.string("concurrency").pipe(
+  Flag.optional,
+  Flag.withAlias("c"),
+  Flag.withDescription(
+    'Maximum concurrent Rollback Pipeline executions; use a positive integer or "unbounded"'
+  )
 );
 
 const failed = Flag.boolean("failed").pipe(
@@ -203,9 +224,27 @@ const parseSourceIdentityTargets = (
 ): Effect.Effect<readonly string[], CliError.UserError> =>
   Effect.forEach(input, decodeSourceIdentityTarget);
 
+const parsePipelineExecutionConcurrency = (
+  input: string,
+  flag: string
+): Effect.Effect<PipelineExecutionConcurrency, CliError.UserError> => {
+  if (input === "unbounded") {
+    return Effect.succeed("unbounded");
+  }
+
+  const parsed = Number(input);
+
+  return Number.isInteger(parsed) && parsed > 0
+    ? Effect.succeed(parsed)
+    : failReportedCliMessage(
+        `${flag} must be a positive integer or "unbounded"`
+      );
+};
+
 const makeRunPlanInput = (input: {
   readonly all: boolean;
   readonly definitionIds: readonly string[];
+  readonly execution?: MigrationExecutionOptions;
   readonly mode?: "failed" | "skipped";
   readonly sourceIdentities?: readonly string[];
   readonly withDependencies: boolean;
@@ -217,6 +256,9 @@ const makeRunPlanInput = (input: {
           ...(input.sourceIdentities === undefined
             ? {}
             : { sourceIdentities: input.sourceIdentities }),
+          ...(input.execution === undefined
+            ? {}
+            : { execution: input.execution }),
           ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
           withDependencies: input.withDependencies,
         }
@@ -226,6 +268,9 @@ const makeRunPlanInput = (input: {
           ...(input.sourceIdentities === undefined
             ? {}
             : { sourceIdentities: input.sourceIdentities }),
+          ...(input.execution === undefined
+            ? {}
+            : { execution: input.execution }),
           ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
           withDependencies: input.withDependencies,
         } as MigrationDefinitionRegistryRunInput);
@@ -238,6 +283,9 @@ const makeRunPlanInput = (input: {
         ...(input.sourceIdentities === undefined
           ? {}
           : { sourceIdentities: input.sourceIdentities }),
+        ...(input.execution === undefined
+          ? {}
+          : { execution: input.execution }),
         ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
         withDependencies: input.withDependencies,
       };
@@ -246,6 +294,7 @@ const makeRunPlanInput = (input: {
 const makeRollbackPlanInput = (input: {
   readonly all: boolean;
   readonly definitionIds: readonly string[];
+  readonly execution?: MigrationExecutionOptions;
   readonly sourceIdentities?: readonly string[];
   readonly withDependencies: boolean;
 }): MigrationDefinitionRegistryRollbackInput => {
@@ -256,6 +305,9 @@ const makeRollbackPlanInput = (input: {
           ...(input.sourceIdentities === undefined
             ? {}
             : { sourceIdentities: input.sourceIdentities }),
+          ...(input.execution === undefined
+            ? {}
+            : { execution: input.execution }),
           withDependencies: input.withDependencies,
         }
       : ({
@@ -264,6 +316,9 @@ const makeRollbackPlanInput = (input: {
           ...(input.sourceIdentities === undefined
             ? {}
             : { sourceIdentities: input.sourceIdentities }),
+          ...(input.execution === undefined
+            ? {}
+            : { execution: input.execution }),
           withDependencies: input.withDependencies,
         } as MigrationDefinitionRegistryRollbackInput);
   }
@@ -275,6 +330,9 @@ const makeRollbackPlanInput = (input: {
         ...(input.sourceIdentities === undefined
           ? {}
           : { sourceIdentities: input.sourceIdentities }),
+        ...(input.execution === undefined
+          ? {}
+          : { execution: input.execution }),
         withDependencies: input.withDependencies,
       };
 };
@@ -388,7 +446,7 @@ const statusCommand = Command.make(
   "status",
   {
     all,
-    concurrency,
+    concurrency: statusConcurrency,
     definitions: runDefinitions,
     scanSource,
     withDependencies,
@@ -431,6 +489,7 @@ const runCommand = Command.make(
     id,
     plan,
     progress,
+    concurrency: processConcurrency,
     skipped,
     withDependencies,
   },
@@ -455,9 +514,22 @@ const runCommand = Command.make(
       } else if (input.skipped) {
         mode = "skipped";
       }
+      const concurrencyInput = Option.getOrUndefined(input.concurrency);
+      const execution =
+        concurrencyInput === undefined
+          ? undefined
+          : {
+              process: {
+                concurrency: yield* parsePipelineExecutionConcurrency(
+                  concurrencyInput,
+                  "--concurrency"
+                ),
+              },
+            };
       const runInput = makeRunPlanInput({
         all: input.all,
         definitionIds: input.definitions,
+        ...(execution === undefined ? {} : { execution }),
         ...(mode === undefined ? {} : { mode }),
         ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
         withDependencies: input.withDependencies,
@@ -514,6 +586,7 @@ const rollbackCommand = Command.make(
     id,
     plan,
     progress,
+    concurrency: rollbackConcurrency,
     withDependencies,
   },
   (input) =>
@@ -524,9 +597,22 @@ const rollbackCommand = Command.make(
         idsInput === undefined || idsInput.length === 0
           ? undefined
           : yield* parseSourceIdentityTargets(idsInput);
+      const concurrencyInput = Option.getOrUndefined(input.concurrency);
+      const execution =
+        concurrencyInput === undefined
+          ? undefined
+          : {
+              rollback: {
+                concurrency: yield* parsePipelineExecutionConcurrency(
+                  concurrencyInput,
+                  "--concurrency"
+                ),
+              },
+            };
       const rollbackInput = makeRollbackPlanInput({
         all: input.all,
         definitionIds: input.definitions,
+        ...(execution === undefined ? {} : { execution }),
         ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
         withDependencies: input.withDependencies,
       });

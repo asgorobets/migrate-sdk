@@ -291,6 +291,63 @@ const renderExecutionOrderTable = (
         options
       );
 
+const renderConcurrency = (value: number | "unbounded"): string =>
+  value === "unbounded" ? value : String(value);
+
+const renderRunExecutionPolicyTable = (
+  plan: MigrationDefinitionRunPlan,
+  options: RenderOptions
+): readonly string[] =>
+  plan.executionPolicy.length === 0
+    ? [dim("No definitions.", options)]
+    : renderTable(
+        [
+          {
+            align: "right",
+            header: "#",
+            render: (_policy, index) => String(index + 1),
+          },
+          {
+            header: "Migration ID",
+            render: (policy) => policy.definitionId,
+          },
+          {
+            align: "right",
+            header: "Process Concurrency",
+            render: (policy) => renderConcurrency(policy.processConcurrency),
+          },
+        ],
+        plan.executionPolicy,
+        options
+      );
+
+const renderRollbackExecutionPolicyTable = (
+  plan: MigrationDefinitionRollbackPlan,
+  options: RenderOptions
+): readonly string[] =>
+  plan.executionPolicy.length === 0
+    ? [dim("No definitions.", options)]
+    : renderTable(
+        [
+          {
+            align: "right",
+            header: "#",
+            render: (_policy, index) => String(index + 1),
+          },
+          {
+            header: "Migration ID",
+            render: (policy) => policy.definitionId,
+          },
+          {
+            align: "right",
+            header: "Rollback Concurrency",
+            render: (policy) => renderConcurrency(policy.rollbackConcurrency),
+          },
+        ],
+        plan.executionPolicy,
+        options
+      );
+
 const renderPlanNotice = (notice: MigrationDefinitionPlanNotice): string => {
   switch (notice._tag) {
     case "MigrationDefinitionDuplicateRequestedDefinitionIgnored":
@@ -366,6 +423,9 @@ export const renderRunPlan = (
     "",
     bold("Execution Order", options),
     ...renderExecutionOrderTable(plan.executionDefinitionIds, options),
+    "",
+    bold("Execution Policy", options),
+    ...renderRunExecutionPolicyTable(plan, options),
     ...renderNoticeSection(plan.notices, options),
   ].join("\n");
 
@@ -389,6 +449,9 @@ export const renderRollbackPlan = (
     "",
     bold("Execution Order", options),
     ...renderExecutionOrderTable(plan.executionDefinitionIds, options),
+    "",
+    bold("Execution Policy", options),
+    ...renderRollbackExecutionPolicyTable(plan, options),
     ...renderNoticeSection(plan.notices, options),
   ].join("\n");
 };
