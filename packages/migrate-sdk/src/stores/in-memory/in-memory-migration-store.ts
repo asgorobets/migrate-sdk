@@ -106,6 +106,14 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         })
     );
 
+    const deleteSourceCursor = Effect.fn(
+      "InMemoryMigrationStore.deleteSourceCursor"
+    )((definitionId: MigrationDefinitionId) =>
+      Effect.sync(() => {
+        state.sourceCursors.delete(definitionId);
+      })
+    );
+
     const getItemState = Effect.fn("InMemoryMigrationStore.getItemState")(
       (definitionId: MigrationDefinitionId, identity: EncodedSourceIdentity) =>
         Effect.sync(
@@ -292,6 +300,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
     return {
       getSourceCursor,
       setSourceCursor,
+      deleteSourceCursor,
       getMigrationContract,
       upsertMigrationContract,
       getItemState,

@@ -1764,6 +1764,8 @@ const runRollbackMigrationDefinition = <
       }
     }
 
+    yield* store.deleteSourceCursor(definition.id);
+
     return {
       counts,
       definitionId: definition.id,

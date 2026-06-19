@@ -475,6 +475,17 @@ describe("FileMigrationStore", () => {
         }).pipe(Effect.provide(fileStoreLayer(directory)));
 
         expect(storedCursor).toEqual(encodedInMemoryCursor(1));
+
+        const deletedCursor = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+          const definitionId = toMigrationDefinitionId("articles");
+
+          yield* store.deleteSourceCursor(definitionId);
+
+          return yield* store.getSourceCursor(definitionId);
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        expect(deletedCursor).toBeNull();
       })
     )
   );

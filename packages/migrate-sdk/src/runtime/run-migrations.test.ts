@@ -5959,6 +5959,56 @@ describe("rollbackMigration", () => {
       ).toBe(false);
     })
   );
+
+  it.effect("clears the Source Cursor when rollback finds no item state", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const store = InMemoryMigrationStore.layer(storeState);
+      const definitionId = toMigrationDefinitionId("articles");
+      const processCalls: string[] = [];
+
+      storeState.sourceCursors.set(definitionId, encodedInMemoryCursor(1));
+
+      const definition = defineMigration({
+        id: definitionId,
+        source: makeTestInMemorySource({
+          batchSize: 1,
+          items: [
+            {
+              identityKey: "article-rollback",
+              version: "source-version-1",
+              item: { title: "Rollback source cursor" },
+            },
+          ],
+        }),
+        store,
+        process: (source) =>
+          Effect.sync(() => {
+            processCalls.push(source.identity.encoded);
+          }),
+        rollback: () => Effect.void,
+      });
+
+      const rollbackSummary = yield* rollbackMigration(definition, {
+        sourceIdentityKeys: ["article-rollback"],
+      });
+      const runSummary = yield* runMigration(definition);
+
+      expect(rollbackSummary.definitions[0]?.counts).toEqual({
+        rolledBack: 0,
+        failed: 0,
+        skipped: 1,
+      });
+      expect(runSummary.definitions[0]?.counts).toEqual({
+        migrated: 1,
+        skipped: 0,
+        failed: 0,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(processCalls).toEqual(["article-rollback"]);
+    })
+  );
 });
 
 describe("rollbackMigrations", () => {

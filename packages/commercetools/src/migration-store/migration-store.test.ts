@@ -657,6 +657,10 @@ describe("CommercetoolsMigrationStore", () => {
 
         expect(yield* store.getSourceCursor(definitionId)).toBe(cursor);
 
+        yield* store.deleteSourceCursor(definitionId);
+
+        expect(yield* store.getSourceCursor(definitionId)).toBeNull();
+
         const [missingLookup, upsert, directLookup] = recording.requests;
 
         expect(missingLookup).toMatchObject({
@@ -689,6 +693,16 @@ describe("CommercetoolsMigrationStore", () => {
             container: "migrate-sdk",
             key: expectedKey,
             projectKey: "test-project",
+          },
+        });
+        expect(recording.requests.at(-2)).toMatchObject({
+          method: "DELETE",
+          pathVariables: {
+            container: "migrate-sdk",
+            key: expectedKey,
+          },
+          queryParams: {
+            version: 1,
           },
         });
       }).pipe(Effect.provide(makeStoreLayer(recording)));

@@ -25,6 +25,10 @@ export class MigrationStore extends Service<
       cursor: EncodedSourceCursor
     ) => Effect.Effect<void, MigrationStoreError>;
 
+    readonly deleteSourceCursor: (
+      definitionId: MigrationDefinitionId
+    ) => Effect.Effect<void, MigrationStoreError>;
+
     readonly getMigrationContract: (
       definitionId: MigrationDefinitionId
     ) => Effect.Effect<MigrationContract | null, MigrationStoreError>;

@@ -1259,6 +1259,19 @@ const makeService = (
     );
   });
 
+  const deleteSourceCursor = Effect.fn(
+    "CommercetoolsMigrationStore.deleteSourceCursor"
+  )(function* (definitionId: MigrationDefinitionId) {
+    const key = sourceCursorKey(options.namespace, definitionId);
+    const customObject = yield* readCustomObjectOptional(sdk, options, key);
+
+    if (customObject === null) {
+      return;
+    }
+
+    yield* deleteCustomObject(sdk, options, key, customObject.version);
+  });
+
   const getMigrationContract = Effect.fn(
     "CommercetoolsMigrationStore.getMigrationContract"
   )((definitionId: MigrationDefinitionId) => {
@@ -1455,6 +1468,7 @@ const makeService = (
   return {
     getSourceCursor,
     setSourceCursor,
+    deleteSourceCursor,
     getMigrationContract,
     upsertMigrationContract,
     getItemState,

@@ -1,8 +1,10 @@
+import type { BusinessUnit } from "@commercetools/platform-sdk";
 import type { CommercetoolsSdkLayer } from "@migrate-sdk/commercetools";
 import { CommercetoolsDestination } from "@migrate-sdk/commercetools/destination";
 import { CommercetoolsSourcePlugin } from "@migrate-sdk/commercetools/source";
-import { Effect, type Layer } from "effect";
+import { Effect, type Layer, type Schema } from "effect";
 import {
+  type DestinationPluginError,
   defineMigration,
   type MigrationStore,
   type MigrationStoreError,
@@ -22,6 +24,10 @@ export interface BusinessUnitStaticFieldMigrationOptions {
   readonly storeLayer: Layer.Layer<MigrationStore, MigrationStoreError>;
 }
 
+type BusinessUnitStaticFieldProcessError =
+  | DestinationPluginError
+  | Schema.SchemaError;
+
 export const makeBusinessUnitStaticFieldMigration = (
   options: BusinessUnitStaticFieldMigrationOptions
 ) => {
@@ -31,7 +37,7 @@ export const makeBusinessUnitStaticFieldMigration = (
     identity: "key",
   }).provide(options.sdkLayer);
 
-  return defineMigration({
+  return defineMigration<BusinessUnit, BusinessUnitStaticFieldProcessError>({
     id: businessUnitStaticFieldDefinitionId,
     source,
     store: options.storeLayer,
@@ -61,5 +67,6 @@ export const makeBusinessUnitStaticFieldMigration = (
         });
       }
     ),
+    rollback: () => Effect.void,
   });
 };

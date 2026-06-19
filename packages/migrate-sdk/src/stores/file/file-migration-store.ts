@@ -510,6 +510,12 @@ const makeLayerWithoutPlatform = (
           )
       );
 
+      const deleteSourceCursor = Effect.fn(
+        "FileMigrationStore.deleteSourceCursor"
+      )((definitionId: MigrationDefinitionId) =>
+        removeFileIfExists(fs, paths.sourceCursor(definitionId))
+      );
+
       const getItemState = Effect.fn("FileMigrationStore.getItemState")(
         function* (
           definitionId: MigrationDefinitionId,
@@ -776,6 +782,7 @@ const makeLayerWithoutPlatform = (
       return {
         getSourceCursor,
         setSourceCursor,
+        deleteSourceCursor,
         getMigrationContract,
         upsertMigrationContract,
         getItemState,
