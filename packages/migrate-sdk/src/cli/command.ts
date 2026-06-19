@@ -482,8 +482,9 @@ const runCommand = Command.make(
         return;
       }
 
+      const runtime = yield* MigrationCliRuntime;
       const summary = yield* registry.run(runInput).pipe(
-        Effect.provide(makeCliProgressLayer(input.progress)),
+        Effect.provide(makeCliProgressLayer(input.progress, runtime)),
         Effect.catch((error) =>
           failReportedCliMessage(
             renderRunCommandError(error, {
