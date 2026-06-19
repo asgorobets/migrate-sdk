@@ -1,6 +1,11 @@
 import { Schema } from "effect";
 import type { MigrationDefinition } from "./definition.ts";
 import type {
+  MigrationExecutionOptions,
+  NormalizedMigrationExecutionOptions,
+} from "./execution.ts";
+import { normalizeMigrationExecutionOptions } from "./execution.ts";
+import type {
   MigrationDefinitionId,
   MigrationDefinitionIdInput,
 } from "./ids.ts";
@@ -131,6 +136,7 @@ export interface RunRequest<
 > {
   readonly definitionIds?: readonly MigrationDefinitionId[];
   readonly definitions: Definitions;
+  readonly execution?: NormalizedMigrationExecutionOptions;
   readonly mode?: RunModeInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
@@ -142,6 +148,7 @@ export interface RunRequestInput<
 > {
   readonly definitionIds?: readonly MigrationDefinitionIdInput[];
   readonly definitions: Definitions;
+  readonly execution?: MigrationExecutionOptions;
   readonly mode?: RunModeInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
@@ -153,6 +160,9 @@ export const makeRunRequest = <
   input: RunRequestInput<Definitions>
 ): RunRequest<Definitions> => ({
   definitions: input.definitions,
+  ...(input.execution === undefined
+    ? {}
+    : { execution: normalizeMigrationExecutionOptions(input.execution) }),
   ...(input.mode === undefined ? {} : { mode: input.mode }),
   ...(input.definitionIds === undefined
     ? {}
@@ -165,6 +175,7 @@ export interface EncodedRunRequest<
 > {
   readonly definitionIds?: readonly MigrationDefinitionId[];
   readonly definitions: Definitions;
+  readonly execution?: NormalizedMigrationExecutionOptions;
   readonly mode?: RunMode;
 }
 
@@ -174,6 +185,7 @@ export interface EncodedRunRequestInput<
 > {
   readonly definitionIds?: readonly MigrationDefinitionIdInput[];
   readonly definitions: Definitions;
+  readonly execution?: MigrationExecutionOptions;
   readonly mode?: EncodedRunModeInput;
 }
 
@@ -183,6 +195,9 @@ export const makeEncodedRunRequest = <
   input: EncodedRunRequestInput<Definitions>
 ): EncodedRunRequest<Definitions> => ({
   definitions: input.definitions,
+  ...(input.execution === undefined
+    ? {}
+    : { execution: normalizeMigrationExecutionOptions(input.execution) }),
   ...(input.mode === undefined ? {} : { mode: makeEncodedRunMode(input.mode) }),
   ...(input.definitionIds === undefined
     ? {}

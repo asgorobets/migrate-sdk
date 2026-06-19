@@ -33,6 +33,9 @@ const articleRunSummaryPattern = /1\s+articles\s+succeeded\s+1\s+0\s+0\s+0\s+0/;
 const rollbackAllSummaryPattern =
   /1\s+articles\s+succeeded\s+1\s+0\s+0[\s\S]*2\s+authors\s+succeeded\s+1\s+0\s+0[\s\S]*3\s+tags\s+succeeded\s+1\s+0\s+0/;
 const tagRollbackSummaryPattern = /1\s+tags\s+succeeded\s+1\s+0\s+0/;
+const tagsProcessConcurrencyPattern = /tags\s+4/;
+const authorsProcessConcurrencyPattern = /authors\s+4/;
+const tagsRollbackConcurrencyPattern = /tags\s+unbounded/;
 
 const makeLayer = (cwd: string) =>
   Layer.mergeAll(
@@ -1125,7 +1128,7 @@ describe("migrate CLI", () => {
           "--config",
           "migrate.config.ts",
           "--scan-source",
-          "--concurrency",
+          "-c",
           "2",
           "articles",
         ],
@@ -1260,6 +1263,8 @@ describe("migrate CLI", () => {
             "--config",
             "migrate.config.ts",
             "--plan",
+            "-c",
+            "4",
             "--with-dependencies",
             "articles",
             "tags",
@@ -1274,6 +1279,10 @@ describe("migrate CLI", () => {
         expect(result.stdout).toContain("Requested  articles, tags");
         expect(result.stdout).toContain("Included   tags, articles, authors");
         expect(result.stdout).toContain("Execution Order");
+        expect(result.stdout).toContain("Execution Policy");
+        expect(result.stdout).toContain("Process Concurrency");
+        expect(result.stdout).toMatch(tagsProcessConcurrencyPattern);
+        expect(result.stdout).toMatch(authorsProcessConcurrencyPattern);
         expect(result.stdout).toMatch(tagsAuthorsArticlesOrderPattern);
         expect(result.stdout).not.toContain("executed");
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
@@ -1295,6 +1304,8 @@ describe("migrate CLI", () => {
           "--config",
           "migrate.config.ts",
           "--plan",
+          "--concurrency",
+          "unbounded",
           "--id",
           "article-1",
           "--id",
@@ -1314,7 +1325,58 @@ describe("migrate CLI", () => {
       );
       expect(result.stdout).toContain("Included   tags");
       expect(result.stdout).toMatch(singleTagsRowPattern);
+      expect(result.stdout).toContain("Execution Policy");
+      expect(result.stdout).toContain("Rollback Concurrency");
+      expect(result.stdout).toMatch(tagsRollbackConcurrencyPattern);
       expect(result.stdout).not.toContain("executed");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects invalid pipeline execution concurrency flags", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const runResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--concurrency",
+          "0",
+          "tags",
+        ],
+        project
+      );
+      const rollbackResult = yield* runCli(
+        [
+          "rollback",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "-c",
+          "1.5",
+          "tags",
+        ],
+        project
+      );
+
+      expect(runResult.exitCode).toBe(1);
+      expect(runResult.stdout).toBe("");
+      expect(runResult.stderr).toContain(
+        '--concurrency must be a positive integer or "unbounded"'
+      );
+      expect(rollbackResult.exitCode).toBe(1);
+      expect(rollbackResult.stdout).toBe("");
+      expect(rollbackResult.stderr).toContain(
+        '--concurrency must be a positive integer or "unbounded"'
+      );
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 

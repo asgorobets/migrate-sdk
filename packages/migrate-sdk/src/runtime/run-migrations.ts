@@ -9,6 +9,14 @@ import {
   type SkipItem,
   SourcePluginError,
 } from "../domain/errors.ts";
+import {
+  type MigrationExecutionOptions,
+  type NormalizedMigrationExecutionOptions,
+  normalizeMigrationExecutionOptions,
+  type PipelineExecutionConcurrency,
+  type PipelineExecutionOptions,
+  resolvePipelineExecutionOptions,
+} from "../domain/execution.ts";
 import type {
   EncodedSourceIdentity,
   MigrationDefinitionId,
@@ -190,7 +198,11 @@ const encodeRollbackMigrationOptions = (
   options: RollbackMigrationOptions
 ): Effect.Effect<EncodedRollbackMigrationOptions, RollbackRequestError> => {
   if (options.sourceIdentityKeys === undefined) {
-    return Effect.succeed({});
+    return Effect.succeed({
+      ...(options.execution === undefined
+        ? {}
+        : { execution: options.execution }),
+    });
   }
 
   const sourceIdentityKeys = options.sourceIdentityKeys;
@@ -224,6 +236,9 @@ const encodeRollbackMigrationOptions = (
       }
 
       return {
+        ...(options.execution === undefined
+          ? {}
+          : { execution: options.execution }),
         encodedSourceIdentities: [firstIdentity, ...remainingIdentities],
       };
     },
@@ -346,6 +361,8 @@ interface MutableRollbackDefinitionCounts {
   rolledBack: number;
   skipped: number;
 }
+
+type RollbackItemOutcome = "failed" | "rolled-back" | "skipped";
 
 const runStatusForDefinitions = (
   definitions: readonly MigrationDefinitionRunSummary[]
@@ -899,6 +916,30 @@ const addOutcomeToCounts = (
   }
 };
 
+const addOutcomesToCounts = (
+  counts: MutableDefinitionCounts,
+  outcomes: readonly MigrationItemOutcome[]
+) => {
+  for (const outcome of outcomes) {
+    addOutcomeToCounts(counts, outcome);
+  }
+};
+
+const addRollbackOutcomesToCounts = (
+  counts: MutableRollbackDefinitionCounts,
+  outcomes: readonly RollbackItemOutcome[]
+) => {
+  for (const outcome of outcomes) {
+    if (outcome === "failed") {
+      counts.failed += 1;
+    } else if (outcome === "rolled-back") {
+      counts.rolledBack += 1;
+    } else {
+      counts.skipped += 1;
+    }
+  }
+};
+
 const runRollbackPipeline = <RollbackError>(
   rollback: RollbackPipeline<RollbackError>,
   definitionId: MigrationDefinitionId,
@@ -965,13 +1006,11 @@ const rollbackItemState = <
   SourceLayerError,
   SourceRequirements,
 >({
-  counts,
   definition,
   itemState,
   runId,
   store,
 }: {
-  readonly counts: MutableRollbackDefinitionCounts;
   readonly definition: MigrationDefinition<
     Source,
     PipelineError,
@@ -985,7 +1024,10 @@ const rollbackItemState = <
   readonly itemState: MigrationItemState;
   readonly runId: MigrationRunId;
   readonly store: typeof MigrationStore.Service;
-}) =>
+}): Effect.Effect<
+  RollbackItemOutcome,
+  MigrationStoreError | RollbackPreflightError
+> =>
   Effect.gen(function* () {
     const rollback = definition.rollback;
 
@@ -1027,15 +1069,14 @@ const rollbackItemState = <
         normalizeItemError("process", rollbackOutcome.error)
       );
       yield* store.upsertItemState(updatedState);
-      counts.failed += 1;
-      return;
+      return "failed" as const;
     }
 
     yield* store.deleteItemState(
       definition.id,
       itemState.sourceIdentity.encoded
     );
-    counts.rolledBack += 1;
+    return "rolled-back" as const;
   });
 
 interface ProcessTargetedSourceIdentitiesOptions<
@@ -1060,6 +1101,7 @@ interface ProcessTargetedSourceIdentitiesOptions<
   >;
   readonly itemStates: readonly MigrationItemState[];
   readonly mode: RunMode;
+  readonly processConcurrency: PipelineExecutionConcurrency;
   readonly runId: MigrationRunId;
   readonly source: SourcePlugin<Source, Cursor, SourceInput, IdentityKey>;
   readonly store: typeof MigrationStore.Service;
@@ -1078,6 +1120,7 @@ const processTargetedSourceIdentities = <
   definition,
   itemStates,
   mode,
+  processConcurrency,
   runId,
   source,
   store,
@@ -1096,68 +1139,77 @@ const processTargetedSourceIdentities = <
       selectBacklogStates(mode, itemStates)
     );
 
-    for (const sourceIdentity of sourceIdentities) {
-      const previousState =
-        itemStates.find(
-          (itemState) => itemState.sourceIdentity.encoded === sourceIdentity
-        ) ?? null;
-      const readByIdentity = Effect.try({
-        try: () => SourceIdentity.fromEncoded(source.identity, sourceIdentity),
-        catch: (cause) =>
-          new SourcePluginError({
-            message:
-              "Encoded source identity did not match Source Identity Schema",
-            cause,
-          }),
-      }).pipe(Effect.flatMap((identity) => source.readByIdentity(identity)));
-      const readByIdentityWithRetry =
-        definition.sourceLookupRetry === undefined
-          ? readByIdentity
-          : definition.sourceLookupRetry(readByIdentity);
-      const lookup = yield* readByIdentityWithRetry.pipe(
-        Effect.map((sourceItem) =>
-          sourceItem === null
-            ? ({
-                kind: "missing" as const,
-                error: new SourcePluginError({
-                  message: "Source identity was not found",
-                  cause: { sourceIdentity },
-                }),
-              } as const)
-            : ({ kind: "found" as const, sourceItem } as const)
-        ),
-        Effect.catch((error) =>
-          Effect.succeed({ kind: "failed" as const, error } as const)
-        )
-      );
+    const outcomes = yield* Effect.forEach(
+      sourceIdentities,
+      (sourceIdentity) =>
+        Effect.gen(function* () {
+          const previousState =
+            itemStates.find(
+              (itemState) => itemState.sourceIdentity.encoded === sourceIdentity
+            ) ?? null;
+          const readByIdentity = Effect.try({
+            try: () =>
+              SourceIdentity.fromEncoded(source.identity, sourceIdentity),
+            catch: (cause) =>
+              new SourcePluginError({
+                message:
+                  "Encoded source identity did not match Source Identity Schema",
+                cause,
+              }),
+          }).pipe(
+            Effect.flatMap((identity) => source.readByIdentity(identity))
+          );
+          const readByIdentityWithRetry =
+            definition.sourceLookupRetry === undefined
+              ? readByIdentity
+              : definition.sourceLookupRetry(readByIdentity);
+          const lookup = yield* readByIdentityWithRetry.pipe(
+            Effect.map((sourceItem) =>
+              sourceItem === null
+                ? ({
+                    kind: "missing" as const,
+                    error: new SourcePluginError({
+                      message: "Source identity was not found",
+                      cause: { sourceIdentity },
+                    }),
+                  } as const)
+                : ({ kind: "found" as const, sourceItem } as const)
+            ),
+            Effect.catch((error) =>
+              Effect.succeed({ kind: "failed" as const, error } as const)
+            )
+          );
 
-      if (lookup.kind === "failed" || lookup.kind === "missing") {
-        if (previousState === null) {
-          return yield* lookup.error;
-        }
+          if (lookup.kind === "failed" || lookup.kind === "missing") {
+            if (previousState === null) {
+              return yield* lookup.error;
+            }
 
-        yield* store.upsertItemState(
-          makeSourceLookupFailedItemState(
-            definition.id,
+            yield* store.upsertItemState(
+              makeSourceLookupFailedItemState(
+                definition.id,
+                runId,
+                previousState,
+                lookup.error
+              )
+            );
+            return "failed" as const;
+          }
+
+          const outcome = yield* processSourceItem({
+            definition,
+            reprocessUnchangedTerminal: shouldReprocessUnchangedTerminal(mode),
             runId,
-            previousState,
-            lookup.error
-          )
-        );
-        counts.failed += 1;
-        continue;
-      }
+            sourceSchema: source.sourceSchema,
+            sourceItem: lookup.sourceItem,
+          });
 
-      const outcome = yield* processSourceItem({
-        definition,
-        reprocessUnchangedTerminal: shouldReprocessUnchangedTerminal(mode),
-        runId,
-        sourceSchema: source.sourceSchema,
-        sourceItem: lookup.sourceItem,
-      });
+          return outcome;
+        }),
+      { concurrency: processConcurrency }
+    );
 
-      addOutcomeToCounts(counts, outcome);
-    }
+    addOutcomesToCounts(counts, outcomes);
 
     return sourceIdentities;
   });
@@ -1183,6 +1235,7 @@ interface ProcessCursorDiscoveryOptions<
     SourceRequirements
   >;
   readonly excludedSourceIdentities: readonly EncodedSourceIdentity[];
+  readonly processConcurrency: PipelineExecutionConcurrency;
   readonly runId: MigrationRunId;
   readonly source: SourcePlugin<Source, Cursor, SourceInput, IdentityKey>;
   readonly store: typeof MigrationStore.Service;
@@ -1200,6 +1253,7 @@ const processCursorDiscovery = <
   counts,
   definition,
   excludedSourceIdentities,
+  processConcurrency,
   runId,
   source,
   store,
@@ -1228,20 +1282,24 @@ const processCursorDiscovery = <
           : definition.sourceCursorRetry(read);
       const readResult = yield* readWithRetry;
 
-      for (const sourceItem of readResult.items) {
-        if (excludedSourceIdentities.includes(sourceItem.identity.encoded)) {
-          continue;
-        }
+      const outcomes = yield* Effect.forEach(
+        readResult.items,
+        (sourceItem) =>
+          excludedSourceIdentities.includes(sourceItem.identity.encoded)
+            ? Effect.succeed(null)
+            : processSourceItem({
+                definition,
+                runId,
+                sourceSchema: source.sourceSchema,
+                sourceItem,
+              }),
+        { concurrency: processConcurrency }
+      );
 
-        const outcome = yield* processSourceItem({
-          definition,
-          runId,
-          sourceSchema: source.sourceSchema,
-          sourceItem,
-        });
-
-        addOutcomeToCounts(counts, outcome);
-      }
+      addOutcomesToCounts(
+        counts,
+        outcomes.filter((outcome) => outcome !== null)
+      );
 
       if (readResult.nextCursor === undefined) {
         break;
@@ -1636,7 +1694,8 @@ const runMigrationDefinition = <
   >,
   runId: MigrationRunId,
   mode: RunMode,
-  createStubReference: CreateMigrationReferenceStub
+  createStubReference: CreateMigrationReferenceStub,
+  processExecution?: PipelineExecutionOptions
 ): Effect.Effect<
   MigrationDefinitionRunSummary,
   RunMigrationError | SourceLayerError,
@@ -1650,6 +1709,11 @@ const runMigrationDefinition = <
       IdentityKey
     >();
     const store = yield* MigrationStore;
+    const processConcurrency = resolvePipelineExecutionOptions(
+      processExecution,
+      definition.execution?.process,
+      "Process Pipeline Execution"
+    ).concurrency;
 
     const counts = { ...emptyCounts };
     const itemStates = yield* store.listItemStates(definition.id);
@@ -1659,6 +1723,7 @@ const runMigrationDefinition = <
       definition,
       itemStates,
       mode,
+      processConcurrency,
       runId,
       source,
       store,
@@ -1677,6 +1742,7 @@ const runMigrationDefinition = <
       counts,
       definition,
       excludedSourceIdentities: attemptedSourceIdentities,
+      processConcurrency,
       runId,
       source,
       store,
@@ -1729,39 +1795,50 @@ const runRollbackMigrationDefinition = <
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
     const counts = { ...emptyRollbackCounts };
+    const rollbackConcurrency = resolvePipelineExecutionOptions(
+      options.execution?.rollback,
+      definition.execution?.rollback,
+      "Rollback Pipeline Execution"
+    ).concurrency;
 
     if (options.encodedSourceIdentities === undefined) {
       const itemStates = yield* store.listItemStates(definition.id);
-
-      for (const itemState of itemStates) {
-        yield* rollbackItemState({
-          counts,
-          definition,
-          itemState,
-          runId,
-          store,
-        });
-      }
+      const outcomes = yield* Effect.forEach(
+        itemStates,
+        (itemState) =>
+          rollbackItemState({
+            definition,
+            itemState,
+            runId,
+            store,
+          }),
+        { concurrency: rollbackConcurrency }
+      );
+      addRollbackOutcomesToCounts(counts, outcomes);
     } else {
-      for (const sourceIdentity of options.encodedSourceIdentities) {
-        const itemState = yield* store.getItemState(
-          definition.id,
-          sourceIdentity
-        );
+      const outcomes = yield* Effect.forEach(
+        options.encodedSourceIdentities,
+        (sourceIdentity) =>
+          Effect.gen(function* () {
+            const itemState = yield* store.getItemState(
+              definition.id,
+              sourceIdentity
+            );
 
-        if (itemState === null) {
-          counts.skipped += 1;
-          continue;
-        }
+            if (itemState === null) {
+              return "skipped" as const;
+            }
 
-        yield* rollbackItemState({
-          counts,
-          definition,
-          itemState,
-          runId,
-          store,
-        });
-      }
+            return yield* rollbackItemState({
+              definition,
+              itemState,
+              runId,
+              store,
+            });
+          }),
+        { concurrency: rollbackConcurrency }
+      );
+      addRollbackOutcomesToCounts(counts, outcomes);
     }
 
     yield* store.deleteSourceCursor(definition.id);
@@ -2060,8 +2137,17 @@ const rollbackMigrationsWithRequest = <
 
   const options: EncodedRollbackMigrationOptions =
     request.encodedSourceIdentities === undefined
-      ? {}
-      : { encodedSourceIdentities: request.encodedSourceIdentities };
+      ? {
+          ...(request.execution === undefined
+            ? {}
+            : { execution: request.execution }),
+        }
+      : {
+          ...(request.execution === undefined
+            ? {}
+            : { execution: request.execution }),
+          encodedSourceIdentities: request.encodedSourceIdentities,
+        };
 
   if (
     options.encodedSourceIdentities !== undefined &&
@@ -2196,8 +2282,17 @@ export const rollbackMigrations = <
 
     const publicOptions: RollbackMigrationOptions =
       request.sourceIdentityKeys === undefined
-        ? {}
-        : { sourceIdentityKeys: request.sourceIdentityKeys };
+        ? {
+            ...(request.execution === undefined
+              ? {}
+              : { execution: request.execution }),
+          }
+        : {
+            ...(request.execution === undefined
+              ? {}
+              : { execution: request.execution }),
+            sourceIdentityKeys: request.sourceIdentityKeys,
+          };
 
     if (
       publicOptions.sourceIdentityKeys !== undefined &&
@@ -2214,6 +2309,9 @@ export const rollbackMigrations = <
           ...(request.definitionIds === undefined
             ? {}
             : { definitionIds: request.definitionIds }),
+          ...(request.execution === undefined
+            ? {}
+            : { execution: request.execution }),
           ...(options.encodedSourceIdentities === undefined
             ? {}
             : { encodedSourceIdentities: options.encodedSourceIdentities }),
@@ -2284,7 +2382,8 @@ const runMigrationsWithRequest = <
                   definition,
                   runId,
                   request.mode ?? normalRunMode,
-                  stubRunScope.createStubReference
+                  stubRunScope.createStubReference,
+                  request.execution?.process
                 );
                 summaries.push(summary);
               }
@@ -2359,6 +2458,9 @@ export const runMigrations = <
           ...(request.definitionIds === undefined
             ? {}
             : { definitionIds: request.definitionIds }),
+          ...(request.execution === undefined
+            ? {}
+            : { execution: request.execution }),
           mode,
         })
     );
@@ -2383,54 +2485,72 @@ export const runMigration = <
     SourceInput,
     SourceLayerError,
     SourceRequirements
-  >
+  >,
+  options: { readonly execution?: MigrationExecutionOptions } = {}
 ): Effect.Effect<
   MigrationRunSummary,
   RunMigrationError | SourceLayerError,
   SourceRequirements
 > => {
-  const program = Effect.gen(function* () {
-    const store = yield* MigrationStore;
-    const definitionIds = [definition.id];
+  const runWithExecution = (
+    execution: NormalizedMigrationExecutionOptions | undefined
+  ) => {
+    const program = Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const definitionIds = [definition.id];
 
-    const run = yield* executeMigrationRun(
-      store,
-      definitionIds,
-      (runId) => {
-        const activeRun = {
-          definitionIds,
-          runId,
-          store,
-        };
-
-        return withStubRunScope(activeRun, (stubRunScope) =>
-          runMigrationDefinition(
-            definition,
+      const run = yield* executeMigrationRun(
+        store,
+        definitionIds,
+        (runId) => {
+          const activeRun = {
+            definitionIds,
             runId,
-            normalRunMode,
-            stubRunScope.createStubReference
-          ).pipe(
-            Effect.map((summary) => ({
-              status:
-                summary.status === "failed"
-                  ? ("failed" as const)
-                  : ("succeeded" as const),
-              value: [summary],
-            }))
-          )
-        );
-      },
-      () => validateMigrationContract(store, definition)
-    );
+            store,
+          };
 
-    return {
-      runId: run.runState.runId,
-      status: run.status,
-      startedAt: run.runState.startedAt,
-      finishedAt: run.completedRun.finishedAt ?? new Date(),
-      definitions: run.value,
-    };
-  });
+          return withStubRunScope(activeRun, (stubRunScope) =>
+            runMigrationDefinition(
+              definition,
+              runId,
+              normalRunMode,
+              stubRunScope.createStubReference,
+              execution?.process
+            ).pipe(
+              Effect.map((summary) => ({
+                status:
+                  summary.status === "failed"
+                    ? ("failed" as const)
+                    : ("succeeded" as const),
+                value: [summary],
+              }))
+            )
+          );
+        },
+        () => validateMigrationContract(store, definition)
+      );
 
-  return program.pipe(Effect.provide(definition.store));
+      return {
+        runId: run.runState.runId,
+        status: run.status,
+        startedAt: run.runState.startedAt,
+        finishedAt: run.completedRun.finishedAt ?? new Date(),
+        definitions: run.value,
+      };
+    });
+
+    return program.pipe(Effect.provide(definition.store));
+  };
+
+  if (options.execution === undefined) {
+    return runWithExecution(undefined);
+  }
+
+  return Effect.flatMap(
+    Effect.try({
+      try: () => normalizeMigrationExecutionOptions(options.execution),
+      catch: invalidRunRequestError,
+    }),
+    runWithExecution
+  );
 };

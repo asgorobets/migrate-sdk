@@ -34,6 +34,14 @@ export {
 } from "./domain/errors.ts";
 
 export type {
+  MigrationExecutionOptions,
+  NormalizedMigrationExecutionOptions,
+  NormalizedPipelineExecutionOptions,
+  PipelineExecutionConcurrency,
+  PipelineExecutionOptions,
+} from "./domain/execution.ts";
+
+export type {
   EncodedSourceIdentityInput,
   EncodedSourceCursorInput,
   MigrationDefinitionIdInput,
