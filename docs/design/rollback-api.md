@@ -1,372 +1,41 @@
 # Rollback API
 
-Audience: SDK users authoring rollback-capable migrations.
+Audience: migration authors and runtime maintainers.
 
-Status: pre-ADR-0006 command-plan rollback design. This document describes the
-older singular destination identity and command-plan model. Rollback remains
-state-driven, but the target state shape is refined by
-[ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md)
-and the [Scoped Pipeline Tracking API](./scoped-pipeline-tracking-api.md):
-rollbackable evidence may come from durable destination journal changes and
-optional tracking records. Do not treat the examples below as the new scoped
-pipeline rollback API.
+Status: current rollback process model.
 
-Rollback is a separate SDK operation from forward migration execution. It is
-driven by durable migration item state, not by source reads. A rollback pipeline
-receives a rollbackable item state with a destination identity and returns a
-normal destination command plan that compensates destination-side effects.
-
-This document describes the first implementation slice. It avoids broader
-public API consolidation and store pagination changes.
-
-## Authoring Model
-
-A migration definition may provide a `rollback` pipeline alongside the forward
-`pipeline`:
+Rollback is explicit. A migration definition that may roll back stored item
+state declares `rollback`. The runtime passes the durable item state and a
+rollback context, provides a scoped tracking service for the attempt, and
+deletes item state only when the rollback process succeeds.
 
 ```ts
 const articles = defineMigration({
   id: "articles",
   source,
-  destination,
   store,
-  pipeline: (source) => [
-    destination.commands.upsertEntry({
-      title: source.item.title,
-    }),
-    destination.commands.publishEntry(),
-  ],
-  rollback: (state) => [
-    destination.commands.unpublishEntry(state.destinationIdentity),
-    destination.commands.deleteEntry(state.destinationIdentity),
-  ],
-});
+  process,
+  rollback: Effect.fn("articles.rollback")(function* (state, context) {
+    for (const entry of state.journal?.process.entries ?? []) {
+      if (entries.changes.entryUpserted.is(entry)) {
+        const change = yield* entries.changes.entryUpserted.decode(entry)
+        yield* rawApi.deleteEntry(change.value.entryId)
+      }
+    }
+
+    yield* Tracking.logDiagnostic({
+      severity: "info",
+      message: "Rollback completed",
+      details: {
+        definitionId: context.definitionId,
+      },
+    })
+  }),
+})
 ```
 
-Rollback pipelines receive the rollbackable item state and a minimal
-`RollbackContext` with the definition id and rollback run id. The state carries
-source identity, source version, destination identity, destination version,
-status, and any existing migration error data.
-The rollback input is the full narrowed item state, not an identity-only object,
-so rollback authors may branch on status such as `migrated`, `needs-update`, or
-`failed`.
-
-Rollback commands are ordinary destination commands. Destination plugins expose
-commands such as `createEntry`, `publishEntry`, `unpublishEntry`, and
-`deleteEntry`; the rollback pipeline chooses the compensation sequence.
-Rollback command factories should accept the existing destination identity type
-ergonomically. If identities are branded, rollback authors should be able to
-pass `state.destinationIdentity` without manual unwrapping.
-
-Rollback does not infer inverse commands from the forward command plan.
-The migration definition property is named `rollback`.
-Rollback pipelines may return a command plan directly or an `Effect` that
-produces a command plan. The first slice does not add source services or
-`MigrationReferenceLookup` to rollback pipeline requirements.
-Known rollback pipeline errors should remain typed end to end, following the
-same typed-error discipline as forward migration pipelines.
-Rollback pipeline failures use the same pipeline error treatment as forward
-migration pipeline failures in the first slice.
-
-## Rollbackable States
-
-The runtime passes only rollbackable item states to the rollback pipeline. A
-rollbackable state is any migration item state that records a destination
-identity:
-
-```ts
-type RollbackableMigrationItemState =
-  | MigratedItemState
-  | NeedsUpdateItemState
-  | (FailedItemState & { readonly destinationIdentity: DestinationIdentity });
-```
-
-This includes `needs-update` states created for destination stubs when they
-contain a destination identity. It excludes skipped states and failed states
-without a destination identity.
-
-## Rollback Operation
-
-Rollback is exposed as a separate SDK operation. The implemented
-single-definition helper is:
-
-```ts
-yield* rollbackMigration(articles);
-```
-
-Identity-targeted rollback is an implemented single-definition helper mode:
-
-```ts
-yield* rollbackMigration(articles, {
-  sourceIdentityKeys: ["article-123"],
-});
-```
-
-`sourceIdentityKeys` accepts one or more decoded source identity keys for the
-selected definition. The runtime validates and encodes those keys through the
-definition's Source Identity contract before reading item state. An empty
-`sourceIdentityKeys` array is a request validation failure. Omit
-`sourceIdentityKeys` to rollback all rollbackable states for the definition.
-Duplicate encoded source identities are deduplicated while preserving first
-occurrence order. Targeted rollback uses direct item-state lookup for each
-deduplicated identity. Missing item state, skipped item state, and failed item
-state without a destination identity count as skipped and remain unchanged.
-
-The first slice is SDK-first. There is no CLI yet, but the request shape should
-support future CLI options such as selected definitions, source identities, and
-forced dependency bypass.
-
-`rollbackMigration(definition)` rolls back all rollbackable states for that
-definition. Multi-definition rollback is exposed as:
-
-```ts
-yield* rollbackMigrations({
-  definitions: [authors, articles],
-});
-```
-
-Optional definition selection is supported:
-
-```ts
-yield* rollbackMigrations({
-  definitions: [authors, articles],
-  definitionIds: ["articles"],
-});
-```
-
-`rollbackMigrations(request)` uses the same definition selection semantics as
-`runMigrations`: omitting `definitionIds` selects all provided definitions, and
-provided definition ids are expanded through their dependencies. Rollback does
-not expand to dependent definitions. A future CLI can make per-definition
-rollback selection a visible command surface. Source identity selection stays
-off `rollbackMigrations`; source identities are per-definition and become
-ambiguous across multiple definitions. If multi-definition identity targeting is
-needed later, it should use an explicit per-definition target shape.
-
-## Execution Semantics
-
-Rollback uses the same destination plugin, destination command definitions,
-destination command executor, migration definition locks, and destination retry
-strategy as forward migration execution.
-The destination retry strategy applies only to destination command execution.
-
-Rollback command execution reuses `DestinationCommandContext`. The context uses
-the rollback run id, the rollbackable state's source identity and source
-version, and sets `previousState` to the rollbackable item state. The rollback
-pipeline remains the primary place to decide which commands to emit.
-
-The first slice locks the selected rollback definitions after dependency
-expansion. Dependency preflight may inspect unselected dependent definitions for
-rollbackable item state, but it does not lock those unselected dependents.
-
-Successful rollback requires the entire rollback command plan to succeed. On
-success, the runtime deletes the migration item state through a dedicated
-`MigrationStore` item-state deletion operation. On failure, the original item
-state is preserved so a later rollback attempt retains destination identity and
-version evidence.
-The runtime deletes item state immediately after each successful item rollback
-so rollback progress is durable across process crashes.
-Rollback command handlers should prefer idempotent behavior where possible,
-especially for destructive commands such as unpublish or delete. The runtime
-does not enforce idempotency.
-
-Item-level rollback failures do not stop the rollback definition immediately.
-The runtime continues attempting remaining selected item states, then marks the
-rollback definition summary and top-level rollback summary failed when any item
-rollback failed.
-
-Rollback pipeline failures and destination command execution failures are both
-item-level rollback failures. Both preserve the original item state and
-increment the rollback `failed` count.
-Rollback failures do not overwrite item state with rollback error details in the
-first slice. The original item state remains unchanged.
-
-Rollback pipelines do not support `Skip Item` or a rollback-specific skip
-outcome in the first slice. The `skipped` count is reserved for selected states
-or identities that are not rollbackable.
-
-Rollback command plans must contain at least one destination command. Empty
-rollback command plans are item-level rollback failures.
-
-Rollback command plans may contain only side-effect-only destination commands.
-Identity-bearing command kinds are rejected during rollback command plan
-validation. Rollback compensates an existing durable destination identity; it
-must not create or replace a destination identity.
-
-Destination identities or versions returned by rollback command execution are
-ignored for durable item state purposes.
-
-Rollback does not read source items and does not update the source cursor.
-The first slice accepts normal migration definitions and does not introduce a
-separate rollback-only definition shape. Source configuration may still be
-present on the definition, but rollback execution must not call source reads.
-
-## Dependency Semantics
-
-Rollback never silently expands to dependent migration definitions. If a
-selected definition has unselected dependents with rollbackable item state, the
-rollback run fails preflight.
-Unselected dependents with no rollbackable item state do not block rollback.
-Dependent preflight uses the transitive dependent closure, not only direct
-dependents.
-When dependency preflight is applicable through `rollbackMigrations`, it is
-definition-level. The first slice does not attempt per-item dependent reference
-analysis for identity-targeted single-definition rollback.
-Rollback dependency preflight operates over the definitions supplied to the
-request and follows the same same-store boundary as forward multi-definition
-runs. Unselected dependents that must be inspected for rollback safety must use
-the selected rollback graph's migration store.
-Callers are responsible for supplying the complete request graph needed for
-dependent safety checks. If a dependent definition is omitted from the request,
-this SDK slice cannot discover it. A future definition registry or CLI discovery
-layer may expand the supplied graph before calling `rollbackMigrations`.
-Missing selected dependencies still fail preflight because those edges are
-visible from the selected definitions' `dependsOn` declarations.
-
-Definitions may remain forward-only. A selected definition without a rollback
-pipeline fails preflight only when rollbackable item state is selected for that
-definition.
-
-Preflight failures happen before durable run creation. Request validation and
-dependency safety failures do not create a durable run state in the first
-rollback slice.
-Dependency cycles are preflight failures, as they are for forward migration
-runs.
-Rollback uses distinct rollback runtime errors for public request and preflight
-failures, such as missing rollback pipelines, unsafe dependents, missing
-selected dependencies, and empty identity selections. Store and destination
-errors keep their existing lower-level error types.
-
-When multiple selected definitions are valid for rollback, the runtime executes
-them in reverse dependency order:
-
-```text
-forward:  authors -> articles
-rollback: articles -> authors
-```
-
-Rollback does not guarantee item order within one migration definition. Future
-execution adapters may parallelize rollback item execution.
-
-A future force option may intentionally bypass dependency preflight. That option
-is not part of the first slice.
-
-## Summary Shape
-
-Rollback returns a separate rollback run summary instead of overloading the
-forward migration summary:
-
-```ts
-interface RollbackRunSummary {
-  readonly kind: "rollback";
-  readonly runId: MigrationRunId;
-  readonly startedAt: Date;
-  readonly finishedAt: Date;
-  readonly status: "succeeded" | "failed";
-  readonly definitions: readonly RollbackDefinitionRunSummary[];
-}
-
-interface RollbackDefinitionRunSummary {
-  readonly definitionId: MigrationDefinitionId;
-  readonly status: "succeeded" | "failed";
-  readonly counts: {
-    readonly rolledBack: number;
-    readonly failed: number;
-    readonly skipped: number;
-  };
-}
-```
-
-Rollback summary counts are returned to the current SDK caller. They are not
-durable run state in the first version.
-Rollback summaries include aggregate counts only in the first slice, matching
-the current migration summary shape. Item-level reporting can come from store
-inspection or future reporting APIs.
-Item-level rollback error details are not returned in the rollback summary in
-the first slice.
-The first slice does not add rollback-specific fields to durable
-`MigrationRunState`; operation kind and counts live in the returned rollback
-summary.
-
-`skipped` counts item states or targeted source identities that are not
-rollbackable, such as skipped item states, failed item states without a
-destination identity, or identities with no item state. Like forward migration
-summaries, rollback definition status is `failed` only when the failed count is
-greater than zero; no-op rollback definitions still succeed.
-Targeted source identities with no item state count as skipped, not request
-validation failures.
-Selected skipped item states count as skipped and remain unchanged.
-For definition-wide rollback, `rolledBack + failed + skipped` equals the
-selected item states inspected for that definition. For targeted rollback, it
-equals the deduplicated source identities requested.
-
-## Implemented SDK Surface
-
-The rollback foundation includes:
-
-- optional `rollback` pipeline support on `MigrationDefinition`
-- exported `RollbackPipeline`, `RollbackContext`, and
-  `RollbackableMigrationItemState` types
-- schema-backed `RollbackContext`, `RollbackMigrationOptions`,
-  `RollbackDefinitionRunSummary`, and `RollbackRunSummary`
-- `RollbackRequest` and `RollbackMigrationOptions` input normalizers that use
-  branded definition and source identity values
-- distinct `RollbackRequestError` and `RollbackPreflightError` classes for
-  later public request and safety failures
-- `MigrationStore.deleteItemState(definitionId, sourceIdentity)`
-- in-memory and file-store deletion behavior for migration item state
-- public exports for the rollback foundation beside the existing run exports
-
-The single-definition rollback operation includes:
-
-- `rollbackMigration(definition)` for all rollbackable item states on one
-  migration definition
-- `rollbackMigration(definition, { sourceIdentityKeys })` for targeted
-  single-definition rollback by decoded source identity key
-- definition lock acquisition and normal migration run lifecycle reuse
-- durable item-state selection without source reads, source identity lookups, or
-  source cursor updates
-- rollback pipeline execution with the full narrowed rollbackable item state and
-  `RollbackContext`
-- destination command execution through the existing destination plugin,
-  command definitions, command context, command executor, and destination retry
-  strategy
-- rollback command-plan validation for non-empty plans and no identity-bearing
-  commands
-- immediate item-state deletion after each successful item rollback
-- state preservation for rollback pipeline failures and destination command
-  failures
-- aggregate-only `RollbackRunSummary` counts for `rolledBack`, `failed`, and
-  `skipped`
-
-The multi-definition rollback operation includes:
-
-- `rollbackMigrations({ definitions, definitionIds })` for selected sets of
-  migration definitions
-- default selection of all provided definitions when `definitionIds` is omitted
-- the same dependency expansion semantics as `runMigrations` for selected
-  definition ids
-- selected definition locks and normal migration run lifecycle reuse
-- reverse dependency-order execution of the selected rollback definitions
-- no silent expansion to dependent definitions
-- transitive dependent preflight over the supplied request graph
-- rollback preflight failure when unselected dependents have rollbackable item
-  state
-- no blocking from unselected dependents that have no rollbackable item state
-- rollback preflight failure for selected or inspected definitions that cross
-  the migration store boundary
-- rollback preflight failure for dependency cycles and missing selected
-  dependencies before durable run creation
-
-The first rollback implementation should not add CLI commands, dry-run or
-planning mode, store pagination, a terminal rolled-back item state, or a public
-migration executable object.
-
-Future work may group operations under a migration executable API:
-
-```ts
-const executable = makeMigrationExecutable({ definitions });
-
-yield* executable.run(...);
-yield* executable.rollback(...);
-```
+If a rollback process fails, the runtime leaves the item state in place and
+appends a failed rollback attempt segment. The segment contains rollback-scope
+journal entries and normalized failure metadata. If the rollback process
+succeeds, the item state is removed and no rollback attempt state remains for
+that item.

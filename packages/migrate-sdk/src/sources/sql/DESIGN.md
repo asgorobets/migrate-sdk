@@ -253,10 +253,10 @@ instead of exception-driven control flow.
 
 The source item payload is the SQL row returned by the statement. Raw SQL v1
 does not expose a separate payload mapper. This keeps the SQL source from
-becoming a transformation pipeline. If a migration needs a different payload
-shape, the author should express that with SQL projection or the Source Payload
-Schema. Effectful enrichment belongs in the Transformation Pipeline, not in SQL
-source row handling. The SQL source treats returned row objects as read-only.
+becoming a process pipeline. If a migration needs a different payload shape, the
+author should express that with SQL projection or the Source Payload Schema.
+Effectful enrichment belongs in the Process Pipeline, not in SQL source row
+handling. The SQL source treats returned row objects as read-only.
 
 The raw SQL source should not derive identity or version automatically from
 column names. SQL exports vary too much, and the mapping is migration-specific.
@@ -265,7 +265,7 @@ If Effect SQL offers useful schema-backed row decoding internally, the SQL
 source may use it as an implementation detail. That must not add a second
 user-facing schema requirement, and it must not change the framework boundary:
 the configured Source Payload Schema is still the public contract the runner
-uses before invoking the transformation pipeline.
+uses before invoking the Process Pipeline.
 
 `read` and `readByIdentity` are two access paths to the same Source Item
 contract. Raw SQL v1 should therefore use one source identity descriptor and one

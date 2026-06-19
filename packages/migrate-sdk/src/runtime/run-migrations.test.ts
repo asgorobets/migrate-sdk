@@ -2,13 +2,6 @@ import { describe, expect, it } from "@effect/vitest";
 import { Console, Effect, Layer, Schedule, Schema } from "effect";
 import { MinimumLogLevel } from "effect/References";
 import type { InMemoryEntryUpsertedChange } from "migrate-sdk/destinations/in-memory";
-import {
-  type InMemoryDestinationEntry,
-  type InMemoryDestinationExecute,
-  type InMemoryDestinationExecution,
-  type InMemoryDestinationInspection,
-  InMemoryDestinationTesting,
-} from "migrate-sdk/destinations/in-memory/testing";
 import { expectTypeOf } from "vitest";
 import {
   defaultSourceVersionContractFingerprint,
@@ -16,21 +9,9 @@ import {
 } from "../domain/migration-contract.ts";
 import {
   DestinationChangeDescriptor,
-  type DestinationCommand,
-  type DestinationCommandContext,
-  type DestinationCommandResultInput,
-  type DestinationCommandSchema,
-  DestinationPlugin,
-  DestinationPluginError,
-  defineDestinationCommand,
-  defineDestinationCommandGroup,
-  defineDestinationPlugin,
   defineMigration,
   defineSourcePlugin,
   InMemoryDestination,
-  InMemoryDestinationPlugin,
-  type InMemoryDestinationTransientFailures,
-  type InMemoryEntryCommand,
   InMemoryMigrationStore,
   type InMemoryMigrationStoreState,
   InMemorySourceCursor,
@@ -44,10 +25,8 @@ import {
   type MigrationRunSummary,
   MigrationStore,
   MigrationStoreError,
-  makeDestinationCommandResult,
   type RollbackContext,
   type RollbackMigrationError,
-  type RollbackMigrationOptionsInput,
   RollbackPreflightError,
   RollbackRequestError,
   type RollbackRunSummary,
@@ -64,8 +43,6 @@ import {
   skipItem,
   Tracking,
   type TrackingRecordContractType,
-  toDestinationIdentity,
-  toDestinationVersion,
   toEncodedSourceCursor,
   toEncodedSourceIdentity,
   toMigrationDefinitionId,
@@ -73,60 +50,6 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "../index.ts";
-
-const UpsertEntryCommand = Schema.Struct({
-  kind: Schema.Literal("UpsertEntry"),
-  contentType: Schema.String,
-  fields: Schema.Record(Schema.String, Schema.Unknown),
-});
-
-type UpsertEntryCommand = typeof UpsertEntryCommand.Type;
-
-const PublishEntryCommand = Schema.Struct({
-  kind: Schema.Literal("PublishEntry"),
-  contentType: Schema.String,
-});
-
-const EntryCommand = Schema.Union([UpsertEntryCommand, PublishEntryCommand]);
-
-const upsertEntryCommand = defineDestinationCommand("UpsertEntry", {
-  identity: true,
-  schema: UpsertEntryCommand,
-});
-
-const publishEntryCommand = defineDestinationCommand("PublishEntry", {
-  identity: false,
-  schema: PublishEntryCommand,
-});
-
-const identityPublishEntryCommand = defineDestinationCommand("PublishEntry", {
-  identity: true,
-  schema: PublishEntryCommand,
-});
-
-const UpsertEntryPlugin = defineDestinationPlugin("test-upsert-entry").addGroup(
-  defineDestinationCommandGroup("entries").topLevel().add(upsertEntryCommand)
-);
-
-const EntryPlugin = defineDestinationPlugin("test-entry").addGroup(
-  defineDestinationCommandGroup("entries")
-    .topLevel()
-    .add(upsertEntryCommand, publishEntryCommand)
-);
-
-const MultiIdentityEntryPlugin = defineDestinationPlugin(
-  "test-multi-identity-entry"
-).addGroup(
-  defineDestinationCommandGroup("entries")
-    .topLevel()
-    .add(upsertEntryCommand, identityPublishEntryCommand)
-);
-
-expectTypeOf<DestinationCommandSchema<UpsertEntryCommand>>().toEqualTypeOf<
-  Schema.Codec<UpsertEntryCommand, UpsertEntryCommand, never, never>
->();
-
-type EntryCommand = typeof EntryCommand.Type;
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -180,55 +103,35 @@ const ArticleTrackingRecord = Schema.Struct({
   locale: Schema.String,
 });
 type ArticleTrackingRecord = typeof ArticleTrackingRecord.Type;
-const ArticleStatsEntryFields = Schema.Struct({
-  title: Schema.String,
-  views: Schema.Number,
-});
 const DecodingArticleEntryFields = Schema.Struct({
   views: Schema.NumberFromString,
 });
-interface ArticleEntryCommands {
-  readonly publishEntry: true;
-  readonly upsertEntry: { readonly fields: typeof ArticleEntryFields };
-}
-interface ArticleStatsEntryCommands {
-  readonly publishEntry: true;
-  readonly upsertEntry: { readonly fields: typeof ArticleStatsEntryFields };
-}
-type ArticleEntryCommand = InMemoryEntryCommand<
-  "article",
-  ArticleEntryCommands
->;
-type ArticleStatsEntryCommand = InMemoryEntryCommand<
-  "article",
-  ArticleStatsEntryCommands
->;
-const ArticleEntryDestinationForTypes = InMemoryDestinationPlugin.makeEntries({
+const ArticleEntryDestinationForTypes = InMemoryDestination.makeEntries({
   contentType: "article",
-  commands: {
-    publishEntry: true,
-    upsertEntry: { fields: ArticleEntryFields },
-  },
+  fields: ArticleEntryFields,
 });
-ArticleEntryDestinationForTypes.commands.upsertEntry({
+expectTypeOf(ArticleEntryDestinationForTypes.entries.upsert).parameter(0).toEqualTypeOf<{
+  readonly title: string;
+}>();
+const _validEntryFields: Parameters<
+  typeof ArticleEntryDestinationForTypes.entries.upsert
+>[0] = {
   title: "Typed article",
-});
-ArticleEntryDestinationForTypes.commands.publishEntry();
-// @ts-expect-error command factories close over the configured content type.
-ArticleEntryDestinationForTypes.commands.publishEntry("offer");
-ArticleEntryDestinationForTypes.commands.upsertEntry({
+};
+void _validEntryFields;
+const _invalidEntryFields: Parameters<
+  typeof ArticleEntryDestinationForTypes.entries.upsert
+>[0] = {
   // @ts-expect-error upsert fields must match the configured content type schema.
   headline: "Wrong field",
-});
-InMemoryDestinationPlugin.makeEntries({
+};
+void _invalidEntryFields;
+const _invalidEntryDestination = InMemoryDestination.makeEntries({
   contentType: "article",
-  commands: {
-    upsertEntry: {
-      // @ts-expect-error destination entry schemas validate pipeline values without decoding.
-      fields: DecodingArticleEntryFields,
-    },
-  },
+  // @ts-expect-error destination entry schemas validate process values without decoding.
+  fields: DecodingArticleEntryFields,
 });
+void _invalidEntryDestination;
 
 const ArticleStatsSource = Schema.Struct({
   title: Schema.Trim,
@@ -263,202 +166,6 @@ const makeTestInMemorySource = <A>(
     sourceSchema: Schema.Unknown as Schema.Codec<A, unknown, never, never>,
     ...options,
   });
-
-interface TestDestinationState<C extends DestinationCommand> {
-  readonly bind: (inspection: InMemoryDestinationInspection<C>) => void;
-  readonly entries: ReadonlyMap<string, InMemoryDestinationEntry>;
-  readonly executeAttempts: number;
-  readonly executions: readonly InMemoryDestinationExecution<C>[];
-  readonly record: (execution: InMemoryDestinationExecution<C>) => void;
-}
-
-const makeTestDestinationState = <
-  C extends DestinationCommand,
->(): TestDestinationState<C> => {
-  const inspections: InMemoryDestinationInspection<C>[] = [];
-  const executions: InMemoryDestinationExecution<C>[] = [];
-  const boundInspections = () => {
-    if (inspections.length === 0) {
-      throw new Error("Destination fixture was not bound to the test state");
-    }
-
-    return inspections;
-  };
-
-  return {
-    get entries() {
-      const entries = new Map<string, InMemoryDestinationEntry>();
-
-      for (const inspection of boundInspections()) {
-        for (const [key, entry] of inspection.entries()) {
-          entries.set(key, entry);
-        }
-      }
-
-      return entries;
-    },
-    get executeAttempts() {
-      return boundInspections().reduce(
-        (attempts, inspection) => attempts + inspection.executeAttempts(),
-        0
-      );
-    },
-    get executions() {
-      return executions.length === 0
-        ? boundInspections().flatMap((inspection) => [
-            ...inspection.executions(),
-          ])
-        : executions;
-    },
-    bind: (inspection) => {
-      inspections.push(inspection);
-    },
-    record: (execution) => {
-      executions.push(execution);
-    },
-  };
-};
-
-interface TestDestinationOptions<C extends DestinationCommand> {
-  readonly execute?: InMemoryDestinationExecute<C>;
-  readonly state?: TestDestinationState<C>;
-  readonly transientFailures?: InMemoryDestinationTransientFailures;
-}
-
-const trackDestinationExecute =
-  <C extends DestinationCommand>(
-    state: TestDestinationState<C> | undefined,
-    execute: InMemoryDestinationExecute<C>
-  ): InMemoryDestinationExecute<C> =>
-  (command, context) => {
-    const resultInput = execute(command, context);
-    const recordExecution = (input: DestinationCommandResultInput) => {
-      state?.record({
-        command,
-        context,
-        result: makeDestinationCommandResult(input),
-      });
-
-      return input;
-    };
-
-    return Effect.isEffect(resultInput)
-      ? resultInput.pipe(Effect.map(recordExecution))
-      : recordExecution(resultInput);
-  };
-
-const executeTestUpsertEntryCommand = (
-  _command: UpsertEntryCommand,
-  context: DestinationCommandContext
-): DestinationCommandResultInput => ({
-  destinationIdentity: `entry-${context.sourceIdentity}`,
-  destinationVersion: "destination-version-1",
-});
-
-const executeTestEntryCommand = (
-  command: EntryCommand,
-  context: DestinationCommandContext
-): DestinationCommandResultInput =>
-  command.kind === "UpsertEntry"
-    ? executeTestUpsertEntryCommand(command, context)
-    : {};
-
-const makeTestUpsertEntryDestination = (
-  options: TestDestinationOptions<UpsertEntryCommand> = {}
-) => {
-  const fixture = InMemoryDestinationTesting.fixture({
-    command: upsertEntryCommand,
-    execute: trackDestinationExecute(
-      options.state,
-      options.execute ?? executeTestUpsertEntryCommand
-    ),
-    ...(options.transientFailures === undefined
-      ? {}
-      : { transientFailures: options.transientFailures }),
-  });
-  options.state?.bind(fixture);
-
-  return fixture.destination;
-};
-
-const makeTestEntryDestination = (
-  options: TestDestinationOptions<EntryCommand> = {}
-) => makeTestImplementedEntryDestination(EntryPlugin, options);
-
-const makeTestMultiIdentityEntryDestination = (
-  options: TestDestinationOptions<EntryCommand> = {}
-) => makeTestImplementedEntryDestination(MultiIdentityEntryPlugin, options);
-
-const makeTestImplementedEntryDestination = (
-  plugin: typeof EntryPlugin | typeof MultiIdentityEntryPlugin,
-  options: TestDestinationOptions<EntryCommand>
-) => {
-  let executeAttempts = 0;
-  let remainingExecuteFailures = options.transientFailures?.execute ?? 0;
-  const execute = trackDestinationExecute(
-    options.state,
-    options.execute ?? executeTestEntryCommand
-  );
-  const executeWithState = (
-    command: EntryCommand,
-    context: DestinationCommandContext
-  ): Effect.Effect<DestinationCommandResultInput, DestinationPluginError> =>
-    Effect.gen(function* () {
-      if (remainingExecuteFailures > 0) {
-        remainingExecuteFailures -= 1;
-        return yield* new DestinationPluginError({
-          message: "In-memory destination execute failed transiently",
-        });
-      }
-
-      const resultInput = execute(command, context);
-
-      return yield* Effect.isEffect(resultInput)
-        ? resultInput
-        : Effect.succeed(resultInput);
-    });
-  const implementedPlugin = (plugin as typeof EntryPlugin).implement(
-    (handlers) =>
-      handlers
-        .handle("UpsertEntry", ({ command, context }) =>
-          executeWithState(command, context)
-        )
-        .handle("PublishEntry", ({ command, context }) =>
-          executeWithState(command, context)
-        )
-  );
-  const inspection: InMemoryDestinationInspection<EntryCommand> = {
-    entries: () => new Map(),
-    entry: () => undefined,
-    executeAttempts: () => executeAttempts,
-    executions: () => [],
-  };
-  options.state?.bind(inspection);
-
-  return {
-    commandDefinitions: implementedPlugin.commandDefinitions,
-    commands: implementedPlugin.commands,
-    layer: Layer.effect(
-      DestinationPlugin,
-      Effect.gen(function* () {
-        const destinationPlugin = yield* DestinationPlugin;
-
-        return {
-          execute: Effect.fn("TestEntryDestination.execute")(
-            (command, context) =>
-              Effect.sync(() => {
-                executeAttempts += 1;
-              }).pipe(
-                Effect.flatMap(() =>
-                  destinationPlugin.execute(command, context)
-                )
-              )
-          ),
-        };
-      })
-    ).pipe(Layer.provide(implementedPlugin.layer)),
-  };
-};
 
 interface PipelineTestError {
   readonly _tag: "PipelineTestError";
@@ -643,7 +350,6 @@ describe("MigrationStore durable records", () => {
       const sourceIdentity = toEncodedSourceIdentity("article-delete");
       const itemState = {
         definitionId,
-        destinationIdentity: toDestinationIdentity("entry-article-delete"),
         lastRunId: toMigrationRunId("run-1"),
         sourceIdentity: SourceIdentity.fromEncoded(
           ArticleSourceIdentity,
@@ -664,7 +370,7 @@ describe("MigrationStore durable records", () => {
 });
 
 describe("runMigration", () => {
-  it("keeps item-level pipeline error types out of public run errors", () => {
+  it("keeps item-level process error types out of public run errors", () => {
     const pipelineTestError: PipelineTestError = { _tag: "PipelineTestError" };
     const store = InMemoryMigrationStore.layer();
     const definition = defineMigration({
@@ -678,9 +384,8 @@ describe("runMigration", () => {
           },
         ],
       }),
-      destination: makeTestUpsertEntryDestination({}),
       store,
-      pipeline: (): Effect.Effect<UpsertEntryCommand, PipelineTestError> =>
+      process: (): Effect.Effect<void, PipelineTestError> =>
         Effect.fail(pipelineTestError),
     });
     const otherPipelineTestError: OtherPipelineTestError = {
@@ -697,9 +402,8 @@ describe("runMigration", () => {
           },
         ],
       }),
-      destination: makeTestUpsertEntryDestination({}),
       store,
-      pipeline: (): Effect.Effect<UpsertEntryCommand, OtherPipelineTestError> =>
+      process: (): Effect.Effect<void, OtherPipelineTestError> =>
         Effect.fail(otherPipelineTestError),
     });
 
@@ -724,16 +428,8 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({}),
         store: InMemoryMigrationStore.layer(),
-        pipeline: (source) =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {
-              title: source.item.title,
-            },
-          }),
+        process: () => Effect.void,
       });
 
       const error = yield* Effect.flip(
@@ -784,7 +480,10 @@ describe("runMigration", () => {
 
   it.effect("runs one Source Item through in-memory runtime", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
+      const destination = InMemoryDestination.makeEntries({
+        contentType: "article",
+        fields: ArticleEntryFields,
+      });
       const storeState = InMemoryMigrationStore.makeState();
 
       const definition = defineMigration({
@@ -800,21 +499,13 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-          execute: (_command, context) => ({
-            destinationIdentity: `entry-${context.sourceIdentity}`,
-            destinationVersion: "destination-version-1",
-          }),
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source) => ({
-          kind: "UpsertEntry" as const,
-          contentType: "article",
-          fields: {
-            title: source.item.title,
-          },
-        }),
+        process: (source) =>
+          destination.entries
+            .upsert({
+              title: source.item.title,
+            })
+            .pipe(Effect.asVoid),
       });
 
       const summary = yield* runMigration(definition);
@@ -829,18 +520,6 @@ describe("runMigration", () => {
         needsUpdate: 0,
       });
 
-      expect(destinationState.executions).toHaveLength(1);
-      expect(destinationState.executions[0]?.command).toEqual({
-        kind: "UpsertEntry",
-        contentType: "article",
-        fields: {
-          title: "Hello, migration",
-        },
-      });
-      expect(destinationState.executions[0]?.context.sourceIdentity).toBe(
-        "article-1"
-      );
-
       const itemState = storeState.itemStates.get(
         InMemoryMigrationStore.itemStateKey("articles", "article-1")
       );
@@ -849,11 +528,30 @@ describe("runMigration", () => {
         expect.objectContaining({
           status: "migrated",
           sourceVersion: "source-version-1",
-          destinationIdentity: "entry-article-1",
-          destinationVersion: "destination-version-1",
           lastRunId: summary.runId,
+          journal: {
+            process: {
+              entries: [
+                expect.objectContaining({
+                  descriptorId: destination.changes.entryUpserted.id,
+                  kind: "change",
+                  value: expect.objectContaining({
+                    contentType: "article",
+                    fields: {
+                      title: "Hello, migration",
+                    },
+                    sourceIdentity: "article-1",
+                  }),
+                }),
+              ],
+              runId: summary.runId,
+            },
+            rollbackAttempts: [],
+          },
         })
       );
+      expect(itemState).not.toHaveProperty(`destination${"Identity"}`);
+      expect(itemState).not.toHaveProperty(`destination${"Version"}`);
     })
   );
 
@@ -907,8 +605,8 @@ describe("runMigration", () => {
             lastRunId: summary.runId,
           })
         );
-        expect(itemState).not.toHaveProperty("destinationIdentity");
-        expect(itemState).not.toHaveProperty("destinationVersion");
+        expect(itemState).not.toHaveProperty(`destination${"Identity"}`);
+        expect(itemState).not.toHaveProperty(`destination${"Version"}`);
       })
   );
 
@@ -1352,8 +1050,8 @@ describe("runMigration", () => {
         >();
         expect(decodedEntry.value).toEqual({
           contentType: "article",
-          destinationIdentity: "entry:article:article-1",
-          destinationVersion: "version:1",
+          entryId: "entry:article:article-1",
+          entryVersion: "version:1",
           fields: {
             title: "Journaled article",
           },
@@ -1952,7 +1650,7 @@ describe("runMigration", () => {
           { title: "Second title" },
         ]);
         expect(
-          upsertedChanges.map((entry) => entry.value.destinationVersion)
+          upsertedChanges.map((entry) => entry.value.entryVersion)
         ).toEqual(["version:1", "version:2"]);
       })
   );
@@ -2228,27 +1926,6 @@ describe("runMigration", () => {
     })
   );
 
-  it("rejects a Migration Definition with both process and pipeline", () => {
-    expect(() =>
-      defineMigration({
-        id: "articles",
-        source: makeTestInMemorySource({
-          items: [],
-        }),
-        destination: makeTestUpsertEntryDestination({}),
-        store: InMemoryMigrationStore.layer(),
-        process: () => Effect.void,
-        pipeline: () => ({
-          kind: "UpsertEntry" as const,
-          contentType: "article",
-          fields: {
-            title: "Ambiguous",
-          },
-        }),
-      })
-    ).toThrow("Migration Definition must declare either process or pipeline");
-  });
-
   it.effect(
     "blocks execution before source reads when existing item state uses a different source identity contract",
     () =>
@@ -2256,14 +1933,7 @@ describe("runMigration", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const changedSourceState = InMemorySourcePlugin.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
-        const destination = makeTestUpsertEntryDestination({});
-        const pipeline = (source: { readonly item: ArticleSource }) => ({
-          kind: "UpsertEntry" as const,
-          contentType: "article",
-          fields: {
-            title: source.item.title,
-          },
-        });
+        const process = () => Effect.void;
         const original = defineMigration({
           id: "articles",
           source: makeTestInMemorySource({
@@ -2277,9 +1947,8 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination,
           store,
-          pipeline,
+          process,
         });
 
         yield* runMigration(original);
@@ -2304,9 +1973,8 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination,
           store,
-          pipeline,
+          process,
         });
 
         const error = yield* Effect.flip(runMigration(changed));
@@ -2334,8 +2002,6 @@ describe("runMigration", () => {
           InMemoryMigrationStore.itemStateKey("articles", "article-1"),
           {
             definitionId: toMigrationDefinitionId("articles"),
-            destinationIdentity: toDestinationIdentity("entry-article-1"),
-            destinationVersion: toDestinationVersion("destination-version-1"),
             lastRunId: toMigrationRunId("run-previous"),
             sourceIdentity: articleSourceIdentity("article-1"),
             sourceVersion: toSourceVersion("source-version-1"),
@@ -2358,15 +2024,8 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({}),
           store,
-          pipeline: (source) => ({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {
-              title: source.item.title,
-            },
-          }),
+          process: () => Effect.void,
         });
 
         const error = yield* Effect.flip(runMigration(definition));
@@ -3571,7 +3230,7 @@ describe("runMigration", () => {
               });
 
               yield* Tracking.setRecord({
-                entryId: entry.destinationIdentity,
+                entryId: entry.entryId,
                 locale: "en-US",
               });
             }),
@@ -3699,7 +3358,7 @@ describe("runMigration", () => {
             });
 
             yield* Tracking.setRecord({
-              entryId: entry.destinationIdentity,
+              entryId: entry.entryId,
               locale: "en-US",
             });
           }),
@@ -3844,18 +3503,8 @@ describe("runMigration", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const changedSourceState = InMemorySourcePlugin.makeState();
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const store = InMemoryMigrationStore.layer(storeState);
-        const destination = makeTestUpsertEntryDestination({
-          state: destinationState,
-        });
-        const pipeline = (source: { readonly item: ArticleSource }) => ({
-          kind: "UpsertEntry" as const,
-          contentType: "article",
-          fields: {
-            title: source.item.title,
-          },
-        });
+        const process = () => Effect.void;
         const originalVersionContract = makeSourceVersionContractFingerprint({
           kind: "field",
           field: "updatedAt",
@@ -3874,9 +3523,8 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination,
           store,
-          pipeline,
+          process,
         });
 
         yield* runMigration(original);
@@ -3918,9 +3566,8 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination,
           store,
-          pipeline,
+          process,
         });
 
         const summary = yield* runMigration(changed);
@@ -3959,11 +3606,11 @@ describe("runMigration", () => {
   );
 
   it.effect(
-    "persists skipped Source Items without executing a Destination Command",
+    "persists skipped Source Items without executing a destination effect",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
+        const processCalls: string[] = [];
 
         const definition = defineMigration({
           id: "articles",
@@ -3987,23 +3634,14 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: (source) =>
+          process: (source) =>
             Effect.gen(function* () {
               if (!source.item.publish) {
                 return yield* skipItem("Article is not published");
               }
 
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              };
+              processCalls.push(source.identity.encoded);
             }),
         });
 
@@ -4017,11 +3655,7 @@ describe("runMigration", () => {
           unchanged: 0,
           needsUpdate: 0,
         });
-        expect(
-          destinationState.executions.map(
-            (execution) => execution.context.sourceIdentity
-          )
-        ).toEqual(["article-2"]);
+        expect(processCalls).toEqual(["article-2"]);
 
         expect(
           storeState.itemStates.get(
@@ -4040,7 +3674,6 @@ describe("runMigration", () => {
 
   it.effect("recognizes structurally tagged Skip Item errors", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
 
       const definition = defineMigration({
@@ -4054,11 +3687,8 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (): Effect.Effect<UpsertEntryCommand, StructuralSkipItem> =>
+        process: (): Effect.Effect<void, StructuralSkipItem> =>
           Effect.fail({
             _tag: "SkipItem",
             reason: "Structurally tagged skip",
@@ -4075,7 +3705,6 @@ describe("runMigration", () => {
         unchanged: 0,
         needsUpdate: 0,
       });
-      expect(destinationState.executions).toEqual([]);
       expect(
         storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
@@ -4090,11 +3719,11 @@ describe("runMigration", () => {
   );
 
   it.effect(
-    "persists pipeline failures and continues processing Source Items",
+    "persists process failures and continues processing Source Items",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
+        const processCalls: string[] = [];
         const pipelineError: PipelineFailureTestError = {
           _tag: "PipelineFailureTestError",
           message: "Article cannot be transformed",
@@ -4121,20 +3750,13 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: (source) =>
+          process: (source) =>
             source.identity.encoded === "article-1"
               ? Effect.fail(pipelineError)
-              : {
-                  kind: "UpsertEntry" as const,
-                  contentType: "article",
-                  fields: {
-                    title: source.item.title,
-                  },
-                },
+              : Effect.sync(() => {
+                  processCalls.push(source.identity.encoded);
+                }),
         });
 
         const summary = yield* runMigration(definition);
@@ -4148,11 +3770,7 @@ describe("runMigration", () => {
           unchanged: 0,
           needsUpdate: 0,
         });
-        expect(
-          destinationState.executions.map(
-            (execution) => execution.context.sourceIdentity
-          )
-        ).toEqual(["article-2"]);
+        expect(processCalls).toEqual(["article-2"]);
 
         expect(
           storeState.itemStates.get(
@@ -4164,7 +3782,7 @@ describe("runMigration", () => {
             sourceVersion: "source-version-1",
             lastRunId: summary.runId,
             error: {
-              kind: "pipeline",
+              kind: "process",
               errorTag: "PipelineFailureTestError",
               message: "Article cannot be transformed",
             },
@@ -4186,7 +3804,7 @@ describe("runMigration", () => {
             sourceVersion: "source-version-1",
             lastRunId: summary.runId,
             error: expect.objectContaining({
-              kind: "pipeline",
+              kind: "process",
               errorTag: "PipelineFailureTestError",
               message: "Article cannot be transformed",
             }),
@@ -4205,175 +3823,11 @@ describe("runMigration", () => {
       })
   );
 
-  it.effect(
-    "persists destination failures and continues processing Source Items",
-    () =>
-      Effect.gen(function* () {
-        const destinationExecutions: string[] = [];
-        const storeState = InMemoryMigrationStore.makeState();
-
-        const definition = defineMigration({
-          id: "articles",
-          source: makeTestInMemorySource({
-            items: [
-              {
-                identityKey: "article-1",
-                version: "source-version-1",
-                item: {
-                  title: "Invalid article",
-                },
-              },
-              {
-                identityKey: "article-2",
-                version: "source-version-1",
-                item: {
-                  title: "Published article",
-                },
-              },
-            ],
-          }),
-          destination: {
-            commandDefinitions: UpsertEntryPlugin.commandDefinitions,
-            layer: Layer.sync(DestinationPlugin, () => ({
-              execute: (_command, context) => {
-                if (context.sourceIdentity === "article-1") {
-                  return Effect.fail(
-                    new DestinationPluginError({
-                      message: "Destination command failed",
-                      cause: new Error("Destination write failed"),
-                    })
-                  );
-                }
-
-                destinationExecutions.push(context.sourceIdentity);
-
-                return Effect.succeed({
-                  destinationIdentity: toDestinationIdentity(
-                    `entry-${context.sourceIdentity}`
-                  ),
-                });
-              },
-            })),
-          },
-          store: InMemoryMigrationStore.layer(storeState),
-          pipeline: () =>
-            Effect.succeed({
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {},
-            }),
-        });
-
-        const summary = yield* runMigration(definition);
-
-        expect(summary.status).toBe("failed");
-        expect(summary.definitions[0]?.status).toBe("failed");
-        expect(summary.definitions[0]?.counts).toEqual({
-          migrated: 1,
-          skipped: 0,
-          failed: 1,
-          unchanged: 0,
-          needsUpdate: 0,
-        });
-        expect(destinationExecutions).toEqual(["article-2"]);
-
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey("articles", "article-1")
-          )
-        ).toEqual(
-          expect.objectContaining({
-            status: "failed",
-            sourceVersion: "source-version-1",
-            lastRunId: summary.runId,
-            error: expect.objectContaining({
-              kind: "destination",
-              errorTag: "DestinationPluginError",
-              message: "Destination command failed",
-            }),
-          })
-        );
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey("articles", "article-2")
-          )
-        ).toEqual(
-          expect.objectContaining({
-            status: "migrated",
-            lastRunId: summary.runId,
-          })
-        );
-      })
-  );
-
-  it.effect("wraps Destination Command execution with Destination Retry", () =>
-    Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
-      const storeState = InMemoryMigrationStore.makeState();
-
-      const definition = defineMigration({
-        id: "articles",
-        source: makeTestInMemorySource({
-          items: [
-            {
-              identityKey: "article-1",
-              version: "source-version-1",
-              item: { title: "Retryable article" },
-            },
-          ],
-        }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-          transientFailures: { execute: 1 },
-          execute: (_command, context) => ({
-            destinationIdentity: `entry-${context.sourceIdentity}`,
-          }),
-        }),
-        destinationRetry: (effect) =>
-          effect.pipe(Effect.retry(Schedule.recurs(1))),
-        store: InMemoryMigrationStore.layer(storeState),
-        pipeline: () =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {},
-          }),
-      });
-
-      const summary = yield* runMigration(definition);
-
-      expect(summary.status).toBe("succeeded");
-      expect(summary.definitions[0]?.counts).toEqual({
-        migrated: 1,
-        skipped: 0,
-        failed: 0,
-        unchanged: 0,
-        needsUpdate: 0,
-      });
-      expect(destinationState.executeAttempts).toBe(2);
-      expect(
-        destinationState.executions.map(
-          (execution) => execution.context.sourceIdentity
-        )
-      ).toEqual(["article-1"]);
-      expect(
-        storeState.itemStates.get(
-          InMemoryMigrationStore.itemStateKey("articles", "article-1")
-        )
-      ).toEqual(
-        expect.objectContaining({
-          status: "migrated",
-          destinationIdentity: "entry-article-1",
-        })
-      );
-    })
-  );
-
   it.effect("wraps Source Cursor reads with Source Cursor Retry", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const sourceState = InMemorySourcePlugin.makeState();
       const storeState = InMemoryMigrationStore.makeState();
+      const processCalls: string[] = [];
 
       const definition = defineMigration({
         id: "articles",
@@ -4390,15 +3844,10 @@ describe("runMigration", () => {
         }),
         sourceCursorRetry: (effect) =>
           effect.pipe(Effect.retry(Schedule.recurs(1))),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: () =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {},
+        process: (source) =>
+          Effect.sync(() => {
+            processCalls.push(source.identity.encoded);
           }),
       });
 
@@ -4413,19 +3862,15 @@ describe("runMigration", () => {
         needsUpdate: 0,
       });
       expect(sourceState.readAttempts).toBe(2);
-      expect(
-        destinationState.executions.map(
-          (execution) => execution.context.sourceIdentity
-        )
-      ).toEqual(["article-1"]);
+      expect(processCalls).toEqual(["article-1"]);
     })
   );
 
   it.effect("wraps Source Identity lookups with Source Lookup Retry", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const sourceState = InMemorySourcePlugin.makeState();
       const storeState = InMemoryMigrationStore.makeState();
+      const processCalls: string[] = [];
 
       const definition = defineMigration({
         id: "articles",
@@ -4442,15 +3887,10 @@ describe("runMigration", () => {
         }),
         sourceLookupRetry: (effect) =>
           effect.pipe(Effect.retry(Schedule.recurs(1))),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: () =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {},
+        process: (source) =>
+          Effect.sync(() => {
+            processCalls.push(source.identity.encoded);
           }),
       });
 
@@ -4468,17 +3908,12 @@ describe("runMigration", () => {
         needsUpdate: 0,
       });
       expect(sourceState.readByIdentityAttempts).toBe(2);
-      expect(
-        destinationState.executions.map(
-          (execution) => execution.context.sourceIdentity
-        )
-      ).toEqual(["article-1"]);
+      expect(processCalls).toEqual(["article-1"]);
     })
   );
 
   it.effect("runs item mode from decoded composite source identity keys", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
       const BusinessAddressSourceIdentity = SourceIdentity.make({
@@ -4507,21 +3942,10 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source) =>
+        process: (source) =>
           Effect.sync(() => {
             pipelineCalls.push(source.identity.encoded);
-
-            return {
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {
-                title: source.item.title,
-              },
-            };
           }),
       });
 
@@ -4532,11 +3956,6 @@ describe("runMigration", () => {
 
       expect(summary.status).toBe("succeeded");
       expect(pipelineCalls).toEqual([JSON.stringify(["bu-1", 2])]);
-      expect(
-        destinationState.executions.map(
-          (execution) => execution.context.sourceIdentity
-        )
-      ).toEqual([JSON.stringify(["bu-1", 2])]);
     })
   );
 
@@ -4544,7 +3963,6 @@ describe("runMigration", () => {
     "records cursor-discovered source payload validation failures as durable item failures",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const pipelineCalls: string[] = [];
 
@@ -4566,21 +3984,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: (source) =>
+          process: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity.encoded);
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              };
             }),
         });
 
@@ -4595,11 +4002,6 @@ describe("runMigration", () => {
           needsUpdate: 0,
         });
         expect(pipelineCalls).toEqual(["article-valid"]);
-        expect(
-          destinationState.executions.map(
-            (execution) => execution.context.sourceIdentity
-          )
-        ).toEqual(["article-valid"]);
         expect(
           storeState.itemStates.get(
             InMemoryMigrationStore.itemStateKey("articles", "article-invalid")
@@ -4626,7 +4028,6 @@ describe("runMigration", () => {
 
   it.effect("validates source payloads before unchanged detection", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
 
@@ -4643,19 +4044,10 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source) =>
+        process: (source) =>
           Effect.sync(() => {
             pipelineCalls.push(source.identity.encoded);
-
-            return {
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {},
-            };
           }),
       });
 
@@ -4672,10 +4064,6 @@ describe("runMigration", () => {
           lastRunId: toMigrationRunId("run-previous"),
           updatedAt: new Date("2026-01-01T00:00:00.000Z"),
           status: "migrated",
-          destinationIdentity: toDestinationIdentity(
-            "entry-article-unchanged-invalid"
-          ),
-          destinationVersion: toDestinationVersion("destination-version-1"),
         }
       );
 
@@ -4690,7 +4078,6 @@ describe("runMigration", () => {
         needsUpdate: 0,
       });
       expect(pipelineCalls).toEqual([]);
-      expect(destinationState.executions).toEqual([]);
       expect(
         storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey(
@@ -4703,8 +4090,6 @@ describe("runMigration", () => {
           status: "failed",
           lastRunId: summary.runId,
           sourceVersion: "source-version-1",
-          destinationIdentity: "entry-article-unchanged-invalid",
-          destinationVersion: "destination-version-1",
           error: expect.objectContaining({
             kind: "source",
             errorTag: "SourcePayloadSchemaError",
@@ -4716,7 +4101,6 @@ describe("runMigration", () => {
 
   it.effect("bounds persisted source payload schema error details", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
 
       const definition = defineMigration({
@@ -4732,16 +4116,9 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: () =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {},
-          }),
+        process: () =>
+          Effect.void,
       });
 
       yield* runMigration(definition);
@@ -4773,7 +4150,6 @@ describe("runMigration", () => {
 
   it.effect("validates targeted source identity lookup payloads", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
 
@@ -4790,19 +4166,10 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source) =>
+        process: (source) =>
           Effect.sync(() => {
             pipelineCalls.push(source.identity.encoded);
-
-            return {
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {},
-            };
           }),
       });
 
@@ -4823,7 +4190,6 @@ describe("runMigration", () => {
         needsUpdate: 0,
       });
       expect(pipelineCalls).toEqual([]);
-      expect(destinationState.executions).toEqual([]);
       expect(
         storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey(
@@ -4845,10 +4211,9 @@ describe("runMigration", () => {
   );
 
   it.effect(
-    "passes decoded source payloads to the transformation pipeline",
+    "passes decoded source payloads to the process pipeline",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const decodedPayloads: ArticleStatsSource[] = [];
 
@@ -4868,22 +4233,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: (source) =>
+          process: (source) =>
             Effect.sync(() => {
               decodedPayloads.push(source.item);
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                  views: source.item.views,
-                },
-              };
             }),
         });
 
@@ -4893,78 +4246,6 @@ describe("runMigration", () => {
         expect(decodedPayloads).toEqual([
           { title: "Decoded article", views: 42 },
         ]);
-        expect(destinationState.executions[0]?.command.fields).toEqual({
-          title: "Decoded article",
-          views: 42,
-        });
-      })
-  );
-
-  it.effect(
-    "accepts decoded source values through in-memory entry command factories",
-    () =>
-      Effect.gen(function* () {
-        const destinationState =
-          makeTestDestinationState<ArticleStatsEntryCommand>();
-        const storeState = InMemoryMigrationStore.makeState();
-        const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
-          contentType: "article",
-          commands: {
-            publishEntry: true,
-            upsertEntry: { fields: ArticleStatsEntryFields },
-          },
-        });
-        destinationState.bind(destinationFixture);
-        const destination = destinationFixture.destination;
-
-        const definition = defineMigration({
-          id: "articles",
-          source: InMemorySourcePlugin.make({
-            identity: ArticleSourceIdentity,
-            sourceSchema: ArticleStatsSource,
-            items: [
-              {
-                identityKey: "article-stats",
-                version: "source-version-1",
-                item: asArticleStatsSource({
-                  title: "  Decoded article  ",
-                  views: "42",
-                }),
-              },
-            ],
-          }),
-          destination,
-          store: InMemoryMigrationStore.layer(storeState),
-          pipeline: (source) =>
-            Effect.succeed(
-              destination.commands.upsertEntry({
-                title: source.item.title,
-                views: source.item.views,
-              })
-            ),
-        });
-
-        const summary = yield* runMigration(definition);
-        const firstExecution = destinationState.executions[0];
-
-        expect(summary.status).toBe("succeeded");
-        expect(firstExecution?.command.kind).toBe("UpsertEntry");
-        expect(
-          firstExecution?.command.kind === "UpsertEntry"
-            ? firstExecution.command.fields
-            : undefined
-        ).toEqual({
-          title: "Decoded article",
-          views: 42,
-        });
-        expect(destinationState.entries.get("article:article-stats")).toEqual(
-          expect.objectContaining({
-            fields: {
-              title: "Decoded article",
-              views: 42,
-            },
-          })
-        );
       })
   );
 
@@ -4982,16 +4263,8 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({}),
         store: InMemoryMigrationStore.layer(),
-        pipeline: (source) =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {
-              title: source.item.title,
-            },
-          }),
+        process: () => Effect.void,
       });
 
       const error = yield* Effect.flip(runMigration(definition));
@@ -5007,8 +4280,8 @@ describe("runMigration", () => {
 
   it.effect("processes all Source Cursor Windows in one run", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
+      const processCalls: string[] = [];
 
       const definition = defineMigration({
         id: "articles",
@@ -5042,17 +4315,10 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source) =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {
-              title: source.item.title,
-            },
+        process: (source) =>
+          Effect.sync(() => {
+            processCalls.push(source.identity.encoded);
           }),
       });
 
@@ -5065,11 +4331,7 @@ describe("runMigration", () => {
         unchanged: 0,
         needsUpdate: 0,
       });
-      expect(
-        destinationState.executions.map(
-          (execution) => execution.context.sourceIdentity
-        )
-      ).toEqual([
+      expect(processCalls).toEqual([
         "article-1",
         "article-2",
         "article-3",
@@ -5094,8 +4356,8 @@ describe("runMigration", () => {
 
   it.effect("advances Source Cursors after windows with item failures", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
+      const processCalls: string[] = [];
       const pipelineError: PipelineFailureTestError = {
         _tag: "PipelineFailureTestError",
         message: "Article cannot be transformed",
@@ -5124,19 +4386,12 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source) =>
+        process: (source) =>
           source.identity.encoded === "article-1"
             ? Effect.fail(pipelineError)
-            : Effect.succeed({
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
+            : Effect.sync(() => {
+                processCalls.push(source.identity.encoded);
               }),
       });
 
@@ -5150,11 +4405,7 @@ describe("runMigration", () => {
         unchanged: 0,
         needsUpdate: 0,
       });
-      expect(
-        destinationState.executions.map(
-          (execution) => execution.context.sourceIdentity
-        )
-      ).toEqual(["article-2", "article-3"]);
+      expect(processCalls).toEqual(["article-2", "article-3"]);
       expect(storeState.sourceCursors.get(definition.id)).toEqual(
         encodedInMemoryCursor(2)
       );
@@ -5171,8 +4422,8 @@ describe("runMigration", () => {
     "processes failed backlog before cursor discovery in normal mode",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
+        const processCalls: string[] = [];
 
         const definition = defineMigration({
           id: "articles",
@@ -5190,15 +4441,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: () =>
-            Effect.succeed({
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {},
+          process: (source) =>
+            Effect.sync(() => {
+              processCalls.push(source.identity.encoded);
             }),
         });
 
@@ -5214,7 +4460,7 @@ describe("runMigration", () => {
             updatedAt: new Date("2026-01-01T00:00:00.000Z"),
             status: "failed",
             error: {
-              kind: "pipeline",
+              kind: "process",
               errorTag: "PipelineFailureTestError",
               message: "Article could not be transformed",
             },
@@ -5231,11 +4477,7 @@ describe("runMigration", () => {
           unchanged: 0,
           needsUpdate: 0,
         });
-        expect(
-          destinationState.executions.map(
-            (execution) => execution.context.sourceIdentity
-          )
-        ).toEqual(["article-failed", "article-new"]);
+        expect(processCalls).toEqual(["article-failed", "article-new"]);
       })
   );
 
@@ -5243,8 +4485,10 @@ describe("runMigration", () => {
     "processes needs-update backlog before cursor discovery in normal mode",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
+        const processCalls: string[] = [];
+        const previousStates: (typeof MigrationItemState.Type | undefined)[] =
+          [];
 
         const definition = defineMigration({
           id: "articles",
@@ -5262,15 +4506,11 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: () =>
-            Effect.succeed({
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {},
+          process: (source, context) =>
+            Effect.sync(() => {
+              processCalls.push(source.identity.encoded);
+              previousStates.push(context.previousState);
             }),
         });
 
@@ -5288,9 +4528,6 @@ describe("runMigration", () => {
             lastRunId: toMigrationRunId("run-previous"),
             updatedAt: new Date("2026-01-01T00:00:00.000Z"),
             status: "needs-update",
-            destinationIdentity: toDestinationIdentity(
-              "entry-article-needs-update"
-            ),
             reason: "Destination stub must be completed",
           }
         );
@@ -5305,12 +4542,8 @@ describe("runMigration", () => {
           unchanged: 0,
           needsUpdate: 0,
         });
-        expect(
-          destinationState.executions.map(
-            (execution) => execution.context.sourceIdentity
-          )
-        ).toEqual(["article-needs-update", "article-new"]);
-        expect(destinationState.executions[0]?.context.previousState).toEqual(
+        expect(processCalls).toEqual(["article-needs-update", "article-new"]);
+        expect(previousStates[0]).toEqual(
           expect.objectContaining({
             status: "needs-update",
             reason: "Destination stub must be completed",
@@ -5321,8 +4554,8 @@ describe("runMigration", () => {
 
   it.effect("processes only failed Migration Item States in failed mode", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
+      const processCalls: string[] = [];
 
       const definition = defineMigration({
         id: "articles",
@@ -5345,17 +4578,10 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source) =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {
-              title: source.item.title,
-            },
+        process: (source) =>
+          Effect.sync(() => {
+            processCalls.push(source.identity.encoded);
           }),
       });
 
@@ -5372,7 +4598,7 @@ describe("runMigration", () => {
           error: {
             kind: "destination",
             errorTag: "DestinationPluginError",
-            message: "Destination command failed",
+            message: "destination effect failed",
           },
         }
       );
@@ -5385,9 +4611,6 @@ describe("runMigration", () => {
           lastRunId: toMigrationRunId("run-previous"),
           updatedAt: new Date("2026-01-01T00:00:00.000Z"),
           status: "needs-update",
-          destinationIdentity: toDestinationIdentity(
-            "entry-article-needs-update"
-          ),
           reason: "Destination stub must be completed",
         }
       );
@@ -5405,19 +4628,15 @@ describe("runMigration", () => {
         unchanged: 0,
         needsUpdate: 0,
       });
-      expect(
-        destinationState.executions.map(
-          (execution) => execution.context.sourceIdentity
-        )
-      ).toEqual(["article-failed"]);
+      expect(processCalls).toEqual(["article-failed"]);
       expect(storeState.sourceCursorCommits).toEqual([]);
     })
   );
 
   it.effect("reprocesses skipped Migration Item States in skipped mode", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
+      const processCalls: string[] = [];
 
       const definition = defineMigration({
         id: "articles",
@@ -5435,17 +4654,10 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source) =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {
-              title: source.item.title,
-            },
+        process: (source) =>
+          Effect.sync(() => {
+            processCalls.push(source.identity.encoded);
           }),
       });
 
@@ -5476,19 +4688,15 @@ describe("runMigration", () => {
         unchanged: 0,
         needsUpdate: 0,
       });
-      expect(
-        destinationState.executions.map(
-          (execution) => execution.context.sourceIdentity
-        )
-      ).toEqual(["article-skipped"]);
+      expect(processCalls).toEqual(["article-skipped"]);
       expect(storeState.sourceCursorCommits).toEqual([]);
     })
   );
 
   it.effect("processes exactly one Source Identity in item mode", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
+      const processCalls: string[] = [];
 
       const definition = defineMigration({
         id: "articles",
@@ -5506,17 +4714,10 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source) =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {
-              title: source.item.title,
-            },
+        process: (source) =>
+          Effect.sync(() => {
+            processCalls.push(source.identity.encoded);
           }),
       });
 
@@ -5530,7 +4731,6 @@ describe("runMigration", () => {
           lastRunId: toMigrationRunId("run-previous"),
           updatedAt: new Date("2026-01-01T00:00:00.000Z"),
           status: "migrated",
-          destinationIdentity: toDestinationIdentity("entry-article-target"),
         }
       );
 
@@ -5547,11 +4747,7 @@ describe("runMigration", () => {
         unchanged: 0,
         needsUpdate: 0,
       });
-      expect(
-        destinationState.executions.map(
-          (execution) => execution.context.sourceIdentity
-        )
-      ).toEqual(["article-target"]);
+      expect(processCalls).toEqual(["article-target"]);
       expect(storeState.sourceCursorCommits).toEqual([]);
     })
   );
@@ -5560,7 +4756,6 @@ describe("runMigration", () => {
     "records Source identity lookup failures for known Migration Item States",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const sourceError = new SourcePluginError({
           message: "Source identity lookup failed",
@@ -5577,16 +4772,8 @@ describe("runMigration", () => {
             read: () => Effect.succeed({ items: [] }),
             readByIdentity: () => Effect.fail(sourceError),
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: () =>
-            Effect.succeed({
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {},
-            }),
+          process: () => Effect.void,
         });
 
         seedArticleMigrationContract(storeState);
@@ -5600,7 +4787,7 @@ describe("runMigration", () => {
             updatedAt: new Date("2026-01-01T00:00:00.000Z"),
             status: "failed",
             error: {
-              kind: "pipeline",
+              kind: "process",
               errorTag: "PipelineFailureTestError",
               message: "Article could not be transformed",
             },
@@ -5620,7 +4807,6 @@ describe("runMigration", () => {
           unchanged: 0,
           needsUpdate: 0,
         });
-        expect(destinationState.executions).toEqual([]);
         expect(
           storeState.itemStates.get(
             InMemoryMigrationStore.itemStateKey("articles", "article-failed")
@@ -5640,10 +4826,9 @@ describe("runMigration", () => {
   );
 
   it.effect(
-    "preserves Destination Identity when a migrated item lookup fails",
+    "records Source identity lookup failures for migrated item states",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const sourceError = new SourcePluginError({
           message: "Source identity lookup failed",
@@ -5660,16 +4845,8 @@ describe("runMigration", () => {
             read: () => Effect.succeed({ items: [] }),
             readByIdentity: () => Effect.fail(sourceError),
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: () =>
-            Effect.succeed({
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {},
-            }),
+          process: () => Effect.void,
         });
 
         seedArticleMigrationContract(storeState);
@@ -5682,10 +4859,6 @@ describe("runMigration", () => {
             lastRunId: toMigrationRunId("run-previous"),
             updatedAt: new Date("2026-01-01T00:00:00.000Z"),
             status: "migrated",
-            destinationIdentity: toDestinationIdentity(
-              "entry-article-migrated"
-            ),
-            destinationVersion: toDestinationVersion("destination-version-1"),
           }
         );
 
@@ -5695,7 +4868,6 @@ describe("runMigration", () => {
         });
 
         expect(summary.status).toBe("failed");
-        expect(destinationState.executions).toEqual([]);
         expect(
           storeState.itemStates.get(
             InMemoryMigrationStore.itemStateKey("articles", "article-migrated")
@@ -5703,8 +4875,6 @@ describe("runMigration", () => {
         ).toEqual(
           expect.objectContaining({
             status: "failed",
-            destinationIdentity: "entry-article-migrated",
-            destinationVersion: "destination-version-1",
             error: expect.objectContaining({
               kind: "source",
               errorTag: "SourcePluginError",
@@ -5719,8 +4889,8 @@ describe("runMigration", () => {
     "does not rediscover attempted backlog Source Identities in normal mode",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
+        const processCalls: string[] = [];
         const sourceError = new SourcePluginError({
           message: "Source identity lookup failed",
           cause: new Error("Source system unavailable"),
@@ -5750,15 +4920,10 @@ describe("runMigration", () => {
               }),
             readByIdentity: () => Effect.fail(sourceError),
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: () =>
-            Effect.succeed({
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {},
+          process: (source) =>
+            Effect.sync(() => {
+              processCalls.push(source.identity.encoded);
             }),
         });
 
@@ -5773,7 +4938,7 @@ describe("runMigration", () => {
             updatedAt: new Date("2026-01-01T00:00:00.000Z"),
             status: "failed",
             error: {
-              kind: "pipeline",
+              kind: "process",
               errorTag: "PipelineFailureTestError",
               message: "Article could not be transformed",
             },
@@ -5790,11 +4955,7 @@ describe("runMigration", () => {
           unchanged: 0,
           needsUpdate: 0,
         });
-        expect(
-          destinationState.executions.map(
-            (execution) => execution.context.sourceIdentity
-          )
-        ).toEqual(["article-new"]);
+        expect(processCalls).toEqual(["article-new"]);
         expect(
           storeState.itemStates.get(
             InMemoryMigrationStore.itemStateKey("articles", "article-failed")
@@ -5815,7 +4976,6 @@ describe("runMigration", () => {
 
   it.effect("only counts previously migrated Source Items as unchanged", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
 
@@ -5840,25 +5000,14 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source) =>
+        process: (source) =>
           Effect.gen(function* () {
             pipelineCalls.push(source.identity.encoded);
 
             if (source.identity.encoded === "article-2") {
               return yield* skipItem("Still skipped");
             }
-
-            return {
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {
-                title: source.item.title,
-              },
-            };
           }),
       });
 
@@ -5877,7 +5026,6 @@ describe("runMigration", () => {
           lastRunId: previousRunId,
           updatedAt: previousUpdatedAt,
           status: "migrated",
-          destinationIdentity: toDestinationIdentity("entry-article-1"),
         }
       );
       storeState.itemStates.set(
@@ -5906,11 +5054,6 @@ describe("runMigration", () => {
       });
       expect(pipelineCalls).toEqual(["article-2", "article-3"]);
       expect(
-        destinationState.executions.map(
-          (execution) => execution.context.sourceIdentity
-        )
-      ).toEqual(["article-3"]);
-      expect(
         storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         )
@@ -5937,9 +5080,10 @@ describe("runMigration", () => {
 
   it.effect("reprocesses Source Items when Source Version changes", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
+      const previousStates: (typeof MigrationItemState.Type | undefined)[] =
+        [];
 
       const definition = defineMigration({
         id: "articles",
@@ -5952,27 +5096,13 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-          execute: (_command, context) => ({
-            destinationIdentity: `entry-${context.sourceIdentity}`,
-            destinationVersion: "destination-version-2",
-          }),
-        }),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (source, context) =>
+        process: (source, context) =>
           Effect.sync(() => {
             pipelineCalls.push(
               `${source.identity.encoded}:${context.previousState?.sourceVersion}`
             );
-
-            return {
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {
-                title: source.item.title,
-              },
-            };
+            previousStates.push(context.previousState);
           }),
       });
 
@@ -5986,8 +5116,6 @@ describe("runMigration", () => {
           lastRunId: toMigrationRunId("run-previous"),
           updatedAt: new Date("2026-01-01T00:00:00.000Z"),
           status: "migrated",
-          destinationIdentity: toDestinationIdentity("entry-article-1"),
-          destinationVersion: toDestinationVersion("destination-version-1"),
         }
       );
 
@@ -6001,8 +5129,8 @@ describe("runMigration", () => {
         needsUpdate: 0,
       });
       expect(pipelineCalls).toEqual(["article-1:source-version-1"]);
-      expect(destinationState.executions).toHaveLength(1);
-      expect(destinationState.executions[0]?.context.previousState).toEqual(
+      expect(previousStates).toHaveLength(1);
+      expect(previousStates[0]).toEqual(
         expect.objectContaining({
           status: "migrated",
           sourceVersion: "source-version-1",
@@ -6016,7 +5144,6 @@ describe("runMigration", () => {
         expect.objectContaining({
           status: "migrated",
           sourceVersion: "source-version-2",
-          destinationVersion: "destination-version-2",
           lastRunId: summary.runId,
         })
       );
@@ -6027,7 +5154,6 @@ describe("runMigration", () => {
     "expands selected Migration Definitions and executes dependencies first",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const executionOrder: string[] = [];
@@ -6043,21 +5169,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
+          process: (source) =>
             Effect.sync(() => {
               executionOrder.push(`authors:${source.identity.encoded}`);
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "author",
-                fields: {
-                  name: source.item.name,
-                },
-              };
             }),
         });
         const articles = defineMigration({
@@ -6072,21 +5187,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
+          process: (source) =>
             Effect.sync(() => {
               executionOrder.push(`articles:${source.identity.encoded}`);
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              };
             }),
         });
 
@@ -6103,11 +5207,6 @@ describe("runMigration", () => {
           "authors:author-1",
           "articles:article-1",
         ]);
-        expect(
-          destinationState.executions.map(
-            (execution) => execution.context.definitionId
-          )
-        ).toEqual(["authors", "articles"]);
       })
   );
 
@@ -6115,9 +5214,9 @@ describe("runMigration", () => {
     "summarizes selected dependencies once when also explicitly selected",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
+        const executionOrder: string[] = [];
 
         const authors = defineMigration({
           id: "authors",
@@ -6130,17 +5229,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
-            Effect.succeed({
-              kind: "UpsertEntry" as const,
-              contentType: "author",
-              fields: {
-                name: source.item.name,
-              },
+          process: (source) =>
+            Effect.sync(() => {
+              executionOrder.push(`authors:${source.identity.encoded}`);
             }),
         });
         const articles = defineMigration({
@@ -6155,17 +5247,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
-            Effect.succeed({
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {
-                title: source.item.title,
-              },
+          process: (source) =>
+            Effect.sync(() => {
+              executionOrder.push(`articles:${source.identity.encoded}`);
             }),
         });
 
@@ -6178,497 +5263,10 @@ describe("runMigration", () => {
           summary.definitions.map((definition) => definition.definitionId)
         ).toEqual(["authors", "articles"]);
         expect(summary.definitions).toHaveLength(2);
-        expect(
-          destinationState.executions.map(
-            (execution) => execution.context.definitionId
-          )
-        ).toEqual(["authors", "articles"]);
-      })
-  );
-
-  it.effect(
-    "persists the identity-bearing result from a Destination Command Plan",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const destinationState =
-          makeTestDestinationState<ArticleEntryCommand>();
-        const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
-          contentType: "article",
-          commands: {
-            publishEntry: true,
-            upsertEntry: { fields: ArticleEntryFields },
-          },
-        });
-        destinationState.bind(destinationFixture);
-        const destination = destinationFixture.destination;
-        const definition = defineMigration({
-          id: "articles",
-          source: makeTestInMemorySource({
-            items: [
-              {
-                identityKey: "article-1",
-                version: "source-version-1",
-                item: { title: "Published article" },
-              },
-            ],
-          }),
-          destination,
-          store: InMemoryMigrationStore.layer(storeState),
-          pipeline: (source) =>
-            Effect.succeed([
-              destination.commands.upsertEntry({
-                title: source.item.title,
-              }),
-              destination.commands.publishEntry(),
-            ]),
-        });
-
-        const summary = yield* runMigration(definition);
-
-        expect(summary.status).toBe("succeeded");
-        expect(
-          destinationState.executions.map((execution) => execution.command.kind)
-        ).toEqual(["UpsertEntry", "PublishEntry"]);
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey("articles", "article-1")
-          )
-        ).toEqual(
-          expect.objectContaining({
-            status: "migrated",
-            destinationIdentity: "entry:article:article-1",
-            destinationVersion: "version:1",
-          })
-        );
-      })
-  );
-
-  it.effect(
-    "publishes in-memory entries without returning another identity",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const destinationState =
-          makeTestDestinationState<ArticleEntryCommand>();
-        const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
-          contentType: "article",
-          commands: {
-            publishEntry: true,
-            upsertEntry: { fields: ArticleEntryFields },
-          },
-        });
-        destinationState.bind(destinationFixture);
-        const destination = destinationFixture.destination;
-        const definition = defineMigration({
-          id: "articles",
-          source: makeTestInMemorySource({
-            items: [
-              {
-                identityKey: "article-1",
-                version: "source-version-1",
-                item: { title: "Published by default article" },
-              },
-            ],
-          }),
-          destination,
-          store: InMemoryMigrationStore.layer(storeState),
-          pipeline: (source) =>
-            Effect.succeed([
-              destination.commands.upsertEntry({
-                title: source.item.title,
-              }),
-              destination.commands.publishEntry(),
-            ]),
-        });
-
-        const summary = yield* runMigration(definition);
-
-        expect(summary.status).toBe("succeeded");
-        expect(
-          destinationState.executions.map((execution) => ({
-            kind: execution.command.kind,
-            result: execution.result,
-          }))
-        ).toEqual([
-          {
-            kind: "UpsertEntry",
-            result: {
-              destinationIdentity: "entry:article:article-1",
-              destinationVersion: "version:1",
-            },
-          },
-          {
-            kind: "PublishEntry",
-            result: {},
-          },
+        expect(executionOrder).toEqual([
+          "authors:author-1",
+          "articles:article-1",
         ]);
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey("articles", "article-1")
-          )
-        ).toEqual(
-          expect.objectContaining({
-            status: "migrated",
-            destinationIdentity: "entry:article:article-1",
-            destinationVersion: "version:1",
-          })
-        );
-        expect(destinationState.entries.get("article:article-1")).toEqual(
-          expect.objectContaining({
-            contentType: "article",
-            fields: {
-              title: "Published by default article",
-            },
-            published: true,
-          })
-        );
-      })
-  );
-
-  it.effect("fails publishing an in-memory entry before it is upserted", () =>
-    Effect.gen(function* () {
-      const storeState = InMemoryMigrationStore.makeState();
-      const destinationState = makeTestDestinationState<ArticleEntryCommand>();
-      const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
-        contentType: "article",
-        commands: {
-          publishEntry: true,
-          upsertEntry: { fields: ArticleEntryFields },
-        },
-      });
-      destinationState.bind(destinationFixture);
-      const destination = destinationFixture.destination;
-      const definition = defineMigration({
-        id: "articles",
-        source: makeTestInMemorySource({
-          items: [
-            {
-              identityKey: "article-1",
-              version: "source-version-1",
-              item: { title: "Publish-only article" },
-            },
-          ],
-        }),
-        destination,
-        store: InMemoryMigrationStore.layer(storeState),
-        pipeline: () => Effect.succeed(destination.commands.publishEntry()),
-      });
-
-      const summary = yield* runMigration(definition);
-
-      expect(summary.status).toBe("failed");
-      expect(destinationState.executeAttempts).toBe(1);
-      expect(destinationState.executions).toEqual([]);
-      expect(destinationState.entries.size).toBe(0);
-      expect(
-        storeState.itemStates.get(
-          InMemoryMigrationStore.itemStateKey("articles", "article-1")
-        )
-      ).toEqual(
-        expect.objectContaining({
-          status: "failed",
-          error: expect.objectContaining({
-            message: "Cannot publish an in-memory entry before it is upserted",
-          }),
-        })
-      );
-    })
-  );
-
-  it.effect(
-    "fails an empty Destination Command Plan before preserving a previous identity",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
-        seedArticleMigrationContract(storeState);
-        storeState.itemStates.set(
-          InMemoryMigrationStore.itemStateKey("articles", "article-1"),
-          {
-            definitionId: toMigrationDefinitionId("articles"),
-            sourceIdentity: articleSourceIdentity("article-1"),
-            sourceVersion: toSourceVersion("source-version-1"),
-            destinationIdentity: toDestinationIdentity(
-              "entry-article-previous"
-            ),
-            destinationVersion: toDestinationVersion("previous-version-1"),
-            lastRunId: toMigrationRunId("run-previous"),
-            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-            status: "migrated",
-          }
-        );
-        const definition = defineMigration({
-          id: "articles",
-          source: makeTestInMemorySource({
-            items: [
-              {
-                identityKey: "article-1",
-                version: "source-version-1",
-                item: { title: "Empty plan article" },
-              },
-            ],
-          }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
-          store: InMemoryMigrationStore.layer(storeState),
-          pipeline: () => Effect.succeed([]),
-        });
-
-        const summary = yield* runMigrations({
-          definitions: [definition],
-          mode: { kind: "item", sourceIdentityKey: "article-1" },
-        });
-
-        expect(summary.status).toBe("failed");
-        expect(destinationState.executions).toEqual([]);
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey("articles", "article-1")
-          )
-        ).toEqual(
-          expect.objectContaining({
-            status: "failed",
-            destinationIdentity: "entry-article-previous",
-            destinationVersion: "previous-version-1",
-            error: expect.objectContaining({
-              kind: "destination",
-              message:
-                "Destination Command Plan must contain at least one Destination Command",
-            }),
-          })
-        );
-      })
-  );
-
-  it.effect(
-    "fails a Destination Command Plan that produces multiple destination identities",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const definition = defineMigration({
-          id: "articles",
-          source: makeTestInMemorySource({
-            items: [
-              {
-                identityKey: "article-1",
-                version: "source-version-1",
-                item: { title: "Multi identity article" },
-              },
-            ],
-          }),
-          destination: makeTestEntryDestination({
-            state: destinationState,
-            execute: (command, context) =>
-              command.kind === "UpsertEntry"
-                ? {
-                    destinationIdentity: `entry-${context.sourceIdentity}`,
-                    destinationVersion: "entry-version-1",
-                  }
-                : {
-                    destinationIdentity: `published-${context.sourceIdentity}`,
-                    destinationVersion: "published-version-1",
-                  },
-          }),
-          store: InMemoryMigrationStore.layer(storeState),
-          pipeline: (source) =>
-            Effect.succeed([
-              {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              },
-              {
-                kind: "PublishEntry" as const,
-                contentType: "article",
-              },
-            ]),
-        });
-
-        const summary = yield* runMigration(definition);
-
-        expect(summary.status).toBe("failed");
-        expect(
-          destinationState.executions.map((execution) => execution.command.kind)
-        ).toEqual(["UpsertEntry", "PublishEntry"]);
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey("articles", "article-1")
-          )
-        ).toEqual(
-          expect.objectContaining({
-            status: "failed",
-            destinationIdentity: "entry-article-1",
-            destinationVersion: "entry-version-1",
-            error: expect.objectContaining({
-              kind: "destination",
-              message:
-                "Destination Command Plan produced more than one Destination Identity",
-            }),
-          })
-        );
-      })
-  );
-
-  it.effect(
-    "rejects statically known multi-identity Destination Command Plans before execution",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const definition = defineMigration({
-          id: "articles",
-          source: makeTestInMemorySource({
-            items: [
-              {
-                identityKey: "article-1",
-                version: "source-version-1",
-                item: { title: "Static multi identity article" },
-              },
-            ],
-          }),
-          destination: makeTestMultiIdentityEntryDestination({
-            state: destinationState,
-          }),
-          store: InMemoryMigrationStore.layer(storeState),
-          pipeline: (source) =>
-            Effect.succeed([
-              {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              },
-              {
-                kind: "PublishEntry" as const,
-                contentType: "article",
-              },
-            ]),
-        });
-
-        const summary = yield* runMigration(definition);
-
-        expect(summary.status).toBe("failed");
-        expect(destinationState.executions).toEqual([]);
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey("articles", "article-1")
-          )
-        ).toEqual(
-          expect.objectContaining({
-            status: "failed",
-            error: expect.objectContaining({
-              kind: "destination",
-              message:
-                "Destination Command Plan contains more than one identity-bearing Destination Command",
-            }),
-          })
-        );
-      })
-  );
-
-  it.effect(
-    "applies Destination Retry to each Destination Command independently",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const attempts: EntryCommand["kind"][] = [];
-        let publishFailures = 1;
-        const destination = {
-          commandDefinitions: EntryPlugin.commandDefinitions,
-          layer: Layer.sync(DestinationPlugin, () => ({
-            execute: (command, context) =>
-              Effect.gen(function* () {
-                const typedCommand = yield* Schema.decodeUnknownEffect(
-                  EntryCommand
-                )(command).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new DestinationPluginError({
-                        message:
-                          "Destination command did not match command schema",
-                        cause,
-                      })
-                  )
-                );
-
-                attempts.push(typedCommand.kind);
-
-                if (
-                  typedCommand.kind === "PublishEntry" &&
-                  publishFailures > 0
-                ) {
-                  publishFailures -= 1;
-
-                  return yield* new DestinationPluginError({
-                    message: "Publish failed transiently",
-                  });
-                }
-
-                return typedCommand.kind === "UpsertEntry"
-                  ? {
-                      destinationIdentity: toDestinationIdentity(
-                        `entry-${context.sourceIdentity}`
-                      ),
-                    }
-                  : {};
-              }),
-          })),
-        };
-        const definition = defineMigration({
-          id: "articles",
-          source: makeTestInMemorySource({
-            items: [
-              {
-                identityKey: "article-1",
-                version: "source-version-1",
-                item: { title: "Retry publish article" },
-              },
-            ],
-          }),
-          destination,
-          destinationRetry: (effect) =>
-            effect.pipe(Effect.retry(Schedule.recurs(1))),
-          store: InMemoryMigrationStore.layer(storeState),
-          pipeline: (source) =>
-            Effect.succeed([
-              {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              },
-              {
-                kind: "PublishEntry" as const,
-                contentType: "article",
-              },
-            ]),
-        });
-
-        const summary = yield* runMigration(definition);
-
-        expect(summary.status).toBe("succeeded");
-        expect(attempts).toEqual([
-          "UpsertEntry",
-          "PublishEntry",
-          "PublishEntry",
-        ]);
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey("articles", "article-1")
-          )
-        ).toEqual(
-          expect.objectContaining({
-            status: "migrated",
-            destinationIdentity: "entry-article-1",
-          })
-        );
       })
   );
 
@@ -6688,16 +5286,8 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({}),
         store: InMemoryMigrationStore.layer(unselectedStoreState),
-        pipeline: (source) =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "unselected",
-            fields: {
-              title: source.item.title,
-            },
-          }),
+        process: () => Effect.void,
       });
       const selected = defineMigration({
         id: "selected",
@@ -6710,16 +5300,8 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({}),
         store: InMemoryMigrationStore.layer(selectedStoreState),
-        pipeline: (source) =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "selected",
-            fields: {
-              title: source.item.title,
-            },
-          }),
+        process: () => Effect.void,
       });
 
       const summary = yield* runMigrations({
@@ -6749,7 +5331,6 @@ describe("runMigration", () => {
       Effect.gen(function* () {
         const authorsStoreState = InMemoryMigrationStore.makeState();
         const articlesStoreState = InMemoryMigrationStore.makeState();
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const pipelineCalls: string[] = [];
 
         const authors = defineMigration({
@@ -6763,21 +5344,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: InMemoryMigrationStore.layer(authorsStoreState),
-          pipeline: (source) =>
+          process: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity.encoded);
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "author",
-                fields: {
-                  name: source.item.name,
-                },
-              };
             }),
         });
         const articles = defineMigration({
@@ -6792,21 +5362,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store: InMemoryMigrationStore.layer(articlesStoreState),
-          pipeline: (source) =>
+          process: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity.encoded);
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              };
             }),
         });
 
@@ -6824,7 +5383,6 @@ describe("runMigration", () => {
               "Migration Definitions in the same run must use the same Migration Store",
           })
         );
-        expect(destinationState.executions).toEqual([]);
         expect(pipelineCalls).toEqual([]);
         expect(authorsStoreState.latestRunStates.size).toBe(0);
         expect(articlesStoreState.latestRunStates.size).toBe(0);
@@ -6835,7 +5393,6 @@ describe("runMigration", () => {
     "rejects missing Migration Definition dependencies before execution",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];
@@ -6852,21 +5409,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
+          process: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity.encoded);
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              };
             }),
         });
 
@@ -6880,7 +5426,6 @@ describe("runMigration", () => {
             message: "Migration Definition was not found",
           })
         );
-        expect(destinationState.executions).toEqual([]);
         expect(pipelineCalls).toEqual([]);
         expect(storeState.latestRunStates.size).toBe(0);
       })
@@ -6890,7 +5435,6 @@ describe("runMigration", () => {
     "rejects Migration Definition dependency cycles before execution",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];
@@ -6907,21 +5451,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
+          process: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity.encoded);
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "author",
-                fields: {
-                  name: source.item.name,
-                },
-              };
             }),
         });
         const articles = defineMigration({
@@ -6936,21 +5469,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
+          process: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity.encoded);
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              };
             }),
         });
 
@@ -6964,7 +5486,6 @@ describe("runMigration", () => {
             message: "Migration Definition dependency cycle detected",
           })
         );
-        expect(destinationState.executions).toEqual([]);
         expect(pipelineCalls).toEqual([]);
         expect(storeState.latestRunStates.size).toBe(0);
       })
@@ -7087,8 +5608,8 @@ describe("runMigration", () => {
 
   it.effect("surfaces Migration Definition Lock release failures", () =>
     Effect.gen(function* () {
-      const destinationState = makeTestDestinationState<UpsertEntryCommand>();
       const storeState = InMemoryMigrationStore.makeState();
+      const processCalls: string[] = [];
       const releaseError = new MigrationStoreError({
         message: "Unable to release Migration Definition Lock",
         cause: { definitionId: "articles" },
@@ -7105,17 +5626,10 @@ describe("runMigration", () => {
             },
           ],
         }),
-        destination: makeTestUpsertEntryDestination({
-          state: destinationState,
-        }),
         store: releaseFailingStoreLayer(storeState, releaseError),
-        pipeline: (source) =>
-          Effect.succeed({
-            kind: "UpsertEntry" as const,
-            contentType: "article",
-            fields: {
-              title: source.item.title,
-            },
+        process: (source) =>
+          Effect.sync(() => {
+            processCalls.push(source.identity.encoded);
           }),
       });
 
@@ -7143,7 +5657,7 @@ describe("runMigration", () => {
           token: "lock-1",
         }),
       ]);
-      expect(destinationState.executions).toHaveLength(1);
+      expect(processCalls).toEqual(["article-1"]);
       expect(storeState.definitionLocks.size).toBe(1);
       expect(
         storeState.latestRunStates.get(toMigrationDefinitionId("articles"))
@@ -7159,11 +5673,11 @@ describe("runMigration", () => {
     "attempts every Migration Definition Lock release when cleanup fails",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const releaseError = new MigrationStoreError({
           message: "Unable to release Migration Definition Lock",
         });
+        const processCalls: string[] = [];
         const releasedDefinitionIds: string[] = [];
         const store = releaseFailingStoreLayer(
           storeState,
@@ -7184,17 +5698,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
-            Effect.succeed({
-              kind: "UpsertEntry" as const,
-              contentType: "author",
-              fields: {
-                name: source.item.name,
-              },
+          process: (source) =>
+            Effect.sync(() => {
+              processCalls.push(`authors:${source.identity.encoded}`);
             }),
         });
         const articles = defineMigration({
@@ -7209,17 +5716,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
-            Effect.succeed({
-              kind: "UpsertEntry" as const,
-              contentType: "article",
-              fields: {
-                title: source.item.title,
-              },
+          process: (source) =>
+            Effect.sync(() => {
+              processCalls.push(`articles:${source.identity.encoded}`);
             }),
         });
 
@@ -7241,6 +5741,7 @@ describe("runMigration", () => {
             message: "Unable to release Migration Definition Lock set",
           })
         );
+        expect(processCalls).toEqual(["authors:author-1", "articles:article-1"]);
         expect(releasedDefinitionIds).toEqual([
           toMigrationDefinitionId("authors"),
           toMigrationDefinitionId("articles"),
@@ -7263,7 +5764,6 @@ describe("runMigration", () => {
     "rejects concurrent Migration Definition Lock ownership before execution",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];
@@ -7286,21 +5786,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
+          process: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity.encoded);
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              };
             }),
         });
 
@@ -7312,7 +5801,6 @@ describe("runMigration", () => {
             message: "Migration definition is already locked",
           })
         );
-        expect(destinationState.executions).toEqual([]);
         expect(pipelineCalls).toEqual([]);
         expect(
           storeState.definitionLocks.get(toMigrationDefinitionId("articles"))
@@ -7331,7 +5819,6 @@ describe("runMigration", () => {
     "rejects overlapping lock sets before executing earlier definitions",
     () =>
       Effect.gen(function* () {
-        const destinationState = makeTestDestinationState<UpsertEntryCommand>();
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];
@@ -7354,21 +5841,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
+          process: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity.encoded);
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "author",
-                fields: {
-                  name: source.item.name,
-                },
-              };
             }),
         });
         const articles = defineMigration({
@@ -7383,21 +5859,10 @@ describe("runMigration", () => {
               },
             ],
           }),
-          destination: makeTestUpsertEntryDestination({
-            state: destinationState,
-          }),
           store,
-          pipeline: (source) =>
+          process: (source) =>
             Effect.sync(() => {
               pipelineCalls.push(source.identity.encoded);
-
-              return {
-                kind: "UpsertEntry" as const,
-                contentType: "article",
-                fields: {
-                  title: source.item.title,
-                },
-              };
             }),
         });
 
@@ -7411,7 +5876,6 @@ describe("runMigration", () => {
             message: "Migration definition is already locked",
           })
         );
-        expect(destinationState.executions).toEqual([]);
         expect(pipelineCalls).toEqual([]);
         expect(storeState.latestRunStates.size).toBe(0);
         expect(storeState.migrationContracts.size).toBe(0);
@@ -7431,293 +5895,14 @@ describe("runMigration", () => {
 });
 
 describe("rollbackMigration", () => {
-  it.effect(
-    "rolls back a process item using journaled destination ids without a tracking record",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const store = InMemoryMigrationStore.layer(storeState);
-        const destination = InMemoryDestination.makeEntries({
-          contentType: "article",
-          fields: ArticleEntryFields,
-        });
-        const rolledBackDestinationIds: string[] = [];
-
-        const definition = defineMigration({
-          id: "articles",
-          source: makeTestInMemorySource({
-            items: [
-              {
-                identityKey: "article-1",
-                version: "source-version-1",
-                item: {
-                  title: "Journal-backed rollback",
-                },
-              },
-            ],
-          }),
-          store,
-          process: (source) =>
-            destination.entries
-              .upsert({
-                title: source.item.title,
-              })
-              .pipe(Effect.asVoid),
-          rollback: (state) =>
-            Effect.gen(function* () {
-              const journalEntry = state.journal?.process.entries.find(
-                destination.changes.entryUpserted.is
-              );
-
-              if (journalEntry === undefined) {
-                return yield* Effect.fail({
-                  _tag: "RollbackMissingJournalEntry" as const,
-                  message: "Rollback expected a journaled destination id",
-                });
-              }
-
-              const change =
-                yield* destination.changes.entryUpserted.decode(journalEntry);
-              rolledBackDestinationIds.push(change.value.destinationIdentity);
-            }),
-        });
-
-        const runSummary = yield* runMigration(definition);
-        const itemState = storeState.itemStates.get(
-          InMemoryMigrationStore.itemStateKey("articles", "article-1")
-        );
-
-        expect(runSummary.status).toBe("succeeded");
-        expect(itemState).toEqual(
-          expect.objectContaining({
-            status: "migrated",
-            journal: expect.objectContaining({
-              process: expect.objectContaining({
-                entries: [
-                  expect.objectContaining({
-                    descriptorId: destination.changes.entryUpserted.id,
-                  }),
-                ],
-              }),
-            }),
-          })
-        );
-        expect(itemState).not.toHaveProperty("trackingRecord");
-
-        const rollbackSummary = yield* rollbackMigration(definition);
-
-        expect(rollbackSummary.status).toBe("succeeded");
-        expect(rollbackSummary.definitions[0]?.counts).toEqual({
-          rolledBack: 1,
-          failed: 0,
-          skipped: 0,
-        });
-        expect(rolledBackDestinationIds).toEqual(["entry:article:article-1"]);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey("articles", "article-1")
-          )
-        ).toBe(false);
-      })
-  );
-
-  it.effect(
-    "appends rollback attempt evidence when journal-backed rollback fails",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const store = InMemoryMigrationStore.layer(storeState);
-        const destination = InMemoryDestination.makeEntries({
-          contentType: "article",
-          fields: ArticleEntryFields,
-        });
-        const rollbackError = {
-          _tag: "RollbackFailureTestError" as const,
-          message: "Rollback failed after diagnostic",
-        };
-
-        const definition = defineMigration({
-          id: "articles",
-          source: makeTestInMemorySource({
-            items: [
-              {
-                identityKey: "article-1",
-                version: "source-version-1",
-                item: {
-                  title: "Rollback attempt journal",
-                },
-              },
-            ],
-          }),
-          store,
-          process: (source) =>
-            destination.entries
-              .upsert({
-                title: source.item.title,
-              })
-              .pipe(Effect.asVoid),
-          rollback: () =>
-            Effect.gen(function* () {
-              yield* Tracking.logDiagnostic({
-                severity: "error",
-                message: "Rollback could not delete entry",
-                details: {
-                  destinationIdentity: "entry:article:article-1",
-                },
-              });
-              return yield* Effect.fail(rollbackError);
-            }),
-        });
-
-        yield* runMigration(definition);
-
-        const migratedState = storeState.itemStates.get(
-          InMemoryMigrationStore.itemStateKey("articles", "article-1")
-        );
-        const originalProcessEntries =
-          migratedState?.status === "migrated"
-            ? (migratedState.journal?.process.entries ?? [])
-            : [];
-
-        const rollbackSummary = yield* rollbackMigration(definition);
-        const failedRollbackState = storeState.itemStates.get(
-          InMemoryMigrationStore.itemStateKey("articles", "article-1")
-        );
-
-        expect(rollbackSummary.status).toBe("failed");
-        expect(rollbackSummary.definitions[0]?.counts).toEqual({
-          rolledBack: 0,
-          failed: 1,
-          skipped: 0,
-        });
-        expect(failedRollbackState).toEqual(
-          expect.objectContaining({
-            status: "migrated",
-          })
-        );
-
-        if (failedRollbackState?.status !== "migrated") {
-          throw new Error(
-            "Expected migrated item state to remain after rollback failure"
-          );
-        }
-
-        expect(failedRollbackState.journal?.process.entries).toEqual(
-          originalProcessEntries
-        );
-        expect(failedRollbackState.journal?.rollbackAttempts).toEqual([
-          expect.objectContaining({
-            entries: [
-              {
-                kind: "diagnostic",
-                sequence: 0,
-                severity: "error",
-                message: "Rollback could not delete entry",
-                details: {
-                  destinationIdentity: "entry:article:article-1",
-                },
-              },
-            ],
-            error: {
-              kind: "process",
-              errorTag: "RollbackFailureTestError",
-              message: "Rollback failed after diagnostic",
-            },
-            failedAt: expect.any(Date),
-            runId: rollbackSummary.runId,
-          }),
-        ]);
-      })
-  );
-
-  it.effect(
-    "exposes previous failed rollback attempts to a later rollback retry",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const store = InMemoryMigrationStore.layer(storeState);
-        const destination = InMemoryDestination.makeEntries({
-          contentType: "article",
-          fields: ArticleEntryFields,
-        });
-        let shouldFailRollback = true;
-        let retryAttemptCount = 0;
-
-        const definition = defineMigration({
-          id: "articles",
-          source: makeTestInMemorySource({
-            items: [
-              {
-                identityKey: "article-1",
-                version: "source-version-1",
-                item: {
-                  title: "Rollback retry",
-                },
-              },
-            ],
-          }),
-          store,
-          process: (source) =>
-            destination.entries
-              .upsert({
-                title: source.item.title,
-              })
-              .pipe(Effect.asVoid),
-          rollback: (state) =>
-            Effect.gen(function* () {
-              if (shouldFailRollback) {
-                yield* Tracking.logDiagnostic({
-                  severity: "warning",
-                  message: "Rollback retry required",
-                });
-                return yield* Effect.fail({
-                  _tag: "RetryableRollbackFailure" as const,
-                  message: "Rollback failed before retry",
-                });
-              }
-
-              retryAttemptCount = state.journal?.rollbackAttempts.length ?? 0;
-            }),
-        });
-
-        yield* runMigration(definition);
-        const failedRollbackSummary = yield* rollbackMigration(definition);
-
-        shouldFailRollback = false;
-
-        const successfulRollbackSummary = yield* rollbackMigration(definition);
-
-        expect(failedRollbackSummary.status).toBe("failed");
-        expect(successfulRollbackSummary.status).toBe("succeeded");
-        expect(successfulRollbackSummary.definitions[0]?.counts).toEqual({
-          rolledBack: 1,
-          failed: 0,
-          skipped: 0,
-        });
-        expect(retryAttemptCount).toBe(1);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey("articles", "article-1")
-          )
-        ).toBe(false);
-      })
-  );
-
-  it.effect("rolls back a migrated item and deletes its item state", () =>
+  it.effect("runs a rollback process and deletes migrated item state", () =>
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
       const store = InMemoryMigrationStore.layer(storeState);
-      const sourceState = InMemorySourcePlugin.makeState();
-      const destinationState = makeTestDestinationState<EntryCommand>();
-      const destination = makeTestEntryDestination({
-        state: destinationState,
-      });
       const definitionId = toMigrationDefinitionId("articles");
       const sourceIdentity = toEncodedSourceIdentity("article-rollback");
       const migratedState = {
         definitionId,
-        destinationIdentity: toDestinationIdentity("entry-article-rollback"),
-        destinationVersion: toDestinationVersion("destination-version-1"),
         lastRunId: toMigrationRunId("run-previous"),
         sourceIdentity: SourceIdentity.fromEncoded(
           ArticleSourceIdentity,
@@ -7727,10 +5912,6 @@ describe("rollbackMigration", () => {
         status: "migrated" as const,
         updatedAt: new Date("2026-01-01T00:00:00.000Z"),
       };
-      storeState.itemStates.set(
-        InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity),
-        migratedState
-      );
       let rollbackInput:
         | {
             readonly context: RollbackContext;
@@ -7738,83 +5919,32 @@ describe("rollbackMigration", () => {
           }
         | undefined;
 
+      storeState.itemStates.set(
+        InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity),
+        migratedState
+      );
+
       const definition = defineMigration({
         id: definitionId,
         source: makeTestInMemorySource({
           items: [],
           sourceSchema: ArticleSource,
-          state: sourceState,
         }),
-        destination,
         store,
-        pipeline: () => ({
-          contentType: "article",
-          fields: {
-            title: "unused",
-          },
-          kind: "UpsertEntry" as const,
-        }),
+        process: () => Effect.void,
         rollback: (state, context) => {
           rollbackInput = { context, state };
-
-          return {
-            contentType: "article",
-            kind: "PublishEntry" as const,
-          };
         },
       });
 
-      expectTypeOf(rollbackMigration(definition)).toEqualTypeOf<
-        Effect.Effect<
-          RollbackRunSummary,
-          DestinationPluginError | MigrationStoreError | RollbackPreflightError
-        >
-      >();
-      expectTypeOf(rollbackMigration(definition, undefined)).toEqualTypeOf<
-        Effect.Effect<
-          RollbackRunSummary,
-          DestinationPluginError | MigrationStoreError | RollbackPreflightError
-        >
-      >();
-      const optionalOptions = undefined as
-        | RollbackMigrationOptionsInput<string>
-        | undefined;
-      expectTypeOf(
-        rollbackMigration(definition, optionalOptions)
-      ).toEqualTypeOf<
-        Effect.Effect<RollbackRunSummary, RollbackMigrationError>
-      >();
-      expectTypeOf(
-        rollbackMigration(definition, {
-          sourceIdentityKeys: ["article-rollback"],
-        })
-      ).toEqualTypeOf<
-        Effect.Effect<RollbackRunSummary, RollbackMigrationError>
-      >();
+      const summary = yield* rollbackMigration(definition);
 
-      const summary: RollbackRunSummary = yield* rollbackMigration(definition);
-
-      expect(summary.kind).toBe("rollback");
-      expect(summary.definitions).toEqual([
-        {
-          counts: {
-            rolledBack: 1,
-            failed: 0,
-            skipped: 0,
-          },
-          definitionId,
-          status: "succeeded",
-        },
-      ]);
       expect(summary.status).toBe("succeeded");
-      expect(summary.startedAt).toBeInstanceOf(Date);
-      expect(summary.finishedAt).toBeInstanceOf(Date);
-      expect(storeState.latestRunStates.get(definitionId)).toEqual(
-        expect.objectContaining({
-          runId: summary.runId,
-          status: "succeeded",
-        })
-      );
+      expect(summary.definitions[0]?.counts).toEqual({
+        rolledBack: 1,
+        failed: 0,
+        skipped: 0,
+      });
       expect(rollbackInput).toEqual({
         context: {
           definitionId,
@@ -7827,1370 +5957,7 @@ describe("rollbackMigration", () => {
           InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity)
         )
       ).toBe(false);
-      expect(sourceState.readAttempts).toBe(0);
-      expect(sourceState.readByIdentityAttempts).toBe(0);
-      expect(storeState.sourceCursorCommits).toEqual([]);
-      expect(storeState.sourceCursors.size).toBe(0);
-      expect(destinationState.executions).toHaveLength(1);
-      expect(destinationState.executions[0]).toEqual(
-        expect.objectContaining({
-          command: {
-            contentType: "article",
-            kind: "PublishEntry",
-          },
-          context: {
-            definitionId,
-            previousState: migratedState,
-            runId: summary.runId,
-            sourceIdentity,
-            sourceVersion: toSourceVersion("source-version-1"),
-          },
-        })
-      );
     })
-  );
-
-  it.effect("rolls back only targeted source identities by direct lookup", () =>
-    Effect.gen(function* () {
-      const storeState = InMemoryMigrationStore.makeState();
-      const destinationState = makeTestDestinationState<EntryCommand>();
-      const destination = makeTestEntryDestination({
-        state: destinationState,
-      });
-      const definitionId = toMigrationDefinitionId("articles");
-      const targetedIdentity = toEncodedSourceIdentity("article-targeted");
-      const untouchedIdentity = toEncodedSourceIdentity("article-untouched");
-      const makeMigratedState = (sourceIdentity: typeof targetedIdentity) => ({
-        definitionId,
-        destinationIdentity: toDestinationIdentity(`entry-${sourceIdentity}`),
-        lastRunId: toMigrationRunId("run-previous"),
-        sourceIdentity: SourceIdentity.fromEncoded(
-          ArticleSourceIdentity,
-          sourceIdentity
-        ),
-        sourceVersion: toSourceVersion("source-version-1"),
-        status: "migrated" as const,
-        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-      });
-      const targetedState = makeMigratedState(targetedIdentity);
-      const untouchedState = makeMigratedState(untouchedIdentity);
-
-      for (const itemState of [targetedState, untouchedState]) {
-        storeState.itemStates.set(
-          InMemoryMigrationStore.itemStateKey(
-            itemState.definitionId,
-            itemState.sourceIdentity.encoded
-          ),
-          itemState
-        );
-      }
-
-      const store = Layer.effect(
-        MigrationStore,
-        Effect.gen(function* () {
-          const baseStore = yield* MigrationStore;
-
-          return {
-            ...baseStore,
-            listItemStates: () =>
-              Effect.fail(
-                new MigrationStoreError({
-                  message:
-                    "Targeted rollback must not scan all Migration Item States",
-                })
-              ),
-          };
-        })
-      ).pipe(Layer.provide(InMemoryMigrationStore.layer(storeState)));
-
-      const definition = defineMigration({
-        id: definitionId,
-        source: makeTestInMemorySource({
-          items: [],
-          sourceSchema: ArticleSource,
-        }),
-        destination,
-        store,
-        pipeline: () => ({
-          contentType: "article",
-          fields: {
-            title: "unused",
-          },
-          kind: "UpsertEntry" as const,
-        }),
-        rollback: () => ({
-          contentType: "article",
-          kind: "PublishEntry" as const,
-        }),
-      });
-
-      const summary = yield* rollbackMigration(definition, {
-        sourceIdentityKeys: ["article-targeted"],
-      });
-
-      expect(summary.status).toBe("succeeded");
-      expect(summary.definitions[0]?.counts).toEqual({
-        rolledBack: 1,
-        failed: 0,
-        skipped: 0,
-      });
-      expect(destinationState.executions).toHaveLength(1);
-      expect(destinationState.executions[0]?.context.sourceIdentity).toBe(
-        targetedIdentity
-      );
-      expect(
-        storeState.itemStates.has(
-          InMemoryMigrationStore.itemStateKey(definitionId, targetedIdentity)
-        )
-      ).toBe(false);
-      expect(
-        storeState.itemStates.get(
-          InMemoryMigrationStore.itemStateKey(definitionId, untouchedIdentity)
-        )
-      ).toEqual(untouchedState);
-    })
-  );
-
-  it.effect(
-    "rejects empty targeted source identity requests before a run",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const definitionId = toMigrationDefinitionId("articles");
-        const definition = defineMigration({
-          id: definitionId,
-          source: makeTestInMemorySource({
-            items: [],
-            sourceSchema: ArticleSource,
-          }),
-          destination: makeTestEntryDestination(),
-          store: InMemoryMigrationStore.layer(storeState),
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "article",
-            kind: "PublishEntry" as const,
-          }),
-        });
-
-        const error = yield* Effect.flip(
-          rollbackMigration(definition, { sourceIdentityKeys: [] })
-        );
-
-        expect(error).toBeInstanceOf(RollbackRequestError);
-        expect(error).toEqual(
-          expect.objectContaining({
-            message:
-              "Rollback sourceIdentityKeys must include at least one identity",
-          })
-        );
-        expect(storeState.latestRunStates.has(definitionId)).toBe(false);
-      })
-  );
-
-  it.effect(
-    "counts missing targeted identities as skipped and rolls back stored skipped/failed states",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const store = InMemoryMigrationStore.layer(storeState);
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const definitionId = toMigrationDefinitionId("articles");
-        const skippedState = {
-          definitionId,
-          lastRunId: toMigrationRunId("run-previous"),
-          skipReason: "Skipped during forward migration",
-          sourceIdentity: articleSourceIdentity("article-skipped"),
-          sourceVersion: toSourceVersion("source-version-1"),
-          status: "skipped" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-        const failedWithoutDestinationState = {
-          definitionId,
-          error: {
-            errorTag: "SourcePluginError",
-            kind: "source" as const,
-            message: "Previous source lookup failed",
-          },
-          lastRunId: toMigrationRunId("run-previous"),
-          sourceIdentity: articleSourceIdentity(
-            "article-failed-without-destination"
-          ),
-          status: "failed" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-
-        for (const itemState of [skippedState, failedWithoutDestinationState]) {
-          storeState.itemStates.set(
-            InMemoryMigrationStore.itemStateKey(
-              itemState.definitionId,
-              itemState.sourceIdentity.encoded
-            ),
-            itemState
-          );
-        }
-
-        const definition = defineMigration({
-          id: definitionId,
-          source: makeTestInMemorySource({
-            items: [],
-            sourceSchema: ArticleSource,
-          }),
-          destination: makeTestEntryDestination({
-            state: destinationState,
-          }),
-          store,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "article",
-            kind: "PublishEntry" as const,
-          }),
-        });
-
-        const summary = yield* rollbackMigration(definition, {
-          sourceIdentityKeys: [
-            "article-missing",
-            "article-skipped",
-            "article-failed-without-destination",
-          ],
-        });
-
-        expect(summary.status).toBe("succeeded");
-        expect(summary.definitions[0]?.counts).toEqual({
-          rolledBack: 2,
-          failed: 0,
-          skipped: 1,
-        });
-        expect(destinationState.executeAttempts).toBe(2);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              skippedState.sourceIdentity.encoded
-            )
-          )
-        ).toBe(false);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              failedWithoutDestinationState.sourceIdentity.encoded
-            )
-          )
-        ).toBe(false);
-      })
-  );
-
-  it.effect("deduplicates targeted source identities before rollback", () =>
-    Effect.gen(function* () {
-      const storeState = InMemoryMigrationStore.makeState();
-      const store = InMemoryMigrationStore.layer(storeState);
-      const destinationState = makeTestDestinationState<EntryCommand>();
-      const definitionId = toMigrationDefinitionId("articles");
-      const makeMigratedState = (identity: string) => ({
-        definitionId,
-        destinationIdentity: toDestinationIdentity(`entry-${identity}`),
-        lastRunId: toMigrationRunId("run-previous"),
-        sourceIdentity: articleSourceIdentity(identity),
-        sourceVersion: toSourceVersion("source-version-1"),
-        status: "migrated" as const,
-        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-      });
-
-      for (const itemState of [
-        makeMigratedState("article-1"),
-        makeMigratedState("article-2"),
-      ]) {
-        storeState.itemStates.set(
-          InMemoryMigrationStore.itemStateKey(
-            itemState.definitionId,
-            itemState.sourceIdentity.encoded
-          ),
-          itemState
-        );
-      }
-
-      const definition = defineMigration({
-        id: definitionId,
-        source: makeTestInMemorySource({
-          items: [],
-          sourceSchema: ArticleSource,
-        }),
-        destination: makeTestEntryDestination({
-          state: destinationState,
-        }),
-        store,
-        pipeline: () => ({
-          contentType: "article",
-          fields: {
-            title: "unused",
-          },
-          kind: "UpsertEntry" as const,
-        }),
-        rollback: () => ({
-          contentType: "article",
-          kind: "PublishEntry" as const,
-        }),
-      });
-
-      const summary = yield* rollbackMigration(definition, {
-        sourceIdentityKeys: ["article-2", "article-1", "article-2"],
-      });
-
-      expect(summary.status).toBe("succeeded");
-      expect(summary.definitions[0]?.counts).toEqual({
-        rolledBack: 2,
-        failed: 0,
-        skipped: 0,
-      });
-      expect(
-        destinationState.executions.map(
-          (execution) => execution.context.sourceIdentity
-        )
-      ).toEqual(["article-2", "article-1"]);
-    })
-  );
-
-  it.effect(
-    "reports targeted rollback successes, failures, and skips from the requested identities",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const store = InMemoryMigrationStore.layer(storeState);
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const definitionId = toMigrationDefinitionId("articles");
-        const makeMigratedState = (identity: string) => ({
-          definitionId,
-          destinationIdentity: toDestinationIdentity(`entry-${identity}`),
-          lastRunId: toMigrationRunId("run-previous"),
-          sourceIdentity: articleSourceIdentity(identity),
-          sourceVersion: toSourceVersion("source-version-1"),
-          status: "migrated" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        });
-        const successState = makeMigratedState("article-success");
-        const rejectedPlanState = makeMigratedState("article-rejected-plan");
-
-        for (const itemState of [successState, rejectedPlanState]) {
-          storeState.itemStates.set(
-            InMemoryMigrationStore.itemStateKey(
-              itemState.definitionId,
-              itemState.sourceIdentity.encoded
-            ),
-            itemState
-          );
-        }
-
-        const definition = defineMigration({
-          id: definitionId,
-          source: makeTestInMemorySource({
-            items: [],
-            sourceSchema: ArticleSource,
-          }),
-          destination: makeTestEntryDestination({
-            state: destinationState,
-          }),
-          store,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: (state) =>
-            state.sourceIdentity.encoded ===
-            toEncodedSourceIdentity("article-rejected-plan")
-              ? {
-                  contentType: "article",
-                  fields: {
-                    title: "must not recreate identity",
-                  },
-                  kind: "UpsertEntry" as const,
-                }
-              : {
-                  contentType: "article",
-                  kind: "PublishEntry" as const,
-                },
-        });
-
-        const summary = yield* rollbackMigration(definition, {
-          sourceIdentityKeys: [
-            "article-success",
-            "article-rejected-plan",
-            "article-missing",
-          ],
-        });
-
-        expect(summary.status).toBe("failed");
-        expect(summary.definitions[0]?.counts).toEqual({
-          rolledBack: 1,
-          failed: 1,
-          skipped: 1,
-        });
-        expect(destinationState.executeAttempts).toBe(1);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              successState.sourceIdentity.encoded
-            )
-          )
-        ).toBe(false);
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              rejectedPlanState.sourceIdentity.encoded
-            )
-          )
-        ).toEqual({
-          ...rejectedPlanState,
-          journal: {
-            process: {
-              entries: [],
-              runId: rejectedPlanState.lastRunId,
-            },
-            rollbackAttempts: [
-              expect.objectContaining({
-                entries: [],
-                error: {
-                  details: [
-                    {
-                      message: "Identity-bearing command: UpsertEntry",
-                    },
-                  ],
-                  errorTag: "DestinationCommandPlanError",
-                  kind: "destination",
-                  message:
-                    "Rollback Destination Command Plan must not contain identity-bearing Destination Commands",
-                },
-                failedAt: expect.any(Date),
-                runId: summary.runId,
-              }),
-            ],
-          },
-        });
-      })
-  );
-
-  it.effect(
-    "fails missing rollback pipeline preflight against only targeted identities",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const definitionId = toMigrationDefinitionId("articles");
-        const unselectedState = {
-          definitionId,
-          destinationIdentity: toDestinationIdentity("entry-unselected"),
-          lastRunId: toMigrationRunId("run-previous"),
-          sourceIdentity: articleSourceIdentity("article-unselected"),
-          sourceVersion: toSourceVersion("source-version-1"),
-          status: "migrated" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-        const selectedSkippedState = {
-          definitionId,
-          lastRunId: toMigrationRunId("run-previous"),
-          skipReason: "Not ready",
-          sourceIdentity: articleSourceIdentity("article-skipped"),
-          sourceVersion: toSourceVersion("source-version-1"),
-          status: "skipped" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-
-        for (const itemState of [unselectedState, selectedSkippedState]) {
-          storeState.itemStates.set(
-            InMemoryMigrationStore.itemStateKey(
-              itemState.definitionId,
-              itemState.sourceIdentity.encoded
-            ),
-            itemState
-          );
-        }
-
-        const store = Layer.effect(
-          MigrationStore,
-          Effect.gen(function* () {
-            const baseStore = yield* MigrationStore;
-
-            return {
-              ...baseStore,
-              listItemStates: () =>
-                Effect.fail(
-                  new MigrationStoreError({
-                    message:
-                      "Targeted rollback preflight must not scan all Migration Item States",
-                  })
-                ),
-            };
-          })
-        ).pipe(Layer.provide(InMemoryMigrationStore.layer(storeState)));
-
-        const definition = defineMigration({
-          id: definitionId,
-          source: makeTestInMemorySource({
-            items: [],
-            sourceSchema: ArticleSource,
-          }),
-          destination: makeTestEntryDestination(),
-          store,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-        });
-
-        const error = yield* Effect.flip(
-          rollbackMigration(definition, {
-            sourceIdentityKeys: ["article-skipped", "article-missing"],
-          })
-        );
-
-        expect(error).toBeInstanceOf(RollbackPreflightError);
-        expect(error).toEqual(
-          expect.objectContaining({
-            message: "Migration Definition does not define a rollback pipeline",
-          })
-        );
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              unselectedState.sourceIdentity.encoded
-            )
-          )
-        ).toEqual(unselectedState);
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              selectedSkippedState.sourceIdentity.encoded
-            )
-          )
-        ).toEqual(selectedSkippedState);
-      })
-  );
-
-  it.effect(
-    "selects rollback item states after acquiring the definition lock",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const destination = makeTestEntryDestination({
-          state: destinationState,
-        });
-        const definitionId = toMigrationDefinitionId("articles");
-        const sourceIdentity = toEncodedSourceIdentity("article-after-lock");
-        const migratedState = {
-          definitionId,
-          destinationIdentity: toDestinationIdentity("entry-after-lock"),
-          lastRunId: toMigrationRunId("run-previous"),
-          sourceIdentity: SourceIdentity.fromEncoded(
-            ArticleSourceIdentity,
-            sourceIdentity
-          ),
-          sourceVersion: toSourceVersion("source-version-1"),
-          status: "migrated" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-        const store = Layer.effect(
-          MigrationStore,
-          Effect.gen(function* () {
-            const baseStore = yield* MigrationStore;
-
-            return {
-              ...baseStore,
-              acquireDefinitionLock: (id, ownerRunId) =>
-                baseStore.acquireDefinitionLock(id, ownerRunId).pipe(
-                  Effect.tap(() =>
-                    Effect.sync(() => {
-                      storeState.itemStates.set(
-                        InMemoryMigrationStore.itemStateKey(
-                          definitionId,
-                          sourceIdentity
-                        ),
-                        migratedState
-                      );
-                    })
-                  )
-                ),
-            };
-          })
-        ).pipe(Layer.provide(InMemoryMigrationStore.layer(storeState)));
-
-        const definition = defineMigration({
-          id: definitionId,
-          source: makeTestInMemorySource({
-            items: [],
-            sourceSchema: ArticleSource,
-          }),
-          destination,
-          store,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "article",
-            kind: "PublishEntry" as const,
-          }),
-        });
-
-        const summary = yield* rollbackMigration(definition);
-
-        expect(summary.status).toBe("succeeded");
-        expect(summary.definitions[0]?.counts).toEqual({
-          rolledBack: 1,
-          failed: 0,
-          skipped: 0,
-        });
-        expect(destinationState.executeAttempts).toBe(1);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity)
-          )
-        ).toBe(false);
-      })
-  );
-
-  it.effect(
-    "preserves item state on item-level failures and keeps rolling back remaining states",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const store = InMemoryMigrationStore.layer(storeState);
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const destination = makeTestEntryDestination({
-          state: destinationState,
-          execute: (_command, context) =>
-            context.sourceIdentity ===
-            toEncodedSourceIdentity("article-destination-fail")
-              ? Effect.fail(
-                  new DestinationPluginError({
-                    message: "Rollback destination command failed",
-                  })
-                )
-              : {},
-        });
-        const definitionId = toMigrationDefinitionId("articles");
-        const makeMigratedState = (identity: string) => ({
-          definitionId,
-          destinationIdentity: toDestinationIdentity(`entry-${identity}`),
-          lastRunId: toMigrationRunId("run-previous"),
-          sourceIdentity: articleSourceIdentity(identity),
-          sourceVersion: toSourceVersion("source-version-1"),
-          status: "migrated" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        });
-        const pipelineFailureState = makeMigratedState("article-pipeline-fail");
-        const destinationFailureState = makeMigratedState(
-          "article-destination-fail"
-        );
-        const successState = makeMigratedState("article-success");
-
-        for (const itemState of [
-          pipelineFailureState,
-          destinationFailureState,
-          successState,
-        ]) {
-          storeState.itemStates.set(
-            InMemoryMigrationStore.itemStateKey(
-              itemState.definitionId,
-              itemState.sourceIdentity.encoded
-            ),
-            itemState
-          );
-        }
-
-        const definition = defineMigration({
-          id: definitionId,
-          source: makeTestInMemorySource({
-            items: [],
-            sourceSchema: ArticleSource,
-          }),
-          destination,
-          store,
-          pipeline: (): Effect.Effect<EntryCommand, PipelineFailureTestError> =>
-            Effect.succeed({
-              contentType: "article",
-              fields: {
-                title: "unused",
-              },
-              kind: "UpsertEntry" as const,
-            }),
-          rollback: (state) =>
-            state.sourceIdentity.encoded ===
-            toEncodedSourceIdentity("article-pipeline-fail")
-              ? Effect.fail({
-                  _tag: "PipelineFailureTestError" as const,
-                  code: "rollback-plan-failed",
-                  message: "Rollback plan failed",
-                })
-              : {
-                  contentType: "article",
-                  kind: "PublishEntry" as const,
-                },
-        });
-
-        const summary = yield* rollbackMigration(definition);
-
-        expect(summary.status).toBe("failed");
-        expect(summary.definitions).toEqual([
-          {
-            counts: {
-              rolledBack: 1,
-              failed: 2,
-              skipped: 0,
-            },
-            definitionId,
-            status: "failed",
-          },
-        ]);
-        expect(storeState.latestRunStates.get(definitionId)).toEqual(
-          expect.objectContaining({
-            runId: summary.runId,
-            status: "failed",
-          })
-        );
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              pipelineFailureState.sourceIdentity.encoded
-            )
-          )
-        ).toEqual({
-          ...pipelineFailureState,
-          journal: {
-            process: {
-              entries: [],
-              runId: pipelineFailureState.lastRunId,
-            },
-            rollbackAttempts: [
-              expect.objectContaining({
-                entries: [],
-                error: {
-                  errorTag: "PipelineFailureTestError",
-                  kind: "process",
-                  message: "Rollback plan failed",
-                },
-                failedAt: expect.any(Date),
-                runId: summary.runId,
-              }),
-            ],
-          },
-        });
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              destinationFailureState.sourceIdentity.encoded
-            )
-          )
-        ).toEqual({
-          ...destinationFailureState,
-          journal: {
-            process: {
-              entries: [],
-              runId: destinationFailureState.lastRunId,
-            },
-            rollbackAttempts: [
-              expect.objectContaining({
-                entries: [],
-                error: {
-                  errorTag: "DestinationPluginError",
-                  kind: "destination",
-                  message: "Rollback destination command failed",
-                },
-                failedAt: expect.any(Date),
-                runId: summary.runId,
-              }),
-            ],
-          },
-        });
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              successState.sourceIdentity.encoded
-            )
-          )
-        ).toBe(false);
-        expect(destinationState.executeAttempts).toBe(2);
-      })
-  );
-
-  it.effect(
-    "calls rollback for every stored item state and deletes successes",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const store = InMemoryMigrationStore.layer(storeState);
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const destination = makeTestEntryDestination({
-          state: destinationState,
-        });
-        const definitionId = toMigrationDefinitionId("articles");
-        const needsUpdateState = {
-          definitionId,
-          destinationIdentity: toDestinationIdentity("entry-needs-update"),
-          lastRunId: toMigrationRunId("run-previous"),
-          reason: "Destination Stub requires update",
-          sourceIdentity: articleSourceIdentity("article-needs-update"),
-          status: "needs-update" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-        const failedWithDestinationState = {
-          definitionId,
-          destinationIdentity: toDestinationIdentity("entry-failed"),
-          error: {
-            errorTag: "DestinationPluginError",
-            kind: "destination" as const,
-            message: "Previous destination write failed",
-          },
-          lastRunId: toMigrationRunId("run-previous"),
-          sourceIdentity: articleSourceIdentity("article-failed"),
-          status: "failed" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-        const skippedState = {
-          definitionId,
-          lastRunId: toMigrationRunId("run-previous"),
-          skipReason: "Not ready",
-          sourceIdentity: articleSourceIdentity("article-skipped"),
-          sourceVersion: toSourceVersion("source-version-1"),
-          status: "skipped" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-        const failedWithoutDestinationState = {
-          definitionId,
-          error: {
-            errorTag: "SourcePluginError",
-            kind: "source" as const,
-            message: "Previous source lookup failed",
-          },
-          lastRunId: toMigrationRunId("run-previous"),
-          sourceIdentity: articleSourceIdentity(
-            "article-failed-without-destination"
-          ),
-          status: "failed" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-        const trackingOnlyNeedsUpdateState = {
-          definitionId,
-          lastRunId: toMigrationRunId("run-previous"),
-          reason: "Migration Reference Stub requires update",
-          sourceIdentity: articleSourceIdentity(
-            "article-tracking-only-needs-update"
-          ),
-          status: "needs-update" as const,
-          trackingRecord: {
-            entryId: "entry-tracking-only",
-            locale: "en-US",
-          },
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-        const rollbackStatuses: string[] = [];
-
-        for (const itemState of [
-          needsUpdateState,
-          failedWithDestinationState,
-          skippedState,
-          failedWithoutDestinationState,
-          trackingOnlyNeedsUpdateState,
-        ]) {
-          storeState.itemStates.set(
-            InMemoryMigrationStore.itemStateKey(
-              itemState.definitionId,
-              itemState.sourceIdentity.encoded
-            ),
-            itemState
-          );
-        }
-
-        const definition = defineMigration({
-          id: definitionId,
-          source: makeTestInMemorySource({
-            items: [],
-            sourceSchema: ArticleSource,
-          }),
-          destination,
-          store,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: (state) => {
-            rollbackStatuses.push(state.status);
-
-            return {
-              contentType: "article",
-              kind: "PublishEntry" as const,
-            };
-          },
-        });
-
-        const summary = yield* rollbackMigration(definition);
-
-        expect(summary.status).toBe("succeeded");
-        expect(summary.definitions[0]?.counts).toEqual({
-          rolledBack: 5,
-          failed: 0,
-          skipped: 0,
-        });
-        expect(rollbackStatuses).toEqual([
-          "needs-update",
-          "failed",
-          "skipped",
-          "failed",
-          "needs-update",
-        ]);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              needsUpdateState.sourceIdentity.encoded
-            )
-          )
-        ).toBe(false);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              failedWithDestinationState.sourceIdentity.encoded
-            )
-          )
-        ).toBe(false);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              skippedState.sourceIdentity.encoded
-            )
-          )
-        ).toBe(false);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              failedWithoutDestinationState.sourceIdentity.encoded
-            )
-          )
-        ).toBe(false);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(
-              definitionId,
-              trackingOnlyNeedsUpdateState.sourceIdentity.encoded
-            )
-          )
-        ).toBe(false);
-        expect(destinationState.executeAttempts).toBe(5);
-      })
-  );
-
-  it.effect(
-    "rejects identity-bearing rollback command plans before execution",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const store = InMemoryMigrationStore.layer(storeState);
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const destination = makeTestEntryDestination({
-          state: destinationState,
-        });
-        const definitionId = toMigrationDefinitionId("articles");
-        const sourceIdentity = toEncodedSourceIdentity(
-          "article-identity-command"
-        );
-        const itemState = {
-          definitionId,
-          destinationIdentity: toDestinationIdentity("entry-identity-command"),
-          lastRunId: toMigrationRunId("run-previous"),
-          sourceIdentity: SourceIdentity.fromEncoded(
-            ArticleSourceIdentity,
-            sourceIdentity
-          ),
-          sourceVersion: toSourceVersion("source-version-1"),
-          status: "migrated" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-        storeState.itemStates.set(
-          InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity),
-          itemState
-        );
-
-        const definition = defineMigration({
-          id: definitionId,
-          source: makeTestInMemorySource({
-            items: [],
-            sourceSchema: ArticleSource,
-          }),
-          destination,
-          store,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "article",
-            fields: {
-              title: "must not recreate identity",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-        });
-
-        const summary = yield* rollbackMigration(definition);
-
-        expect(summary.status).toBe("failed");
-        expect(summary.definitions[0]?.counts).toEqual({
-          rolledBack: 0,
-          failed: 1,
-          skipped: 0,
-        });
-        expect(destinationState.executeAttempts).toBe(0);
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity)
-          )
-        ).toEqual({
-          ...itemState,
-          journal: {
-            process: {
-              entries: [],
-              runId: itemState.lastRunId,
-            },
-            rollbackAttempts: [
-              expect.objectContaining({
-                entries: [],
-                error: {
-                  details: [
-                    {
-                      message: "Identity-bearing command: UpsertEntry",
-                    },
-                  ],
-                  errorTag: "DestinationCommandPlanError",
-                  kind: "destination",
-                  message:
-                    "Rollback Destination Command Plan must not contain identity-bearing Destination Commands",
-                },
-                failedAt: expect.any(Date),
-                runId: summary.runId,
-              }),
-            ],
-          },
-        });
-      })
-  );
-
-  it.effect("fails empty rollback command plans before execution", () =>
-    Effect.gen(function* () {
-      const storeState = InMemoryMigrationStore.makeState();
-      const store = InMemoryMigrationStore.layer(storeState);
-      const destinationState = makeTestDestinationState<EntryCommand>();
-      const destination = makeTestEntryDestination({
-        state: destinationState,
-      });
-      const definitionId = toMigrationDefinitionId("articles");
-      const sourceIdentity = toEncodedSourceIdentity("article-empty-plan");
-      const itemState = {
-        definitionId,
-        destinationIdentity: toDestinationIdentity("entry-empty-plan"),
-        lastRunId: toMigrationRunId("run-previous"),
-        sourceIdentity: SourceIdentity.fromEncoded(
-          ArticleSourceIdentity,
-          sourceIdentity
-        ),
-        sourceVersion: toSourceVersion("source-version-1"),
-        status: "migrated" as const,
-        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-      };
-      storeState.itemStates.set(
-        InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity),
-        itemState
-      );
-
-      const definition = defineMigration({
-        id: definitionId,
-        source: makeTestInMemorySource({
-          items: [],
-          sourceSchema: ArticleSource,
-        }),
-        destination,
-        store,
-        pipeline: () => ({
-          contentType: "article",
-          fields: {
-            title: "unused",
-          },
-          kind: "UpsertEntry" as const,
-        }),
-        rollback: () => [] as readonly EntryCommand[],
-      });
-
-      const summary = yield* rollbackMigration(definition);
-
-      expect(summary.status).toBe("failed");
-      expect(summary.definitions[0]?.counts).toEqual({
-        rolledBack: 0,
-        failed: 1,
-        skipped: 0,
-      });
-      expect(destinationState.executeAttempts).toBe(0);
-      expect(
-        storeState.itemStates.get(
-          InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity)
-        )
-      ).toEqual({
-        ...itemState,
-        journal: {
-          process: {
-            entries: [],
-            runId: itemState.lastRunId,
-          },
-          rollbackAttempts: [
-            expect.objectContaining({
-              entries: [],
-              error: {
-                errorTag: "DestinationCommandPlanError",
-                kind: "destination",
-                message:
-                  "Destination Command Plan must contain at least one Destination Command",
-              },
-              failedAt: expect.any(Date),
-              runId: summary.runId,
-            }),
-          ],
-        },
-      });
-    })
-  );
-
-  it.effect(
-    "ignores destination identity and version returned by rollback command execution",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const store = InMemoryMigrationStore.layer(storeState);
-        const destination = makeTestEntryDestination({
-          execute: () => ({
-            destinationIdentity: "entry-returned-during-rollback",
-            destinationVersion: "version-returned-during-rollback",
-          }),
-        });
-        const definitionId = toMigrationDefinitionId("articles");
-        const sourceIdentity = toEncodedSourceIdentity(
-          "article-returned-identity"
-        );
-        const itemState = {
-          definitionId,
-          destinationIdentity: toDestinationIdentity("entry-original"),
-          lastRunId: toMigrationRunId("run-previous"),
-          sourceIdentity: SourceIdentity.fromEncoded(
-            ArticleSourceIdentity,
-            sourceIdentity
-          ),
-          sourceVersion: toSourceVersion("source-version-1"),
-          status: "migrated" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-        storeState.itemStates.set(
-          InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity),
-          itemState
-        );
-
-        const definition = defineMigration({
-          id: definitionId,
-          source: makeTestInMemorySource({
-            items: [],
-            sourceSchema: ArticleSource,
-          }),
-          destination,
-          store,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "article",
-            kind: "PublishEntry" as const,
-          }),
-        });
-
-        const summary = yield* rollbackMigration(definition);
-
-        expect(summary.status).toBe("succeeded");
-        expect(summary.definitions[0]?.counts).toEqual({
-          rolledBack: 1,
-          failed: 0,
-          skipped: 0,
-        });
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity)
-          )
-        ).toBe(false);
-      })
-  );
-
-  it.effect(
-    "fails preflight before creating a run when selected state has no rollback pipeline",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const store = InMemoryMigrationStore.layer(storeState);
-        const destination = makeTestEntryDestination();
-        const definitionId = toMigrationDefinitionId("articles");
-        const sourceIdentity = toEncodedSourceIdentity(
-          "article-missing-rollback"
-        );
-        storeState.itemStates.set(
-          InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity),
-          {
-            definitionId,
-            destinationIdentity: toDestinationIdentity(
-              "entry-missing-rollback"
-            ),
-            lastRunId: toMigrationRunId("run-previous"),
-            sourceIdentity: SourceIdentity.fromEncoded(
-              ArticleSourceIdentity,
-              sourceIdentity
-            ),
-            sourceVersion: toSourceVersion("source-version-1"),
-            status: "migrated",
-            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-          }
-        );
-        const definition = defineMigration({
-          id: definitionId,
-          source: makeTestInMemorySource({
-            items: [],
-            sourceSchema: ArticleSource,
-          }),
-          destination,
-          store,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-        });
-
-        const error = yield* Effect.flip(rollbackMigration(definition));
-
-        expect(error).toBeInstanceOf(RollbackPreflightError);
-        expect(error).toEqual(
-          expect.objectContaining({
-            message: "Migration Definition does not define a rollback pipeline",
-          })
-        );
-        expect(storeState.latestRunStates.has(definitionId)).toBe(false);
-      })
-  );
-
-  it.effect(
-    "checks missing rollback pipeline preflight after acquiring the definition lock",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const definitionId = toMigrationDefinitionId("articles");
-        const sourceIdentity = toEncodedSourceIdentity("article-after-lock");
-        const migratedState = {
-          definitionId,
-          destinationIdentity: toDestinationIdentity("entry-after-lock"),
-          lastRunId: toMigrationRunId("run-previous"),
-          sourceIdentity: SourceIdentity.fromEncoded(
-            ArticleSourceIdentity,
-            sourceIdentity
-          ),
-          sourceVersion: toSourceVersion("source-version-1"),
-          status: "migrated" as const,
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-        };
-        const store = Layer.effect(
-          MigrationStore,
-          Effect.gen(function* () {
-            const baseStore = yield* MigrationStore;
-
-            return {
-              ...baseStore,
-              acquireDefinitionLock: (id, ownerRunId) =>
-                baseStore.acquireDefinitionLock(id, ownerRunId).pipe(
-                  Effect.tap(() =>
-                    Effect.sync(() => {
-                      storeState.itemStates.set(
-                        InMemoryMigrationStore.itemStateKey(
-                          definitionId,
-                          sourceIdentity
-                        ),
-                        migratedState
-                      );
-                    })
-                  )
-                ),
-            };
-          })
-        ).pipe(Layer.provide(InMemoryMigrationStore.layer(storeState)));
-
-        const definition = defineMigration({
-          id: definitionId,
-          source: makeTestInMemorySource({
-            items: [],
-            sourceSchema: ArticleSource,
-          }),
-          destination: makeTestEntryDestination(),
-          store,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-        });
-
-        const error = yield* Effect.flip(rollbackMigration(definition));
-
-        expect(error).toBeInstanceOf(RollbackPreflightError);
-        expect(error).toEqual(
-          expect.objectContaining({
-            message: "Migration Definition does not define a rollback pipeline",
-          })
-        );
-        expect(storeState.latestRunStates.has(definitionId)).toBe(false);
-        expect(storeState.definitionLocks.has(definitionId)).toBe(false);
-      })
   );
 });
 
@@ -9201,15 +5968,10 @@ describe("rollbackMigrations", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const destination = makeTestEntryDestination({
-          state: destinationState,
-        });
         const authorsId = toMigrationDefinitionId("authors");
         const articlesId = toMigrationDefinitionId("articles");
         const authorState = {
           definitionId: authorsId,
-          destinationIdentity: toDestinationIdentity("entry-author-1"),
           lastRunId: toMigrationRunId("run-previous"),
           sourceIdentity: articleSourceIdentity("author-1"),
           sourceVersion: toSourceVersion("source-version-1"),
@@ -9218,7 +5980,6 @@ describe("rollbackMigrations", () => {
         };
         const articleState = {
           definitionId: articlesId,
-          destinationIdentity: toDestinationIdentity("entry-article-1"),
           lastRunId: toMigrationRunId("run-previous"),
           sourceIdentity: articleSourceIdentity("article-1"),
           sourceVersion: toSourceVersion("source-version-1"),
@@ -9242,19 +6003,9 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination,
           store,
-          pipeline: () => ({
-            contentType: "author",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "author",
-            kind: "PublishEntry" as const,
-          }),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
         const articles = defineMigration({
           id: articlesId,
@@ -9263,19 +6014,9 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination,
           store,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "article",
-            kind: "PublishEntry" as const,
-          }),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
 
         expectTypeOf(
@@ -9310,34 +6051,6 @@ describe("rollbackMigrations", () => {
             status: "succeeded",
           },
         ]);
-        expect(
-          destinationState.executions.map(
-            (execution) => execution.context.definitionId
-          )
-        ).toEqual([articlesId, authorsId]);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(
-              articlesId,
-              articleState.sourceIdentity.encoded
-            )
-          )
-        ).toBe(false);
-        expect(
-          storeState.itemStates.has(
-            InMemoryMigrationStore.itemStateKey(
-              authorsId,
-              authorState.sourceIdentity.encoded
-            )
-          )
-        ).toBe(false);
-        expect(storeState.latestRunStates.get(articlesId)).toEqual(
-          expect.objectContaining({
-            definitionIds: [authorsId, articlesId],
-            runId: summary.runId,
-            status: "succeeded",
-          })
-        );
         expect(storeState.latestRunStates.get(authorsId)).toEqual(
           expect.objectContaining({
             definitionIds: [authorsId, articlesId],
@@ -9353,16 +6066,11 @@ describe("rollbackMigrations", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const destination = makeTestEntryDestination({
-          state: destinationState,
-        });
         const definitionId = toMigrationDefinitionId("articles");
         const targetedIdentity = toEncodedSourceIdentity("article-targeted");
         const untouchedIdentity = toEncodedSourceIdentity("article-untouched");
         const targetedState = {
           definitionId,
-          destinationIdentity: toDestinationIdentity("entry-targeted"),
           lastRunId: toMigrationRunId("run-previous"),
           sourceIdentity: SourceIdentity.fromEncoded(
             ArticleSourceIdentity,
@@ -9374,7 +6082,6 @@ describe("rollbackMigrations", () => {
         };
         const untouchedState = {
           definitionId,
-          destinationIdentity: toDestinationIdentity("entry-untouched"),
           lastRunId: toMigrationRunId("run-previous"),
           sourceIdentity: SourceIdentity.fromEncoded(
             ArticleSourceIdentity,
@@ -9401,19 +6108,9 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination,
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "article",
-            kind: "PublishEntry" as const,
-          }),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
 
         const summary = yield* rollbackMigrations({
@@ -9427,10 +6124,6 @@ describe("rollbackMigrations", () => {
           failed: 0,
           skipped: 0,
         });
-        expect(destinationState.executions).toHaveLength(1);
-        expect(destinationState.executions[0]?.context.sourceIdentity).toBe(
-          targetedIdentity
-        );
         expect(
           storeState.itemStates.has(
             InMemoryMigrationStore.itemStateKey(definitionId, targetedIdentity)
@@ -9468,17 +6161,12 @@ describe("rollbackMigrations", () => {
             };
           })
         ).pipe(Layer.provide(InMemoryMigrationStore.layer(storeState)));
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const destination = makeTestEntryDestination({
-          state: destinationState,
-        });
         const authorsId = toMigrationDefinitionId("authors");
         const articlesId = toMigrationDefinitionId("articles");
 
         for (const itemState of [
           {
             definitionId: authorsId,
-            destinationIdentity: toDestinationIdentity("entry-author-1"),
             lastRunId: toMigrationRunId("run-previous"),
             sourceIdentity: articleSourceIdentity("author-1"),
             sourceVersion: toSourceVersion("source-version-1"),
@@ -9487,7 +6175,6 @@ describe("rollbackMigrations", () => {
           },
           {
             definitionId: articlesId,
-            destinationIdentity: toDestinationIdentity("entry-article-1"),
             lastRunId: toMigrationRunId("run-previous"),
             sourceIdentity: articleSourceIdentity("article-1"),
             sourceVersion: toSourceVersion("source-version-1"),
@@ -9510,19 +6197,9 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination,
           store,
-          pipeline: () => ({
-            contentType: "author",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "author",
-            kind: "PublishEntry" as const,
-          }),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
         const articles = defineMigration({
           id: articlesId,
@@ -9531,19 +6208,9 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination,
           store,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "article",
-            kind: "PublishEntry" as const,
-          }),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
 
         const error = yield* Effect.flip(
@@ -9563,7 +6230,6 @@ describe("rollbackMigrations", () => {
         expect(acquiredDefinitionIds).toEqual([authorsId]);
         expect(storeState.latestRunStates.size).toBe(0);
         expect(storeState.definitionLocks.size).toBe(0);
-        expect(destinationState.executions).toEqual([]);
       })
   );
 
@@ -9575,15 +6241,10 @@ describe("rollbackMigrations", () => {
         const articlesStoreState = InMemoryMigrationStore.makeState();
         const authorsStore = InMemoryMigrationStore.layer(authorsStoreState);
         const articlesStore = InMemoryMigrationStore.layer(articlesStoreState);
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const destination = makeTestEntryDestination({
-          state: destinationState,
-        });
         const authorsId = toMigrationDefinitionId("authors");
         const articlesId = toMigrationDefinitionId("articles");
         const articleState = {
           definitionId: articlesId,
-          destinationIdentity: toDestinationIdentity("entry-article-1"),
           lastRunId: toMigrationRunId("run-previous"),
           sourceIdentity: articleSourceIdentity("article-1"),
           sourceVersion: toSourceVersion("source-version-1"),
@@ -9604,19 +6265,9 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination,
           store: authorsStore,
-          pipeline: () => ({
-            contentType: "author",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "author",
-            kind: "PublishEntry" as const,
-          }),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
         const articles = defineMigration({
           id: articlesId,
@@ -9625,19 +6276,9 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination,
           store: articlesStore,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "article",
-            kind: "PublishEntry" as const,
-          }),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
 
         const error = yield* Effect.flip(
@@ -9656,7 +6297,6 @@ describe("rollbackMigrations", () => {
         );
         expect(authorsStoreState.latestRunStates.size).toBe(0);
         expect(articlesStoreState.latestRunStates.size).toBe(0);
-        expect(destinationState.executions).toEqual([]);
       })
   );
 
@@ -9666,7 +6306,6 @@ describe("rollbackMigrations", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
-        const destination = makeTestEntryDestination();
         const authorsId = toMigrationDefinitionId("authors");
         const articlesId = toMigrationDefinitionId("articles");
         const commentsId = toMigrationDefinitionId("comments");
@@ -9677,19 +6316,9 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination,
           store,
-          pipeline: () => ({
-            contentType: "author",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "author",
-            kind: "PublishEntry" as const,
-          }),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
         const articles = defineMigration({
           id: articlesId,
@@ -9698,19 +6327,9 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination,
           store,
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "article",
-            kind: "PublishEntry" as const,
-          }),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
         const comments = defineMigration({
           id: commentsId,
@@ -9719,19 +6338,9 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination,
           store,
-          pipeline: () => ({
-            contentType: "comment",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "comment",
-            kind: "PublishEntry" as const,
-          }),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
 
         const error = yield* Effect.flip(
@@ -9755,16 +6364,11 @@ describe("rollbackMigrations", () => {
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
       const store = InMemoryMigrationStore.layer(storeState);
-      const destinationState = makeTestDestinationState<EntryCommand>();
-      const destination = makeTestEntryDestination({
-        state: destinationState,
-      });
       const authorsId = toMigrationDefinitionId("authors");
       const articlesId = toMigrationDefinitionId("articles");
       const lockObservations: string[] = [];
       const authorState = {
         definitionId: authorsId,
-        destinationIdentity: toDestinationIdentity("entry-author-1"),
         lastRunId: toMigrationRunId("run-previous"),
         sourceIdentity: articleSourceIdentity("author-1"),
         sourceVersion: toSourceVersion("source-version-1"),
@@ -9807,22 +6411,12 @@ describe("rollbackMigrations", () => {
           items: [],
           sourceSchema: ArticleSource,
         }),
-        destination,
         store,
-        pipeline: () => ({
-          contentType: "author",
-          fields: {
-            title: "unused",
-          },
-          kind: "UpsertEntry" as const,
-        }),
+        process: () => Effect.void,
         rollback: () => {
           observeLocks();
 
-          return {
-            contentType: "author",
-            kind: "PublishEntry" as const,
-          };
+
         },
       });
       const articles = defineMigration({
@@ -9832,15 +6426,8 @@ describe("rollbackMigrations", () => {
           items: [],
           sourceSchema: ArticleSource,
         }),
-        destination,
         store,
-        pipeline: () => ({
-          contentType: "article",
-          fields: {
-            title: "unused",
-          },
-          kind: "UpsertEntry" as const,
-        }),
+        process: () => Effect.void,
       });
 
       const error = yield* Effect.flip(
@@ -9891,15 +6478,8 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination: makeTestEntryDestination(),
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
+          process: () => Effect.void,
         });
 
         const summary = yield* rollbackMigrations({
@@ -9936,7 +6516,6 @@ describe("rollbackMigrations", () => {
         InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity),
         {
           definitionId,
-          destinationIdentity: toDestinationIdentity("entry-forward-only"),
           lastRunId: toMigrationRunId("run-previous"),
           sourceIdentity: SourceIdentity.fromEncoded(
             ArticleSourceIdentity,
@@ -9953,15 +6532,8 @@ describe("rollbackMigrations", () => {
           items: [],
           sourceSchema: ArticleSource,
         }),
-        destination: makeTestEntryDestination(),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: () => ({
-          contentType: "article",
-          fields: {
-            title: "unused",
-          },
-          kind: "UpsertEntry" as const,
-        }),
+        process: () => Effect.void,
       });
 
       const error = yield* Effect.flip(
@@ -9973,7 +6545,7 @@ describe("rollbackMigrations", () => {
       expect(error).toBeInstanceOf(RollbackPreflightError);
       expect(error).toEqual(
         expect.objectContaining({
-          message: "Migration Definition does not define a rollback pipeline",
+          message: "Migration Definition does not define a rollback process",
         })
       );
       expect(storeState.latestRunStates.size).toBe(0);
@@ -9990,19 +6562,9 @@ describe("rollbackMigrations", () => {
           items: [],
           sourceSchema: ArticleSource,
         }),
-        destination: makeTestEntryDestination(),
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: () => ({
-          contentType: "article",
-          fields: {
-            title: "unused",
-          },
-          kind: "UpsertEntry" as const,
-        }),
-        rollback: () => ({
-          contentType: "article",
-          kind: "PublishEntry" as const,
-        }),
+        process: () => Effect.void,
+        rollback: () => undefined,
       });
 
       const error = yield* Effect.flip(
@@ -10035,19 +6597,9 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination: makeTestEntryDestination(),
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: () => ({
-            contentType: "article",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "article",
-            kind: "PublishEntry" as const,
-          }),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
 
         const error = yield* Effect.flip(
@@ -10073,15 +6625,10 @@ describe("rollbackMigrations", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
-        const destinationState = makeTestDestinationState<EntryCommand>();
-        const destination = makeTestEntryDestination({
-          state: destinationState,
-        });
         const authorsId = toMigrationDefinitionId("authors");
         const articlesId = toMigrationDefinitionId("articles");
         const authorState = {
           definitionId: authorsId,
-          destinationIdentity: toDestinationIdentity("entry-author-1"),
           lastRunId: toMigrationRunId("run-previous"),
           sourceIdentity: articleSourceIdentity("author-1"),
           sourceVersion: toSourceVersion("source-version-1"),
@@ -10090,7 +6637,6 @@ describe("rollbackMigrations", () => {
         };
         const omittedArticleState = {
           definitionId: articlesId,
-          destinationIdentity: toDestinationIdentity("entry-article-1"),
           lastRunId: toMigrationRunId("run-previous"),
           sourceIdentity: articleSourceIdentity("article-1"),
           sourceVersion: toSourceVersion("source-version-1"),
@@ -10114,19 +6660,9 @@ describe("rollbackMigrations", () => {
             items: [],
             sourceSchema: ArticleSource,
           }),
-          destination,
           store,
-          pipeline: () => ({
-            contentType: "author",
-            fields: {
-              title: "unused",
-            },
-            kind: "UpsertEntry" as const,
-          }),
-          rollback: () => ({
-            contentType: "author",
-            kind: "PublishEntry" as const,
-          }),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
 
         const summary = yield* rollbackMigrations({
@@ -10154,11 +6690,6 @@ describe("rollbackMigrations", () => {
             )
           )
         ).toEqual(omittedArticleState);
-        expect(
-          destinationState.executions.map(
-            (execution) => execution.context.definitionId
-          )
-        ).toEqual([authorsId]);
       })
   );
 });

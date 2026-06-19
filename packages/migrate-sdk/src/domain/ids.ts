@@ -672,18 +672,6 @@ export const EncodedSourceCursor = Schema.String.pipe(
 export type EncodedSourceCursor = typeof EncodedSourceCursor.Type;
 export type EncodedSourceCursorInput = string | EncodedSourceCursor;
 
-export const DestinationIdentity = Schema.NonEmptyString.pipe(
-  Schema.brand("DestinationIdentity")
-);
-export type DestinationIdentity = typeof DestinationIdentity.Type;
-export type DestinationIdentityInput = string | DestinationIdentity;
-
-export const DestinationVersion = Schema.NonEmptyString.pipe(
-  Schema.brand("DestinationVersion")
-);
-export type DestinationVersion = typeof DestinationVersion.Type;
-export type DestinationVersionInput = string | DestinationVersion;
-
 export const MigrationDefinitionLockToken = Schema.NonEmptyString.pipe(
   Schema.brand("MigrationDefinitionLockToken")
 );
@@ -710,14 +698,6 @@ export const toSourceVersion = (value: SourceVersionInput): SourceVersion =>
 export const toEncodedSourceCursor = (
   value: EncodedSourceCursorInput
 ): EncodedSourceCursor => EncodedSourceCursor.make(value);
-
-export const toDestinationIdentity = (
-  value: DestinationIdentityInput
-): DestinationIdentity => DestinationIdentity.make(value);
-
-export const toDestinationVersion = (
-  value: DestinationVersionInput
-): DestinationVersion => DestinationVersion.make(value);
 
 export const toMigrationDefinitionLockToken = (
   value: MigrationDefinitionLockTokenInput

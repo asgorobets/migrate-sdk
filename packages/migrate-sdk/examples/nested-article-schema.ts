@@ -5,7 +5,6 @@ import {
   runMigration,
   SourceIdentity,
 } from "migrate-sdk";
-import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
@@ -60,25 +59,10 @@ const ArticleEntryFields = Schema.Struct({
   views: Schema.Number,
 });
 
-const makeArticleDestinationFixture = () =>
-  InMemoryDestinationTesting.fixtureEntries({
-    contentType: "article",
-    commands: {
-      publishEntry: true,
-      upsertEntry: { fields: ArticleEntryFields },
-    },
-  });
-
-type ArticleDestinationFixture = ReturnType<
-  typeof makeArticleDestinationFixture
->;
-type ArticleUpsertCommand = Extract<
-  ReturnType<ArticleDestinationFixture["executions"]>[number]["command"],
-  { readonly kind: "UpsertEntry" }
->;
+type ArticleEntryFields = typeof ArticleEntryFields.Type;
 
 export interface NestedArticleSchemaExampleResult {
-  readonly commandFields: readonly ArticleUpsertCommand["fields"][];
+  readonly commandFields: readonly ArticleEntryFields[];
   readonly summary: MigrationRunSummary;
 }
 
@@ -112,8 +96,7 @@ const sourceItems = [
 ] as const;
 
 export const makeNestedArticleSchemaMigration = () => {
-  const destinationFixture = makeArticleDestinationFixture();
-  const { destination } = destinationFixture;
+  const commandFields: ArticleEntryFields[] = [];
 
   const migration = defineMigration({
     id: "nested-articles",
@@ -122,16 +105,15 @@ export const makeNestedArticleSchemaMigration = () => {
       items: sourceItems,
       sourceSchema: NestedArticle,
     }),
-    destination,
     store: InMemoryMigrationStore.layer(),
-    pipeline: (source) => {
+    process: (source) => {
       const article = source.item;
       const authorDisplayName = article.author.displayName;
       const tagLabels = article.tags.map((tag) => tag.label);
       const views = article.metrics.views;
       const readingTimeMinutes = article.metrics.readingTimeMinutes;
 
-      return destination.commands.upsertEntry({
+      commandFields.push({
         authorDisplayName,
         locale: article.locale,
         readingTimeMinutes,
@@ -145,23 +127,17 @@ export const makeNestedArticleSchemaMigration = () => {
     },
   });
 
-  return { destinationFixture, migration };
+  return { commandFields, migration };
 };
 
 export const runNestedArticleSchemaExample = Effect.fn(
   "runNestedArticleSchemaExample"
 )(function* () {
-  const { destinationFixture, migration } = makeNestedArticleSchemaMigration();
+  const { commandFields, migration } = makeNestedArticleSchemaMigration();
   const summary = yield* runMigration(migration);
 
   return {
-    commandFields: destinationFixture
-      .executions()
-      .flatMap((execution) =>
-        execution.command.kind === "UpsertEntry"
-          ? [execution.command.fields]
-          : []
-      ),
+    commandFields,
     summary,
   } satisfies NestedArticleSchemaExampleResult;
 });
@@ -173,7 +149,7 @@ export const formatNestedArticleSchemaExampleResult = (
     "Nested Article Source Schema Example",
     formatMigrationRunSummary(result.summary),
     "",
-    "Decoded Destination Command Fields",
+    "Decoded Destination Entry Fields",
     ...result.commandFields.map((fields, index) =>
       [
         `article ${index + 1}: ${fields.title}`,

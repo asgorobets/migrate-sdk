@@ -102,7 +102,6 @@ export const DestinationJournalRollbackAttemptError = Schema.Struct({
     "source",
     "tracking",
     "process",
-    "pipeline",
     "destination",
   ]),
   errorTag: Schema.String,

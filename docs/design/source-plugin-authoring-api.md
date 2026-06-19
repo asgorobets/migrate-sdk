@@ -147,18 +147,13 @@ examples/api-source/
 Migration authors should mostly see the migration wiring:
 
 ```ts
-const destination = InMemoryDestinationPlugin.makeEntries({
+const destination = InMemoryDestination.makeEntries({
   contentType: "post",
-  commands: {
-    publishEntry: true,
-    upsertEntry: {
-      fields: Schema.Struct({
-        authorId: Schema.Number,
-        body: Schema.String,
-        title: Schema.String,
-      }),
-    },
-  },
+  fields: Schema.Struct({
+    authorId: Schema.Number,
+    body: Schema.String,
+    title: Schema.String,
+  }),
 });
 
 const source = JsonPlaceholderPostSourcePlugin.make();
@@ -166,10 +161,9 @@ const source = JsonPlaceholderPostSourcePlugin.make();
 const migration = defineMigration({
   id: "jsonplaceholder-posts",
   source,
-  destination,
   store,
-  pipeline: (sourceItem) =>
-    destination.commands.upsertEntry({
+  process: (sourceItem) =>
+    destination.entries.upsert({
       authorId: sourceItem.item.userId,
       body: sourceItem.item.body,
       title: sourceItem.item.title,
@@ -352,7 +346,7 @@ const CsvArticleSource = Schema.Struct({
 ```
 
 The runtime decodes every emitted `sourceItem.item` with `sourceSchema` before
-unchanged-terminal checks, pipeline execution, and destination command
+unchanged-terminal checks, pipeline execution, and destination effect
 execution. A valid source envelope with an invalid payload becomes a failed item
 state with source error details.
 

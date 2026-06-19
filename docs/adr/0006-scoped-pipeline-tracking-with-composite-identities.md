@@ -2,7 +2,7 @@
 
 Migration definitions will use composite-capable source identities, scoped
 process execution, and optional tracking record contracts instead of relying on
-destination plugins or returned command plans to decide durable tracking state.
+destination plugins or returned returned destination work to decide durable tracking state.
 The runtime owns migration item state, while the process pipeline performs
 destination effects inside a scope that records destination changes and
 diagnostics in a journal; the migration definition decides whether successful
@@ -22,7 +22,7 @@ The API direction is expanded in
 
 ## Considered Options
 
-- Keep the current command-plan model where a process pipeline returns destination commands and the runtime infers one primary destination identity from identity-bearing command results.
+- Keep the current removed destination model where a process pipeline returns destination effects and the runtime infers one primary destination identity from identity-bearing command results.
 - Let destination plugins decide whether their commands are tracked or untracked.
 - Require process pipelines to return final migration outcomes.
 - Use an Effect PubSub as the canonical tracking mechanism for destination changes.
@@ -108,7 +108,7 @@ operation, its durable journal append is not suppressed by Effect's configured
 minimum log level. Ordinary logs remain observability output and do not become
 migration item state.
 
-Retries are authored inline at the destination helper call site. A process pipeline can retry exactly the effect it wants to retry, such as `ct.products.upsert(input).pipe(RetryOnNetwork)`, instead of relying on a destination-command-plan retry loop outside the process.
+Retries are authored inline at the destination helper call site. A process pipeline can retry exactly the effect it wants to retry, such as `ct.products.upsert(input).pipe(RetryOnNetwork)`, instead of relying on a destination-removed destination retry loop outside the process.
 
 The migration store records a migration contract for each migration definition.
 The hard migration contract covers the source identity contract, tracking
@@ -176,7 +176,7 @@ const migration = defineMigration({
       address: Schema.String,
     }),
   }),
-  pipeline: Effect.fn(function* (source) {
+  process: Effect.fn(function* (source) {
     const address = yield* ct.addresses
       .upsert(source.item)
       .pipe(RetryOnNetwork)

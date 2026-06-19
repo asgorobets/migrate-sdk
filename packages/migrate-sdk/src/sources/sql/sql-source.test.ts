@@ -6,7 +6,6 @@ import {
   type ConfiguredSourcePlugin,
   defineMigration,
   type EncodedSourceIdentityInput,
-  InMemoryDestinationPlugin,
   InMemoryMigrationStore,
   type MigrationRunSummary,
   type RunMigrationError,
@@ -41,11 +40,6 @@ type SqlArticleCursor = typeof SqlArticleCursor.Type;
 const SqlArticleColumnIdentity = SqlIdentity.columns({
   id: "sql-article@v1",
   columns: [SqlIdentity.column("id", Schema.NonEmptyString)],
-});
-
-const ArticleEntryFields = Schema.Struct({
-  title: Schema.String,
-  views: Schema.Number,
 });
 
 const SqliteArticleRow = Schema.Struct({
@@ -676,23 +670,10 @@ describe("SqlSourcePlugin", () => {
       const fakeSql = makeFakeSqlClient([[articleRows[0]], []]);
       const source = makeSqlArticleSource().provide(fakeSql.layer);
       const storeState = InMemoryMigrationStore.makeState();
-      const destination = InMemoryDestinationPlugin.makeEntries({
-        commands: {
-          upsertEntry: {
-            fields: ArticleEntryFields,
-          },
-        },
-        contentType: "article",
-      });
 
       const definition = defineMigration({
-        destination,
         id: "sql-articles",
-        pipeline: (sourceItem) =>
-          destination.commands.upsertEntry({
-            title: sourceItem.item.title,
-            views: sourceItem.item.views,
-          }),
+        process: () => Effect.void,
         source,
         store: InMemoryMigrationStore.layer(storeState),
       });
@@ -974,33 +955,20 @@ describe("SqlSourcePlugin", () => {
   );
 
   it.effect(
-    "passes decoded SQL rows into the transformation pipeline through the runner",
+    "passes decoded SQL rows into the process through the runner",
     () =>
       Effect.gen(function* () {
         const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([[articleRows[0]], []]);
         const storeState = InMemoryMigrationStore.makeState();
-        const destination = InMemoryDestinationPlugin.makeEntries({
-          commands: {
-            upsertEntry: {
-              fields: ArticleEntryFields,
-            },
-          },
-          contentType: "article",
-        });
         let decodedViews: number | undefined;
 
         const definition = defineMigration({
-          destination,
           id: "sql-articles",
-          pipeline: (sourceItem) => {
+          process: (sourceItem) =>
+            Effect.sync(() => {
             decodedViews = sourceItem.item.views;
-
-            return destination.commands.upsertEntry({
-              title: sourceItem.item.title,
-              views: sourceItem.item.views,
-            });
-          },
+            }),
           source,
           store: InMemoryMigrationStore.layer(storeState),
         });
@@ -1093,29 +1061,16 @@ describe("SqlSourcePlugin", () => {
           sourceSchema: SqliteArticleRow,
         }).provide(sqlite.layer);
         const storeState = InMemoryMigrationStore.makeState();
-        const destination = InMemoryDestinationPlugin.makeEntries({
-          commands: {
-            upsertEntry: {
-              fields: ArticleEntryFields,
-            },
-          },
-          contentType: "article",
-        });
-        const pipelineItems: string[] = [];
+        const processItems: string[] = [];
 
         const definition = defineMigration({
-          destination,
           id: "sqlite-articles",
-          pipeline: (sourceItem) => {
-            pipelineItems.push(
+          process: (sourceItem) =>
+            Effect.sync(() => {
+            processItems.push(
               `${sourceItem.identity.encoded}:${sourceItem.version}:${sourceItem.item.views}`
             );
-
-            return destination.commands.upsertEntry({
-              title: sourceItem.item.title,
-              views: sourceItem.item.views,
-            });
-          },
+            }),
           source,
           store: InMemoryMigrationStore.layer(storeState),
         });
@@ -1134,10 +1089,10 @@ describe("SqlSourcePlugin", () => {
 
         expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts.migrated).toBe(3);
-        expect(pipelineItems).toEqual([
-          "article-a:hash-1:1",
-          "article-b:hash-2:2",
-          "article-c:hash-3:3",
+      expect(processItems).toEqual([
+        "article-a:hash-1:1",
+        "article-b:hash-2:2",
+        "article-c:hash-3:3",
         ]);
         expect(
           sqlite.calls
@@ -1214,35 +1169,22 @@ describe("SqlSourcePlugin", () => {
         sourceSchema: SqliteArticleRow,
       });
       const storeState = InMemoryMigrationStore.makeState();
-      const destination = InMemoryDestinationPlugin.makeEntries({
-        commands: {
-          upsertEntry: {
-            fields: ArticleEntryFields,
-          },
-        },
-        contentType: "article",
-      });
-      const pipelineItems: Array<{
+      const processItems: Array<{
         readonly sourceIdentity: EncodedSourceIdentityInput;
         readonly valueType: string;
         readonly views: number;
       }> = [];
 
       const definition = defineMigration({
-        destination,
         id: "sqlite-real-articles",
-        pipeline: (sourceItem) => {
-          pipelineItems.push({
+        process: (sourceItem) =>
+          Effect.sync(() => {
+          processItems.push({
             sourceIdentity: sourceItem.identity.encoded,
             valueType: typeof sourceItem.item.views,
             views: sourceItem.item.views,
           });
-
-          return destination.commands.upsertEntry({
-            title: sourceItem.item.title,
-            views: sourceItem.item.views,
-          });
-        },
+          }),
         source,
         store: InMemoryMigrationStore.layer(storeState),
       });
@@ -1258,7 +1200,7 @@ describe("SqlSourcePlugin", () => {
 
       expect(summary.status).toBe("succeeded");
       expect(summary.definitions[0]?.counts.migrated).toBe(3);
-      expect(pipelineItems).toEqual([
+      expect(processItems).toEqual([
         { sourceIdentity: "article-a", valueType: "number", views: 1 },
         { sourceIdentity: "article-b", valueType: "number", views: 2 },
         { sourceIdentity: "article-c", valueType: "number", views: 3 },
@@ -1295,27 +1237,14 @@ describe("SqlSourcePlugin", () => {
         } satisfies SqlArticleRow;
         const fakeSql = makeFakeSqlClient([[invalidRow], []]);
         const storeState = InMemoryMigrationStore.makeState();
-        const destination = InMemoryDestinationPlugin.makeEntries({
-          commands: {
-            upsertEntry: {
-              fields: ArticleEntryFields,
-            },
-          },
-          contentType: "article",
-        });
-        let pipelineCalls = 0;
+        let processCalls = 0;
 
         const definition = defineMigration({
-          destination,
           id: "sql-articles",
-          pipeline: (sourceItem) => {
-            pipelineCalls += 1;
-
-            return destination.commands.upsertEntry({
-              title: sourceItem.item.title,
-              views: sourceItem.item.views,
-            });
-          },
+          process: () =>
+            Effect.sync(() => {
+              processCalls += 1;
+            }),
           source,
           store: InMemoryMigrationStore.layer(storeState),
         });
@@ -1329,7 +1258,7 @@ describe("SqlSourcePlugin", () => {
 
         expect(summary.status).toBe("failed");
         expect(summary.definitions[0]?.counts.failed).toBe(1);
-        expect(pipelineCalls).toBe(0);
+        expect(processCalls).toBe(0);
         expect(itemState).toEqual(
           expect.objectContaining({
             status: "failed",

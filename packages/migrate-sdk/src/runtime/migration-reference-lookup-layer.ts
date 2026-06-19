@@ -1,6 +1,5 @@
 import { Cache, Duration, Effect, Exit, Layer, Option, Schema } from "effect";
 import {
-  type DestinationPluginError,
   MigrationReferenceLookupError,
   type MigrationStoreError,
 } from "../domain/errors.ts";
@@ -37,7 +36,7 @@ export type CreateMigrationReferenceStub = (input: {
   readonly sourceIdentity: EncodedSourceIdentity;
 }) => Effect.Effect<
   MigrationReference,
-  DestinationPluginError | MigrationReferenceLookupError | MigrationStoreError
+  MigrationReferenceLookupError | MigrationStoreError
 >;
 
 const stubDefinitionNotInLookupError = (

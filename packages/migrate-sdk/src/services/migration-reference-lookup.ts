@@ -1,7 +1,6 @@
 import type { Effect } from "effect";
 import { Service } from "effect/Context";
 import type {
-  DestinationPluginError,
   MigrationReferenceLookupError,
   MigrationStoreError,
 } from "../domain/errors.ts";
@@ -112,7 +111,7 @@ type MigrationReferenceLookupEffect<
   Reference extends MigrationReference = MigrationReference,
 > = Effect.Effect<
   Reference | null,
-  DestinationPluginError | MigrationReferenceLookupError | MigrationStoreError
+  MigrationReferenceLookupError | MigrationStoreError
 >;
 
 export interface MigrationReferenceLookupService {

@@ -36,7 +36,7 @@ describe("in-memory runtime example", () => {
   );
 
   it.effect(
-    "runs a nested article Source Payload Schema example with typed pipeline fields",
+    "runs a nested article Source Payload Schema example with typed process fields",
     () =>
       Effect.gen(function* () {
         const result = yield* runNestedArticleSchemaExample();

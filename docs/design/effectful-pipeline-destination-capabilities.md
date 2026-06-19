@@ -7,7 +7,7 @@ Status: draft design direction.
 
 This document captures the revised destination API direction where the process
 pipeline is the destination execution unit. It intentionally does not rewrite
-the older command-plan design documents yet.
+older destination execution notes.
 
 Change descriptors, journal tracking, optional materialized tracking records,
 and journal persistence are specified in
@@ -15,13 +15,12 @@ and journal persistence are specified in
 only describes how destination helpers participate in effectful process
 pipelines.
 
-The domain term is **Process Pipeline**; examples may still show the current
-`pipeline` property until implementation renames that authoring slot to
-`process`.
+The domain term is **Process Pipeline**; public migration definitions declare it
+with the `process` property.
 
 ## Summary
 
-Destination command plans should collapse into normal Effect process pipelines.
+Destination helpers run as normal Effect process pipelines.
 Destination plugins should become Effect capability modules: they expose
 effectful destination helpers, typed change descriptors, dependency layers, and
 optional rollback helpers. The migration definition does not need a
@@ -50,7 +49,7 @@ const products = defineMigration({
   source,
   store,
   tracking: ProductTracking,
-  pipeline: Effect.fn("products.pipeline")(function* (source) {
+  process: Effect.fn("products.process")(function* (source) {
     const product = yield* ct.products
       .upsert({
         key: source.item.key,
@@ -73,7 +72,7 @@ Effect composition.
 
 ## Destination Capability Module
 
-A destination module is not a command-plan executor. It is a typed Effect helper
+A destination module is not a runtime executor. It is a typed Effect helper
 package for one destination system or destination area.
 
 ```ts
@@ -142,7 +141,7 @@ const ct = CommercetoolsDestination.make({
 Process-local provision remains valid for advanced cases:
 
 ```ts
-const productsPipeline = Effect.fn("products.pipeline")(function* (source) {
+const productsPipeline = Effect.fn("products.process")(function* (source) {
   yield* ct.products.upsert(source.item).pipe(RetryOnNetwork)
 }).pipe(Effect.provide(CommercetoolsLive.layer))
 ```
@@ -196,11 +195,11 @@ are specified by the tracking spec.
 
 ## Why Not `destination` On The Definition
 
-The previous runtime needed `definition.destination` because the pipeline
-returned command plans:
+The previous runtime needed `definition.destination` because the old authoring
+path returned destination work descriptions:
 
 ```ts
-pipeline -> DestinationCommandPlan
+process authoring -> Effect<void, error, requirements | Tracking>
 runtime -> validate command definitions
 runtime -> execute through DestinationPlugin service
 runtime -> infer destination identity
@@ -215,7 +214,7 @@ runtime -> provide item scope and tracking service
 runtime -> preserve failed-state journal evidence and evaluate tracking records
 ```
 
-If the runtime does not execute destination command plans, a top-level
+If the runtime does not execute destination work outside the process, a top-level
 `destination` key becomes misleading. It suggests the framework owns destination
 execution policy, retries, and identity inference. The new model intentionally
 moves those decisions into normal Effect composition and the tracking model.

@@ -10,10 +10,6 @@ import {
   SourceIdentity,
 } from "migrate-sdk";
 import {
-  type InMemoryDestinationEntry,
-  InMemoryDestinationTesting,
-} from "migrate-sdk/destinations/in-memory/testing";
-import {
   type DocumentFetcherPlatform,
   DocumentFetchers,
   DocumentParsers,
@@ -89,6 +85,15 @@ const AddressEntryFields = Schema.Struct({
   type: Schema.Literals(["billing", "shipping"]),
 });
 
+type BusinessUnitEntryFields = typeof BusinessUnitEntryFields.Type;
+type ContactEntryFields = typeof ContactEntryFields.Type;
+type AddressEntryFields = typeof AddressEntryFields.Type;
+
+interface RecordedEntry<Fields> {
+  readonly fields: Fields;
+  readonly sourceIdentity: string;
+}
+
 const nodePlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
 
 const defaultFilePath = () =>
@@ -128,49 +133,19 @@ const makeCompaniesDocumentFetcher = (options: {
     platform: options.platform ?? nodePlatformLayer,
   });
 
-const makeBusinessUnitDestination = () =>
-  InMemoryDestinationTesting.fixtureEntries({
-    contentType: "business-unit",
-    commands: {
-      upsertEntry: { fields: BusinessUnitEntryFields },
-    },
-  });
-
-const makeContactDestination = () =>
-  InMemoryDestinationTesting.fixtureEntries({
-    contentType: "contact",
-    commands: {
-      upsertEntry: { fields: ContactEntryFields },
-    },
-  });
-
-const makeAddressDestination = () =>
-  InMemoryDestinationTesting.fixtureEntries({
-    contentType: "address",
-    commands: {
-      upsertEntry: { fields: AddressEntryFields },
-    },
-  });
-
-interface MigrationOptions<Destination> {
-  readonly destination?: Destination | undefined;
+interface MigrationOptions<Entry> {
   readonly filePath?: string | undefined;
   readonly platform?: DocumentFetcherPlatform | undefined;
+  readonly recordEntry?: (entry: Entry) => void;
   readonly store?: Layer.Layer<MigrationStore> | undefined;
 }
 
 export const makeBusinessUnitsMigration = (
-  options: MigrationOptions<
-    ReturnType<typeof makeBusinessUnitDestination>["destination"]
-  > = {}
+  options: MigrationOptions<RecordedEntry<BusinessUnitEntryFields>> = {}
 ) => {
-  const destination =
-    options.destination ?? makeBusinessUnitDestination().destination;
-
   return defineMigration({
-    destination,
     id: "companies-business-units",
-    pipeline: (source) => {
+    process: (source) => {
       const businessUnit = source.item.item;
       const billingAddress = businessUnit.addresses.find(
         (address) => address.type === "billing"
@@ -182,13 +157,16 @@ export const makeBusinessUnitsMigration = (
         (contact) => contact.isPrimary
       );
 
-      return destination.commands.upsertEntry({
+      options.recordEntry?.({
+        fields: {
         billingCity: billingAddress?.city ?? null,
         key: businessUnit.key,
         name: businessUnit.name,
         primaryContactEmail: primaryContact?.email ?? null,
         shippingCity: shippingAddress?.city ?? null,
         status: businessUnit.status,
+        },
+        sourceIdentity: source.identity.encoded,
       });
     },
     source: DocumentSourcePlugin.make({
@@ -209,21 +187,16 @@ export const makeBusinessUnitsMigration = (
 };
 
 export const makeContactsMigration = (
-  options: MigrationOptions<
-    ReturnType<typeof makeContactDestination>["destination"]
-  > = {}
+  options: MigrationOptions<RecordedEntry<ContactEntryFields>> = {}
 ) => {
-  const destination =
-    options.destination ?? makeContactDestination().destination;
-
   return defineMigration({
-    destination,
     id: "companies-contacts",
-    pipeline: (source) => {
+    process: (source) => {
       const businessUnit = source.item.parent;
       const contact = source.item.item;
 
-      return destination.commands.upsertEntry({
+      options.recordEntry?.({
+        fields: {
         businessUnitKey: businessUnit.key,
         businessUnitName: businessUnit.name,
         businessUnitStatus: businessUnit.status,
@@ -233,6 +206,8 @@ export const makeContactsMigration = (
         key: contact.key,
         lastName: contact.lastName,
         role: contact.role,
+        },
+        sourceIdentity: source.identity.encoded,
       });
     },
     source: DocumentSourcePlugin.make({
@@ -254,21 +229,16 @@ export const makeContactsMigration = (
 };
 
 export const makeAddressesMigration = (
-  options: MigrationOptions<
-    ReturnType<typeof makeAddressDestination>["destination"]
-  > = {}
+  options: MigrationOptions<RecordedEntry<AddressEntryFields>> = {}
 ) => {
-  const destination =
-    options.destination ?? makeAddressDestination().destination;
-
   return defineMigration({
-    destination,
     id: "companies-addresses",
-    pipeline: (source) => {
+    process: (source) => {
       const businessUnit = source.item.parent;
       const address = source.item.item;
 
-      return destination.commands.upsertEntry({
+      options.recordEntry?.({
+        fields: {
         businessUnitKey: businessUnit.key,
         businessUnitName: businessUnit.name,
         businessUnitStatus: businessUnit.status,
@@ -279,6 +249,8 @@ export const makeAddressesMigration = (
         region: address.region,
         street: address.street,
         type: address.type,
+        },
+        sourceIdentity: source.identity.encoded,
       });
     },
     source: DocumentSourcePlugin.make({
@@ -300,9 +272,9 @@ export const makeAddressesMigration = (
 };
 
 export interface CompaniesDocumentSourceExampleResult {
-  readonly addressEntries: readonly InMemoryDestinationEntry[];
-  readonly businessUnitEntries: readonly InMemoryDestinationEntry[];
-  readonly contactEntries: readonly InMemoryDestinationEntry[];
+  readonly addressEntries: readonly RecordedEntry<AddressEntryFields>[];
+  readonly businessUnitEntries: readonly RecordedEntry<BusinessUnitEntryFields>[];
+  readonly contactEntries: readonly RecordedEntry<ContactEntryFields>[];
   readonly summary: MigrationRunSummary;
 }
 
@@ -313,25 +285,31 @@ export const runCompaniesDocumentSourceExample = Effect.fn(
   readonly platform?: DocumentFetcherPlatform;
 }) {
   const store = InMemoryMigrationStore.layer();
-  const addressDestination = makeAddressDestination();
-  const businessUnitDestination = makeBusinessUnitDestination();
-  const contactDestination = makeContactDestination();
+  const addressEntries: RecordedEntry<AddressEntryFields>[] = [];
+  const businessUnitEntries: RecordedEntry<BusinessUnitEntryFields>[] = [];
+  const contactEntries: RecordedEntry<ContactEntryFields>[] = [];
   const businessUnits = makeBusinessUnitsMigration({
-    destination: businessUnitDestination.destination,
     filePath: options?.filePath,
     platform: options?.platform,
+    recordEntry: (entry) => {
+      businessUnitEntries.push(entry);
+    },
     store,
   });
   const contacts = makeContactsMigration({
-    destination: contactDestination.destination,
     filePath: options?.filePath,
     platform: options?.platform,
+    recordEntry: (entry) => {
+      contactEntries.push(entry);
+    },
     store,
   });
   const addresses = makeAddressesMigration({
-    destination: addressDestination.destination,
     filePath: options?.filePath,
     platform: options?.platform,
+    recordEntry: (entry) => {
+      addressEntries.push(entry);
+    },
     store,
   });
   const summary = yield* runMigrations({
@@ -339,9 +317,9 @@ export const runCompaniesDocumentSourceExample = Effect.fn(
   });
 
   return {
-    addressEntries: Array.from(addressDestination.entries().values()),
-    businessUnitEntries: Array.from(businessUnitDestination.entries().values()),
-    contactEntries: Array.from(contactDestination.entries().values()),
+    addressEntries,
+    businessUnitEntries,
+    contactEntries,
     summary,
   } satisfies CompaniesDocumentSourceExampleResult;
 });

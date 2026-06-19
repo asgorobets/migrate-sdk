@@ -1,10 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, type Layer, Option, Schema } from "effect";
 import {
-  type ConfiguredDestinationPlugin,
-  type DestinationCommand,
   defineMigration,
-  InMemoryDestinationPlugin,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
   type MigrationDefinitionDependenciesInput,
@@ -20,7 +17,6 @@ import {
   type RollbackPipeline,
   RollbackPreflightError,
   SourceIdentity,
-  toDestinationIdentity,
   toEncodedSourceIdentity,
   toMigrationDefinitionId,
   toMigrationRunId,
@@ -36,19 +32,11 @@ const ArticleSourceIdentity = SourceIdentity.make({
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 
-const ArticleEntryFields = Schema.Struct({
-  title: Schema.String,
-});
-
-interface NoopCommand extends DestinationCommand {
-  readonly kind: "Noop";
-}
-
 interface TestDefinitionInput {
   readonly dependencies?: MigrationDefinitionDependenciesInput;
   readonly dependsOn?: readonly MigrationDefinitionIdInput[];
   readonly id: MigrationDefinitionIdInput;
-  readonly rollback?: RollbackPipeline<NoopCommand, never>;
+  readonly rollback?: RollbackPipeline;
 }
 
 const source = InMemorySourcePlugin.make({
@@ -56,7 +44,6 @@ const source = InMemorySourcePlugin.make({
   sourceSchema: ArticleSource,
   items: [],
 });
-const destination = {} as ConfiguredDestinationPlugin<NoopCommand>;
 const store = {} as Layer.Layer<MigrationStore, MigrationStoreError>;
 
 const makeDefinition = (input: TestDefinitionInput) =>
@@ -67,9 +54,8 @@ const makeDefinition = (input: TestDefinitionInput) =>
       : { dependencies: input.dependencies }),
     ...(input.dependsOn === undefined ? {} : { dependsOn: input.dependsOn }),
     source,
-    destination,
     store,
-    pipeline: () => ({ kind: "Noop" }),
+    process: () => Effect.void,
     ...(input.rollback === undefined ? {} : { rollback: input.rollback }),
   });
 
@@ -85,9 +71,8 @@ const makeStatusDefinition = (
       : { dependencies: input.dependencies }),
     ...(input.dependsOn === undefined ? {} : { dependsOn: input.dependsOn }),
     source,
-    destination,
     store: input.store,
-    pipeline: () => ({ kind: "Noop" }),
+    process: () => Effect.void,
   });
 
 const makeRollbackSafetyFixture = () => {
@@ -95,20 +80,10 @@ const makeRollbackSafetyFixture = () => {
   const articlesId = toMigrationDefinitionId("articles");
   const storeState = InMemoryMigrationStore.makeState();
   const store = InMemoryMigrationStore.layer(storeState);
-  const destination = InMemoryDestinationPlugin.makeEntries({
-    contentType: "rollback-safety",
-    commands: {
-      upsertEntry: {
-        fields: ArticleEntryFields,
-      },
-      publishEntry: true,
-    },
-  });
   const previousRunId = toMigrationRunId("run-previous");
   const previousDate = new Date("2026-01-01T00:00:00.000Z");
   const authorState = {
     definitionId: authorsId,
-    destinationIdentity: toDestinationIdentity("entry-author-1"),
     lastRunId: previousRunId,
     sourceIdentity: SourceIdentity.fromKey(ArticleSourceIdentity, "author-1"),
     sourceVersion: toSourceVersion("source-version-1"),
@@ -117,7 +92,6 @@ const makeRollbackSafetyFixture = () => {
   };
   const articleState = {
     definitionId: articlesId,
-    destinationIdentity: toDestinationIdentity("entry-article-1"),
     lastRunId: previousRunId,
     sourceIdentity: SourceIdentity.fromKey(ArticleSourceIdentity, "article-1"),
     sourceVersion: toSourceVersion("source-version-1"),
@@ -142,13 +116,9 @@ const makeRollbackSafetyFixture = () => {
       sourceSchema: ArticleSource,
       items: [],
     }),
-    destination,
     store,
-    pipeline: () =>
-      destination.commands.upsertEntry({
-        title: "unused",
-      }),
-    rollback: () => destination.commands.publishEntry(),
+    process: () => Effect.void,
+    rollback: () => undefined,
   });
   const articles = defineMigration({
     id: articlesId,
@@ -160,13 +130,9 @@ const makeRollbackSafetyFixture = () => {
       sourceSchema: ArticleSource,
       items: [],
     }),
-    destination,
     store,
-    pipeline: () =>
-      destination.commands.upsertEntry({
-        title: "unused",
-      }),
-    rollback: () => destination.commands.publishEntry(),
+    process: () => Effect.void,
+    rollback: () => undefined,
   });
   const registry = MigrationDefinitionRegistry.make({
     definitions: [authors, articles] as const,
@@ -201,7 +167,7 @@ describe("MigrationDefinitionRegistry", () => {
       dependencies: {
         optional: ["asset-cleanup"],
       },
-      rollback: () => Effect.succeed({ kind: "Noop" }),
+      rollback: () => Effect.void,
     });
 
     const registry = MigrationDefinitionRegistry.make({
@@ -466,7 +432,6 @@ describe("MigrationDefinitionRegistry", () => {
           InMemoryMigrationStore.itemStateKey(articlesId, "article-1"),
           {
             definitionId: articlesId,
-            destinationIdentity: toDestinationIdentity("entry-article-1"),
             lastRunId: runId,
             sourceIdentity: SourceIdentity.fromKey(
               ArticleSourceIdentity,
@@ -1036,10 +1001,8 @@ describe("MigrationDefinitionRegistry", () => {
         });
         const businessAddresses = defineMigration({
           id: "business-addresses",
-          source: businessAddressSource,
-          destination,
-          store,
-          pipeline: () => ({ kind: "Noop" }),
+          source: businessAddressSource,          store,
+          process: () => Effect.void,
         });
         const registry = MigrationDefinitionRegistry.make({
           definitions: [businessAddresses] as const,
@@ -1077,10 +1040,8 @@ describe("MigrationDefinitionRegistry", () => {
         });
         const businessAddresses = defineMigration({
           id: "business-addresses",
-          source: businessAddressSource,
-          destination,
-          store,
-          pipeline: () => ({ kind: "Noop" }),
+          source: businessAddressSource,          store,
+          process: () => Effect.void,
         });
         const registry = MigrationDefinitionRegistry.make({
           definitions: [businessAddresses] as const,
@@ -1238,14 +1199,6 @@ describe("MigrationDefinitionRegistry", () => {
   it.effect("runs a valid registry plan through the existing runtime", () =>
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
-      const destination = InMemoryDestinationPlugin.makeEntries({
-        contentType: "article",
-        commands: {
-          upsertEntry: {
-            fields: ArticleEntryFields,
-          },
-        },
-      });
       const articles = defineMigration({
         id: "articles",
         source: InMemorySourcePlugin.make({
@@ -1261,12 +1214,8 @@ describe("MigrationDefinitionRegistry", () => {
             },
           ],
         }),
-        destination,
         store: InMemoryMigrationStore.layer(storeState),
-        pipeline: (sourceItem) =>
-          destination.commands.upsertEntry({
-            title: sourceItem.item.title,
-          }),
+        process: () => Effect.void,
       });
       const registry = MigrationDefinitionRegistry.make({
         definitions: [articles] as const,
@@ -1302,15 +1251,6 @@ describe("MigrationDefinitionRegistry", () => {
           definitionId,
           sourceIdentity
         );
-        const destination = InMemoryDestinationPlugin.makeEntries({
-          contentType: "article",
-          commands: {
-            upsertEntry: {
-              fields: ArticleEntryFields,
-            },
-            publishEntry: true,
-          },
-        });
         const articles = defineMigration({
           id: definitionId,
           source: InMemorySourcePlugin.make({
@@ -1326,13 +1266,9 @@ describe("MigrationDefinitionRegistry", () => {
               },
             ],
           }),
-          destination,
           store: InMemoryMigrationStore.layer(storeState),
-          pipeline: (sourceItem) =>
-            destination.commands.upsertEntry({
-              title: sourceItem.item.title,
-            }),
-          rollback: () => destination.commands.publishEntry(),
+          process: () => Effect.void,
+          rollback: () => undefined,
         });
         const registry = MigrationDefinitionRegistry.make({
           definitions: [articles] as const,
@@ -1453,19 +1389,11 @@ describe("MigrationDefinitionRegistry", () => {
         const articlesId = toMigrationDefinitionId("articles");
         const storeState = InMemoryMigrationStore.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
-        const destination = InMemoryDestinationPlugin.makeEntries({
-          contentType: "rollback-order",
-          commands: {
-            upsertEntry: {
-              fields: ArticleEntryFields,
-            },
-          },
-        });
+        const rollbackOrder: string[] = [];
         const previousRunId = toMigrationRunId("run-previous");
         const previousDate = new Date("2026-01-01T00:00:00.000Z");
         const authorState = {
           definitionId: authorsId,
-          destinationIdentity: toDestinationIdentity("entry-author-1"),
           lastRunId: previousRunId,
           sourceIdentity: SourceIdentity.fromKey(
             ArticleSourceIdentity,
@@ -1477,7 +1405,6 @@ describe("MigrationDefinitionRegistry", () => {
         };
         const articleState = {
           definitionId: articlesId,
-          destinationIdentity: toDestinationIdentity("entry-article-1"),
           lastRunId: previousRunId,
           sourceIdentity: SourceIdentity.fromKey(
             ArticleSourceIdentity,
@@ -1505,15 +1432,11 @@ describe("MigrationDefinitionRegistry", () => {
             sourceSchema: ArticleSource,
             items: [],
           }),
-          destination,
           store,
-          pipeline: () =>
-            destination.commands.upsertEntry({
-              title: "unused",
-            }),
+          process: () => Effect.void,
           rollback: () =>
-            destination.commands.upsertEntry({
-              title: "author rollback",
+            Effect.sync(() => {
+              rollbackOrder.push("authors");
             }),
         });
         const articles = defineMigration({
@@ -1526,15 +1449,11 @@ describe("MigrationDefinitionRegistry", () => {
             sourceSchema: ArticleSource,
             items: [],
           }),
-          destination,
           store,
-          pipeline: () =>
-            destination.commands.upsertEntry({
-              title: "unused",
-            }),
+          process: () => Effect.void,
           rollback: () =>
-            destination.commands.upsertEntry({
-              title: "article rollback",
+            Effect.sync(() => {
+              rollbackOrder.push("articles");
             }),
         });
         const registry = MigrationDefinitionRegistry.make({
@@ -1548,6 +1467,7 @@ describe("MigrationDefinitionRegistry", () => {
         expect(
           summary.definitions.map((definition) => definition.definitionId)
         ).toEqual([articlesId, authorsId]);
+        expect(rollbackOrder).toEqual(["articles", "authors"]);
       })
   );
 });

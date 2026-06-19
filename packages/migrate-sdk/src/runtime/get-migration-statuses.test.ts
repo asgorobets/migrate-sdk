@@ -1,10 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Schedule, Schema } from "effect";
 import {
-  type ConfiguredDestinationPlugin,
   type ConfiguredSourcePlugin,
-  type DestinationCommand,
-  DestinationPlugin,
   DuplicateSourceIdentityStatusWarning,
   defineMigration,
   defineSourcePlugin,
@@ -20,16 +17,11 @@ import {
   type SourceIdentitySnapshotKey,
   SourcePlugin,
   SourcePluginError,
-  toDestinationIdentity,
   toEncodedSourceCursor,
   toMigrationDefinitionId,
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
-
-interface NoopCommand extends DestinationCommand {
-  readonly kind: "Noop";
-}
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -52,15 +44,6 @@ const failingSource = {
   unknown
 >;
 
-const failingDestination = {
-  commandDefinitions: {},
-  layer: Layer.sync(DestinationPlugin, () => {
-    throw new Error(
-      "durable-only status must not initialize destination plugins"
-    );
-  }),
-} as unknown as ConfiguredDestinationPlugin<NoopCommand>;
-
 const makeStatusOnlyDefinition = (
   store: ReturnType<typeof InMemoryMigrationStore.layer>,
   id = "articles"
@@ -68,9 +51,8 @@ const makeStatusOnlyDefinition = (
   defineMigration({
     id,
     source: failingSource,
-    destination: failingDestination,
     store,
-    pipeline: () => ({ kind: "Noop" }),
+    process: () => Effect.void,
   });
 
 const makeStatusScanDefinition = <
@@ -86,9 +68,8 @@ const makeStatusScanDefinition = <
   defineMigration({
     id,
     source,
-    destination: failingDestination,
     store,
-    pipeline: () => ({ kind: "Noop" }),
+    process: () => Effect.void,
   });
 
 const makeObservableSource = ({
@@ -159,7 +140,6 @@ describe("getMigrationStatuses", () => {
       const itemStates: readonly MigrationItemState[] = [
         {
           definitionId,
-          destinationIdentity: toDestinationIdentity("entry-1"),
           lastRunId: runId,
           sourceIdentity: SourceIdentity.fromKey(
             ArticleSourceIdentity,
@@ -184,9 +164,9 @@ describe("getMigrationStatuses", () => {
         {
           definitionId,
           error: {
-            errorTag: "PipelineError",
-            kind: "pipeline",
-            message: "Pipeline failed",
+            errorTag: "ProcessError",
+            kind: "process",
+            message: "Process failed",
           },
           lastRunId: runId,
           sourceIdentity: SourceIdentity.fromKey(
@@ -198,7 +178,6 @@ describe("getMigrationStatuses", () => {
         },
         {
           definitionId,
-          destinationIdentity: toDestinationIdentity("entry-4"),
           lastRunId: runId,
           reason: "Stub requires update",
           sourceIdentity: SourceIdentity.fromKey(
@@ -359,7 +338,6 @@ describe("getMigrationStatuses", () => {
         const storedCursor = toEncodedSourceCursor('{"offset":1}');
         const migratedState: MigrationItemState = {
           definitionId,
-          destinationIdentity: toDestinationIdentity("entry-1"),
           lastRunId: runId,
           sourceIdentity: SourceIdentity.fromKey(
             ArticleSourceIdentity,
@@ -519,7 +497,6 @@ describe("getMigrationStatuses", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const migratedState: MigrationItemState = {
           definitionId,
-          destinationIdentity: toDestinationIdentity("entry-migrated"),
           lastRunId: runId,
           sourceIdentity: SourceIdentity.fromKey(
             ArticleSourceIdentity,
@@ -763,9 +740,8 @@ describe("getMigrationStatuses", () => {
         }),
         sourceCursorRetry: (effect) =>
           effect.pipe(Effect.retry(Schedule.recurs(1))),
-        destination: failingDestination,
         store: InMemoryMigrationStore.layer(),
-        pipeline: () => ({ kind: "Noop" }),
+        process: () => Effect.void,
       });
 
       const report = yield* getMigrationStatuses({

@@ -1,5 +1,4 @@
 import { Effect, Layer, type Schema } from "effect";
-import type { DestinationPlugin } from "../services/destination-plugin.ts";
 import type { MigrationReferenceLookup } from "../services/migration-reference-lookup.ts";
 import type { MigrationStore } from "../services/migration-store.ts";
 import {
@@ -9,12 +8,6 @@ import {
 } from "../services/source-plugin.ts";
 import type { Tracking } from "../services/tracking.ts";
 import type {
-  DefinedDestinationCommands,
-  DestinationCommand,
-  DestinationCommandPlan,
-} from "./destination.ts";
-import type {
-  DestinationPluginError,
   MigrationStoreError,
   SkipItem,
 } from "./errors.ts";
@@ -33,7 +26,7 @@ import {
   defaultSourceVersionContractFingerprint,
   type SourceVersionContractFingerprint,
 } from "./migration-contract.ts";
-import type { PipelineContext } from "./pipeline.ts";
+import type { ProcessContext } from "./pipeline.ts";
 import type { RollbackPipeline } from "./rollback.ts";
 import type {
   SourceItem,
@@ -393,17 +386,6 @@ const normalizeSourceLookupResult = <
     )
   );
 
-export interface ConfiguredDestinationPlugin<
-  Command extends DestinationCommand,
-> {
-  readonly commandDefinitions: DefinedDestinationCommands<Command>;
-  readonly layer: Layer.Layer<DestinationPlugin, DestinationPluginError>;
-}
-
-export type DestinationRetryStrategy = <A>(
-  effect: Effect.Effect<A, DestinationPluginError>
-) => Effect.Effect<A, DestinationPluginError>;
-
 export type SourceRetryStrategy = <A>(
   effect: Effect.Effect<A, SourcePluginError>
 ) => Effect.Effect<A, SourcePluginError>;
@@ -414,7 +396,7 @@ export type ProcessPipeline<
   IdentityKey extends SourceIdentitySnapshotKey,
 > = (
   source: SourceItem<Source, IdentityKey>,
-  context: PipelineContext
+  context: ProcessContext
 ) => void | Effect.Effect<
   void,
   ProcessError | SkipItem,
@@ -432,7 +414,6 @@ export interface DestinationStubContext {
 
 export interface MigrationDefinition<
   Source,
-  Command extends DestinationCommand,
   PipelineError = never,
   Cursor = unknown,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
@@ -446,26 +427,9 @@ export interface MigrationDefinition<
 > {
   readonly dependencies?: MigrationDefinitionDependencies;
   readonly dependsOn?: readonly MigrationDefinitionId[];
-  readonly destination?: ConfiguredDestinationPlugin<Command>;
-  readonly destinationRetry?: DestinationRetryStrategy;
   readonly id: MigrationDefinitionId;
-  /**
-   * @deprecated Use `process` for new Migration Definitions. The command-plan
-   * pipeline path is temporary bridge behavior while process-based destination
-   * tracking replaces command plans.
-   */
-  readonly pipeline?: (
-    source: SourceItem<Source, IdentityKey>,
-    context: PipelineContext
-  ) =>
-    | DestinationCommandPlan<Command>
-    | Effect.Effect<
-        DestinationCommandPlan<Command>,
-        PipelineError | SkipItem,
-        MigrationReferenceLookup
-      >;
-  readonly process?: ProcessPipeline<Source, PipelineError, IdentityKey>;
-  readonly rollback?: RollbackPipeline<Command, RollbackPipelineError>;
+  readonly process: ProcessPipeline<Source, PipelineError, IdentityKey>;
+  readonly rollback?: RollbackPipeline<RollbackPipelineError>;
   readonly source: ConfiguredSourcePlugin<
     Source,
     Cursor,
@@ -496,7 +460,6 @@ export interface MigrationDefinitionDependenciesInput {
 
 export interface MigrationDefinitionInput<
   Source,
-  Command extends DestinationCommand,
   PipelineError = never,
   Cursor = unknown,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
@@ -510,7 +473,6 @@ export interface MigrationDefinitionInput<
 > extends Omit<
     MigrationDefinition<
       Source,
-      Command,
       PipelineError,
       Cursor,
       IdentityKey,
@@ -528,32 +490,10 @@ export interface MigrationDefinitionInput<
 }
 
 const validateProcessAuthoring = (definition: {
-  readonly destination?: unknown;
-  readonly pipeline?: unknown;
-  readonly rollback?: unknown;
   readonly process?: unknown;
-  readonly stub?: unknown;
 }) => {
-  const hasPipeline = definition.pipeline !== undefined;
-  const hasProcess = definition.process !== undefined;
-
-  if (hasPipeline === hasProcess) {
-    throw new Error(
-      hasPipeline
-        ? "Migration Definition must declare either process or pipeline, not both"
-        : "Migration Definition must declare a process"
-    );
-  }
-
-  if (
-    definition.destination === undefined &&
-    (hasPipeline ||
-      (definition.rollback !== undefined && !hasProcess) ||
-      (definition.stub !== undefined && !hasProcess))
-  ) {
-    throw new Error(
-      "Migration Definition command-plan pipeline, rollback, and legacy stub paths require a destination"
-    );
+  if (definition.process === undefined) {
+    throw new Error("Migration Definition must declare a process");
   }
 };
 
@@ -579,7 +519,6 @@ const normalizeMigrationDefinitionIds = (
 
 export const defineMigration = <
   Source,
-  Command extends DestinationCommand,
   PipelineError = never,
   Cursor = unknown,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
@@ -591,7 +530,6 @@ export const defineMigration = <
 >(
   definition: MigrationDefinitionInput<
     Source,
-    Command,
     PipelineError,
     Cursor,
     IdentityKey,
@@ -603,7 +541,6 @@ export const defineMigration = <
   >
 ): MigrationDefinition<
   Source,
-  Command,
   PipelineError,
   Cursor,
   IdentityKey,

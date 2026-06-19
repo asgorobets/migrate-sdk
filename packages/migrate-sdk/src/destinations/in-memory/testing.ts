@@ -4,10 +4,6 @@
 export { InMemoryDestinationTesting } from "./in-memory-destination.ts";
 export type {
   InMemoryDestinationEntry,
-  InMemoryDestinationExecute,
-  InMemoryDestinationExecution,
-  InMemoryDestinationFixture,
   InMemoryDestinationInspection,
-  InMemoryDestinationOptions,
   InMemoryEntryDestinationFixture,
 } from "./in-memory-destination.ts";

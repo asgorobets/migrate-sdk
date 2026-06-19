@@ -1,7 +1,5 @@
 import { Schema } from "effect";
 import {
-  DestinationIdentity,
-  DestinationVersion,
   MigrationDefinitionId,
   MigrationRunId,
   SourceIdentitySnapshot,
@@ -28,7 +26,6 @@ export const MigrationItemErrorKind = Schema.Literals([
   "source",
   "tracking",
   "process",
-  "pipeline",
   "destination",
 ]);
 export type MigrationItemErrorKind = typeof MigrationItemErrorKind.Type;
@@ -50,8 +47,6 @@ export type MigrationItemError = typeof MigrationItemError.Type;
 export const MigratedItemState = Schema.Struct({
   ...MigrationItemStateBaseFields,
   ...ObservedSourceVersionFields,
-  destinationIdentity: Schema.optional(DestinationIdentity),
-  destinationVersion: Schema.optional(DestinationVersion),
   journal: Schema.optional(DestinationJournal),
   status: Schema.Literal("migrated"),
   trackingRecord: Schema.optional(TrackingRecord),
@@ -73,8 +68,6 @@ export const FailedItemState = Schema.Struct({
     SourceVersionContractFingerprint
   ),
   sourceVersion: Schema.optional(SourceVersion),
-  destinationIdentity: Schema.optional(DestinationIdentity),
-  destinationVersion: Schema.optional(DestinationVersion),
   error: MigrationItemError,
   journal: Schema.optional(DestinationJournal),
   status: Schema.Literal("failed"),
@@ -87,8 +80,6 @@ export const NeedsUpdateItemState = Schema.Struct({
     SourceVersionContractFingerprint
   ),
   sourceVersion: Schema.optional(SourceVersion),
-  destinationIdentity: Schema.optional(DestinationIdentity),
-  destinationVersion: Schema.optional(DestinationVersion),
   journal: Schema.optional(DestinationJournal),
   reason: Schema.String,
   status: Schema.Literal("needs-update"),

@@ -160,7 +160,7 @@ const planConfigSource = (): string => `
   const definition = (id: string, input: Record<string, unknown> = {}) => ({
     id: toMigrationDefinitionId(id),
     source: { identity },
-    pipeline: () => {
+    process: () => {
       throw new Error(id + " executed");
     },
     ...input
@@ -172,10 +172,10 @@ const planConfigSource = (): string => `
       required: [toMigrationDefinitionId("authors")],
       optional: [toMigrationDefinitionId("tags")]
     },
-    rollback: () => ({ kind: "noop" })
+    rollback: () => undefined
   });
   const tags = definition("tags", {
-    rollback: () => ({ kind: "noop" })
+    rollback: () => undefined
   });
 
   export default defineMigrationCliConfig({
@@ -211,12 +211,10 @@ const statusConfigSource = (): string => `
   import { Schema } from "effect";
   import {
     defineMigration,
-    InMemoryDestinationPlugin,
     InMemoryMigrationStore,
     InMemorySourcePlugin,
     MigrationDefinitionRegistry,
     SourceIdentity,
-    toDestinationIdentity,
     toMigrationDefinitionId,
     toMigrationRunId,
     toEncodedSourceIdentity,
@@ -225,7 +223,6 @@ const statusConfigSource = (): string => `
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
   const EntrySource = Schema.Struct({ title: Schema.String });
-  const EntryFields = Schema.Struct({ title: Schema.String });
   const EntrySourceIdentity = SourceIdentity.make({
     id: "entry@v1",
     schema: SourceIdentity.key("id", Schema.NonEmptyString)
@@ -235,14 +232,6 @@ const statusConfigSource = (): string => `
   const runId = toMigrationRunId("run-status");
   const updatedAt = new Date("2026-01-01T00:00:02.000Z");
   const store = InMemoryMigrationStore.layer(storeState);
-  const destination = InMemoryDestinationPlugin.makeEntries({
-    contentType: "entry",
-    commands: {
-      upsertEntry: {
-        fields: EntryFields
-      }
-    }
-  });
 
   storeState.latestRunStates.set(definitionId, {
     definitionIds: [definitionId],
@@ -255,7 +244,6 @@ const statusConfigSource = (): string => `
     InMemoryMigrationStore.itemStateKey(definitionId, "article-1"),
     {
       definitionId,
-      destinationIdentity: toDestinationIdentity("entry-article-1"),
       lastRunId: runId,
       sourceIdentity: SourceIdentity.fromKey(EntrySourceIdentity, "article-1"),
       sourceVersion: toSourceVersion("source-version-1"),
@@ -283,11 +271,8 @@ const statusConfigSource = (): string => `
       sourceSchema: EntrySource,
       items: []
     }),
-    destination,
     store,
-    pipeline: (sourceItem) => destination.commands.upsertEntry({
-      title: sourceItem.item.title
-    })
+    process: () => undefined
   });
 
   export default defineMigrationCliConfig({
@@ -301,12 +286,10 @@ const statusScanConfigSource = (): string => `
   import { Schema } from "effect";
   import {
     defineMigration,
-    InMemoryDestinationPlugin,
     InMemoryMigrationStore,
     InMemorySourcePlugin,
     MigrationDefinitionRegistry,
     SourceIdentity,
-    toDestinationIdentity,
     toMigrationDefinitionId,
     toMigrationRunId,
     toEncodedSourceIdentity,
@@ -315,7 +298,6 @@ const statusScanConfigSource = (): string => `
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
   const EntrySource = Schema.Struct({ title: Schema.String });
-  const EntryFields = Schema.Struct({ title: Schema.String });
   const EntrySourceIdentity = SourceIdentity.make({
     id: "entry@v1",
     schema: SourceIdentity.key("id", Schema.NonEmptyString)
@@ -325,20 +307,11 @@ const statusScanConfigSource = (): string => `
   const runId = toMigrationRunId("run-status");
   const updatedAt = new Date("2026-01-01T00:00:02.000Z");
   const store = InMemoryMigrationStore.layer(storeState);
-  const destination = InMemoryDestinationPlugin.makeEntries({
-    contentType: "entry",
-    commands: {
-      upsertEntry: {
-        fields: EntryFields
-      }
-    }
-  });
 
   storeState.itemStates.set(
     InMemoryMigrationStore.itemStateKey(definitionId, "article-1"),
     {
       definitionId,
-      destinationIdentity: toDestinationIdentity("entry-article-1"),
       lastRunId: runId,
       sourceIdentity: SourceIdentity.fromKey(EntrySourceIdentity, "article-1"),
       sourceVersion: toSourceVersion("source-version-1"),
@@ -350,7 +323,6 @@ const statusScanConfigSource = (): string => `
     InMemoryMigrationStore.itemStateKey(definitionId, "article-orphan"),
     {
       definitionId,
-      destinationIdentity: toDestinationIdentity("entry-article-orphan"),
       lastRunId: runId,
       sourceIdentity: SourceIdentity.fromKey(EntrySourceIdentity, "article-orphan"),
       sourceVersion: toSourceVersion("source-version-1"),
@@ -387,11 +359,8 @@ const statusScanConfigSource = (): string => `
         }
       ]
     }),
-    destination,
     store,
-    pipeline: (sourceItem) => destination.commands.upsertEntry({
-      title: sourceItem.item.title
-    })
+    process: () => undefined
   });
 
   export default defineMigrationCliConfig({
@@ -429,7 +398,6 @@ const executionConfigSource = (): string => `
   import { Schema } from "effect";
   import {
     defineMigration,
-    InMemoryDestinationPlugin,
     InMemoryMigrationStore,
     InMemorySourcePlugin,
     MigrationDefinitionRegistry,
@@ -439,21 +407,12 @@ const executionConfigSource = (): string => `
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
   const EntrySource = Schema.Struct({ title: Schema.String });
-  const EntryFields = Schema.Struct({ title: Schema.String });
   const EntrySourceIdentity = SourceIdentity.make({
     id: "entry@v1",
     schema: SourceIdentity.key("id", Schema.NonEmptyString)
   });
   const storeState = InMemoryMigrationStore.makeState();
   const store = InMemoryMigrationStore.layer(storeState);
-  const destination = InMemoryDestinationPlugin.makeEntries({
-    contentType: "entry",
-    commands: {
-      upsertEntry: {
-        fields: EntryFields
-      }
-    }
-  });
   const probe = {
     executions: [],
     storeState
@@ -472,11 +431,9 @@ const executionConfigSource = (): string => `
         item: { title }
       }]
     }),
-    destination,
     store,
-    pipeline: (sourceItem) => {
+    process: () => {
       probe.executions.push(id);
-      return destination.commands.upsertEntry({ title: sourceItem.item.title });
     },
     ...input
   });
@@ -502,12 +459,10 @@ const modeExecutionConfigSource = (): string => `
   import {
     defaultSourceVersionContractFingerprint,
     defineMigration,
-    InMemoryDestinationPlugin,
     InMemoryMigrationStore,
     InMemorySourcePlugin,
     MigrationDefinitionRegistry,
     SourceIdentity,
-    toDestinationIdentity,
     toMigrationDefinitionId,
     toMigrationRunId,
     toEncodedSourceIdentity,
@@ -516,7 +471,6 @@ const modeExecutionConfigSource = (): string => `
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
   const EntrySource = Schema.Struct({ title: Schema.String });
-  const EntryFields = Schema.Struct({ title: Schema.String });
   const EntrySourceIdentity = SourceIdentity.make({
     id: "entry@v1",
     schema: SourceIdentity.key("id", Schema.NonEmptyString)
@@ -524,14 +478,6 @@ const modeExecutionConfigSource = (): string => `
   const definitionId = toMigrationDefinitionId("articles");
   const storeState = InMemoryMigrationStore.makeState();
   const store = InMemoryMigrationStore.layer(storeState);
-  const destination = InMemoryDestinationPlugin.makeEntries({
-    contentType: "entry",
-    commands: {
-      upsertEntry: {
-        fields: EntryFields
-      }
-    }
-  });
   const probe = {
     executions: [],
     storeState
@@ -560,7 +506,7 @@ const modeExecutionConfigSource = (): string => `
       error: {
         kind: "destination",
         errorTag: "DestinationPluginError",
-        message: "Destination command failed"
+        message: "destination effect failed"
       }
     }
   );
@@ -580,7 +526,6 @@ const modeExecutionConfigSource = (): string => `
     InMemoryMigrationStore.itemStateKey("articles", "article-target"),
     {
       definitionId,
-      destinationIdentity: toDestinationIdentity("entry-article-target"),
       sourceIdentity: SourceIdentity.fromKey(EntrySourceIdentity, "article-target"),
       sourceVersion: toSourceVersion("source-version-1"),
       lastRunId: previousRunId,
@@ -617,11 +562,9 @@ const modeExecutionConfigSource = (): string => `
         }
       ]
     }),
-    destination,
     store,
-    pipeline: (sourceItem) => {
+    process: (sourceItem) => {
       probe.executions.push(sourceItem.identity.encoded);
-      return destination.commands.upsertEntry({ title: sourceItem.item.title });
     }
   });
 
@@ -640,46 +583,20 @@ const rollbackExecutionConfigSource = (): string => `
     InMemorySourcePlugin,
     MigrationDefinitionRegistry,
     SourceIdentity,
-    toDestinationIdentity,
-    toDestinationVersion,
     toMigrationDefinitionId,
     toMigrationRunId,
     toEncodedSourceIdentity,
     toSourceVersion
   } from "migrate-sdk";
-  import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
   const EntrySource = Schema.Struct({ title: Schema.String });
-  const EntryFields = Schema.Struct({ title: Schema.String });
   const EntrySourceIdentity = SourceIdentity.make({
     id: "entry@v1",
     schema: SourceIdentity.key("id", Schema.NonEmptyString)
   });
   const storeState = InMemoryMigrationStore.makeState();
   const store = InMemoryMigrationStore.layer(storeState);
-  const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
-    contentType: "entry",
-    commands: {
-      upsertEntry: {
-        fields: EntryFields
-      },
-      publishEntry: true
-    }
-  });
-  const destination = destinationFixture.destination;
-  const seedDestinationEntry = (id, identity) => {
-    destinationFixture.entries().set("entry:" + identity, {
-      contentType: "entry",
-      destinationIdentity: toDestinationIdentity("entry-" + identity),
-      destinationVersion: toDestinationVersion("destination-version-1"),
-      fields: {
-        title: id
-      },
-      published: false,
-      sourceIdentity: SourceIdentity.fromKey(EntrySourceIdentity, identity)
-    });
-  };
   const probe = {
     executions: [],
     storeState
@@ -695,7 +612,6 @@ const rollbackExecutionConfigSource = (): string => `
       InMemoryMigrationStore.itemStateKey(definitionId, identity),
       {
         definitionId,
-        destinationIdentity: toDestinationIdentity("entry-" + identity),
         sourceIdentity: SourceIdentity.fromKey(EntrySourceIdentity, identity),
         sourceVersion: toSourceVersion("source-version-1"),
         lastRunId: previousRunId,
@@ -708,9 +624,6 @@ const rollbackExecutionConfigSource = (): string => `
   seedMigratedState("tags", "tags-1");
   seedMigratedState("authors", "authors-1");
   seedMigratedState("articles", "articles-1");
-  seedDestinationEntry("tags", "tags-1");
-  seedDestinationEntry("authors", "authors-1");
-  seedDestinationEntry("articles", "articles-1");
 
   const definition = (id, identity, input = {}) => defineMigration({
     id: toMigrationDefinitionId(id),
@@ -723,14 +636,10 @@ const rollbackExecutionConfigSource = (): string => `
         item: { title: id }
       }]
     }),
-    destination,
     store,
-    pipeline: (sourceItem) => destination.commands.upsertEntry({
-      title: sourceItem.item.title
-    }),
+    process: () => undefined,
     rollback: () => {
       probe.executions.push("rollback:" + id);
-      return destination.commands.publishEntry();
     },
     ...input
   });
@@ -755,7 +664,6 @@ const runtimeFailureConfigSource = (): string => `
   import { Schema } from "effect";
   import {
     defineMigration,
-    InMemoryDestinationPlugin,
     InMemoryMigrationStore,
     InMemorySourcePlugin,
     MigrationDefinitionRegistry,
@@ -765,18 +673,9 @@ const runtimeFailureConfigSource = (): string => `
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
   const EntrySource = Schema.Struct({ title: Schema.String });
-  const EntryFields = Schema.Struct({ title: Schema.String });
   const EntrySourceIdentity = SourceIdentity.make({
     id: "entry@v1",
     schema: SourceIdentity.key("id", Schema.NonEmptyString)
-  });
-  const destination = InMemoryDestinationPlugin.makeEntries({
-    contentType: "entry",
-    commands: {
-      upsertEntry: {
-        fields: EntryFields
-      }
-    }
   });
   const articles = defineMigration({
     id: toMigrationDefinitionId("articles"),
@@ -790,11 +689,8 @@ const runtimeFailureConfigSource = (): string => `
         item: { title: "Article" }
       }]
     }),
-    destination,
     store: InMemoryMigrationStore.layer(),
-    pipeline: (sourceItem) => destination.commands.upsertEntry({
-      title: sourceItem.item.title
-    })
+    process: () => undefined
   });
 
   export default defineMigrationCliConfig({
@@ -829,7 +725,7 @@ describe("migrate CLI", () => {
               required: [toMigrationDefinitionId("authors")],
               optional: [toMigrationDefinitionId("images")]
             },
-            rollback: () => ({ kind: "noop" })
+            rollback: () => undefined
           });
 
           export default defineMigrationCliConfig({

@@ -1,10 +1,6 @@
 import { type Effect, Schema } from "effect";
 import type { Tracking } from "../services/tracking.ts";
 import type { MigrationDefinition } from "./definition.ts";
-import type {
-  DestinationCommand,
-  DestinationCommandPlan,
-} from "./destination.ts";
 import { RollbackRequestError } from "./errors.ts";
 import type {
   EncodedSourceIdentity,
@@ -30,32 +26,23 @@ export const RollbackContext = Schema.Struct({
   runId: MigrationRunId,
 });
 
-export type RollbackPipelineSuccess<Command extends DestinationCommand> =
-  | undefined
-  | DestinationCommandPlan<Command>;
-
-export type RollbackPipeline<
-  Command extends DestinationCommand,
-  RollbackError = never,
-> = (
+export type RollbackPipeline<RollbackError = never> = (
   state: MigrationItemState,
   context: RollbackContext
 ) =>
-  | RollbackPipelineSuccess<Command>
-  | Effect.Effect<RollbackPipelineSuccess<Command>, RollbackError, Tracking>
+  | void
   | Effect.Effect<void, RollbackError, Tracking>;
 
 export type AnyRollbackMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous rollback requests.
   any,
-  DestinationCommand,
-  // biome-ignore lint/suspicious/noExplicitAny: Forward pipeline error is not relevant to rollback request shape.
+  // biome-ignore lint/suspicious/noExplicitAny: Forward process error is not relevant to rollback request shape.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Cursor is existential across heterogeneous rollback requests.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Source identity key is existential across heterogeneous rollback requests.
   any,
-  // biome-ignore lint/suspicious/noExplicitAny: Rollback pipeline error is re-extracted by callers when execution exists.
+  // biome-ignore lint/suspicious/noExplicitAny: Rollback process error is re-extracted by callers when execution exists.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Source input is not relevant to rollback request shape.
   any,
@@ -68,7 +55,6 @@ export type AnyRollbackMigrationDefinition = MigrationDefinition<
 export type MigrationDefinitionRollbackPipelineError<Definition> =
   Definition extends MigrationDefinition<
     infer _Source,
-    infer _Command,
     infer _PipelineError,
     infer _Cursor,
     infer _IdentityKey,
@@ -83,7 +69,6 @@ export type MigrationDefinitionRollbackPipelineError<Definition> =
 export type RollbackMigrationDefinitionSourceIdentityKey<Definition> =
   Definition extends MigrationDefinition<
     infer _Source,
-    infer _Command,
     infer _PipelineError,
     infer _Cursor,
     infer IdentityKey,

@@ -1,6 +1,5 @@
 import { Schema } from "effect";
 import type { MigrationDefinition } from "./definition.ts";
-import type { DestinationCommand } from "./destination.ts";
 import type {
   MigrationDefinitionId,
   MigrationDefinitionIdInput,
@@ -17,14 +16,13 @@ import type { TrackingRecordContract } from "./tracking.ts";
 export type AnyMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous run requests.
   any,
-  DestinationCommand,
-  // biome-ignore lint/suspicious/noExplicitAny: Pipeline error is re-extracted by MigrationDefinitionPipelineError.
+  // biome-ignore lint/suspicious/noExplicitAny: Process error is re-extracted by MigrationDefinitionPipelineError.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Cursor is existential across heterogeneous run requests.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Source identity key is existential across heterogeneous run requests.
   any,
-  // biome-ignore lint/suspicious/noExplicitAny: Rollback pipeline error is not relevant to forward run requests.
+  // biome-ignore lint/suspicious/noExplicitAny: Rollback process error is not relevant to forward run requests.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Source input is existential across heterogeneous run requests.
   any,
@@ -39,7 +37,6 @@ export type AnyMigrationDefinition = MigrationDefinition<
 export type MigrationDefinitionPipelineError<Definition> =
   Definition extends MigrationDefinition<
     infer _Source,
-    infer _Command,
     infer PipelineError,
     infer _Cursor,
     infer _IdentityKey,
@@ -55,7 +52,6 @@ export type MigrationDefinitionPipelineError<Definition> =
 export type MigrationDefinitionSourceLayerError<Definition> =
   Definition extends MigrationDefinition<
     infer _Source,
-    infer _Command,
     infer _PipelineError,
     infer _Cursor,
     infer _IdentityKey,
@@ -71,7 +67,6 @@ export type MigrationDefinitionSourceLayerError<Definition> =
 export type MigrationDefinitionSourceRequirements<Definition> =
   Definition extends MigrationDefinition<
     infer _Source,
-    infer _Command,
     infer _PipelineError,
     infer _Cursor,
     infer _IdentityKey,
@@ -87,7 +82,6 @@ export type MigrationDefinitionSourceRequirements<Definition> =
 export type MigrationDefinitionSourceIdentityKey<Definition> =
   Definition extends MigrationDefinition<
     infer _Source,
-    infer _Command,
     infer _PipelineError,
     infer _Cursor,
     infer IdentityKey,
@@ -103,7 +97,6 @@ export type MigrationDefinitionSourceIdentityKey<Definition> =
 export type MigrationDefinitionTrackingContract<Definition> =
   Definition extends MigrationDefinition<
     infer _Source,
-    infer _Command,
     infer _PipelineError,
     infer _Cursor,
     infer _IdentityKey,

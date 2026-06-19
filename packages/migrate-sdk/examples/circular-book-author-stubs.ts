@@ -135,18 +135,17 @@ type BookstoreUpsertChange = BookUpsertChange | AuthorUpsertChange;
 type SourceIdentityKey<Definition> =
   Definition extends SourceIdentityDefinition<infer Key> ? Key : never;
 
-type ReferenceLookupPipelineError =
+type ReferenceLookupProcessError =
   | DestinationPluginError
   | MigrationReferenceLookupError
   | MigrationStoreError
   | Schema.SchemaError;
 type BookMigration = MigrationDefinition<
   typeof BookSource.Type,
-  never,
-  ReferenceLookupPipelineError,
+  ReferenceLookupProcessError,
   InMemorySourceCursor,
   SourceIdentityKey<typeof BookSourceIdentity>,
-  ReferenceLookupPipelineError,
+  ReferenceLookupProcessError,
   unknown,
   never,
   never,
@@ -154,11 +153,10 @@ type BookMigration = MigrationDefinition<
 >;
 type AuthorMigration = MigrationDefinition<
   typeof AuthorSource.Type,
-  never,
-  ReferenceLookupPipelineError,
+  ReferenceLookupProcessError,
   InMemorySourceCursor,
   SourceIdentityKey<typeof AuthorSourceIdentity>,
-  ReferenceLookupPipelineError,
+  ReferenceLookupProcessError,
   unknown,
   never,
   never,
@@ -294,7 +292,7 @@ export const makeCircularBookAuthorStubMigrations = () => {
         });
 
         yield* Tracking.setRecord({
-          entryId: entry.destinationIdentity,
+          entryId: entry.entryId,
         });
       }),
     process: Effect.fn("books.process")(function* (source) {
@@ -329,7 +327,7 @@ export const makeCircularBookAuthorStubMigrations = () => {
       });
 
       yield* Tracking.setRecord({
-        entryId: entry.destinationIdentity,
+        entryId: entry.entryId,
       });
     }),
   });
@@ -355,7 +353,7 @@ export const makeCircularBookAuthorStubMigrations = () => {
         });
 
         yield* Tracking.setRecord({
-          entryId: entry.destinationIdentity,
+          entryId: entry.entryId,
         });
       }),
     process: Effect.fn("authors.process")(function* (source) {
@@ -386,14 +384,14 @@ export const makeCircularBookAuthorStubMigrations = () => {
       });
 
       yield* Tracking.setRecord({
-        entryId: entry.destinationIdentity,
+        entryId: entry.entryId,
       });
     }),
   });
 
   // Do not write `dependsOn` here. Books and Authors form a source-level cycle:
   // Books need Authors, and Authors need popular Books. Running both
-  // definitions together lets pipelines resolve the cycle with lookup-created
+  // definitions together lets processes resolve the cycle with lookup-created
   // stubs instead of impossible dependency ordering.
   return {
     definitions: [books, authors] as const,
@@ -458,7 +456,7 @@ export const formatCircularBookAuthorStubsExampleResult = (
       [
         `${change.contentType}:${change.sourceIdentity}`,
         `  contentType: ${change.contentType}`,
-        `  destinationIdentity: ${change.destinationIdentity}`,
+        `  entryId: `,
         `  fields: ${JSON.stringify(change.fields)}`,
       ].join("\n")
     ),

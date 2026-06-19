@@ -8,7 +8,7 @@ import {
   SourceIdentity,
   skipItem,
 } from "migrate-sdk";
-import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
+import { InMemoryDestination } from "migrate-sdk/destinations/in-memory";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { FileMigrationStore } from "migrate-sdk/stores/file";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
@@ -34,9 +34,9 @@ export interface RunFileStoreExampleOptions {
 
 export interface FileStoreExampleResult {
   readonly firstRun: MigrationRunSummary;
-  readonly firstRunDestinationExecutions: number;
+  readonly firstRunProcessedEntries: number;
   readonly secondRun: MigrationRunSummary;
-  readonly secondRunDestinationExecutions: number;
+  readonly secondRunProcessedEntries: number;
   readonly storeDirectory: string;
 }
 
@@ -80,29 +80,27 @@ export const makeFileStoreArticlesMigration = ({
   definitionId = "articles",
   storeDirectory = defaultFileStoreDirectory,
 }: MakeFileStoreArticlesMigrationOptions = {}) => {
-  const destinationFixture = InMemoryDestinationTesting.fixtureEntries({
+  const destination = InMemoryDestination.makeEntries({
     contentType: "article",
-    commands: {
-      deleteEntry: true,
-      publishEntry: true,
-      upsertEntry: { fields: ArticleEntryFields },
-    },
+    fields: ArticleEntryFields,
   });
-  const { destination } = destinationFixture;
+  const processedEntries: Array<typeof ArticleEntryFields.Type> = [];
 
   const migration = defineMigration({
-    destination,
     id: definitionId,
-    pipeline: Effect.fn("fileStoreArticles.pipeline")(function* (source) {
+    process: Effect.fn("fileStoreArticles.process")(function* (source) {
       if (!source.item.publish) {
         return yield* skipItem("Article is not published");
       }
 
-      return destination.commands.upsertEntry({
+      processedEntries.push({
+        title: source.item.title,
+      });
+      yield* destination.entries.upsert({
         title: source.item.title,
       });
     }),
-    rollback: () => destination.commands.deleteEntry(),
+    rollback: () => undefined,
     source: InMemorySourcePlugin.make({
       identity: ArticleSourceIdentity,
       items: sourceItems,
@@ -111,7 +109,7 @@ export const makeFileStoreArticlesMigration = ({
     store: FileMigrationStore.layer({ directory: storeDirectory }),
   });
 
-  return { destinationFixture, migration };
+  return { migration, processedEntries };
 };
 
 export const runFileStoreExample = Effect.fn("runFileStoreExample")(function* (
@@ -132,10 +130,9 @@ export const runFileStoreExample = Effect.fn("runFileStoreExample")(function* (
 
   return {
     firstRun,
-    firstRunDestinationExecutions: first.destinationFixture.executions().length,
+    firstRunProcessedEntries: first.processedEntries.length,
     secondRun,
-    secondRunDestinationExecutions:
-      second.destinationFixture.executions().length,
+    secondRunProcessedEntries: second.processedEntries.length,
     storeDirectory,
   } satisfies FileStoreExampleResult;
 });
@@ -149,11 +146,11 @@ export const formatFileStoreExampleResult = (
     "",
     "Run A",
     formatMigrationRunSummary(result.firstRun),
-    `destination executions: ${result.firstRunDestinationExecutions}`,
+    `processed entries: ${result.firstRunProcessedEntries}`,
     "",
     "Run B (fresh destination, same file store)",
     formatMigrationRunSummary(result.secondRun),
-    `destination executions: ${result.secondRunDestinationExecutions}`,
+    `processed entries: ${result.secondRunProcessedEntries}`,
     "",
     "Inspect persisted records under:",
     result.storeDirectory,

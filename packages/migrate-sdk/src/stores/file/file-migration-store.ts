@@ -7,8 +7,6 @@ import { Path } from "effect/Path";
 import type { PlatformError } from "effect/PlatformError";
 import { MigrationStoreError } from "../../domain/errors.ts";
 import {
-  DestinationIdentity as DestinationIdentitySchema,
-  DestinationVersion as DestinationVersionSchema,
   EncodedSourceCursor,
   type EncodedSourceCursor as EncodedSourceCursorType,
   type EncodedSourceIdentity,
@@ -121,8 +119,6 @@ const PersistedDestinationJournal = Schema.Struct({
 const PersistedMigratedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
   ...PersistedObservedSourceVersionFields,
-  destinationIdentity: Schema.optional(DestinationIdentitySchema),
-  destinationVersion: Schema.optional(DestinationVersionSchema),
   journal: Schema.optional(PersistedDestinationJournal),
   status: Schema.Literal("migrated"),
   trackingRecord: Schema.optional(TrackingRecord),
@@ -142,8 +138,6 @@ const PersistedFailedItemState = Schema.Struct({
     SourceVersionContractFingerprint
   ),
   sourceVersion: Schema.optional(SourceVersionSchema),
-  destinationIdentity: Schema.optional(DestinationIdentitySchema),
-  destinationVersion: Schema.optional(DestinationVersionSchema),
   error: MigrationItemError,
   journal: Schema.optional(PersistedDestinationJournal),
   status: Schema.Literal("failed"),
@@ -155,8 +149,6 @@ const PersistedNeedsUpdateItemState = Schema.Struct({
     SourceVersionContractFingerprint
   ),
   sourceVersion: Schema.optional(SourceVersionSchema),
-  destinationIdentity: Schema.optional(DestinationIdentitySchema),
-  destinationVersion: Schema.optional(DestinationVersionSchema),
   journal: Schema.optional(PersistedDestinationJournal),
   reason: Schema.String,
   status: Schema.Literal("needs-update"),

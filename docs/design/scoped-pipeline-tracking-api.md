@@ -4,10 +4,9 @@ Audience: SDK users authoring migrations and plugin authors implementing destina
 
 This document describes the public API direction from
 [ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md).
-It supersedes the command-plan identity tracking model for future tracking work.
-The domain term is **Process Pipeline**; examples may still show the current
-`pipeline` property until the implementation renames that authoring slot to
-`process`.
+It supersedes the removed destination identity tracking model for future tracking work.
+The domain term is **Process Pipeline**; public migration definitions declare it
+with the `process` property.
 
 ## Goals
 
@@ -22,7 +21,7 @@ The domain term is **Process Pipeline**; examples may still show the current
 - Migration definitions decide whether successful items require a projected
   tracking record.
 - Destination changes use typed change descriptors, not raw change kind strings.
-- Pipelines keep normal Effect ergonomics, including inline retries.
+- Process pipelines keep normal Effect ergonomics, including inline retries.
 - Missing declared tracking records fail the item instead of silently writing
   incomplete migrated state.
 - Repeated destination changes are interpreted through typed journal payloads
@@ -90,7 +89,7 @@ type SourceItem<A, Key> = {
 The process pipeline receives that already-identified source item:
 
 ```ts
-pipeline: Effect.fn(function* (source) {
+process: Effect.fn(function* (source) {
   const [businessUnitKey, addressIndex] = source.identity.key
   source.item
 })
@@ -728,7 +727,7 @@ const publishOnly = defineMigration({
   id: "publish-only",
   source,
   store,
-  pipeline: Effect.fn(function* (source) {
+  process: Effect.fn(function* (source) {
     yield* ct.products.publish(source.item.productKey).pipe(RetryOnNetwork)
   }),
 })
@@ -761,7 +760,7 @@ const products = defineMigration({
     id: "product-record@v1",
     schema: ProductTrackingRecord,
   }),
-  pipeline: Effect.fn(function* (source) {
+  process: Effect.fn(function* (source) {
     const product = yield* ct.products
       .upsert({
         key: source.item.productKey,
@@ -829,7 +828,7 @@ const productsWithInventory = defineMigration({
     id: "product-with-inventory@v1",
     schema: ProductInventoryTrackingRecord,
   }),
-  pipeline: Effect.fn(function* (source) {
+  process: Effect.fn(function* (source) {
     const product = yield* ct.products
       .upsert(source.item.product)
       .pipe(RetryOnNetwork)

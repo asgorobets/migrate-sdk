@@ -6,6 +6,10 @@ We will model the migration framework around executable TypeScript migration def
 
 Accepted
 
+## Superseded By
+
+[ADR 0006](./0006-scoped-pipeline-tracking-with-composite-identities.md)
+
 ## Considered Options
 
 - Executable TypeScript migration definitions using Effect services and layers.

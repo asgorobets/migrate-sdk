@@ -4,8 +4,8 @@ Status: ready-for-agent
 
 ## Problem Statement
 
-The SDK still persists destination progress through the older command-plan
-model, where a process pipeline returns destination commands and the
+The SDK still persists destination progress through the older removed destination model
+model, where a process pipeline returns destination effects and the
 runtime infers one primary destination identity from command results. That model
 breaks down for migrations where one source item affects several destination
 resources, such as a product plus inventory, a business unit plus addresses, or
@@ -40,7 +40,7 @@ Progress-only does not mean ephemeral: item state, source identity, source
 version, and failures are still durable.
 
 Destination capability modules will expose normal Effect helpers instead of
-requiring pipelines to return command plans. Helpers that produce trackable
+requiring pipelines to return removed destination model. Helpers that produce trackable
 destination effects record destination-native changes into the framework-owned
 destination journal when they succeed. Migration authors can still use ordinary
 hand-written Effects, but those Effects do not record destination-native
@@ -150,11 +150,11 @@ destination identity inference as the target model for new work.
 
 46. As a runtime maintainer, I want destination journal entries to be schema-validated before persistence, so that malformed helper output cannot corrupt the migration store.
 
-47. As a runtime maintainer, I want old command-plan destination identity inference treated as legacy, so that new implementation work does not deepen the single-identity model.
+47. As a runtime maintainer, I want old removed destination model destination identity inference treated as legacy, so that new implementation work does not deepen the single-identity model.
 
 48. As a runtime maintainer, I want the first in-memory destination capability module to prove the new helper API, so that runtime semantics are verified before provider-specific integrations.
 
-49. As a runtime maintainer, I want the old in-memory destination command-plan tests either migrated or explicitly left as legacy coverage, so that the target model is visible in tests.
+49. As a runtime maintainer, I want the old in-memory destination removed destination model tests either migrated or explicitly left as legacy coverage, so that the target model is visible in tests.
 
 50. As a store implementer, I want durable schemas for journal entries and tracking records, so that file, in-memory, and later SQL stores can validate stored state consistently.
 
@@ -174,7 +174,7 @@ destination identity inference as the target model for new work.
 
 58. As an SDK maintainer, I want the public API to use domain terms from the glossary, so that destination tracking does not reintroduce ambiguous phrases such as destination identity for composite state.
 
-59. As an SDK maintainer, I want all new public examples to use the scoped process model, so that docs do not teach the deprecated command-plan identity path.
+59. As an SDK maintainer, I want all new public examples to use the scoped process model, so that docs do not teach the deprecated removed destination model identity path.
 
 ## Implementation Decisions
 
@@ -184,7 +184,7 @@ destination identity inference as the target model for new work.
 
 - Use `Destination Change`, `Destination Change Descriptor`, `Destination Journal`, `Destination Journal Diagnostic`, `Tracking Record`, `Tracking Record Contract`, and `Destination Capability Module` as the public vocabulary.
 
-- Keep `Destination Command` and command groups as legacy command-plan concepts and rollback-operation concepts where still needed, but do not use identity-bearing command results as the target tracking model for new work.
+- Keep `Destination Operation` and command groups as legacy removed destination model concepts and rollback-operation concepts where still needed, but do not use identity-bearing command results as the target tracking model for new work.
 
 - Add a destination change descriptor module as a deep module. It should own descriptor construction, descriptor identity, schema validation, schema fingerprinting inputs, and typed value inference.
 
@@ -248,7 +248,7 @@ destination identity inference as the target model for new work.
 
 - Replace migrated and needs-update state requirements for a singular destination identity with optional tracking-record durable state.
 
-- Keep backward compatibility concerns isolated. Existing pre-tracking state that contains a singular destination identity can be treated as legacy command-plan state until an explicit migration or removal decision is made.
+- Keep backward compatibility concerns isolated. Existing pre-tracking state that contains a singular destination identity can be treated as legacy removed destination model state until an explicit migration or removal decision is made.
 
 - Extend migration contract state to include tracking contract id and tracking record schema fingerprint when a tracking record contract is declared.
 
@@ -360,7 +360,7 @@ destination identity inference as the target model for new work.
 
 - Add type-level or compile-time tests around tracking record inference where the repo already uses TypeScript assertions.
 
-- Keep legacy command-plan tests until their behavior is intentionally removed or migrated. New tests should prefer scoped process tracking.
+- Keep legacy removed destination model tests until their behavior is intentionally removed or migrated. New tests should prefer scoped process tracking.
 
 ## Out of Scope
 
@@ -384,9 +384,9 @@ destination identity inference as the target model for new work.
 
 - A full rollback helper API for every destination capability module.
 
-- Automatic migration of legacy command-plan item state into journal or record state.
+- Automatic migration of legacy removed destination model item state into journal or record state.
 
-- Removing the old command-plan implementation before the scoped tracking path is proven.
+- Removing the old removed destination model implementation before the scoped tracking path is proven.
 
 ## Further Notes
 
@@ -402,4 +402,4 @@ destination identity inference as the target model for new work.
 
 - Definitions without `Tracking.record` persist progress only on success while failed states may preserve journal evidence.
 
-- The old command-plan authoring, plugin usage, runtime, and rollback docs are useful historical context but are explicitly marked pre-ADR-0006. New public docs and examples should point to the scoped process tracking model.
+- The old removed destination model authoring, plugin usage, runtime, and rollback docs are useful historical context but are explicitly marked pre-ADR-0006. New public docs and examples should point to the scoped process tracking model.

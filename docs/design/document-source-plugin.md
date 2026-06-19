@@ -152,18 +152,17 @@ const contactsSource = DocumentSourcePlugin.make({
 });
 ```
 
-The pipeline receives the selected shape:
+The process receives the selected shape:
 
 ```ts
 const contactsMigration = defineMigration({
   id: "import-company-contacts",
   source: contactsSource,
-  destination,
   store,
-  pipeline: (sourceItem) => {
+  process: (sourceItem) => {
     const { item, parent } = sourceItem.item;
 
-    return destination.commands.upsertEntry({
+    return destination.entries.upsert({
       businessUnitKey: parent.key,
       businessUnitName: parent.name,
       email: item.email,
@@ -183,10 +182,9 @@ The same migration can also be written inline:
 const contactsMigration = defineMigration({
   id: "import-company-contacts",
   source: contactsSource,
-  destination,
   store,
-  pipeline: ({ item: { item, parent } }) =>
-    destination.commands.upsertEntry({
+  process: ({ item: { item, parent } }) =>
+    destination.entries.upsert({
       businessUnitKey: parent.key,
       businessUnitName: parent.name,
       email: item.email,
@@ -197,7 +195,7 @@ const contactsMigration = defineMigration({
 ```
 
 The source preserves parent context, but destination projection remains in the
-pipeline. The source does not extract arbitrary individual fields on behalf of a
+process. The source does not extract arbitrary individual fields on behalf of a
 destination.
 
 ## Future Effect-Native Fetchers

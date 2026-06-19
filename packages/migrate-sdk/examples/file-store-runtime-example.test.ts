@@ -35,12 +35,6 @@ describe("file store runtime example", () => {
           skipped: 0,
           failed: 0,
         });
-        expect(
-          rollback.destinationFixture
-            .executions()
-            .map((execution) => execution.command.kind)
-        ).toEqual(["DeleteEntry", "DeleteEntry", "DeleteEntry"]);
-        expect(rollback.destinationFixture.entries().size).toBe(0);
 
         const secondRun = makeFileStoreArticlesMigration({ storeDirectory });
         const secondRunSummary = yield* runMigration(secondRun.migration);

@@ -1,9 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, type Layer, Schema } from "effect";
 import {
-  type ConfiguredDestinationPlugin,
   type ConfiguredSourcePlugin,
-  type DestinationCommand,
   defineMigration,
   type MigrationDefinitionId,
   type MigrationItemState,
@@ -33,27 +31,19 @@ const ArticleSource = Schema.Struct({
 });
 type ArticleSource = typeof ArticleSource.Type;
 
-interface DeleteArticleCommand extends DestinationCommand {
-  readonly kind: "DeleteArticle";
-}
-
 interface RollbackPipelineError {
   readonly _tag: "RollbackPipelineError";
 }
 
 const source = {} as ConfiguredSourcePlugin<ArticleSource, unknown, string>;
-const destination = {} as ConfiguredDestinationPlugin<DeleteArticleCommand>;
 const store = {} as Layer.Layer<MigrationStore, MigrationStoreError>;
 
 describe("rollback public API", () => {
   it("normalizes rollback request and option inputs", () => {
-    const rollbackPipeline: RollbackPipeline<
-      DeleteArticleCommand,
-      RollbackPipelineError
-    > = () => Effect.succeed({ kind: "DeleteArticle" });
+    const rollbackPipeline: RollbackPipeline<RollbackPipelineError> = () =>
+      Effect.void;
     const definition = defineMigration<
       ArticleSource,
-      DeleteArticleCommand,
       never,
       unknown,
       string,
@@ -61,9 +51,8 @@ describe("rollback public API", () => {
     >({
       id: "articles",
       source,
-      destination,
       store,
-      pipeline: () => ({ kind: "DeleteArticle" }),
+      process: () => Effect.void,
       rollback: rollbackPipeline,
     });
 
@@ -185,12 +174,11 @@ describe("rollback public API", () => {
 });
 
 expectTypeOf<
-  Parameters<RollbackPipeline<DeleteArticleCommand>>[0]
+  Parameters<RollbackPipeline>[0]
 >().toEqualTypeOf<typeof MigrationItemState.Type>();
-const effectVoidRollbackPipeline: RollbackPipeline<DeleteArticleCommand> = () =>
-  Effect.void;
+const effectVoidRollbackPipeline: RollbackPipeline = () => Effect.void;
 expectTypeOf(effectVoidRollbackPipeline).toEqualTypeOf<
-  RollbackPipeline<DeleteArticleCommand>
+  RollbackPipeline
 >();
 expectTypeOf<RollbackContext>().toEqualTypeOf<{
   readonly definitionId: MigrationDefinitionId;
