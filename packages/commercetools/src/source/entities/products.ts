@@ -8,6 +8,7 @@ import type {
   CommercetoolsSourceProjection,
   ConfiguredCommercetoolsSourcePlugin,
 } from "../domain.ts";
+import { makeCommercetoolsSourceIdentityDefinitions } from "../domain.ts";
 import { makeProjectedEntitySource } from "../internal/entity-source.ts";
 import { ProductSourceSchema } from "../schemas.ts";
 import { entitySourceBaseOptions } from "../selectors.ts";
@@ -36,6 +37,10 @@ const productSourceDescriptor: CommercetoolsEntitySourceDescriptor<
   getId: (product) => product.id,
   getKey: (product) => product.key,
   getVersion: (product) => product.version,
+  identity: makeCommercetoolsSourceIdentityDefinitions({
+    resource: "product",
+    resourceLabel: "product",
+  }),
   label: "Commercetools products",
   readById: (sdk, id) =>
     sdk.request("products.source.readById", (project) =>

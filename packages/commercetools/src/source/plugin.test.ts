@@ -17,7 +17,7 @@ import {
   scriptedCommercetoolsSdkRoute,
 } from "@migrate-sdk/commercetools/testing";
 import { Effect, Schema } from "effect";
-import { SourcePlugin, SourcePluginError, toSourceIdentity } from "migrate-sdk";
+import { SourceIdentity, SourcePlugin, SourcePluginError } from "migrate-sdk";
 import { expectTypeOf } from "vitest";
 
 const CatalogProductSource = Schema.Struct({
@@ -384,7 +384,10 @@ describe("CommercetoolsSourcePlugin", () => {
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
         const page = yield* plugin.read(null);
 
-        expect(page.items[0]?.identity).toBe("example-business-unit");
+        expect(plugin.identity.id).toBe("commercetools-business-unit-key@v1");
+        expect(page.items[0]?.identity).toEqual(
+          SourceIdentity.fromKey(plugin.identity, "example-business-unit")
+        );
         expect(recording.requests[0]).toMatchObject({
           operation: "businessUnits.source.read",
           queryParams: {
@@ -414,7 +417,10 @@ describe("CommercetoolsSourcePlugin", () => {
         const firstItem = firstPage.items[0];
 
         expect(firstPage.items).toHaveLength(1);
-        expect(firstItem?.identity).toBe("recording-product-id");
+        expect(plugin.identity.id).toBe("commercetools-product-id@v1");
+        expect(firstItem?.identity).toEqual(
+          SourceIdentity.fromKey(plugin.identity, "recording-product-id")
+        );
         expect(firstItem?.version).toBe("1");
         expect(firstItem?.item).toMatchObject({
           id: "recording-product-id",
@@ -431,18 +437,18 @@ describe("CommercetoolsSourcePlugin", () => {
         expect(secondPage.nextCursor).toBeUndefined();
 
         const lookedUp = yield* plugin.readByIdentity(
-          toSourceIdentity("recording-product-id")
+          SourceIdentity.fromKey(plugin.identity, "recording-product-id")
         );
 
-        expect(lookedUp).toMatchObject({
-          identity: "recording-product-id",
-          item: {
-            id: "recording-product-id",
-            key: "example-book",
-            version: 1,
-          },
-          version: "1",
+        expect(lookedUp?.identity).toEqual(
+          SourceIdentity.fromKey(plugin.identity, "recording-product-id")
+        );
+        expect(lookedUp?.item).toMatchObject({
+          id: "recording-product-id",
+          key: "example-book",
+          version: 1,
         });
+        expect(lookedUp?.version).toBe("1");
       })
   );
 
@@ -455,7 +461,7 @@ describe("CommercetoolsSourcePlugin", () => {
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
       const lookedUp = yield* plugin.readByIdentity(
-        toSourceIdentity("missing-product")
+        SourceIdentity.fromKey(plugin.identity, "missing-product")
       );
 
       expect(lookedUp).toBeNull();
@@ -474,11 +480,16 @@ describe("CommercetoolsSourcePlugin", () => {
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
       const page = yield* plugin.read(null);
       const lookedUp = yield* plugin.readByIdentity(
-        toSourceIdentity("example-book")
+        SourceIdentity.fromKey(plugin.identity, "example-book")
       );
 
-      expect(page.items[0]?.identity).toBe("example-book");
-      expect(lookedUp?.identity).toBe("example-book");
+      expect(plugin.identity.id).toBe("commercetools-product-key@v1");
+      expect(page.items[0]?.identity).toEqual(
+        SourceIdentity.fromKey(plugin.identity, "example-book")
+      );
+      expect(lookedUp?.identity).toEqual(
+        SourceIdentity.fromKey(plugin.identity, "example-book")
+      );
       expect(lookedUp?.item).toMatchObject({
         id: "recording-product-id",
         key: "example-book",
@@ -556,18 +567,22 @@ describe("CommercetoolsSourcePlugin", () => {
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
       const page = yield* plugin.read(null);
       const lookedUp = yield* plugin.readByIdentity(
-        toSourceIdentity("recording-customer-id")
+        SourceIdentity.fromKey(plugin.identity, "recording-customer-id")
       );
 
+      expect(page.items[0]?.identity).toEqual(
+        SourceIdentity.fromKey(plugin.identity, "recording-customer-id")
+      );
       expect(page.items[0]).toMatchObject({
-        identity: "recording-customer-id",
         item: {
           email: "customer@example.com",
           key: "example-customer",
         },
         version: "1",
       });
-      expect(lookedUp?.identity).toBe("recording-customer-id");
+      expect(lookedUp?.identity).toEqual(
+        SourceIdentity.fromKey(plugin.identity, "recording-customer-id")
+      );
     })
   );
 
@@ -591,18 +606,22 @@ describe("CommercetoolsSourcePlugin", () => {
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
         const page = yield* plugin.read(null);
         const lookedUp = yield* plugin.readByIdentity(
-          toSourceIdentity("recording-business-unit-id")
+          SourceIdentity.fromKey(plugin.identity, "recording-business-unit-id")
         );
 
+        expect(page.items[0]?.identity).toEqual(
+          SourceIdentity.fromKey(plugin.identity, "recording-business-unit-id")
+        );
         expect(page.items[0]).toMatchObject({
-          identity: "recording-business-unit-id",
           item: {
             key: "example-business-unit",
             name: "Example Business Unit",
           },
           version: "1",
         });
-        expect(lookedUp?.identity).toBe("recording-business-unit-id");
+        expect(lookedUp?.identity).toEqual(
+          SourceIdentity.fromKey(plugin.identity, "recording-business-unit-id")
+        );
       })
   );
 });

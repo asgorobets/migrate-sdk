@@ -22,6 +22,16 @@ import {
 } from "./entities/products.ts";
 import type { CommercetoolsSourceCursor } from "./schemas.ts";
 
+type ConfiguredCommercetoolsSource<Source, SourceInput> =
+  ConfiguredSourcePlugin<
+    Source,
+    CommercetoolsSourceCursor,
+    string,
+    SourceInput,
+    never,
+    CommercetoolsSdk
+  >;
+
 export type {
   CommercetoolsSourceIdentity,
   CommercetoolsSourceQueryVariableValue,
@@ -83,22 +93,10 @@ export interface CommercetoolsSourcePluginFactory {
         Source,
         SourceInput
       >
-    ): ConfiguredSourcePlugin<
-      Source,
-      CommercetoolsSourceCursor,
-      SourceInput,
-      never,
-      CommercetoolsSdk
-    >;
+    ): ConfiguredCommercetoolsSource<Source, SourceInput>;
     (
       options?: CommercetoolsBusinessUnitSourceFactoryOptions
-    ): ConfiguredSourcePlugin<
-      BusinessUnit,
-      CommercetoolsSourceCursor,
-      BusinessUnit,
-      never,
-      CommercetoolsSdk
-    >;
+    ): ConfiguredCommercetoolsSource<BusinessUnit, BusinessUnit>;
   };
   readonly customers: {
     <Source, SourceInput>(
@@ -106,22 +104,10 @@ export interface CommercetoolsSourcePluginFactory {
         Source,
         SourceInput
       >
-    ): ConfiguredSourcePlugin<
-      Source,
-      CommercetoolsSourceCursor,
-      SourceInput,
-      never,
-      CommercetoolsSdk
-    >;
+    ): ConfiguredCommercetoolsSource<Source, SourceInput>;
     (
       options?: CommercetoolsCustomerSourceFactoryOptions
-    ): ConfiguredSourcePlugin<
-      Customer,
-      CommercetoolsSourceCursor,
-      Customer,
-      never,
-      CommercetoolsSdk
-    >;
+    ): ConfiguredCommercetoolsSource<Customer, Customer>;
   };
   readonly products: {
     <Source, SourceInput>(
@@ -129,22 +115,10 @@ export interface CommercetoolsSourcePluginFactory {
         Source,
         SourceInput
       >
-    ): ConfiguredSourcePlugin<
-      Source,
-      CommercetoolsSourceCursor,
-      SourceInput,
-      never,
-      CommercetoolsSdk
-    >;
+    ): ConfiguredCommercetoolsSource<Source, SourceInput>;
     (
       options?: CommercetoolsProductSourceFactoryOptions
-    ): ConfiguredSourcePlugin<
-      Product,
-      CommercetoolsSourceCursor,
-      Product,
-      never,
-      CommercetoolsSdk
-    >;
+    ): ConfiguredCommercetoolsSource<Product, Product>;
   };
 }
 
@@ -153,23 +127,11 @@ function businessUnits<Source, SourceInput>(
     Source,
     SourceInput
   >
-): ConfiguredSourcePlugin<
-  Source,
-  CommercetoolsSourceCursor,
-  SourceInput,
-  never,
-  CommercetoolsSdk
->;
+): ConfiguredCommercetoolsSource<Source, SourceInput>;
 
 function businessUnits(
   options?: CommercetoolsBusinessUnitSourceFactoryOptions
-): ConfiguredSourcePlugin<
-  BusinessUnit,
-  CommercetoolsSourceCursor,
-  BusinessUnit,
-  never,
-  CommercetoolsSdk
->;
+): ConfiguredCommercetoolsSource<BusinessUnit, BusinessUnit>;
 
 function businessUnits<Source, SourceInput>(
   options:
@@ -192,23 +154,11 @@ function customers<Source, SourceInput>(
     Source,
     SourceInput
   >
-): ConfiguredSourcePlugin<
-  Source,
-  CommercetoolsSourceCursor,
-  SourceInput,
-  never,
-  CommercetoolsSdk
->;
+): ConfiguredCommercetoolsSource<Source, SourceInput>;
 
 function customers(
   options?: CommercetoolsCustomerSourceFactoryOptions
-): ConfiguredSourcePlugin<
-  Customer,
-  CommercetoolsSourceCursor,
-  Customer,
-  never,
-  CommercetoolsSdk
->;
+): ConfiguredCommercetoolsSource<Customer, Customer>;
 
 function customers<Source, SourceInput>(
   options:
@@ -231,23 +181,11 @@ function products<Source, SourceInput>(
     Source,
     SourceInput
   >
-): ConfiguredSourcePlugin<
-  Source,
-  CommercetoolsSourceCursor,
-  SourceInput,
-  never,
-  CommercetoolsSdk
->;
+): ConfiguredCommercetoolsSource<Source, SourceInput>;
 
 function products(
   options?: CommercetoolsProductSourceFactoryOptions
-): ConfiguredSourcePlugin<
-  Product,
-  CommercetoolsSourceCursor,
-  Product,
-  never,
-  CommercetoolsSdk
->;
+): ConfiguredCommercetoolsSource<Product, Product>;
 
 function products<Source, SourceInput>(
   options:

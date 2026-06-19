@@ -17,6 +17,7 @@ export type {
 export {
   defineMigration,
   defineSourcePlugin,
+  defineSourcePluginLayer,
 } from "./domain/definition.ts";
 
 export {
@@ -53,6 +54,7 @@ export {
   MigrationDefinitionLockToken,
   MigrationRunId,
   SourceIdentity,
+  SourceIdentitySnapshot as SourceIdentitySnapshotSchema,
   SourceVersion,
   toEncodedSourceCursor,
   toMigrationDefinitionId,
@@ -70,6 +72,7 @@ export type {
   TrackingRecordContractFingerprintInput,
 } from "./domain/migration-contract.ts";
 export {
+  MigrationContract as MigrationContractSchema,
   SourceVersionContractId,
   SourceVersionContractFingerprint,
   TrackingRecordContractId,
@@ -246,9 +249,7 @@ export type {
   RunMigrationError,
 } from "./runtime/run-migrations.ts";
 
-export {
-  InMemoryDestination,
-} from "./destinations/in-memory/in-memory-destination.ts";
+export { InMemoryDestination } from "./destinations/in-memory/in-memory-destination.ts";
 export type {
   InMemoryEntryDestinationModule,
   InMemoryEntryDestinationModuleOptions,

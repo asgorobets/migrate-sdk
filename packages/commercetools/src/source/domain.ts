@@ -1,9 +1,39 @@
 import type { Effect } from "effect";
-import type { ConfiguredSourcePlugin, SourcePayloadSchema } from "migrate-sdk";
+import { Schema } from "effect";
+import {
+  type ConfiguredSourcePlugin,
+  SourceIdentity,
+  type SourceIdentityDefinition,
+  type SourcePayloadSchema,
+} from "migrate-sdk";
 import type { CommercetoolsSdk, CommercetoolsSdkError } from "../sdk.ts";
 import type { CommercetoolsSourceCursor } from "./schemas.ts";
 
 export type CommercetoolsSourceIdentity = "id" | "key";
+
+export type CommercetoolsSourceIdentityKey = string;
+
+export interface CommercetoolsEntitySourceIdentityDefinitions {
+  readonly id: SourceIdentityDefinition<CommercetoolsSourceIdentityKey>;
+  readonly key: SourceIdentityDefinition<CommercetoolsSourceIdentityKey>;
+}
+
+const sourceIdentitySchema = (partName: string) =>
+  SourceIdentity.key(partName, Schema.String);
+
+export const makeCommercetoolsSourceIdentityDefinitions = (input: {
+  readonly resource: string;
+  readonly resourceLabel: string;
+}): CommercetoolsEntitySourceIdentityDefinitions => ({
+  id: SourceIdentity.make({
+    id: `commercetools-${input.resource}-id@v1`,
+    schema: sourceIdentitySchema(`${input.resourceLabel}Id`),
+  }),
+  key: SourceIdentity.make({
+    id: `commercetools-${input.resource}-key@v1`,
+    schema: sourceIdentitySchema(`${input.resourceLabel}Key`),
+  }),
+});
 
 export type CommercetoolsSourceQueryVariableValue =
   | boolean
@@ -67,6 +97,7 @@ export interface CommercetoolsEntitySourceDescriptor<
   readonly getId: (resource: Resource) => string;
   readonly getKey: (resource: Resource) => string | undefined;
   readonly getVersion: (resource: Resource) => number;
+  readonly identity: CommercetoolsEntitySourceIdentityDefinitions;
   readonly label: string;
   readonly readById: (
     sdk: typeof CommercetoolsSdk.Service,
@@ -86,6 +117,7 @@ export type ConfiguredCommercetoolsSourcePlugin<Source, SourceInput> =
   ConfiguredSourcePlugin<
     Source,
     CommercetoolsSourceCursor,
+    CommercetoolsSourceIdentityKey,
     SourceInput,
     never,
     CommercetoolsSdk

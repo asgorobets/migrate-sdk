@@ -8,6 +8,7 @@ import type {
   CommercetoolsSourceProjection,
   ConfiguredCommercetoolsSourcePlugin,
 } from "../domain.ts";
+import { makeCommercetoolsSourceIdentityDefinitions } from "../domain.ts";
 import { makeProjectedEntitySource } from "../internal/entity-source.ts";
 import { BusinessUnitSourceSchema } from "../schemas.ts";
 import { entitySourceBaseOptions } from "../selectors.ts";
@@ -36,6 +37,10 @@ const businessUnitSourceDescriptor: CommercetoolsEntitySourceDescriptor<
   getId: (businessUnit) => businessUnit.id,
   getKey: (businessUnit) => businessUnit.key,
   getVersion: (businessUnit) => businessUnit.version,
+  identity: makeCommercetoolsSourceIdentityDefinitions({
+    resource: "business-unit",
+    resourceLabel: "businessUnit",
+  }),
   label: "Commercetools business units",
   readById: (sdk, id) =>
     sdk.request("businessUnits.source.readById", (project) =>

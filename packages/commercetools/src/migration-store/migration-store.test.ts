@@ -1,30 +1,40 @@
 import { createHash } from "node:crypto";
 import { ApiRoot as PlatformApiRoot } from "@commercetools/platform-sdk";
 import { describe, expect, it } from "@effect/vitest";
-import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
 import { CommercetoolsMigrationStore } from "@migrate-sdk/commercetools/migration-store";
 import {
   makeRecordingCustomObjectApiRoot,
   type RecordedCustomObjectRequest,
 } from "@migrate-sdk/commercetools/testing";
-import { Data, Effect, Layer } from "effect";
+import { Data, Effect, Layer, Schema } from "effect";
 import {
+  DestinationChangeDescriptorId,
   MigrationStore,
-  toDestinationIdentity,
-  toDestinationVersion,
+  makeSourceVersionContractFingerprint,
+  SourceIdentity,
   toEncodedSourceCursor,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
   toMigrationRunId,
-  toSourceIdentity,
   toSourceVersion,
 } from "migrate-sdk";
+import { CommercetoolsSdk } from "../sdk.ts";
 
 const runIdPattern = /^run-/u;
 const lockTokenPattern = /^lock-/u;
 const safeCustomObjectKeyPattern = /^[A-Za-z0-9_.~-]+(?:__[A-Za-z0-9_.~-]+)+$/u;
 const definitionId = toMigrationDefinitionId("catalog-products");
-const sourceIdentity = toSourceIdentity("product:sku-123");
+const TestSourceIdentity = SourceIdentity.make({
+  id: "test-product-source@v1",
+  schema: SourceIdentity.key("sourceKey", Schema.String),
+});
+const AlternateTestSourceIdentity = SourceIdentity.make({
+  id: "alternate-test-product-source@v1",
+  schema: SourceIdentity.key("sourceKey", Schema.String),
+});
+const sourceIdentityFor = (key: string) =>
+  SourceIdentity.fromKey(TestSourceIdentity, key);
+const sourceIdentity = sourceIdentityFor("product:sku-123");
 const namespace = "catalog-import";
 
 const hashedSegment = (value: string): string =>
@@ -33,13 +43,25 @@ const hashedSegment = (value: string): string =>
 const definitionHashSegment = (definition: string): string =>
   `definition-hash_${hashedSegment(definition)}`;
 
-const sourceIdentityHashSegment = (identity: string): string =>
-  `source-identity-hash_${hashedSegment(identity)}`;
+const sourceIdentityText = (
+  identity: string | { readonly encoded: string }
+): string => (typeof identity === "string" ? identity : identity.encoded);
+
+const sourceIdentityHashSegment = (
+  identity: string | { readonly encoded: string }
+): string =>
+  `source-identity-hash_${hashedSegment(sourceIdentityText(identity))}`;
 
 const sourceCursorKey = (definition: string): string =>
   `${namespace}__encoded-source-cursor__${definitionHashSegment(definition)}`;
 
-const itemStateKey = (definition: string, identity: string): string =>
+const migrationContractKey = (definition: string): string =>
+  `${namespace}__migration-contract__${definitionHashSegment(definition)}`;
+
+const itemStateKey = (
+  definition: string,
+  identity: string | { readonly encoded: string }
+): string =>
   `${namespace}__migration-item-state__${definitionHashSegment(definition)}__${sourceIdentityHashSegment(identity)}`;
 
 const latestRunStateKey = (definition: string): string =>
@@ -674,19 +696,83 @@ describe("CommercetoolsMigrationStore", () => {
   );
 
   it.effect(
+    "round-trips migration contracts as Custom Objects with deterministic keys",
+    () => {
+      const recording = makeRecordingCustomObjectApiRoot();
+      const expectedKey = migrationContractKey(definitionId);
+      const sourceVersionContractFingerprint =
+        makeSourceVersionContractFingerprint({
+          kind: "commercetools-version",
+          field: "version",
+        });
+      const contract = {
+        definitionId,
+        sourceIdentityContractFingerprint: TestSourceIdentity.fingerprint,
+        sourceVersionContractFingerprint,
+      };
+
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        expect(yield* store.getMigrationContract(definitionId)).toBeNull();
+
+        yield* store.upsertMigrationContract(contract);
+
+        expect(yield* store.getMigrationContract(definitionId)).toEqual(
+          contract
+        );
+
+        const [missingLookup, upsert, directLookup] = recording.requests;
+
+        expect(missingLookup).toMatchObject({
+          method: "GET",
+          pathVariables: {
+            container: "migrate-sdk",
+            key: expectedKey,
+            projectKey: "test-project",
+          },
+        });
+        expect(upsert).toMatchObject({
+          body: {
+            container: "migrate-sdk",
+            key: expectedKey,
+            value: {
+              formatVersion: 1,
+              index: {
+                definitionId,
+              },
+              namespace,
+              recordKind: "migration-contract",
+              state: contract,
+            },
+          },
+          method: "POST",
+        });
+        expect(directLookup).toMatchObject({
+          method: "GET",
+          pathVariables: {
+            container: "migrate-sdk",
+            key: expectedKey,
+            projectKey: "test-project",
+          },
+        });
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  it.effect(
     "uses safe bounded hashed key segments for unsafe long values",
     () => {
       const recording = makeRecordingCustomObjectApiRoot();
       const unsafeDefinitionId = toMigrationDefinitionId(
         `catalog products/"special"|${"x".repeat(500)}`
       );
-      const unsafeSourceIdentity = toSourceIdentity(
+      const unsafeSourceIdentity = sourceIdentityFor(
         `sku/"special"|${"y".repeat(500)}`
       );
       const cursor = toEncodedSourceCursor("cursor-long-values");
       const itemState = {
         definitionId: unsafeDefinitionId,
-        destinationIdentity: toDestinationIdentity("ct-product-long-values"),
         lastRunId: toMigrationRunId("run-long-values"),
         sourceIdentity: unsafeSourceIdentity,
         sourceVersion: toSourceVersion("source-long-values"),
@@ -732,7 +818,6 @@ describe("CommercetoolsMigrationStore", () => {
     const runId = toMigrationRunId("run-no-explicit-nulls");
     const itemState = {
       definitionId,
-      destinationIdentity: toDestinationIdentity("ct-product-no-nulls"),
       lastRunId: runId,
       reason: "destination version was not observed yet",
       sourceIdentity,
@@ -771,12 +856,52 @@ describe("CommercetoolsMigrationStore", () => {
     const itemStates = [
       {
         definitionId,
-        destinationIdentity: toDestinationIdentity("ct-product-123"),
-        destinationVersion: toDestinationVersion("7"),
+        journal: {
+          process: {
+            entries: [
+              {
+                descriptorId: DestinationChangeDescriptorId.make(
+                  "commercetools.product.upserted"
+                ),
+                kind: "change",
+                sequence: 0,
+                value: {
+                  id: "ct-product-123",
+                  key: "sku-123",
+                  version: 7,
+                },
+              },
+            ],
+            runId,
+          },
+          rollbackAttempts: [
+            {
+              entries: [
+                {
+                  kind: "diagnostic",
+                  message: "Rollback failed after product lookup",
+                  sequence: 0,
+                  severity: "error",
+                },
+              ],
+              error: {
+                errorTag: "RollbackRejected",
+                kind: "destination",
+                message: "Product rollback was rejected",
+              },
+              failedAt: new Date("2026-06-09T12:05:00.000Z"),
+              runId: toMigrationRunId("run-rollback-item-states"),
+            },
+          ],
+        },
         lastRunId: runId,
         sourceIdentity,
         sourceVersion: toSourceVersion("source-v1"),
         status: "migrated",
+        trackingRecord: {
+          productId: "ct-product-123",
+          productKey: "sku-123",
+        },
         updatedAt,
       },
       {
@@ -803,13 +928,14 @@ describe("CommercetoolsMigrationStore", () => {
       },
       {
         definitionId,
-        destinationIdentity: toDestinationIdentity("ct-product-123"),
-        destinationVersion: toDestinationVersion("8"),
         lastRunId: runId,
         reason: "source version changed",
         sourceIdentity,
         sourceVersion: toSourceVersion("source-v4"),
         status: "needs-update",
+        trackingRecord: {
+          productId: "ct-product-123",
+        },
         updatedAt,
       },
     ] as const;
@@ -818,14 +944,14 @@ describe("CommercetoolsMigrationStore", () => {
       const store = yield* MigrationStore;
 
       expect(
-        yield* store.getItemState(definitionId, sourceIdentity)
+        yield* store.getItemState(definitionId, sourceIdentity.encoded)
       ).toBeNull();
 
       for (const itemState of itemStates) {
         yield* store.upsertItemState(itemState);
         const persisted = yield* store.getItemState(
           itemState.definitionId,
-          itemState.sourceIdentity
+          itemState.sourceIdentity.encoded
         );
 
         expect(persisted).toEqual(itemState);
@@ -854,7 +980,7 @@ describe("CommercetoolsMigrationStore", () => {
               definitionId,
               lastRunId: runId,
               sourceIdentity,
-              sourceIdentityHash: hashedSegment(sourceIdentity),
+              sourceIdentityHash: hashedSegment(sourceIdentity.encoded),
               status: "needs-update",
             },
             namespace,
@@ -948,11 +1074,57 @@ describe("CommercetoolsMigrationStore", () => {
   );
 
   it.effect(
+    "rejects migration contract records whose metadata targets another definition",
+    () => {
+      const recording = makeRecordingCustomObjectApiRoot();
+      const requestedDefinitionId = toMigrationDefinitionId("catalog-products");
+      const persistedDefinitionId = toMigrationDefinitionId("catalog-prices");
+      const key = migrationContractKey(requestedDefinitionId);
+      const sourceVersionContractFingerprint =
+        makeSourceVersionContractFingerprint({
+          kind: "commercetools-version",
+          field: "version",
+        });
+
+      return Effect.gen(function* () {
+        yield* seedCustomObject(recording, key, {
+          formatVersion: 1,
+          index: {
+            definitionId: persistedDefinitionId,
+          },
+          namespace,
+          recordKind: "migration-contract",
+          state: {
+            definitionId: persistedDefinitionId,
+            sourceIdentityContractFingerprint: TestSourceIdentity.fingerprint,
+            sourceVersionContractFingerprint,
+          },
+        });
+
+        const error = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.getMigrationContract(requestedDefinitionId);
+        }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationStoreError",
+            message: expect.stringContaining(
+              "Migration store record metadata mismatch"
+            ),
+          })
+        );
+      });
+    }
+  );
+
+  it.effect(
     "rejects item state records whose metadata targets another item",
     () => {
       const recording = makeRecordingCustomObjectApiRoot();
-      const requestedSourceIdentity = toSourceIdentity("product:requested");
-      const persistedSourceIdentity = toSourceIdentity("product:persisted");
+      const requestedSourceIdentity = sourceIdentityFor("product:requested");
+      const persistedSourceIdentity = sourceIdentityFor("product:persisted");
       const key = itemStateKey(definitionId, requestedSourceIdentity);
 
       return Effect.gen(function* () {
@@ -962,7 +1134,7 @@ describe("CommercetoolsMigrationStore", () => {
             definitionId,
             lastRunId: toMigrationRunId("run-corrupt-item"),
             sourceIdentity: persistedSourceIdentity,
-            sourceIdentityHash: hashedSegment(persistedSourceIdentity),
+            sourceIdentityHash: hashedSegment(persistedSourceIdentity.encoded),
             status: "migrated",
             updatedAt: "2026-06-09T12:00:00.000Z",
           },
@@ -970,7 +1142,6 @@ describe("CommercetoolsMigrationStore", () => {
           recordKind: "migration-item-state",
           state: {
             definitionId,
-            destinationIdentity: toDestinationIdentity("ct-corrupt-item"),
             lastRunId: toMigrationRunId("run-corrupt-item"),
             sourceIdentity: persistedSourceIdentity,
             sourceVersion: toSourceVersion("source-corrupt-item"),
@@ -984,7 +1155,7 @@ describe("CommercetoolsMigrationStore", () => {
 
           return yield* store.getItemState(
             definitionId,
-            requestedSourceIdentity
+            requestedSourceIdentity.encoded
           );
         }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
 
@@ -1011,7 +1182,7 @@ describe("CommercetoolsMigrationStore", () => {
           definitionId,
           lastRunId: toMigrationRunId("run-index-state"),
           sourceIdentity,
-          sourceIdentityHash: hashedSegment(sourceIdentity),
+          sourceIdentityHash: hashedSegment(sourceIdentity.encoded),
           status: "migrated",
           updatedAt: "2026-06-09T12:00:00.000Z",
         },
@@ -1035,7 +1206,7 @@ describe("CommercetoolsMigrationStore", () => {
       const error = yield* Effect.gen(function* () {
         const store = yield* MigrationStore;
 
-        return yield* store.getItemState(definitionId, sourceIdentity);
+        return yield* store.getItemState(definitionId, sourceIdentity.encoded);
       }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
 
       expect(error).toEqual(
@@ -1049,6 +1220,60 @@ describe("CommercetoolsMigrationStore", () => {
     });
   });
 
+  it.effect(
+    "rejects item state records whose source identity snapshot metadata drifted",
+    () => {
+      const recording = makeRecordingCustomObjectApiRoot();
+      const driftedSourceIdentity = SourceIdentity.fromKey(
+        AlternateTestSourceIdentity,
+        "product:sku-123"
+      );
+      const key = itemStateKey(definitionId, sourceIdentity);
+
+      return Effect.gen(function* () {
+        yield* seedCustomObject(recording, key, {
+          formatVersion: 1,
+          index: {
+            definitionId,
+            lastRunId: toMigrationRunId("run-index-identity-contract"),
+            sourceIdentity: driftedSourceIdentity,
+            sourceIdentityHash: hashedSegment(sourceIdentity.encoded),
+            status: "migrated",
+            updatedAt: "2026-06-09T12:00:00.000Z",
+          },
+          namespace,
+          recordKind: "migration-item-state",
+          state: {
+            definitionId,
+            lastRunId: toMigrationRunId("run-index-identity-contract"),
+            sourceIdentity,
+            sourceVersion: toSourceVersion("source-index-identity-contract"),
+            status: "migrated",
+            updatedAt: "2026-06-09T12:00:00.000Z",
+          },
+        });
+
+        const error = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.getItemState(
+            definitionId,
+            sourceIdentity.encoded
+          );
+        }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationStoreError",
+            message: expect.stringContaining(
+              "Migration store record metadata mismatch"
+            ),
+          })
+        );
+      });
+    }
+  );
+
   it.effect("rejects listed item state records with non-canonical keys", () => {
     const recording = makeRecordingCustomObjectApiRoot();
     const nonCanonicalKey = `${namespace}__migration-item-state__definition-hash_wrong__source-identity-hash_wrong`;
@@ -1060,7 +1285,7 @@ describe("CommercetoolsMigrationStore", () => {
           definitionId,
           lastRunId: toMigrationRunId("run-non-canonical-key"),
           sourceIdentity,
-          sourceIdentityHash: hashedSegment(sourceIdentity),
+          sourceIdentityHash: hashedSegment(sourceIdentity.encoded),
           status: "migrated",
           updatedAt: "2026-06-09T12:00:00.000Z",
         },
@@ -1068,7 +1293,6 @@ describe("CommercetoolsMigrationStore", () => {
         recordKind: "migration-item-state",
         state: {
           definitionId,
-          destinationIdentity: toDestinationIdentity("ct-non-canonical-key"),
           lastRunId: toMigrationRunId("run-non-canonical-key"),
           sourceIdentity,
           sourceVersion: toSourceVersion("source-non-canonical-key"),
@@ -1100,9 +1324,8 @@ describe("CommercetoolsMigrationStore", () => {
     const additionalDefinitionId = toMigrationDefinitionId("catalog-prices");
     const firstState = {
       definitionId,
-      destinationIdentity: toDestinationIdentity("ct-product-a"),
       lastRunId: runId,
-      sourceIdentity: toSourceIdentity("product:sku-a"),
+      sourceIdentity: sourceIdentityFor("product:sku-a"),
       sourceVersion: toSourceVersion("source-a"),
       status: "migrated",
       updatedAt: new Date("2026-06-09T12:00:00.000Z"),
@@ -1111,16 +1334,15 @@ describe("CommercetoolsMigrationStore", () => {
       definitionId,
       lastRunId: runId,
       skipReason: "unchanged",
-      sourceIdentity: toSourceIdentity("product:sku-b"),
+      sourceIdentity: sourceIdentityFor("product:sku-b"),
       sourceVersion: toSourceVersion("source-b"),
       status: "skipped",
       updatedAt: new Date("2026-06-09T12:01:00.000Z"),
     } as const;
     const otherDefinitionState = {
       definitionId: additionalDefinitionId,
-      destinationIdentity: toDestinationIdentity("ct-price-a"),
       lastRunId: runId,
-      sourceIdentity: toSourceIdentity("price:sku-a"),
+      sourceIdentity: sourceIdentityFor("price:sku-a"),
       sourceVersion: toSourceVersion("source-price-a"),
       status: "migrated",
       updatedAt: new Date("2026-06-09T12:02:00.000Z"),
@@ -1166,27 +1388,24 @@ describe("CommercetoolsMigrationStore", () => {
     const itemStates = [
       {
         definitionId,
-        destinationIdentity: toDestinationIdentity("ct-product-a"),
         lastRunId: runId,
-        sourceIdentity: toSourceIdentity("product:sku-a"),
+        sourceIdentity: sourceIdentityFor("product:sku-a"),
         sourceVersion: toSourceVersion("source-a"),
         status: "migrated",
         updatedAt: new Date("2026-06-09T12:00:00.000Z"),
       },
       {
         definitionId,
-        destinationIdentity: toDestinationIdentity("ct-product-b"),
         lastRunId: runId,
-        sourceIdentity: toSourceIdentity("product:sku-b"),
+        sourceIdentity: sourceIdentityFor("product:sku-b"),
         sourceVersion: toSourceVersion("source-b"),
         status: "migrated",
         updatedAt: new Date("2026-06-09T12:01:00.000Z"),
       },
       {
         definitionId,
-        destinationIdentity: toDestinationIdentity("ct-product-c"),
         lastRunId: runId,
-        sourceIdentity: toSourceIdentity("product:sku-c"),
+        sourceIdentity: sourceIdentityFor("product:sku-c"),
         sourceVersion: toSourceVersion("source-c"),
         status: "migrated",
         updatedAt: new Date("2026-06-09T12:02:00.000Z"),
@@ -1246,9 +1465,8 @@ describe("CommercetoolsMigrationStore", () => {
     );
     const itemState = {
       definitionId: quotedDefinitionId,
-      destinationIdentity: toDestinationIdentity("ct-product-special"),
       lastRunId: toMigrationRunId("run-list-item-states-escaping"),
-      sourceIdentity: toSourceIdentity("product:sku-special"),
+      sourceIdentity: sourceIdentityFor("product:sku-special"),
       sourceVersion: toSourceVersion("source-special"),
       status: "migrated",
       updatedAt: new Date("2026-06-09T12:03:00.000Z"),
@@ -1282,7 +1500,6 @@ describe("CommercetoolsMigrationStore", () => {
       const recording = makeRecordingCustomObjectApiRoot();
       const itemState = {
         definitionId,
-        destinationIdentity: toDestinationIdentity("ct-product-123"),
         lastRunId: toMigrationRunId("run-delete-item-state"),
         sourceIdentity,
         sourceVersion: toSourceVersion("source-v1"),
@@ -1294,12 +1511,12 @@ describe("CommercetoolsMigrationStore", () => {
       return Effect.gen(function* () {
         const store = yield* MigrationStore;
 
-        yield* store.deleteItemState(definitionId, sourceIdentity);
+        yield* store.deleteItemState(definitionId, sourceIdentity.encoded);
         yield* store.upsertItemState(itemState);
-        yield* store.deleteItemState(definitionId, sourceIdentity);
+        yield* store.deleteItemState(definitionId, sourceIdentity.encoded);
 
         expect(
-          yield* store.getItemState(definitionId, sourceIdentity)
+          yield* store.getItemState(definitionId, sourceIdentity.encoded)
         ).toBeNull();
 
         expect(recording.requests.at(-2)).toMatchObject({

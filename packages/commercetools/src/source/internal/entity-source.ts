@@ -1,6 +1,9 @@
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import {
   defineSourcePlugin,
+  defineSourcePluginLayer,
+  type SourceIdentityTarget,
+  SourcePlugin,
   type SourcePluginImplementation,
 } from "migrate-sdk";
 import { CommercetoolsSdk } from "../../sdk.ts";
@@ -8,6 +11,7 @@ import type {
   CommercetoolsEntitySourceDescriptor,
   CommercetoolsPagedQueryResponse,
   CommercetoolsProjectedEntitySourceOptions,
+  CommercetoolsSourceIdentityKey,
   ConfiguredCommercetoolsSourcePlugin,
 } from "../domain.ts";
 import { CommercetoolsSourceCursor } from "../schemas.ts";
@@ -63,7 +67,7 @@ const sourceItem = <
     );
 
     return {
-      identity,
+      identityKey: identity,
       item,
       version: String(descriptor.getVersion(resource)),
     };
@@ -80,17 +84,17 @@ const makeImplementation = <
     Source,
     SourceInput,
     Resource
-  >
+  >,
+  sdk: typeof CommercetoolsSdk.Service
 ): SourcePluginImplementation<
   Source,
   CommercetoolsSourceCursor,
-  SourceInput,
-  CommercetoolsSdk
+  CommercetoolsSourceIdentityKey,
+  SourceInput
 > => {
   const read = Effect.fn(`${descriptor.label}.read`)(function* (
     cursor: CommercetoolsSourceCursor | null
   ) {
-    const sdk = yield* CommercetoolsSdk;
     const limit = yield* resolveBatchSize(descriptor.label, options);
     const page = yield* descriptor
       .readPage(sdk, makeReadQueryArgs(options, cursor, limit))
@@ -107,12 +111,11 @@ const makeImplementation = <
   });
 
   const readByIdentity = Effect.fn(`${descriptor.label}.readByIdentity`)(
-    function* (identity: string) {
-      const sdk = yield* CommercetoolsSdk;
+    function* (identity: SourceIdentityTarget<CommercetoolsSourceIdentityKey>) {
       const resource = yield* (
         (options.identity ?? defaultSourceIdentity) === "id"
-          ? descriptor.readById(sdk, identity)
-          : descriptor.readByKey(sdk, identity)
+          ? descriptor.readById(sdk, identity.key)
+          : descriptor.readByKey(sdk, identity.key)
       ).pipe(
         Effect.catch((cause) =>
           isNotFoundSdkError(cause)
@@ -146,18 +149,36 @@ export const makeProjectedEntitySource = <
     SourceInput,
     Resource
   >
-): ConfiguredCommercetoolsSourcePlugin<Source, SourceInput> =>
-  defineSourcePlugin<
-    Source,
-    CommercetoolsSourceCursor,
-    SourceInput,
-    CommercetoolsSdk
-  >({
-    cursorSchema: CommercetoolsSourceCursor,
-    make: () =>
-      makeImplementation<Source, SourceInput, Resource, Page>(
-        descriptor,
-        options
-      ),
+): ConfiguredCommercetoolsSourcePlugin<Source, SourceInput> => {
+  const identity =
+    descriptor.identity[options.identity ?? defaultSourceIdentity];
+
+  return defineSourcePluginLayer({
+    identity,
+    layer: Layer.effect(
+      SourcePlugin,
+      Effect.gen(function* () {
+        const sdk = yield* CommercetoolsSdk;
+        const source = defineSourcePlugin<
+          Source,
+          CommercetoolsSourceCursor,
+          CommercetoolsSourceIdentityKey,
+          SourceInput
+        >({
+          cursorSchema: CommercetoolsSourceCursor,
+          identity,
+          make: () =>
+            makeImplementation<Source, SourceInput, Resource, Page>(
+              descriptor,
+              options,
+              sdk
+            ),
+          sourceSchema: options.sourceSchema,
+        });
+
+        return yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      })
+    ),
     sourceSchema: options.sourceSchema,
   });
+};

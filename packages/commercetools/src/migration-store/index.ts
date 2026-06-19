@@ -6,19 +6,25 @@ import type {
 } from "@commercetools/platform-sdk";
 import { Effect, Layer, Schema } from "effect";
 import {
-  DestinationIdentity as DestinationIdentitySchema,
-  DestinationVersion as DestinationVersionSchema,
+  DestinationJournalEntry,
+  DestinationJournalRollbackAttemptError,
   EncodedSourceCursor as EncodedSourceCursorSchema,
+  type EncodedSourceIdentity as EncodedSourceIdentitySchema,
+  MigrationContractSchema,
+  type MigrationContract as MigrationContractType,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
   type MigrationDefinitionLock as MigrationDefinitionLockSchema,
   MigrationDefinitionLockToken as MigrationDefinitionLockTokenSchema,
   MigrationItemError,
+  type MigrationItemState as MigrationItemStateSchema,
   MigrationRunId as MigrationRunIdSchema,
   type MigrationRunState,
   MigrationStore,
   MigrationStoreError,
-  SourceIdentity as SourceIdentitySchema,
+  SourceIdentitySnapshotSchema,
+  SourceVersionContractFingerprint,
   SourceVersion as SourceVersionSchema,
+  TrackingRecord,
   toMigrationDefinitionLockToken,
   toMigrationRunId,
 } from "migrate-sdk";
@@ -29,11 +35,13 @@ import {
 } from "../sdk.ts";
 
 type EncodedSourceCursor = typeof EncodedSourceCursorSchema.Type;
+type EncodedSourceIdentity = typeof EncodedSourceIdentitySchema.Type;
 type MigrationDefinitionLock = typeof MigrationDefinitionLockSchema.Type;
 type MigrationDefinitionId = typeof MigrationDefinitionIdSchema.Type;
 type MigrationRunId = typeof MigrationRunIdSchema.Type;
 type MigrationRunStateType = typeof MigrationRunState.Type;
-type SourceIdentity = typeof SourceIdentitySchema.Type;
+type MigrationItemState = typeof MigrationItemStateSchema.Type;
+type SourceIdentitySnapshot = typeof SourceIdentitySnapshotSchema.Type;
 
 export interface CommercetoolsMigrationStoreOptions {
   readonly container?: string;
@@ -93,48 +101,90 @@ const EncodedSourceCursorRecord = Schema.Struct({
 });
 type EncodedSourceCursorRecord = typeof EncodedSourceCursorRecord.Type;
 
+const MigrationContractRecord = Schema.Struct({
+  formatVersion: Schema.Literal(formatVersion),
+  index: Schema.Struct({
+    definitionId: MigrationDefinitionIdSchema,
+  }),
+  namespace: Schema.String,
+  recordKind: Schema.Literal("migration-contract"),
+  state: MigrationContractSchema,
+});
+type MigrationContractRecord = typeof MigrationContractRecord.Type;
+
 const PersistedMigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionIdSchema,
   lastRunId: MigrationRunIdSchema,
-  sourceIdentity: SourceIdentitySchema,
+  sourceIdentity: SourceIdentitySnapshotSchema,
   updatedAt: Schema.DateFromString,
 } as const;
 
 const PersistedObservedSourceVersionFields = {
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: SourceVersionSchema,
 } as const;
+
+const PersistedDestinationJournalSegmentFields = {
+  entries: Schema.Array(DestinationJournalEntry),
+  runId: MigrationRunIdSchema,
+} as const;
+
+const PersistedDestinationJournalSegment = Schema.Struct(
+  PersistedDestinationJournalSegmentFields
+);
+
+const PersistedDestinationRollbackAttemptJournalSegment = Schema.Struct({
+  ...PersistedDestinationJournalSegmentFields,
+  error: DestinationJournalRollbackAttemptError,
+  failedAt: Schema.DateFromString,
+});
+
+const PersistedDestinationJournal = Schema.Struct({
+  process: PersistedDestinationJournalSegment,
+  rollbackAttempts: Schema.Array(
+    PersistedDestinationRollbackAttemptJournalSegment
+  ),
+});
 
 const PersistedMigratedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
   ...PersistedObservedSourceVersionFields,
-  destinationIdentity: DestinationIdentitySchema,
-  destinationVersion: Schema.optional(DestinationVersionSchema),
+  journal: Schema.optional(PersistedDestinationJournal),
   status: Schema.Literal("migrated"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 
 const PersistedSkippedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
   ...PersistedObservedSourceVersionFields,
+  journal: Schema.optional(PersistedDestinationJournal),
   skipReason: Schema.String,
   status: Schema.Literal("skipped"),
 });
 
 const PersistedFailedItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: Schema.optional(SourceVersionSchema),
-  destinationIdentity: Schema.optional(DestinationIdentitySchema),
-  destinationVersion: Schema.optional(DestinationVersionSchema),
   error: MigrationItemError,
+  journal: Schema.optional(PersistedDestinationJournal),
   status: Schema.Literal("failed"),
 });
 
 const PersistedNeedsUpdateItemState = Schema.Struct({
   ...PersistedMigrationItemStateBaseFields,
+  sourceVersionContractFingerprint: Schema.optional(
+    SourceVersionContractFingerprint
+  ),
   sourceVersion: Schema.optional(SourceVersionSchema),
-  destinationIdentity: DestinationIdentitySchema,
-  destinationVersion: Schema.optional(DestinationVersionSchema),
+  journal: Schema.optional(PersistedDestinationJournal),
   reason: Schema.String,
   status: Schema.Literal("needs-update"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 
 const PersistedMigrationItemState = Schema.Union([
@@ -143,14 +193,13 @@ const PersistedMigrationItemState = Schema.Union([
   PersistedFailedItemState,
   PersistedNeedsUpdateItemState,
 ]);
-type MigrationItemState = typeof PersistedMigrationItemState.Type;
 
 const MigrationItemStateRecord = Schema.Struct({
   formatVersion: Schema.Literal(formatVersion),
   index: Schema.Struct({
     definitionId: MigrationDefinitionIdSchema,
     lastRunId: MigrationRunIdSchema,
-    sourceIdentity: SourceIdentitySchema,
+    sourceIdentity: SourceIdentitySnapshotSchema,
     sourceIdentityHash: Schema.String,
     status: Schema.Literals(["migrated", "skipped", "failed", "needs-update"]),
     updatedAt: Schema.DateFromString,
@@ -192,7 +241,7 @@ const hashSegment = (value: string): string =>
 const definitionHashSegment = (definitionId: MigrationDefinitionId): string =>
   `definition-hash_${hashSegment(definitionId)}`;
 
-const sourceIdentityHashSegment = (identity: SourceIdentity): string =>
+const sourceIdentityHashSegment = (identity: EncodedSourceIdentity): string =>
   `source-identity-hash_${hashSegment(identity)}`;
 
 const sourceCursorKey = (
@@ -201,10 +250,16 @@ const sourceCursorKey = (
 ): string =>
   `${namespace}__encoded-source-cursor__${definitionHashSegment(definitionId)}`;
 
+const migrationContractKey = (
+  namespace: string,
+  definitionId: MigrationDefinitionId
+): string =>
+  `${namespace}__migration-contract__${definitionHashSegment(definitionId)}`;
+
 const itemStateKey = (
   namespace: string,
   definitionId: MigrationDefinitionId,
-  identity: SourceIdentity
+  identity: EncodedSourceIdentity
 ): string =>
   `${namespace}__migration-item-state__${definitionHashSegment(definitionId)}__${sourceIdentityHashSegment(identity)}`;
 
@@ -454,6 +509,30 @@ const validateMetadata = (
     ? Effect.void
     : Effect.fail(metadataMismatchError(key, fieldName, expected, actual));
 
+const sourceIdentitySnapshotKeyValue = (
+  value: SourceIdentitySnapshot["key"]
+): string => JSON.stringify(value);
+
+const sameSourceIdentitySnapshots = (
+  left: SourceIdentitySnapshot,
+  right: SourceIdentitySnapshot
+): boolean =>
+  left.encoded === right.encoded &&
+  left.fingerprint === right.fingerprint &&
+  left.id === right.id &&
+  sourceIdentitySnapshotKeyValue(left.key) ===
+    sourceIdentitySnapshotKeyValue(right.key);
+
+const validateSourceIdentitySnapshotMetadata = (
+  key: string,
+  fieldName: string,
+  expected: SourceIdentitySnapshot,
+  actual: SourceIdentitySnapshot
+): Effect.Effect<void, MigrationStoreError> =>
+  sameSourceIdentitySnapshots(expected, actual)
+    ? Effect.void
+    : Effect.fail(metadataMismatchError(key, fieldName, expected, actual));
+
 const dateMetadataValue = (date: Date | undefined): string | undefined =>
   date?.toISOString();
 
@@ -511,13 +590,46 @@ const validateSourceCursorRecord = (
     )
   );
 
+const validateMigrationContractRecord = (
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  key: string,
+  definitionId: MigrationDefinitionId,
+  record: MigrationContractRecord
+): Effect.Effect<void, MigrationStoreError> =>
+  validateRecordNamespace(options, key, record).pipe(
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "key",
+        migrationContractKey(options.namespace, record.index.definitionId),
+        key
+      )
+    ),
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "index.definitionId",
+        definitionId,
+        record.index.definitionId
+      )
+    ),
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "state.definitionId",
+        definitionId,
+        record.state.definitionId
+      )
+    )
+  );
+
 const validateItemStateRecord = (
   options: ResolvedCommercetoolsMigrationStoreOptions,
   key: string,
   record: MigrationItemStateRecord,
   expected: {
     readonly definitionId: MigrationDefinitionId;
-    readonly sourceIdentity?: SourceIdentity;
+    readonly sourceIdentity?: EncodedSourceIdentity;
   }
 ): Effect.Effect<void, MigrationStoreError> =>
   Effect.all(
@@ -541,7 +653,7 @@ const validateItemStateRecord = (
         itemStateKey(
           options.namespace,
           record.state.definitionId,
-          record.state.sourceIdentity
+          record.state.sourceIdentity.encoded
         ),
         key
       ),
@@ -551,7 +663,7 @@ const validateItemStateRecord = (
         record.state.lastRunId,
         record.index.lastRunId
       ),
-      validateMetadata(
+      validateSourceIdentitySnapshotMetadata(
         key,
         "index.sourceIdentity",
         record.state.sourceIdentity,
@@ -560,7 +672,7 @@ const validateItemStateRecord = (
       validateMetadata(
         key,
         "index.sourceIdentityHash",
-        hashSegment(record.state.sourceIdentity),
+        hashSegment(record.state.sourceIdentity.encoded),
         record.index.sourceIdentityHash
       ),
       validateMetadata(
@@ -580,9 +692,9 @@ const validateItemStateRecord = (
         : [
             validateMetadata(
               key,
-              "state.sourceIdentity",
+              "state.sourceIdentity.encoded",
               expected.sourceIdentity,
-              record.state.sourceIdentity
+              record.state.sourceIdentity.encoded
             ),
           ]),
     ],
@@ -891,6 +1003,19 @@ const sourceCursorRecord = (
   state: cursor,
 });
 
+const migrationContractRecord = (
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  contract: MigrationContractType
+): MigrationContractRecord => ({
+  formatVersion,
+  index: {
+    definitionId: contract.definitionId,
+  },
+  namespace: options.namespace,
+  recordKind: "migration-contract",
+  state: contract,
+});
+
 const itemStateRecord = (
   options: ResolvedCommercetoolsMigrationStoreOptions,
   state: MigrationItemState
@@ -900,7 +1025,7 @@ const itemStateRecord = (
     definitionId: state.definitionId,
     lastRunId: state.lastRunId,
     sourceIdentity: state.sourceIdentity,
-    sourceIdentityHash: hashSegment(state.sourceIdentity),
+    sourceIdentityHash: hashSegment(state.sourceIdentity.encoded),
     status: state.status,
     updatedAt: state.updatedAt,
   },
@@ -1134,8 +1259,37 @@ const makeService = (
     );
   });
 
+  const getMigrationContract = Effect.fn(
+    "CommercetoolsMigrationStore.getMigrationContract"
+  )((definitionId: MigrationDefinitionId) => {
+    const key = migrationContractKey(options.namespace, definitionId);
+
+    return readRecordOptional(
+      sdk,
+      options,
+      key,
+      MigrationContractRecord,
+      (record) =>
+        validateMigrationContractRecord(options, key, definitionId, record)
+    ).pipe(Effect.map((record) => record?.state ?? null));
+  });
+
+  const upsertMigrationContract = Effect.fn(
+    "CommercetoolsMigrationStore.upsertMigrationContract"
+  )((contract: MigrationContractType) => {
+    const key = migrationContractKey(options.namespace, contract.definitionId);
+
+    return writeRecord(
+      sdk,
+      options,
+      key,
+      MigrationContractRecord,
+      migrationContractRecord(options, contract)
+    );
+  });
+
   const getItemState = Effect.fn("CommercetoolsMigrationStore.getItemState")(
-    (definitionId: MigrationDefinitionId, identity: SourceIdentity) => {
+    (definitionId: MigrationDefinitionId, identity: EncodedSourceIdentity) => {
       const key = itemStateKey(options.namespace, definitionId, identity);
 
       return readRecordOptional(
@@ -1162,7 +1316,10 @@ const makeService = (
 
   const deleteItemState = Effect.fn(
     "CommercetoolsMigrationStore.deleteItemState"
-  )(function* (definitionId: MigrationDefinitionId, identity: SourceIdentity) {
+  )(function* (
+    definitionId: MigrationDefinitionId,
+    identity: EncodedSourceIdentity
+  ) {
     const key = itemStateKey(options.namespace, definitionId, identity);
     const customObject = yield* readCustomObjectOptional(sdk, options, key);
 
@@ -1189,7 +1346,7 @@ const makeService = (
     const key = itemStateKey(
       options.namespace,
       state.definitionId,
-      state.sourceIdentity
+      state.sourceIdentity.encoded
     );
 
     return writeRecord(
@@ -1298,6 +1455,8 @@ const makeService = (
   return {
     getSourceCursor,
     setSourceCursor,
+    getMigrationContract,
+    upsertMigrationContract,
     getItemState,
     listItemStates: (definitionId: MigrationDefinitionId) =>
       listItemStates(sdk, options, definitionId),
