@@ -30,6 +30,8 @@ const articlesAuthorsTagsOrderPattern =
 const selectedRunSummaryPattern =
   /1\s+authors\s+succeeded\s+1\s+0\s+0\s+0\s+0[\s\S]*2\s+articles\s+succeeded\s+1\s+0\s+0\s+0\s+0/;
 const articleRunSummaryPattern = /1\s+articles\s+succeeded\s+1\s+0\s+0\s+0\s+0/;
+const progressArticleRunSummaryPattern =
+  /1\s+articles\s+succeeded\s+3\s+0\s+0\s+0\s+0/;
 const rollbackAllSummaryPattern =
   /1\s+articles\s+succeeded\s+1\s+0\s+0[\s\S]*2\s+authors\s+succeeded\s+1\s+0\s+0[\s\S]*3\s+tags\s+succeeded\s+1\s+0\s+0/;
 const tagRollbackSummaryPattern = /1\s+tags\s+succeeded\s+1\s+0\s+0/;
@@ -450,6 +452,60 @@ const executionConfigSource = (): string => `
   export default defineMigrationCliConfig({
     registry: MigrationDefinitionRegistry.make({
       definitions: [tags, articles, authors]
+    })
+  });
+`;
+
+const progressExecutionConfigSource = (): string => `
+  import { Schema } from "effect";
+  import {
+    defineMigration,
+    InMemoryMigrationStore,
+    InMemorySourcePlugin,
+    MigrationDefinitionRegistry,
+    SourceIdentity,
+    toMigrationDefinitionId
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntrySourceIdentity = SourceIdentity.make({
+    id: "entry@v1",
+    schema: SourceIdentity.key("id", Schema.NonEmptyString)
+  });
+  const store = InMemoryMigrationStore.layer();
+
+  const articles = defineMigration({
+    id: toMigrationDefinitionId("articles"),
+    source: InMemorySourcePlugin.make({
+      identity: EntrySourceIdentity,
+      sourceSchema: EntrySource,
+      batchSize: 2,
+      items: [
+        {
+          identityKey: "article-1",
+          version: "source-version-1",
+          item: { title: "Article 1" }
+        },
+        {
+          identityKey: "article-2",
+          version: "source-version-1",
+          item: { title: "Article 2" }
+        },
+        {
+          identityKey: "article-3",
+          version: "source-version-1",
+          item: { title: "Article 3" }
+        }
+      ]
+    }),
+    store,
+    process: () => undefined
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [articles]
     })
   });
 `;
@@ -2072,6 +2128,103 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
+  it.effect("renders checkpoint progress logs for run execution", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        progressExecutionConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--progress",
+          "log",
+          "articles",
+        ],
+        project
+      );
+
+      const progressLines = result.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("[progress]"));
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(progressLines).toEqual([
+        "[progress] Run started definitions=articles",
+        "[progress] Definition started definition=articles",
+        "[progress] Source Cursor Window completed definition=articles itemsRead=2 migrated=2 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Source Cursor Window completed definition=articles itemsRead=3 migrated=3 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Definition completed definition=articles status=succeeded migrated=3 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Run completed status=succeeded definitions=articles",
+      ]);
+      expect(result.stdout).toContain("Run Completed succeeded");
+      expect(result.stdout).not.toContain("Source Item");
+      expect(result.stdout).not.toContain("offset");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("suppresses live progress output when progress mode is none", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        progressExecutionConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--progress",
+          "none",
+          "articles",
+        ],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run Completed succeeded");
+      expect(result.stdout).not.toContain("[progress]");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("keeps default non-interactive run output stable", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        progressExecutionConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "articles"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run Completed succeeded");
+      expect(result.stdout).toMatch(progressArticleRunSummaryPattern);
+      expect(result.stdout).not.toContain("[progress]");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
   it.effect("executes all run definitions in dependency order", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -2096,6 +2249,86 @@ describe("migrate CLI", () => {
         "tags",
         "authors",
         "articles",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders all-definition progress logs in execution order", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        executionConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--progress", "log", "--all"],
+        project
+      );
+
+      const progressLines = result.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("[progress]"));
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(progressLines).toEqual([
+        "[progress] Run started definitions=tags,authors,articles",
+        "[progress] Definition started definition=tags",
+        "[progress] Source Cursor Window completed definition=tags itemsRead=1 migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Definition completed definition=tags status=succeeded migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Definition started definition=authors",
+        "[progress] Source Cursor Window completed definition=authors itemsRead=1 migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Definition completed definition=authors status=succeeded migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Definition started definition=articles",
+        "[progress] Source Cursor Window completed definition=articles itemsRead=1 migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Definition completed definition=articles status=succeeded migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Run completed status=succeeded definitions=tags,authors,articles",
+      ]);
+      expect(getExecutionProbe().executions).toEqual([
+        "tags",
+        "authors",
+        "articles",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders progress log output for run failures", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        runtimeFailureConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--progress",
+          "log",
+          "articles",
+        ],
+        project
+      );
+
+      const progressLines = result.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("[progress]"));
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("SourcePluginError");
+      expect(progressLines).toEqual([
+        "[progress] Run started definitions=articles",
+        "[progress] Definition started definition=articles",
+        "[progress] Run failed definitions=articles",
       ]);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );

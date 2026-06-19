@@ -65,6 +65,7 @@ import type {
   TrackingRecord,
   TrackingRecordContract,
 } from "../domain/tracking.ts";
+import { MigrationProgress } from "../services/migration-progress.ts";
 import type { MigrationReference } from "../services/migration-reference-lookup.ts";
 import { MigrationStore } from "../services/migration-store.ts";
 import {
@@ -327,6 +328,10 @@ const emptyCounts = {
   needsUpdate: 0,
 };
 
+const snapshotCounts = (
+  counts: MutableDefinitionCounts
+): MigrationDefinitionRunSummary["counts"] => ({ ...counts });
+
 const emptyRollbackCounts = {
   rolledBack: 0,
   failed: 0,
@@ -460,15 +465,35 @@ const executeMigrationRun = <A, E, R = never>(
           }
 
           const runState = yield* store.beginRun(runId, definitionIds);
+          yield* MigrationProgress.emit({
+            definitionIds,
+            kind: "run-started",
+            runId: runState.runId,
+          });
           const bodyResult = yield* body(runState.runId).pipe(
             Effect.catch((error) =>
-              failRunAndRethrow(store, runState.runId, definitionIds, error)
+              MigrationProgress.emit({
+                definitionIds,
+                error,
+                kind: "run-failed",
+                runId: runState.runId,
+              }).pipe(
+                Effect.andThen(
+                  failRunAndRethrow(store, runState.runId, definitionIds, error)
+                )
+              )
             )
           );
           const completedRun =
             bodyResult.status === "failed"
               ? yield* store.failRun(runState.runId, definitionIds)
               : yield* store.completeRun(runState.runId, definitionIds);
+          yield* MigrationProgress.emit({
+            definitionIds,
+            kind: "run-completed",
+            runId: runState.runId,
+            status: bodyResult.status,
+          });
 
           return {
             ...bodyResult,
@@ -1157,6 +1182,13 @@ const processTargetedSourceIdentities = <
       });
 
       addOutcomeToCounts(counts, outcome);
+      yield* MigrationProgress.emit({
+        counts: snapshotCounts(counts),
+        definitionId: definition.id,
+        kind: "source-item-completed",
+        outcome,
+        runId,
+      });
     }
 
     return sourceIdentities;
@@ -1241,7 +1273,22 @@ const processCursorDiscovery = <
         });
 
         addOutcomeToCounts(counts, outcome);
+        yield* MigrationProgress.emit({
+          counts: snapshotCounts(counts),
+          definitionId: definition.id,
+          kind: "source-item-completed",
+          outcome,
+          runId,
+        });
       }
+
+      yield* MigrationProgress.emit({
+        counts: snapshotCounts(counts),
+        definitionId: definition.id,
+        itemsRead: readResult.items.length,
+        kind: "source-cursor-window-completed",
+        runId,
+      });
 
       if (readResult.nextCursor === undefined) {
         break;
@@ -1653,6 +1700,11 @@ const runMigrationDefinition = <
 
     const counts = { ...emptyCounts };
     const itemStates = yield* store.listItemStates(definition.id);
+    yield* MigrationProgress.emit({
+      definitionId: definition.id,
+      kind: "definition-started",
+      runId,
+    });
 
     const attemptedSourceIdentities = yield* processTargetedSourceIdentities({
       counts,
@@ -1665,12 +1717,22 @@ const runMigrationDefinition = <
     });
 
     if (isTargetedMode(mode)) {
-      return {
+      const summary = {
         definitionId: definition.id,
         status:
           counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
         counts,
       };
+
+      yield* MigrationProgress.emit({
+        counts: snapshotCounts(counts),
+        definitionId: definition.id,
+        kind: "definition-completed",
+        runId,
+        status: summary.status,
+      });
+
+      return summary;
     }
 
     yield* processCursorDiscovery({
@@ -1682,11 +1744,21 @@ const runMigrationDefinition = <
       store,
     });
 
-    return {
+    const summary = {
       definitionId: definition.id,
       status: counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
       counts,
     };
+
+    yield* MigrationProgress.emit({
+      counts: snapshotCounts(counts),
+      definitionId: definition.id,
+      kind: "definition-completed",
+      runId,
+      status: summary.status,
+    });
+
+    return summary;
   });
   const lookupLayer = makeMigrationReferenceLookupLayer({
     createStubReference,

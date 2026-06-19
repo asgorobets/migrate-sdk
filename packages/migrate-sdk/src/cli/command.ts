@@ -18,6 +18,7 @@ import {
   loadMigrationCliConfig,
   type MigrationCliConfigLoadError,
 } from "./config-loader.ts";
+import { type CliProgressMode, makeCliProgressLayer } from "./progress.ts";
 import {
   renderConfigLoadError,
   renderPlanningError,
@@ -138,6 +139,11 @@ const graphCommand = Command.make(
 
 const plan = Flag.boolean("plan").pipe(
   Flag.withDescription("Print the execution plan without running migrations")
+);
+
+const progress = Flag.choice("progress", ["auto", "log", "none"] as const).pipe(
+  Flag.withDefault<CliProgressMode>("auto"),
+  Flag.withDescription("Render live progress: auto, log, or none")
 );
 
 const all = Flag.boolean("all").pipe(
@@ -420,6 +426,7 @@ const runCommand = Command.make(
     failed,
     id,
     plan,
+    progress,
     skipped,
     withDependencies,
   },
@@ -476,6 +483,7 @@ const runCommand = Command.make(
       }
 
       const summary = yield* registry.run(runInput).pipe(
+        Effect.provide(makeCliProgressLayer(input.progress)),
         Effect.catch((error) =>
           failReportedCliMessage(
             renderRunCommandError(error, {

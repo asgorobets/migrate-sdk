@@ -87,6 +87,20 @@ export { MigrationDefinitionLock } from "./domain/lock.ts";
 
 export type { ProcessContext } from "./domain/pipeline.ts";
 
+export type {
+  MigrationDefinitionProgressState,
+  MigrationProgressDefinitionStatus,
+  MigrationProgressCounts,
+  MigrationProgressEvent,
+  MigrationProgressRunStatus,
+  MigrationProgressState,
+} from "./domain/progress.ts";
+export {
+  emptyMigrationProgressCounts,
+  initialMigrationProgressState,
+  reduceMigrationProgressState,
+} from "./domain/progress.ts";
+
 export { MigrationRunState } from "./domain/run.ts";
 export type {
   MigrationDefinitionRunSummary,
@@ -230,6 +244,7 @@ export type {
   MigrationReferenceLookupTarget,
 } from "./services/migration-reference-lookup.ts";
 export { MigrationStore } from "./services/migration-store.ts";
+export { MigrationProgress } from "./services/migration-progress.ts";
 export { SourcePlugin } from "./services/source-plugin.ts";
 export { Tracking } from "./services/tracking.ts";
 export type {

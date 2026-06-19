@@ -19,6 +19,8 @@ import {
   InMemorySourcePlugin,
   MigrationDefinitionLock,
   MigrationItemState,
+  MigrationProgress,
+  type MigrationProgressEvent,
   type MigrationReference,
   MigrationReferenceLookup,
   MigrationRunState,
@@ -4352,6 +4354,99 @@ describe("runMigration", () => {
         },
       ]);
     })
+  );
+
+  it.effect(
+    "emits Migration Progress events while processing Source Cursor Windows",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const events: MigrationProgressEvent[] = [];
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            batchSize: 2,
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: { title: "Article 1" },
+              },
+              {
+                identityKey: "article-2",
+                version: "source-version-1",
+                item: { title: "Article 2" },
+              },
+              {
+                identityKey: "article-3",
+                version: "source-version-1",
+                item: { title: "Article 3" },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () => Effect.void,
+        });
+
+        const progressLayer = Layer.succeed(MigrationProgress, {
+          emit: (event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+        });
+
+        const summary = yield* runMigration(definition).pipe(
+          Effect.provide(progressLayer)
+        );
+
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 3,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(events.map((event) => event.kind)).toEqual([
+          "run-started",
+          "definition-started",
+          "source-item-completed",
+          "source-item-completed",
+          "source-cursor-window-completed",
+          "source-item-completed",
+          "source-cursor-window-completed",
+          "definition-completed",
+          "run-completed",
+        ]);
+        expect(events).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              kind: "source-cursor-window-completed",
+              definitionId: definition.id,
+              counts: {
+                migrated: 2,
+                skipped: 0,
+                failed: 0,
+                unchanged: 0,
+                needsUpdate: 0,
+              },
+              itemsRead: 2,
+            }),
+            expect.objectContaining({
+              kind: "definition-completed",
+              definitionId: definition.id,
+              status: "succeeded",
+              counts: {
+                migrated: 3,
+                skipped: 0,
+                failed: 0,
+                unchanged: 0,
+                needsUpdate: 0,
+              },
+            }),
+          ])
+        );
+      })
   );
 
   it.effect("advances Source Cursors after windows with item failures", () =>
