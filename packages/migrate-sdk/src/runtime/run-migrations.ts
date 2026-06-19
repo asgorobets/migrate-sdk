@@ -68,6 +68,7 @@ import type {
 import { MigrationProgress } from "../services/migration-progress.ts";
 import type { MigrationReference } from "../services/migration-reference-lookup.ts";
 import { MigrationStore } from "../services/migration-store.ts";
+import { RollbackProgress } from "../services/rollback-progress.ts";
 import {
   getSourcePlugin,
   type SourcePlugin,
@@ -331,6 +332,10 @@ const emptyCounts = {
 const snapshotCounts = (
   counts: MutableDefinitionCounts
 ): MigrationDefinitionRunSummary["counts"] => ({ ...counts });
+
+const snapshotRollbackCounts = (
+  counts: MutableRollbackDefinitionCounts
+): RollbackDefinitionRunSummary["counts"] => ({ ...counts });
 
 const emptyRollbackCounts = {
   rolledBack: 0,
@@ -1053,6 +1058,13 @@ const rollbackItemState = <
       );
       yield* store.upsertItemState(updatedState);
       counts.failed += 1;
+      yield* RollbackProgress.emit({
+        counts: snapshotRollbackCounts(counts),
+        definitionId: definition.id,
+        kind: "source-item-completed",
+        outcome: "failed",
+        runId,
+      });
       return;
     }
 
@@ -1061,6 +1073,13 @@ const rollbackItemState = <
       itemState.sourceIdentity.encoded
     );
     counts.rolledBack += 1;
+    yield* RollbackProgress.emit({
+      counts: snapshotRollbackCounts(counts),
+      definitionId: definition.id,
+      kind: "source-item-completed",
+      outcome: "rolled-back",
+      runId,
+    });
   });
 
 interface ProcessTargetedSourceIdentitiesOptions<
@@ -1801,6 +1820,11 @@ const runRollbackMigrationDefinition = <
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
     const counts = { ...emptyRollbackCounts };
+    yield* RollbackProgress.emit({
+      definitionId: definition.id,
+      kind: "definition-started",
+      runId,
+    });
 
     if (options.encodedSourceIdentities === undefined) {
       const itemStates = yield* store.listItemStates(definition.id);
@@ -1823,6 +1847,13 @@ const runRollbackMigrationDefinition = <
 
         if (itemState === null) {
           counts.skipped += 1;
+          yield* RollbackProgress.emit({
+            counts: snapshotRollbackCounts(counts),
+            definitionId: definition.id,
+            kind: "source-item-completed",
+            outcome: "skipped",
+            runId,
+          });
           continue;
         }
 
@@ -1838,10 +1869,20 @@ const runRollbackMigrationDefinition = <
 
     yield* store.deleteSourceCursor(definition.id);
 
+    const status =
+      counts.failed > 0 ? ("failed" as const) : ("succeeded" as const);
+    yield* RollbackProgress.emit({
+      counts: snapshotRollbackCounts(counts),
+      definitionId: definition.id,
+      kind: "definition-completed",
+      runId,
+      status,
+    });
+
     return {
       counts,
       definitionId: definition.id,
-      status: counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
+      status,
     };
   });
 
@@ -2070,21 +2111,48 @@ export function rollbackMigration<
     const program = Effect.gen(function* () {
       const store = yield* MigrationStore;
       const definitionIds = [definition.id];
+      const progressDefinitionIds = [definition.id];
       const run = yield* executeMigrationRun(
         store,
         definitionIds,
         (runId) =>
-          runRollbackMigrationDefinition(definition, runId, options).pipe(
-            Effect.map((summary) => ({
+          Effect.gen(function* () {
+            yield* RollbackProgress.emit({
+              definitionIds: progressDefinitionIds,
+              kind: "rollback-started",
+              runId,
+            });
+            const summary = yield* runRollbackMigrationDefinition(
+              definition,
+              runId,
+              options
+            );
+
+            return {
               status:
                 summary.status === "failed"
                   ? ("failed" as const)
                   : ("succeeded" as const),
               value: [summary],
-            }))
+            };
+          }).pipe(
+            Effect.catch((error) =>
+              RollbackProgress.emit({
+                definitionIds: progressDefinitionIds,
+                error,
+                kind: "rollback-failed",
+                runId,
+              }).pipe(Effect.andThen(Effect.fail(error)))
+            )
           ),
         () => validateRollbackPipelinePreflight(store, definition, options)
       );
+      yield* RollbackProgress.emit({
+        definitionIds: progressDefinitionIds,
+        kind: "rollback-completed",
+        runId: run.runState.runId,
+        status: rollbackStatusForDefinitions(run.value),
+      });
 
       return {
         kind: "rollback" as const,
@@ -2162,31 +2230,49 @@ const rollbackMigrationsWithRequest = <
     (definition) => definition.id
   );
   const rollbackDefinitions = [...orderedDefinitions.definitions].reverse();
+  const progressDefinitionIds = rollbackDefinitions.map(
+    (definition) => definition.id
+  );
 
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
+    const runRollbackBody = (runId: MigrationRunId) =>
+      Effect.gen(function* () {
+        yield* RollbackProgress.emit({
+          definitionIds: progressDefinitionIds,
+          kind: "rollback-started",
+          runId,
+        });
+        const summaries: RollbackDefinitionRunSummary[] = [];
+
+        for (const definition of rollbackDefinitions) {
+          const summary = yield* runRollbackMigrationDefinition(
+            definition,
+            runId,
+            options
+          );
+          summaries.push(summary);
+        }
+
+        return {
+          status: rollbackStatusForDefinitions(summaries),
+          value: summaries,
+        };
+      }).pipe(
+        Effect.catch((error) =>
+          RollbackProgress.emit({
+            definitionIds: progressDefinitionIds,
+            error,
+            kind: "rollback-failed",
+            runId,
+          }).pipe(Effect.andThen(Effect.fail(error)))
+        )
+      );
 
     const run = yield* executeMigrationRun(
       store,
       definitionIds,
-      (runId) =>
-        Effect.gen(function* () {
-          const summaries: RollbackDefinitionRunSummary[] = [];
-
-          for (const definition of rollbackDefinitions) {
-            const summary = yield* runRollbackMigrationDefinition(
-              definition,
-              runId,
-              options
-            );
-            summaries.push(summary);
-          }
-
-          return {
-            status: rollbackStatusForDefinitions(summaries),
-            value: summaries,
-          };
-        }),
+      runRollbackBody,
       () =>
         validateRollbackDependencyPreflight(
           store,
@@ -2203,6 +2289,12 @@ const rollbackMigrationsWithRequest = <
           )
         )
     );
+    yield* RollbackProgress.emit({
+      definitionIds: progressDefinitionIds,
+      kind: "rollback-completed",
+      runId: run.runState.runId,
+      status: rollbackStatusForDefinitions(run.value),
+    });
 
     return {
       kind: "rollback" as const,

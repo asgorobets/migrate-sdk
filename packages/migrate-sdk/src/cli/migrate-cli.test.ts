@@ -816,6 +816,68 @@ const rollbackExecutionConfigSource = (): string => `
   });
 `;
 
+const rollbackFailureConfigSource = (): string => `
+  import { Schema } from "effect";
+  import {
+    defineMigration,
+    InMemoryMigrationStore,
+    InMemorySourcePlugin,
+    MigrationDefinitionRegistry,
+    SourceIdentity,
+    toMigrationDefinitionId,
+    toMigrationRunId,
+    toEncodedSourceIdentity,
+    toSourceVersion
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntrySourceIdentity = SourceIdentity.make({
+    id: "entry@v1",
+    schema: SourceIdentity.key("id", Schema.NonEmptyString)
+  });
+  const storeState = InMemoryMigrationStore.makeState();
+  const store = InMemoryMigrationStore.layer(storeState);
+  const definitionId = toMigrationDefinitionId("articles");
+  const sourceIdentity = toEncodedSourceIdentity("articles-1");
+
+  storeState.itemStates.set(
+    InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity),
+    {
+      definitionId,
+      sourceIdentity: SourceIdentity.fromEncoded(EntrySourceIdentity, sourceIdentity),
+      sourceVersion: toSourceVersion("source-version-1"),
+      lastRunId: toMigrationRunId("run-previous"),
+      updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+      status: "migrated"
+    }
+  );
+
+  const articles = defineMigration({
+    id: definitionId,
+    source: InMemorySourcePlugin.make({
+      identity: EntrySourceIdentity,
+      sourceSchema: EntrySource,
+      items: [{
+        identityKey: "articles-1",
+        version: "source-version-1",
+        item: { title: "articles" }
+      }]
+    }),
+    store,
+    process: () => undefined,
+    rollback: () => {
+      throw new Error("rollback failed after progress");
+    }
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [articles]
+    })
+  });
+`;
+
 const runtimeFailureConfigSource = (): string => `
   import { Schema } from "effect";
   import {
@@ -2625,6 +2687,241 @@ describe("migrate CLI", () => {
         "[progress] Run failed definitions=articles",
       ]);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders checkpoint progress logs for rollback execution", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        rollbackExecutionConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "rollback",
+          "--config",
+          "migrate.config.ts",
+          "--progress",
+          "log",
+          "--all",
+        ],
+        project
+      );
+      const progressLines = result.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("[progress]"));
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(progressLines).toEqual([
+        "[progress] Rollback started definitions=articles,authors,tags",
+        "[progress] Rollback Definition started definition=articles",
+        "[progress] Rollback Source Item completed definition=articles rolledBack=1 skipped=0 failed=0",
+        "[progress] Rollback Definition completed definition=articles status=succeeded rolledBack=1 skipped=0 failed=0",
+        "[progress] Rollback Definition started definition=authors",
+        "[progress] Rollback Source Item completed definition=authors rolledBack=1 skipped=0 failed=0",
+        "[progress] Rollback Definition completed definition=authors status=succeeded rolledBack=1 skipped=0 failed=0",
+        "[progress] Rollback Definition started definition=tags",
+        "[progress] Rollback Source Item completed definition=tags rolledBack=1 skipped=0 failed=0",
+        "[progress] Rollback Definition completed definition=tags status=succeeded rolledBack=1 skipped=0 failed=0",
+        "[progress] Rollback completed status=succeeded definitions=articles,authors,tags",
+      ]);
+      expect(result.stdout).toContain("Rollback Completed succeeded");
+      expect(getExecutionProbe().executions).toEqual([
+        "rollback:articles",
+        "rollback:authors",
+        "rollback:tags",
+      ]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "suppresses rollback progress output when progress mode is none",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          rollbackExecutionConfigSource()
+        );
+
+        const result = yield* runCli(
+          [
+            "rollback",
+            "--config",
+            "migrate.config.ts",
+            "--progress",
+            "none",
+            "--all",
+          ],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Rollback Completed succeeded");
+        expect(result.stdout).not.toContain("[progress]");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("keeps default non-interactive rollback output stable", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        rollbackExecutionConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["rollback", "--config", "migrate.config.ts", "--all"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Rollback Completed succeeded");
+      expect(result.stdout).toMatch(rollbackAllSummaryPattern);
+      expect(result.stdout).not.toContain("[progress]");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "renders interactive rollback progress by default when stdout is a TTY",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+        resetExecutionProbe();
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          rollbackExecutionConfigSource()
+        );
+
+        const result = yield* runCliInteractive(
+          ["rollback", "--config", "migrate.config.ts", "--all"],
+          project
+        );
+        const progressFrames = result.progressOutput
+          .split("\r\u001B[2K")
+          .filter((frame) => frame.startsWith("Rollback Progress"));
+        const activeDefinitions = progressFrames.reduce<string[]>(
+          (definitionIds, frame) => {
+            const definitionId = interactiveDefinitionPattern.exec(frame)?.[1];
+
+            if (
+              definitionId !== undefined &&
+              definitionIds.at(-1) !== definitionId
+            ) {
+              definitionIds.push(definitionId);
+            }
+
+            return definitionIds;
+          },
+          []
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.progressOutput).toContain("Rollback Progress");
+        expect(result.progressOutput).toContain("rolledBack=1");
+        expect(result.progressOutput).toContain("failed=0");
+        expect(result.progressOutput).not.toContain("%");
+        expect(activeDefinitions).toEqual(["articles", "authors", "tags"]);
+        expect(result.progressOutput.endsWith("\r\u001B[2K\n")).toBe(true);
+        expect(result.stdout).toContain("Rollback Completed succeeded");
+        expect(result.stdout).not.toContain("[progress]");
+        expect(getExecutionProbe().executions).toEqual([
+          "rollback:articles",
+          "rollback:authors",
+          "rollback:tags",
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "cleans up interactive rollback progress for failed rollback items",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          rollbackFailureConfigSource()
+        );
+
+        const result = yield* runCliInteractive(
+          ["rollback", "--config", "migrate.config.ts", "articles"],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.progressOutput).toContain("Rollback Progress");
+        expect(result.progressOutput).toContain("definition=articles");
+        expect(result.progressOutput).toContain("failed=1");
+        expect(result.progressOutput.endsWith("\r\u001B[2K\n")).toBe(true);
+        expect(result.stdout).toContain("Rollback Completed failed");
+        expect(result.stdout).not.toContain("[progress]");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "renders targeted rollback progress without source identity output",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          rollbackExecutionConfigSource()
+        );
+
+        const result = yield* runCli(
+          [
+            "rollback",
+            "--config",
+            "migrate.config.ts",
+            "--progress",
+            "log",
+            "--id",
+            "tags-1",
+            "tags",
+          ],
+          project
+        );
+        const progressLines = result.stdout
+          .split("\n")
+          .filter((line) => line.startsWith("[progress]"));
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(progressLines).toEqual([
+          "[progress] Rollback started definitions=tags",
+          "[progress] Rollback Definition started definition=tags",
+          "[progress] Rollback Source Item completed definition=tags rolledBack=1 skipped=0 failed=0",
+          "[progress] Rollback Definition completed definition=tags status=succeeded rolledBack=1 skipped=0 failed=0",
+          "[progress] Rollback completed status=succeeded definitions=tags",
+        ]);
+        expect(result.stdout).toContain("Rollback Completed succeeded");
+        expect(result.stdout).not.toContain("tags-1");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
   it.effect("executes failed, skipped, and source identity run modes", () =>

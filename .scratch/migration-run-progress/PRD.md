@@ -1,6 +1,6 @@
 # Migration Run Progress
 
-Status: ready-for-agent
+Status: done
 
 ## Problem Statement
 
@@ -10,9 +10,9 @@ The SDK needs an Effect-native way to surface live progress without turning prog
 
 ## Solution
 
-Add live progress display for `migrate run`.
+Add live progress display for `migrate run` and `migrate rollback`.
 
-The runtime emits structured `MigrationProgressEvent` values through a `MigrationProgress` Effect service. The default layer is a no-op so direct SDK usage does not need terminal wiring. The CLI provides a progress layer that reduces events into `MigrationProgressState` stored in a `SubscriptionRef`. A CLI renderer subscribes to that state and updates a transient progress display while the run is active.
+The runtime emits structured `MigrationProgressEvent` values through a `MigrationProgress` Effect service and structured `RollbackProgressEvent` values through a `RollbackProgress` Effect service. The default layers are no-ops so direct SDK usage does not need terminal wiring. The CLI provides progress layers that reduce events into `SubscriptionRef`-backed progress state. CLI renderers subscribe to that state and update transient progress displays while run or rollback execution is active.
 
 `SubscriptionRef` is the implementation choice for this PRD because the CLI needs the latest aggregate state, not a durable replay of every progress event. `PubSub` and `Queue` are not part of this slice.
 
@@ -24,7 +24,7 @@ Progress is live observability:
 - It does not expose raw Source Cursor values in public CLI output.
 - It does not require Source plugins, Destination plugins, or Migration authors to adopt new APIs.
 
-The CLI behavior is:
+The `migrate run` CLI behavior is:
 
 - Interactive TTY: render live progress to the terminal.
 - Non-TTY, CI, or snapshot-oriented output: preserve current stable output and final summary behavior.
@@ -32,7 +32,16 @@ The CLI behavior is:
 - `--progress log`: emit line-oriented progress updates at run, definition, and Source Cursor Window checkpoints.
 - `run --all`: render progress for the ordered definitions one at a time, matching existing execution order.
 
+The `migrate rollback` CLI behavior is:
+
+- Interactive TTY: render live rollback progress to the terminal.
+- Non-TTY, CI, or snapshot-oriented output: preserve current stable output and final summary behavior.
+- `--progress none`: suppress live rollback progress display.
+- `--progress log`: emit line-oriented rollback updates at rollback, definition, and Source Item rollback checkpoints.
+- `rollback --all`: render rollback progress in actual rollback execution order.
+
 The final `MigrationRunSummary` remains the authoritative completion output.
+The final `RollbackRunSummary` remains the authoritative rollback completion output.
 
 ## User Stories
 
@@ -62,15 +71,19 @@ The final `MigrationRunSummary` remains the authoritative completion output.
 
 - Emit progress events from `migrate run` execution points that already exist: run start, definition start, Source Cursor Window read, item completed, definition complete, run complete, and run failure.
 
-- Use `SubscriptionRef<MigrationProgressState>` in the CLI progress layer. The renderer subscribes to the latest state and redraws from snapshots.
+- Emit rollback progress events from rollback execution points that already exist: rollback start, definition start, item rollback completed, definition complete, rollback complete, and rollback failure.
+
+- Use `SubscriptionRef` in the CLI progress layers. The renderer subscribes to the latest state and redraws from snapshots.
 
 - Do not use `PubSub` or `Queue` for this PRD.
 
 - Render live progress only for interactive TTY output by default. Preserve existing non-interactive output.
 
-- Add `--progress none` and `--progress log` to the run command.
+- Add `--progress none` and `--progress log` to the run and rollback commands.
 
 - In `--progress log`, print aggregate progress lines at run start, definition start, Source Cursor Window completion, definition completion, run completion, and run failure. Do not print one line per Source Item by default.
+
+- In rollback `--progress log`, print rollback progress lines at rollback start, definition start, Source Item rollback completion, definition completion, rollback completion, and rollback failure.
 
 - In `run --all`, log progress for one active Migration Definition at a time. Do not interleave multiple definition progress streams because `run --all` currently executes ordered definitions sequentially.
 
@@ -78,13 +91,15 @@ The final `MigrationRunSummary` remains the authoritative completion output.
 
 - Keep the final `MigrationRunSummary` behavior unchanged.
 
+- Keep the final `RollbackRunSummary` behavior unchanged.
+
 - Keep raw Source Cursor values out of public progress output.
 
 - Do not add a third-party progress-bar dependency in this slice.
 
 ## Testing Decisions
 
-- Test runtime progress with a recording `MigrationProgress` layer and assert meaningful events and counts.
+- Test runtime progress with recording progress layers and assert meaningful events and counts.
 
 - Test the progress reducer as a pure unit.
 
@@ -92,15 +107,15 @@ The final `MigrationRunSummary` remains the authoritative completion output.
 
 - Test `--progress none` and `--progress log` behavior.
 
-- Test that `--progress log` emits checkpoint lines rather than one line per Source Item.
+- Test that run `--progress log` emits checkpoint lines rather than one line per Source Item.
+
+- Test that rollback `--progress log` emits rollback Source Item progress without exposing raw Source Identity values.
 
 - Test renderer cleanup on success and failure so final output remains readable.
 
 - Do not add Migration Store schema tests because progress is not durable store state.
 
 ## Out of Scope
-
-Rollback progress display.
 
 Durable progress persistence in `MigrationStore`.
 
@@ -116,8 +131,8 @@ Interleaved progress output for multiple active Migration Definitions.
 
 Separate progress logging cadence flags, such as `--progress-log-every`.
 
-Changing the final `MigrationRunSummary` contract.
+Changing the final `MigrationRunSummary` or `RollbackRunSummary` contract.
 
 ## Further Notes
 
-This PRD is intentionally limited to a concise CLI progress display for `migrate run`.
+This PRD is intentionally limited to concise CLI progress display for `migrate run` and `migrate rollback`.

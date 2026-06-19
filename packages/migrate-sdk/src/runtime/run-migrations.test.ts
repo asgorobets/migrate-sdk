@@ -30,6 +30,8 @@ import {
   type RollbackContext,
   type RollbackMigrationError,
   RollbackPreflightError,
+  RollbackProgress,
+  type RollbackProgressEvent,
   RollbackRequestError,
   type RollbackRunSummary,
   type RunMigrationError,
@@ -6103,6 +6105,83 @@ describe("rollbackMigration", () => {
       });
       expect(processCalls).toEqual(["article-rollback"]);
     })
+  );
+
+  it.effect(
+    "emits Rollback Progress events while rolling back item states",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const definitionId = toMigrationDefinitionId("articles");
+        const sourceIdentity = toEncodedSourceIdentity("article-rollback");
+        const events: RollbackProgressEvent[] = [];
+
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity),
+          {
+            definitionId,
+            lastRunId: toMigrationRunId("run-previous"),
+            sourceIdentity: SourceIdentity.fromEncoded(
+              ArticleSourceIdentity,
+              sourceIdentity
+            ),
+            sourceVersion: toSourceVersion("source-version-1"),
+            status: "migrated" as const,
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          }
+        );
+
+        const definition = defineMigration({
+          id: definitionId,
+          source: makeTestInMemorySource({
+            items: [],
+            sourceSchema: ArticleSource,
+          }),
+          store,
+          process: () => Effect.void,
+          rollback: () => Effect.void,
+        });
+        const progressLayer = Layer.succeed(RollbackProgress, {
+          emit: (event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+        });
+
+        const summary = yield* rollbackMigration(definition).pipe(
+          Effect.provide(progressLayer)
+        );
+
+        expect(summary.definitions[0]?.counts).toEqual({
+          rolledBack: 1,
+          failed: 0,
+          skipped: 0,
+        });
+        expect(events.map((event) => event.kind)).toEqual([
+          "rollback-started",
+          "definition-started",
+          "source-item-completed",
+          "definition-completed",
+          "rollback-completed",
+        ]);
+        expect(events[0]).toEqual({
+          definitionIds: [definitionId],
+          kind: "rollback-started",
+          runId: summary.runId,
+        });
+        expect(events[2]).toEqual({
+          counts: {
+            rolledBack: 1,
+            failed: 0,
+            skipped: 0,
+          },
+          definitionId,
+          kind: "source-item-completed",
+          outcome: "rolled-back",
+          runId: summary.runId,
+        });
+      })
   );
 });
 

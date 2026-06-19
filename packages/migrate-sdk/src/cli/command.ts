@@ -18,7 +18,11 @@ import {
   loadMigrationCliConfig,
   type MigrationCliConfigLoadError,
 } from "./config-loader.ts";
-import { type CliProgressMode, makeCliProgressLayer } from "./progress.ts";
+import {
+  type CliProgressMode,
+  makeCliProgressLayer,
+  makeCliRollbackProgressLayer,
+} from "./progress.ts";
 import {
   renderConfigLoadError,
   renderPlanningError,
@@ -509,6 +513,7 @@ const rollbackCommand = Command.make(
     definitions: runDefinitions,
     id,
     plan,
+    progress,
     withDependencies,
   },
   (input) =>
@@ -545,7 +550,9 @@ const rollbackCommand = Command.make(
         return;
       }
 
+      const runtime = yield* MigrationCliRuntime;
       const summary = yield* registry.rollback(rollbackInput).pipe(
+        Effect.provide(makeCliRollbackProgressLayer(input.progress, runtime)),
         Effect.catch((error) =>
           failReportedCliMessage(
             renderRollbackCommandError(error, {

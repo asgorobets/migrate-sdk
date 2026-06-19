@@ -7,7 +7,16 @@ import {
   type MigrationProgressState,
   reduceMigrationProgressState,
 } from "../domain/progress.ts";
+import {
+  initialRollbackProgressState,
+  type RollbackDefinitionProgressState,
+  type RollbackProgressCounts,
+  type RollbackProgressEvent,
+  type RollbackProgressState,
+  reduceRollbackProgressState,
+} from "../domain/rollback-progress.ts";
 import { MigrationProgress } from "../services/migration-progress.ts";
+import { RollbackProgress } from "../services/rollback-progress.ts";
 import type { MigrationCliRuntimeShape } from "./runtime.ts";
 
 export type CliProgressMode = "auto" | "log" | "none";
@@ -19,6 +28,9 @@ const newlinePattern = /\r?\n/;
 
 const formatCounts = (counts: MigrationProgressCounts): string =>
   `migrated=${counts.migrated} skipped=${counts.skipped} failed=${counts.failed} unchanged=${counts.unchanged} needsUpdate=${counts.needsUpdate}`;
+
+const formatRollbackCounts = (counts: RollbackProgressCounts): string =>
+  `rolledBack=${counts.rolledBack} skipped=${counts.skipped} failed=${counts.failed}`;
 
 const countProcessedItems = (counts: MigrationProgressCounts): number =>
   counts.migrated +
@@ -66,6 +78,14 @@ const findDefinitionState = (
     (definition) => definition.definitionId === definitionId
   );
 
+const findRollbackDefinitionState = (
+  state: RollbackProgressState,
+  definitionId: string
+): RollbackDefinitionProgressState | undefined =>
+  state.definitions.find(
+    (definition) => definition.definitionId === definitionId
+  );
+
 const renderProgressLogLine = (
   event: MigrationProgressEvent,
   state: MigrationProgressState
@@ -94,6 +114,27 @@ const renderProgressLogLine = (
   }
 };
 
+const renderRollbackProgressLogLine = (
+  event: RollbackProgressEvent
+): string | null => {
+  switch (event.kind) {
+    case "rollback-started":
+      return `[progress] Rollback started definitions=${event.definitionIds.join(",")}`;
+    case "definition-started":
+      return `[progress] Rollback Definition started definition=${event.definitionId}`;
+    case "source-item-completed":
+      return `[progress] Rollback Source Item completed definition=${event.definitionId} ${formatRollbackCounts(event.counts)}`;
+    case "definition-completed":
+      return `[progress] Rollback Definition completed definition=${event.definitionId} status=${event.status} ${formatRollbackCounts(event.counts)}`;
+    case "rollback-completed":
+      return `[progress] Rollback completed status=${event.status} definitions=${event.definitionIds.join(",")}`;
+    case "rollback-failed":
+      return `[progress] Rollback failed definitions=${event.definitionIds.join(",")}`;
+    default:
+      return null;
+  }
+};
+
 const renderInteractiveProgressLine = (
   state: MigrationProgressState
 ): string | null => {
@@ -108,6 +149,25 @@ const renderInteractiveProgressLine = (
   }
 
   return `Migration Progress definition=${definition.definitionId} processed=${countProcessedItems(definition.counts)} sourceCursorWindows=${definition.cursorWindowsCompleted} ${formatCounts(definition.counts)}`;
+};
+
+const renderInteractiveRollbackProgressLine = (
+  state: RollbackProgressState
+): string | null => {
+  if (state.activeDefinitionId === undefined) {
+    return null;
+  }
+
+  const definition = findRollbackDefinitionState(
+    state,
+    state.activeDefinitionId
+  );
+
+  if (definition === undefined) {
+    return null;
+  }
+
+  return `Rollback Progress definition=${definition.definitionId} processed=${definition.itemsProcessed} ${formatRollbackCounts(definition.counts)}`;
 };
 
 type InteractiveProgressRender =
@@ -127,6 +187,19 @@ const renderInteractiveProgress = (
   return line === null ? null : { kind: "line", line };
 };
 
+const renderInteractiveRollbackProgress = (
+  event: RollbackProgressEvent,
+  state: RollbackProgressState
+): InteractiveProgressRender | null => {
+  if (event.kind === "rollback-completed" || event.kind === "rollback-failed") {
+    return { kind: "cleanup" };
+  }
+
+  const line = renderInteractiveRollbackProgressLine(state);
+
+  return line === null ? null : { kind: "line", line };
+};
+
 const logProgressLayer = Layer.effect(
   MigrationProgress,
   Effect.gen(function* () {
@@ -141,6 +214,28 @@ const logProgressLayer = Layer.effect(
         }).pipe(
           Effect.flatMap((line) =>
             line === null ? Effect.void : Console.log(line)
+          )
+        ),
+    };
+  })
+);
+
+const rollbackLogProgressLayer = Layer.effect(
+  RollbackProgress,
+  Effect.gen(function* () {
+    const stateRef = yield* SubscriptionRef.make(initialRollbackProgressState);
+
+    return {
+      emit: (event) =>
+        SubscriptionRef.update(stateRef, (state) =>
+          reduceRollbackProgressState(state, event)
+        ).pipe(
+          Effect.andThen(
+            Effect.suspend(() => {
+              const line = renderRollbackProgressLogLine(event);
+
+              return line === null ? Effect.void : Console.log(line);
+            })
           )
         ),
     };
@@ -200,6 +295,59 @@ const makeInteractiveProgressLayer = (
     })
   );
 
+const makeInteractiveRollbackProgressLayer = (
+  writeProgress: NonNullable<MigrationCliRuntimeShape["writeProgress"]>,
+  columns: number | undefined
+) =>
+  Layer.effect(
+    RollbackProgress,
+    Effect.gen(function* () {
+      const stateRef = yield* SubscriptionRef.make(
+        initialRollbackProgressState
+      );
+      const renderedRowsRef = yield* Ref.make(0);
+      const cleanupRenderedProgress = Ref.getAndSet(renderedRowsRef, 0).pipe(
+        Effect.flatMap((renderedRows) =>
+          renderedRows === 0
+            ? Effect.void
+            : writeProgress(`${clearRenderedRows(renderedRows)}\n`)
+        )
+      );
+      const writeRenderedLine = (line: string) =>
+        Effect.gen(function* () {
+          const renderedRows = yield* Ref.get(renderedRowsRef);
+          yield* writeProgress(
+            `${clearRenderedRows(renderedRows === 0 ? 1 : renderedRows)}${line}`
+          );
+          yield* Ref.set(renderedRowsRef, countTerminalRows(line, columns));
+        });
+
+      yield* Effect.addFinalizer(() => cleanupRenderedProgress);
+
+      return {
+        emit: (event) =>
+          SubscriptionRef.modify(stateRef, (state) => {
+            const nextState = reduceRollbackProgressState(state, event);
+
+            return [
+              renderInteractiveRollbackProgress(event, nextState),
+              nextState,
+            ] as const;
+          }).pipe(
+            Effect.flatMap((render) => {
+              if (render === null) {
+                return Effect.void;
+              }
+
+              return render.kind === "cleanup"
+                ? cleanupRenderedProgress
+                : writeRenderedLine(render.line);
+            })
+          ),
+      };
+    })
+  );
+
 export const makeCliProgressLayer = (
   mode: CliProgressMode,
   runtime: MigrationCliRuntimeShape
@@ -220,4 +368,26 @@ export const makeCliProgressLayer = (
   }
 
   return MigrationProgress.noopLayer;
+};
+
+export const makeCliRollbackProgressLayer = (
+  mode: CliProgressMode,
+  runtime: MigrationCliRuntimeShape
+): Layer.Layer<RollbackProgress> => {
+  if (mode === "log") {
+    return rollbackLogProgressLayer;
+  }
+
+  if (
+    mode === "auto" &&
+    runtime.stdoutIsTTY === true &&
+    runtime.writeProgress !== undefined
+  ) {
+    return makeInteractiveRollbackProgressLayer(
+      runtime.writeProgress,
+      runtime.stdoutColumns
+    );
+  }
+
+  return RollbackProgress.noopLayer;
 };

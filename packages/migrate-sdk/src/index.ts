@@ -101,6 +101,21 @@ export {
   reduceMigrationProgressState,
 } from "./domain/progress.ts";
 
+export type {
+  RollbackDefinitionProgressState,
+  RollbackProgressCounts,
+  RollbackProgressDefinitionStatus,
+  RollbackProgressEvent,
+  RollbackProgressOutcome,
+  RollbackProgressRunStatus,
+  RollbackProgressState,
+} from "./domain/rollback-progress.ts";
+export {
+  emptyRollbackProgressCounts,
+  initialRollbackProgressState,
+  reduceRollbackProgressState,
+} from "./domain/rollback-progress.ts";
+
 export { MigrationRunState } from "./domain/run.ts";
 export type {
   MigrationDefinitionRunSummary,
@@ -245,6 +260,7 @@ export type {
 } from "./services/migration-reference-lookup.ts";
 export { MigrationStore } from "./services/migration-store.ts";
 export { MigrationProgress } from "./services/migration-progress.ts";
+export { RollbackProgress } from "./services/rollback-progress.ts";
 export { SourcePlugin } from "./services/source-plugin.ts";
 export { Tracking } from "./services/tracking.ts";
 export type {
