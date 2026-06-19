@@ -4871,6 +4871,340 @@ describe("runMigration", () => {
   );
 
   it.effect(
+    "preserves prior tracking evidence when an update attempt fails",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const processError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          code: "update-failed",
+          message: "Update process failed",
+        };
+        const tracking = Tracking.record({
+          id: "article-entry@v1",
+          schema: ArticleTrackingRecord,
+        });
+        const previousRunId = toMigrationRunId("run-previous");
+        const previousJournal = {
+          process: {
+            runId: previousRunId,
+            entries: [
+              {
+                kind: "diagnostic" as const,
+                sequence: 0,
+                severity: "info" as const,
+                message: "Previous migration created destination evidence",
+              },
+            ],
+          },
+          rollbackAttempts: [],
+        };
+        const previousTrackingRecord = {
+          entryId: "entry-previous",
+          locale: "en-US",
+        };
+        let rollbackState: typeof MigrationItemState.Type | undefined;
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-migrated",
+                version: "source-version-2",
+                item: { title: "Previously migrated article" },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          tracking,
+          process: () => Effect.fail(processError),
+          rollback: (state) =>
+            Effect.sync(() => {
+              rollbackState = state;
+            }),
+        });
+
+        seedTrackingMigrationContract(storeState, "articles", tracking);
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-migrated"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: articleSourceIdentity("article-migrated"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            sourceVersionContractFingerprint:
+              defaultSourceVersionContractFingerprint,
+            lastRunId: previousRunId,
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            journal: previousJournal,
+            status: "migrated",
+            trackingRecord: previousTrackingRecord,
+          }
+        );
+
+        const summary = yield* runMigrations({
+          definitions: [definition],
+          update: true,
+        });
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-migrated")
+        );
+
+        expect(summary.status).toBe("failed");
+        expect(itemState).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            journal: previousJournal,
+            trackingRecord: previousTrackingRecord,
+          })
+        );
+
+        const rollbackSummary = yield* rollbackMigration(definition);
+
+        expect(rollbackSummary.status).toBe("succeeded");
+        expect(rollbackState).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            journal: previousJournal,
+            trackingRecord: previousTrackingRecord,
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "preserves prior evidence when update attempts skip or fail tracking validation",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const tracking = Tracking.record({
+          id: "article-entry@v1",
+          schema: ArticleTrackingRecord,
+        });
+        const previousRunId = toMigrationRunId("run-previous");
+        const previousJournal = {
+          process: {
+            runId: previousRunId,
+            entries: [
+              {
+                kind: "diagnostic" as const,
+                sequence: 0,
+                severity: "info" as const,
+                message: "Previous destination evidence",
+              },
+            ],
+          },
+          rollbackAttempts: [],
+        };
+        const previousTrackingRecord = {
+          entryId: "entry-previous",
+          locale: "en-US",
+        };
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-skip",
+                version: "source-version-2",
+                item: { title: "Skip update" },
+              },
+              {
+                identityKey: "article-invalid-tracking",
+                version: "source-version-2",
+                item: { title: "Invalid tracking update" },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          tracking,
+          process: (source) =>
+            source.identity.encoded === "article-skip"
+              ? skipItem("No longer eligible")
+              : Effect.void,
+        });
+
+        seedTrackingMigrationContract(storeState, "articles", tracking);
+
+        for (const sourceIdentity of [
+          "article-skip",
+          "article-invalid-tracking",
+        ]) {
+          storeState.itemStates.set(
+            InMemoryMigrationStore.itemStateKey("articles", sourceIdentity),
+            {
+              definitionId: toMigrationDefinitionId("articles"),
+              sourceIdentity: articleSourceIdentity(sourceIdentity),
+              sourceVersion: toSourceVersion("source-version-1"),
+              sourceVersionContractFingerprint:
+                defaultSourceVersionContractFingerprint,
+              lastRunId: previousRunId,
+              updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+              journal: previousJournal,
+              status: "migrated",
+              trackingRecord: previousTrackingRecord,
+            }
+          );
+        }
+
+        const summary = yield* runMigrations({
+          definitions: [definition],
+          update: true,
+        });
+        const skippedState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-skip")
+        );
+        const failedState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey(
+            "articles",
+            "article-invalid-tracking"
+          )
+        );
+
+        expect(summary.status).toBe("failed");
+        expect(skippedState).toEqual(
+          expect.objectContaining({
+            status: "skipped",
+            journal: previousJournal,
+            trackingRecord: previousTrackingRecord,
+          })
+        );
+        expect(failedState).toEqual(
+          expect.objectContaining({
+            status: "failed",
+            journal: previousJournal,
+            trackingRecord: previousTrackingRecord,
+            error: expect.objectContaining({
+              kind: "tracking",
+            }),
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "lets a later retry read prior evidence and replace it on successful update",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const tracking = Tracking.record({
+          id: "article-entry@v1",
+          schema: ArticleTrackingRecord,
+        });
+        const processError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          code: "update-failed",
+          message: "Update failed before retry",
+        };
+        const previousRunId = toMigrationRunId("run-previous");
+        const previousJournal = {
+          process: {
+            runId: previousRunId,
+            entries: [
+              {
+                kind: "diagnostic" as const,
+                sequence: 0,
+                severity: "info" as const,
+                message: "Previous destination evidence",
+              },
+            ],
+          },
+          rollbackAttempts: [],
+        };
+        const previousTrackingRecord = {
+          entryId: "entry-previous",
+          locale: "en-US",
+        };
+        const retryPreviousTrackingRecords: unknown[] = [];
+        let failUpdate = true;
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-retry",
+                version: "source-version-2",
+                item: { title: "Retry update" },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          tracking,
+          process: (source, context) =>
+            Effect.gen(function* () {
+              if (failUpdate) {
+                return yield* Effect.fail(processError);
+              }
+
+              const priorTrackingRecord =
+                context.previousState !== undefined &&
+                "trackingRecord" in context.previousState
+                  ? context.previousState.trackingRecord
+                  : undefined;
+
+              retryPreviousTrackingRecords.push(priorTrackingRecord);
+
+              yield* Tracking.logDiagnostic({
+                severity: "info",
+                message: `Retried ${source.item.title}`,
+              });
+              yield* Tracking.setRecord({
+                entryId: "entry-fresh",
+                locale: "en-US",
+              });
+            }),
+        });
+
+        seedTrackingMigrationContract(storeState, "articles", tracking);
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-retry"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: articleSourceIdentity("article-retry"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            sourceVersionContractFingerprint:
+              defaultSourceVersionContractFingerprint,
+            lastRunId: previousRunId,
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            journal: previousJournal,
+            status: "migrated",
+            trackingRecord: previousTrackingRecord,
+          }
+        );
+
+        const failedSummary = yield* runMigrations({
+          definitions: [definition],
+          update: true,
+        });
+        failUpdate = false;
+        const retrySummary = yield* runMigration(definition);
+        const itemState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-retry")
+        );
+
+        expect(failedSummary.status).toBe("failed");
+        expect(retrySummary.status).toBe("succeeded");
+        expect(retryPreviousTrackingRecords).toEqual([previousTrackingRecord]);
+        expect(itemState).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            trackingRecord: {
+              entryId: "entry-fresh",
+              locale: "en-US",
+            },
+          })
+        );
+        expect(
+          itemState?.status === "migrated"
+            ? itemState.journal?.process.runId
+            : undefined
+        ).toBe(retrySummary.runId);
+      })
+  );
+
+  it.effect(
     "schedules migrated states for update and leaves other states unchanged",
     () =>
       Effect.gen(function* () {
@@ -5030,6 +5364,209 @@ describe("runMigration", () => {
           expect.objectContaining({
             status: "skipped",
             lastRunId: previousRunId,
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "leaves update-created needs-update backlog visible and resumes it without update intent",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const sourceState = InMemorySourcePlugin.makeState();
+        const sourceItems = [
+          {
+            identityKey: "article-seen",
+            version: "source-version-2",
+            item: { title: "Seen during update" },
+          },
+        ];
+        const processCalls: string[] = [];
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            state: sourceState,
+            items: sourceItems,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (source) =>
+            Effect.sync(() => {
+              processCalls.push(source.identity.encoded);
+            }),
+        });
+
+        seedArticleMigrationContract(storeState);
+        storeState.sourceCursors.set(definition.id, encodedInMemoryCursor(2));
+
+        for (const sourceIdentity of ["article-seen", "article-missing"]) {
+          storeState.itemStates.set(
+            InMemoryMigrationStore.itemStateKey("articles", sourceIdentity),
+            {
+              definitionId: toMigrationDefinitionId("articles"),
+              sourceIdentity: articleSourceIdentity(sourceIdentity),
+              sourceVersion: toSourceVersion("source-version-1"),
+              sourceVersionContractFingerprint:
+                defaultSourceVersionContractFingerprint,
+              lastRunId: toMigrationRunId("run-previous"),
+              updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+              status: "migrated",
+            }
+          );
+        }
+
+        const updateSummary = yield* runMigrations({
+          definitions: [definition],
+          update: true,
+        });
+        const durableAfterUpdate = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.getItemStateSummary(definition.id);
+        }).pipe(Effect.provide(InMemoryMigrationStore.layer(storeState)));
+
+        expect(updateSummary.status).toBe("succeeded");
+        expect(updateSummary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(processCalls).toEqual(["article-seen"]);
+        expect(sourceState.readByIdentityAttempts).toBe(0);
+        expect(durableAfterUpdate).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          needsUpdate: 1,
+        });
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-missing")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "needs-update",
+            reason: "Scheduled by update run",
+          })
+        );
+
+        sourceItems.push({
+          identityKey: "article-missing",
+          version: "source-version-2",
+          item: { title: "Recovered by normal run" },
+        });
+        processCalls.length = 0;
+
+        const retrySummary = yield* runMigration(definition);
+        const durableAfterRetry = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.getItemStateSummary(definition.id);
+        }).pipe(Effect.provide(InMemoryMigrationStore.layer(storeState)));
+
+        expect(retrySummary.status).toBe("succeeded");
+        expect(retrySummary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          unchanged: 1,
+          needsUpdate: 0,
+        });
+        expect(processCalls).toEqual(["article-missing"]);
+        expect(sourceState.readByIdentityAttempts).toBe(1);
+        expect(durableAfterRetry).toEqual({
+          migrated: 2,
+          skipped: 0,
+          failed: 0,
+          needsUpdate: 0,
+        });
+      })
+  );
+
+  it.effect(
+    "keeps already scheduled update state when update preparation fails",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const updatePreparationError = new MigrationStoreError({
+          message: "Unable to schedule migrated item for update",
+        });
+        const store = Layer.effect(
+          MigrationStore,
+          Effect.gen(function* () {
+            const baseStore = yield* MigrationStore;
+
+            return {
+              ...baseStore,
+              upsertItemState: (state: typeof MigrationItemState.Type) =>
+                state.status === "needs-update" &&
+                state.sourceIdentity.encoded === "article-second"
+                  ? Effect.fail(updatePreparationError)
+                  : baseStore.upsertItemState(state),
+            };
+          })
+        ).pipe(Layer.provide(InMemoryMigrationStore.layer(storeState)));
+
+        const definition = defineMigration({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [],
+          }),
+          store,
+          process: () => Effect.void,
+        });
+
+        seedArticleMigrationContract(storeState);
+        storeState.sourceCursors.set(definition.id, encodedInMemoryCursor(2));
+
+        for (const sourceIdentity of ["article-first", "article-second"]) {
+          storeState.itemStates.set(
+            InMemoryMigrationStore.itemStateKey("articles", sourceIdentity),
+            {
+              definitionId: toMigrationDefinitionId("articles"),
+              sourceIdentity: articleSourceIdentity(sourceIdentity),
+              sourceVersion: toSourceVersion("source-version-1"),
+              sourceVersionContractFingerprint:
+                defaultSourceVersionContractFingerprint,
+              lastRunId: toMigrationRunId("run-previous"),
+              updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+              status: "migrated",
+            }
+          );
+        }
+
+        const error = yield* Effect.flip(
+          runMigrations({
+            definitions: [definition],
+            update: true,
+          })
+        );
+
+        expect(error).toEqual(updatePreparationError);
+        expect(storeState.sourceCursors.get(definition.id)).toEqual(
+          encodedInMemoryCursor(2)
+        );
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-first")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "needs-update",
+            reason: "Scheduled by update run",
+          })
+        );
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-second")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            lastRunId: toMigrationRunId("run-previous"),
           })
         );
       })

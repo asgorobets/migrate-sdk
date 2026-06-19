@@ -130,6 +130,7 @@ const PersistedSkippedItemState = Schema.Struct({
   journal: Schema.optional(PersistedDestinationJournal),
   skipReason: Schema.String,
   status: Schema.Literal("skipped"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 
 const PersistedFailedItemState = Schema.Struct({
@@ -141,6 +142,7 @@ const PersistedFailedItemState = Schema.Struct({
   error: MigrationItemError,
   journal: Schema.optional(PersistedDestinationJournal),
   status: Schema.Literal("failed"),
+  trackingRecord: Schema.optional(TrackingRecord),
 });
 
 const PersistedNeedsUpdateItemState = Schema.Struct({

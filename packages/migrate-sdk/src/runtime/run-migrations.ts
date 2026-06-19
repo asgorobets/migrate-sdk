@@ -626,6 +626,13 @@ const shouldReprocessUnchangedTerminal = (mode: RunMode): boolean =>
 
 const updateRunScheduleReason = "Scheduled by update run";
 
+const previousTrackingRecord = (
+  previousState: MigrationItemState | null
+): TrackingRecord | undefined =>
+  previousState !== null && "trackingRecord" in previousState
+    ? previousState.trackingRecord
+    : undefined;
+
 const makeUpdateRunNeedsUpdateState = (
   itemState: MigratedItemState,
   runId: MigrationRunId
@@ -751,24 +758,30 @@ const makeFailedStubReferenceState = ({
   readonly previousState: MigrationItemState | null;
   readonly runId: MigrationRunId;
   readonly sourceIdentity: SourceIdentityValue;
-}): FailedItemState => ({
-  definitionId,
-  sourceIdentity,
-  ...(previousState?.sourceVersionContractFingerprint === undefined
-    ? {}
-    : {
-        sourceVersionContractFingerprint:
-          previousState.sourceVersionContractFingerprint,
-      }),
-  ...(previousState?.sourceVersion === undefined
-    ? {}
-    : { sourceVersion: previousState.sourceVersion }),
-  ...(journal === undefined ? {} : { journal }),
-  lastRunId: runId,
-  updatedAt: new Date(),
-  status: "failed",
-  error,
-});
+}): FailedItemState => {
+  const preservedJournal = previousState?.journal ?? journal;
+  const trackingRecord = previousTrackingRecord(previousState);
+
+  return {
+    definitionId,
+    sourceIdentity,
+    ...(previousState?.sourceVersionContractFingerprint === undefined
+      ? {}
+      : {
+          sourceVersionContractFingerprint:
+            previousState.sourceVersionContractFingerprint,
+        }),
+    ...(previousState?.sourceVersion === undefined
+      ? {}
+      : { sourceVersion: previousState.sourceVersion }),
+    ...(preservedJournal === undefined ? {} : { journal: preservedJournal }),
+    lastRunId: runId,
+    updatedAt: new Date(),
+    status: "failed",
+    error,
+    ...(trackingRecord === undefined ? {} : { trackingRecord }),
+  };
+};
 
 const makeNeedsUpdateStubReferenceState = ({
   definitionId,
@@ -784,25 +797,32 @@ const makeNeedsUpdateStubReferenceState = ({
   readonly runId: MigrationRunId;
   readonly sourceIdentity: SourceIdentityValue;
   readonly trackingRecord?: TrackingRecord;
-}): NeedsUpdateItemState => ({
-  definitionId,
-  sourceIdentity,
-  ...(previousState?.sourceVersionContractFingerprint === undefined
-    ? {}
-    : {
-        sourceVersionContractFingerprint:
-          previousState.sourceVersionContractFingerprint,
-      }),
-  ...(previousState?.sourceVersion === undefined
-    ? {}
-    : { sourceVersion: previousState.sourceVersion }),
-  ...(journal === undefined ? {} : { journal }),
-  lastRunId: runId,
-  updatedAt: new Date(),
-  reason: "Migration Reference Stub requires update",
-  status: "needs-update",
-  ...(trackingRecord === undefined ? {} : { trackingRecord }),
-});
+}): NeedsUpdateItemState => {
+  const resolvedTrackingRecord =
+    trackingRecord ?? previousTrackingRecord(previousState);
+
+  return {
+    definitionId,
+    sourceIdentity,
+    ...(previousState?.sourceVersionContractFingerprint === undefined
+      ? {}
+      : {
+          sourceVersionContractFingerprint:
+            previousState.sourceVersionContractFingerprint,
+        }),
+    ...(previousState?.sourceVersion === undefined
+      ? {}
+      : { sourceVersion: previousState.sourceVersion }),
+    ...(journal === undefined ? {} : { journal }),
+    lastRunId: runId,
+    updatedAt: new Date(),
+    reason: "Migration Reference Stub requires update",
+    status: "needs-update",
+    ...(resolvedTrackingRecord === undefined
+      ? {}
+      : { trackingRecord: resolvedTrackingRecord }),
+  };
+};
 
 type TrackingStubOutcome =
   | {
@@ -920,23 +940,31 @@ const makeSourceLookupFailedItemState = (
   runId: MigrationRunId,
   previousState: MigrationItemState,
   error: unknown
-): FailedItemState => ({
-  definitionId,
-  sourceIdentity: previousState.sourceIdentity,
-  ...(previousState.sourceVersionContractFingerprint === undefined
-    ? {}
-    : {
-        sourceVersionContractFingerprint:
-          previousState.sourceVersionContractFingerprint,
-      }),
-  ...(previousState.sourceVersion === undefined
-    ? {}
-    : { sourceVersion: previousState.sourceVersion }),
-  lastRunId: runId,
-  updatedAt: new Date(),
-  status: "failed",
-  error: normalizeItemError("source", error),
-});
+): FailedItemState => {
+  const trackingRecord = previousTrackingRecord(previousState);
+
+  return {
+    definitionId,
+    sourceIdentity: previousState.sourceIdentity,
+    ...(previousState.sourceVersionContractFingerprint === undefined
+      ? {}
+      : {
+          sourceVersionContractFingerprint:
+            previousState.sourceVersionContractFingerprint,
+        }),
+    ...(previousState.sourceVersion === undefined
+      ? {}
+      : { sourceVersion: previousState.sourceVersion }),
+    lastRunId: runId,
+    updatedAt: new Date(),
+    status: "failed",
+    error: normalizeItemError("source", error),
+    ...(previousState.journal === undefined
+      ? {}
+      : { journal: previousState.journal }),
+    ...(trackingRecord === undefined ? {} : { trackingRecord }),
+  };
+};
 
 const addOutcomeToCounts = (
   counts: MutableDefinitionCounts,

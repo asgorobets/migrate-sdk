@@ -108,18 +108,32 @@ const makeItemStateBase = <Source>(
   updatedAt: new Date(),
 });
 
+const previousTrackingRecord = (
+  previousState: MigrationItemState | null
+): TrackingRecord | undefined =>
+  previousState !== null && "trackingRecord" in previousState
+    ? previousState.trackingRecord
+    : undefined;
+
 const makeSkippedItemState = <Source>(
   sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Source>,
   reason: string,
+  previousState: MigrationItemState | null = null,
   journal?: SkippedItemState["journal"]
-): SkippedItemState => ({
-  ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
-  ...(journal === undefined ? {} : { journal }),
-  status: "skipped",
-  skipReason: reason,
-});
+): SkippedItemState => {
+  const preservedJournal = previousState?.journal ?? journal;
+  const trackingRecord = previousTrackingRecord(previousState);
+
+  return {
+    ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
+    ...(preservedJournal === undefined ? {} : { journal: preservedJournal }),
+    status: "skipped",
+    skipReason: reason,
+    ...(trackingRecord === undefined ? {} : { trackingRecord }),
+  };
+};
 
 const makeFailedItemState = <Source>(
   sourceVersionContractContext: SourceVersionContractContext,
@@ -128,15 +142,18 @@ const makeFailedItemState = <Source>(
   error: MigrationItemError,
   previousState: MigrationItemState | null = null,
   journal?: FailedItemState["journal"]
-): FailedItemState => ({
-  ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
-  ...(previousState?.journal === undefined || journal !== undefined
-    ? {}
-    : { journal: previousState.journal }),
-  ...(journal === undefined ? {} : { journal }),
-  status: "failed",
-  error,
-});
+): FailedItemState => {
+  const preservedJournal = previousState?.journal ?? journal;
+  const trackingRecord = previousTrackingRecord(previousState);
+
+  return {
+    ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
+    ...(preservedJournal === undefined ? {} : { journal: preservedJournal }),
+    status: "failed",
+    error,
+    ...(trackingRecord === undefined ? {} : { trackingRecord }),
+  };
+};
 
 const makeMigratedItemState = <Source>(
   sourceVersionContractContext: SourceVersionContractContext,
@@ -236,11 +253,11 @@ const resolveProcessTrackingRecord = <Source>({
             makeFailedItemState(
               sourceVersionContractContext,
               runId,
-            decodedSourceItem,
-            error,
-            previousState,
-            processJournal
-          )
+              decodedSourceItem,
+              error,
+              previousState,
+              processJournal
+            )
           )
           .pipe(Effect.as(null))
       )
@@ -272,6 +289,7 @@ const persistProcessOutcome = <Source>({
           runId,
           decodedSourceItem,
           outcome.reason,
+          previousState,
           processJournal
         )
       )

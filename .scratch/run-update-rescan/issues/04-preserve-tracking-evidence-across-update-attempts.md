@@ -14,16 +14,16 @@ The completed slice should let update-aware process code read prior tracking evi
 
 ## Acceptance criteria
 
-- [ ] Update-aware process code can read prior Tracking Record evidence from previous Migration Item State.
-- [ ] Update-aware process code can read prior Destination Journal evidence from previous Migration Item State.
-- [ ] Process examples or tests treat both migrated and Needs Update previous states as previously tracked states.
-- [ ] A failed update attempt preserves prior Tracking Record evidence where available.
-- [ ] A failed update attempt preserves prior Destination Journal evidence where available.
-- [ ] A skipped update attempt preserves prior evidence needed for retry or rollback.
-- [ ] A failed tracking-record validation during update does not discard prior tracking evidence.
-- [ ] A later retry can still access prior tracking evidence after a failed update attempt.
-- [ ] Rollback input remains able to inspect the prior evidence after a failed update attempt.
-- [ ] Successful update processing still replaces prior evidence with the fresh successful run's Tracking Record and Destination Journal evidence.
+- [x] Update-aware process code can read prior Tracking Record evidence from previous Migration Item State.
+- [x] Update-aware process code can read prior Destination Journal evidence from previous Migration Item State.
+- [x] Process examples or tests treat both migrated and Needs Update previous states as previously tracked states.
+- [x] A failed update attempt preserves prior Tracking Record evidence where available.
+- [x] A failed update attempt preserves prior Destination Journal evidence where available.
+- [x] A skipped update attempt preserves prior evidence needed for retry or rollback.
+- [x] A failed tracking-record validation during update does not discard prior tracking evidence.
+- [x] A later retry can still access prior tracking evidence after a failed update attempt.
+- [x] Rollback input remains able to inspect the prior evidence after a failed update attempt.
+- [x] Successful update processing still replaces prior evidence with the fresh successful run's Tracking Record and Destination Journal evidence.
 
 ## Blocked by
 

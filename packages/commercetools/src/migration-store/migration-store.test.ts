@@ -925,6 +925,10 @@ describe("CommercetoolsMigrationStore", () => {
         sourceIdentity,
         sourceVersion: toSourceVersion("source-v2"),
         status: "skipped",
+        trackingRecord: {
+          productId: "ct-product-skipped",
+          productKey: "sku-skipped",
+        },
         updatedAt,
       },
       {
@@ -938,6 +942,10 @@ describe("CommercetoolsMigrationStore", () => {
         sourceIdentity,
         sourceVersion: toSourceVersion("source-v3"),
         status: "failed",
+        trackingRecord: {
+          productId: "ct-product-failed",
+          productKey: "sku-failed",
+        },
         updatedAt,
       },
       {
