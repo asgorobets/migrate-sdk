@@ -139,6 +139,14 @@ const invalidRunRequestError = (cause: unknown) =>
     cause,
   });
 
+const invalidUpdateRunModeError = (mode: RunMode) =>
+  new MigrationRuntimeError({
+    message:
+      mode.kind === "item"
+        ? "Update run cannot target source identities"
+        : `Update run cannot combine with ${mode.kind} mode`,
+  });
+
 const invalidRollbackRequestError = (cause: unknown) =>
   cause instanceof RollbackRequestError
     ? cause
@@ -596,6 +604,18 @@ const validateSharedStore = (
   }
 
   return null;
+};
+
+const validateUpdateRunRequest = (
+  request: EncodedRunRequest<readonly AnyMigrationDefinition[]>
+): MigrationRuntimeError | null => {
+  if (request.update !== true) {
+    return null;
+  }
+
+  const mode = request.mode ?? normalRunMode;
+
+  return mode.kind === "normal" ? null : invalidUpdateRunModeError(mode);
 };
 
 const isTargetedMode = (mode: RunMode): boolean => mode.kind !== "normal";
@@ -2237,6 +2257,12 @@ const runMigrationsWithRequest = <
     return Effect.fail(emptyRunError);
   }
 
+  const updateRunRequestError = validateUpdateRunRequest(request);
+
+  if (updateRunRequestError !== null) {
+    return Effect.fail(updateRunRequestError);
+  }
+
   const orderedDefinitions = orderDefinitions(
     request.definitions,
     request.definitionIds
@@ -2360,6 +2386,7 @@ export const runMigrations = <
             ? {}
             : { definitionIds: request.definitionIds }),
           mode,
+          ...(request.update === undefined ? {} : { update: request.update }),
         })
     );
   });

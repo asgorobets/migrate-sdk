@@ -134,6 +134,7 @@ export interface RunRequest<
   readonly mode?: RunModeInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
+  readonly update?: boolean;
 }
 
 export interface RunRequestInput<
@@ -145,6 +146,7 @@ export interface RunRequestInput<
   readonly mode?: RunModeInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
+  readonly update?: boolean;
 }
 
 export const makeRunRequest = <
@@ -154,6 +156,7 @@ export const makeRunRequest = <
 ): RunRequest<Definitions> => ({
   definitions: input.definitions,
   ...(input.mode === undefined ? {} : { mode: input.mode }),
+  ...(input.update === undefined ? {} : { update: input.update }),
   ...(input.definitionIds === undefined
     ? {}
     : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
@@ -166,6 +169,7 @@ export interface EncodedRunRequest<
   readonly definitionIds?: readonly MigrationDefinitionId[];
   readonly definitions: Definitions;
   readonly mode?: RunMode;
+  readonly update?: boolean;
 }
 
 export interface EncodedRunRequestInput<
@@ -175,6 +179,7 @@ export interface EncodedRunRequestInput<
   readonly definitionIds?: readonly MigrationDefinitionIdInput[];
   readonly definitions: Definitions;
   readonly mode?: EncodedRunModeInput;
+  readonly update?: boolean;
 }
 
 export const makeEncodedRunRequest = <
@@ -184,6 +189,7 @@ export const makeEncodedRunRequest = <
 ): EncodedRunRequest<Definitions> => ({
   definitions: input.definitions,
   ...(input.mode === undefined ? {} : { mode: makeEncodedRunMode(input.mode) }),
+  ...(input.update === undefined ? {} : { update: input.update }),
   ...(input.definitionIds === undefined
     ? {}
     : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),

@@ -69,6 +69,7 @@ export type MigrationDefinitionRegistryRunInput =
   MigrationDefinitionRegistrySelectionInput & {
     readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
     readonly sourceIdentities?: readonly string[];
+    readonly update?: boolean;
   };
 
 export type MigrationDefinitionRegistryRollbackInput =
@@ -161,6 +162,7 @@ export interface MigrationDefinitionRunPlan {
   readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
   readonly target?: MigrationDefinitionPlanTarget;
+  readonly update?: boolean;
   readonly withDependencies: boolean;
 }
 
@@ -795,6 +797,40 @@ const normalizeRunTarget = (
   );
 };
 
+const validateUpdateRunInput = (
+  input: MigrationDefinitionRegistryRunInput
+): Effect.Effect<void, MigrationDefinitionRegistryInvalidSelectionError> => {
+  if (input.update !== true) {
+    return Effect.void;
+  }
+
+  if (input.mode?.kind === "failed") {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Update run planning cannot combine with failed mode",
+      })
+    );
+  }
+
+  if (input.mode?.kind === "skipped") {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Update run planning cannot combine with skipped mode",
+      })
+    );
+  }
+
+  if (input.sourceIdentities !== undefined) {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Update run planning cannot target source identities",
+      })
+    );
+  }
+
+  return Effect.void;
+};
+
 const normalizeRollbackTarget = (
   input: MigrationDefinitionRegistryRollbackInput,
   selection: ResolvedRegistrySelection,
@@ -1071,6 +1107,7 @@ export class MigrationDefinitionRegistry<
         definitionsById,
         input
       );
+      yield* validateUpdateRunInput(input);
       const targetOption = yield* normalizeRunTarget(
         input,
         selection,
@@ -1100,6 +1137,7 @@ export class MigrationDefinitionRegistry<
         definitions: planDefinitions,
         ...(target === undefined ? {} : { target }),
         notices: selection.notices,
+        ...(input.update === undefined ? {} : { update: input.update }),
         withDependencies: selection.withDependencies,
       };
     });
@@ -1171,6 +1209,7 @@ export class MigrationDefinitionRegistry<
           ? {
               definitions: plan.definitions as Definitions,
               ...(input.mode === undefined ? {} : { mode: input.mode }),
+              ...(input.update === undefined ? {} : { update: input.update }),
             }
           : {
               definitions: plan.definitions as Definitions,

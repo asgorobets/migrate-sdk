@@ -14,19 +14,19 @@ This slice should keep `--update` separate from Run Mode. Update is a run execut
 
 ## Acceptance criteria
 
-- [ ] Raw run request input accepts update intent.
-- [ ] Registry-backed run input accepts update intent.
-- [ ] Run planning preserves update intent in the structured plan.
-- [ ] CLI `migrate run --update <definition>` parses successfully.
-- [ ] CLI `migrate run --update --all` parses successfully.
-- [ ] CLI `migrate run --update <definition> --with-dependencies` parses successfully.
-- [ ] Plan output makes update intent visible to the operator.
-- [ ] Plan mode remains static and does not acquire locks, read stores, mutate item state, clear Source Cursors, scan sources, or run process pipelines.
-- [ ] `--update --failed` is rejected with a clear error.
-- [ ] `--update --skipped` is rejected with a clear error.
-- [ ] `--update` with source identity targeting is rejected with a clear error.
-- [ ] Missing dependency suggestions preserve the update flag when suggesting corrected run commands.
-- [ ] Existing run mode, source identity targeting, dependency expansion, and plan rendering tests remain green.
+- [x] Raw run request input accepts update intent.
+- [x] Registry-backed run input accepts update intent.
+- [x] Run planning preserves update intent in the structured plan.
+- [x] CLI `migrate run --update <definition>` parses successfully.
+- [x] CLI `migrate run --update --all` parses successfully.
+- [x] CLI `migrate run --update <definition> --with-dependencies` parses successfully.
+- [x] Plan output makes update intent visible to the operator.
+- [x] Plan mode remains static and does not acquire locks, read stores, mutate item state, clear Source Cursors, scan sources, or run process pipelines.
+- [x] `--update --failed` is rejected with a clear error.
+- [x] `--update --skipped` is rejected with a clear error.
+- [x] `--update` with source identity targeting is rejected with a clear error.
+- [x] Missing dependency suggestions preserve the update flag when suggesting corrected run commands.
+- [x] Existing run mode, source identity targeting, dependency expansion, and plan rendering tests remain green.
 
 ## Blocked by
 

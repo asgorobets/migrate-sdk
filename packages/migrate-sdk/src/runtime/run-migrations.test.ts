@@ -4752,6 +4752,72 @@ describe("runMigration", () => {
     })
   );
 
+  it.effect("rejects raw SDK update runs with targeted retry modes", () =>
+    Effect.gen(function* () {
+      const processCalls: string[] = [];
+      const definition = defineMigration({
+        id: "articles",
+        source: makeTestInMemorySource({
+          items: [
+            {
+              identityKey: "article-target",
+              version: "source-version-1",
+              item: { title: "Target article" },
+            },
+          ],
+        }),
+        store: InMemoryMigrationStore.layer(),
+        process: (source) =>
+          Effect.sync(() => {
+            processCalls.push(source.identity.encoded);
+          }),
+      });
+
+      const failedError = yield* Effect.flip(
+        runMigrations({
+          definitions: [definition],
+          mode: { kind: "failed" },
+          update: true,
+        })
+      );
+      expect(failedError).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationRuntimeError",
+          message: "Update run cannot combine with failed mode",
+        })
+      );
+
+      const skippedError = yield* Effect.flip(
+        runMigrations({
+          definitions: [definition],
+          mode: { kind: "skipped" },
+          update: true,
+        })
+      );
+      expect(skippedError).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationRuntimeError",
+          message: "Update run cannot combine with skipped mode",
+        })
+      );
+
+      const targetError = yield* Effect.flip(
+        runMigrations({
+          definitions: [definition],
+          mode: { kind: "item", sourceIdentityKey: "article-target" },
+          update: true,
+        })
+      );
+      expect(targetError).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationRuntimeError",
+          message: "Update run cannot target source identities",
+        })
+      );
+      expect(processCalls).toEqual([]);
+    })
+  );
+
   it.effect(
     "records Source identity lookup failures for known Migration Item States",
     () =>

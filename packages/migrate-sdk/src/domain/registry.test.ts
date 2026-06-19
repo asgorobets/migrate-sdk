@@ -418,6 +418,25 @@ describe("MigrationDefinitionRegistry", () => {
       })
   );
 
+  it.effect("preserves update intent in run plans", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({ id: "articles" });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+
+      const plan = yield* registry.planRun({
+        definitionIds: ["articles"],
+        update: true,
+      });
+
+      expect(plan.update).toBe(true);
+      expect(plan.executionDefinitionIds).toEqual([
+        toMigrationDefinitionId("articles"),
+      ]);
+    })
+  );
+
   it.effect(
     "reports status for selected definitions with dependency expansion in registry order",
     () =>
@@ -1001,7 +1020,8 @@ describe("MigrationDefinitionRegistry", () => {
         });
         const businessAddresses = defineMigration({
           id: "business-addresses",
-          source: businessAddressSource,          store,
+          source: businessAddressSource,
+          store,
           process: () => Effect.void,
         });
         const registry = MigrationDefinitionRegistry.make({
@@ -1040,7 +1060,8 @@ describe("MigrationDefinitionRegistry", () => {
         });
         const businessAddresses = defineMigration({
           id: "business-addresses",
-          source: businessAddressSource,          store,
+          source: businessAddressSource,
+          store,
           process: () => Effect.void,
         });
         const registry = MigrationDefinitionRegistry.make({
@@ -1191,6 +1212,54 @@ describe("MigrationDefinitionRegistry", () => {
         new MigrationDefinitionRegistryInvalidSelectionError({
           message:
             "Rollback source identity targeting cannot expand required dependencies",
+        })
+      );
+    })
+  );
+
+  it.effect("rejects unsupported update run planning combinations", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({ id: "articles" });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+
+      const failedError = yield* Effect.flip(
+        registry.planRun({
+          definitionIds: ["articles"],
+          mode: { kind: "failed" },
+          update: true,
+        })
+      );
+      expect(failedError).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message: "Update run planning cannot combine with failed mode",
+        })
+      );
+
+      const skippedError = yield* Effect.flip(
+        registry.planRun({
+          definitionIds: ["articles"],
+          mode: { kind: "skipped" },
+          update: true,
+        })
+      );
+      expect(skippedError).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message: "Update run planning cannot combine with skipped mode",
+        })
+      );
+
+      const targetError = yield* Effect.flip(
+        registry.planRun({
+          definitionIds: ["articles"],
+          sourceIdentities: ["article-1"],
+          update: true,
+        })
+      );
+      expect(targetError).toEqual(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message: "Update run planning cannot target source identities",
         })
       );
     })
