@@ -1,9 +1,17 @@
 import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSystem";
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, PlatformError, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
+import {
+  defineMigration,
+  InMemoryMigrationStore,
+  MigrationProgress,
+  type MigrationProgressEvent,
+  runMigration,
+  SourceItemTotal,
+} from "migrate-sdk";
 import { CsvIdentity, CsvSourcePlugin } from "migrate-sdk/sources/csv";
 import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
 import { SourcePlugin } from "../../services/source-plugin.ts";
@@ -66,6 +74,42 @@ const bookstoreCatalogOptions: CsvParserOptions<
 };
 
 const testPlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
+
+const makeFirstReadFileFailurePlatformLayer = (state: {
+  readFileAttempts: number;
+}) => {
+  const flakyFileSystemLayer = Layer.effect(
+    FileSystem,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem;
+
+      return {
+        ...fs,
+        readFile: (filePath: string) =>
+          Effect.sync(() => {
+            state.readFileAttempts += 1;
+            return state.readFileAttempts;
+          }).pipe(
+            Effect.flatMap((attempt) =>
+              attempt === 1
+                ? Effect.fail(
+                    PlatformError.systemError({
+                      _tag: "Unknown",
+                      description: "Transient test read failure",
+                      method: "readFile",
+                      module: "FileSystem",
+                      pathOrDescriptor: filePath,
+                    })
+                  )
+                : fs.readFile(filePath)
+            )
+          ),
+      };
+    })
+  ).pipe(Layer.provide(nodeFileSystemLayer));
+
+  return Layer.mergeAll(flakyFileSystemLayer, nodePathLayer);
+};
 
 describe("CsvParserCore", () => {
   it.effect(
@@ -368,6 +412,173 @@ describe("CsvSourcePlugin", () => {
 
       expect(lookedUp?.item.primary_author_id).toBe("AUTH-002");
     }).pipe(Effect.provide(testPlatformLayer))
+  );
+
+  it.effect("discovers totals from the native file load and parse path", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem;
+      const path = yield* Path;
+      const directory = yield* fs.makeTempDirectoryScoped({
+        prefix: "migrate-sdk-csv-",
+      });
+      const filePath = path.join(directory, "articles.csv");
+      yield* fs.writeFileString(
+        filePath,
+        "id,title,views\n42,Hello,7\n43,Goodbye,8\n"
+      );
+
+      const source = CsvSourcePlugin.make({
+        ...csvOptions,
+        path: filePath,
+        platform: testPlatformLayer,
+        sourceSchema: CsvArticleSource,
+      });
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+      if (plugin.discoverSourceItemTotal === undefined) {
+        throw new Error("Expected CSV source total discovery");
+      }
+
+      const total = yield* plugin.discoverSourceItemTotal();
+
+      expect(total).toEqual(SourceItemTotal.known(2));
+    }).pipe(Effect.provide(testPlatformLayer))
+  );
+
+  it.effect(
+    "discovers totals that respect provided headers, custom separators, and skipped blank rows",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem;
+        const path = yield* Path;
+        const directory = yield* fs.makeTempDirectoryScoped({
+          prefix: "migrate-sdk-csv-",
+        });
+        const filePath = path.join(directory, "articles.csv");
+        yield* fs.writeFileString(
+          filePath,
+          "metadata\n42;Hello;7\n\n43;Goodbye;8\n"
+        );
+
+        const source = CsvSourcePlugin.make({
+          ...csvOptions,
+          dialect: { kind: "custom", separator: ";" },
+          headers: {
+            columns: ["id", "title", "views"],
+            dataStartRowIndex: 1,
+            kind: "provided",
+          },
+          path: filePath,
+          platform: testPlatformLayer,
+          sourceSchema: CsvArticleSource,
+        });
+        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+        if (plugin.discoverSourceItemTotal === undefined) {
+          throw new Error("Expected CSV source total discovery");
+        }
+
+        const total = yield* plugin.discoverSourceItemTotal();
+
+        expect(total).toEqual(SourceItemTotal.known(2));
+      }).pipe(Effect.provide(testPlatformLayer))
+  );
+
+  it.effect("returns unknown total when CSV total discovery cannot parse", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem;
+      const path = yield* Path;
+      const directory = yield* fs.makeTempDirectoryScoped({
+        prefix: "migrate-sdk-csv-",
+      });
+      const filePath = path.join(directory, "articles.csv");
+      yield* fs.writeFileString(filePath, "id,title,views\n,,\n");
+
+      const source = CsvSourcePlugin.make({
+        ...csvOptions,
+        emptyRows: { kind: "error" },
+        path: filePath,
+        platform: testPlatformLayer,
+        sourceSchema: CsvArticleSource,
+      });
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+      if (plugin.discoverSourceItemTotal === undefined) {
+        throw new Error("Expected CSV source total discovery");
+      }
+
+      const total = yield* plugin.discoverSourceItemTotal();
+
+      expect(total).toEqual(
+        expect.objectContaining({
+          kind: "unknown",
+          message: "CSV Source Item total discovery failed",
+          reason: "failed",
+        })
+      );
+    }).pipe(Effect.provide(testPlatformLayer))
+  );
+
+  it.effect(
+    "continues migration execution when CSV total discovery has a transient load failure",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem;
+        const path = yield* Path;
+        const directory = yield* fs.makeTempDirectoryScoped({
+          prefix: "migrate-sdk-csv-",
+        });
+        const filePath = path.join(directory, "articles.csv");
+        const platformState = { readFileAttempts: 0 };
+        const progressEvents: MigrationProgressEvent[] = [];
+        yield* fs.writeFileString(filePath, "id,title,views\n42,Hello,7\n");
+
+        const source = CsvSourcePlugin.make({
+          ...csvOptions,
+          path: filePath,
+          platform: makeFirstReadFileFailurePlatformLayer(platformState),
+          sourceSchema: CsvArticleSource,
+        });
+        const definition = defineMigration({
+          id: "articles",
+          source,
+          store: InMemoryMigrationStore.layer(),
+          process: () => Effect.void,
+        });
+        const progressLayer = Layer.succeed(MigrationProgress, {
+          discoverSourceItemTotals: true,
+          emit: (event) =>
+            Effect.sync(() => {
+              progressEvents.push(event);
+            }),
+        });
+
+        const summary = yield* runMigration(definition).pipe(
+          Effect.provide(progressLayer)
+        );
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(platformState.readFileAttempts).toBe(3);
+        expect(progressEvents).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              kind: "source-item-total-discovered",
+              sourceItemTotal: expect.objectContaining({
+                kind: "unknown",
+                message: "CSV Source Item total discovery failed",
+                reason: "failed",
+              }),
+            }),
+          ])
+        );
+      }).pipe(Effect.provide(testPlatformLayer))
   );
 
   it.effect("reads a path source once per file fingerprint", () =>

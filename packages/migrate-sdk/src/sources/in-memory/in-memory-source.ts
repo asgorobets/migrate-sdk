@@ -15,6 +15,7 @@ import type { SourceVersionContractFingerprint } from "../../domain/migration-co
 import {
   encodeSourceIdentityKey,
   type SourceItemInput,
+  SourceItemTotal,
   type SourceLookupStrategy,
 } from "../../domain/source.ts";
 import type { AnySourcePlugin } from "../../services/source-plugin.ts";
@@ -83,6 +84,10 @@ const makeImplementation = <A, IdentityKey extends SourceIdentitySnapshotKey>(
   let remainingReadByIdentityFailures =
     options.transientFailures?.readByIdentity ?? 0;
 
+  const discoverSourceItemTotal = Effect.fn(
+    "InMemorySource.discoverSourceItemTotal"
+  )(() => Effect.succeed(SourceItemTotal.known(items.length)));
+
   const read = Effect.fn("InMemorySource.read")(function* (
     cursor: InMemorySourceCursor | null
   ) {
@@ -144,6 +149,7 @@ const makeImplementation = <A, IdentityKey extends SourceIdentitySnapshotKey>(
   });
 
   return {
+    discoverSourceItemTotal,
     lookupStrategy,
     read,
     readByIdentity,

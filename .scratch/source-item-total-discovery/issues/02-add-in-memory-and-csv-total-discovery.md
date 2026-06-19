@@ -17,19 +17,23 @@ Covers user stories 2-8, 14-16, 18-19, and 23-24.
 
 ## Acceptance criteria
 
-- [ ] In-memory total discovery returns the configured item count directly from `items.length`.
-- [ ] In-memory total discovery treats zero items as a known zero total.
-- [ ] In-memory `batchSize` affects Source Cursor Window size but does not affect the discovered total.
-- [ ] In-memory total discovery does not call source reads or identity lookup.
-- [ ] CSV total discovery uses the CSV source's existing load and parse behavior instead of a separate counting parser.
-- [ ] CSV total discovery counts the Source Items selected for the current configuration.
-- [ ] CSV totals respect dialect, header, empty-row, identity, version, and source schema behavior that affects emitted Source Items.
-- [ ] CSV total discovery returns a typed unknown total when the file cannot be loaded or parsed for progress purposes.
-- [ ] CSV total discovery failures surface as progress warnings and do not create Migration Item State or Migration Diagnostics.
-- [ ] CSV read behavior remains authoritative for migration correctness after a total discovery failure.
-- [ ] The in-memory and CSV source plugins both expose the optional capability in their configured source output.
-- [ ] Tests cover known in-memory totals, known CSV totals, CSV configuration-sensitive counts, CSV discovery failure, and preservation of normal migration execution after a discovery failure.
+- [x] In-memory total discovery returns the configured item count directly from `items.length`.
+- [x] In-memory total discovery treats zero items as a known zero total.
+- [x] In-memory `batchSize` affects Source Cursor Window size but does not affect the discovered total.
+- [x] In-memory total discovery does not call source reads or identity lookup.
+- [x] CSV total discovery uses the CSV source's existing load and parse behavior instead of a separate counting parser.
+- [x] CSV total discovery counts the Source Items selected for the current configuration.
+- [x] CSV totals respect dialect, header, empty-row, identity, version, and source schema behavior that affects emitted Source Items.
+- [x] CSV total discovery returns a typed unknown total when the file cannot be loaded or parsed for progress purposes.
+- [x] CSV total discovery failures surface as progress warnings and do not create Migration Item State or Migration Diagnostics.
+- [x] CSV read behavior remains authoritative for migration correctness after a total discovery failure.
+- [x] The in-memory and CSV source plugins both expose the optional capability in their configured source output.
+- [x] Tests cover known in-memory totals, known CSV totals, CSV configuration-sensitive counts, CSV discovery failure, and preservation of normal migration execution after a discovery failure.
 
 ## Blocked by
 
 [Add Source Item Total Discovery Contract](./01-add-source-item-total-discovery-contract.md)
+
+## Completion notes
+
+Implemented native total discovery for in-memory and CSV sources. In-memory reports `items.length` without reads or lookups. CSV reuses its file load and parser path, counts parsed Source Items, and returns an unknown failed total for count-time load or parse failures while leaving read execution authoritative.

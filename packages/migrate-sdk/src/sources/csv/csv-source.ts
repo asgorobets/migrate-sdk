@@ -24,6 +24,7 @@ import {
 import {
   encodeSourceIdentityKey,
   type SourceItemInput,
+  SourceItemTotal,
 } from "../../domain/source.ts";
 import {
   type AnySourcePlugin,
@@ -877,6 +878,22 @@ const makeImplementation = <
 > => {
   const load = () => loadPathDocument(fs, path, options);
   const identity = makeCsvIdentityDefinition(options.identity);
+  const discoverSourceItemTotal = Effect.fn(
+    "CsvSource.discoverSourceItemTotal"
+  )(() =>
+    load().pipe(
+      Effect.map((document) => SourceItemTotal.known(document.rows.length)),
+      Effect.catch((error) =>
+        Effect.succeed(
+          SourceItemTotal.unknown({
+            cause: error,
+            message: "CSV Source Item total discovery failed",
+            reason: "failed",
+          })
+        )
+      )
+    )
+  );
 
   const read = Effect.fn("CsvSource.read")(function* (
     cursor: CsvSourceCursor | null
@@ -922,6 +939,7 @@ const makeImplementation = <
   });
 
   return {
+    discoverSourceItemTotal,
     lookupStrategy: "scan",
     read,
     readByIdentity,

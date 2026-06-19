@@ -4774,9 +4774,14 @@ describe("runMigration", () => {
     () =>
       Effect.gen(function* () {
         const events: MigrationProgressEvent[] = [];
+        const sourceState: ObservableTotalDiscoverySourceState = {
+          readAttempts: 0,
+          readByIdentityAttempts: 0,
+          totalDiscoveryAttempts: 0,
+        };
         const definition = defineMigration({
           id: "articles",
-          source: makeTestInMemorySource({
+          source: makeObservableTotalDiscoverySource({
             items: [
               {
                 identityKey: "article-1",
@@ -4784,6 +4789,7 @@ describe("runMigration", () => {
                 item: { title: "Article 1" },
               },
             ],
+            state: sourceState,
           }),
           store: InMemoryMigrationStore.layer(),
           process: () => Effect.void,
