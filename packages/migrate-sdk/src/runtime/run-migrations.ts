@@ -54,6 +54,7 @@ import {
 } from "../domain/run-mode.ts";
 import type {
   FailedItemState,
+  MigratedItemState,
   MigrationItemError,
   MigrationItemOutcome,
   MigrationItemState,
@@ -622,6 +623,56 @@ const isTargetedMode = (mode: RunMode): boolean => mode.kind !== "normal";
 
 const shouldReprocessUnchangedTerminal = (mode: RunMode): boolean =>
   mode.kind === "skipped" || mode.kind === "item";
+
+const updateRunScheduleReason = "Scheduled by update run";
+
+const makeUpdateRunNeedsUpdateState = (
+  itemState: MigratedItemState,
+  runId: MigrationRunId
+): NeedsUpdateItemState => ({
+  definitionId: itemState.definitionId,
+  sourceIdentity: itemState.sourceIdentity,
+  ...(itemState.sourceVersionContractFingerprint === undefined
+    ? {}
+    : {
+        sourceVersionContractFingerprint:
+          itemState.sourceVersionContractFingerprint,
+      }),
+  sourceVersion: itemState.sourceVersion,
+  ...(itemState.journal === undefined ? {} : { journal: itemState.journal }),
+  lastRunId: runId,
+  updatedAt: new Date(),
+  reason: updateRunScheduleReason,
+  status: "needs-update",
+  ...(itemState.trackingRecord === undefined
+    ? {}
+    : { trackingRecord: itemState.trackingRecord }),
+});
+
+const prepareUpdateRunDefinition = ({
+  definitionId,
+  itemStates,
+  runId,
+  store,
+}: {
+  readonly definitionId: MigrationDefinitionId;
+  readonly itemStates: readonly MigrationItemState[];
+  readonly runId: MigrationRunId;
+  readonly store: typeof MigrationStore.Service;
+}): Effect.Effect<void, MigrationStoreError> =>
+  Effect.gen(function* () {
+    for (const itemState of itemStates) {
+      if (itemState.status !== "migrated") {
+        continue;
+      }
+
+      yield* store.upsertItemState(
+        makeUpdateRunNeedsUpdateState(itemState, runId)
+      );
+    }
+
+    yield* store.deleteSourceCursor(definitionId);
+  });
 
 const selectBacklogStates = (
   mode: RunMode,
@@ -1203,6 +1254,7 @@ interface ProcessCursorDiscoveryOptions<
     SourceRequirements
   >;
   readonly excludedSourceIdentities: readonly EncodedSourceIdentity[];
+  readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
   readonly source: SourcePlugin<Source, Cursor, SourceInput, IdentityKey>;
   readonly store: typeof MigrationStore.Service;
@@ -1220,6 +1272,7 @@ const processCursorDiscovery = <
   counts,
   definition,
   excludedSourceIdentities,
+  reprocessUnchangedTerminal = false,
   runId,
   source,
   store,
@@ -1255,6 +1308,7 @@ const processCursorDiscovery = <
 
         const outcome = yield* processSourceItem({
           definition,
+          reprocessUnchangedTerminal,
           runId,
           sourceSchema: source.sourceSchema,
           sourceItem,
@@ -1656,6 +1710,7 @@ const runMigrationDefinition = <
   >,
   runId: MigrationRunId,
   mode: RunMode,
+  update: boolean,
   createStubReference: CreateMigrationReferenceStub
 ): Effect.Effect<
   MigrationDefinitionRunSummary,
@@ -1673,6 +1728,32 @@ const runMigrationDefinition = <
 
     const counts = { ...emptyCounts };
     const itemStates = yield* store.listItemStates(definition.id);
+
+    if (update) {
+      yield* prepareUpdateRunDefinition({
+        definitionId: definition.id,
+        itemStates,
+        runId,
+        store,
+      });
+
+      yield* processCursorDiscovery({
+        counts,
+        definition,
+        excludedSourceIdentities: [],
+        reprocessUnchangedTerminal: true,
+        runId,
+        source,
+        store,
+      });
+
+      return {
+        definitionId: definition.id,
+        status:
+          counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
+        counts,
+      };
+    }
 
     const attemptedSourceIdentities = yield* processTargetedSourceIdentities({
       counts,
@@ -2310,6 +2391,7 @@ const runMigrationsWithRequest = <
                   definition,
                   runId,
                   request.mode ?? normalRunMode,
+                  request.update === true,
                   stubRunScope.createStubReference
                 );
                 summaries.push(summary);
@@ -2435,6 +2517,7 @@ export const runMigration = <
             definition,
             runId,
             normalRunMode,
+            false,
             stubRunScope.createStubReference
           ).pipe(
             Effect.map((summary) => ({

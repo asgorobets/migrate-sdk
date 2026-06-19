@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, type Layer, Option, Schema } from "effect";
 import {
+  defaultSourceVersionContractFingerprint,
   defineMigration,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
@@ -17,6 +18,7 @@ import {
   type RollbackPipeline,
   RollbackPreflightError,
   SourceIdentity,
+  toEncodedSourceCursor,
   toEncodedSourceIdentity,
   toMigrationDefinitionId,
   toMigrationRunId,
@@ -45,6 +47,17 @@ const source = InMemorySourcePlugin.make({
   items: [],
 });
 const store = {} as Layer.Layer<MigrationStore, MigrationStoreError>;
+
+const seedMigrationContract = (
+  storeState: ReturnType<typeof InMemoryMigrationStore.makeState>,
+  definitionId: MigrationDefinitionIdInput
+) => {
+  storeState.migrationContracts.set(toMigrationDefinitionId(definitionId), {
+    definitionId: toMigrationDefinitionId(definitionId),
+    sourceIdentityContractFingerprint: ArticleSourceIdentity.fingerprint,
+    sourceVersionContractFingerprint: defaultSourceVersionContractFingerprint,
+  });
+};
 
 const makeDefinition = (input: TestDefinitionInput) =>
   defineMigration({
@@ -1306,6 +1319,91 @@ describe("MigrationDefinitionRegistry", () => {
           },
         },
       ]);
+    })
+  );
+
+  it.effect("runs update intent through the registry runtime path", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const processCalls: string[] = [];
+      const articles = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          identity: ArticleSourceIdentity,
+          sourceSchema: ArticleSource,
+          batchSize: 1,
+          items: [
+            {
+              identityKey: "article-migrated",
+              version: "source-version-1",
+              item: {
+                title: "Already migrated",
+              },
+            },
+            {
+              identityKey: "article-new",
+              version: "source-version-1",
+              item: {
+                title: "New article",
+              },
+            },
+          ],
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        process: (sourceItem) =>
+          Effect.sync(() => {
+            processCalls.push(sourceItem.identity.encoded);
+          }),
+      });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+
+      seedMigrationContract(storeState, "articles");
+      storeState.sourceCursors.set(
+        articles.id,
+        toEncodedSourceCursor('{"offset":1}')
+      );
+      storeState.itemStates.set(
+        InMemoryMigrationStore.itemStateKey("articles", "article-migrated"),
+        {
+          definitionId: toMigrationDefinitionId("articles"),
+          sourceIdentity: SourceIdentity.fromKey(
+            ArticleSourceIdentity,
+            "article-migrated"
+          ),
+          sourceVersion: toSourceVersion("source-version-1"),
+          sourceVersionContractFingerprint:
+            defaultSourceVersionContractFingerprint,
+          lastRunId: toMigrationRunId("run-previous"),
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          status: "migrated",
+        }
+      );
+
+      const summary = yield* registry.run({
+        definitionIds: ["articles"],
+        update: true,
+      });
+
+      expect(summary.definitions[0]?.counts).toEqual({
+        migrated: 2,
+        skipped: 0,
+        failed: 0,
+        unchanged: 0,
+        needsUpdate: 0,
+      });
+      expect(processCalls).toEqual(["article-migrated", "article-new"]);
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-migrated")
+        )
+      ).toEqual(
+        expect.objectContaining({
+          status: "migrated",
+          lastRunId: summary.runId,
+        })
+      );
     })
   );
 
