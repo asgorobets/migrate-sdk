@@ -18,21 +18,20 @@ service-backed, and layer-swappable without introducing a durable provider yet.
 
 ## Acceptance criteria
 
-- [ ] A registry can expose an executable run-planning view that returns a
+- [x] A registry can expose an executable run-planning view that returns a
       distinct executable run plan.
-- [ ] `MigrationExecutable` exposes `startRun` through an Effect service and a
+- [x] `MigrationExecutable` exposes `startRun` through an Effect service and a
       static helper.
-- [ ] `MigrationExecutable.inline` starts executable run plans through the
+- [x] `MigrationExecutable.inline` starts executable run plans through the
       existing inline runtime and returns a completed execution start result.
-- [ ] Inline run execution preserves existing migration summary, run state, item
+- [x] Inline run execution preserves existing migration summary, run state, item
       state, and lock behavior.
-- [ ] Ordinary non-executable registry run plans cannot be passed to
+- [x] Ordinary non-executable registry run plans cannot be passed to
       `MigrationExecutable.startRun` at the public type boundary.
-- [ ] Dynamic executable-planning failures report missing runtime requirements
+- [x] Dynamic executable-planning failures report missing runtime requirements
       with a `missingRequirements` diagnostic.
-- [ ] Public exports and author-facing docs expose the new run start path.
+- [x] Public exports and author-facing docs expose the new run start path.
 
 ## Blocked by
 
 None - can start immediately.
-

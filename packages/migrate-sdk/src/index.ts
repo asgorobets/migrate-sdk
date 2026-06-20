@@ -126,6 +126,8 @@ export {
 
 export { MigrationRunState } from "./domain/run.ts";
 export type {
+  ExecutionStartResult,
+  MigrationExecutionHandle,
   MigrationDefinitionRunSummary,
   MigrationRunSummary,
   RunRequest,
@@ -153,6 +155,7 @@ export type {
 
 export {
   DuplicateMigrationDefinitionId,
+  ExecutableMigrationDefinitionRegistry,
   MigrationDefinitionDuplicateRequestedDefinitionIgnored,
   MigrationDefinitionDuplicateSourceIdentityTargetIgnored,
   MigrationDefinitionOptionalDependencyCycleIgnored,
@@ -160,6 +163,7 @@ export {
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryConstructionError,
   MigrationDefinitionRegistryConstructionIssue,
+  MigrationDefinitionRegistryExecutableError,
   MigrationDefinitionRegistryInvalidSelectionError,
   MigrationDefinitionRegistryLookupError,
   MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
@@ -169,6 +173,8 @@ export {
 } from "./domain/registry.ts";
 export type {
   MigrationDefinitionDependencyEdge,
+  MigrationDefinitionExecutableRunPlan,
+  MigrationDefinitionMissingRequirements,
   MigrationDefinitionPlanTarget,
   MigrationDefinitionRegistryEntry,
   MigrationDefinitionRegistryInput,
@@ -185,6 +191,7 @@ export type {
   MigrationDefinitionRegistryStatusReport,
   MigrationDefinitionRollbackPlan,
   MigrationDefinitionRunPlan,
+  MigrationRuntimeRequirement,
 } from "./domain/registry.ts";
 
 export {
@@ -269,6 +276,11 @@ export type {
   MigrationReferenceLookupInput,
   MigrationReferenceLookupTarget,
 } from "./services/migration-reference-lookup.ts";
+export { MigrationExecutable } from "./services/migration-executable.ts";
+export type {
+  MigrationExecutableRunError,
+  MigrationExecutableService,
+} from "./services/migration-executable.ts";
 export { MigrationStore } from "./services/migration-store.ts";
 export { MigrationProgress } from "./services/migration-progress.ts";
 export { RollbackProgress } from "./services/rollback-progress.ts";

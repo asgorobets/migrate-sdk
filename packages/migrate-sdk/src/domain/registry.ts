@@ -46,7 +46,18 @@ export interface MigrationDefinitionRegistryInput<
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
 > {
   readonly definitions: Definitions;
+  readonly missingRequirements?: MigrationDefinitionMissingRequirements;
 }
+
+export interface MigrationRuntimeRequirement {
+  readonly key: string;
+  readonly label?: string;
+  readonly owner: "definition" | "destination" | "process" | "source" | "store";
+}
+
+export type MigrationDefinitionMissingRequirements = (
+  definition: AnyMigrationDefinition
+) => readonly MigrationRuntimeRequirement[];
 
 export interface MigrationDefinitionRegistryEntry {
   readonly dependencies: {
@@ -166,18 +177,34 @@ export interface MigrationDefinitionExecutionPolicy {
   readonly rollbackConcurrency: PipelineExecutionConcurrency;
 }
 
-export interface MigrationDefinitionRunPlan {
-  readonly definitions: readonly AnyMigrationDefinition[];
+export interface MigrationDefinitionRunPlan<
+  Definitions extends
+    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
+> {
+  readonly definitions: Definitions;
+  readonly execution?: MigrationExecutionOptions;
   readonly executionDefinitionIds: readonly MigrationDefinitionId[];
   readonly executionPolicy: readonly MigrationDefinitionExecutionPolicy[];
   readonly includedDefinitionIds: readonly MigrationDefinitionId[];
   readonly kind: "run";
+  readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
   readonly notices: readonly MigrationDefinitionPlanNotice[];
   readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
   readonly target?: MigrationDefinitionPlanTarget;
   readonly update?: boolean;
   readonly withDependencies: boolean;
+}
+
+const executableRunPlanTypeId: unique symbol = Symbol.for(
+  "@migrate-sdk/MigrationDefinitionExecutableRunPlan"
+);
+
+export interface MigrationDefinitionExecutableRunPlan<
+  Definitions extends
+    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
+> extends MigrationDefinitionRunPlan<Definitions> {
+  readonly [executableRunPlanTypeId]: "run";
 }
 
 export interface MigrationDefinitionRollbackPlan {
@@ -279,6 +306,29 @@ export class MigrationDefinitionRegistryInvalidSelectionError extends Schema.Tag
   "MigrationDefinitionRegistryInvalidSelectionError",
   {
     message: Schema.String,
+  }
+) {}
+
+const MigrationRuntimeRequirementSchema = Schema.Struct({
+  key: Schema.String,
+  label: Schema.optional(Schema.String),
+  owner: Schema.Literals([
+    "definition",
+    "destination",
+    "process",
+    "source",
+    "store",
+  ]),
+});
+
+export class MigrationDefinitionRegistryExecutableError extends Schema.TaggedErrorClass<MigrationDefinitionRegistryExecutableError>()(
+  "MigrationDefinitionRegistryExecutableError",
+  {
+    definitionId: MigrationDefinitionIdSchema,
+    message: Schema.String,
+    missingRequirements: Schema.NonEmptyArray(
+      MigrationRuntimeRequirementSchema
+    ),
   }
 ) {}
 
@@ -1082,6 +1132,42 @@ const freezeEntry = (
     }),
   });
 
+const makeExecutableRunPlan = <
+  Definitions extends readonly AnyMigrationDefinition[],
+>(
+  plan: MigrationDefinitionRunPlan<Definitions>
+): MigrationDefinitionExecutableRunPlan<Definitions> =>
+  Object.freeze({
+    ...plan,
+    [executableRunPlanTypeId]: "run",
+  }) as MigrationDefinitionExecutableRunPlan<Definitions>;
+
+const validateExecutableDefinitions = (
+  definitions: readonly AnyMigrationDefinition[],
+  missingRequirements: MigrationDefinitionMissingRequirements | undefined
+): Effect.Effect<void, MigrationDefinitionRegistryExecutableError> => {
+  if (missingRequirements === undefined) {
+    return Effect.void;
+  }
+
+  for (const definition of definitions) {
+    const requirements = missingRequirements(definition);
+    const [firstRequirement, ...remainingRequirements] = requirements;
+
+    if (firstRequirement !== undefined) {
+      return Effect.fail(
+        new MigrationDefinitionRegistryExecutableError({
+          definitionId: definition.id,
+          message: "Migration Definition is missing runtime requirements",
+          missingRequirements: [firstRequirement, ...remainingRequirements],
+        })
+      );
+    }
+  }
+
+  return Effect.void;
+};
+
 export class MigrationDefinitionRegistry<
   Definitions extends
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
@@ -1092,13 +1178,20 @@ export class MigrationDefinitionRegistry<
     AnyMigrationDefinition
   >;
   readonly #entries: readonly MigrationDefinitionRegistryEntry[];
+  readonly #missingRequirements:
+    | MigrationDefinitionMissingRequirements
+    | undefined;
 
-  private constructor(definitions: Definitions) {
+  private constructor(
+    definitions: Definitions,
+    missingRequirements: MigrationDefinitionMissingRequirements | undefined
+  ) {
     validateConstruction(definitions);
 
     this.#definitions = Object.freeze([
       ...definitions,
     ]) as unknown as Definitions;
+    this.#missingRequirements = missingRequirements;
     this.#definitionsById = new Map(
       this.#definitions.map((definition) => [definition.id, definition])
     );
@@ -1119,7 +1212,10 @@ export class MigrationDefinitionRegistry<
   static make<const Definitions extends readonly AnyMigrationDefinition[]>(
     input: MigrationDefinitionRegistryInput<Definitions>
   ): MigrationDefinitionRegistry<Definitions> {
-    return new MigrationDefinitionRegistry(input.definitions);
+    return new MigrationDefinitionRegistry(
+      input.definitions,
+      input.missingRequirements
+    );
   }
 
   definitions(): Definitions {
@@ -1138,10 +1234,17 @@ export class MigrationDefinitionRegistry<
     return this.#entries;
   }
 
+  executable(): ExecutableMigrationDefinitionRegistry<Definitions> {
+    return new ExecutableMigrationDefinitionRegistry(
+      this,
+      this.#missingRequirements
+    );
+  }
+
   planRun(
     input: MigrationDefinitionRegistryRunInput
   ): Effect.Effect<
-    MigrationDefinitionRunPlan,
+    MigrationDefinitionRunPlan<Definitions>,
     MigrationDefinitionRegistryPlanningError
   > {
     const definitions = this.#definitions;
@@ -1171,7 +1274,7 @@ export class MigrationDefinitionRegistry<
       );
       const planDefinitions = planDetails.executionDefinitionIds.map(
         (definitionId) => definitionsById.get(definitionId)
-      ) as readonly AnyMigrationDefinition[];
+      ) as unknown as Definitions;
       const executionPolicy = yield* resolveDefinitionExecutionPolicy(
         planDefinitions,
         input.execution
@@ -1188,6 +1291,10 @@ export class MigrationDefinitionRegistry<
         definitions: planDefinitions,
         ...(target === undefined ? {} : { target }),
         notices: selection.notices,
+        ...(input.execution === undefined
+          ? {}
+          : { execution: input.execution }),
+        ...(input.mode === undefined ? {} : { mode: input.mode }),
         ...(input.update === undefined ? {} : { update: input.update }),
         withDependencies: selection.withDependencies,
       };
@@ -1264,17 +1371,17 @@ export class MigrationDefinitionRegistry<
         plan.target === undefined
           ? {
               definitions: plan.definitions as Definitions,
-              ...(input.execution === undefined
+              ...(plan.execution === undefined
                 ? {}
-                : { execution: input.execution }),
-              ...(input.mode === undefined ? {} : { mode: input.mode }),
-              ...(input.update === undefined ? {} : { update: input.update }),
+                : { execution: plan.execution }),
+              ...(plan.mode === undefined ? {} : { mode: plan.mode }),
+              ...(plan.update === undefined ? {} : { update: plan.update }),
             }
           : {
               definitions: plan.definitions as Definitions,
-              ...(input.execution === undefined
+              ...(plan.execution === undefined
                 ? {}
-                : { execution: input.execution }),
+                : { execution: plan.execution }),
               mode: {
                 kind: "item" as const,
                 encodedSourceIdentity: plan.target.sourceIdentities[0],
@@ -1399,5 +1506,38 @@ export class MigrationDefinitionRegistry<
         ),
       onSome: (definition) => Effect.succeed(definition),
     });
+  }
+}
+
+export class ExecutableMigrationDefinitionRegistry<
+  Definitions extends
+    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
+> {
+  readonly #missingRequirements:
+    | MigrationDefinitionMissingRequirements
+    | undefined;
+  readonly #registry: MigrationDefinitionRegistry<Definitions>;
+
+  constructor(
+    registry: MigrationDefinitionRegistry<Definitions>,
+    missingRequirements: MigrationDefinitionMissingRequirements | undefined
+  ) {
+    this.#missingRequirements = missingRequirements;
+    this.#registry = registry;
+  }
+
+  planRun(
+    input: MigrationDefinitionRegistryRunInput
+  ): Effect.Effect<
+    MigrationDefinitionExecutableRunPlan<Definitions>,
+    | MigrationDefinitionRegistryPlanningError
+    | MigrationDefinitionRegistryExecutableError
+  > {
+    return Effect.flatMap(this.#registry.planRun(input), (plan) =>
+      validateExecutableDefinitions(
+        plan.definitions,
+        this.#missingRequirements
+      ).pipe(Effect.as(makeExecutableRunPlan(plan)))
+    );
   }
 }

@@ -239,6 +239,18 @@ export interface MigrationDefinitionRunSummary {
   readonly status: "succeeded" | "failed" | "skipped";
 }
 
-export type ExecutionStartResult =
-  | { readonly kind: "Completed"; readonly summary: MigrationRunSummary }
-  | { readonly kind: "Started"; readonly runId: MigrationRunId };
+export interface MigrationExecutionHandle {
+  readonly adapter: string;
+}
+
+export type ExecutionStartResult<Summary = MigrationRunSummary> =
+  | {
+      readonly kind: "completed";
+      readonly runId: MigrationRunId;
+      readonly summary: Summary;
+    }
+  | {
+      readonly execution: MigrationExecutionHandle;
+      readonly kind: "started";
+      readonly runId: MigrationRunId;
+    };

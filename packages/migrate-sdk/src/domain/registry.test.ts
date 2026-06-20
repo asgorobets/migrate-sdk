@@ -3,17 +3,22 @@ import { Effect, type Layer, Option, Schema } from "effect";
 import {
   defaultSourceVersionContractFingerprint,
   defineMigration,
+  type ExecutionStartResult,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
   type MigrationDefinitionDependenciesInput,
+  type MigrationDefinitionExecutableRunPlan,
   type MigrationDefinitionIdInput,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryConstructionError,
+  MigrationDefinitionRegistryExecutableError,
   MigrationDefinitionRegistryInvalidSelectionError,
   MigrationDefinitionRegistryLookupError,
   MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
   MigrationDefinitionRegistryUnknownDefinitionError,
+  MigrationExecutable,
   type MigrationExecutionOptions,
+  type MigrationRunSummary,
   type MigrationStore,
   type MigrationStoreError,
   type RollbackPipeline,
@@ -25,6 +30,7 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
+import { expectTypeOf } from "vitest";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -1348,6 +1354,212 @@ describe("MigrationDefinitionRegistry", () => {
         })
       );
     })
+  );
+
+  it.effect("plans executable runs with a distinct executable plan type", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({ id: "articles" });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+
+      const ordinaryPlan = yield* registry.planRun({
+        definitionIds: ["articles"],
+      });
+      const executablePlan = yield* registry.executable().planRun({
+        definitionIds: ["articles"],
+      });
+
+      expect(executablePlan).toEqual(
+        expect.objectContaining({
+          kind: "run",
+          definitions: [articles],
+          executionDefinitionIds: [toMigrationDefinitionId("articles")],
+        })
+      );
+      expectTypeOf(
+        executablePlan
+      ).toMatchTypeOf<MigrationDefinitionExecutableRunPlan>();
+      // @ts-expect-error Ordinary registry plans are not accepted by startRun.
+      const rejectedOrdinaryPlanStartInput: Parameters<
+        typeof MigrationExecutable.startRun
+      >[0] = ordinaryPlan;
+      expect(rejectedOrdinaryPlanStartInput).toBeDefined();
+    })
+  );
+
+  it.effect(
+    "reports missing runtime requirements during executable planning",
+    () =>
+      Effect.gen(function* () {
+        const articles = makeDefinition({ id: "articles" });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles] as const,
+          missingRequirements: (definition) =>
+            definition.id === toMigrationDefinitionId("articles")
+              ? [
+                  {
+                    key: "SqlClient",
+                    label: "SQL client layer",
+                    owner: "source" as const,
+                  },
+                ]
+              : [],
+        });
+
+        const error = yield* Effect.flip(
+          registry.executable().planRun({ definitionIds: ["articles"] })
+        );
+
+        expect(error).toEqual(
+          new MigrationDefinitionRegistryExecutableError({
+            definitionId: toMigrationDefinitionId("articles"),
+            message: "Migration Definition is missing runtime requirements",
+            missingRequirements: [
+              {
+                key: "SqlClient",
+                label: "SQL client layer",
+                owner: "source",
+              },
+            ],
+          })
+        );
+      })
+  );
+
+  it.effect("starts executable run plans through the inline executable", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const articles = defineMigration({
+        id: "articles",
+        source: InMemorySourcePlugin.make({
+          identity: ArticleSourceIdentity,
+          sourceSchema: ArticleSource,
+          items: [
+            {
+              identityKey: "article-1",
+              version: "source-version-1",
+              item: {
+                title: "Executable registry run",
+              },
+            },
+          ],
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        process: () => Effect.void,
+      });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+      const plan = yield* registry.executable().planRun({
+        definitionIds: ["articles"],
+      });
+
+      const result = yield* MigrationExecutable.startRun(plan).pipe(
+        Effect.provide(MigrationExecutable.inline)
+      );
+
+      expectTypeOf(result).toMatchTypeOf<
+        ExecutionStartResult<MigrationRunSummary>
+      >();
+      expect(result.kind).toBe("completed");
+
+      if (result.kind === "completed") {
+        expect(result.runId).toBe(result.summary.runId);
+        expect(result.summary.status).toBe("succeeded");
+        expect(result.summary.definitions).toEqual([
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            status: "succeeded",
+            counts: {
+              migrated: 1,
+              skipped: 0,
+              failed: 0,
+              unchanged: 0,
+              needsUpdate: 0,
+            },
+          },
+        ]);
+        expect(
+          storeState.latestRunStates.get(toMigrationDefinitionId("articles"))
+        ).toEqual(
+          expect.objectContaining({
+            runId: result.runId,
+            status: "succeeded",
+          })
+        );
+      }
+
+      expect(storeState.definitionLocks.size).toBe(0);
+    })
+  );
+
+  it.effect(
+    "starts targeted executable run plans through the inline executable",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const articles = defineMigration({
+          id: "articles",
+          source: InMemorySourcePlugin.make({
+            identity: ArticleSourceIdentity,
+            sourceSchema: ArticleSource,
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: {
+                  title: "Targeted executable run",
+                },
+              },
+              {
+                identityKey: "article-2",
+                version: "source-version-1",
+                item: {
+                  title: "Ignored article",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () => Effect.void,
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles] as const,
+        });
+        const plan = yield* registry.executable().planRun({
+          definitionIds: ["articles"],
+          sourceIdentities: ["article-1"],
+        });
+
+        const result = yield* MigrationExecutable.startRun(plan).pipe(
+          Effect.provide(MigrationExecutable.inline)
+        );
+
+        expect(result.kind).toBe("completed");
+
+        if (result.kind === "completed") {
+          expect(result.summary.definitions[0]?.counts).toEqual({
+            migrated: 1,
+            skipped: 0,
+            failed: 0,
+            unchanged: 0,
+            needsUpdate: 0,
+          });
+          expect(
+            storeState.itemStates.has(
+              InMemoryMigrationStore.itemStateKey("articles", "article-1")
+            )
+          ).toBe(true);
+          expect(
+            storeState.itemStates.has(
+              InMemoryMigrationStore.itemStateKey("articles", "article-2")
+            )
+          ).toBe(false);
+        }
+
+        expect(storeState.definitionLocks.size).toBe(0);
+      })
   );
 
   it.effect("runs a valid registry plan through the existing runtime", () =>

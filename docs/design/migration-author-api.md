@@ -799,6 +799,22 @@ const source = SqlSource.make({
 })
 ```
 
+Generated or dynamic registries can report runtime authoring gaps explicitly
+when static Effect requirements are not enough:
+
+```ts
+const registry = MigrationDefinitionRegistry.make({
+  definitions,
+  missingRequirements: (definition) =>
+    definition.id === "articles"
+      ? [{ key: "SqlClient", label: "SQL client layer", owner: "source" }]
+      : [],
+})
+
+const plan = yield* registry.executable().planRun({ definitionIds: ["articles"] })
+// fails with MigrationDefinitionRegistryExecutableError { missingRequirements }
+```
+
 Execution adapters may still have their own requirements. For Workflow SDK, the
 adapter should configure the workflow function and optional `start()` options,
 not queues, workers, or registry identity:
