@@ -13,6 +13,7 @@ import type {
   RunRequestSourceRequirements,
 } from "../domain/run.ts";
 import {
+  type MigrationRuntimeExecutionOptions,
   type RollbackMigrationError,
   type RunMigrationError,
   rollbackMigrationsWithEncodedSourceIdentities,
@@ -42,10 +43,13 @@ export interface MigrationExecutableService {
   >;
 }
 
-const startInlineRun = <Definitions extends readonly AnyMigrationDefinition[]>(
-  plan: MigrationDefinitionExecutableRunPlan<Definitions>
+export const executeMigrationRunPlanInline = <
+  Definitions extends readonly AnyMigrationDefinition[],
+>(
+  plan: MigrationDefinitionExecutableRunPlan<Definitions>,
+  options: MigrationRuntimeExecutionOptions = {}
 ): Effect.Effect<
-  ExecutionStartResult<MigrationRunSummary>,
+  MigrationRunSummary,
   MigrationExecutableRunError<Definitions>,
   RunRequestSourceRequirements<Definitions>
 > =>
@@ -68,13 +72,39 @@ const startInlineRun = <Definitions extends readonly AnyMigrationDefinition[]>(
             kind: "item" as const,
             encodedSourceIdentity: plan.target.sourceIdentities[0],
           },
-        }
-  ).pipe(
+        },
+    options
+  );
+
+const startInlineRun = <Definitions extends readonly AnyMigrationDefinition[]>(
+  plan: MigrationDefinitionExecutableRunPlan<Definitions>
+): Effect.Effect<
+  ExecutionStartResult<MigrationRunSummary>,
+  MigrationExecutableRunError<Definitions>,
+  RunRequestSourceRequirements<Definitions>
+> =>
+  executeMigrationRunPlanInline(plan).pipe(
     Effect.map((summary) => ({
       kind: "completed" as const,
       runId: summary.runId,
       summary,
     }))
+  );
+
+export const executeMigrationRollbackPlanInline = (
+  plan: MigrationDefinitionExecutableRollbackPlan,
+  options: MigrationRuntimeExecutionOptions = {}
+): Effect.Effect<RollbackRunSummary, MigrationExecutableRollbackError> =>
+  rollbackMigrationsWithEncodedSourceIdentities(
+    {
+      definitions: plan.registryDefinitions,
+      definitionIds: [...plan.executionDefinitionIds].reverse(),
+      ...(plan.execution === undefined ? {} : { execution: plan.execution }),
+      ...(plan.target === undefined
+        ? {}
+        : { encodedSourceIdentities: plan.target.sourceIdentities }),
+    },
+    options
   );
 
 const startInlineRollback = (
@@ -83,14 +113,7 @@ const startInlineRollback = (
   ExecutionStartResult<RollbackRunSummary>,
   MigrationExecutableRollbackError
 > =>
-  rollbackMigrationsWithEncodedSourceIdentities({
-    definitions: plan.registryDefinitions,
-    definitionIds: [...plan.executionDefinitionIds].reverse(),
-    ...(plan.execution === undefined ? {} : { execution: plan.execution }),
-    ...(plan.target === undefined
-      ? {}
-      : { encodedSourceIdentities: plan.target.sourceIdentities }),
-  }).pipe(
+  executeMigrationRollbackPlanInline(plan).pipe(
     Effect.map((summary) => ({
       kind: "completed" as const,
       runId: summary.runId,

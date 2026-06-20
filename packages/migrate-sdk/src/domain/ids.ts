@@ -6,6 +6,15 @@ export const MigrationDefinitionId = Schema.NonEmptyString.pipe(
 export type MigrationDefinitionId = typeof MigrationDefinitionId.Type;
 export type MigrationDefinitionIdInput = string | MigrationDefinitionId;
 
+export const MigrationDefinitionRegistryId = Schema.NonEmptyString.pipe(
+  Schema.brand("MigrationDefinitionRegistryId")
+);
+export type MigrationDefinitionRegistryId =
+  typeof MigrationDefinitionRegistryId.Type;
+export type MigrationDefinitionRegistryIdInput =
+  | string
+  | MigrationDefinitionRegistryId;
+
 export const MigrationRunId = Schema.NonEmptyString.pipe(
   Schema.brand("MigrationRunId")
 );
@@ -684,6 +693,10 @@ export type MigrationDefinitionLockTokenInput =
 export const toMigrationDefinitionId = (
   value: MigrationDefinitionIdInput
 ): MigrationDefinitionId => MigrationDefinitionId.make(value);
+
+export const toMigrationDefinitionRegistryId = (
+  value: MigrationDefinitionRegistryIdInput
+): MigrationDefinitionRegistryId => MigrationDefinitionRegistryId.make(value);
 
 export const toMigrationRunId = (value: MigrationRunIdInput): MigrationRunId =>
   MigrationRunId.make(value);

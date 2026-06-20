@@ -18,24 +18,23 @@ workflow provider.
 
 ## Acceptance criteria
 
-- [ ] A migration execution envelope can be derived from executable run and
+- [x] A migration execution envelope can be derived from executable run and
       rollback plans.
-- [ ] The envelope includes the migration run id, registry id, kind, definition
+- [x] The envelope includes the migration run id, registry id, kind, definition
       ids, request, and diagnostic planned order.
-- [ ] The envelope does not serialize migration definitions, layers, effects, or
+- [x] The envelope does not serialize migration definitions, layers, effects, or
       executable plan objects.
-- [ ] `MigrationDefinitionRegistryCatalog` resolves registries by registry id.
-- [ ] The catalog rejects duplicate registry ids when its layer is constructed.
-- [ ] Missing registry lookup fails through a typed Effect error.
-- [ ] Envelope execution re-plans from the resolved executable registry before
+- [x] `MigrationDefinitionRegistryCatalog` resolves registries by registry id.
+- [x] The catalog rejects duplicate registry ids when its layer is constructed.
+- [x] Missing registry lookup fails through a typed Effect error.
+- [x] Envelope execution re-plans from the resolved executable registry before
       running.
-- [ ] Envelope execution uses the envelope migration run id and does not call
+- [x] Envelope execution uses the envelope migration run id and does not call
       the public `MigrationExecutable.startRun` or `startRollback` again.
-- [ ] Planned order differences are diagnostic metadata only and do not fail
+- [x] Planned order differences are diagnostic metadata only and do not fail
       code-defined envelope execution by default.
 
 ## Blocked by
 
 - [01 - Start Registry-Planned Runs Through Inline MigrationExecutable](01-start-registry-planned-runs-through-inline-migration-executable.md)
 - [02 - Start Registry-Planned Rollbacks Through Inline MigrationExecutable](02-start-registry-planned-rollbacks-through-inline-migration-executable.md)
-

@@ -306,6 +306,20 @@ views, and operator debugging; the workflow execution context still re-plans
 before it does any work. Providers with immutable deployment boundaries should
 let the provider keep already-started runs on their compatible code world.
 
+```ts
+const plan = yield* registry.executable().planRun({
+  definitionIds: ["articles"],
+})
+
+const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
+  runId,
+})
+
+const summary = yield* executeMigrationExecutionEnvelope(envelope).pipe(
+  Effect.provide(MigrationDefinitionRegistryCatalog.layer({ registries: [registry] }))
+)
+```
+
 The durable workflow handler must execute with `envelope.runId`; it must not
 call the public `MigrationExecutable.startRun(plan)` or `startRollback(plan)`
 after the durable adapter has already allocated a migration run id. Adapter

@@ -15,12 +15,15 @@ import type {
   EncodedSourceIdentity,
   MigrationDefinitionId,
   MigrationDefinitionIdInput,
+  MigrationDefinitionRegistryId,
+  MigrationDefinitionRegistryIdInput,
 } from "./ids.ts";
 import {
   EncodedSourceIdentity as EncodedSourceIdentitySchema,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
   SourceIdentity,
   toMigrationDefinitionId,
+  toMigrationDefinitionRegistryId,
 } from "./ids.ts";
 import type {
   AnyRollbackMigrationDefinition,
@@ -46,6 +49,7 @@ export interface MigrationDefinitionRegistryInput<
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
 > {
   readonly definitions: Definitions;
+  readonly id?: MigrationDefinitionRegistryIdInput;
   readonly missingRequirements?: MigrationDefinitionMissingRequirements;
 }
 
@@ -190,6 +194,7 @@ export interface MigrationDefinitionRunPlan<
   readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
   readonly notices: readonly MigrationDefinitionPlanNotice[];
   readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
+  readonly registryId?: MigrationDefinitionRegistryId;
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
   readonly target?: MigrationDefinitionPlanTarget;
   readonly update?: boolean;
@@ -207,6 +212,7 @@ export interface MigrationDefinitionExecutableRunPlan<
   Definitions extends
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
 > extends MigrationDefinitionRunPlan<Definitions> {
+  readonly request: MigrationDefinitionRegistryRunInput;
   readonly [executableRunPlanTypeId]: "run";
 }
 
@@ -219,6 +225,7 @@ export interface MigrationDefinitionRollbackPlan {
   readonly kind: "rollback";
   readonly notices: readonly MigrationDefinitionPlanNotice[];
   readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
+  readonly registryId?: MigrationDefinitionRegistryId;
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
   readonly target?: MigrationDefinitionPlanTarget;
   readonly withDependencies: boolean;
@@ -227,6 +234,7 @@ export interface MigrationDefinitionRollbackPlan {
 export interface MigrationDefinitionExecutableRollbackPlan
   extends MigrationDefinitionRollbackPlan {
   readonly registryDefinitions: readonly AnyRollbackMigrationDefinition[];
+  readonly request: MigrationDefinitionRegistryRollbackInput;
   readonly [executableRollbackPlanTypeId]: "rollback";
 }
 
@@ -1145,16 +1153,28 @@ const freezeEntry = (
 const makeExecutableRunPlan = <
   Definitions extends readonly AnyMigrationDefinition[],
 >(
-  plan: MigrationDefinitionRunPlan<Definitions>
-): MigrationDefinitionExecutableRunPlan<Definitions> =>
-  Object.freeze({
+  plan: MigrationDefinitionRunPlan<Definitions>,
+  request: MigrationDefinitionRegistryRunInput
+): MigrationDefinitionExecutableRunPlan<Definitions> => {
+  const executablePlan = {
     ...plan,
     [executableRunPlanTypeId]: "run",
-  }) as MigrationDefinitionExecutableRunPlan<Definitions>;
+  };
+
+  Object.defineProperty(executablePlan, "request", {
+    enumerable: false,
+    value: request,
+  });
+
+  return Object.freeze(
+    executablePlan
+  ) as MigrationDefinitionExecutableRunPlan<Definitions>;
+};
 
 const makeExecutableRollbackPlan = (
   plan: MigrationDefinitionRollbackPlan,
-  registryDefinitions: readonly AnyRollbackMigrationDefinition[]
+  registryDefinitions: readonly AnyRollbackMigrationDefinition[],
+  request: MigrationDefinitionRegistryRollbackInput
 ): MigrationDefinitionExecutableRollbackPlan => {
   const executablePlan = {
     ...plan,
@@ -1164,6 +1184,10 @@ const makeExecutableRollbackPlan = (
   Object.defineProperty(executablePlan, "registryDefinitions", {
     enumerable: false,
     value: Object.freeze([...registryDefinitions]),
+  });
+  Object.defineProperty(executablePlan, "request", {
+    enumerable: false,
+    value: request,
   });
 
   return Object.freeze(
@@ -1207,12 +1231,14 @@ export class MigrationDefinitionRegistry<
     AnyMigrationDefinition
   >;
   readonly #entries: readonly MigrationDefinitionRegistryEntry[];
+  readonly #id: MigrationDefinitionRegistryId | undefined;
   readonly #missingRequirements:
     | MigrationDefinitionMissingRequirements
     | undefined;
 
   private constructor(
     definitions: Definitions,
+    id: MigrationDefinitionRegistryId | undefined,
     missingRequirements: MigrationDefinitionMissingRequirements | undefined
   ) {
     validateConstruction(definitions);
@@ -1220,6 +1246,7 @@ export class MigrationDefinitionRegistry<
     this.#definitions = Object.freeze([
       ...definitions,
     ]) as unknown as Definitions;
+    this.#id = id;
     this.#missingRequirements = missingRequirements;
     this.#definitionsById = new Map(
       this.#definitions.map((definition) => [definition.id, definition])
@@ -1243,6 +1270,9 @@ export class MigrationDefinitionRegistry<
   ): MigrationDefinitionRegistry<Definitions> {
     return new MigrationDefinitionRegistry(
       input.definitions,
+      input.id === undefined
+        ? undefined
+        : toMigrationDefinitionRegistryId(input.id),
       input.missingRequirements
     );
   }
@@ -1263,6 +1293,10 @@ export class MigrationDefinitionRegistry<
     return this.#entries;
   }
 
+  id(): Option.Option<MigrationDefinitionRegistryId> {
+    return Option.fromUndefinedOr(this.#id);
+  }
+
   executable(): ExecutableMigrationDefinitionRegistry<Definitions> {
     return new ExecutableMigrationDefinitionRegistry(
       this,
@@ -1278,6 +1312,7 @@ export class MigrationDefinitionRegistry<
   > {
     const definitions = this.#definitions;
     const definitionsById = this.#definitionsById;
+    const registryId = this.#id;
 
     return Effect.gen(function* () {
       const selection = yield* resolveSelectionInput(
@@ -1318,6 +1353,7 @@ export class MigrationDefinitionRegistry<
         executionPolicy,
         optionalDependencyEdges: planDetails.optionalDependencyEdges,
         definitions: planDefinitions,
+        ...(registryId === undefined ? {} : { registryId }),
         ...(target === undefined ? {} : { target }),
         notices: selection.notices,
         ...(input.execution === undefined
@@ -1338,6 +1374,7 @@ export class MigrationDefinitionRegistry<
   > {
     const definitions = this.#definitions;
     const definitionsById = this.#definitionsById;
+    const registryId = this.#id;
 
     return Effect.gen(function* () {
       const selection = yield* resolveSelectionInput(
@@ -1380,6 +1417,7 @@ export class MigrationDefinitionRegistry<
         executionPolicy,
         optionalDependencyEdges: planDetails.optionalDependencyEdges,
         definitions: planDefinitions,
+        ...(registryId === undefined ? {} : { registryId }),
         ...(target === undefined ? {} : { target }),
         notices: selection.notices,
         ...(input.execution === undefined
@@ -1567,7 +1605,7 @@ export class ExecutableMigrationDefinitionRegistry<
       validateExecutableDefinitions(
         plan.definitions,
         this.#missingRequirements
-      ).pipe(Effect.as(makeExecutableRunPlan(plan)))
+      ).pipe(Effect.as(makeExecutableRunPlan(plan, input)))
     );
   }
 
@@ -1585,7 +1623,9 @@ export class ExecutableMigrationDefinitionRegistry<
       validateExecutableDefinitions(
         plan.definitions,
         this.#missingRequirements
-      ).pipe(Effect.as(makeExecutableRollbackPlan(plan, registryDefinitions)))
+      ).pipe(
+        Effect.as(makeExecutableRollbackPlan(plan, registryDefinitions, input))
+      )
     );
   }
 }

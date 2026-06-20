@@ -475,6 +475,10 @@ interface MigrationRunExecutionResult<A> extends MigrationRunBodyResult<A> {
   readonly runState: MigrationRunState;
 }
 
+export interface MigrationRuntimeExecutionOptions {
+  readonly runId?: MigrationRunId;
+}
+
 const executeMigrationRun = <A, E, R = never>(
   store: typeof MigrationStore.Service,
   definitionIds: readonly MigrationDefinitionId[],
@@ -483,10 +487,11 @@ const executeMigrationRun = <A, E, R = never>(
   ) => Effect.Effect<MigrationRunBodyResult<A>, E | MigrationStoreError, R>,
   beforeBegin?: (
     runId: MigrationRunId
-  ) => Effect.Effect<void, E | MigrationStoreError>
+  ) => Effect.Effect<void, E | MigrationStoreError>,
+  options: MigrationRuntimeExecutionOptions = {}
 ): Effect.Effect<MigrationRunExecutionResult<A>, E | MigrationStoreError, R> =>
   Effect.gen(function* () {
-    const runId = yield* store.createRunId;
+    const runId = options.runId ?? (yield* store.createRunId);
 
     return yield* Effect.acquireUseRelease(
       acquireDefinitionLocks(store, runId, definitionIds),
@@ -2492,7 +2497,8 @@ export function rollbackMigration<
 const rollbackMigrationsWithRequest = <
   Definitions extends readonly AnyRollbackMigrationDefinition[],
 >(
-  request: EncodedRollbackRequest<Definitions>
+  request: EncodedRollbackRequest<Definitions>,
+  executionOptions: MigrationRuntimeExecutionOptions = {}
 ): Effect.Effect<RollbackRunSummary, RollbackMigrationError> => {
   const orderedDefinitions = orderDefinitions(
     request.definitions,
@@ -2617,7 +2623,8 @@ const rollbackMigrationsWithRequest = <
               { discard: true }
             )
           )
-        )
+        ),
+      executionOptions
     );
     yield* RollbackProgress.emit({
       definitionIds: progressDefinitionIds,
@@ -2642,14 +2649,17 @@ const rollbackMigrationsWithRequest = <
 export const rollbackMigrationsWithEncodedSourceIdentities = <
   Definitions extends readonly AnyRollbackMigrationDefinition[],
 >(
-  input: EncodedRollbackRequestInput<Definitions>
+  input: EncodedRollbackRequestInput<Definitions>,
+  executionOptions: MigrationRuntimeExecutionOptions = {}
 ): Effect.Effect<RollbackRunSummary, RollbackMigrationError> => {
   const requestEffect = Effect.try({
     try: () => makeEncodedRollbackRequest(input),
     catch: invalidRollbackRequestError,
   });
 
-  return Effect.flatMap(requestEffect, rollbackMigrationsWithRequest);
+  return Effect.flatMap(requestEffect, (request) =>
+    rollbackMigrationsWithRequest(request, executionOptions)
+  );
 };
 
 export const rollbackMigrations = <
@@ -2731,7 +2741,8 @@ export const rollbackMigrations = <
 const runMigrationsWithRequest = <
   Definitions extends readonly AnyMigrationDefinition[],
 >(
-  request: EncodedRunRequest<Definitions>
+  request: EncodedRunRequest<Definitions>,
+  executionOptions: MigrationRuntimeExecutionOptions = {}
 ): Effect.Effect<
   MigrationRunSummary,
   RunMigrationError | RunRequestSourceLayerError<Definitions>,
@@ -2809,7 +2820,8 @@ const runMigrationsWithRequest = <
               };
             })
         ),
-      () => validateMigrationContracts(store, orderedDefinitions.definitions)
+      () => validateMigrationContracts(store, orderedDefinitions.definitions),
+      executionOptions
     );
 
     return {
@@ -2827,7 +2839,8 @@ const runMigrationsWithRequest = <
 export const runMigrationsWithEncodedRunMode = <
   Definitions extends readonly AnyMigrationDefinition[],
 >(
-  input: EncodedRunRequestInput<Definitions>
+  input: EncodedRunRequestInput<Definitions>,
+  executionOptions: MigrationRuntimeExecutionOptions = {}
 ): Effect.Effect<
   MigrationRunSummary,
   RunMigrationError | RunRequestSourceLayerError<Definitions>,
@@ -2838,7 +2851,9 @@ export const runMigrationsWithEncodedRunMode = <
     catch: invalidRunRequestError,
   });
 
-  return Effect.flatMap(requestEffect, runMigrationsWithRequest);
+  return Effect.flatMap(requestEffect, (request) =>
+    runMigrationsWithRequest(request, executionOptions)
+  );
 };
 
 export const runMigrations = <

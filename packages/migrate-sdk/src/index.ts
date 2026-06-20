@@ -45,6 +45,7 @@ export type {
   EncodedSourceIdentityInput,
   EncodedSourceCursorInput,
   MigrationDefinitionIdInput,
+  MigrationDefinitionRegistryIdInput,
   MigrationDefinitionLockTokenInput,
   MigrationRunIdInput,
   SourceIdentityContractFingerprint,
@@ -59,6 +60,7 @@ export {
   EncodedSourceIdentity,
   EncodedSourceCursor,
   MigrationDefinitionId,
+  MigrationDefinitionRegistryId,
   MigrationDefinitionLockToken,
   MigrationRunId,
   SourceIdentity,
@@ -66,11 +68,30 @@ export {
   SourceVersion,
   toEncodedSourceCursor,
   toMigrationDefinitionId,
+  toMigrationDefinitionRegistryId,
   toMigrationDefinitionLockToken,
   toMigrationRunId,
   toEncodedSourceIdentity,
   toSourceVersion,
 } from "./domain/ids.ts";
+
+export {
+  executeMigrationExecutionEnvelope,
+  makeMigrationRollbackExecutionEnvelope,
+  makeMigrationRunExecutionEnvelope,
+  MigrationExecutionEnvelope,
+  MigrationExecutionEnvelopeMissingRegistryIdError,
+  MigrationRollbackExecutionEnvelope,
+  MigrationRunExecutionEnvelope,
+} from "./domain/execution-envelope.ts";
+export type {
+  MigrationExecutionEnvelope as MigrationExecutionEnvelopeType,
+  MigrationExecutionEnvelopeBase,
+  MigrationExecutionEnvelopeExecutionError,
+  MigrationExecutionEnvelopeInput,
+  MigrationRollbackExecutionEnvelope as MigrationRollbackExecutionEnvelopeType,
+  MigrationRunExecutionEnvelope as MigrationRunExecutionEnvelopeType,
+} from "./domain/execution-envelope.ts";
 
 export type {
   MigrationContract,
@@ -283,6 +304,18 @@ export type {
   MigrationExecutableRunError,
   MigrationExecutableService,
 } from "./services/migration-executable.ts";
+export {
+  DuplicateMigrationDefinitionRegistryId,
+  MigrationDefinitionRegistryCatalog,
+  MigrationDefinitionRegistryCatalogConstructionError,
+  MigrationDefinitionRegistryCatalogConstructionIssue,
+  MigrationDefinitionRegistryCatalogLookupError,
+  MissingMigrationDefinitionRegistryId,
+} from "./services/migration-definition-registry-catalog.ts";
+export type {
+  MigrationDefinitionRegistryCatalogLayerInput,
+  MigrationDefinitionRegistryCatalogService,
+} from "./services/migration-definition-registry-catalog.ts";
 export { MigrationStore } from "./services/migration-store.ts";
 export { MigrationProgress } from "./services/migration-progress.ts";
 export { RollbackProgress } from "./services/rollback-progress.ts";
