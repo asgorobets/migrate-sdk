@@ -33,11 +33,13 @@ import type { RollbackPipeline } from "./rollback.ts";
 import type {
   SourceItem,
   SourceItemInput,
-  SourceItemTotal,
   SourceLookupStrategy,
   SourceReadResult,
 } from "./source.ts";
-import { makeSourceItemEffect, normalizeSourceItemTotal } from "./source.ts";
+import {
+  makeSourceItemEffect,
+  normalizeSourceItemTotalCount,
+} from "./source.ts";
 import type { TrackingRecordContract } from "./tracking.ts";
 
 const configuredSourcePluginTypeId: unique symbol = Symbol.for(
@@ -102,10 +104,7 @@ export interface SourcePluginImplementation<
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
   SourceInput = Source,
 > {
-  readonly discoverSourceItemTotal?: () => Effect.Effect<
-    SourceItemTotal,
-    SourcePluginError
-  >;
+  readonly countTotal?: () => Effect.Effect<number, SourcePluginError>;
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
@@ -264,9 +263,9 @@ export const defineSourcePlugin = <
           lookupStrategy: input.lookupStrategy,
           read: input.read,
           readByIdentity: input.readByIdentity,
-          ...(input.discoverSourceItemTotal === undefined
+          ...(input.countTotal === undefined
             ? {}
-            : { discoverSourceItemTotal: input.discoverSourceItemTotal }),
+            : { countTotal: input.countTotal }),
         });
 
   return makeConfiguredSourcePlugin({
@@ -274,7 +273,7 @@ export const defineSourcePlugin = <
       SourcePluginService,
       (): SourcePlugin<Source, Cursor, SourceInput, IdentityKey> => {
         const implementation = makeImplementation();
-        const discoverSourceItemTotal = implementation.discoverSourceItemTotal;
+        const countTotal = implementation.countTotal;
 
         return {
           cursorSchema: input.cursorSchema,
@@ -302,12 +301,12 @@ export const defineSourcePlugin = <
                       )
                 )
               ),
-          ...(discoverSourceItemTotal === undefined
+          ...(countTotal === undefined
             ? {}
             : {
-                discoverSourceItemTotal: () =>
-                  discoverSourceItemTotal().pipe(
-                    Effect.flatMap(normalizeSourceItemTotal)
+                countTotal: () =>
+                  countTotal().pipe(
+                    Effect.flatMap(normalizeSourceItemTotalCount)
                   ),
               }),
           sourceSchema: input.sourceSchema,

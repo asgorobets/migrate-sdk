@@ -9,7 +9,7 @@ export interface DocumentFetchResult<Resource, Cursor> {
   readonly resource: Resource;
 }
 
-export interface DocumentFetcherTotalDiscoveryCapability {
+export interface DocumentFetcherTotalCountCapability {
   readonly kind: "single-resource-local";
 }
 
@@ -18,7 +18,7 @@ export interface DocumentFetcher<Resource, Cursor> {
   readonly read: (
     cursor: Cursor | null
   ) => Effect.Effect<DocumentFetchResult<Resource, Cursor>, SourcePluginError>;
-  readonly totalDiscovery?: DocumentFetcherTotalDiscoveryCapability;
+  readonly totalCount?: DocumentFetcherTotalCountCapability;
 }
 
 export type DocumentFetcherPlatform = Layer.Layer<FileSystem | Path>;
@@ -145,7 +145,7 @@ const makeFileTextFetcher = (
 ): DocumentFetcher<string, DocumentFileTextFetcherCursor> => ({
   cursorSchema: DocumentFileTextFetcherCursor,
   read: () => readFileText(options).pipe(Effect.provide(options.platform)),
-  totalDiscovery: { kind: "single-resource-local" },
+  totalCount: { kind: "single-resource-local" },
 });
 
 function makeEffectFetcher<Resource, Cursor>(

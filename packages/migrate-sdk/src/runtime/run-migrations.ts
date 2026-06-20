@@ -60,7 +60,7 @@ import {
   normalRunMode,
   type RunMode,
 } from "../domain/run-mode.ts";
-import { SourceItemTotal } from "../domain/source.ts";
+import { SourceItemTotal, sourceItemTotalFromCount } from "../domain/source.ts";
 import type {
   FailedItemState,
   MigratedItemState,
@@ -1072,7 +1072,7 @@ const recordMigrationOutcome = ({
     )
   );
 
-const discoverDefinitionSourceItemTotal = <
+const countDefinitionSourceItemTotal = <
   Source,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
@@ -1088,39 +1088,40 @@ const discoverDefinitionSourceItemTotal = <
   readonly runId: MigrationRunId;
   readonly source: SourcePlugin<Source, Cursor, SourceInput, IdentityKey>;
 }) =>
-  MigrationProgress.shouldDiscoverSourceItemTotals.pipe(
-    Effect.flatMap((shouldDiscoverTotals) => {
-      if (!shouldDiscoverTotals) {
+  MigrationProgress.shouldCountSourceItemTotals.pipe(
+    Effect.flatMap((shouldCountTotals) => {
+      if (!shouldCountTotals) {
         return Effect.void;
       }
 
-      const discovery =
-        source.discoverSourceItemTotal === undefined
+      const count =
+        source.countTotal === undefined
           ? Effect.succeed(
               SourceItemTotal.unknown({
                 message:
-                  "Source plugin does not support Source Item total discovery",
+                  "Source plugin does not support Source Item total count",
                 reason: "unsupported",
               })
             )
-          : source.discoverSourceItemTotal().pipe(
+          : source.countTotal().pipe(
+              Effect.flatMap(sourceItemTotalFromCount),
               Effect.catch((error) =>
                 Effect.succeed(
                   SourceItemTotal.unknown({
                     cause: error,
-                    message: "Source Item total discovery failed",
+                    message: "Source Item total count failed",
                     reason: "failed",
                   })
                 )
               )
             );
 
-      return discovery.pipe(
+      return count.pipe(
         Effect.flatMap((sourceItemTotal) =>
           MigrationProgress.emit({
             definitionId,
             ...(itemLimit === undefined ? {} : { itemLimit }),
-            kind: "source-item-total-discovered",
+            kind: "source-item-total-counted",
             runId,
             sourceItemTotal,
           })
@@ -1976,7 +1977,7 @@ const runMigrationDefinition = <
       kind: "definition-started",
       runId,
     });
-    yield* discoverDefinitionSourceItemTotal({
+    yield* countDefinitionSourceItemTotal({
       definitionId: definition.id,
       ...(mode.kind === "item" ? { itemLimit: 1 } : {}),
       runId,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-import { SourceIdentity, SourceItemTotal } from "migrate-sdk";
+import { SourceIdentity } from "migrate-sdk";
 import { SourcePlugin } from "../../services/source-plugin.ts";
 import { InMemorySourcePlugin } from "./in-memory-source.ts";
 
@@ -15,7 +15,7 @@ const ArticleSourceIdentity = SourceIdentity.make({
 
 describe("InMemorySourcePlugin", () => {
   it.effect(
-    "discovers the configured item count without reading or looking up items",
+    "counts the configured items without reading or looking up items",
     () =>
       Effect.gen(function* () {
         const state = InMemorySourcePlugin.makeState();
@@ -39,19 +39,19 @@ describe("InMemorySourcePlugin", () => {
         });
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
-        if (plugin.discoverSourceItemTotal === undefined) {
-          throw new Error("Expected in-memory source total discovery");
+        if (plugin.countTotal === undefined) {
+          throw new Error("Expected in-memory source total count");
         }
 
-        const total = yield* plugin.discoverSourceItemTotal();
+        const total = yield* plugin.countTotal();
 
-        expect(total).toEqual(SourceItemTotal.known(2));
+        expect(total).toBe(2);
         expect(state.readAttempts).toBe(0);
         expect(state.readByIdentityAttempts).toBe(0);
       })
   );
 
-  it.effect("discovers zero Source Items as a known zero total", () =>
+  it.effect("counts zero Source Items", () =>
     Effect.gen(function* () {
       const source = InMemorySourcePlugin.make({
         identity: ArticleSourceIdentity,
@@ -60,13 +60,13 @@ describe("InMemorySourcePlugin", () => {
       });
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
-      if (plugin.discoverSourceItemTotal === undefined) {
-        throw new Error("Expected in-memory source total discovery");
+      if (plugin.countTotal === undefined) {
+        throw new Error("Expected in-memory source total count");
       }
 
-      const total = yield* plugin.discoverSourceItemTotal();
+      const total = yield* plugin.countTotal();
 
-      expect(total).toEqual(SourceItemTotal.known(0));
+      expect(total).toBe(0);
     })
   );
 });

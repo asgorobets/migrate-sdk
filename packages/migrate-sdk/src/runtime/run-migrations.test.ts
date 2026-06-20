@@ -185,22 +185,22 @@ const makeTestInMemorySource = <A>(
     ...options,
   });
 
-interface ObservableTotalDiscoverySourceState {
+interface ObservableTotalCountSourceState {
   readAttempts: number;
   readByIdentityAttempts: number;
-  totalDiscoveryAttempts: number;
+  totalCountAttempts: number;
 }
 
-const makeObservableTotalDiscoverySource = ({
+const makeObservableTotalCountSource = ({
   batchSize,
   items,
-  sourceItemTotal,
+  sourceItemCount,
   state,
 }: {
   readonly batchSize?: number;
   readonly items: readonly SourceItemInput<ArticleSource, string>[];
-  readonly sourceItemTotal?: Effect.Effect<SourceItemTotal, SourcePluginError>;
-  readonly state: ObservableTotalDiscoverySourceState;
+  readonly sourceItemCount?: Effect.Effect<number, SourcePluginError>;
+  readonly state: ObservableTotalCountSourceState;
 }) =>
   defineSourcePlugin({
     cursorSchema: InMemorySourceCursor,
@@ -236,13 +236,13 @@ const makeObservableTotalDiscoverySource = ({
           ) ?? null
         );
       }),
-    ...(sourceItemTotal === undefined
+    ...(sourceItemCount === undefined
       ? {}
       : {
-          discoverSourceItemTotal: () =>
+          countTotal: () =>
             Effect.sync(() => {
-              state.totalDiscoveryAttempts += 1;
-            }).pipe(Effect.andThen(sourceItemTotal)),
+              state.totalCountAttempts += 1;
+            }).pipe(Effect.andThen(sourceItemCount)),
         }),
   });
 
@@ -4694,18 +4694,18 @@ describe("runMigration", () => {
       })
   );
 
-  it.effect("discovers a known Source Item total when progress opts in", () =>
+  it.effect("counts a known Source Item total when progress opts in", () =>
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
-      const sourceState: ObservableTotalDiscoverySourceState = {
+      const sourceState: ObservableTotalCountSourceState = {
         readAttempts: 0,
         readByIdentityAttempts: 0,
-        totalDiscoveryAttempts: 0,
+        totalCountAttempts: 0,
       };
       const events: MigrationProgressEvent[] = [];
       const definition = defineMigration({
         id: "articles",
-        source: makeObservableTotalDiscoverySource({
+        source: makeObservableTotalCountSource({
           batchSize: 2,
           items: [
             {
@@ -4724,14 +4724,14 @@ describe("runMigration", () => {
               item: { title: "Article 3" },
             },
           ],
-          sourceItemTotal: Effect.succeed(SourceItemTotal.known(3)),
+          sourceItemCount: Effect.succeed(3),
           state: sourceState,
         }),
         store: InMemoryMigrationStore.layer(storeState),
         process: () => Effect.void,
       });
       const progressLayer = Layer.succeed(MigrationProgress, {
-        discoverSourceItemTotals: true,
+        countSourceItemTotals: true,
         emit: (event) =>
           Effect.sync(() => {
             events.push(event);
@@ -4743,12 +4743,12 @@ describe("runMigration", () => {
       );
 
       expect(summary.status).toBe("succeeded");
-      expect(sourceState.totalDiscoveryAttempts).toBe(1);
+      expect(sourceState.totalCountAttempts).toBe(1);
       expect(sourceState.readByIdentityAttempts).toBe(0);
       expect(events.map((event) => event.kind)).toEqual([
         "run-started",
         "definition-started",
-        "source-item-total-discovered",
+        "source-item-total-counted",
         "source-item-completed",
         "source-item-completed",
         "source-cursor-window-completed",
@@ -4761,7 +4761,7 @@ describe("runMigration", () => {
         expect.arrayContaining([
           expect.objectContaining({
             definitionId: definition.id,
-            kind: "source-item-total-discovered",
+            kind: "source-item-total-counted",
             sourceItemTotal: SourceItemTotal.known(3),
           }),
         ])
@@ -4770,18 +4770,18 @@ describe("runMigration", () => {
   );
 
   it.effect(
-    "emits an unsupported unknown Source Item total for sources without discovery",
+    "emits an unsupported unknown Source Item total for sources without count support",
     () =>
       Effect.gen(function* () {
         const events: MigrationProgressEvent[] = [];
-        const sourceState: ObservableTotalDiscoverySourceState = {
+        const sourceState: ObservableTotalCountSourceState = {
           readAttempts: 0,
           readByIdentityAttempts: 0,
-          totalDiscoveryAttempts: 0,
+          totalCountAttempts: 0,
         };
         const definition = defineMigration({
           id: "articles",
-          source: makeObservableTotalDiscoverySource({
+          source: makeObservableTotalCountSource({
             items: [
               {
                 identityKey: "article-1",
@@ -4795,7 +4795,7 @@ describe("runMigration", () => {
           process: () => Effect.void,
         });
         const progressLayer = Layer.succeed(MigrationProgress, {
-          discoverSourceItemTotals: true,
+          countSourceItemTotals: true,
           emit: (event) =>
             Effect.sync(() => {
               events.push(event);
@@ -4811,10 +4811,10 @@ describe("runMigration", () => {
           expect.arrayContaining([
             expect.objectContaining({
               definitionId: definition.id,
-              kind: "source-item-total-discovered",
+              kind: "source-item-total-counted",
               sourceItemTotal: SourceItemTotal.unknown({
                 message:
-                  "Source plugin does not support Source Item total discovery",
+                  "Source plugin does not support Source Item total count",
                 reason: "unsupported",
               }),
             }),
@@ -4823,16 +4823,16 @@ describe("runMigration", () => {
       })
   );
 
-  it.effect("does not discover Source Item totals for no-op progress", () =>
+  it.effect("does not count Source Item totals for no-op progress", () =>
     Effect.gen(function* () {
-      const sourceState: ObservableTotalDiscoverySourceState = {
+      const sourceState: ObservableTotalCountSourceState = {
         readAttempts: 0,
         readByIdentityAttempts: 0,
-        totalDiscoveryAttempts: 0,
+        totalCountAttempts: 0,
       };
       const definition = defineMigration({
         id: "articles",
-        source: makeObservableTotalDiscoverySource({
+        source: makeObservableTotalCountSource({
           items: [
             {
               identityKey: "article-1",
@@ -4840,7 +4840,7 @@ describe("runMigration", () => {
               item: { title: "Article 1" },
             },
           ],
-          sourceItemTotal: Effect.succeed(SourceItemTotal.known(1)),
+          sourceItemCount: Effect.succeed(1),
           state: sourceState,
         }),
         store: InMemoryMigrationStore.layer(),
@@ -4850,28 +4850,28 @@ describe("runMigration", () => {
       const summary = yield* runMigration(definition);
 
       expect(summary.status).toBe("succeeded");
-      expect(sourceState.totalDiscoveryAttempts).toBe(0);
+      expect(sourceState.totalCountAttempts).toBe(0);
       expect(sourceState.readAttempts).toBe(1);
     })
   );
 
   it.effect(
-    "continues with an unknown failed Source Item total when discovery fails",
+    "continues with an unknown failed Source Item total when count fails",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const sourceState: ObservableTotalDiscoverySourceState = {
+        const sourceState: ObservableTotalCountSourceState = {
           readAttempts: 0,
           readByIdentityAttempts: 0,
-          totalDiscoveryAttempts: 0,
+          totalCountAttempts: 0,
         };
         const events: MigrationProgressEvent[] = [];
-        const discoveryError = new SourcePluginError({
+        const countError = new SourcePluginError({
           message: "Count endpoint failed",
         });
         const definition = defineMigration({
           id: "articles",
-          source: makeObservableTotalDiscoverySource({
+          source: makeObservableTotalCountSource({
             items: [
               {
                 identityKey: "article-1",
@@ -4879,14 +4879,14 @@ describe("runMigration", () => {
                 item: { title: "Article 1" },
               },
             ],
-            sourceItemTotal: Effect.fail(discoveryError),
+            sourceItemCount: Effect.fail(countError),
             state: sourceState,
           }),
           store: InMemoryMigrationStore.layer(storeState),
           process: () => Effect.void,
         });
         const progressLayer = Layer.succeed(MigrationProgress, {
-          discoverSourceItemTotals: true,
+          countSourceItemTotals: true,
           emit: (event) =>
             Effect.sync(() => {
               events.push(event);
@@ -4905,15 +4905,15 @@ describe("runMigration", () => {
           unchanged: 0,
           needsUpdate: 0,
         });
-        expect(sourceState.totalDiscoveryAttempts).toBe(1);
+        expect(sourceState.totalCountAttempts).toBe(1);
         expect(events).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
               definitionId: definition.id,
-              kind: "source-item-total-discovered",
+              kind: "source-item-total-counted",
               sourceItemTotal: SourceItemTotal.unknown({
-                cause: discoveryError,
-                message: "Source Item total discovery failed",
+                cause: countError,
+                message: "Source Item total count failed",
                 reason: "failed",
               }),
             }),

@@ -416,13 +416,12 @@ describe("DocumentSourcePlugin", () => {
   );
 
   it.effect(
-    "discovers callback-provided Source Item totals without reading the source",
+    "counts callback-provided Source Item totals without reading the source",
     () =>
       Effect.gen(function* () {
         let readCalls = 0;
         const source = DocumentSourcePlugin.make({
-          discoverSourceItemTotal: () =>
-            Effect.succeed(SourceItemTotal.known(42)),
+          countTotal: () => Effect.succeed(42),
           fetcher: {
             cursorSchema: Schema.Null,
             read: () =>
@@ -454,13 +453,13 @@ describe("DocumentSourcePlugin", () => {
         });
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
-        if (plugin.discoverSourceItemTotal === undefined) {
-          throw new Error("Expected document source total discovery");
+        if (plugin.countTotal === undefined) {
+          throw new Error("Expected document source total count");
         }
 
-        const total = yield* plugin.discoverSourceItemTotal();
+        const total = yield* plugin.countTotal();
 
-        expect(total).toEqual(SourceItemTotal.known(42));
+        expect(total).toBe(42);
         expect(readCalls).toBe(0);
       })
   );
@@ -470,7 +469,7 @@ describe("DocumentSourcePlugin", () => {
     () =>
       Effect.gen(function* () {
         const source = DocumentSourcePlugin.make({
-          discoverSourceItemTotal: ({ countResource }) =>
+          countTotal: ({ countResource }) =>
             countResource({
               resource: JSON.stringify({
                 businessUnits: [
@@ -497,7 +496,7 @@ describe("DocumentSourcePlugin", () => {
             read: () =>
               Effect.fail(
                 new SourcePluginError({
-                  message: "Discovery callback should not use source read",
+                  message: "Count callback should not use source read",
                 })
               ),
           },
@@ -518,17 +517,17 @@ describe("DocumentSourcePlugin", () => {
         });
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
-        if (plugin.discoverSourceItemTotal === undefined) {
-          throw new Error("Expected document source total discovery");
+        if (plugin.countTotal === undefined) {
+          throw new Error("Expected document source total count");
         }
 
-        const total = yield* plugin.discoverSourceItemTotal();
+        const total = yield* plugin.countTotal();
 
-        expect(total).toEqual(SourceItemTotal.known(2));
+        expect(total).toBe(2);
       })
   );
 
-  it.effect("discovers local JSON file totals with item selectors", () =>
+  it.effect("counts local JSON file totals with item selectors", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem;
       const path = yield* Path;
@@ -560,17 +559,17 @@ describe("DocumentSourcePlugin", () => {
       });
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
-      if (plugin.discoverSourceItemTotal === undefined) {
-        throw new Error("Expected document source total discovery");
+      if (plugin.countTotal === undefined) {
+        throw new Error("Expected document source total count");
       }
 
-      const total = yield* plugin.discoverSourceItemTotal();
+      const total = yield* plugin.countTotal();
 
-      expect(total).toEqual(SourceItemTotal.known(2));
+      expect(total).toBe(2);
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
-  it.effect("discovers local JSON file totals with subitem selectors", () =>
+  it.effect("counts local JSON file totals with subitem selectors", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem;
       const path = yield* Path;
@@ -599,18 +598,18 @@ describe("DocumentSourcePlugin", () => {
       });
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
-      if (plugin.discoverSourceItemTotal === undefined) {
-        throw new Error("Expected document source total discovery");
+      if (plugin.countTotal === undefined) {
+        throw new Error("Expected document source total count");
       }
 
-      const total = yield* plugin.discoverSourceItemTotal();
+      const total = yield* plugin.countTotal();
 
-      expect(total).toEqual(SourceItemTotal.known(3));
+      expect(total).toBe(3);
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
   it.effect(
-    "returns unknown totals for paginated document sources without callbacks",
+    "omits total count for paginated document sources without callbacks",
     () =>
       Effect.gen(function* () {
         let readCalls = 0;
@@ -655,34 +654,22 @@ describe("DocumentSourcePlugin", () => {
         });
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
-        if (plugin.discoverSourceItemTotal === undefined) {
-          throw new Error("Expected document source total discovery");
-        }
-
-        const total = yield* plugin.discoverSourceItemTotal();
-
-        expect(total).toEqual(
-          SourceItemTotal.unknown({
-            message:
-              "Document Source Item total discovery needs a source-native total callback",
-            reason: "too-expensive",
-          })
-        );
+        expect(plugin.countTotal).toBeUndefined();
         expect(readCalls).toBe(0);
       })
   );
 
   it.effect(
-    "continues migration execution when document total discovery fails",
+    "continues migration execution when document total count fails",
     () =>
       Effect.gen(function* () {
-        const discoveryError = new SourcePluginError({
+        const countError = new SourcePluginError({
           message: "Manifest count failed",
         });
         const progressEvents: MigrationProgressEvent[] = [];
         const storeState = InMemoryMigrationStore.makeState();
         const source = DocumentSourcePlugin.make({
-          discoverSourceItemTotal: () => Effect.fail(discoveryError),
+          countTotal: () => Effect.fail(countError),
           fetcher: {
             cursorSchema: Schema.Null,
             read: () =>
@@ -723,7 +710,7 @@ describe("DocumentSourcePlugin", () => {
           store: InMemoryMigrationStore.layer(storeState),
         });
         const progressLayer = Layer.succeed(MigrationProgress, {
-          discoverSourceItemTotals: true,
+          countSourceItemTotals: true,
           emit: (event) =>
             Effect.sync(() => {
               progressEvents.push(event);
@@ -750,10 +737,10 @@ describe("DocumentSourcePlugin", () => {
           expect.arrayContaining([
             expect.objectContaining({
               definitionId: definition.id,
-              kind: "source-item-total-discovered",
+              kind: "source-item-total-counted",
               sourceItemTotal: SourceItemTotal.unknown({
-                cause: discoveryError,
-                message: "Document Source Item total discovery failed",
+                cause: countError,
+                message: "Source Item total count failed",
                 reason: "failed",
               }),
             }),

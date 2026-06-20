@@ -10,7 +10,6 @@ import {
   MigrationProgress,
   type MigrationProgressEvent,
   runMigration,
-  SourceItemTotal,
 } from "migrate-sdk";
 import { CsvIdentity, CsvSourcePlugin } from "migrate-sdk/sources/csv";
 import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
@@ -414,7 +413,7 @@ describe("CsvSourcePlugin", () => {
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
-  it.effect("discovers totals from the native file load and parse path", () =>
+  it.effect("counts totals from the native file load and parse path", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem;
       const path = yield* Path;
@@ -435,18 +434,18 @@ describe("CsvSourcePlugin", () => {
       });
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
-      if (plugin.discoverSourceItemTotal === undefined) {
-        throw new Error("Expected CSV source total discovery");
+      if (plugin.countTotal === undefined) {
+        throw new Error("Expected CSV source total count");
       }
 
-      const total = yield* plugin.discoverSourceItemTotal();
+      const total = yield* plugin.countTotal();
 
-      expect(total).toEqual(SourceItemTotal.known(2));
+      expect(total).toBe(2);
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
   it.effect(
-    "discovers totals that respect provided headers, custom separators, and skipped blank rows",
+    "counts totals that respect provided headers, custom separators, and skipped blank rows",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem;
@@ -474,17 +473,17 @@ describe("CsvSourcePlugin", () => {
         });
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
-        if (plugin.discoverSourceItemTotal === undefined) {
-          throw new Error("Expected CSV source total discovery");
+        if (plugin.countTotal === undefined) {
+          throw new Error("Expected CSV source total count");
         }
 
-        const total = yield* plugin.discoverSourceItemTotal();
+        const total = yield* plugin.countTotal();
 
-        expect(total).toEqual(SourceItemTotal.known(2));
+        expect(total).toBe(2);
       }).pipe(Effect.provide(testPlatformLayer))
   );
 
-  it.effect("returns unknown total when CSV total discovery cannot parse", () =>
+  it.effect("fails total count when CSV cannot parse", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem;
       const path = yield* Path;
@@ -503,24 +502,22 @@ describe("CsvSourcePlugin", () => {
       });
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
-      if (plugin.discoverSourceItemTotal === undefined) {
-        throw new Error("Expected CSV source total discovery");
+      if (plugin.countTotal === undefined) {
+        throw new Error("Expected CSV source total count");
       }
 
-      const total = yield* plugin.discoverSourceItemTotal();
+      const error = yield* Effect.flip(plugin.countTotal());
 
-      expect(total).toEqual(
+      expect(error).toEqual(
         expect.objectContaining({
-          kind: "unknown",
-          message: "CSV Source Item total discovery failed",
-          reason: "failed",
+          message: "CSV row is blank",
         })
       );
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
   it.effect(
-    "continues migration execution when CSV total discovery has a transient load failure",
+    "continues migration execution when CSV total count has a transient load failure",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem;
@@ -546,7 +543,7 @@ describe("CsvSourcePlugin", () => {
           process: () => Effect.void,
         });
         const progressLayer = Layer.succeed(MigrationProgress, {
-          discoverSourceItemTotals: true,
+          countSourceItemTotals: true,
           emit: (event) =>
             Effect.sync(() => {
               progressEvents.push(event);
@@ -569,10 +566,10 @@ describe("CsvSourcePlugin", () => {
         expect(progressEvents).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
-              kind: "source-item-total-discovered",
+              kind: "source-item-total-counted",
               sourceItemTotal: expect.objectContaining({
                 kind: "unknown",
-                message: "CSV Source Item total discovery failed",
+                message: "Source Item total count failed",
                 reason: "failed",
               }),
             }),

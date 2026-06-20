@@ -20,7 +20,7 @@ export type MigrationProgressEvent =
   | {
       readonly definitionId: MigrationDefinitionId;
       readonly itemLimit?: number;
-      readonly kind: "source-item-total-discovered";
+      readonly kind: "source-item-total-counted";
       readonly runId: MigrationRunId;
       readonly sourceItemTotal: SourceItemTotal;
     }
@@ -74,7 +74,7 @@ export type MigrationProgressDefinitionStatus =
 export interface MigrationProgressWarning {
   readonly cause?: unknown;
   readonly definitionId: MigrationDefinitionId;
-  readonly kind: "source-item-total-discovery-failed";
+  readonly kind: "source-item-total-count-failed";
   readonly message: string;
 }
 
@@ -121,7 +121,7 @@ const initialDefinitionState = (
   warnings: [],
 });
 
-const sourceItemTotalDiscoveryWarning = (
+const sourceItemTotalCountWarning = (
   definitionId: MigrationDefinitionId,
   sourceItemTotal: SourceItemTotal
 ): MigrationProgressWarning | null => {
@@ -137,8 +137,8 @@ const sourceItemTotalDiscoveryWarning = (
       ? {}
       : { cause: sourceItemTotal.cause }),
     definitionId,
-    kind: "source-item-total-discovery-failed",
-    message: sourceItemTotal.message ?? "Source Item total discovery failed",
+    kind: "source-item-total-count-failed",
+    message: sourceItemTotal.message ?? "Source Item total count failed",
   };
 };
 
@@ -203,7 +203,7 @@ export const reduceMigrationProgressState = (
         runId: state.runId ?? event.runId,
         status: "running",
       };
-    case "source-item-total-discovered":
+    case "source-item-total-counted":
       return {
         ...state,
         definitions: upsertDefinition(
@@ -214,7 +214,7 @@ export const reduceMigrationProgressState = (
               event.sourceItemTotal,
               event.itemLimit
             );
-            const warning = sourceItemTotalDiscoveryWarning(
+            const warning = sourceItemTotalCountWarning(
               event.definitionId,
               sourceItemTotal
             );

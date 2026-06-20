@@ -99,7 +99,9 @@ const sourceItemTotalCountError = (count: number) =>
     cause: { count },
   });
 
-const makeKnownSourceItemTotal = (count: number): SourceItemTotal => {
+const makeKnownSourceItemTotal = (
+  count: number
+): Extract<SourceItemTotal, { readonly kind: "known" }> => {
   if (!Number.isInteger(count) || count < 0) {
     throw sourceItemTotalCountError(count);
   }
@@ -122,17 +124,29 @@ export const SourceItemTotal = {
   unknown: makeUnknownSourceItemTotal,
 } as const;
 
+export const normalizeSourceItemTotalCount = (
+  count: number
+): Effect.Effect<number, SourcePluginError> =>
+  Effect.try({
+    try: () => SourceItemTotal.known(count).count,
+    catch: (cause) =>
+      cause instanceof SourcePluginError
+        ? cause
+        : sourceItemTotalCountError(count),
+  });
+
+export const sourceItemTotalFromCount = (
+  count: number
+): Effect.Effect<SourceItemTotal, SourcePluginError> =>
+  normalizeSourceItemTotalCount(count).pipe(
+    Effect.map((normalizedCount) => SourceItemTotal.known(normalizedCount))
+  );
+
 export const normalizeSourceItemTotal = (
   total: SourceItemTotal
 ): Effect.Effect<SourceItemTotal, SourcePluginError> =>
   total.kind === "known"
-    ? Effect.try({
-        try: () => SourceItemTotal.known(total.count),
-        catch: (cause) =>
-          cause instanceof SourcePluginError
-            ? cause
-            : sourceItemTotalCountError(total.count),
-      })
+    ? sourceItemTotalFromCount(total.count)
     : Effect.succeed(SourceItemTotal.unknown(total));
 
 export const capSourceItemTotal = (

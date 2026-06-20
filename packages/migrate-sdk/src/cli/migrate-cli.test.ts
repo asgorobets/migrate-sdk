@@ -438,26 +438,24 @@ const getExecutionProbe = (): CliExecutionProbe => {
   return probe as CliExecutionProbe;
 };
 
-interface CliTotalDiscoveryProbe {
-  totalDiscoveryAttempts: number;
+interface CliTotalCountProbe {
+  totalCountAttempts: number;
 }
 
-const totalDiscoveryProbeGlobal = "__migrateSdkCliTotalDiscoveryProbe";
+const totalCountProbeGlobal = "__migrateSdkCliTotalCountProbe";
 
-const resetTotalDiscoveryProbe = () => {
-  delete (globalThis as Record<string, unknown>)[totalDiscoveryProbeGlobal];
+const resetTotalCountProbe = () => {
+  delete (globalThis as Record<string, unknown>)[totalCountProbeGlobal];
 };
 
-const getTotalDiscoveryProbe = (): CliTotalDiscoveryProbe => {
-  const probe = (globalThis as Record<string, unknown>)[
-    totalDiscoveryProbeGlobal
-  ];
+const getTotalCountProbe = (): CliTotalCountProbe => {
+  const probe = (globalThis as Record<string, unknown>)[totalCountProbeGlobal];
 
   if (typeof probe !== "object" || probe === null) {
-    throw new Error("CLI total discovery probe was not initialized");
+    throw new Error("CLI total count probe was not initialized");
   }
 
-  return probe as CliTotalDiscoveryProbe;
+  return probe as CliTotalCountProbe;
 };
 
 const executionConfigSource = (): string => `
@@ -661,7 +659,7 @@ const progressZeroTotalConfigSource = (): string => `
   });
 `;
 
-const progressTotalDiscoveryProbeConfigSource = (): string => `
+const progressTotalCountProbeConfigSource = (): string => `
   import { Effect, Schema } from "effect";
   import {
     defineMigration,
@@ -669,7 +667,6 @@ const progressTotalDiscoveryProbeConfigSource = (): string => `
     InMemoryMigrationStore,
     MigrationDefinitionRegistry,
     SourceIdentity,
-    SourceItemTotal,
     toMigrationDefinitionId
   } from "migrate-sdk";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
@@ -681,17 +678,17 @@ const progressTotalDiscoveryProbeConfigSource = (): string => `
   });
   const store = InMemoryMigrationStore.layer();
   const probe = {
-    totalDiscoveryAttempts: 0
+    totalCountAttempts: 0
   };
 
-  globalThis.${totalDiscoveryProbeGlobal} = probe;
+  globalThis.${totalCountProbeGlobal} = probe;
 
   const source = defineSourcePlugin({
     cursorSchema: Schema.Null,
-    discoverSourceItemTotal: () =>
+    countTotal: () =>
       Effect.sync(() => {
-        probe.totalDiscoveryAttempts += 1;
-        return SourceItemTotal.known(1);
+        probe.totalCountAttempts += 1;
+        return 1;
       }),
     identity: EntrySourceIdentity,
     lookupStrategy: "scan",
@@ -2802,7 +2799,7 @@ describe("migrate CLI", () => {
       expect(progressLines).toEqual([
         "[progress] Run started definitions=articles",
         "[progress] Definition started definition=articles",
-        "[progress] Source Item total discovered definition=articles total=3",
+        "[progress] Source Item total counted definition=articles total=3",
         "[progress] Source Cursor Window completed definition=articles itemsRead=2 progress=[#############-------] processed=2 total=3 percentage=67% migrated=2 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Source Cursor Window completed definition=articles itemsRead=3 progress=[####################] processed=3 total=3 percentage=100% migrated=3 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Definition completed definition=articles status=succeeded migrated=3 skipped=0 failed=0 unchanged=0 needsUpdate=0",
@@ -2886,15 +2883,15 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
-  it.effect("does not discover totals when progress mode is none", () =>
+  it.effect("does not count totals when progress mode is none", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const project = yield* makeProject;
-      resetTotalDiscoveryProbe();
+      resetTotalCountProbe();
 
       yield* fs.writeFileString(
         `${project}/migrate.config.ts`,
-        progressTotalDiscoveryProbeConfigSource()
+        progressTotalCountProbeConfigSource()
       );
 
       const result = yield* runCli(
@@ -2914,7 +2911,7 @@ describe("migrate CLI", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Run Completed succeeded");
       expect(result.stdout).not.toContain("[progress]");
-      expect(getTotalDiscoveryProbe().totalDiscoveryAttempts).toBe(0);
+      expect(getTotalCountProbe().totalCountAttempts).toBe(0);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -3263,15 +3260,15 @@ describe("migrate CLI", () => {
       expect(progressLines).toEqual([
         "[progress] Run started definitions=tags,authors,articles",
         "[progress] Definition started definition=tags",
-        "[progress] Source Item total discovered definition=tags total=1",
+        "[progress] Source Item total counted definition=tags total=1",
         "[progress] Source Cursor Window completed definition=tags itemsRead=1 progress=[####################] processed=1 total=1 percentage=100% migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Definition completed definition=tags status=succeeded migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Definition started definition=authors",
-        "[progress] Source Item total discovered definition=authors total=1",
+        "[progress] Source Item total counted definition=authors total=1",
         "[progress] Source Cursor Window completed definition=authors itemsRead=1 progress=[####################] processed=1 total=1 percentage=100% migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Definition completed definition=authors status=succeeded migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Definition started definition=articles",
-        "[progress] Source Item total discovered definition=articles total=1",
+        "[progress] Source Item total counted definition=articles total=1",
         "[progress] Source Cursor Window completed definition=articles itemsRead=1 progress=[####################] processed=1 total=1 percentage=100% migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Definition completed definition=articles status=succeeded migrated=1 skipped=0 failed=0 unchanged=0 needsUpdate=0",
         "[progress] Run completed status=succeeded definitions=tags,authors,articles",
@@ -3343,7 +3340,7 @@ describe("migrate CLI", () => {
       expect(progressLines).toEqual([
         "[progress] Run started definitions=articles",
         "[progress] Definition started definition=articles",
-        "[progress] Source Item total discovered definition=articles total=1",
+        "[progress] Source Item total counted definition=articles total=1",
         "[progress] Run failed definitions=articles",
       ]);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))

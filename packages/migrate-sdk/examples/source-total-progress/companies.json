@@ -1,0 +1,6 @@
+{
+  "companies": [
+    { "key": "company-1", "name": "Orbit Labs" },
+    { "key": "company-2", "name": "River Market" }
+  ]
+}

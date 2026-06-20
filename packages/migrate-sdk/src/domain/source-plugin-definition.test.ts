@@ -6,7 +6,6 @@ import {
   SourceIdentity,
   type SourceIdentityTarget,
   type SourceItem,
-  SourceItemTotal,
   SourcePluginError,
   type SourceReadResult,
   type SourceReadResultInput,
@@ -58,13 +57,10 @@ expectTypeOf<
 expectTypeOf<
   ReturnType<
     NonNullable<
-      SourcePluginContract<
-        RemoteArticle,
-        RemoteArticleCursor
-      >["discoverSourceItemTotal"]
+      SourcePluginContract<RemoteArticle, RemoteArticleCursor>["countTotal"]
     >
   >
->().toEqualTypeOf<Effect.Effect<SourceItemTotal, SourcePluginError>>();
+>().toEqualTypeOf<Effect.Effect<number, SourcePluginError>>();
 
 interface ArticleListEntry {
   readonly id: string;
@@ -194,7 +190,7 @@ describe("defineSourcePlugin", () => {
         expect(plugin.identity).toBe(RemoteArticleIdentity);
         expect(plugin.sourceSchema).toBe(RemoteArticle);
         expect(plugin.lookupStrategy).toBe("direct");
-        expect(plugin.discoverSourceItemTotal).toBeUndefined();
+        expect(plugin.countTotal).toBeUndefined();
         expect(page.items[0]?.identity).toEqual(
           SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
         );
@@ -205,7 +201,7 @@ describe("defineSourcePlugin", () => {
       })
   );
 
-  it.effect("exposes optional Source Item total discovery", () =>
+  it.effect("exposes optional Source Item total count", () =>
     Effect.gen(function* () {
       const source = defineSourcePlugin({
         cursorSchema: RemoteArticleCursor,
@@ -217,17 +213,17 @@ describe("defineSourcePlugin", () => {
             items: [],
           }),
         readByIdentity: () => Effect.succeed(null),
-        discoverSourceItemTotal: () => Effect.succeed(SourceItemTotal.known(0)),
+        countTotal: () => Effect.succeed(0),
       });
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
 
-      if (plugin.discoverSourceItemTotal === undefined) {
-        throw new Error("Expected source plugin to expose total discovery");
+      if (plugin.countTotal === undefined) {
+        throw new Error("Expected source plugin to expose total count");
       }
 
-      const total = yield* plugin.discoverSourceItemTotal();
+      const total = yield* plugin.countTotal();
 
-      expect(total).toEqual(SourceItemTotal.known(0));
+      expect(total).toBe(0);
     })
   );
 

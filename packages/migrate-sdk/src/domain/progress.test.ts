@@ -168,7 +168,7 @@ describe("Migration Progress state", () => {
       },
       {
         definitionId: articles,
-        kind: "source-item-total-discovered",
+        kind: "source-item-total-counted",
         runId,
         sourceItemTotal: SourceItemTotal.known(3),
       },
@@ -179,7 +179,7 @@ describe("Migration Progress state", () => {
       },
       {
         definitionId: authors,
-        kind: "source-item-total-discovered",
+        kind: "source-item-total-counted",
         runId,
         sourceItemTotal: SourceItemTotal.unknown({
           reason: "unsupported",
@@ -220,7 +220,7 @@ describe("Migration Progress state", () => {
       {
         definitionId: articles,
         itemLimit: 2,
-        kind: "source-item-total-discovered",
+        kind: "source-item-total-counted",
         runId,
         sourceItemTotal: SourceItemTotal.known(5),
       }
@@ -235,13 +235,13 @@ describe("Migration Progress state", () => {
     expect(rawDefinition?.remaining).toBeUndefined();
   });
 
-  it("records a progress warning when Source Item total discovery fails", () => {
+  it("records a progress warning when Source Item total count fails", () => {
     const runId = toMigrationRunId("run-progress");
     const articles = toMigrationDefinitionId("articles");
     const cause = new Error("count failed");
     const state = reduceMigrationProgressState(initialMigrationProgressState, {
       definitionId: articles,
-      kind: "source-item-total-discovered",
+      kind: "source-item-total-counted",
       runId,
       sourceItemTotal: SourceItemTotal.unknown({
         cause,
@@ -262,7 +262,7 @@ describe("Migration Progress state", () => {
           {
             cause,
             definitionId: articles,
-            kind: "source-item-total-discovery-failed",
+            kind: "source-item-total-count-failed",
             message: "Unable to count articles",
           },
         ],

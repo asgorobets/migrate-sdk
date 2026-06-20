@@ -3,7 +3,7 @@ import { Service } from "effect/Context";
 import type { MigrationProgressEvent } from "../domain/progress.ts";
 
 export interface MigrationProgressService {
-  readonly discoverSourceItemTotals?: boolean;
+  readonly countSourceItemTotals?: boolean;
   readonly emit: (
     event: MigrationProgressEvent
   ) => Effect.Effect<void, never, never>;
@@ -19,13 +19,13 @@ export class MigrationProgress extends Service<
 >()("@migrate-sdk/MigrationProgress") {
   static readonly noopLayer = Layer.succeed(MigrationProgress, noop);
 
-  static readonly shouldDiscoverSourceItemTotals = Effect.serviceOption(
+  static readonly shouldCountSourceItemTotals = Effect.serviceOption(
     MigrationProgress
   ).pipe(
     Effect.map(
       Option.match({
         onNone: () => false,
-        onSome: (progress) => progress.discoverSourceItemTotals === true,
+        onSome: (progress) => progress.countSourceItemTotals === true,
       })
     )
   );

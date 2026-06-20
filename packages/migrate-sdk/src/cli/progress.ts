@@ -138,9 +138,9 @@ const renderProgressLogLine = (
       return `[progress] Run started definitions=${event.definitionIds.join(",")}`;
     case "definition-started":
       return `[progress] Definition started definition=${event.definitionId}`;
-    case "source-item-total-discovered":
+    case "source-item-total-counted":
       return event.sourceItemTotal.kind === "known"
-        ? `[progress] Source Item total discovered definition=${event.definitionId} total=${event.sourceItemTotal.count}`
+        ? `[progress] Source Item total counted definition=${event.definitionId} total=${event.sourceItemTotal.count}`
         : null;
     case "source-item-completed":
       return null;
@@ -257,7 +257,7 @@ const logProgressLayer = Layer.effect(
     const stateRef = yield* SubscriptionRef.make(initialMigrationProgressState);
 
     return {
-      discoverSourceItemTotals: true,
+      countSourceItemTotals: true,
       emit: (event) =>
         SubscriptionRef.modify(stateRef, (state) => {
           const nextState = reduceMigrationProgressState(state, event);
@@ -324,7 +324,7 @@ const makeInteractiveProgressLayer = (
       yield* Effect.addFinalizer(() => cleanupRenderedProgress);
 
       return {
-        discoverSourceItemTotals: true,
+        countSourceItemTotals: true,
         emit: (event) =>
           SubscriptionRef.modify(stateRef, (state) => {
             const nextState = reduceMigrationProgressState(state, event);

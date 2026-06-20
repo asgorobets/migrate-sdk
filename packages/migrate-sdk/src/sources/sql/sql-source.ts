@@ -28,7 +28,6 @@ import {
 import {
   encodeSourceIdentityKey,
   type SourceItemInput,
-  SourceItemTotal,
 } from "../../domain/source.ts";
 import {
   type AnySourcePlugin,
@@ -544,29 +543,6 @@ const makeSqlSourceCountRowError = (rowCount: number): SourcePluginError =>
     message: "SQL source plugin count must return exactly one row",
   });
 
-const makeFailedSqlSourceItemTotalDiscovery = (
-  cause: unknown
-): SourceItemTotal =>
-  SourceItemTotal.unknown({
-    cause,
-    message: "SQL Source Item total discovery failed",
-    reason: "failed",
-  });
-
-const makeKnownSqlSourceItemTotal = (
-  count: number
-): Effect.Effect<SourceItemTotal, SourcePluginError> =>
-  Effect.try({
-    try: () => SourceItemTotal.known(count),
-    catch: (cause) =>
-      cause instanceof SourcePluginError
-        ? cause
-        : new SourcePluginError({
-            cause,
-            message: "SQL source plugin count returned an invalid total",
-          }),
-  });
-
 const readSqlSourceCount = <CountRow>(
   count: SqlSourceCount<CountRow>,
   sql: SqlClient.SqlClient
@@ -599,27 +575,6 @@ const readSqlSourceCount = <CountRow>(
   });
 };
 
-const discoverSqlSourceItemTotal = <CountRow>(
-  count: SqlSourceCount<CountRow> | undefined,
-  sql: SqlClient.SqlClient
-): Effect.Effect<SourceItemTotal, never> => {
-  if (count === undefined) {
-    return Effect.succeed(
-      SourceItemTotal.unknown({
-        message: "SQL Source Item total discovery was not configured",
-        reason: "disabled",
-      })
-    );
-  }
-
-  return readSqlSourceCount(count, sql).pipe(
-    Effect.flatMap(makeKnownSqlSourceItemTotal),
-    Effect.catch((cause) =>
-      Effect.succeed(makeFailedSqlSourceItemTotalDiscovery(cause))
-    )
-  );
-};
-
 const makeImplementation = <
   Source,
   Cursor,
@@ -642,9 +597,13 @@ const makeImplementation = <
     readRows(options, identityDefinition, sql, cursor)
   );
 
-  const discoverSourceItemTotal = Effect.fn(
-    "SqlSource.discoverSourceItemTotal"
-  )(() => discoverSqlSourceItemTotal(options.count, sql));
+  const configuredCount = options.count;
+  const countTotal =
+    configuredCount === undefined
+      ? undefined
+      : Effect.fn("SqlSource.countTotal")(() =>
+          readSqlSourceCount(configuredCount, sql)
+        );
 
   const readByIdentity = Effect.fn("SqlSource.readByIdentity")(function* (
     identity: SourceIdentity<SqlIdentityDefinitionKey<Identity>>
@@ -695,7 +654,7 @@ const makeImplementation = <
   });
 
   return {
-    discoverSourceItemTotal,
+    ...(countTotal === undefined ? {} : { countTotal }),
     lookupStrategy: "direct",
     read,
     readByIdentity,

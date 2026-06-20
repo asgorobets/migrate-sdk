@@ -12,7 +12,7 @@ export type {
   DocumentEffectFetcherOptions,
   DocumentFetcher,
   DocumentFetcherPlatform,
-  DocumentFetcherTotalDiscoveryCapability,
+  DocumentFetcherTotalCountCapability,
   DocumentFetchResult,
   DocumentFileTextFetcherOptions,
 } from "./document-fetcher.ts";

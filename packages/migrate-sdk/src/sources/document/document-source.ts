@@ -24,7 +24,6 @@ import {
 import {
   encodeSourceIdentityKey,
   type SourceItemInput,
-  SourceItemTotal,
 } from "../../domain/source.ts";
 import type {
   DocumentFetcher,
@@ -166,15 +165,15 @@ export type DocumentSourceLookup<
 export interface DocumentSourceTotalContext<Resource, FetcherCursor, Document> {
   readonly countDocuments: (
     documents: readonly Document[]
-  ) => Effect.Effect<SourceItemTotal, SourcePluginError>;
+  ) => Effect.Effect<number, SourcePluginError>;
   readonly countResource: (
     resourceResult: DocumentFetchResult<Resource, FetcherCursor>
-  ) => Effect.Effect<SourceItemTotal, SourcePluginError>;
+  ) => Effect.Effect<number, SourcePluginError>;
 }
 
 export type DocumentSourceTotalCallback<Resource, FetcherCursor, Document> = (
   context: DocumentSourceTotalContext<Resource, FetcherCursor, Document>
-) => Effect.Effect<SourceItemTotal, SourcePluginError>;
+) => Effect.Effect<number, SourcePluginError>;
 
 export interface DocumentSourceBaseOptions<
   Resource,
@@ -183,7 +182,7 @@ export interface DocumentSourceBaseOptions<
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
 > {
   readonly batchSize?: number;
-  readonly discoverSourceItemTotal?: DocumentSourceTotalCallback<
+  readonly countTotal?: DocumentSourceTotalCallback<
     Resource,
     FetcherCursor,
     Document
@@ -1068,7 +1067,7 @@ const countDocuments = <
     IdentityKey
   >,
   documents: readonly unknown[]
-): Effect.Effect<SourceItemTotal, SourcePluginError> =>
+): Effect.Effect<number, SourcePluginError> =>
   Effect.gen(function* () {
     let count = 0;
 
@@ -1077,7 +1076,7 @@ const countDocuments = <
       count += selectedItems.length;
     }
 
-    return SourceItemTotal.known(count);
+    return count;
   });
 
 const countResource = <
@@ -1093,14 +1092,14 @@ const countResource = <
     IdentityKey
   >,
   resourceResult: DocumentFetchResult<Resource, FetcherCursor>
-): Effect.Effect<SourceItemTotal, SourcePluginError> =>
+): Effect.Effect<number, SourcePluginError> =>
   Effect.gen(function* () {
     const documents = yield* parseResourceDocuments(
       options.parser,
       resourceResult,
       null,
       {
-        sourceItemTotalDiscovery: true,
+        sourceItemTotalCount: true,
       }
     );
 
@@ -1124,23 +1123,7 @@ const makeDocumentSourceTotalContext = <
   countResource: (resourceResult) => countResource(options, resourceResult),
 });
 
-const failedDocumentSourceItemTotalDiscovery = (
-  cause: unknown
-): SourceItemTotal =>
-  SourceItemTotal.unknown({
-    cause,
-    message: "Document Source Item total discovery failed",
-    reason: "failed",
-  });
-
-const unknownDocumentSourceItemTotal = (): SourceItemTotal =>
-  SourceItemTotal.unknown({
-    message:
-      "Document Source Item total discovery needs a source-native total callback",
-    reason: "too-expensive",
-  });
-
-const discoverDocumentSourceItemTotal = <
+const makeDocumentSourceCountTotal = <
   Resource,
   FetcherCursor,
   Source,
@@ -1152,29 +1135,28 @@ const discoverDocumentSourceItemTotal = <
     Source,
     IdentityKey
   >
-): Effect.Effect<SourceItemTotal, never> => {
-  const configuredDiscovery = options.discoverSourceItemTotal;
+): (() => Effect.Effect<number, SourcePluginError>) | undefined => {
+  const configuredCount = options.countTotal;
 
-  if (configuredDiscovery !== undefined) {
-    return configuredDiscovery(makeDocumentSourceTotalContext(options)).pipe(
-      Effect.catch((cause) =>
-        Effect.succeed(failedDocumentSourceItemTotalDiscovery(cause))
-      )
+  if (configuredCount !== undefined) {
+    return Effect.fn("DocumentSource.countTotal")(() =>
+      configuredCount(makeDocumentSourceTotalContext(options))
     );
   }
 
-  if (options.fetcher.totalDiscovery?.kind === "single-resource-local") {
-    return options.fetcher.read(null).pipe(
-      Effect.flatMap((resourceResult) =>
-        countResource(options, resourceResult)
-      ),
-      Effect.catch((cause) =>
-        Effect.succeed(failedDocumentSourceItemTotalDiscovery(cause))
-      )
+  if (options.fetcher.totalCount?.kind === "single-resource-local") {
+    return Effect.fn("DocumentSource.countTotal")(() =>
+      options.fetcher
+        .read(null)
+        .pipe(
+          Effect.flatMap((resourceResult) =>
+            countResource(options, resourceResult)
+          )
+        )
     );
   }
 
-  return Effect.succeed(unknownDocumentSourceItemTotal());
+  return undefined;
 };
 
 const configuredBatchSize = (
@@ -1251,9 +1233,7 @@ const makeImplementation = <
     options.identity
   );
 
-  const discoverSourceItemTotal = Effect.fn(
-    "DocumentSource.discoverSourceItemTotal"
-  )(() => discoverDocumentSourceItemTotal(options));
+  const countTotal = makeDocumentSourceCountTotal(options);
 
   const read = Effect.fn("DocumentSource.read")(function* (
     cursor: DocumentSourceCursor<FetcherCursor> | null
@@ -1365,7 +1345,7 @@ const makeImplementation = <
   });
 
   return {
-    discoverSourceItemTotal,
+    ...(countTotal === undefined ? {} : { countTotal }),
     lookupStrategy: options.lookup.kind,
     read,
     readByIdentity,
