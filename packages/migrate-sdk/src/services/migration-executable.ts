@@ -1,6 +1,10 @@
 import { Effect, Layer } from "effect";
 import { Service } from "effect/Context";
-import type { MigrationDefinitionExecutableRunPlan } from "../domain/registry.ts";
+import type {
+  MigrationDefinitionExecutableRollbackPlan,
+  MigrationDefinitionExecutableRunPlan,
+} from "../domain/registry.ts";
+import type { RollbackRunSummary } from "../domain/rollback.ts";
 import type {
   AnyMigrationDefinition,
   ExecutionStartResult,
@@ -9,7 +13,9 @@ import type {
   RunRequestSourceRequirements,
 } from "../domain/run.ts";
 import {
+  type RollbackMigrationError,
   type RunMigrationError,
+  rollbackMigrationsWithEncodedSourceIdentities,
   runMigrationsWithEncodedRunMode,
 } from "../runtime/run-migrations.ts";
 
@@ -18,7 +24,15 @@ export type MigrationExecutableRunError<
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
 > = RunMigrationError | RunRequestSourceLayerError<Definitions>;
 
+export type MigrationExecutableRollbackError = RollbackMigrationError;
+
 export interface MigrationExecutableService {
+  readonly startRollback: (
+    plan: MigrationDefinitionExecutableRollbackPlan
+  ) => Effect.Effect<
+    ExecutionStartResult<RollbackRunSummary>,
+    MigrationExecutableRollbackError
+  >;
   readonly startRun: <Definitions extends readonly AnyMigrationDefinition[]>(
     plan: MigrationDefinitionExecutableRunPlan<Definitions>
   ) => Effect.Effect<
@@ -63,7 +77,29 @@ const startInlineRun = <Definitions extends readonly AnyMigrationDefinition[]>(
     }))
   );
 
+const startInlineRollback = (
+  plan: MigrationDefinitionExecutableRollbackPlan
+): Effect.Effect<
+  ExecutionStartResult<RollbackRunSummary>,
+  MigrationExecutableRollbackError
+> =>
+  rollbackMigrationsWithEncodedSourceIdentities({
+    definitions: plan.registryDefinitions,
+    definitionIds: [...plan.executionDefinitionIds].reverse(),
+    ...(plan.execution === undefined ? {} : { execution: plan.execution }),
+    ...(plan.target === undefined
+      ? {}
+      : { encodedSourceIdentities: plan.target.sourceIdentities }),
+  }).pipe(
+    Effect.map((summary) => ({
+      kind: "completed" as const,
+      runId: summary.runId,
+      summary,
+    }))
+  );
+
 const inlineMigrationExecutable: MigrationExecutableService = {
+  startRollback: startInlineRollback,
   startRun: startInlineRun,
 };
 
@@ -78,6 +114,13 @@ export class MigrationExecutable extends Service<
   ) =>
     Effect.flatMap(MigrationExecutable, (executable) =>
       executable.startRun(plan)
+    );
+
+  static readonly startRollback = (
+    plan: MigrationDefinitionExecutableRollbackPlan
+  ) =>
+    Effect.flatMap(MigrationExecutable, (executable) =>
+      executable.startRollback(plan)
     );
 
   static readonly inline = Layer.succeed(

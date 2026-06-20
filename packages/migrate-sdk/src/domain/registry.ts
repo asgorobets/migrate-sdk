@@ -199,6 +199,9 @@ export interface MigrationDefinitionRunPlan<
 const executableRunPlanTypeId: unique symbol = Symbol.for(
   "@migrate-sdk/MigrationDefinitionExecutableRunPlan"
 );
+const executableRollbackPlanTypeId: unique symbol = Symbol.for(
+  "@migrate-sdk/MigrationDefinitionExecutableRollbackPlan"
+);
 
 export interface MigrationDefinitionExecutableRunPlan<
   Definitions extends
@@ -209,6 +212,7 @@ export interface MigrationDefinitionExecutableRunPlan<
 
 export interface MigrationDefinitionRollbackPlan {
   readonly definitions: readonly AnyRollbackMigrationDefinition[];
+  readonly execution?: MigrationExecutionOptions;
   readonly executionDefinitionIds: readonly MigrationDefinitionId[];
   readonly executionPolicy: readonly MigrationDefinitionExecutionPolicy[];
   readonly includedDefinitionIds: readonly MigrationDefinitionId[];
@@ -218,6 +222,12 @@ export interface MigrationDefinitionRollbackPlan {
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
   readonly target?: MigrationDefinitionPlanTarget;
   readonly withDependencies: boolean;
+}
+
+export interface MigrationDefinitionExecutableRollbackPlan
+  extends MigrationDefinitionRollbackPlan {
+  readonly registryDefinitions: readonly AnyRollbackMigrationDefinition[];
+  readonly [executableRollbackPlanTypeId]: "rollback";
 }
 
 export interface MigrationDefinitionRegistryStatusReport
@@ -1142,6 +1152,25 @@ const makeExecutableRunPlan = <
     [executableRunPlanTypeId]: "run",
   }) as MigrationDefinitionExecutableRunPlan<Definitions>;
 
+const makeExecutableRollbackPlan = (
+  plan: MigrationDefinitionRollbackPlan,
+  registryDefinitions: readonly AnyRollbackMigrationDefinition[]
+): MigrationDefinitionExecutableRollbackPlan => {
+  const executablePlan = {
+    ...plan,
+    [executableRollbackPlanTypeId]: "rollback",
+  };
+
+  Object.defineProperty(executablePlan, "registryDefinitions", {
+    enumerable: false,
+    value: Object.freeze([...registryDefinitions]),
+  });
+
+  return Object.freeze(
+    executablePlan
+  ) as MigrationDefinitionExecutableRollbackPlan;
+};
+
 const validateExecutableDefinitions = (
   definitions: readonly AnyMigrationDefinition[],
   missingRequirements: MigrationDefinitionMissingRequirements | undefined
@@ -1353,6 +1382,9 @@ export class MigrationDefinitionRegistry<
         definitions: planDefinitions,
         ...(target === undefined ? {} : { target }),
         notices: selection.notices,
+        ...(input.execution === undefined
+          ? {}
+          : { execution: input.execution }),
         withDependencies: selection.withDependencies,
       };
     });
@@ -1404,9 +1436,7 @@ export class MigrationDefinitionRegistry<
       rollbackMigrationsWithEncodedSourceIdentities({
         definitions,
         definitionIds: [...plan.executionDefinitionIds].reverse(),
-        ...(input.execution === undefined
-          ? {}
-          : { execution: input.execution }),
+        ...(plan.execution === undefined ? {} : { execution: plan.execution }),
         ...(plan.target === undefined
           ? {}
           : { encodedSourceIdentities: plan.target.sourceIdentities }),
@@ -1538,6 +1568,24 @@ export class ExecutableMigrationDefinitionRegistry<
         plan.definitions,
         this.#missingRequirements
       ).pipe(Effect.as(makeExecutableRunPlan(plan)))
+    );
+  }
+
+  planRollback(
+    input: MigrationDefinitionRegistryRollbackInput
+  ): Effect.Effect<
+    MigrationDefinitionExecutableRollbackPlan,
+    | MigrationDefinitionRegistryPlanningError
+    | MigrationDefinitionRegistryExecutableError
+  > {
+    const registryDefinitions =
+      this.#registry.definitions() as unknown as AnyRollbackMigrationDefinitions;
+
+    return Effect.flatMap(this.#registry.planRollback(input), (plan) =>
+      validateExecutableDefinitions(
+        plan.definitions,
+        this.#missingRequirements
+      ).pipe(Effect.as(makeExecutableRollbackPlan(plan, registryDefinitions)))
     );
   }
 }

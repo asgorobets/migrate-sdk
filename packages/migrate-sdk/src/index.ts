@@ -173,6 +173,7 @@ export {
 } from "./domain/registry.ts";
 export type {
   MigrationDefinitionDependencyEdge,
+  MigrationDefinitionExecutableRollbackPlan,
   MigrationDefinitionExecutableRunPlan,
   MigrationDefinitionMissingRequirements,
   MigrationDefinitionPlanTarget,
@@ -278,6 +279,7 @@ export type {
 } from "./services/migration-reference-lookup.ts";
 export { MigrationExecutable } from "./services/migration-executable.ts";
 export type {
+  MigrationExecutableRollbackError,
   MigrationExecutableRunError,
   MigrationExecutableService,
 } from "./services/migration-executable.ts";

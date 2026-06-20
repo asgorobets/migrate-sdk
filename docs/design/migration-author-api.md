@@ -249,9 +249,15 @@ export type MigrationDefinitionExecutableRunPlan =
 
 export type MigrationDefinitionExecutableRollbackPlan =
   MigrationDefinitionRollbackPlan & {
+    readonly registryDefinitions: readonly AnyRollbackMigrationDefinition[]
     readonly [executablePlanTypeId]: "rollback"
   }
 ```
+
+Executable rollback plans retain the registry definitions so rollback preflight
+can still detect dependent item state outside the selected rollback scope. That
+context is for in-process execution only, not for plan serialization or operator
+rendering.
 
 This is valid:
 

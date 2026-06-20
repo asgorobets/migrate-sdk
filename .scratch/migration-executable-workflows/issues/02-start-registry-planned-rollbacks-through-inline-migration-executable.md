@@ -18,21 +18,20 @@ inline compatibility path so existing SDK users do not need to adopt
 
 ## Acceptance criteria
 
-- [ ] A registry can expose an executable rollback-planning view that returns a
+- [x] A registry can expose an executable rollback-planning view that returns a
       distinct executable rollback plan.
-- [ ] `MigrationExecutable` exposes `startRollback` through the service and
+- [x] `MigrationExecutable` exposes `startRollback` through the service and
       static helper.
-- [ ] `MigrationExecutable.inline` starts executable rollback plans through the
+- [x] `MigrationExecutable.inline` starts executable rollback plans through the
       existing inline runtime and returns a completed execution start result.
-- [ ] Inline rollback execution preserves existing rollback summary, preflight,
+- [x] Inline rollback execution preserves existing rollback summary, preflight,
       run state, item state, and lock behavior.
-- [ ] Ordinary non-executable registry rollback plans cannot be passed to
+- [x] Ordinary non-executable registry rollback plans cannot be passed to
       `MigrationExecutable.startRollback` at the public type boundary.
-- [ ] Existing function-style run and rollback entrypoints continue to return
+- [x] Existing function-style run and rollback entrypoints continue to return
       completed summaries on the inline path.
-- [ ] Public exports and author-facing docs expose the rollback start path.
+- [x] Public exports and author-facing docs expose the rollback start path.
 
 ## Blocked by
 
 - [01 - Start Registry-Planned Runs Through Inline MigrationExecutable](01-start-registry-planned-runs-through-inline-migration-executable.md)
-

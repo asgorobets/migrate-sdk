@@ -7,6 +7,7 @@ import {
   InMemoryMigrationStore,
   InMemorySourcePlugin,
   type MigrationDefinitionDependenciesInput,
+  type MigrationDefinitionExecutableRollbackPlan,
   type MigrationDefinitionExecutableRunPlan,
   type MigrationDefinitionIdInput,
   MigrationDefinitionRegistry,
@@ -23,6 +24,7 @@ import {
   type MigrationStoreError,
   type RollbackPipeline,
   RollbackPreflightError,
+  type RollbackRunSummary,
   SourceIdentity,
   toEncodedSourceCursor,
   toEncodedSourceIdentity,
@@ -1559,6 +1561,170 @@ describe("MigrationDefinitionRegistry", () => {
         }
 
         expect(storeState.definitionLocks.size).toBe(0);
+      })
+  );
+
+  it.effect(
+    "plans executable rollbacks with a distinct executable plan type",
+    () =>
+      Effect.gen(function* () {
+        const articles = makeDefinition({
+          id: "articles",
+          rollback: () => Effect.void,
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles] as const,
+        });
+
+        const ordinaryPlan = yield* registry.planRollback({
+          definitionIds: ["articles"],
+        });
+        const executablePlan = yield* registry.executable().planRollback({
+          definitionIds: ["articles"],
+        });
+
+        expect(executablePlan).toEqual(
+          expect.objectContaining({
+            kind: "rollback",
+            definitions: [articles],
+            executionDefinitionIds: [toMigrationDefinitionId("articles")],
+          })
+        );
+        expectTypeOf(
+          executablePlan
+        ).toMatchTypeOf<MigrationDefinitionExecutableRollbackPlan>();
+        expect(executablePlan.registryDefinitions).toEqual([articles]);
+        expect(Object.keys(executablePlan)).not.toContain(
+          "registryDefinitions"
+        );
+        // @ts-expect-error Ordinary registry rollback plans are not accepted by startRollback.
+        const rejectedOrdinaryPlanStartInput: Parameters<
+          typeof MigrationExecutable.startRollback
+        >[0] = ordinaryPlan;
+        expect(rejectedOrdinaryPlanStartInput).toBeDefined();
+      })
+  );
+
+  it.effect(
+    "starts executable rollback plans through the inline executable",
+    () =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("articles");
+        const sourceIdentity = toEncodedSourceIdentity("article-1");
+        const storeState = InMemoryMigrationStore.makeState();
+        const itemStateKey = InMemoryMigrationStore.itemStateKey(
+          definitionId,
+          sourceIdentity
+        );
+        const articles = defineMigration({
+          id: definitionId,
+          source: InMemorySourcePlugin.make({
+            identity: ArticleSourceIdentity,
+            sourceSchema: ArticleSource,
+            items: [
+              {
+                identityKey: sourceIdentity,
+                version: "source-version-1",
+                item: {
+                  title: "Executable rollback",
+                },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () => Effect.void,
+          rollback: () => undefined,
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles] as const,
+        });
+
+        yield* registry.run({ definitionIds: ["articles"] });
+        expect(storeState.itemStates.has(itemStateKey)).toBe(true);
+
+        const plan = yield* registry.executable().planRollback({
+          definitionIds: ["articles"],
+        });
+        const result = yield* MigrationExecutable.startRollback(plan).pipe(
+          Effect.provide(MigrationExecutable.inline)
+        );
+
+        expectTypeOf(result).toMatchTypeOf<
+          ExecutionStartResult<RollbackRunSummary>
+        >();
+        expect(result.kind).toBe("completed");
+
+        if (result.kind === "completed") {
+          expect(result.runId).toBe(result.summary.runId);
+          expect(result.summary.kind).toBe("rollback");
+          expect(result.summary.status).toBe("succeeded");
+          expect(result.summary.definitions).toEqual([
+            {
+              definitionId,
+              status: "succeeded",
+              counts: {
+                rolledBack: 1,
+                failed: 0,
+                skipped: 0,
+              },
+            },
+          ]);
+          expect(
+            storeState.latestRunStates.get(toMigrationDefinitionId("articles"))
+          ).toEqual(
+            expect.objectContaining({
+              runId: result.runId,
+              status: "succeeded",
+            })
+          );
+        }
+
+        expect(storeState.itemStates.has(itemStateKey)).toBe(false);
+        expect(storeState.definitionLocks.size).toBe(0);
+      })
+  );
+
+  it.effect(
+    "preserves rollback preflight through executable rollback plans",
+    () =>
+      Effect.gen(function* () {
+        const { articleState, authorState, authorsId, registry, storeState } =
+          makeRollbackSafetyFixture();
+
+        const plan = yield* registry.executable().planRollback({
+          definitionIds: [authorsId],
+        });
+        const error = yield* Effect.flip(
+          MigrationExecutable.startRollback(plan).pipe(
+            Effect.provide(MigrationExecutable.inline)
+          )
+        );
+
+        expect(error).toBeInstanceOf(RollbackPreflightError);
+        expect(error).toEqual(
+          expect.objectContaining({
+            message:
+              "Rollback would leave dependent Migration Definition item state",
+          })
+        );
+        expect(storeState.latestRunStates.size).toBe(0);
+        expect(storeState.definitionLocks.size).toBe(0);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(
+              authorState.definitionId,
+              authorState.sourceIdentity.encoded
+            )
+          )
+        ).toEqual(authorState);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(
+              articleState.definitionId,
+              articleState.sourceIdentity.encoded
+            )
+          )
+        ).toEqual(articleState);
       })
   );
 
