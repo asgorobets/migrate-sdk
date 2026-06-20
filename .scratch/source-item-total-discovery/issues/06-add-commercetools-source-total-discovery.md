@@ -38,22 +38,3 @@ Covers user stories 2-8, 14-19, and 23-24.
 ## Blocked by
 
 [Add Source Item Total Count Contract](./01-add-source-item-total-discovery-contract.md)
-
-## Comments
-
-Implemented Commercetools source totals for products, customers, and business
-units. Each descriptor now provides a native count request using `limit: 0`,
-`withTotal: true`, and the configured `where`/`whereVariables` scope, while the
-shared source factory exposes `countTotal`, maps capped filtered counts to a
-lower-bound total, and rejects missing or invalid totals with
-`SourcePluginError`.
-
-Added package docs in `packages/commercetools/docs/source.md` clarifying that
-Commercetools totals are live progress observability, not authoritative
-inventory validation.
-
-Verification:
-
-- `pnpm --filter @migrate-sdk/commercetools test`
-- `pnpm --filter @migrate-sdk/commercetools check-types`
-- `pnpm exec ultracite check packages/commercetools/src/source/domain.ts packages/commercetools/src/source/selectors.ts packages/commercetools/src/source/internal/entity-source.ts packages/commercetools/src/source/entities/products.ts packages/commercetools/src/source/entities/customers.ts packages/commercetools/src/source/entities/business-units.ts packages/commercetools/src/source/plugin.test.ts packages/commercetools/docs/source.md`
