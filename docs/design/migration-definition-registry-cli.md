@@ -24,15 +24,21 @@ import { articles } from "./migrations/articles.ts";
 import { authors } from "./migrations/authors.ts";
 
 export const migrations = MigrationDefinitionRegistry.make({
+  id: "catalog-migration",
   definitions: [authors, articles],
 });
 ```
+
+Executable registries require a stable `id` even when the first execution
+adapter is inline, because distributed adapters and execution envelopes use the
+same registry identity later.
 
 Do not use subclassing in the first slice:
 
 ```ts
 // Not first-slice public API.
 class AppMigrations extends MigrationDefinitionRegistry.make({
+  id: "catalog-migration",
   definitions: [authors, articles],
 }) {}
 ```

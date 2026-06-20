@@ -91,6 +91,24 @@ A migration definition dependency that orders another migration definition first
 **Migration Definition Registry**:
 A catalog of executable migration definitions available to an SDK or CLI host.
 
+**Migration Definition Registry Id**:
+A stable identity for a migration definition registry across execution boundaries.
+
+**Migration Definition Registry Catalog**:
+An Effect service that resolves migration definition registries by registry id.
+
+**Executable Migration Definition Registry**:
+A migration definition registry view that plans only executable runs and rollback runs.
+
+**Migration Definition Registry Executable Error**:
+A typed planning error raised when runtime metadata says a selected migration definition cannot produce an executable plan.
+
+**Migration Executable**:
+An Effect service that executes planned migration runs and rollback runs.
+
+**Migration Execution**:
+An Effect service for observing and controlling migration execution after it has started.
+
 **Migration Definition Lock**:
 A durable ownership record that prevents multiple runners from executing the same migration definition concurrently.
 
@@ -116,7 +134,10 @@ The structured inspection result for one or more migration definitions.
 The structured result returned after a rollback run completes or fails.
 
 **Execution Start Result**:
-The result of starting execution, either a completed summary or a run id for later observation.
+The result of starting execution, including the migration run id and either a completed summary or a started run for later observation.
+
+**Migration Execution Envelope**:
+A serializable execution request derived from an executable plan for a distributed execution adapter. It carries the migration run id, registry id, request, and diagnostic planned order; the workflow execution context re-plans before doing work.
 
 **Run Mode**:
 The runtime mode that controls which migration item states are reprocessed.
@@ -128,7 +149,13 @@ The invocation object that starts a migration run from the SDK, CLI, or another 
 The invocation object that starts a rollback run from the SDK, CLI, or another host.
 
 **Execution Adapter**:
-The runtime strategy that executes migration definitions.
+The runtime strategy that executes migration definitions inline or starts them through a durable workflow provider.
+
+**Workflow SDK Execution Adapter**:
+An execution adapter that starts a Workflow SDK run from a migration execution envelope.
+
+**Effect Workflow Execution Adapter**:
+An execution adapter that starts an Effect workflow from a migration execution envelope.
 
 **Migration Reference Lookup**:
 A process capability for reading migrated tracking state or destination references from migration item states.
@@ -282,8 +309,16 @@ A schema-backed warning or error record that explains migration status, item fai
 - An **Optional Migration Definition Dependency** is an ordering preference when both **Migration Definitions** participate in a run.
 - A **Migration Reference Lookup** relationship is not a **Migration Definition Dependency** unless the migration definition also declares it as one.
 - A **Migration Definition Registry** catalogs executable **Migration Definitions**.
+- A **Migration Definition Registry** has a **Migration Definition Registry Id** when it is used for executable planning.
+- A **Migration Definition Registry Catalog** resolves **Migration Definition Registries** for workflow execution contexts.
+- A **Migration Definition Registry Catalog** rejects duplicate **Migration Definition Registry Ids** at construction.
 - A **Migration Definition Registry** is distinct from a **Plugin Registry** and does not compile **Migration Specs**.
 - A **Migration Definition Registry** may be authored directly or initialized from previously compiled **Migration Definitions**.
+- An **Executable Migration Definition Registry** validates that planned definitions have all runtime service requirements provided.
+- An **Executable Migration Definition Registry** relies on Effect requirements for static executability and uses **Migration Definition Registry Executable Error** for dynamic runtime diagnostics.
+- An **Executable Migration Definition Registry** produces executable plans that are distinct from non-executable registry plans.
+- A **Migration Definition Registry** plans migration run and rollback execution before a **Migration Executable** executes the plan.
+- A **Migration Executable** executes plans whose **Migration Definitions** have all runtime service requirements provided before execution starts.
 - A **Migration Status Report** inspects selected **Migration Definitions** without acquiring **Migration Definition Locks** or creating **Migration Run State**.
 - A **Migration Status Report** may include current durable item-state counts, latest **Migration Run State** lifecycle metadata, and **Source Inventory Scan** counts.
 - A **Migration Status Report** over multiple **Migration Definitions** may read each definition's own **Migration Store** independently.
@@ -291,6 +326,7 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Migration Definition Lock** prevents concurrent runners from executing the same **Migration Definition** in the first version.
 - A **Migration Definition Lock** does not expire automatically in durable stores; abandoned locks require an explicit force-unlock workflow.
 - A **Migration Run** that includes multiple **Migration Definitions** acquires the full set of definition locks before executing any definition.
+- A provider-owned workflow execution owns its **Migration Definition Locks** for the duration of the durable workflow run.
 - A **Migration Run** that includes multiple **Migration Definitions** requires every selected or dependency-expanded definition to use the same **Migration Store** layer.
 - Overlapping **Migration Runs** are rejected when any requested **Migration Definition** is already locked.
 - A **Migration Spec** is serializable and cannot contain arbitrary effects directly.
@@ -304,7 +340,29 @@ A schema-backed warning or error record that explains migration status, item fai
 - A completed **Migration Run** produces a **Migration Run Summary** for SDK callers and CLI rendering.
 - A completed rollback run produces a **Rollback Run Summary** for SDK callers and CLI rendering.
 - A **Rollback Run Summary** is distinct from a **Migration Run Summary**.
+- A **Migration Executable** is the public Effect service form of an **Execution Adapter**.
+- A **Migration Executable** executes planned runs and rollback runs; it does not select migration definitions from a registry.
+- A **Migration Executable** is provided through an Effect layer selected by the SDK host, CLI host, or application.
+- A **Migration Execution** is separate from a **Migration Executable**.
+- A **Migration Execution** observes and controls started execution by **Migration Run** id.
+- Existing function-style run and rollback entrypoints may delegate to the default inline **Migration Executable** for compatibility.
+- A **Migration Executable** allocates the **Migration Run** id when starting execution.
+- A durable **Migration Executable** creates **Migration Run State** before returning a started **Execution Start Result**.
+- A durable **Migration Executable** records a start failure in **Migration Run State** when the adapter cannot accept execution after state creation.
+- A durable **Migration Executable** does not return a started **Execution Start Result** when adapter execution is accepted but its adapter execution identity cannot be attached to **Migration Run State**.
+- Each **Migration Executable** start call creates a new **Migration Run**; repeated calls are not implicitly deduplicated.
 - An **Execution Adapter** may return an **Execution Start Result** before the migration run is complete.
+- An **Execution Start Result** always includes the **Migration Run** id.
+- A started **Execution Start Result** may include adapter execution identity for observing the adapter-owned execution.
+- A durable **Execution Adapter** returns an **Execution Start Result** after accepting or scheduling execution; waiting for completion is a separate observation concern.
+- A Workflow SDK **Execution Adapter** returns a started **Execution Start Result** after the Workflow SDK run is accepted.
+- An Effect Workflow **Execution Adapter** returns a started **Execution Start Result** after the Effect workflow execution is accepted.
+- A workflow execution context updates existing **Migration Run State**; it does not create the first state record for the **Migration Run**.
+- An executable plan is an in-process object and is not required to be serializable.
+- A **Migration Execution Envelope** carries the **Migration Definition Registry Id** of the registry that produced the executable plan.
+- A **Migration Execution Envelope** carries **Planned Order** as diagnostic metadata; it is not a frozen execution plan.
+- A distributed **Execution Adapter** serializes a **Migration Execution Envelope** derived from an executable plan and rehydrates executable definitions by registry id in the workflow execution context.
+- A distributed **Execution Adapter** re-plans from the workflow execution context's **Migration Definition Registry** before executing a **Migration Execution Envelope**.
 - A **Migration Run** treats migrated and skipped item states as terminal for a given source version.
 - A **Migration Run** retries failed item states on rerun.
 - A **Migration Run** requires an explicit run mode to reprocess unchanged skipped items when skip logic changes.
@@ -315,7 +373,7 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Run Request** supplies migration definitions, run mode, and optional migration definition selection.
 - A **Rollback Request** supplies migration definitions, rollback selection, and optional source identity selection.
 - A **Run Request** that selects migration definitions also includes their **Required Migration Definition Dependencies**.
-- An **Execution Adapter** may execute migration definitions inline, inline with bounded parallelism, or through a durable queue.
+- An **Execution Adapter** may execute migration definitions inline, inline with bounded parallelism, or through a durable workflow runtime.
 - An **Execution Adapter** may be provided by users when they need custom scheduling or parallelization.
 - A **Migration Reference Lookup** reads migrated tracking state or destination references from **Migration Item State** in a **Migration Store**.
 - A **Migration Reference Lookup** result is typed from the referenced **Migration Definition's Tracking Record Contract**.
