@@ -647,6 +647,70 @@ describe("FileMigrationStore", () => {
     )
   );
 
+  it.effect("persists queued run state and provider execution handles", () =>
+    withTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("articles");
+        const runId = toMigrationRunId("run-started-file");
+        const execution = {
+          adapter: "fake-durable",
+          executionId: "fake-execution-1",
+        };
+
+        yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          const queued = yield* store.queueRun(runId, [definitionId]);
+          expect(queued).toEqual(
+            expect.objectContaining({
+              runId,
+              status: "queued",
+            })
+          );
+          expect(queued).not.toHaveProperty("execution");
+
+          const attached = yield* store.attachRunExecution(
+            runId,
+            [definitionId],
+            execution
+          );
+          expect(attached).toEqual(
+            expect.objectContaining({
+              execution,
+              runId,
+              status: "queued",
+            })
+          );
+
+          const startFailed = yield* store.markRunStartFailed(runId, [
+            definitionId,
+          ]);
+          expect(startFailed).toEqual(
+            expect.objectContaining({
+              execution,
+              runId,
+              status: "start-failed",
+            })
+          );
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        const persisted = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.getLatestRunState(definitionId);
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        expect(persisted).toEqual(
+          expect.objectContaining({
+            execution,
+            runId,
+            status: "start-failed",
+          })
+        );
+      })
+    )
+  );
+
   it.effect("uses persisted skipped item state in skipped mode", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {

@@ -27,18 +27,31 @@ export type MigrationExecutableRunError<
 
 export type MigrationExecutableRollbackError = RollbackMigrationError;
 
+export interface MigrationExecutableAdapterError {
+  readonly _tag: string;
+}
+
+export type MigrationExecutableRunStartError<
+  Definitions extends
+    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
+> = MigrationExecutableRunError<Definitions> | MigrationExecutableAdapterError;
+
+export type MigrationExecutableRollbackStartError =
+  | MigrationExecutableRollbackError
+  | MigrationExecutableAdapterError;
+
 export interface MigrationExecutableService {
   readonly startRollback: (
     plan: MigrationDefinitionExecutableRollbackPlan
   ) => Effect.Effect<
     ExecutionStartResult<RollbackRunSummary>,
-    MigrationExecutableRollbackError
+    MigrationExecutableRollbackStartError
   >;
   readonly startRun: <Definitions extends readonly AnyMigrationDefinition[]>(
     plan: MigrationDefinitionExecutableRunPlan<Definitions>
   ) => Effect.Effect<
     ExecutionStartResult<MigrationRunSummary>,
-    MigrationExecutableRunError<Definitions>,
+    MigrationExecutableRunStartError<Definitions>,
     RunRequestSourceRequirements<Definitions>
   >;
 }

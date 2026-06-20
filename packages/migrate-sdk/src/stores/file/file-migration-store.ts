@@ -25,7 +25,10 @@ import {
   type MigrationContract as MigrationContractType,
   SourceVersionContractFingerprint,
 } from "../../domain/migration-contract.ts";
-import type { MigrationRunState } from "../../domain/run.ts";
+import type {
+  MigrationExecutionHandle,
+  MigrationRunState,
+} from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { MigrationItemError } from "../../domain/state.ts";
 import { summarizeMigrationItemStates } from "../../domain/status.ts";
@@ -55,10 +58,22 @@ type ManifestRecord = typeof ManifestRecord.Type;
 
 const PersistedMigrationRunState = Schema.Struct({
   definitionIds: Schema.Array(MigrationDefinitionIdSchema),
+  execution: Schema.optional(
+    Schema.Struct({
+      adapter: Schema.String,
+      executionId: Schema.optional(Schema.String),
+    })
+  ),
   finishedAt: Schema.optional(Schema.DateFromString),
   runId: MigrationRunIdSchema,
   startedAt: Schema.DateFromString,
-  status: Schema.Literals(["running", "succeeded", "failed"]),
+  status: Schema.Literals([
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "start-failed",
+  ]),
 });
 
 const LatestRunStateRecord = Schema.Struct({
@@ -632,41 +647,58 @@ const makeLayerWithoutPlatform = (
         return record?.state ?? null;
       });
 
+      const writeRunState = (
+        runId: MigrationRunId,
+        definitionIds: readonly MigrationDefinitionId[],
+        status: MigrationRunState["status"]
+      ) =>
+        Effect.gen(function* () {
+          const runState: MigrationRunState = {
+            runId,
+            definitionIds,
+            status,
+            startedAt: new Date(),
+          };
+
+          for (const definitionId of definitionIds) {
+            yield* writeRecordAtomic(
+              fs,
+              path,
+              paths.latestRunState(definitionId),
+              LatestRunStateRecord,
+              {
+                formatVersion,
+                recordKind: "latest-run-state",
+                state: runState,
+              }
+            );
+          }
+
+          return runState;
+        });
+
       const beginRun = Effect.fn("FileMigrationStore.beginRun")(
         (
           runId: MigrationRunId,
           definitionIds: readonly MigrationDefinitionId[]
-        ) =>
-          Effect.gen(function* () {
-            const runState: MigrationRunState = {
-              runId,
-              definitionIds,
-              status: "running",
-              startedAt: new Date(),
-            };
+        ) => writeRunState(runId, definitionIds, "running")
+      );
 
-            for (const definitionId of definitionIds) {
-              yield* writeRecordAtomic(
-                fs,
-                path,
-                paths.latestRunState(definitionId),
-                LatestRunStateRecord,
-                {
-                  formatVersion,
-                  recordKind: "latest-run-state",
-                  state: runState,
-                }
-              );
-            }
-
-            return runState;
-          })
+      const queueRun = Effect.fn("FileMigrationStore.queueRun")(
+        (
+          runId: MigrationRunId,
+          definitionIds: readonly MigrationDefinitionId[]
+        ) => writeRunState(runId, definitionIds, "queued")
       );
 
       const updateLatestRunState = (
         runId: MigrationRunId,
         definitionIds: readonly MigrationDefinitionId[],
-        status: MigrationRunState["status"]
+        input: {
+          readonly execution?: MigrationExecutionHandle;
+          readonly finish?: boolean;
+          readonly status?: MigrationRunState["status"];
+        }
       ) =>
         Effect.gen(function* () {
           const records: LatestRunStateRecord[] = [];
@@ -691,8 +723,11 @@ const makeLayerWithoutPlatform = (
 
           const updated: MigrationRunState = {
             ...current.state,
-            status,
-            finishedAt: new Date(),
+            ...(input.status === undefined ? {} : { status: input.status }),
+            ...(input.execution === undefined
+              ? {}
+              : { execution: input.execution }),
+            ...(input.finish === true ? { finishedAt: new Date() } : {}),
           };
 
           for (const definitionId of definitionIds) {
@@ -716,14 +751,45 @@ const makeLayerWithoutPlatform = (
         (
           runId: MigrationRunId,
           definitionIds: readonly MigrationDefinitionId[]
-        ) => updateLatestRunState(runId, definitionIds, "succeeded")
+        ) =>
+          updateLatestRunState(runId, definitionIds, {
+            finish: true,
+            status: "succeeded",
+          })
       );
 
       const failRun = Effect.fn("FileMigrationStore.failRun")(
         (
           runId: MigrationRunId,
           definitionIds: readonly MigrationDefinitionId[]
-        ) => updateLatestRunState(runId, definitionIds, "failed")
+        ) =>
+          updateLatestRunState(runId, definitionIds, {
+            finish: true,
+            status: "failed",
+          })
+      );
+
+      const attachRunExecution = Effect.fn(
+        "FileMigrationStore.attachRunExecution"
+      )(
+        (
+          runId: MigrationRunId,
+          definitionIds: readonly MigrationDefinitionId[],
+          execution: MigrationExecutionHandle
+        ) => updateLatestRunState(runId, definitionIds, { execution })
+      );
+
+      const markRunStartFailed = Effect.fn(
+        "FileMigrationStore.markRunStartFailed"
+      )(
+        (
+          runId: MigrationRunId,
+          definitionIds: readonly MigrationDefinitionId[]
+        ) =>
+          updateLatestRunState(runId, definitionIds, {
+            finish: true,
+            status: "start-failed",
+          })
       );
 
       const acquireDefinitionLock = Effect.fn(
@@ -795,6 +861,9 @@ const makeLayerWithoutPlatform = (
         createRunId,
         getLatestRunState,
         beginRun,
+        queueRun,
+        attachRunExecution,
+        markRunStartFailed,
         completeRun,
         failRun,
         acquireDefinitionLock,

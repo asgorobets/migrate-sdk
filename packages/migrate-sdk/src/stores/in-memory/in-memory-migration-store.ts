@@ -16,7 +16,10 @@ import {
 } from "../../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../../domain/lock.ts";
 import type { MigrationContract } from "../../domain/migration-contract.ts";
-import type { MigrationRunState } from "../../domain/run.ts";
+import type {
+  MigrationExecutionHandle,
+  MigrationRunState,
+} from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { summarizeMigrationItemStates } from "../../domain/status.ts";
 import { MigrationStore } from "../../services/migration-store.ts";
@@ -186,26 +189,79 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       Effect.sync(() => state.latestRunStates.get(definitionId) ?? null)
     );
 
+    const writeRunState = (
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[],
+      status: MigrationRunState["status"]
+    ) =>
+      Effect.sync(() => {
+        const runState: MigrationRunState = {
+          runId,
+          definitionIds,
+          status,
+          startedAt: new Date(),
+        };
+
+        for (const definitionId of definitionIds) {
+          state.latestRunStates.set(definitionId, runState);
+        }
+
+        return runState;
+      });
+
     const beginRun = Effect.fn("InMemoryMigrationStore.beginRun")(
       (
         runId: MigrationRunId,
         definitionIds: readonly MigrationDefinitionId[]
-      ) =>
-        Effect.sync(() => {
-          const runState: MigrationRunState = {
-            runId,
-            definitionIds,
-            status: "running",
-            startedAt: new Date(),
-          };
-
-          for (const definitionId of definitionIds) {
-            state.latestRunStates.set(definitionId, runState);
-          }
-
-          return runState;
-        })
+      ) => writeRunState(runId, definitionIds, "running")
     );
+
+    const queueRun = Effect.fn("InMemoryMigrationStore.queueRun")(
+      (
+        runId: MigrationRunId,
+        definitionIds: readonly MigrationDefinitionId[]
+      ) => writeRunState(runId, definitionIds, "queued")
+    );
+
+    const attachRunExecution = Effect.fn(
+      "InMemoryMigrationStore.attachRunExecution"
+    )(function* (
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[],
+      execution: MigrationExecutionHandle
+    ) {
+      const current = yield* readRunState(state, runId, definitionIds);
+      const updated: MigrationRunState = {
+        ...current,
+        ...(execution === undefined ? {} : { execution }),
+      };
+
+      for (const definitionId of definitionIds) {
+        state.latestRunStates.set(definitionId, updated);
+      }
+
+      return updated;
+    });
+
+    const markRunStartFailed = Effect.fn(
+      "InMemoryMigrationStore.markRunStartFailed"
+    )(function* (
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[]
+    ) {
+      const current = yield* readRunState(state, runId, definitionIds);
+      const failed: MigrationRunState = {
+        ...current,
+        status: "start-failed",
+        finishedAt: new Date(),
+      };
+
+      for (const definitionId of definitionIds) {
+        state.latestRunStates.set(definitionId, failed);
+      }
+
+      return failed;
+    });
 
     const completeRun = Effect.fn("InMemoryMigrationStore.completeRun")(
       function* (
@@ -311,6 +367,9 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       createRunId,
       getLatestRunState,
       beginRun,
+      queueRun,
+      attachRunExecution,
+      markRunStartFailed,
       completeRun,
       failRun,
       acquireDefinitionLock,

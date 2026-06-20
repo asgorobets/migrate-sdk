@@ -9,7 +9,10 @@ import type {
 } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type { MigrationContract } from "../domain/migration-contract.ts";
-import type { MigrationRunState } from "../domain/run.ts";
+import type {
+  MigrationExecutionHandle,
+  MigrationRunState,
+} from "../domain/run.ts";
 import type { MigrationItemState } from "../domain/state.ts";
 import type { MigrationItemStateSummary } from "../domain/status.ts";
 
@@ -66,6 +69,22 @@ export class MigrationStore extends Service<
     ) => Effect.Effect<MigrationRunState | null, MigrationStoreError>;
 
     readonly beginRun: (
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[]
+    ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
+
+    readonly queueRun: (
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[]
+    ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
+
+    readonly attachRunExecution: (
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[],
+      execution: MigrationExecutionHandle
+    ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
+
+    readonly markRunStartFailed: (
       runId: MigrationRunId,
       definitionIds: readonly MigrationDefinitionId[]
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;

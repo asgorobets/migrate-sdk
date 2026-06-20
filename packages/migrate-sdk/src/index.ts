@@ -300,10 +300,20 @@ export type {
 } from "./services/migration-reference-lookup.ts";
 export { MigrationExecutable } from "./services/migration-executable.ts";
 export type {
+  MigrationExecutableAdapterError,
   MigrationExecutableRollbackError,
+  MigrationExecutableRollbackStartError,
   MigrationExecutableRunError,
+  MigrationExecutableRunStartError,
   MigrationExecutableService,
 } from "./services/migration-executable.ts";
+export {
+  FakeDurableMigrationExecutable,
+  FakeDurableMigrationExecutableAttachError,
+  FakeDurableMigrationExecutableStartRejectedError,
+  makeFakeDurableMigrationExecutableState,
+} from "./services/fake-durable-migration-executable.ts";
+export type { FakeDurableMigrationExecutableState } from "./services/fake-durable-migration-executable.ts";
 export {
   DuplicateMigrationDefinitionRegistryId,
   MigrationDefinitionRegistryCatalog,

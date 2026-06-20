@@ -212,10 +212,22 @@ export const makeEncodedRunRequest = <
 
 export const MigrationRunState = Schema.Struct({
   definitionIds: Schema.Array(MigrationDefinitionIdSchema),
+  execution: Schema.optional(
+    Schema.Struct({
+      adapter: Schema.String,
+      executionId: Schema.optional(Schema.String),
+    })
+  ),
   finishedAt: Schema.optional(Schema.Date),
   runId: MigrationRunId,
   startedAt: Schema.Date,
-  status: Schema.Literals(["running", "succeeded", "failed"]),
+  status: Schema.Literals([
+    "queued",
+    "running",
+    "succeeded",
+    "failed",
+    "start-failed",
+  ]),
 });
 export type MigrationRunState = typeof MigrationRunState.Type;
 
@@ -241,6 +253,7 @@ export interface MigrationDefinitionRunSummary {
 
 export interface MigrationExecutionHandle {
   readonly adapter: string;
+  readonly executionId?: string;
 }
 
 export type ExecutionStartResult<Summary = MigrationRunSummary> =
