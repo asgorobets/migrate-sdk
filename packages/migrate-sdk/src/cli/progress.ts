@@ -60,15 +60,25 @@ const formatKnownTotalProgress = (processed: number, total: number): string => {
   return `progress=${renderProgressBar(percentage)} processed=${processed} total=${total} percentage=${percentage}%`;
 };
 
+const formatLowerBoundTotalProgress = (
+  processed: number,
+  minimum: number
+): string => `processed=${processed} total=${minimum}+`;
+
 const formatInteractiveProcessedItems = (
   definition: MigrationDefinitionProgressState
 ): string => {
   const processed = countProcessedItems(definition.counts);
   const total = definition.sourceItemTotal;
 
-  return total?.kind === "known"
-    ? formatKnownTotalProgress(processed, total.count)
-    : `processed=${processed}`;
+  switch (total?.kind) {
+    case "known":
+      return formatKnownTotalProgress(processed, total.count);
+    case "lower-bound":
+      return formatLowerBoundTotalProgress(processed, total.minimum);
+    default:
+      return `processed=${processed}`;
+  }
 };
 
 const formatLogTotalProgress = (
@@ -77,9 +87,14 @@ const formatLogTotalProgress = (
 ): string => {
   const total = definition?.sourceItemTotal;
 
-  return total?.kind === "known"
-    ? ` ${formatKnownTotalProgress(processed, total.count)}`
-    : "";
+  switch (total?.kind) {
+    case "known":
+      return ` ${formatKnownTotalProgress(processed, total.count)}`;
+    case "lower-bound":
+      return ` ${formatLowerBoundTotalProgress(processed, total.minimum)}`;
+    default:
+      return "";
+  }
 };
 
 const countTerminalRows = (
@@ -139,9 +154,18 @@ const renderProgressLogLine = (
     case "definition-started":
       return `[progress] Definition started definition=${event.definitionId}`;
     case "source-item-total-counted":
-      return event.sourceItemTotal.kind === "known"
-        ? `[progress] Source Item total counted definition=${event.definitionId} total=${event.sourceItemTotal.count}`
-        : null;
+      switch (event.sourceItemTotal.kind) {
+        case "known":
+          return `[progress] Source Item total counted definition=${event.definitionId} total=${event.sourceItemTotal.count}`;
+        case "lower-bound":
+          return `[progress] Source Item total counted definition=${event.definitionId} total=${event.sourceItemTotal.minimum}+ reason=${event.sourceItemTotal.reason}`;
+        case "unknown":
+          return null;
+        default: {
+          const exhaustive: never = event.sourceItemTotal;
+          return exhaustive;
+        }
+      }
     case "source-item-completed":
       return null;
     case "source-cursor-window-completed": {

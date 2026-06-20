@@ -622,6 +622,74 @@ const progressUnknownTotalConfigSource = (): string => `
   });
 `;
 
+const progressLowerBoundTotalConfigSource = (): string => `
+  import { Effect, Schema } from "effect";
+  import {
+    defineMigration,
+    defineSourcePlugin,
+    InMemoryMigrationStore,
+    MigrationDefinitionRegistry,
+    SourceIdentity,
+    SourceItemTotal,
+    toMigrationDefinitionId
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntrySourceIdentity = SourceIdentity.make({
+    id: "entry@v1",
+    schema: SourceIdentity.key("id", Schema.NonEmptyString)
+  });
+  const store = InMemoryMigrationStore.layer();
+  const source = defineSourcePlugin({
+    cursorSchema: Schema.Null,
+    countTotal: () =>
+      Effect.succeed(
+        SourceItemTotal.lowerBound(2, {
+          message: "Source total is capped",
+          reason: "capped"
+        })
+      ),
+    identity: EntrySourceIdentity,
+    lookupStrategy: "scan",
+    read: () =>
+      Effect.succeed({
+        items: [
+          {
+            identityKey: "article-1",
+            version: "source-version-1",
+            item: { title: "Article 1" }
+          },
+          {
+            identityKey: "article-2",
+            version: "source-version-1",
+            item: { title: "Article 2" }
+          },
+          {
+            identityKey: "article-3",
+            version: "source-version-1",
+            item: { title: "Article 3" }
+          }
+        ]
+      }),
+    readByIdentity: () => Effect.succeed(null),
+    sourceSchema: EntrySource
+  });
+
+  const articles = defineMigration({
+    id: toMigrationDefinitionId("articles"),
+    source,
+    store,
+    process: () => undefined
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [articles]
+    })
+  });
+`;
+
 const progressZeroTotalConfigSource = (): string => `
   import { Schema } from "effect";
   import {
@@ -2850,6 +2918,47 @@ describe("migrate CLI", () => {
       expect(progressLines.join("\n")).not.toContain("percentage=");
       expect(progressLines.join("\n")).not.toContain("progress=[");
       expect(progressLines.join("\n")).not.toContain("offset");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders progress logs with lower-bound totals", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        progressLowerBoundTotalConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--progress",
+          "log",
+          "articles",
+        ],
+        project
+      );
+      const progressLines = result.stdout
+        .split("\n")
+        .filter((line) => line.startsWith("[progress]"));
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(progressLines).toEqual([
+        "[progress] Run started definitions=articles",
+        "[progress] Definition started definition=articles",
+        "[progress] Source Item total counted definition=articles total=2+ reason=capped",
+        "[progress] Source Cursor Window completed definition=articles itemsRead=3 processed=3 total=2+ migrated=3 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Definition completed definition=articles status=succeeded migrated=3 skipped=0 failed=0 unchanged=0 needsUpdate=0",
+        "[progress] Run completed status=succeeded definitions=articles",
+      ]);
+      expect(progressLines.join("\n")).not.toContain("percentage=");
+      expect(progressLines.join("\n")).not.toContain("progress=[");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 

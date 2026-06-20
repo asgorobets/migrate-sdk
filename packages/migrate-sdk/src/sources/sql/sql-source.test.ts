@@ -13,6 +13,7 @@ import {
   type RunMigrationError,
   runMigration,
   SourceIdentity,
+  SourceItemTotal,
   type SourcePayloadSchema,
   SourcePlugin,
   SourcePluginError,
@@ -524,7 +525,7 @@ describe("SqlSourcePlugin", () => {
 
         const total = yield* plugin.countTotal();
 
-        expect(total).toBe(2);
+        expect(total).toEqual(SourceItemTotal.known(2));
         expect(readCalls).toBe(0);
         expect(lookupCalls).toBe(0);
         expect(fakeSql.calls).toHaveLength(1);
@@ -554,7 +555,7 @@ describe("SqlSourcePlugin", () => {
 
       const total = yield* plugin.countTotal();
 
-      expect(total).toBe(0);
+      expect(total).toEqual(SourceItemTotal.known(0));
       expect(fakeSql.calls).toHaveLength(0);
     })
   );
@@ -580,7 +581,7 @@ describe("SqlSourcePlugin", () => {
 
       const total = yield* plugin.countTotal();
 
-      expect(total).toBe(2);
+      expect(total).toEqual(SourceItemTotal.known(2));
       expect(fakeSql.calls).toHaveLength(1);
     })
   );

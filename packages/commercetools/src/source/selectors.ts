@@ -3,6 +3,7 @@ import type {
   CommercetoolsEntitySourceBaseOptions,
   CommercetoolsEntitySourceDescriptor,
   CommercetoolsPagedQueryResponse,
+  CommercetoolsSourceCountQueryArgs,
   CommercetoolsSourceQueryArgs,
   CommercetoolsSourceWhereVariables,
 } from "./domain.ts";
@@ -109,6 +110,19 @@ export const makeReadQueryArgs = (
     ...(where === undefined ? {} : { where }),
     ...whereVariableQueryArgs(options.whereVariables),
     ...(cursor === null ? {} : { "var.lastId": cursor.lastId }),
+  };
+};
+
+export const makeCountQueryArgs = (
+  options: CommercetoolsEntitySourceBaseOptions
+): CommercetoolsSourceCountQueryArgs => {
+  const where = maybeStringArray(asArray(options.where));
+
+  return {
+    limit: 0,
+    withTotal: true,
+    ...(where === undefined ? {} : { where }),
+    ...whereVariableQueryArgs(options.whereVariables),
   };
 };
 

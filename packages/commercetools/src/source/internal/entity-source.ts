@@ -3,6 +3,7 @@ import {
   defineSourcePlugin,
   defineSourcePluginLayer,
   type SourceIdentityTarget,
+  SourceItemTotal,
   SourcePlugin,
   type SourcePluginImplementation,
 } from "migrate-sdk";
@@ -11,12 +12,14 @@ import type {
   CommercetoolsEntitySourceDescriptor,
   CommercetoolsPagedQueryResponse,
   CommercetoolsProjectedEntitySourceOptions,
+  CommercetoolsSourceCountQueryArgs,
   CommercetoolsSourceIdentityKey,
   ConfiguredCommercetoolsSourcePlugin,
 } from "../domain.ts";
 import { CommercetoolsSourceCursor } from "../schemas.ts";
 import {
   defaultSourceIdentity,
+  makeCountQueryArgs,
   makeReadQueryArgs,
   nextCursorFromPage,
   resolveBatchSize,
@@ -27,6 +30,8 @@ import {
   sourcePluginError,
   toSourcePluginError,
 } from "./plugin-errors.ts";
+
+const filteredQueryTotalLimit = 10_000;
 
 const projectResource = <SourceInput, Resource>(
   label: string,
@@ -73,6 +78,39 @@ const sourceItem = <
     };
   });
 
+const countTotalFromPage = <
+  Resource,
+  Page extends CommercetoolsPagedQueryResponse<Resource>,
+>(
+  descriptor: CommercetoolsEntitySourceDescriptor<Resource, Page>,
+  queryArgs: CommercetoolsSourceCountQueryArgs,
+  page: Page
+) => {
+  const total = page.total;
+
+  if (typeof total === "number" && Number.isInteger(total) && total >= 0) {
+    if (queryArgs.where !== undefined && total >= filteredQueryTotalLimit) {
+      return Effect.succeed(
+        SourceItemTotal.lowerBound(total, {
+          message: `${descriptor.label} source count is capped for filtered queries`,
+          reason: "capped",
+        })
+      );
+    }
+
+    return Effect.succeed(total);
+  }
+
+  return Effect.fail(
+    sourcePluginError(
+      `${descriptor.label} source count returned invalid total`,
+      {
+        total,
+      }
+    )
+  );
+};
+
 const makeImplementation = <
   Source,
   SourceInput,
@@ -92,6 +130,15 @@ const makeImplementation = <
   CommercetoolsSourceIdentityKey,
   SourceInput
 > => {
+  const countTotal = Effect.fn(`${descriptor.label}.countTotal`)(function* () {
+    const queryArgs = makeCountQueryArgs(options);
+    const page = yield* descriptor
+      .countPage(sdk, queryArgs)
+      .pipe(Effect.mapError(toSourcePluginError));
+
+    return yield* countTotalFromPage(descriptor, queryArgs, page);
+  });
+
   const read = Effect.fn(`${descriptor.label}.read`)(function* (
     cursor: CommercetoolsSourceCursor | null
   ) {
@@ -131,6 +178,7 @@ const makeImplementation = <
   );
 
   return {
+    countTotal,
     lookupStrategy: "direct",
     read,
     readByIdentity,

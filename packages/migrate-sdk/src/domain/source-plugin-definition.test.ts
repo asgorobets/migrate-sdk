@@ -6,6 +6,7 @@ import {
   SourceIdentity,
   type SourceIdentityTarget,
   type SourceItem,
+  SourceItemTotal,
   SourcePluginError,
   type SourceReadResult,
   type SourceReadResultInput,
@@ -60,7 +61,7 @@ expectTypeOf<
       SourcePluginContract<RemoteArticle, RemoteArticleCursor>["countTotal"]
     >
   >
->().toEqualTypeOf<Effect.Effect<number, SourcePluginError>>();
+>().toEqualTypeOf<Effect.Effect<SourceItemTotal, SourcePluginError>>();
 
 interface ArticleListEntry {
   readonly id: string;
@@ -223,7 +224,44 @@ describe("defineSourcePlugin", () => {
 
       const total = yield* plugin.countTotal();
 
-      expect(total).toBe(0);
+      expect(total).toEqual(SourceItemTotal.known(0));
+    })
+  );
+
+  it.effect("exposes lower-bound Source Item totals", () =>
+    Effect.gen(function* () {
+      const source = defineSourcePlugin({
+        cursorSchema: RemoteArticleCursor,
+        identity: RemoteArticleIdentity,
+        sourceSchema: RemoteArticle,
+        lookupStrategy: "direct",
+        read: () =>
+          Effect.succeed({
+            items: [],
+          }),
+        readByIdentity: () => Effect.succeed(null),
+        countTotal: () =>
+          Effect.succeed(
+            SourceItemTotal.lowerBound(10_000, {
+              message: "Remote total is capped",
+              reason: "capped",
+            })
+          ),
+      });
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+      if (plugin.countTotal === undefined) {
+        throw new Error("Expected source plugin to expose total count");
+      }
+
+      const total = yield* plugin.countTotal();
+
+      expect(total).toEqual(
+        SourceItemTotal.lowerBound(10_000, {
+          message: "Remote total is capped",
+          reason: "capped",
+        })
+      );
     })
   );
 

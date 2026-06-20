@@ -60,7 +60,7 @@ import {
   normalRunMode,
   type RunMode,
 } from "../domain/run-mode.ts";
-import { SourceItemTotal, sourceItemTotalFromCount } from "../domain/source.ts";
+import { normalizeSourceItemTotal, SourceItemTotal } from "../domain/source.ts";
 import type {
   FailedItemState,
   MigratedItemState,
@@ -1104,7 +1104,7 @@ const countDefinitionSourceItemTotal = <
               })
             )
           : source.countTotal().pipe(
-              Effect.flatMap(sourceItemTotalFromCount),
+              Effect.flatMap(normalizeSourceItemTotal),
               Effect.catch((error) =>
                 Effect.succeed(
                   SourceItemTotal.unknown({

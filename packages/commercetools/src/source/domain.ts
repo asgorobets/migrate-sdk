@@ -86,14 +86,33 @@ export interface CommercetoolsSourceQueryArgs {
     | undefined;
 }
 
+export interface CommercetoolsSourceCountQueryArgs {
+  readonly limit: number;
+  readonly where?: string | string[];
+  readonly withTotal: true;
+  readonly [key: string]:
+    | boolean
+    | boolean[]
+    | number
+    | number[]
+    | string
+    | string[]
+    | undefined;
+}
+
 export interface CommercetoolsPagedQueryResponse<Resource> {
   readonly results: readonly Resource[];
+  readonly total?: number | undefined;
 }
 
 export interface CommercetoolsEntitySourceDescriptor<
   Resource,
   Page extends CommercetoolsPagedQueryResponse<Resource>,
 > {
+  readonly countPage: (
+    sdk: typeof CommercetoolsSdk.Service,
+    queryArgs: CommercetoolsSourceCountQueryArgs
+  ) => Effect.Effect<Page, CommercetoolsSdkError>;
   readonly getId: (resource: Resource) => string;
   readonly getKey: (resource: Resource) => string | undefined;
   readonly getVersion: (resource: Resource) => number;

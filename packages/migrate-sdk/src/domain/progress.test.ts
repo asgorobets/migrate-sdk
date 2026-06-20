@@ -235,6 +235,48 @@ describe("Migration Progress state", () => {
     expect(rawDefinition?.remaining).toBeUndefined();
   });
 
+  it("keeps lower-bound Source Item totals unless the item limit makes the run total known", () => {
+    const runId = toMigrationRunId("run-progress");
+    const articles = toMigrationDefinitionId("articles");
+    const lowerBound = SourceItemTotal.lowerBound(10_000, {
+      message: "Source total is capped",
+      reason: "capped",
+    });
+    const uncappedState = reduceMigrationProgressState(
+      reduceMigrationProgressState(initialMigrationProgressState, {
+        definitionIds: [articles],
+        kind: "run-started",
+        runId,
+      }),
+      {
+        definitionId: articles,
+        itemLimit: 20_000,
+        kind: "source-item-total-counted",
+        runId,
+        sourceItemTotal: lowerBound,
+      }
+    );
+    const knownLimitedState = reduceMigrationProgressState(
+      reduceMigrationProgressState(initialMigrationProgressState, {
+        definitionIds: [articles],
+        kind: "run-started",
+        runId,
+      }),
+      {
+        definitionId: articles,
+        itemLimit: 500,
+        kind: "source-item-total-counted",
+        runId,
+        sourceItemTotal: lowerBound,
+      }
+    );
+
+    expect(uncappedState.definitions[0]?.sourceItemTotal).toEqual(lowerBound);
+    expect(knownLimitedState.definitions[0]?.sourceItemTotal).toEqual(
+      SourceItemTotal.known(500)
+    );
+  });
+
   it("records a progress warning when Source Item total count fails", () => {
     const runId = toMigrationRunId("run-progress");
     const articles = toMigrationDefinitionId("articles");

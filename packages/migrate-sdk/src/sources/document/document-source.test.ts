@@ -459,7 +459,7 @@ describe("DocumentSourcePlugin", () => {
 
         const total = yield* plugin.countTotal();
 
-        expect(total).toBe(42);
+        expect(total).toEqual(SourceItemTotal.known(42));
         expect(readCalls).toBe(0);
       })
   );
@@ -523,7 +523,7 @@ describe("DocumentSourcePlugin", () => {
 
         const total = yield* plugin.countTotal();
 
-        expect(total).toBe(2);
+        expect(total).toEqual(SourceItemTotal.known(2));
       })
   );
 
@@ -565,7 +565,7 @@ describe("DocumentSourcePlugin", () => {
 
       const total = yield* plugin.countTotal();
 
-      expect(total).toBe(2);
+      expect(total).toEqual(SourceItemTotal.known(2));
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
@@ -604,7 +604,7 @@ describe("DocumentSourcePlugin", () => {
 
       const total = yield* plugin.countTotal();
 
-      expect(total).toBe(3);
+      expect(total).toEqual(SourceItemTotal.known(3));
     }).pipe(Effect.provide(testPlatformLayer))
   );
 

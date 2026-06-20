@@ -17,13 +17,14 @@ The SDK needs an optional way for source plugins to expose a Source Item total w
 
 Add an optional Source Item total count capability to configured source plugins.
 
-Source plugins that can provide a cheap, meaningful total may expose `countTotal`. The hook returns an Effect that succeeds with a non-negative integer count or fails with `SourcePluginError`. Source plugins that cannot count, should not count by default, or can only count through a full Source Inventory Scan omit the capability. The runtime and CLI consume the capability opportunistically. Missing or failed total count does not fail a migration run and does not prevent live progress from rendering.
+Source plugins that can provide a cheap, meaningful total may expose `countTotal`. The hook returns an Effect that succeeds with either a non-negative integer count or a richer Source Item total value, such as a lower bound for capped native totals, or fails with `SourcePluginError`. Source plugins that cannot count, should not count by default, or can only count through a full Source Inventory Scan omit the capability. The runtime and CLI consume the capability opportunistically. Missing or failed total count does not fail a migration run and does not prevent live progress from rendering.
 
-All first-party source plugins should participate in the capability in their source-native way. Participation does not mean every source always returns a known total. It means every first-party source plugin makes an intentional decision: return a count when the source already has a safe native count path, or omit `countTotal` when counting would require an expensive or semantically unsafe inventory traversal.
+All first-party source plugins should participate in the capability in their source-native way. Participation does not mean every source always returns a known total. It means every first-party source plugin makes an intentional decision: return a known count when the source already has a safe native count path, return a lower bound when the source can only guarantee at least that many Source Items, or omit `countTotal` when counting would require an expensive or semantically unsafe inventory traversal.
 
-Progress rendering uses two modes:
+Progress rendering uses three modes:
 
 - Known total: show active Migration Definition, processed Source Items, outcome counters, and `processed / total` progress. A percentage is allowed only when the total was counted successfully and is still applicable to the current run scope.
+- Lower-bound total: show active Migration Definition, processed Source Items, outcome counters, and a `minimum+` Source Item total hint without a percentage, ETA, or determinate progress bar.
 - Unknown total: show active Migration Definition, processed Source Items, outcome counters, and Source Cursor Window checkpoints without a percentage, ETA, or `x / y` display.
 
 The final Migration Run Summary remains the authoritative completion output. Source Item total count is live observability, not durable migration progress.
@@ -72,19 +73,21 @@ The final Migration Run Summary remains the authoritative completion output. Sou
 
 21. As a runtime maintainer, I want total count to avoid exposing raw Source Cursor values, so that public progress output stays operator-friendly.
 
-22. As a runtime maintainer, I want the progress reducer to model known and unknown totals explicitly, so that renderers cannot accidentally calculate percentages from missing data.
+22. As a runtime maintainer, I want the progress reducer to model known, lower-bound, and unknown totals explicitly, so that renderers cannot accidentally calculate percentages from incomplete data.
 
-23. As a CLI maintainer, I want interactive progress to render cleanly for known and unknown totals, so that terminal output remains readable on success and failure.
+23. As a CLI maintainer, I want interactive progress to render cleanly for known, lower-bound, and unknown totals, so that terminal output remains readable on success and failure.
 
-24. As a CLI maintainer, I want `--progress log` to include total information only when known, so that CI logs stay stable and honest.
+24. As a CLI maintainer, I want `--progress log` to include total information only when known or lower-bound, so that CI logs stay stable and honest.
 
 25. As an SDK caller, I want the default progress layer to remain no-op, so that direct SDK usage does not require terminal or total-count wiring.
 
 ## Implementation Decisions
 
-- Add a Source Item total count domain type with explicit known and unknown variants.
+- Add a Source Item total count domain type with explicit known, lower-bound, and unknown variants.
 
 - A known total is a non-negative integer. A zero total is valid and means the configured source scope has no Source Items to process.
+
+- A lower-bound total is a non-negative integer minimum with a reason, such as capped. It is useful for `10,000+` style progress hints, but renderers must not use it as a denominator for percentages or determinate progress bars.
 
 - An unknown total should preserve a reason category suitable for progress warnings and status rendering, such as unsupported, disabled, too expensive, or failed.
 
@@ -106,13 +109,13 @@ The final Migration Run Summary remains the authoritative completion output. Sou
 
 - Progress reducers should never derive percentage, remaining count, or completion ratio unless total state is known.
 
-- Interactive progress should render known totals as processed count, total count, and percentage. It should render unknown totals as processed count and activity indicators without percentage.
+- Interactive progress should render known totals as processed count, total count, and percentage. It should render lower-bound totals as processed count plus `minimum+`. It should render unknown totals as processed count and activity indicators without percentage.
 
-- Log progress should include total state at Migration Definition start when known, and otherwise use concise unknown-total wording.
+- Log progress should include total state at Migration Definition start when known or lower-bound, and otherwise use concise unknown-total wording.
 
 - Source Cursor Window checkpoint output should remain useful in unknown-total mode by showing completed windows and processed Source Items.
 
-- Run limits should cap the displayed total when the counted total is greater than the limit. The displayed total should reflect the active run scope.
+- Run limits should cap the displayed total when the counted total is greater than the limit. If a lower-bound total is greater than or equal to the item limit, the effective run total becomes known because the source has enough items to satisfy the limited run scope.
 
 - Source Inventory Scan remains the exact inventory-count path. A counted total may be useful for progress, but it is not a substitute for scan-source validation, duplicate detection, invalid payload counts, or orphaned durable state analysis.
 
@@ -130,7 +133,7 @@ The final Migration Run Summary remains the authoritative completion output. Sou
 
 - Document source options should grow an optional total callback, similar in spirit to `lookup`. The callback belongs on the document source configuration rather than the low-level fetcher because only the document source has the fetcher, parser, selector, item/subitem, and version context needed to define what "total Source Items" means.
 
-- The document source total callback should be source-native and may use an API count endpoint, response metadata, an index, a manifest, a parser-level count available from a single resource, or another source-specific counting path. It should return the final selected Source Item count as a non-negative integer.
+- The document source total callback should be source-native and may use an API count endpoint, response metadata, an index, a manifest, a parser-level count available from a single resource, or another source-specific counting path. It should return the final selected Source Item count as a non-negative integer or Source Item total value.
 
 - The document source total callback should not be a generic fallback that repeatedly calls the configured fetcher and parser until the source is exhausted. If the only way to know the total is to scan every resource or page, the source should omit `countTotal` and operators should use Source Inventory Scan when they need exact inventory counts.
 
@@ -152,11 +155,13 @@ The final Migration Run Summary remains the authoritative completion output. Sou
 
 ## Testing Decisions
 
-- Test the total count domain type with known zero, known positive, and unknown variants.
+- Test the total count domain type with known zero, known positive, lower-bound, and unknown variants.
 
 - Test that configured source plugins without total count continue to run normally.
 
 - Test a source plugin that returns a known total and verify progress state stores it for the active Migration Definition.
+
+- Test a source plugin that returns a lower-bound total and verify progress state stores it for the active Migration Definition.
 
 - Test a source plugin that omits total count and verify progress state records an unsupported unknown total.
 
@@ -190,13 +195,13 @@ The final Migration Run Summary remains the authoritative completion output. Sou
 
 - Test that `run --all` keeps total state scoped to one active Migration Definition at a time.
 
-- Test that run limits cap the displayed total for progress rendering.
+- Test that run limits cap the displayed total for progress rendering, including lower-bound totals that satisfy the item limit.
 
-- Test that the progress reducer never emits percentage or remaining-work values for unknown totals.
+- Test that the progress reducer never emits percentage or remaining-work values for lower-bound or unknown totals.
 
-- Test interactive progress rendering for known totals, unknown totals, zero totals, success cleanup, and failure cleanup.
+- Test interactive progress rendering for known totals, lower-bound totals, unknown totals, zero totals, success cleanup, and failure cleanup.
 
-- Test `--progress log` rendering for known and unknown totals.
+- Test `--progress log` rendering for known, lower-bound, and unknown totals.
 
 - Test that non-TTY default output remains stable.
 

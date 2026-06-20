@@ -16,8 +16,18 @@ import {
   type ScriptedCommercetoolsSdkRequest,
   scriptedCommercetoolsSdkRoute,
 } from "@migrate-sdk/commercetools/testing";
-import { Effect, Schema } from "effect";
-import { SourceIdentity, SourcePlugin, SourcePluginError } from "migrate-sdk";
+import { Effect, Layer, Schema } from "effect";
+import {
+  defineMigration,
+  InMemoryMigrationStore,
+  MigrationProgress,
+  type MigrationProgressEvent,
+  runMigration,
+  SourceIdentity,
+  SourceItemTotal,
+  SourcePlugin,
+  SourcePluginError,
+} from "migrate-sdk";
 import { expectTypeOf } from "vitest";
 
 const CatalogProductSource = Schema.Struct({
@@ -267,8 +277,26 @@ const makeSourceSdk = (
   return makeScriptedCommercetoolsSdk({
     projectKey: "recording-project",
     routes: [
+      scriptedCommercetoolsSdkRoute("products.source.count").replyWith(
+        (request) => ({
+          count: 0,
+          limit: numberQueryParam(request.queryParams?.limit) ?? 0,
+          offset: 0,
+          results: [],
+          total: products.length,
+        })
+      ),
       scriptedCommercetoolsSdkRoute("products.source.read").replyWith(
         (request) => productPage(request, products)
+      ),
+      scriptedCommercetoolsSdkRoute("customers.source.count").replyWith(
+        (request) => ({
+          count: 0,
+          limit: numberQueryParam(request.queryParams?.limit) ?? 0,
+          offset: 0,
+          results: [],
+          total: customers.length,
+        })
       ),
       scriptedCommercetoolsSdkRoute("products.source.readById").replyWith(
         (request) => resourceByRequest(request, products, "Product")
@@ -278,6 +306,15 @@ const makeSourceSdk = (
       ),
       scriptedCommercetoolsSdkRoute("customers.source.read").replyWith(
         (request) => customerPage(request, customers)
+      ),
+      scriptedCommercetoolsSdkRoute("businessUnits.source.count").replyWith(
+        (request) => ({
+          count: 0,
+          limit: numberQueryParam(request.queryParams?.limit) ?? 0,
+          offset: 0,
+          results: [],
+          total: businessUnits.length,
+        })
       ),
       scriptedCommercetoolsSdkRoute("customers.source.readById").replyWith(
         (request) => resourceByRequest(request, customers, "Customer")
@@ -398,6 +435,271 @@ describe("CommercetoolsSourcePlugin", () => {
             withTotal: false,
           },
         });
+      })
+  );
+
+  it.effect("counts product totals with the configured source scope", () =>
+    Effect.gen(function* () {
+      let projectionCalls = 0;
+      const recording = makeSourceSdk({
+        products: [
+          productResponse(),
+          {
+            ...productResponse({
+              ...productDraft,
+              key: "second-book",
+              slug: {
+                "en-US": "second-book",
+              },
+            }),
+            id: "recording-product-id-2",
+          },
+        ],
+      });
+      const source = CommercetoolsSourcePlugin.products({
+        batchSize: 50,
+        projection: {
+          schema: CatalogProductSource,
+          select: (product) => {
+            projectionCalls += 1;
+
+            return {
+              key: product.key ?? product.id,
+              name: product.masterData.current.name["en-US"] ?? product.id,
+            };
+          },
+        },
+        where: ["masterData(current(masterVariant(sku is defined)))"],
+        whereVariables: {
+          channelKey: "web",
+        },
+      }).provide(recording.layer);
+
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+      if (plugin.countTotal === undefined) {
+        throw new Error("Expected Commercetools product total count");
+      }
+
+      const total = yield* plugin.countTotal();
+
+      expect(total).toEqual(SourceItemTotal.known(2));
+      expect(projectionCalls).toBe(0);
+      expect(recording.requests).toEqual([
+        expect.objectContaining({
+          operation: "products.source.count",
+          queryParams: {
+            limit: 0,
+            "var.channelKey": "web",
+            where: "masterData(current(masterVariant(sku is defined)))",
+            withTotal: true,
+          },
+        }),
+      ]);
+    })
+  );
+
+  it.effect("counts customer and business unit totals", () =>
+    Effect.gen(function* () {
+      const recording = makeSourceSdk({
+        businessUnits: [businessUnitResponse()],
+        customers: [customerResponse(), customerResponse()],
+      });
+      const customerSource = CommercetoolsSourcePlugin.customers().provide(
+        recording.layer
+      );
+      const businessUnitSource =
+        CommercetoolsSourcePlugin.businessUnits().provide(recording.layer);
+      const customerPlugin = yield* SourcePlugin.pipe(
+        Effect.provide(customerSource.layer)
+      );
+      const businessUnitPlugin = yield* SourcePlugin.pipe(
+        Effect.provide(businessUnitSource.layer)
+      );
+
+      if (
+        customerPlugin.countTotal === undefined ||
+        businessUnitPlugin.countTotal === undefined
+      ) {
+        throw new Error("Expected Commercetools source total counts");
+      }
+
+      const customerTotal = yield* customerPlugin.countTotal();
+      const businessUnitTotal = yield* businessUnitPlugin.countTotal();
+
+      expect(customerTotal).toEqual(SourceItemTotal.known(2));
+      expect(businessUnitTotal).toEqual(SourceItemTotal.known(1));
+      expect(recording.requests.map((request) => request.operation)).toEqual([
+        "customers.source.count",
+        "businessUnits.source.count",
+      ]);
+    })
+  );
+
+  it.effect("returns zero product totals", () =>
+    Effect.gen(function* () {
+      const recording = makeSourceSdk();
+      const source = CommercetoolsSourcePlugin.products().provide(
+        recording.layer
+      );
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+      if (plugin.countTotal === undefined) {
+        throw new Error("Expected Commercetools product total count");
+      }
+
+      const total = yield* plugin.countTotal();
+
+      expect(total).toEqual(SourceItemTotal.known(0));
+      expect(recording.requests.map((request) => request.operation)).toEqual([
+        "products.source.count",
+      ]);
+    })
+  );
+
+  it.effect("returns a lower-bound total for capped filtered counts", () =>
+    Effect.gen(function* () {
+      const recording = makeScriptedCommercetoolsSdk({
+        projectKey: "recording-project",
+        routes: [
+          scriptedCommercetoolsSdkRoute("products.source.count").reply({
+            count: 0,
+            limit: 0,
+            offset: 0,
+            results: [],
+            total: 10_000,
+          }),
+        ],
+      });
+      const source = CommercetoolsSourcePlugin.products({
+        where: "masterData(current(masterVariant(sku is defined)))",
+      }).provide(recording.layer);
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+      if (plugin.countTotal === undefined) {
+        throw new Error("Expected Commercetools product total count");
+      }
+
+      const total = yield* plugin.countTotal();
+
+      expect(total).toEqual(
+        SourceItemTotal.lowerBound(10_000, {
+          message:
+            "Commercetools products source count is capped for filtered queries",
+          reason: "capped",
+        })
+      );
+      expect(recording.requests[0]).toMatchObject({
+        operation: "products.source.count",
+        queryParams: {
+          limit: 0,
+          where: "masterData(current(masterVariant(sku is defined)))",
+          withTotal: true,
+        },
+      });
+    })
+  );
+
+  it.effect("fails total count when Commercetools omits total", () =>
+    Effect.gen(function* () {
+      const recording = makeScriptedCommercetoolsSdk({
+        projectKey: "recording-project",
+        routes: [
+          scriptedCommercetoolsSdkRoute("products.source.count").reply({
+            count: 0,
+            limit: 0,
+            offset: 0,
+            results: [],
+          }),
+        ],
+      });
+      const source = CommercetoolsSourcePlugin.products().provide(
+        recording.layer
+      );
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+
+      if (plugin.countTotal === undefined) {
+        throw new Error("Expected Commercetools product total count");
+      }
+
+      const error = yield* Effect.flip(plugin.countTotal());
+
+      expect(error).toBeInstanceOf(SourcePluginError);
+      expect(error.message).toBe(
+        "Commercetools products source count returned invalid total"
+      );
+    })
+  );
+
+  it.effect(
+    "continues migration execution when product total count fails",
+    () =>
+      Effect.gen(function* () {
+        const countError = new Error("total endpoint failed");
+        const recording = makeScriptedCommercetoolsSdk({
+          projectKey: "recording-project",
+          routes: [
+            scriptedCommercetoolsSdkRoute("products.source.count").fail(
+              countError
+            ),
+            scriptedCommercetoolsSdkRoute("products.source.read").replyWith(
+              (request) => productPage(request, [productResponse()])
+            ),
+            scriptedCommercetoolsSdkRoute("products.source.readById").replyWith(
+              (request) =>
+                resourceByRequest(request, [productResponse()], "Product")
+            ),
+          ],
+        });
+        const source = CommercetoolsSourcePlugin.products().provide(
+          recording.layer
+        );
+        const storeState = InMemoryMigrationStore.makeState();
+        const progressEvents: MigrationProgressEvent[] = [];
+        const progressLayer = Layer.succeed(MigrationProgress, {
+          countSourceItemTotals: true,
+          emit: (event) =>
+            Effect.sync(() => {
+              progressEvents.push(event);
+            }),
+        });
+        const definition = defineMigration({
+          id: "commercetools-products",
+          process: () => Effect.void,
+          source,
+          store: InMemoryMigrationStore.layer(storeState),
+        });
+
+        const summary = yield* runMigration(definition).pipe(
+          Effect.provide(progressLayer)
+        );
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          failed: 0,
+          migrated: 1,
+          needsUpdate: 0,
+          skipped: 0,
+          unchanged: 0,
+        });
+        expect(recording.requests.map((request) => request.operation)).toEqual([
+          "products.source.count",
+          "products.source.read",
+          "products.source.read",
+        ]);
+        expect(progressEvents).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              definitionId: definition.id,
+              kind: "source-item-total-counted",
+              sourceItemTotal: expect.objectContaining({
+                kind: "unknown",
+                message: "Source Item total count failed",
+                reason: "failed",
+              }),
+            }),
+          ])
+        );
       })
   );
 

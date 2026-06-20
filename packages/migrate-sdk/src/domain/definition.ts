@@ -33,12 +33,13 @@ import type { RollbackPipeline } from "./rollback.ts";
 import type {
   SourceItem,
   SourceItemInput,
+  SourceItemTotalInput,
   SourceLookupStrategy,
   SourceReadResult,
 } from "./source.ts";
 import {
   makeSourceItemEffect,
-  normalizeSourceItemTotalCount,
+  normalizeSourceItemTotalInput,
 } from "./source.ts";
 import type { TrackingRecordContract } from "./tracking.ts";
 
@@ -104,7 +105,10 @@ export interface SourcePluginImplementation<
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
   SourceInput = Source,
 > {
-  readonly countTotal?: () => Effect.Effect<number, SourcePluginError>;
+  readonly countTotal?: () => Effect.Effect<
+    SourceItemTotalInput,
+    SourcePluginError
+  >;
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
@@ -306,7 +310,7 @@ export const defineSourcePlugin = <
             : {
                 countTotal: () =>
                   countTotal().pipe(
-                    Effect.flatMap(normalizeSourceItemTotalCount)
+                    Effect.flatMap(normalizeSourceItemTotalInput)
                   ),
               }),
           sourceSchema: input.sourceSchema,

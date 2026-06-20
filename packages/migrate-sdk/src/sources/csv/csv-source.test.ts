@@ -10,6 +10,7 @@ import {
   MigrationProgress,
   type MigrationProgressEvent,
   runMigration,
+  SourceItemTotal,
 } from "migrate-sdk";
 import { CsvIdentity, CsvSourcePlugin } from "migrate-sdk/sources/csv";
 import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
@@ -440,7 +441,7 @@ describe("CsvSourcePlugin", () => {
 
       const total = yield* plugin.countTotal();
 
-      expect(total).toBe(2);
+      expect(total).toEqual(SourceItemTotal.known(2));
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
@@ -479,7 +480,7 @@ describe("CsvSourcePlugin", () => {
 
         const total = yield* plugin.countTotal();
 
-        expect(total).toBe(2);
+        expect(total).toEqual(SourceItemTotal.known(2));
       }).pipe(Effect.provide(testPlatformLayer))
   );
 

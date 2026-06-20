@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-import { SourceIdentity } from "migrate-sdk";
+import { SourceIdentity, SourceItemTotal } from "migrate-sdk";
 import { SourcePlugin } from "../../services/source-plugin.ts";
 import { InMemorySourcePlugin } from "./in-memory-source.ts";
 
@@ -45,7 +45,7 @@ describe("InMemorySourcePlugin", () => {
 
         const total = yield* plugin.countTotal();
 
-        expect(total).toBe(2);
+        expect(total).toEqual(SourceItemTotal.known(2));
         expect(state.readAttempts).toBe(0);
         expect(state.readByIdentityAttempts).toBe(0);
       })
@@ -66,7 +66,7 @@ describe("InMemorySourcePlugin", () => {
 
       const total = yield* plugin.countTotal();
 
-      expect(total).toBe(0);
+      expect(total).toEqual(SourceItemTotal.known(0));
     })
   );
 });

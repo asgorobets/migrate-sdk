@@ -42,6 +42,10 @@ const customerSourceDescriptor: CommercetoolsEntitySourceDescriptor<
     resourceLabel: "customer",
   }),
   label: "Commercetools customers",
+  countPage: (sdk, queryArgs) =>
+    sdk.request("customers.source.count", (project) =>
+      project.customers().get({ queryArgs })
+    ),
   readById: (sdk, id) =>
     sdk.request("customers.source.readById", (project) =>
       project.customers().withId({ ID: id }).get()

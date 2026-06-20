@@ -199,7 +199,10 @@ const makeObservableTotalCountSource = ({
 }: {
   readonly batchSize?: number;
   readonly items: readonly SourceItemInput<ArticleSource, string>[];
-  readonly sourceItemCount?: Effect.Effect<number, SourcePluginError>;
+  readonly sourceItemCount?: Effect.Effect<
+    number | SourceItemTotal,
+    SourcePluginError
+  >;
   readonly state: ObservableTotalCountSourceState;
 }) =>
   defineSourcePlugin({
@@ -4763,6 +4766,64 @@ describe("runMigration", () => {
             definitionId: definition.id,
             kind: "source-item-total-counted",
             sourceItemTotal: SourceItemTotal.known(3),
+          }),
+        ])
+      );
+    })
+  );
+
+  it.effect("emits lower-bound Source Item totals", () =>
+    Effect.gen(function* () {
+      const sourceState: ObservableTotalCountSourceState = {
+        readAttempts: 0,
+        readByIdentityAttempts: 0,
+        totalCountAttempts: 0,
+      };
+      const events: MigrationProgressEvent[] = [];
+      const definition = defineMigration({
+        id: "articles",
+        source: makeObservableTotalCountSource({
+          items: [
+            {
+              identityKey: "article-1",
+              version: "source-version-1",
+              item: { title: "Article 1" },
+            },
+          ],
+          sourceItemCount: Effect.succeed(
+            SourceItemTotal.lowerBound(10_000, {
+              message: "Source total is capped",
+              reason: "capped",
+            })
+          ),
+          state: sourceState,
+        }),
+        store: InMemoryMigrationStore.layer(),
+        process: () => Effect.void,
+      });
+      const progressLayer = Layer.succeed(MigrationProgress, {
+        countSourceItemTotals: true,
+        emit: (event) =>
+          Effect.sync(() => {
+            events.push(event);
+          }),
+      });
+
+      const summary = yield* runMigration(definition).pipe(
+        Effect.provide(progressLayer)
+      );
+
+      expect(summary.status).toBe("succeeded");
+      expect(sourceState.totalCountAttempts).toBe(1);
+      expect(events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            definitionId: definition.id,
+            kind: "source-item-total-counted",
+            sourceItemTotal: SourceItemTotal.lowerBound(10_000, {
+              message: "Source total is capped",
+              reason: "capped",
+            }),
           }),
         ])
       );

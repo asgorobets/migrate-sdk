@@ -209,6 +209,8 @@ export type { RunModeInput } from "./domain/run-mode.ts";
 export type {
   SourceItem,
   SourceItemInput,
+  SourceItemTotalInput,
+  SourceItemTotalLowerBoundReason,
   SourceItemTotalUnknownReason,
   SourceLookupStrategy,
   SourceReadResult,

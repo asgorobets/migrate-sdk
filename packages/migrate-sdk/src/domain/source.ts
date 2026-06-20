@@ -81,10 +81,18 @@ export type SourceItemTotalUnknownReason =
   | "too-expensive"
   | "unsupported";
 
+export type SourceItemTotalLowerBoundReason = "capped";
+
 export type SourceItemTotal =
   | {
       readonly count: number;
       readonly kind: "known";
+    }
+  | {
+      readonly kind: "lower-bound";
+      readonly message?: string;
+      readonly minimum: number;
+      readonly reason: SourceItemTotalLowerBoundReason;
     }
   | {
       readonly cause?: unknown;
@@ -92,6 +100,8 @@ export type SourceItemTotal =
       readonly message?: string;
       readonly reason: SourceItemTotalUnknownReason;
     };
+
+export type SourceItemTotalInput = number | SourceItemTotal;
 
 const sourceItemTotalCountError = (count: number) =>
   new SourcePluginError({
@@ -112,6 +122,24 @@ const makeKnownSourceItemTotal = (
   };
 };
 
+const makeLowerBoundSourceItemTotal = (
+  minimum: number,
+  input: Omit<
+    Extract<SourceItemTotal, { readonly kind: "lower-bound" }>,
+    "kind" | "minimum"
+  >
+): Extract<SourceItemTotal, { readonly kind: "lower-bound" }> => {
+  if (!Number.isInteger(minimum) || minimum < 0) {
+    throw sourceItemTotalCountError(minimum);
+  }
+
+  return {
+    kind: "lower-bound",
+    minimum,
+    ...input,
+  };
+};
+
 const makeUnknownSourceItemTotal = (
   input: Omit<Extract<SourceItemTotal, { readonly kind: "unknown" }>, "kind">
 ): SourceItemTotal => ({
@@ -121,6 +149,7 @@ const makeUnknownSourceItemTotal = (
 
 export const SourceItemTotal = {
   known: makeKnownSourceItemTotal,
+  lowerBound: makeLowerBoundSourceItemTotal,
   unknown: makeUnknownSourceItemTotal,
 } as const;
 
@@ -144,18 +173,50 @@ export const sourceItemTotalFromCount = (
 
 export const normalizeSourceItemTotal = (
   total: SourceItemTotal
+): Effect.Effect<SourceItemTotal, SourcePluginError> => {
+  switch (total.kind) {
+    case "known":
+      return sourceItemTotalFromCount(total.count);
+    case "lower-bound":
+      return normalizeSourceItemTotalCount(total.minimum).pipe(
+        Effect.map((minimum) =>
+          SourceItemTotal.lowerBound(minimum, {
+            ...(total.message === undefined ? {} : { message: total.message }),
+            reason: total.reason,
+          })
+        )
+      );
+    case "unknown":
+      return Effect.succeed(SourceItemTotal.unknown(total));
+    default: {
+      const exhaustive: never = total;
+      return exhaustive;
+    }
+  }
+};
+
+export const normalizeSourceItemTotalInput = (
+  total: SourceItemTotalInput
 ): Effect.Effect<SourceItemTotal, SourcePluginError> =>
-  total.kind === "known"
-    ? sourceItemTotalFromCount(total.count)
-    : Effect.succeed(SourceItemTotal.unknown(total));
+  typeof total === "number"
+    ? sourceItemTotalFromCount(total)
+    : normalizeSourceItemTotal(total);
 
 export const capSourceItemTotal = (
   total: SourceItemTotal,
   itemLimit: number | undefined
 ): SourceItemTotal => {
-  if (total.kind !== "known" || itemLimit === undefined) {
+  if (itemLimit === undefined) {
     return total;
   }
 
-  return SourceItemTotal.known(Math.min(total.count, itemLimit));
+  if (total.kind === "known") {
+    return SourceItemTotal.known(Math.min(total.count, itemLimit));
+  }
+
+  if (total.kind === "lower-bound" && total.minimum >= itemLimit) {
+    return SourceItemTotal.known(itemLimit);
+  }
+
+  return total;
 };

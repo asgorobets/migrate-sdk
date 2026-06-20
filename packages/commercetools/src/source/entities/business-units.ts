@@ -42,6 +42,10 @@ const businessUnitSourceDescriptor: CommercetoolsEntitySourceDescriptor<
     resourceLabel: "businessUnit",
   }),
   label: "Commercetools business units",
+  countPage: (sdk, queryArgs) =>
+    sdk.request("businessUnits.source.count", (project) =>
+      project.businessUnits().get({ queryArgs })
+    ),
   readById: (sdk, id) =>
     sdk.request("businessUnits.source.readById", (project) =>
       project.businessUnits().withId({ ID: id }).get()
