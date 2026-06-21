@@ -653,8 +653,8 @@ describe("FileMigrationStore", () => {
         const definitionId = toMigrationDefinitionId("articles");
         const runId = toMigrationRunId("run-started-file");
         const execution = {
-          adapter: "fake-durable",
-          executionId: "fake-execution-1",
+          adapter: "test-durable",
+          executionId: "test-execution-1",
         };
 
         yield* Effect.gen(function* () {

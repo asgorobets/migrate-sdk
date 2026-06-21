@@ -338,12 +338,12 @@ export type {
 export { MigrationRunStepExecutor } from "./services/migration-run-step-executor.ts";
 export type { MigrationRunStepExecutorService } from "./services/migration-run-step-executor.ts";
 export {
-  FakeDurableMigrationExecutable,
-  FakeDurableMigrationExecutableAttachError,
-  FakeDurableMigrationExecutableStartRejectedError,
-  makeFakeDurableMigrationExecutableState,
-} from "./services/fake-durable-migration-executable.ts";
-export type { FakeDurableMigrationExecutableState } from "./services/fake-durable-migration-executable.ts";
+  TestDurableMigrationExecutable,
+  TestDurableMigrationExecutableAttachError,
+  TestDurableMigrationExecutableStartRejectedError,
+  makeTestDurableMigrationExecutableState,
+} from "./services/test-durable-migration-executable.ts";
+export type { TestDurableMigrationExecutableState } from "./services/test-durable-migration-executable.ts";
 export {
   DuplicateMigrationDefinitionRegistryId,
   MigrationDefinitionRegistryCatalog,

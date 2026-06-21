@@ -26,30 +26,30 @@ import type {
 import { MigrationExecutable } from "./migration-executable.ts";
 import { MigrationStore } from "./migration-store.ts";
 
-const FakeDurableExecutionHandle = Schema.Struct({
-  adapter: Schema.Literal("fake-durable"),
+const TestDurableExecutionHandle = Schema.Struct({
+  adapter: Schema.Literal("test-durable"),
   executionId: Schema.String,
 });
 
-export class FakeDurableMigrationExecutableStartRejectedError extends Schema.TaggedErrorClass<FakeDurableMigrationExecutableStartRejectedError>()(
-  "FakeDurableMigrationExecutableStartRejectedError",
+export class TestDurableMigrationExecutableStartRejectedError extends Schema.TaggedErrorClass<TestDurableMigrationExecutableStartRejectedError>()(
+  "TestDurableMigrationExecutableStartRejectedError",
   {
     message: Schema.String,
     runId: MigrationRunId,
   }
 ) {}
 
-export class FakeDurableMigrationExecutableAttachError extends Schema.TaggedErrorClass<FakeDurableMigrationExecutableAttachError>()(
-  "FakeDurableMigrationExecutableAttachError",
+export class TestDurableMigrationExecutableAttachError extends Schema.TaggedErrorClass<TestDurableMigrationExecutableAttachError>()(
+  "TestDurableMigrationExecutableAttachError",
   {
     cause: Schema.optional(Schema.Defect),
-    execution: FakeDurableExecutionHandle,
+    execution: TestDurableExecutionHandle,
     message: Schema.String,
     runId: MigrationRunId,
   }
 ) {}
 
-export interface FakeDurableMigrationExecutableState {
+export interface TestDurableMigrationExecutableState {
   readonly envelopes: Map<MigrationRunIdType, MigrationExecutionEnvelope>;
   readonly executions: Map<MigrationRunIdType, MigrationExecutionHandle>;
   readonly locks: Map<MigrationRunIdType, readonly MigrationDefinitionLock[]>;
@@ -59,12 +59,12 @@ export interface FakeDurableMigrationExecutableState {
   rejectStart: boolean;
 }
 
-export const makeFakeDurableMigrationExecutableState = (
+export const makeTestDurableMigrationExecutableState = (
   input: {
     readonly rejectAttach?: boolean;
     readonly rejectStart?: boolean;
   } = {}
-): FakeDurableMigrationExecutableState => ({
+): TestDurableMigrationExecutableState => ({
   envelopes: new Map(),
   executions: new Map(),
   locks: new Map(),
@@ -74,9 +74,9 @@ export const makeFakeDurableMigrationExecutableState = (
   rejectStart: input.rejectStart ?? false,
 });
 
-type FakeDurableMigrationExecutableError =
-  | FakeDurableMigrationExecutableStartRejectedError
-  | FakeDurableMigrationExecutableAttachError
+type TestDurableMigrationExecutableError =
+  | TestDurableMigrationExecutableStartRejectedError
+  | TestDurableMigrationExecutableAttachError
   | MigrationExecutionEnvelopeMissingRegistryIdError
   | MigrationStoreError;
 
@@ -167,37 +167,37 @@ const markStartFailedAndReleaseLocks = (
 
 const rejectStart = (
   runId: MigrationRunIdType
-): FakeDurableMigrationExecutableStartRejectedError =>
-  new FakeDurableMigrationExecutableStartRejectedError({
+): TestDurableMigrationExecutableStartRejectedError =>
+  new TestDurableMigrationExecutableStartRejectedError({
     runId,
-    message: "Fake durable provider rejected migration execution start",
+    message: "Test durable provider rejected migration execution start",
   });
 
 const attachError = (
   runId: MigrationRunIdType,
   execution: MigrationExecutionHandle,
   cause?: unknown
-): FakeDurableMigrationExecutableAttachError =>
-  new FakeDurableMigrationExecutableAttachError({
+): TestDurableMigrationExecutableAttachError =>
+  new TestDurableMigrationExecutableAttachError({
     runId,
-    execution: execution as typeof FakeDurableExecutionHandle.Type,
-    message: "Fake durable provider execution identity attachment failed",
+    execution: execution as typeof TestDurableExecutionHandle.Type,
+    message: "Test durable provider execution identity attachment failed",
     ...(cause === undefined ? {} : { cause }),
   });
 
 const startProvider = (
-  state: FakeDurableMigrationExecutableState,
+  state: TestDurableMigrationExecutableState,
   envelope: MigrationExecutionEnvelope
 ): Effect.Effect<
   MigrationExecutionHandle,
-  FakeDurableMigrationExecutableStartRejectedError
+  TestDurableMigrationExecutableStartRejectedError
 > =>
   state.rejectStart
     ? Effect.fail(rejectStart(envelope.runId))
     : Effect.sync(() => {
         const execution = {
-          adapter: "fake-durable" as const,
-          executionId: `fake-execution-${state.nextExecutionNumber}`,
+          adapter: "test-durable" as const,
+          executionId: `test-execution-${state.nextExecutionNumber}`,
         };
         state.nextExecutionNumber += 1;
         state.envelopes.set(envelope.runId, envelope);
@@ -219,11 +219,11 @@ const startDurablePlan = <Summary>({
     MigrationExecutionEnvelopeMissingRegistryIdError
   >;
   readonly scopeDefinitionIds: readonly MigrationDefinitionId[];
-  readonly state: FakeDurableMigrationExecutableState;
+  readonly state: TestDurableMigrationExecutableState;
   readonly storeLayer: Layer.Layer<MigrationStore, MigrationStoreError>;
 }): Effect.Effect<
   ExecutionStartResult<Summary>,
-  FakeDurableMigrationExecutableError
+  TestDurableMigrationExecutableError
 > =>
   Effect.gen(function* () {
     const store = yield* MigrationStore;
@@ -281,15 +281,15 @@ const startDurablePlan = <Summary>({
     };
   }).pipe(Effect.provide(storeLayer));
 
-export const FakeDurableMigrationExecutable = {
-  layer: (state: FakeDurableMigrationExecutableState) =>
+export const TestDurableMigrationExecutable = {
+  layer: (state: TestDurableMigrationExecutableState) =>
     Layer.succeed(MigrationExecutable, {
       startRun: (plan: MigrationDefinitionExecutableRunPlan) => {
         const firstDefinition = plan.definitions[0];
         if (firstDefinition === undefined) {
           return Effect.die(
             new Error(
-              "Fake durable migration executable requires at least one selected migration definition"
+              "Test durable migration executable requires at least one selected migration definition"
             )
           );
         }
@@ -307,7 +307,7 @@ export const FakeDurableMigrationExecutable = {
         if (firstDefinition === undefined) {
           return Effect.die(
             new Error(
-              "Fake durable migration executable requires at least one selected migration definition"
+              "Test durable migration executable requires at least one selected migration definition"
             )
           );
         }
@@ -321,5 +321,5 @@ export const FakeDurableMigrationExecutable = {
         });
       },
     }),
-  makeState: makeFakeDurableMigrationExecutableState,
+  makeState: makeTestDurableMigrationExecutableState,
 } as const;

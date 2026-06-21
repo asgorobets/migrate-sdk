@@ -2,9 +2,9 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import {
   defineMigration,
-  FakeDurableMigrationExecutable,
-  FakeDurableMigrationExecutableAttachError,
-  FakeDurableMigrationExecutableStartRejectedError,
+  TestDurableMigrationExecutable,
+  TestDurableMigrationExecutableAttachError,
+  TestDurableMigrationExecutableStartRejectedError,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
   MigrationDefinitionRegistry,
@@ -21,7 +21,7 @@ const ArticleSource = Schema.Struct({
 });
 
 const ArticleSourceIdentity = SourceIdentity.make({
-  id: "fake-durable-article@v1",
+  id: "test-durable-article@v1",
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 
@@ -34,14 +34,14 @@ const makeArticlesSource = () =>
         identityKey: "article-1",
         version: "source-version-1",
         item: {
-          title: "Fake durable article",
+          title: "Test durable article",
         },
       },
     ],
   });
 
 const makeFixture = (
-  stateInput: Parameters<typeof FakeDurableMigrationExecutable.makeState>[0] & {
+  stateInput: Parameters<typeof TestDurableMigrationExecutable.makeState>[0] & {
     readonly releaseFails?: boolean;
   } = {}
 ) => {
@@ -80,7 +80,7 @@ const makeFixture = (
     definitions: [articles] as const,
   });
   const durableState =
-    FakeDurableMigrationExecutable.makeState(durableStateInput);
+    TestDurableMigrationExecutable.makeState(durableStateInput);
 
   return {
     articles,
@@ -91,7 +91,7 @@ const makeFixture = (
   };
 };
 
-describe("FakeDurableMigrationExecutable", () => {
+describe("TestDurableMigrationExecutable", () => {
   it.effect("starts executable run plans and returns a started result", () =>
     Effect.gen(function* () {
       const { articlesId, durableState, registry, storeState } = makeFixture();
@@ -100,15 +100,15 @@ describe("FakeDurableMigrationExecutable", () => {
       });
 
       const result = yield* MigrationExecutable.startRun(plan).pipe(
-        Effect.provide(FakeDurableMigrationExecutable.layer(durableState))
+        Effect.provide(TestDurableMigrationExecutable.layer(durableState))
       );
 
       expect(result.kind).toBe("started");
       if (result.kind === "started") {
         expect(result.runId).toBe(toMigrationRunId("run-1"));
         expect(result.execution).toEqual({
-          adapter: "fake-durable",
-          executionId: "fake-execution-1",
+          adapter: "test-durable",
+          executionId: "test-execution-1",
         });
         expect(result.runId).not.toBe(result.execution.executionId);
         expect(durableState.envelopes.get(result.runId)).toEqual(
@@ -165,15 +165,15 @@ describe("FakeDurableMigrationExecutable", () => {
         });
 
         const result = yield* MigrationExecutable.startRollback(plan).pipe(
-          Effect.provide(FakeDurableMigrationExecutable.layer(durableState))
+          Effect.provide(TestDurableMigrationExecutable.layer(durableState))
         );
 
         expect(result.kind).toBe("started");
         if (result.kind === "started") {
           expect(result.runId).toBe(toMigrationRunId("run-1"));
           expect(result.execution).toEqual({
-            adapter: "fake-durable",
-            executionId: "fake-execution-1",
+            adapter: "test-durable",
+            executionId: "test-execution-1",
           });
           expect(durableState.envelopes.get(result.runId)).toEqual(
             expect.objectContaining({
@@ -214,13 +214,13 @@ describe("FakeDurableMigrationExecutable", () => {
 
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
-            Effect.provide(FakeDurableMigrationExecutable.layer(durableState))
+            Effect.provide(TestDurableMigrationExecutable.layer(durableState))
           )
         );
 
         expect(error).toEqual(
-          new FakeDurableMigrationExecutableStartRejectedError({
-            message: "Fake durable provider rejected migration execution start",
+          new TestDurableMigrationExecutableStartRejectedError({
+            message: "Test durable provider rejected migration execution start",
             runId: toMigrationRunId("run-1"),
           })
         );
@@ -260,7 +260,7 @@ describe("FakeDurableMigrationExecutable", () => {
 
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
-            Effect.provide(FakeDurableMigrationExecutable.layer(durableState))
+            Effect.provide(TestDurableMigrationExecutable.layer(durableState))
           )
         );
 
@@ -297,19 +297,19 @@ describe("FakeDurableMigrationExecutable", () => {
 
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
-            Effect.provide(FakeDurableMigrationExecutable.layer(durableState))
+            Effect.provide(TestDurableMigrationExecutable.layer(durableState))
           )
         );
 
-        expect(error).toBeInstanceOf(FakeDurableMigrationExecutableAttachError);
+        expect(error).toBeInstanceOf(TestDurableMigrationExecutableAttachError);
         expect(error).toEqual(
           expect.objectContaining({
             execution: {
-              adapter: "fake-durable",
-              executionId: "fake-execution-1",
+              adapter: "test-durable",
+              executionId: "test-execution-1",
             },
             message:
-              "Fake durable provider execution identity attachment failed",
+              "Test durable provider execution identity attachment failed",
             runId: toMigrationRunId("run-1"),
           })
         );
@@ -348,13 +348,13 @@ describe("FakeDurableMigrationExecutable", () => {
           definitionIds: ["articles"],
         });
         const started = yield* MigrationExecutable.startRun(plan).pipe(
-          Effect.provide(FakeDurableMigrationExecutable.layer(durableState))
+          Effect.provide(TestDurableMigrationExecutable.layer(durableState))
         );
         expect(started.kind).toBe("started");
 
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
-            Effect.provide(FakeDurableMigrationExecutable.layer(durableState))
+            Effect.provide(TestDurableMigrationExecutable.layer(durableState))
           )
         );
 

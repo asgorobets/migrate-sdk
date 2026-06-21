@@ -223,7 +223,7 @@ executable registry and inline executable.
 - Test `MigrationDefinitionRegistryCatalog` with one registry, missing registry
   lookup, and duplicate registry id rejection.
 
-- Test durable adapter behavior with a fake provider adapter. The fake should
+- Test durable adapter behavior with a test provider adapter. The test harness should
   verify queued state creation, start failure marking, attach failure behavior,
   and returned started handles without depending on Workflow SDK or Effect
   workflow.
@@ -277,5 +277,5 @@ issue set after package boundaries, runtime assumptions, and production wiring
 are decided.
 
 The first implementation should make the inline path real and testable before
-adding provider-specific packages. A fake durable provider is enough to prove
+adding provider-specific packages. A test durable provider is enough to prove
 the migration run state and adapter handle semantics.
