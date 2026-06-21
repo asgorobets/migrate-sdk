@@ -299,6 +299,7 @@ describe("getMigrationStatuses", () => {
         completeRun: () => fail("completeRun"),
         failRun: () => fail("failRun"),
         acquireDefinitionLock: () => fail("acquireDefinitionLock"),
+        assertDefinitionLocks: () => fail("assertDefinitionLocks"),
         releaseDefinitionLock: () => fail("releaseDefinitionLock"),
       });
       const definition = makeStatusOnlyDefinition(store);
@@ -458,6 +459,7 @@ describe("getMigrationStatuses", () => {
         completeRun: () => fail("completeRun"),
         failRun: () => fail("failRun"),
         acquireDefinitionLock: () => fail("acquireDefinitionLock"),
+        assertDefinitionLocks: () => fail("assertDefinitionLocks"),
         releaseDefinitionLock: () => fail("releaseDefinitionLock"),
       });
       const definition = makeStatusScanDefinition(

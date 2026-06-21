@@ -73,6 +73,15 @@ const lockOwnershipError = (
     releaseToken: lock.token,
   });
 
+const lockNotFoundError = (
+  lock: MigrationDefinitionLock
+): MigrationStoreError =>
+  storeError("Migration definition lock was not found", {
+    definitionId: lock.definitionId,
+    ownerRunId: lock.ownerRunId,
+    token: lock.token,
+  });
+
 const readRunState = (
   state: InMemoryMigrationStoreState,
   runId: MigrationRunId,
@@ -195,11 +204,15 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       status: MigrationRunState["status"]
     ) =>
       Effect.sync(() => {
+        const current = definitionIds
+          .map((definitionId) => state.latestRunStates.get(definitionId))
+          .find((runState) => runState?.runId === runId);
         const runState: MigrationRunState = {
+          ...(current ?? {}),
           runId,
           definitionIds,
           status,
-          startedAt: new Date(),
+          startedAt: current?.startedAt ?? new Date(),
         };
 
         for (const definitionId of definitionIds) {
@@ -329,6 +342,27 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       return lock;
     });
 
+    const assertDefinitionLocks = Effect.fn(
+      "InMemoryMigrationStore.assertDefinitionLocks"
+    )(function* (locks: readonly MigrationDefinitionLock[]) {
+      for (const lock of locks) {
+        const current = yield* Effect.sync(() =>
+          state.definitionLocks.get(lock.definitionId)
+        );
+
+        if (current === undefined) {
+          return yield* lockNotFoundError(lock);
+        }
+
+        if (
+          current.ownerRunId !== lock.ownerRunId ||
+          current.token !== lock.token
+        ) {
+          return yield* lockOwnershipError(lock, current);
+        }
+      }
+    });
+
     const releaseDefinitionLock = Effect.fn(
       "InMemoryMigrationStore.releaseDefinitionLock"
     )(function* (lock: MigrationDefinitionLock) {
@@ -373,6 +407,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       completeRun,
       failRun,
       acquireDefinitionLock,
+      assertDefinitionLocks,
       releaseDefinitionLock,
     };
   });

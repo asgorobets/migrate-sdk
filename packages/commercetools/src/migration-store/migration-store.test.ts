@@ -1771,7 +1771,7 @@ describe("CommercetoolsMigrationStore", () => {
       );
 
       expect(upserts).toHaveLength(8);
-      expect(lookups).toHaveLength(4);
+      expect(lookups).toHaveLength(6);
       expect(
         upserts.every((request) =>
           expectedKeys.includes(customObjectKey(request) ?? "")

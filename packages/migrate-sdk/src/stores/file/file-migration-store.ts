@@ -219,6 +219,15 @@ const lockOwnershipError = (
     releaseToken: lock.token,
   });
 
+const lockNotFoundError = (
+  lock: MigrationDefinitionLock
+): MigrationStoreError =>
+  storeError("Migration definition lock was not found", {
+    definitionId: lock.definitionId,
+    ownerRunId: lock.ownerRunId,
+    token: lock.token,
+  });
+
 const isPlatformSystemError = (
   cause: PlatformError,
   tag: PlatformError["reason"]["_tag"]
@@ -653,11 +662,24 @@ const makeLayerWithoutPlatform = (
         status: MigrationRunState["status"]
       ) =>
         Effect.gen(function* () {
+          const current =
+            definitionIds[0] === undefined
+              ? undefined
+              : yield* readRecordOptional(
+                  fs,
+                  paths.latestRunState(definitionIds[0]),
+                  LatestRunStateRecord
+                ).pipe(
+                  Effect.map((record) =>
+                    record?.state.runId === runId ? record.state : undefined
+                  )
+                );
           const runState: MigrationRunState = {
+            ...(current ?? {}),
             runId,
             definitionIds,
             status,
-            startedAt: new Date(),
+            startedAt: current?.startedAt ?? new Date(),
           };
 
           for (const definitionId of definitionIds) {
@@ -826,6 +848,30 @@ const makeLayerWithoutPlatform = (
         return lock;
       });
 
+      const assertDefinitionLocks = Effect.fn(
+        "FileMigrationStore.assertDefinitionLocks"
+      )(function* (locks: readonly MigrationDefinitionLock[]) {
+        for (const lock of locks) {
+          const lockPath = paths.lock(lock.definitionId);
+          const record = yield* readRecordOptional(
+            fs,
+            lockPath,
+            MigrationDefinitionLockRecord
+          );
+
+          if (record === null) {
+            return yield* lockNotFoundError(lock);
+          }
+
+          if (
+            record.state.ownerRunId !== lock.ownerRunId ||
+            record.state.token !== lock.token
+          ) {
+            return yield* lockOwnershipError(lock, record.state);
+          }
+        }
+      });
+
       const releaseDefinitionLock = Effect.fn(
         "FileMigrationStore.releaseDefinitionLock"
       )(function* (lock: MigrationDefinitionLock) {
@@ -867,6 +913,7 @@ const makeLayerWithoutPlatform = (
         completeRun,
         failRun,
         acquireDefinitionLock,
+        assertDefinitionLocks,
         releaseDefinitionLock,
       };
     })

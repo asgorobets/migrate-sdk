@@ -104,6 +104,10 @@ export class MigrationStore extends Service<
       ownerRunId: MigrationRunId
     ) => Effect.Effect<MigrationDefinitionLock, MigrationStoreError>;
 
+    readonly assertDefinitionLocks: (
+      locks: readonly MigrationDefinitionLock[]
+    ) => Effect.Effect<void, MigrationStoreError>;
+
     readonly releaseDefinitionLock: (
       lock: MigrationDefinitionLock
     ) => Effect.Effect<void, MigrationStoreError>;
