@@ -155,7 +155,7 @@ const contactsSource = DocumentSourcePlugin.make({
 The process receives the selected shape:
 
 ```ts
-const contactsMigration = defineMigration({
+const contactsMigration = MigrationDefinition.make({
   id: "import-company-contacts",
   source: contactsSource,
   store,
@@ -179,7 +179,7 @@ inner `{ parent, item }` shape is the selected document payload.
 The same migration can also be written inline:
 
 ```ts
-const contactsMigration = defineMigration({
+const contactsMigration = MigrationDefinition.make({
   id: "import-company-contacts",
   source: contactsSource,
   store,

@@ -15,7 +15,7 @@ const entries = InMemoryDestination.makeEntries({
   fields: ArticleEntryFields,
 })
 
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: "articles",
   source,
   store,

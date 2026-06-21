@@ -1,8 +1,7 @@
 import { Effect, Schema } from "effect";
 import {
   type DestinationPluginError,
-  defineMigration,
-  type MigrationDefinition,
+  MigrationDefinition,
   type MigrationItemState,
   MigrationReferenceLookup,
   type MigrationReferenceLookupError,
@@ -267,7 +266,7 @@ export const makeCircularBookAuthorStubMigrations = () => {
   const destinationFixture = makeBookstoreDestinationFixture();
   const { authorDestination, bookDestination } = destinationFixture;
 
-  const books: BookMigration = defineMigration({
+  const books: BookMigration = MigrationDefinition.make({
     id: "books",
     source: InMemorySourcePlugin.make({
       identity: BookSourceIdentity,
@@ -332,7 +331,7 @@ export const makeCircularBookAuthorStubMigrations = () => {
     }),
   });
 
-  const authors: AuthorMigration = defineMigration({
+  const authors: AuthorMigration = MigrationDefinition.make({
     id: "authors",
     source: InMemorySourcePlugin.make({
       identity: AuthorSourceIdentity,
@@ -456,7 +455,7 @@ export const formatCircularBookAuthorStubsExampleResult = (
       [
         `${change.contentType}:${change.sourceIdentity}`,
         `  contentType: ${change.contentType}`,
-        `  entryId: `,
+        "  entryId: ",
         `  fields: ${JSON.stringify(change.fields)}`,
       ].join("\n")
     ),

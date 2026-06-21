@@ -5,8 +5,7 @@ import type { ParseError } from "papaparse";
 import Papa from "papaparse";
 import {
   type ConfiguredSourcePlugin,
-  defineSourcePlugin,
-  defineSourcePluginLayer,
+  SourcePlugin,
   type SourcePluginImplementation,
 } from "../../domain/definition.ts";
 import { SourcePluginError } from "../../domain/errors.ts";
@@ -25,10 +24,7 @@ import {
   encodeSourceIdentityKey,
   type SourceItemInput,
 } from "../../domain/source.ts";
-import {
-  type AnySourcePlugin,
-  SourcePlugin,
-} from "../../services/source-plugin.ts";
+import type { AnySourcePlugin } from "../../services/source-plugin.ts";
 
 const textEncoder = new TextEncoder();
 
@@ -944,7 +940,7 @@ const makeLayerWithoutPlatform = <
       const fs = yield* FileSystem;
       const path = yield* Path;
       const identityDefinition = makeCsvIdentityDefinition(options.identity);
-      const configured = defineSourcePlugin({
+      const configured = SourcePlugin.make({
         cursorSchema: CsvSourceCursor,
         identity: identityDefinition,
         make: () => makeImplementation(options, fs, path),
@@ -969,7 +965,8 @@ const make = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
 ): ConfiguredSourcePlugin<Source, CsvSourceCursor, IdentityKey, unknown> => {
   const identityDefinition = makeCsvIdentityDefinition(options.identity);
 
-  return defineSourcePluginLayer({
+  return SourcePlugin.fromLayer({
+    cursorSchema: CsvSourceCursor,
     identity: identityDefinition,
     layer: makeLayer(options),
     sourceIdentityContractFingerprint: makeCsvSourceIdentityContractFingerprint(

@@ -23,7 +23,7 @@ const entries = InMemoryDestination.makeEntries({
   }),
 })
 
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: "articles",
   source,
   store,
@@ -51,7 +51,7 @@ Process and rollback pipelines run serially by default. Authors can set
 definition defaults, and operators can override them from the CLI:
 
 ```ts
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: "articles",
   source,
   store,
@@ -87,7 +87,7 @@ const RetryDestinationWrite = Schedule.exponential("250 millis").pipe(
   Schedule.jittered
 )
 
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: "articles",
   source,
   store,
@@ -791,7 +791,7 @@ const source = SqlSource.make({
 
 const destination = CommercetoolsDestination.make().provide(commercetools.layer)
 
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: "articles",
   source,
   store,
@@ -887,8 +887,7 @@ const program = Effect.gen(function* () {
 }).pipe(Effect.provide(executableLayer))
 ```
 
-Existing function-style entrypoints should remain as compatibility wrappers
-while the service API settles:
+Runtime command functions remain available while the service API settles:
 
 ```ts
 runMigration(definition, options)

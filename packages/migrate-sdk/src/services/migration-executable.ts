@@ -13,12 +13,12 @@ import type {
   RunRequestSourceRequirements,
 } from "../domain/run.ts";
 import {
-  type RollbackMigrationError,
-  type RunMigrationError,
   MigrationRollbackExecutor,
   type MigrationRollbackExecutorService,
   MigrationRunExecutor,
   type MigrationRunExecutorService,
+  type RollbackMigrationError,
+  type RunMigrationError,
 } from "./migration-run-executor.ts";
 
 export type MigrationExecutableRunError<
@@ -97,7 +97,10 @@ export class MigrationExecutable extends Service<
 
   static readonly inlineDefault = MigrationExecutable.inline.pipe(
     Layer.provide(
-      Layer.mergeAll(MigrationRunExecutor.layer, MigrationRollbackExecutor.layer)
+      Layer.mergeAll(
+        MigrationRunExecutor.layer,
+        MigrationRollbackExecutor.layer
+      )
     )
   );
 }

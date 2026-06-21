@@ -4,9 +4,9 @@ import { Effect, Layer, Schema } from "effect";
 import { SqlClient, type Statement } from "effect/unstable/sql";
 import {
   type ConfiguredSourcePlugin,
-  defineMigration,
   type EncodedSourceIdentityInput,
   InMemoryMigrationStore,
+  MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
   type MigrationRunSummary,
@@ -619,7 +619,7 @@ describe("SqlSourcePlugin", () => {
       });
       const storeState = InMemoryMigrationStore.makeState();
       const progressEvents: MigrationProgressEvent[] = [];
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "sql-articles",
         process: () => Effect.void,
         source,
@@ -870,7 +870,7 @@ describe("SqlSourcePlugin", () => {
       const source = makeSqlArticleSource().provide(fakeSql.layer);
       const storeState = InMemoryMigrationStore.makeState();
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "sql-articles",
         process: () => Effect.void,
         source,
@@ -1160,7 +1160,7 @@ describe("SqlSourcePlugin", () => {
       const storeState = InMemoryMigrationStore.makeState();
       let decodedViews: number | undefined;
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "sql-articles",
         process: (sourceItem) =>
           Effect.sync(() => {
@@ -1260,7 +1260,7 @@ describe("SqlSourcePlugin", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const processItems: string[] = [];
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "sqlite-articles",
           process: (sourceItem) =>
             Effect.sync(() => {
@@ -1372,7 +1372,7 @@ describe("SqlSourcePlugin", () => {
         readonly views: number;
       }> = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "sqlite-real-articles",
         process: (sourceItem) =>
           Effect.sync(() => {
@@ -1436,7 +1436,7 @@ describe("SqlSourcePlugin", () => {
         const storeState = InMemoryMigrationStore.makeState();
         let processCalls = 0;
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "sql-articles",
           process: () =>
             Effect.sync(() => {

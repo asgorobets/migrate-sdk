@@ -109,7 +109,7 @@ const ProductTracking = Tracking.record({
   }),
 });
 
-const definition = defineMigration({
+const definition = MigrationDefinition.make({
   id: "products",
   source,
   store,
@@ -128,7 +128,7 @@ const definition = defineMigration({
 ## Examples
 
 `examples/product-catalog-store-migration.ts` is the scripted end-to-end proof:
-it uses `defineMigration`, `process`, Commercetools product helpers,
+it uses `MigrationDefinition`, `process`, Commercetools product helpers,
 `Tracking.setRecord`, Destination Journal changes, and the Commercetools Custom
 Object Migration Store.
 

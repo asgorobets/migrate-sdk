@@ -268,9 +268,7 @@ const startDurablePlan = <Summary>({
 
     yield* store
       .attachRunExecution(runId, scopeDefinitionIds, execution)
-      .pipe(
-        Effect.mapError((error) => attachError(runId, execution, error))
-      );
+      .pipe(Effect.mapError((error) => attachError(runId, execution, error)));
     state.executions.set(runId, execution);
     state.locks.set(runId, locks);
 

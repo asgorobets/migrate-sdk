@@ -63,7 +63,7 @@ ordering preferences when both definitions participate in the same selected run
 or full-registry run.
 
 ```ts
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: "articles",
   dependencies: {
     required: ["authors"],
@@ -77,7 +77,7 @@ The existing `dependsOn` property can remain a compatibility shorthand for
 `dependencies.required` while the public API transitions:
 
 ```ts
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: "articles",
   dependsOn: ["authors"],
   // source, destination, store, pipeline...

@@ -1,17 +1,17 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import {
-  defineMigration,
-  TestDurableMigrationExecutable,
-  TestDurableMigrationExecutableAttachError,
-  TestDurableMigrationExecutableStartRejectedError,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecutable,
   MigrationStore,
   MigrationStoreError,
   SourceIdentity,
+  TestDurableMigrationExecutable,
+  TestDurableMigrationExecutableAttachError,
+  TestDurableMigrationExecutableStartRejectedError,
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "migrate-sdk";
@@ -68,7 +68,7 @@ const makeFixture = (
           })
         ).pipe(Layer.provide(baseStore))
       : baseStore;
-  const articles = defineMigration({
+  const articles = MigrationDefinition.make({
     id: articlesId,
     source: makeArticlesSource(),
     store,

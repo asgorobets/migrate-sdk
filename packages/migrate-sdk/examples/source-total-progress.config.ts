@@ -3,11 +3,11 @@ import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSyst
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
 import { Effect, Layer, Schema } from "effect";
 import {
-  defineMigration,
-  defineSourcePlugin,
   InMemoryMigrationStore,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   SourceIdentity,
+  SourcePlugin,
 } from "migrate-sdk";
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
 import { CsvIdentity, CsvSourcePlugin } from "migrate-sdk/sources/csv";
@@ -38,7 +38,7 @@ const ArticleIdentity = SourceIdentity.make({
   schema: SourceIdentity.key("articleId", Schema.NonEmptyString),
 });
 
-const inMemoryArticles = defineMigration({
+const inMemoryArticles = MigrationDefinition.make({
   id: "totals-in-memory",
   source: InMemorySourcePlugin.make({
     batchSize: 2,
@@ -71,7 +71,7 @@ const Book = Schema.Struct({
   title: Schema.String,
 });
 
-const csvBooks = defineMigration({
+const csvBooks = MigrationDefinition.make({
   id: "totals-csv",
   source: CsvSourcePlugin.make({
     dialect: { kind: "standard" },
@@ -109,7 +109,7 @@ const CompanyIdentity: DocumentSourceIdentity<
   schema: SourceIdentity.key("companyKey", Schema.NonEmptyString),
 };
 
-const companies = defineMigration({
+const companies = MigrationDefinition.make({
   id: "totals-document",
   source: DocumentSourcePlugin.make({
     fetcher: DocumentFetchers.fileText({
@@ -128,7 +128,7 @@ const companies = defineMigration({
   process: () => undefined,
 });
 
-const unsupportedTotalSource = defineSourcePlugin({
+const unsupportedTotalSource = SourcePlugin.make({
   cursorSchema: Schema.Null,
   identity: SourceIdentity.make({
     id: "progress-unsupported-total@v1",
@@ -151,7 +151,7 @@ const unsupportedTotalSource = defineSourcePlugin({
   }),
 });
 
-const unknownTotal = defineMigration({
+const unknownTotal = MigrationDefinition.make({
   id: "totals-unknown",
   source: unsupportedTotalSource,
   store,

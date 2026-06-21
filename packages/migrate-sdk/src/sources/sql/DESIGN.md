@@ -103,7 +103,7 @@ const source = SqlSourcePlugin.make({
     `,
 }).provide(pgClientLayer);
 
-const definition = defineMigration({
+const definition = MigrationDefinition.make({
   id: "legacy-articles",
   source,
   destination,

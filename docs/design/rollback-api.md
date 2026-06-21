@@ -10,7 +10,7 @@ rollback context, provides a scoped tracking service for the attempt, and
 deletes item state only when the rollback process succeeds.
 
 ```ts
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: "articles",
   source,
   store,

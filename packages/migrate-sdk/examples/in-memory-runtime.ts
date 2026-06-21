@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import {
-  defineMigration,
+  MigrationDefinition,
   type MigrationRunSummary,
   runMigration,
   SourceIdentity,
@@ -57,7 +57,7 @@ export const makeInMemoryArticlesMigration = () => {
     fields: ArticleEntryFields,
   });
 
-  return defineMigration({
+  return MigrationDefinition.make({
     id: "articles",
     source: InMemorySourcePlugin.make({
       identity: ArticleSourceIdentity,

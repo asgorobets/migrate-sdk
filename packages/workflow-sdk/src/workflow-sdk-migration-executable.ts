@@ -11,8 +11,8 @@ import {
   type MigrationExecutionHandle,
   type MigrationRunId,
   MigrationRunId as MigrationRunIdSchema,
-  MigrationRuntimeError,
   type MigrationRunSummary,
+  MigrationRuntimeError,
   MigrationStore,
   MigrationStoreError,
   makeMigrationRollbackExecutionEnvelope,
@@ -352,25 +352,29 @@ export const WorkflowSdkMigrationExecutable = {
   layer: (input: WorkflowSdkMigrationExecutableLayerOptions) =>
     Layer.succeed(MigrationExecutable, {
       startRun: (plan: MigrationDefinitionExecutableRunPlan) => {
-        return Effect.flatMap(validateSharedStore(plan.definitions), (storeLayer) =>
-          startDurablePlan<MigrationRunSummary>({
-            input,
-            makeEnvelope: (runId, locks) =>
-              makeMigrationRunExecutionEnvelope(plan, { locks, runId }),
-            scopeDefinitionIds: plan.includedDefinitionIds,
-            storeLayer,
-          })
+        return Effect.flatMap(
+          validateSharedStore(plan.definitions),
+          (storeLayer) =>
+            startDurablePlan<MigrationRunSummary>({
+              input,
+              makeEnvelope: (runId, locks) =>
+                makeMigrationRunExecutionEnvelope(plan, { locks, runId }),
+              scopeDefinitionIds: plan.includedDefinitionIds,
+              storeLayer,
+            })
         );
       },
       startRollback: (plan: MigrationDefinitionExecutableRollbackPlan) => {
-        return Effect.flatMap(validateSharedStore(plan.definitions), (storeLayer) =>
-          startDurablePlan<RollbackRunSummary>({
-            input,
-            makeEnvelope: (runId, locks) =>
-              makeMigrationRollbackExecutionEnvelope(plan, { locks, runId }),
-            scopeDefinitionIds: plan.includedDefinitionIds,
-            storeLayer,
-          })
+        return Effect.flatMap(
+          validateSharedStore(plan.definitions),
+          (storeLayer) =>
+            startDurablePlan<RollbackRunSummary>({
+              input,
+              makeEnvelope: (runId, locks) =>
+                makeMigrationRollbackExecutionEnvelope(plan, { locks, runId }),
+              scopeDefinitionIds: plan.includedDefinitionIds,
+              storeLayer,
+            })
         );
       },
     }),

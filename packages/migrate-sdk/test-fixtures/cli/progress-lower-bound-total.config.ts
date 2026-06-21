@@ -1,11 +1,11 @@
 import { Effect, Schema } from "effect";
 import {
-  defineMigration,
-  defineSourcePlugin,
   InMemoryMigrationStore,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   SourceIdentity,
   SourceItemTotal,
+  SourcePlugin,
   toMigrationDefinitionId,
 } from "migrate-sdk";
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
@@ -16,7 +16,7 @@ const EntrySourceIdentity = SourceIdentity.make({
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 const store = InMemoryMigrationStore.layer();
-const source = defineSourcePlugin({
+const source = SourcePlugin.make({
   cursorSchema: Schema.Null,
   countTotal: () =>
     Effect.succeed(
@@ -51,7 +51,7 @@ const source = defineSourcePlugin({
   sourceSchema: EntrySource,
 });
 
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: toMigrationDefinitionId("articles"),
   process: () => undefined,
   source,

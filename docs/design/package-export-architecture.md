@@ -55,18 +55,21 @@ files; examples and tests are typechecked through `tsconfig.check.json`.
 The default entrypoint stays the ergonomic public surface:
 
 ```ts
-import { CsvSourcePlugin, defineMigration, runMigration } from "migrate-sdk";
+import { CsvSourcePlugin, MigrationDefinition, runMigration } from "migrate-sdk";
 ```
 
 Subpath exports are allowed for focused imports and optional dependency
 isolation:
 
 ```ts
+import { MigrationDefinition, SourcePlugin } from "migrate-sdk/core";
 import { CsvSourcePlugin } from "migrate-sdk/sources/csv";
 import { FileMigrationStore } from "migrate-sdk/stores/file";
 ```
 
-These subpaths still point into the same package.
+The `core` subpath carries domain definitions, service tags, and authoring
+helpers such as `SourcePlugin.make` without re-exporting concrete source or
+store implementations. These subpaths still point into the same package.
 
 Testing helpers use explicit testing subpaths:
 
@@ -120,7 +123,7 @@ CSV does not cross that line. It belongs in the main `migrate-sdk` package.
 Keep the public surface compatible for the SDK's two core audiences:
 
 - Migration authors get the ergonomic root entrypoint:
-  `import { defineMigration, runMigration } from "migrate-sdk"`.
+  `import { MigrationDefinition, runMigration } from "migrate-sdk"`.
 - Plugin authors continue to get definition helpers, service tags, domain types,
   and typed errors from the root entrypoint.
 - First-party plugins and stores also expose focused subpaths, such as

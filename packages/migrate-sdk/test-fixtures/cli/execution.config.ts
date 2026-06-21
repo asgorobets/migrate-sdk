@@ -1,8 +1,8 @@
 import { Schema } from "effect";
 import {
-  defineMigration,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   SourceIdentity,
   toMigrationDefinitionId,
@@ -24,7 +24,7 @@ const probe = {
 globalThis.__migrateSdkCliExecutionProbe = probe;
 
 const definition = (id, title, input = {}) =>
-  defineMigration({
+  MigrationDefinition.make({
     id: toMigrationDefinitionId(id),
     source: InMemorySourcePlugin.make({
       identity: EntrySourceIdentity,

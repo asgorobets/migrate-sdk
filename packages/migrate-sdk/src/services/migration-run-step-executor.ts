@@ -5,11 +5,11 @@ import type { PipelineExecutionOptions } from "../domain/execution.ts";
 import type { SourceIdentitySnapshotKey } from "../domain/ids.ts";
 import type { MigrationRunState, MigrationRunSummary } from "../domain/run.ts";
 import {
-  MigrationRunExecutor,
   type MigrationRunBeginInput,
   type MigrationRunCompletionInput,
   type MigrationRunCursorWindowResult,
   type MigrationRunDefinitionCursorWindowInput,
+  MigrationRunExecutor,
   type MigrationRunExecutorService,
   type MigrationRunFailureInput,
   type RunMigrationError,

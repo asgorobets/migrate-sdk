@@ -18,8 +18,8 @@ import {
 } from "@migrate-sdk/commercetools/testing";
 import { Effect, Layer, Schema } from "effect";
 import {
-  defineMigration,
   InMemoryMigrationStore,
+  MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
   runMigration,
@@ -663,7 +663,7 @@ describe("CommercetoolsSourcePlugin", () => {
               progressEvents.push(event);
             }),
         });
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "commercetools-products",
           process: () => Effect.void,
           source,

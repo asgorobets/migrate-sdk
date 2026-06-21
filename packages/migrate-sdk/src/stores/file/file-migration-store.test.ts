@@ -11,13 +11,13 @@ import {
 import { FileMigrationStore } from "migrate-sdk/stores/file";
 import { makeSourceVersionContractFingerprint } from "../../domain/migration-contract.ts";
 import {
-  defineMigration,
-  defineSourcePlugin,
+  MigrationDefinition,
   MigrationStore,
   runMigration,
   runMigrations,
   SourceIdentity,
   type SourceItemInput,
+  SourcePlugin,
   SourcePluginError,
   skipItem,
   toEncodedSourceCursor,
@@ -220,7 +220,7 @@ const makeArticlesMigration = (options: {
   readonly items: readonly ArticleSourceItem[];
   readonly processCalls?: string[];
 }) =>
-  defineMigration({
+  MigrationDefinition.make({
     id: "articles",
     source: InMemorySourcePlugin.make({
       identity: TestSourceIdentity,
@@ -492,7 +492,7 @@ describe("FileMigrationStore", () => {
   it.effect("persists encoded Source Cursor across fresh store instances", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: InMemorySourcePlugin.make({
             identity: TestSourceIdentity,
@@ -794,9 +794,9 @@ describe("FileMigrationStore", () => {
         const sourceError = new SourcePluginError({
           message: "Source read failed",
         });
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
-          source: defineSourcePlugin({
+          source: SourcePlugin.make({
             cursorSchema: InMemorySourceCursor,
             identity: TestSourceIdentity,
             sourceSchema: Schema.Unknown,

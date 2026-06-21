@@ -1,7 +1,7 @@
 import { Effect, type Layer, Schema } from "effect";
 import {
   type ConfiguredSourcePlugin,
-  defineSourcePlugin,
+  SourcePlugin,
   type SourcePluginImplementation,
 } from "../../domain/definition.ts";
 import { SourcePluginError } from "../../domain/errors.ts";
@@ -158,7 +158,7 @@ const makeImplementation = <A, IdentityKey extends SourceIdentitySnapshotKey>(
 const make = <A, IdentityKey extends SourceIdentitySnapshotKey>(
   options: InMemorySourceOptions<A, IdentityKey>
 ): ConfiguredSourcePlugin<A, InMemorySourceCursor, IdentityKey, unknown> => {
-  return defineSourcePlugin({
+  return SourcePlugin.make({
     cursorSchema: InMemorySourceCursor,
     identity: options.identity,
     make: () => makeImplementation(options, options.identity),

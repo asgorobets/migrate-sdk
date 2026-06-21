@@ -15,8 +15,9 @@ services.
 
 ## Configured Source Plugin
 
-`defineSourcePlugin` turns a source implementation into a configured source
-plugin:
+`SourcePlugin.make` turns a source implementation into a configured source
+plugin. The configured plugin is layer-backed; migration authors consume that
+configured value rather than raw Effect services:
 
 ```ts
 interface ConfiguredSourcePlugin<
@@ -98,7 +99,7 @@ configured identity contract supplies the id, schema, and fingerprint, and the
 runtime applies the SDK-owned canonical encoder.
 
 The configured plugin also carries an SDK-owned source layer used by the runner.
-Plugin authors normally return the configured value from `defineSourcePlugin`
+Plugin authors normally return the configured value from `SourcePlugin.make`
 instead of naming that layer type directly.
 
 Plugins can also use the factory form when each configured plugin needs fresh
@@ -126,9 +127,24 @@ interface SourcePluginFactoryInput<
 The runner provides the configured source layer per migration definition. Do not
 register every source plugin globally under the shared `SourcePlugin` tag.
 
+When a plugin already has a complete `Layer<SourcePlugin, E, R>`, adapt that
+layer with `SourcePlugin.fromLayer` instead of adding another constructor name:
+
+```ts
+const source = SourcePlugin.fromLayer({
+  cursorSchema,
+  identity,
+  sourceSchema,
+  layer: SourcePluginLive,
+});
+
+const testSource = source.provide(SourceApi.testLayer(fixtures));
+const liveSource = source.provide(SourceApi.liveLayer(config));
+```
+
 ## Effect-Native API Source Plugins
 
-`defineSourcePlugin` is already Effect-native: source reads and identity lookups
+`SourcePlugin.make` is already Effect-native: source reads and identity lookups
 return `Effect` values, so plugin authors can compose services, layers, retries,
 HTTP clients, timeouts, and bounded concurrency inside the source plugin without
 a second Effect-specific factory.
@@ -158,7 +174,7 @@ const destination = InMemoryDestination.makeEntries({
 
 const source = JsonPlaceholderPostSourcePlugin.make();
 
-const migration = defineMigration({
+const migration = MigrationDefinition.make({
   id: "jsonplaceholder-posts",
   source,
   store,
@@ -179,7 +195,7 @@ export const JsonPlaceholderPostSourcePlugin = {
   make: (options?: JsonPlaceholderPostSourceOptions) => {
     const apiLayer = options?.apiLayer ?? JsonPlaceholderApi.live();
 
-    return defineSourcePlugin({
+    return SourcePlugin.make({
       cursorSchema: JsonPlaceholderPostCursor,
       sourceSchema: JsonPlaceholderPost,
       identity: SourceIdentity.make({
@@ -202,7 +218,7 @@ The JSONPlaceholder source keeps retry policy, timeout, page size, max post
 count, and detail concurrency as defaults inside the source plugin. Its public
 options only expose the API layer override used by tests and live diagnostics.
 
-`defineSourcePlugin` accepts `SourceItemInput` values and normalizes source
+`SourcePlugin.make` accepts `SourceItemInput` values and normalizes source
 identity and source version into the runtime's branded values. It also normalizes
 `nextCursor: undefined` away before the runtime sees the read result. Cursor
 encoding and decoding still belongs to the configured `cursorSchema`.
@@ -399,7 +415,7 @@ export const CsvSourcePlugin = {
   make: <Source, IdentityKey>(
     options: CsvSourceOptions<Source, IdentityKey>
   ) =>
-    defineSourcePlugin({
+    SourcePlugin.make({
       cursorSchema: CsvSourceCursor,
       identity: makeCsvIdentityDefinition(options.identity),
       make: () => makeCsvSourceImplementation(options),

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import {
-  defineMigration,
   InMemorySourcePlugin,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryCatalog,
   MigrationExecutable,
-  MigrationExecution,
   type MigrationExecutableService,
+  MigrationExecution,
   type MigrationRunSummary,
   type MigrationStore,
   type MigrationStoreError,
@@ -32,7 +32,7 @@ const source = InMemorySourcePlugin.make({
 });
 const store = {} as Layer.Layer<MigrationStore, MigrationStoreError>;
 
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: "articles",
   source,
   store,
@@ -85,46 +85,48 @@ const makeRollbackSummary = (): RollbackRunSummary => ({
 });
 
 describe("MigrationExecution", () => {
-  it.effect("plans registry runs and delegates to the provided executable", () =>
-    Effect.gen(function* () {
-      const registry = MigrationDefinitionRegistry.make({
-        definitions: [articles] as const,
-        id: "service-registry",
-      });
-      const delegatedPlans: string[] = [];
-      const executable: MigrationExecutableService = {
-        startRollback: () => Effect.die("rollback should not be called"),
-        startRun: (plan) =>
-          Effect.sync(() => {
-            delegatedPlans.push(plan.executionDefinitionIds.join(","));
-            const summary = makeRunSummary();
+  it.effect(
+    "plans registry runs and delegates to the provided executable",
+    () =>
+      Effect.gen(function* () {
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles] as const,
+          id: "service-registry",
+        });
+        const delegatedPlans: string[] = [];
+        const executable: MigrationExecutableService = {
+          startRollback: () => Effect.die("rollback should not be called"),
+          startRun: (plan) =>
+            Effect.sync(() => {
+              delegatedPlans.push(plan.executionDefinitionIds.join(","));
+              const summary = makeRunSummary();
 
-            return {
-              kind: "completed" as const,
-              runId: summary.runId,
-              summary,
-            };
-          }),
-      };
-      const layer = MigrationExecution.layer.pipe(
-        Layer.provide(
-          Layer.mergeAll(
-            MigrationDefinitionRegistryCatalog.layer({
-              registries: [registry],
+              return {
+                kind: "completed" as const,
+                runId: summary.runId,
+                summary,
+              };
             }),
-            Layer.succeed(MigrationExecutable, executable)
+        };
+        const layer = MigrationExecution.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              MigrationDefinitionRegistryCatalog.layer({
+                registries: [registry],
+              }),
+              Layer.succeed(MigrationExecutable, executable)
+            )
           )
-        )
-      );
+        );
 
-      const result = yield* MigrationExecution.run({
-        definitionIds: ["articles"],
-        registryId: "service-registry",
-      }).pipe(Effect.provide(layer));
+        const result = yield* MigrationExecution.run({
+          definitionIds: ["articles"],
+          registryId: "service-registry",
+        }).pipe(Effect.provide(layer));
 
-      expect(result.kind).toBe("completed");
-      expect(delegatedPlans).toEqual(["articles"]);
-    })
+        expect(result.kind).toBe("completed");
+        expect(delegatedPlans).toEqual(["articles"]);
+      })
   );
 
   it.effect("constructs one-off registry execution explicitly with make", () =>

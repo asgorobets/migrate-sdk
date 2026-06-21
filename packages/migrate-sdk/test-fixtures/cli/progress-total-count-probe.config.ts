@@ -1,10 +1,10 @@
 import { Effect, Schema } from "effect";
 import {
-  defineMigration,
-  defineSourcePlugin,
   InMemoryMigrationStore,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   SourceIdentity,
+  SourcePlugin,
   toMigrationDefinitionId,
 } from "migrate-sdk";
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
@@ -21,7 +21,7 @@ const probe = {
 
 globalThis.__migrateSdkCliTotalCountProbe = probe;
 
-const source = defineSourcePlugin({
+const source = SourcePlugin.make({
   cursorSchema: Schema.Null,
   countTotal: () =>
     Effect.sync(() => {
@@ -44,7 +44,7 @@ const source = defineSourcePlugin({
   sourceSchema: EntrySource,
 });
 
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: toMigrationDefinitionId("articles"),
   source,
   store,

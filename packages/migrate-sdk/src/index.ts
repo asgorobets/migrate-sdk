@@ -5,19 +5,17 @@ export type {
   ConfiguredSourcePlugin,
   MigrationDefinitionDependencies,
   MigrationDefinitionDependenciesInput,
-  MigrationDefinition,
   MigrationDefinitionInput,
   SourcePayloadSchema,
-  SourceReadResultInput,
   SourcePluginFactoryInput,
   SourcePluginImplementation,
   SourcePluginInput,
+  SourceReadResultInput,
   SourceRetryStrategy,
 } from "./domain/definition.ts";
 export {
-  defineMigration,
-  defineSourcePlugin,
-  defineSourcePluginLayer,
+  MigrationDefinition,
+  SourcePlugin,
 } from "./domain/definition.ts";
 
 export {
@@ -359,7 +357,6 @@ export type {
 export { MigrationStore } from "./services/migration-store.ts";
 export { MigrationProgress } from "./services/migration-progress.ts";
 export { RollbackProgress } from "./services/rollback-progress.ts";
-export { SourcePlugin } from "./services/source-plugin.ts";
 export { Tracking } from "./services/tracking.ts";
 export type {
   TrackingProcessContext,

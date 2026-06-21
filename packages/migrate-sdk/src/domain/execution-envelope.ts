@@ -3,9 +3,9 @@ import {
   MigrationDefinitionRegistryCatalog,
   type MigrationDefinitionRegistryCatalogLookupError,
 } from "../services/migration-definition-registry-catalog.ts";
-import {
-  type MigrationExecutableRollbackError,
-  type MigrationExecutableRunError,
+import type {
+  MigrationExecutableRollbackError,
+  MigrationExecutableRunError,
 } from "../services/migration-executable.ts";
 import {
   MigrationRollbackExecutor,
@@ -22,11 +22,11 @@ import { MigrationDefinitionLock } from "./lock.ts";
 import type {
   MigrationDefinitionExecutableRollbackPlan,
   MigrationDefinitionExecutableRunPlan,
+  MigrationDefinitionRegistryExecutableError,
   MigrationDefinitionRegistryPlanningError,
   MigrationDefinitionRegistryRollbackInput,
   MigrationDefinitionRegistryRunInput,
 } from "./registry.ts";
-import { MigrationDefinitionRegistryExecutableError } from "./registry.ts";
 import type { RollbackRunSummary } from "./rollback.ts";
 import type { MigrationRunSummary } from "./run.ts";
 

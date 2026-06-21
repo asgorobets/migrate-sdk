@@ -81,19 +81,6 @@ import type {
   TrackingRecord,
   TrackingRecordContract,
 } from "../domain/tracking.ts";
-import { MigrationProgress } from "./migration-progress.ts";
-import type { MigrationReference } from "./migration-reference-lookup.ts";
-import { MigrationStore } from "./migration-store.ts";
-import { RollbackProgress } from "./rollback-progress.ts";
-import {
-  getSourcePlugin,
-  type SourcePlugin,
-} from "./source-plugin.ts";
-import {
-  makeProcessScope,
-  Tracking,
-  type TrackingService,
-} from "./tracking.ts";
 import { normalizeItemError } from "../runtime/item-error.ts";
 import {
   isMigrationRuntimeError,
@@ -109,6 +96,16 @@ import {
   processSourceItem,
   validateStagedTrackingRecord,
 } from "../runtime/process-source-item.ts";
+import { MigrationProgress } from "./migration-progress.ts";
+import type { MigrationReference } from "./migration-reference-lookup.ts";
+import { MigrationStore } from "./migration-store.ts";
+import { RollbackProgress } from "./rollback-progress.ts";
+import { getSourcePlugin, type SourcePlugin } from "./source-plugin.ts";
+import {
+  makeProcessScope,
+  Tracking,
+  type TrackingService,
+} from "./tracking.ts";
 
 export type RunMigrationDefinitionError =
   | SourcePluginError

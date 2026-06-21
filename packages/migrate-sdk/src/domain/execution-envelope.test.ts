@@ -3,10 +3,10 @@ import { Effect, Layer, Schema } from "effect";
 import {
   DuplicateMigrationDefinitionRegistryId,
   defaultSourceVersionContractFingerprint,
-  defineMigration,
   executeMigrationExecutionEnvelope,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryCatalog,
   MigrationDefinitionRegistryCatalogConstructionError,
@@ -55,7 +55,7 @@ describe("MigrationExecutionEnvelope", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeArticlesSource(),
           store: InMemoryMigrationStore.layer(storeState),
@@ -105,7 +105,7 @@ describe("MigrationExecutionEnvelope", () => {
 
   it.effect("requires a registry id before deriving an envelope", () =>
     Effect.gen(function* () {
-      const articles = defineMigration({
+      const articles = MigrationDefinition.make({
         id: "articles",
         source: makeArticlesSource(),
         store: InMemoryMigrationStore.layer(),
@@ -137,7 +137,7 @@ describe("MigrationExecutionEnvelope", () => {
     "resolves registries from the catalog and rejects invalid catalogs",
     () =>
       Effect.gen(function* () {
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeArticlesSource(),
           store: InMemoryMigrationStore.layer(),
@@ -231,7 +231,7 @@ describe("MigrationExecutionEnvelope", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeArticlesSource(),
           store: InMemoryMigrationStore.layer(storeState),
@@ -275,60 +275,57 @@ describe("MigrationExecutionEnvelope", () => {
       })
   );
 
-  it.effect(
-    "executes run envelopes with workflow-owned locks",
-    () =>
-      Effect.gen(function* () {
-        const definitionId = toMigrationDefinitionId("articles");
-        const runId = toMigrationRunId("leased-run-envelope");
-        const lockOwnersDuringProcess: string[] = [];
-        const storeState = InMemoryMigrationStore.makeState();
-        const storeLayer = InMemoryMigrationStore.layer(storeState);
-        const articles = defineMigration({
-          id: definitionId,
-          source: makeArticlesSource(),
-          store: storeLayer,
-          process: () =>
-            Effect.sync(() => {
-              lockOwnersDuringProcess.push(
-                storeState.definitionLocks.get(definitionId)?.ownerRunId ??
-                  "none"
-              );
+  it.effect("executes run envelopes with workflow-owned locks", () =>
+    Effect.gen(function* () {
+      const definitionId = toMigrationDefinitionId("articles");
+      const runId = toMigrationRunId("leased-run-envelope");
+      const lockOwnersDuringProcess: string[] = [];
+      const storeState = InMemoryMigrationStore.makeState();
+      const storeLayer = InMemoryMigrationStore.layer(storeState);
+      const articles = MigrationDefinition.make({
+        id: definitionId,
+        source: makeArticlesSource(),
+        store: storeLayer,
+        process: () =>
+          Effect.sync(() => {
+            lockOwnersDuringProcess.push(
+              storeState.definitionLocks.get(definitionId)?.ownerRunId ?? "none"
+            );
+          }),
+      });
+      const registry = MigrationDefinitionRegistry.make({
+        id: "catalog",
+        definitions: [articles] as const,
+      });
+      const plan = yield* registry.executable().planRun({
+        definitionIds: ["articles"],
+      });
+      const lock = yield* Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        return yield* store.acquireDefinitionLock(definitionId, runId);
+      }).pipe(Effect.provide(storeLayer));
+      const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
+        locks: [lock],
+        runId,
+      });
+
+      const summary = yield* executeMigrationExecutionEnvelope(envelope).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            MigrationDefinitionRegistryCatalog.layer({
+              registries: [registry],
             }),
-        });
-        const registry = MigrationDefinitionRegistry.make({
-          id: "catalog",
-          definitions: [articles] as const,
-        });
-        const plan = yield* registry.executable().planRun({
-          definitionIds: ["articles"],
-        });
-        const lock = yield* Effect.gen(function* () {
-          const store = yield* MigrationStore;
-
-          return yield* store.acquireDefinitionLock(definitionId, runId);
-        }).pipe(Effect.provide(storeLayer));
-        const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
-          locks: [lock],
-          runId,
-        });
-
-        const summary = yield* executeMigrationExecutionEnvelope(envelope).pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              MigrationDefinitionRegistryCatalog.layer({
-                registries: [registry],
-              }),
-              MigrationRunExecutor.layer,
-              MigrationRollbackExecutor.layer
-            )
+            MigrationRunExecutor.layer,
+            MigrationRollbackExecutor.layer
           )
-        );
+        )
+      );
 
-        expect(summary.runId).toBe(runId);
-        expect(lockOwnersDuringProcess).toEqual([runId]);
-        expect(storeState.definitionLocks.size).toBe(0);
-      })
+      expect(summary.runId).toBe(runId);
+      expect(lockOwnersDuringProcess).toEqual([runId]);
+      expect(storeState.definitionLocks.size).toBe(0);
+    })
   );
 
   it.effect(
@@ -336,7 +333,7 @@ describe("MigrationExecutionEnvelope", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeArticlesSource(),
           store: InMemoryMigrationStore.layer(storeState),
@@ -390,5 +387,4 @@ describe("MigrationExecutionEnvelope", () => {
         );
       })
   );
-
 });

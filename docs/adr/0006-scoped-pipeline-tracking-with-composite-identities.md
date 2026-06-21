@@ -167,7 +167,7 @@ const ct = CommercetoolsDestination.make({
   projectKey: "catalog",
 }).provide(CommercetoolsLive.layer)
 
-const migration = defineMigration({
+const migration = MigrationDefinition.make({
   id: "business-addresses",
   source,
   tracking: Tracking.record({

@@ -28,9 +28,9 @@ import { Effect, Schema } from "effect";
 import {
   type DestinationJournalChangeEntry,
   type DestinationPluginError,
-  defineMigration,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
+  MigrationDefinition,
   rollbackMigration,
   runMigrations,
   SourceIdentity,
@@ -340,7 +340,7 @@ describe("CommercetoolsDestination capability module", () => {
           },
         }).provide(sdk.layer);
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "resource-helpers",
           process: (source) =>
             Effect.gen(function* () {
@@ -776,7 +776,7 @@ describe("CommercetoolsDestination capability module", () => {
           message: "Process failed after destination work",
         };
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "resource-helpers",
           process: (source) =>
             Effect.gen(function* () {
@@ -846,7 +846,7 @@ describe("CommercetoolsDestination capability module", () => {
         });
         const ct = CommercetoolsDestination.make().provide(sdk.layer);
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "resource-helpers",
           process: (source) =>
             ct.productSelections
@@ -916,7 +916,7 @@ describe("CommercetoolsDestination capability module", () => {
         });
         const ct = CommercetoolsDestination.make().provide(sdk.layer);
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "resource-helpers",
           process: () =>
             ct.customers
@@ -978,7 +978,7 @@ describe("CommercetoolsDestination capability module", () => {
           message: "Rollback failed after inspecting product change",
         };
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "resource-helpers",
           process: () =>
             ct.products

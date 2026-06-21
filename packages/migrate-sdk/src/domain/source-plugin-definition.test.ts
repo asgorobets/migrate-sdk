@@ -2,20 +2,19 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { Service } from "effect/Context";
 import {
-  defineSourcePlugin,
+  type ConfiguredSourcePlugin,
   SourceIdentity,
   type SourceIdentityTarget,
   type SourceItem,
   SourceItemTotal,
+  SourcePlugin,
+  type SourcePlugin as SourcePluginContract,
   SourcePluginError,
   type SourceReadResult,
   type SourceReadResultInput,
+  toSourceVersion,
 } from "migrate-sdk";
 import { expectTypeOf } from "vitest";
-import {
-  SourcePlugin,
-  type SourcePlugin as SourcePluginContract,
-} from "../services/source-plugin.ts";
 
 const RemoteArticle = Schema.Struct({
   id: Schema.String,
@@ -138,12 +137,12 @@ const makeArticleApiLayer = (state: ArticleApiState): Layer.Layer<ArticleApi> =>
     };
   });
 
-describe("defineSourcePlugin", () => {
+describe("SourcePlugin", () => {
   it.effect(
     "normalizes source item inputs into a configured source plugin",
     () =>
       Effect.gen(function* () {
-        const source = defineSourcePlugin({
+        const source = SourcePlugin.make({
           cursorSchema: RemoteArticleCursor,
           identity: RemoteArticleIdentity,
           sourceSchema: RemoteArticle,
@@ -204,7 +203,7 @@ describe("defineSourcePlugin", () => {
 
   it.effect("exposes optional Source Item total count", () =>
     Effect.gen(function* () {
-      const source = defineSourcePlugin({
+      const source = SourcePlugin.make({
         cursorSchema: RemoteArticleCursor,
         identity: RemoteArticleIdentity,
         sourceSchema: RemoteArticle,
@@ -228,9 +227,55 @@ describe("defineSourcePlugin", () => {
     })
   );
 
+  it.effect("adapts an existing source plugin layer", () =>
+    Effect.gen(function* () {
+      const source = SourcePlugin.fromLayer({
+        cursorSchema: RemoteArticleCursor,
+        identity: RemoteArticleIdentity,
+        sourceSchema: RemoteArticle,
+        layer: Layer.succeed(SourcePlugin, {
+          cursorSchema: RemoteArticleCursor,
+          identity: RemoteArticleIdentity,
+          sourceSchema: RemoteArticle,
+          lookupStrategy: "direct",
+          read: () =>
+            Effect.succeed({
+              items: [
+                {
+                  identity: SourceIdentity.fromKey(
+                    RemoteArticleIdentity,
+                    "article-1"
+                  ),
+                  version: toSourceVersion("2026-06-05T10:00:00.000Z"),
+                  item: {
+                    id: "article-1",
+                    title: "One",
+                    updatedAt: "2026-06-05T10:00:00.000Z",
+                  },
+                },
+              ],
+            }),
+          readByIdentity: () => Effect.succeed(null),
+        }),
+      });
+
+      expectTypeOf(source).toMatchTypeOf<
+        ConfiguredSourcePlugin<RemoteArticle, RemoteArticleCursor>
+      >();
+
+      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const page = yield* plugin.read(null);
+
+      expect(source.identity).toBe(RemoteArticleIdentity);
+      expect(page.items[0]?.identity).toEqual(
+        SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
+      );
+    })
+  );
+
   it.effect("exposes lower-bound Source Item totals", () =>
     Effect.gen(function* () {
-      const source = defineSourcePlugin({
+      const source = SourcePlugin.make({
         cursorSchema: RemoteArticleCursor,
         identity: RemoteArticleIdentity,
         sourceSchema: RemoteArticle,
@@ -269,7 +314,7 @@ describe("defineSourcePlugin", () => {
     "fails source reads with SourcePluginError when identity keys do not match the Source Identity Schema",
     () =>
       Effect.gen(function* () {
-        const source = defineSourcePlugin({
+        const source = SourcePlugin.make({
           cursorSchema: RemoteArticleCursor,
           identity: RemoteArticleIdentity,
           sourceSchema: RemoteArticle,
@@ -311,7 +356,7 @@ describe("defineSourcePlugin", () => {
     "fails source identity lookups with SourcePluginError when returned identity keys do not match the Source Identity Schema",
     () =>
       Effect.gen(function* () {
-        const source = defineSourcePlugin({
+        const source = SourcePlugin.make({
           cursorSchema: RemoteArticleCursor,
           identity: RemoteArticleIdentity,
           sourceSchema: RemoteArticle,
@@ -347,7 +392,7 @@ describe("defineSourcePlugin", () => {
     "fails source identity lookups when the returned item identity does not match the requested target",
     () =>
       Effect.gen(function* () {
-        const source = defineSourcePlugin({
+        const source = SourcePlugin.make({
           cursorSchema: RemoteArticleCursor,
           identity: RemoteArticleIdentity,
           sourceSchema: RemoteArticle,
@@ -396,7 +441,7 @@ describe("defineSourcePlugin", () => {
         ): Effect.Effect<A, SourcePluginError> =>
           effect.pipe(Effect.provide(apiLayer));
 
-        const source = defineSourcePlugin({
+        const source = SourcePlugin.make({
           cursorSchema: RemoteArticleCursor,
           identity: RemoteArticleIdentity,
           sourceSchema: RemoteArticle,
@@ -481,7 +526,7 @@ describe("defineSourcePlugin", () => {
         city: Schema.String,
       });
 
-      const source = defineSourcePlugin({
+      const source = SourcePlugin.make({
         cursorSchema: Schema.Null,
         identity: BusinessAddressIdentity,
         sourceSchema: BusinessAddress,

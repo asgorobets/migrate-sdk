@@ -1,8 +1,8 @@
 import { Effect, Layer, Schema } from "effect";
 import {
-  defineMigration,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationStore,
   MigrationStoreError,
@@ -36,7 +36,7 @@ const store = Layer.effect(
   })
 ).pipe(Layer.provide(baseStore));
 
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: toMigrationDefinitionId("articles"),
   source: InMemorySourcePlugin.make({
     identity: EntrySourceIdentity,

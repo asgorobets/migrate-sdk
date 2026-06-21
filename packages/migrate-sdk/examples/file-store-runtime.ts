@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { Effect, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import {
-  defineMigration,
+  MigrationDefinition,
   type MigrationRunSummary,
   runMigration,
   SourceIdentity,
@@ -84,9 +84,9 @@ export const makeFileStoreArticlesMigration = ({
     contentType: "article",
     fields: ArticleEntryFields,
   });
-  const processedEntries: Array<typeof ArticleEntryFields.Type> = [];
+  const processedEntries: (typeof ArticleEntryFields.Type)[] = [];
 
-  const migration = defineMigration({
+  const migration = MigrationDefinition.make({
     id: definitionId,
     process: Effect.fn("fileStoreArticles.process")(function* (source) {
       if (!source.item.publish) {

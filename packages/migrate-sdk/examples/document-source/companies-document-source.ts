@@ -3,7 +3,7 @@ import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSyst
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
 import { Effect, Layer, Schema } from "effect";
 import {
-  defineMigration,
+  MigrationDefinition,
   type MigrationRunSummary,
   type MigrationStore,
   runMigrations,
@@ -143,7 +143,7 @@ interface MigrationOptions<Entry> {
 export const makeBusinessUnitsMigration = (
   options: MigrationOptions<RecordedEntry<BusinessUnitEntryFields>> = {}
 ) => {
-  return defineMigration({
+  return MigrationDefinition.make({
     id: "companies-business-units",
     process: (source) => {
       const businessUnit = source.item.item;
@@ -159,12 +159,12 @@ export const makeBusinessUnitsMigration = (
 
       options.recordEntry?.({
         fields: {
-        billingCity: billingAddress?.city ?? null,
-        key: businessUnit.key,
-        name: businessUnit.name,
-        primaryContactEmail: primaryContact?.email ?? null,
-        shippingCity: shippingAddress?.city ?? null,
-        status: businessUnit.status,
+          billingCity: billingAddress?.city ?? null,
+          key: businessUnit.key,
+          name: businessUnit.name,
+          primaryContactEmail: primaryContact?.email ?? null,
+          shippingCity: shippingAddress?.city ?? null,
+          status: businessUnit.status,
         },
         sourceIdentity: source.identity.encoded,
       });
@@ -189,7 +189,7 @@ export const makeBusinessUnitsMigration = (
 export const makeContactsMigration = (
   options: MigrationOptions<RecordedEntry<ContactEntryFields>> = {}
 ) => {
-  return defineMigration({
+  return MigrationDefinition.make({
     id: "companies-contacts",
     process: (source) => {
       const businessUnit = source.item.parent;
@@ -197,15 +197,15 @@ export const makeContactsMigration = (
 
       options.recordEntry?.({
         fields: {
-        businessUnitKey: businessUnit.key,
-        businessUnitName: businessUnit.name,
-        businessUnitStatus: businessUnit.status,
-        email: contact.email,
-        firstName: contact.firstName,
-        isPrimary: contact.isPrimary,
-        key: contact.key,
-        lastName: contact.lastName,
-        role: contact.role,
+          businessUnitKey: businessUnit.key,
+          businessUnitName: businessUnit.name,
+          businessUnitStatus: businessUnit.status,
+          email: contact.email,
+          firstName: contact.firstName,
+          isPrimary: contact.isPrimary,
+          key: contact.key,
+          lastName: contact.lastName,
+          role: contact.role,
         },
         sourceIdentity: source.identity.encoded,
       });
@@ -231,7 +231,7 @@ export const makeContactsMigration = (
 export const makeAddressesMigration = (
   options: MigrationOptions<RecordedEntry<AddressEntryFields>> = {}
 ) => {
-  return defineMigration({
+  return MigrationDefinition.make({
     id: "companies-addresses",
     process: (source) => {
       const businessUnit = source.item.parent;
@@ -239,16 +239,16 @@ export const makeAddressesMigration = (
 
       options.recordEntry?.({
         fields: {
-        businessUnitKey: businessUnit.key,
-        businessUnitName: businessUnit.name,
-        businessUnitStatus: businessUnit.status,
-        city: address.city,
-        country: address.country,
-        key: address.key,
-        postalCode: address.postalCode,
-        region: address.region,
-        street: address.street,
-        type: address.type,
+          businessUnitKey: businessUnit.key,
+          businessUnitName: businessUnit.name,
+          businessUnitStatus: businessUnit.status,
+          city: address.city,
+          country: address.country,
+          key: address.key,
+          postalCode: address.postalCode,
+          region: address.region,
+          street: address.street,
+          type: address.type,
         },
         sourceIdentity: source.identity.encoded,
       });

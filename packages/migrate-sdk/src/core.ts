@@ -1,7 +1,18 @@
 // biome-ignore-all assist/source/organizeImports: Public core entrypoint grouped by domain concern.
 // biome-ignore-all lint/performance/noBarrelFile: Core subpath intentionally avoids optional source and store implementations.
 
-export { defineMigration } from "./domain/definition.ts";
+export type {
+  ConfiguredSourcePlugin,
+  SourcePayloadSchema,
+  SourcePluginFactoryInput,
+  SourcePluginImplementation,
+  SourcePluginInput,
+  SourceReadResultInput,
+} from "./domain/definition.ts";
+export {
+  MigrationDefinition,
+  SourcePlugin,
+} from "./domain/definition.ts";
 
 export {
   executeMigrationExecutionEnvelope,

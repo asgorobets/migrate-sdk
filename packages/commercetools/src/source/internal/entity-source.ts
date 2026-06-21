@@ -1,7 +1,5 @@
 import { Effect, Layer } from "effect";
 import {
-  defineSourcePlugin,
-  defineSourcePluginLayer,
   type SourceIdentityTarget,
   SourceItemTotal,
   SourcePlugin,
@@ -201,13 +199,14 @@ export const makeProjectedEntitySource = <
   const identity =
     descriptor.identity[options.identity ?? defaultSourceIdentity];
 
-  return defineSourcePluginLayer({
+  return SourcePlugin.fromLayer({
+    cursorSchema: CommercetoolsSourceCursor,
     identity,
     layer: Layer.effect(
       SourcePlugin,
       Effect.gen(function* () {
         const sdk = yield* CommercetoolsSdk;
-        const source = defineSourcePlugin<
+        const source = SourcePlugin.make<
           Source,
           CommercetoolsSourceCursor,
           CommercetoolsSourceIdentityKey,

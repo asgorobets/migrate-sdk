@@ -5,7 +5,7 @@ import { CommercetoolsSourcePlugin } from "@migrate-sdk/commercetools/source";
 import { Effect, type Layer, type Schema } from "effect";
 import {
   type DestinationPluginError,
-  defineMigration,
+  MigrationDefinition,
   type MigrationStore,
   type MigrationStoreError,
   skipItem,
@@ -37,7 +37,10 @@ export const makeBusinessUnitStaticFieldMigration = (
     identity: "key",
   }).provide(options.sdkLayer);
 
-  return defineMigration<BusinessUnit, BusinessUnitStaticFieldProcessError>({
+  return MigrationDefinition.make<
+    BusinessUnit,
+    BusinessUnitStaticFieldProcessError
+  >({
     id: businessUnitStaticFieldDefinitionId,
     source,
     store: options.storeLayer,

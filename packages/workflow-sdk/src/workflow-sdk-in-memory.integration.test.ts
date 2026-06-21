@@ -5,8 +5,6 @@ import { getRun, start } from "workflow/api";
 import { getWorld } from "workflow/runtime";
 import type { WorkflowSdkMigrationRunEnvelope } from "./migration-execution-workflow.ts";
 import type { WorkflowSdkMigrationRollbackEnvelope } from "./migration-rollback-workflow.ts";
-import type { WorkflowSdkMigrationWorkflow } from "./workflow-sdk-migration-executable.ts";
-import { WorkflowSdkMigrationExecutable } from "./workflow-sdk-migration-executable.ts";
 import {
   beginMigrationRunStep,
   completeMigrationRunStep,
@@ -18,6 +16,8 @@ import {
 } from "./test-fixtures/in-memory-migration.steps.ts";
 import { inMemoryMigrationTestWorkflow } from "./test-fixtures/in-memory-migration.workflow.ts";
 import { inMemoryRollbackTestWorkflow } from "./test-fixtures/in-memory-rollback.workflow.ts";
+import type { WorkflowSdkMigrationWorkflow } from "./workflow-sdk-migration-executable.ts";
+import { WorkflowSdkMigrationExecutable } from "./workflow-sdk-migration-executable.ts";
 
 test("Workflow SDK executes a real in-memory migration run and rollback", async () => {
   resetInMemoryMigrationTestState();

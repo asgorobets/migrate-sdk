@@ -2,10 +2,10 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, type Layer, Option, Schema } from "effect";
 import {
   defaultSourceVersionContractFingerprint,
-  defineMigration,
   type ExecutionStartResult,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
+  MigrationDefinition,
   type MigrationDefinitionDependenciesInput,
   type MigrationDefinitionExecutableRollbackPlan,
   type MigrationDefinitionExecutableRunPlan,
@@ -70,7 +70,7 @@ const seedMigrationContract = (
 };
 
 const makeDefinition = (input: TestDefinitionInput) =>
-  defineMigration({
+  MigrationDefinition.make({
     id: input.id,
     ...(input.dependencies === undefined
       ? {}
@@ -88,7 +88,7 @@ const makeStatusDefinition = (
     readonly store: Layer.Layer<MigrationStore, MigrationStoreError>;
   }
 ) =>
-  defineMigration({
+  MigrationDefinition.make({
     id: input.id,
     ...(input.dependencies === undefined
       ? {}
@@ -133,7 +133,7 @@ const makeRollbackSafetyFixture = () => {
     );
   }
 
-  const authors = defineMigration({
+  const authors = MigrationDefinition.make({
     id: authorsId,
     source: InMemorySourcePlugin.make({
       identity: ArticleSourceIdentity,
@@ -144,7 +144,7 @@ const makeRollbackSafetyFixture = () => {
     process: () => Effect.void,
     rollback: () => undefined,
   });
-  const articles = defineMigration({
+  const articles = MigrationDefinition.make({
     id: articlesId,
     dependencies: {
       required: [authorsId],
@@ -1111,7 +1111,7 @@ describe("MigrationDefinitionRegistry", () => {
           identity: businessAddressIdentity,
           items: [],
         });
-        const businessAddresses = defineMigration({
+        const businessAddresses = MigrationDefinition.make({
           id: "business-addresses",
           source: businessAddressSource,
           store,
@@ -1151,7 +1151,7 @@ describe("MigrationDefinitionRegistry", () => {
           identity: businessAddressIdentity,
           items: [],
         });
-        const businessAddresses = defineMigration({
+        const businessAddresses = MigrationDefinition.make({
           id: "business-addresses",
           source: businessAddressSource,
           store,
@@ -1432,7 +1432,7 @@ describe("MigrationDefinitionRegistry", () => {
   it.effect("starts executable run plans through the inline executable", () =>
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
-      const articles = defineMigration({
+      const articles = MigrationDefinition.make({
         id: "articles",
         source: InMemorySourcePlugin.make({
           identity: ArticleSourceIdentity,
@@ -1501,7 +1501,7 @@ describe("MigrationDefinitionRegistry", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: InMemorySourcePlugin.make({
             identity: ArticleSourceIdentity,
@@ -1616,7 +1616,7 @@ describe("MigrationDefinitionRegistry", () => {
           definitionId,
           sourceIdentity
         );
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: definitionId,
           source: InMemorySourcePlugin.make({
             identity: ArticleSourceIdentity,
@@ -1731,7 +1731,7 @@ describe("MigrationDefinitionRegistry", () => {
   it.effect("runs a valid registry plan through the existing runtime", () =>
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
-      const articles = defineMigration({
+      const articles = MigrationDefinition.make({
         id: "articles",
         source: InMemorySourcePlugin.make({
           identity: ArticleSourceIdentity,
@@ -1776,7 +1776,7 @@ describe("MigrationDefinitionRegistry", () => {
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
       const processCalls: string[] = [];
-      const articles = defineMigration({
+      const articles = MigrationDefinition.make({
         id: "articles",
         source: InMemorySourcePlugin.make({
           identity: ArticleSourceIdentity,
@@ -1868,7 +1868,7 @@ describe("MigrationDefinitionRegistry", () => {
           definitionId,
           sourceIdentity
         );
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: definitionId,
           source: InMemorySourcePlugin.make({
             identity: ArticleSourceIdentity,
@@ -2042,7 +2042,7 @@ describe("MigrationDefinitionRegistry", () => {
           );
         }
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: authorsId,
           source: InMemorySourcePlugin.make({
             identity: ArticleSourceIdentity,
@@ -2056,7 +2056,7 @@ describe("MigrationDefinitionRegistry", () => {
               rollbackOrder.push("authors");
             }),
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: articlesId,
           dependencies: {
             optional: [authorsId],

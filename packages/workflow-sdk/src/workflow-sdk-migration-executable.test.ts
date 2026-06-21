@@ -1,16 +1,16 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import {
-  defineMigration,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecutable,
+  type MigrationExecutionEnvelope,
   MigrationRuntimeError,
   MigrationStore,
   MigrationStoreError,
   SourceIdentity,
-  type MigrationExecutionEnvelope,
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "migrate-sdk";
@@ -111,7 +111,7 @@ const makeFixture = (
           })
         ).pipe(Layer.provide(baseStore))
       : baseStore;
-  const articles = defineMigration({
+  const articles = MigrationDefinition.make({
     id: articlesId,
     source: makeArticlesSource(),
     store,
@@ -266,14 +266,14 @@ describe("WorkflowSdkMigrationExecutable", () => {
       const storeLayer = InMemoryMigrationStore.layer(storeState);
       const authorsId = toMigrationDefinitionId("authors");
       const articlesId = toMigrationDefinitionId("articles");
-      const authors = defineMigration({
+      const authors = MigrationDefinition.make({
         id: authorsId,
         source: makeArticlesSource(),
         store: storeLayer,
         process: () => Effect.void,
         rollback: () => undefined,
       });
-      const articles = defineMigration({
+      const articles = MigrationDefinition.make({
         id: articlesId,
         dependencies: {
           required: [authorsId],
@@ -332,14 +332,14 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const articlesStoreState = InMemoryMigrationStore.makeState();
         const authorsId = toMigrationDefinitionId("authors");
         const articlesId = toMigrationDefinitionId("articles");
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: authorsId,
           source: makeArticlesSource(),
           store: InMemoryMigrationStore.layer(authorsStoreState),
           process: () => Effect.void,
           rollback: () => undefined,
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: articlesId,
           dependencies: {
             required: [authorsId],
@@ -394,14 +394,14 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const articlesStoreState = InMemoryMigrationStore.makeState();
         const authorsId = toMigrationDefinitionId("authors");
         const articlesId = toMigrationDefinitionId("articles");
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: authorsId,
           source: makeArticlesSource(),
           store: InMemoryMigrationStore.layer(authorsStoreState),
           process: () => Effect.void,
           rollback: () => undefined,
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: articlesId,
           dependencies: {
             required: [authorsId],

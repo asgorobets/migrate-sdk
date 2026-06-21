@@ -1,14 +1,21 @@
+import {
+  beginMigrationRunExecutionEnvelope,
+  completeMigrationRunExecutionEnvelope,
+  executeMigrationRollbackExecutionEnvelope,
+  executeMigrationRunCursorWindow,
+  failMigrationRunExecutionEnvelope,
+} from "@migrate-sdk/workflow-sdk/steps";
 import { Effect, Layer, Schema } from "effect";
 import {
-  defineMigration,
+  MigrationDefinition,
   type MigrationDefinitionId,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryCatalog,
-  MigrationRollbackExecutor,
-  MigrationRunStepExecutor,
   type MigrationRollbackExecutionEnvelopeType,
+  MigrationRollbackExecutor,
   type MigrationRunCursorWindowState,
   type MigrationRunExecutionEnvelopeType,
+  MigrationRunStepExecutor,
   type MigrationRunSummary,
   type RollbackRunSummary,
   SourceIdentity,
@@ -29,13 +36,6 @@ import type {
   WorkflowSdkMigrationRollbackEnvelope,
   WorkflowSdkMigrationRollbackSummary,
 } from "../migration-rollback-workflow.ts";
-import {
-  beginMigrationRunExecutionEnvelope,
-  completeMigrationRunExecutionEnvelope,
-  executeMigrationRollbackExecutionEnvelope,
-  executeMigrationRunCursorWindow,
-  failMigrationRunExecutionEnvelope,
-} from "@migrate-sdk/workflow-sdk/steps";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -79,7 +79,7 @@ const resetStoreState = (state: InMemoryMigrationStoreState) => {
 
 const storeState = getStoreState();
 const storeLayer = InMemoryMigrationStore.layer(storeState);
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: articleDefinitionId,
   process: () => Effect.void,
   rollback: () => undefined,
@@ -231,4 +231,5 @@ export async function inspectMigrationStoreStep(): Promise<{
 
 export const inMemoryMigrationTestRegistry = registry;
 export const inMemoryMigrationTestStoreState = storeState;
-export const resetInMemoryMigrationTestState = () => resetStoreState(storeState);
+export const resetInMemoryMigrationTestState = () =>
+  resetStoreState(storeState);

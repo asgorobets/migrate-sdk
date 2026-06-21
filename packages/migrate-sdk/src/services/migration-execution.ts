@@ -28,10 +28,9 @@ import {
   type MigrationExecutableService,
 } from "./migration-executable.ts";
 
-export type MigrationExecutionRunInput =
-  MigrationDefinitionRegistryRunInput & {
-    readonly registryId: MigrationDefinitionRegistryIdInput;
-  };
+export type MigrationExecutionRunInput = MigrationDefinitionRegistryRunInput & {
+  readonly registryId: MigrationDefinitionRegistryIdInput;
+};
 
 export type MigrationExecutionRollbackInput =
   MigrationDefinitionRegistryRollbackInput & {

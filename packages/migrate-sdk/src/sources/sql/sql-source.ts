@@ -2,9 +2,8 @@ import { Effect, Layer, type Schema } from "effect";
 import { SqlClient, type Statement } from "effect/unstable/sql";
 import {
   type ConfiguredSourcePlugin,
-  defineSourcePlugin,
-  defineSourcePluginLayer,
   type SourcePayloadSchema,
+  SourcePlugin,
   type SourcePluginImplementation,
   type SourceReadResultInput,
 } from "../../domain/definition.ts";
@@ -29,10 +28,7 @@ import {
   encodeSourceIdentityKey,
   type SourceItemInput,
 } from "../../domain/source.ts";
-import {
-  type AnySourcePlugin,
-  SourcePlugin as SourcePluginService,
-} from "../../services/source-plugin.ts";
+import type { AnySourcePlugin } from "../../services/source-plugin.ts";
 import {
   makeSqlSourceBatchSizeError,
   makeSqlSourceExecutionError,
@@ -691,7 +687,7 @@ const make = <
       identityDefinition
     );
 
-  return defineSourcePluginLayer<
+  return SourcePlugin.fromLayer<
     Source,
     Cursor,
     IdentityKey,
@@ -699,11 +695,12 @@ const make = <
     never,
     SqlClient.SqlClient
   >({
+    cursorSchema: options.cursorSchema,
     layer: Layer.effect(
-      SourcePluginService,
+      SourcePlugin,
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        const source = defineSourcePlugin<
+        const source = SourcePlugin.make<
           Source,
           Cursor,
           IdentityKey,
@@ -729,7 +726,7 @@ const make = <
               }),
         });
 
-        return yield* SourcePluginService.pipe(Effect.provide(source.layer));
+        return yield* SourcePlugin.pipe(Effect.provide(source.layer));
       })
     ),
     identity: identityDefinition,

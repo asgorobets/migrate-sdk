@@ -18,14 +18,13 @@ import {
 } from "../domain/migration-contract.ts";
 import {
   DestinationChangeDescriptor,
-  defineMigration,
-  defineSourcePlugin,
   InMemoryDestination,
   InMemoryMigrationStore,
   type InMemoryMigrationStoreState,
   InMemorySourceCursor,
   type InMemorySourceOptions,
   InMemorySourcePlugin,
+  MigrationDefinition,
   MigrationDefinitionLock,
   MigrationItemState,
   MigrationProgress,
@@ -205,7 +204,7 @@ const makeObservableTotalCountSource = ({
   >;
   readonly state: ObservableTotalCountSourceState;
 }) =>
-  defineSourcePlugin({
+  SourcePlugin.make({
     cursorSchema: InMemorySourceCursor,
     identity: ArticleSourceIdentity,
     sourceSchema: ArticleSource,
@@ -455,7 +454,7 @@ describe("runMigration", () => {
   it("keeps item-level process error types out of public run errors", () => {
     const pipelineTestError: PipelineTestError = { _tag: "PipelineTestError" };
     const store = InMemoryMigrationStore.layer();
-    const definition = defineMigration({
+    const definition = MigrationDefinition.make({
       id: "articles",
       source: makeTestInMemorySource({
         items: [
@@ -473,7 +472,7 @@ describe("runMigration", () => {
     const otherPipelineTestError: OtherPipelineTestError = {
       _tag: "OtherPipelineTestError",
     };
-    const otherDefinition = defineMigration({
+    const otherDefinition = MigrationDefinition.make({
       id: "articles-copy",
       source: makeTestInMemorySource({
         items: [
@@ -499,7 +498,7 @@ describe("runMigration", () => {
 
   it.effect("returns typed runtime errors for invalid Run Request input", () =>
     Effect.gen(function* () {
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -541,7 +540,7 @@ describe("runMigration", () => {
             }),
           readByIdentity: () => Effect.succeed(null),
         };
-        const source = defineSourcePlugin({
+        const source = SourcePlugin.make({
           cursorSchema,
           identity: ArticleSourceIdentity,
           sourceSchema: Schema.Struct({ title: Schema.String }),
@@ -568,7 +567,7 @@ describe("runMigration", () => {
       });
       const storeState = InMemoryMigrationStore.makeState();
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -644,7 +643,7 @@ describe("runMigration", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const processCalls: ArticleSource[] = [];
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -701,7 +700,7 @@ describe("runMigration", () => {
           active: 0,
           maxActive: 0,
         };
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -762,7 +761,7 @@ describe("runMigration", () => {
         active: 0,
         maxActive: 0,
       };
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -828,7 +827,7 @@ describe("runMigration", () => {
         const storeState = InMemoryMigrationStore.makeState();
         let processCalled = false;
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -865,7 +864,7 @@ describe("runMigration", () => {
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -923,7 +922,7 @@ describe("runMigration", () => {
           schema: ArticleTrackingRecord,
         });
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -993,7 +992,7 @@ describe("runMigration", () => {
           schema: ArticleTrackingRecord,
         });
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1054,7 +1053,7 @@ describe("runMigration", () => {
           schema: ArticleTrackingRecord,
         });
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1117,7 +1116,7 @@ describe("runMigration", () => {
           schema: ArticleTrackingRecord,
         });
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1177,7 +1176,7 @@ describe("runMigration", () => {
           schema: ArticleTrackingRecord,
         });
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1234,7 +1233,7 @@ describe("runMigration", () => {
           message: "Process failed after destination work",
         };
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1323,7 +1322,7 @@ describe("runMigration", () => {
           message: "Process failed after diagnostic",
         };
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1382,7 +1381,7 @@ describe("runMigration", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1428,7 +1427,7 @@ describe("runMigration", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1478,7 +1477,7 @@ describe("runMigration", () => {
           message: "Process failed after suppressed diagnostic",
         };
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1536,7 +1535,7 @@ describe("runMigration", () => {
           message: "Process failed after ordinary logs",
         };
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1586,7 +1585,7 @@ describe("runMigration", () => {
           fields: ArticleEntryFields,
         });
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1641,7 +1640,7 @@ describe("runMigration", () => {
           fields: ArticleEntryFields,
         });
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1703,7 +1702,7 @@ describe("runMigration", () => {
           },
         });
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1778,7 +1777,7 @@ describe("runMigration", () => {
           message: "Process failed after retry",
         };
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1855,7 +1854,7 @@ describe("runMigration", () => {
           message: "Process failed after repeated destination work",
         };
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1918,7 +1917,7 @@ describe("runMigration", () => {
           })
         );
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -1976,7 +1975,7 @@ describe("runMigration", () => {
           message: "Process failed after transformed tracking record",
         };
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -2034,7 +2033,7 @@ describe("runMigration", () => {
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -2085,7 +2084,7 @@ describe("runMigration", () => {
         message: "Process failed",
       };
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -2136,7 +2135,7 @@ describe("runMigration", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const processCalls: string[] = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -2185,7 +2184,7 @@ describe("runMigration", () => {
         const changedSourceState = InMemorySourcePlugin.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const process = () => Effect.void;
-        const original = defineMigration({
+        const original = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -2208,7 +2207,7 @@ describe("runMigration", () => {
           id: "test-article@v1",
           schema: SourceIdentity.key("articleId", Schema.NonEmptyString),
         });
-        const changed = defineMigration({
+        const changed = MigrationDefinition.make({
           id: "articles",
           source: InMemorySourcePlugin.make({
             identity: ChangedArticleSourceIdentity,
@@ -2261,7 +2260,7 @@ describe("runMigration", () => {
           }
         );
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             state: sourceState,
@@ -2304,7 +2303,7 @@ describe("runMigration", () => {
           id: "article-entry@v1",
           schema: ArticleTrackingRecord,
         });
-        const original = defineMigration({
+        const original = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -2332,7 +2331,7 @@ describe("runMigration", () => {
           id: "article-entry@v2",
           schema: ArticleTrackingRecord,
         });
-        const changed = defineMigration({
+        const changed = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             state: changedSourceState,
@@ -2386,7 +2385,7 @@ describe("runMigration", () => {
           id: "author-entry@v1",
           schema: ArticleTrackingRecord,
         });
-        const originalAuthors = defineMigration({
+        const originalAuthors = MigrationDefinition.make({
           id: "authors",
           source: makeTestInMemorySource({
             items: [
@@ -2412,7 +2411,7 @@ describe("runMigration", () => {
           id: "author-entry@v2",
           schema: ArticleTrackingRecord,
         });
-        const changedAuthors = defineMigration({
+        const changedAuthors = MigrationDefinition.make({
           id: "authors",
           source: makeTestInMemorySource({
             items: [],
@@ -2425,7 +2424,7 @@ describe("runMigration", () => {
           id: "article-entry@v1",
           schema: ArticleTrackingRecord,
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -2499,7 +2498,7 @@ describe("runMigration", () => {
           schema: ArticleTrackingRecord,
         });
 
-        const staffAuthors = defineMigration({
+        const staffAuthors = MigrationDefinition.make({
           id: "staff-authors",
           source: makeTestInMemorySource({
             items: [
@@ -2518,7 +2517,7 @@ describe("runMigration", () => {
               locale: "staff",
             }),
         });
-        const guestAuthors = defineMigration({
+        const guestAuthors = MigrationDefinition.make({
           id: "guest-authors",
           source: makeTestInMemorySource({
             items: [
@@ -2545,7 +2544,7 @@ describe("runMigration", () => {
           id: "guest-author-entry@v2",
           schema: ArticleTrackingRecord,
         });
-        const changedGuestAuthors = defineMigration({
+        const changedGuestAuthors = MigrationDefinition.make({
           id: "guest-authors",
           source: makeTestInMemorySource({
             items: [],
@@ -2558,7 +2557,7 @@ describe("runMigration", () => {
           id: "article-entry@v1",
           schema: ArticleTrackingRecord,
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -2645,7 +2644,7 @@ describe("runMigration", () => {
           }
         );
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: "authors",
           source: makeTestInMemorySource({
             items: [],
@@ -2654,7 +2653,7 @@ describe("runMigration", () => {
           tracking: authorTracking,
           process: () => Effect.void,
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -2781,7 +2780,7 @@ describe("runMigration", () => {
         }
       );
 
-      const authors = defineMigration({
+      const authors = MigrationDefinition.make({
         id: "authors",
         source: makeTestInMemorySource({
           items: [],
@@ -2790,7 +2789,7 @@ describe("runMigration", () => {
         tracking: authorTracking,
         process: () => Effect.void,
       });
-      const articles = defineMigration({
+      const articles = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -2886,7 +2885,7 @@ describe("runMigration", () => {
           );
         }
 
-        const staffAuthors = defineMigration({
+        const staffAuthors = MigrationDefinition.make({
           id: "staff-authors",
           source: makeTestInMemorySource({
             items: [],
@@ -2895,7 +2894,7 @@ describe("runMigration", () => {
           tracking: staffTracking,
           process: () => Effect.void,
         });
-        const guestAuthors = defineMigration({
+        const guestAuthors = MigrationDefinition.make({
           id: "guest-authors",
           source: makeTestInMemorySource({
             items: [],
@@ -2906,7 +2905,7 @@ describe("runMigration", () => {
         });
         let observedAuthorReference: MigrationReference<ArticleTrackingRecord> | null =
           null;
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -3024,7 +3023,7 @@ describe("runMigration", () => {
           }
         );
 
-        const staffAuthors = defineMigration({
+        const staffAuthors = MigrationDefinition.make({
           id: "staff-authors",
           source: makeTestInMemorySource({
             items: [],
@@ -3033,7 +3032,7 @@ describe("runMigration", () => {
           tracking: staffTracking,
           process: () => Effect.void,
         });
-        const guestAuthors = defineMigration({
+        const guestAuthors = MigrationDefinition.make({
           id: "guest-authors",
           source: InMemorySourcePlugin.make({
             identity: PublisherAuthorIdentity,
@@ -3046,7 +3045,7 @@ describe("runMigration", () => {
         });
         let observedAuthorReference: MigrationReference<ArticleTrackingRecord> | null =
           null;
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -3137,7 +3136,7 @@ describe("runMigration", () => {
           }
         );
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: "authors",
           source: makeTestInMemorySource({
             items: [],
@@ -3146,7 +3145,7 @@ describe("runMigration", () => {
           tracking: authorTracking,
           process: () => Effect.void,
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -3215,7 +3214,7 @@ describe("runMigration", () => {
       let staffStubCalls = 0;
       let guestStubCalls = 0;
 
-      const staffAuthors = defineMigration({
+      const staffAuthors = MigrationDefinition.make({
         id: "staff-authors",
         source: makeTestInMemorySource({
           items: [],
@@ -3232,7 +3231,7 @@ describe("runMigration", () => {
           }),
         process: () => Effect.void,
       });
-      const guestAuthors = defineMigration({
+      const guestAuthors = MigrationDefinition.make({
         id: "guest-authors",
         source: makeTestInMemorySource({
           items: [],
@@ -3251,7 +3250,7 @@ describe("runMigration", () => {
       });
       let observedAuthorReference: MigrationReference<ArticleTrackingRecord> | null =
         null;
-      const articles = defineMigration({
+      const articles = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -3342,7 +3341,7 @@ describe("runMigration", () => {
         let staffStubCalls = 0;
         let guestStubCalls = 0;
 
-        const staffAuthors = defineMigration({
+        const staffAuthors = MigrationDefinition.make({
           id: "staff-authors",
           source: makeTestInMemorySource({
             items: [],
@@ -3359,7 +3358,7 @@ describe("runMigration", () => {
             }),
           process: () => Effect.void,
         });
-        const guestAuthors = defineMigration({
+        const guestAuthors = MigrationDefinition.make({
           id: "guest-authors",
           source: makeTestInMemorySource({
             items: [],
@@ -3378,7 +3377,7 @@ describe("runMigration", () => {
         });
         let observedAuthorReference: MigrationReference<ArticleTrackingRecord> | null =
           null;
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -3467,7 +3466,7 @@ describe("runMigration", () => {
           schema: ArticleTrackingRecord,
         });
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: "authors",
           source: makeTestInMemorySource({
             items: [],
@@ -3489,7 +3488,7 @@ describe("runMigration", () => {
         });
         let observedAuthorReference: MigrationReference<ArticleTrackingRecord> | null =
           null;
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -3594,7 +3593,7 @@ describe("runMigration", () => {
       });
       let stubCalls = 0;
 
-      const authors = defineMigration({
+      const authors = MigrationDefinition.make({
         id: "authors",
         source: makeTestInMemorySource({
           items: [],
@@ -3615,7 +3614,7 @@ describe("runMigration", () => {
           }),
         process: () => Effect.void,
       });
-      const articles = defineMigration({
+      const articles = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -3690,7 +3689,7 @@ describe("runMigration", () => {
           schema: ArticleTrackingRecord,
         });
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: "authors",
           source: makeTestInMemorySource({
             items: [],
@@ -3698,7 +3697,7 @@ describe("runMigration", () => {
           store,
           process: () => Effect.void,
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -3760,7 +3759,7 @@ describe("runMigration", () => {
           kind: "field",
           field: "updatedAt",
         });
-        const original = defineMigration({
+        const original = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             sourceVersionContractFingerprint: originalVersionContract,
@@ -3802,7 +3801,7 @@ describe("runMigration", () => {
           kind: "field",
           field: "changedAt",
         });
-        const changed = defineMigration({
+        const changed = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             sourceVersionContractFingerprint: changedVersionContract,
@@ -3863,7 +3862,7 @@ describe("runMigration", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const processCalls: string[] = [];
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -3927,7 +3926,7 @@ describe("runMigration", () => {
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -3981,7 +3980,7 @@ describe("runMigration", () => {
           code: "missing-title",
         };
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -4082,7 +4081,7 @@ describe("runMigration", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const processCalls: string[] = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           state: sourceState,
@@ -4125,7 +4124,7 @@ describe("runMigration", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const processCalls: string[] = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           state: sourceState,
@@ -4177,7 +4176,7 @@ describe("runMigration", () => {
         ]),
       });
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "business-addresses",
         source: InMemorySourcePlugin.make({
           identity: BusinessAddressSourceIdentity,
@@ -4219,7 +4218,7 @@ describe("runMigration", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const pipelineCalls: string[] = [];
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: InMemorySourcePlugin.make({
             identity: ArticleSourceIdentity,
@@ -4284,7 +4283,7 @@ describe("runMigration", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: InMemorySourcePlugin.make({
           identity: ArticleSourceIdentity,
@@ -4356,7 +4355,7 @@ describe("runMigration", () => {
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: InMemorySourcePlugin.make({
           identity: ArticleSourceIdentity,
@@ -4405,7 +4404,7 @@ describe("runMigration", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: InMemorySourcePlugin.make({
           identity: ArticleSourceIdentity,
@@ -4467,7 +4466,7 @@ describe("runMigration", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const decodedPayloads: ArticleStatsSource[] = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: InMemorySourcePlugin.make({
           identity: ArticleSourceIdentity,
@@ -4501,7 +4500,7 @@ describe("runMigration", () => {
 
   it.effect("rejects non-positive in-memory Source batch sizes", () =>
     Effect.gen(function* () {
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           batchSize: 0,
@@ -4533,7 +4532,7 @@ describe("runMigration", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const processCalls: string[] = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           batchSize: 2,
@@ -4611,7 +4610,7 @@ describe("runMigration", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const events: MigrationProgressEvent[] = [];
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             batchSize: 2,
@@ -4706,7 +4705,7 @@ describe("runMigration", () => {
         totalCountAttempts: 0,
       };
       const events: MigrationProgressEvent[] = [];
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeObservableTotalCountSource({
           batchSize: 2,
@@ -4780,7 +4779,7 @@ describe("runMigration", () => {
         totalCountAttempts: 0,
       };
       const events: MigrationProgressEvent[] = [];
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeObservableTotalCountSource({
           items: [
@@ -4840,7 +4839,7 @@ describe("runMigration", () => {
           readByIdentityAttempts: 0,
           totalCountAttempts: 0,
         };
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeObservableTotalCountSource({
             items: [
@@ -4891,7 +4890,7 @@ describe("runMigration", () => {
         readByIdentityAttempts: 0,
         totalCountAttempts: 0,
       };
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeObservableTotalCountSource({
           items: [
@@ -4930,7 +4929,7 @@ describe("runMigration", () => {
         const countError = new SourcePluginError({
           message: "Count endpoint failed",
         });
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeObservableTotalCountSource({
             items: [
@@ -4993,7 +4992,7 @@ describe("runMigration", () => {
         code: "missing-title",
       };
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           batchSize: 2,
@@ -5054,7 +5053,7 @@ describe("runMigration", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const processCalls: string[] = [];
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -5119,7 +5118,7 @@ describe("runMigration", () => {
         const previousStates: (typeof MigrationItemState.Type | undefined)[] =
           [];
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -5186,7 +5185,7 @@ describe("runMigration", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const processCalls: string[] = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -5267,7 +5266,7 @@ describe("runMigration", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const processCalls: string[] = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -5327,7 +5326,7 @@ describe("runMigration", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const processCalls: string[] = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -5391,7 +5390,7 @@ describe("runMigration", () => {
         const previousStates: (typeof MigrationItemState.Type | undefined)[] =
           [];
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             batchSize: 1,
@@ -5534,7 +5533,7 @@ describe("runMigration", () => {
         };
         let rollbackState: typeof MigrationItemState.Type | undefined;
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -5630,7 +5629,7 @@ describe("runMigration", () => {
           locale: "en-US",
         };
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -5748,7 +5747,7 @@ describe("runMigration", () => {
         const retryPreviousTrackingRecords: unknown[] = [];
         let failUpdate = true;
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -5863,7 +5862,7 @@ describe("runMigration", () => {
           locale: "en-US",
         };
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [],
@@ -6013,7 +6012,7 @@ describe("runMigration", () => {
         ];
         const processCalls: string[] = [];
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             state: sourceState,
@@ -6139,7 +6138,7 @@ describe("runMigration", () => {
           })
         ).pipe(Layer.provide(InMemoryMigrationStore.layer(storeState)));
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [],
@@ -6208,7 +6207,7 @@ describe("runMigration", () => {
       const previousRunId = toMigrationRunId("run-previous");
       const previousUpdatedAt = new Date("2026-01-01T00:00:00.000Z");
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -6293,7 +6292,7 @@ describe("runMigration", () => {
         })
       ).pipe(Layer.provide(InMemoryMigrationStore.layer(storeState)));
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -6356,7 +6355,7 @@ describe("runMigration", () => {
   it.effect("rejects raw SDK update runs with targeted retry modes", () =>
     Effect.gen(function* () {
       const processCalls: string[] = [];
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -6429,9 +6428,9 @@ describe("runMigration", () => {
           cause: new Error("Source system unavailable"),
         });
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
-          source: defineSourcePlugin({
+          source: SourcePlugin.make({
             cursorSchema: InMemorySourceCursor,
             identity: ArticleSourceIdentity,
             sourceSchema: Schema.Unknown,
@@ -6502,9 +6501,9 @@ describe("runMigration", () => {
           cause: new Error("Source system unavailable"),
         });
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
-          source: defineSourcePlugin({
+          source: SourcePlugin.make({
             cursorSchema: InMemorySourceCursor,
             identity: ArticleSourceIdentity,
             sourceSchema: Schema.Unknown,
@@ -6563,9 +6562,9 @@ describe("runMigration", () => {
           cause: new Error("Source system unavailable"),
         });
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
-          source: defineSourcePlugin({
+          source: SourcePlugin.make({
             cursorSchema: InMemorySourceCursor,
             identity: ArticleSourceIdentity,
             sourceSchema: Schema.Unknown,
@@ -6646,7 +6645,7 @@ describe("runMigration", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const pipelineCalls: string[] = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -6751,7 +6750,7 @@ describe("runMigration", () => {
       const pipelineCalls: string[] = [];
       const previousStates: (typeof MigrationItemState.Type | undefined)[] = [];
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -6824,7 +6823,7 @@ describe("runMigration", () => {
         const store = InMemoryMigrationStore.layer(storeState);
         const executionOrder: string[] = [];
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: "authors",
           source: makeTestInMemorySource({
             items: [
@@ -6841,7 +6840,7 @@ describe("runMigration", () => {
               executionOrder.push(`authors:${source.identity.encoded}`);
             }),
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           dependsOn: ["authors"],
           source: makeTestInMemorySource({
@@ -6884,7 +6883,7 @@ describe("runMigration", () => {
         const store = InMemoryMigrationStore.layer(storeState);
         const executionOrder: string[] = [];
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: "authors",
           source: makeTestInMemorySource({
             items: [
@@ -6901,7 +6900,7 @@ describe("runMigration", () => {
               executionOrder.push(`authors:${source.identity.encoded}`);
             }),
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           dependsOn: ["authors"],
           source: makeTestInMemorySource({
@@ -6941,7 +6940,7 @@ describe("runMigration", () => {
       const unselectedStoreState = InMemoryMigrationStore.makeState();
       const selectedStoreState = InMemoryMigrationStore.makeState();
 
-      const unselected = defineMigration({
+      const unselected = MigrationDefinition.make({
         id: "unselected",
         source: makeTestInMemorySource({
           items: [
@@ -6955,7 +6954,7 @@ describe("runMigration", () => {
         store: InMemoryMigrationStore.layer(unselectedStoreState),
         process: () => Effect.void,
       });
-      const selected = defineMigration({
+      const selected = MigrationDefinition.make({
         id: "selected",
         source: makeTestInMemorySource({
           items: [
@@ -6999,7 +6998,7 @@ describe("runMigration", () => {
         const articlesStoreState = InMemoryMigrationStore.makeState();
         const pipelineCalls: string[] = [];
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: "authors",
           source: makeTestInMemorySource({
             items: [
@@ -7016,7 +7015,7 @@ describe("runMigration", () => {
               pipelineCalls.push(source.identity.encoded);
             }),
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           dependsOn: ["authors"],
           source: makeTestInMemorySource({
@@ -7063,7 +7062,7 @@ describe("runMigration", () => {
         const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];
 
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           dependsOn: ["authors"],
           source: makeTestInMemorySource({
@@ -7105,7 +7104,7 @@ describe("runMigration", () => {
         const store = InMemoryMigrationStore.layer(storeState);
         const pipelineCalls: string[] = [];
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: "authors",
           dependsOn: ["articles"],
           source: makeTestInMemorySource({
@@ -7123,7 +7122,7 @@ describe("runMigration", () => {
               pipelineCalls.push(source.identity.encoded);
             }),
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           dependsOn: ["authors"],
           source: makeTestInMemorySource({
@@ -7177,7 +7176,7 @@ describe("runMigration", () => {
           }
         };
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: "authors",
           source: makeTestInMemorySource({
             items: [
@@ -7194,7 +7193,7 @@ describe("runMigration", () => {
               observeLocks("authors");
             }),
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           dependsOn: ["authors"],
           source: makeTestInMemorySource({
@@ -7238,9 +7237,9 @@ describe("runMigration", () => {
         message: "Unable to mark failed run",
       });
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
-        source: defineSourcePlugin({
+        source: SourcePlugin.make({
           cursorSchema: InMemorySourceCursor,
           identity: ArticleSourceIdentity,
           sourceSchema: Schema.Unknown,
@@ -7281,7 +7280,7 @@ describe("runMigration", () => {
         cause: { definitionId: "articles" },
       });
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: makeTestInMemorySource({
           items: [
@@ -7353,7 +7352,7 @@ describe("runMigration", () => {
           }
         );
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: "authors",
           source: makeTestInMemorySource({
             items: [
@@ -7370,7 +7369,7 @@ describe("runMigration", () => {
               processCalls.push(`authors:${source.identity.encoded}`);
             }),
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           dependsOn: ["authors"],
           source: makeTestInMemorySource({
@@ -7444,7 +7443,7 @@ describe("runMigration", () => {
           token: toMigrationDefinitionLockToken("lock-other"),
         });
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [
@@ -7499,7 +7498,7 @@ describe("runMigration", () => {
           token: toMigrationDefinitionLockToken("lock-other"),
         });
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: "authors",
           source: makeTestInMemorySource({
             items: [
@@ -7516,7 +7515,7 @@ describe("runMigration", () => {
               pipelineCalls.push(source.identity.encoded);
             }),
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: "articles",
           dependsOn: ["authors"],
           source: makeTestInMemorySource({
@@ -7593,7 +7592,7 @@ describe("rollbackMigration", () => {
         migratedState
       );
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: definitionId,
         source: makeTestInMemorySource({
           items: [],
@@ -7638,7 +7637,7 @@ describe("rollbackMigration", () => {
 
       storeState.sourceCursors.set(definitionId, encodedInMemoryCursor(1));
 
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: definitionId,
         source: makeTestInMemorySource({
           batchSize: 1,
@@ -7704,7 +7703,7 @@ describe("rollbackMigration", () => {
           }
         );
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: definitionId,
           source: makeTestInMemorySource({
             items: [],
@@ -7790,7 +7789,7 @@ describe("rollbackMigration", () => {
           );
         }
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: definitionId,
           source: makeTestInMemorySource({
             items: [],
@@ -7835,7 +7834,7 @@ describe("rollbackMigration", () => {
         const storeState = InMemoryMigrationStore.makeState();
         let rollbackCalled = false;
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source: makeTestInMemorySource({
             items: [],
@@ -7901,7 +7900,7 @@ describe("rollbackMigrations", () => {
           );
         }
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: authorsId,
           source: makeTestInMemorySource({
             items: [],
@@ -7911,7 +7910,7 @@ describe("rollbackMigrations", () => {
           process: () => Effect.void,
           rollback: () => undefined,
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: articlesId,
           dependsOn: [authorsId],
           source: makeTestInMemorySource({
@@ -8006,7 +8005,7 @@ describe("rollbackMigrations", () => {
           );
         }
 
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: definitionId,
           source: makeTestInMemorySource({
             items: [],
@@ -8095,7 +8094,7 @@ describe("rollbackMigrations", () => {
           );
         }
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: authorsId,
           source: makeTestInMemorySource({
             items: [],
@@ -8105,7 +8104,7 @@ describe("rollbackMigrations", () => {
           process: () => Effect.void,
           rollback: () => undefined,
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: articlesId,
           dependsOn: [authorsId],
           source: makeTestInMemorySource({
@@ -8163,7 +8162,7 @@ describe("rollbackMigrations", () => {
           articleState
         );
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: authorsId,
           source: makeTestInMemorySource({
             items: [],
@@ -8173,7 +8172,7 @@ describe("rollbackMigrations", () => {
           process: () => Effect.void,
           rollback: () => undefined,
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: articlesId,
           dependsOn: [authorsId],
           source: makeTestInMemorySource({
@@ -8214,7 +8213,7 @@ describe("rollbackMigrations", () => {
         const articlesId = toMigrationDefinitionId("articles");
         const commentsId = toMigrationDefinitionId("comments");
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: authorsId,
           source: makeTestInMemorySource({
             items: [],
@@ -8224,7 +8223,7 @@ describe("rollbackMigrations", () => {
           process: () => Effect.void,
           rollback: () => undefined,
         });
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: articlesId,
           dependsOn: [authorsId, commentsId],
           source: makeTestInMemorySource({
@@ -8235,7 +8234,7 @@ describe("rollbackMigrations", () => {
           process: () => Effect.void,
           rollback: () => undefined,
         });
-        const comments = defineMigration({
+        const comments = MigrationDefinition.make({
           id: commentsId,
           dependsOn: [articlesId],
           source: makeTestInMemorySource({
@@ -8309,7 +8308,7 @@ describe("rollbackMigrations", () => {
         }
       };
 
-      const authors = defineMigration({
+      const authors = MigrationDefinition.make({
         id: authorsId,
         source: makeTestInMemorySource({
           items: [],
@@ -8321,7 +8320,7 @@ describe("rollbackMigrations", () => {
           observeLocks();
         },
       });
-      const articles = defineMigration({
+      const articles = MigrationDefinition.make({
         id: articlesId,
         dependsOn: [authorsId],
         source: makeTestInMemorySource({
@@ -8374,7 +8373,7 @@ describe("rollbackMigrations", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const definitionId = toMigrationDefinitionId("forward-only");
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: definitionId,
           source: makeTestInMemorySource({
             items: [],
@@ -8428,7 +8427,7 @@ describe("rollbackMigrations", () => {
           updatedAt: new Date("2026-01-01T00:00:00.000Z"),
         }
       );
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: definitionId,
         source: makeTestInMemorySource({
           items: [],
@@ -8458,7 +8457,7 @@ describe("rollbackMigrations", () => {
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
       const definitionId = toMigrationDefinitionId("articles");
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: definitionId,
         source: makeTestInMemorySource({
           items: [],
@@ -8492,7 +8491,7 @@ describe("rollbackMigrations", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const articlesId = toMigrationDefinitionId("articles");
-        const articles = defineMigration({
+        const articles = MigrationDefinition.make({
           id: articlesId,
           dependsOn: ["authors"],
           source: makeTestInMemorySource({
@@ -8556,7 +8555,7 @@ describe("rollbackMigrations", () => {
           );
         }
 
-        const authors = defineMigration({
+        const authors = MigrationDefinition.make({
           id: authorsId,
           source: makeTestInMemorySource({
             items: [],

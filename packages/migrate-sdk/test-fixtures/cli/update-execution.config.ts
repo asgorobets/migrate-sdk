@@ -1,9 +1,9 @@
 import { Schema } from "effect";
 import {
   defaultSourceVersionContractFingerprint,
-  defineMigration,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   SourceIdentity,
   toEncodedSourceCursor,
@@ -56,7 +56,7 @@ storeState.itemStates.set(
   }
 );
 
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: definitionId,
   source: InMemorySourcePlugin.make({
     identity: EntrySourceIdentity,

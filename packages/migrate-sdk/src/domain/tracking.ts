@@ -98,12 +98,7 @@ const DestinationJournalRollbackAttemptErrorDetail = Schema.Struct({
 });
 
 export const DestinationJournalRollbackAttemptError = Schema.Struct({
-  kind: Schema.Literals([
-    "source",
-    "tracking",
-    "process",
-    "destination",
-  ]),
+  kind: Schema.Literals(["source", "tracking", "process", "destination"]),
   errorTag: Schema.String,
   message: Schema.String,
   details: Schema.optional(

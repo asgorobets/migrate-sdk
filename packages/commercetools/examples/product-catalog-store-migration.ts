@@ -18,8 +18,8 @@ import {
   Schema,
 } from "effect";
 import {
-  defineMigration,
   InMemorySourcePlugin,
+  MigrationDefinition,
   type MigrationItemState,
   type MigrationRunSummary,
   MigrationStore,
@@ -190,7 +190,7 @@ export const runProductCatalogStoreMigration: (
     },
   }).provide(options.sdkLayer);
 
-  const products = defineMigration({
+  const products = MigrationDefinition.make({
     id: catalogDefinitionId,
     source: InMemorySourcePlugin.make({
       identity: CatalogProductSourceIdentity,

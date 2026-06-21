@@ -723,7 +723,7 @@ that case, successful items persist migration progress only: source identity,
 source version, item status, and normal failure metadata when applicable.
 
 ```ts
-const publishOnly = defineMigration({
+const publishOnly = MigrationDefinition.make({
   id: "publish-only",
   source,
   store,
@@ -752,7 +752,7 @@ const ProductTrackingRecord = Schema.Struct({
   productKey: Schema.String,
 })
 
-const products = defineMigration({
+const products = MigrationDefinition.make({
   id: "products",
   source,
   store,
@@ -820,7 +820,7 @@ const ProductInventoryTrackingRecord = Schema.Struct({
   }),
 })
 
-const productsWithInventory = defineMigration({
+const productsWithInventory = MigrationDefinition.make({
   id: "products-with-inventory",
   source,
   store,

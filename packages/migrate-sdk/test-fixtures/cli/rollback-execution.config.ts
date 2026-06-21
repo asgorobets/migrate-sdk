@@ -1,8 +1,8 @@
 import { Schema } from "effect";
 import {
-  defineMigration,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   SourceIdentity,
   toMigrationDefinitionId,
@@ -47,7 +47,7 @@ seedMigratedState("authors", "authors-1");
 seedMigratedState("articles", "articles-1");
 
 const definition = (id, identity, input = {}) =>
-  defineMigration({
+  MigrationDefinition.make({
     id: toMigrationDefinitionId(id),
     source: InMemorySourcePlugin.make({
       identity: EntrySourceIdentity,

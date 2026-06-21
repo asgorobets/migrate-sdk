@@ -44,7 +44,7 @@ const ProductTracking = Tracking.record({
   schema: ProductTrackingRecord,
 })
 
-const products = defineMigration({
+const products = MigrationDefinition.make({
   id: "products",
   source,
   store,
@@ -230,7 +230,7 @@ descriptors come from registered modules, but it would mostly duplicate values
 already referenced by the process pipeline and tracking model.
 
 ```ts
-const products = defineMigration({
+const products = MigrationDefinition.make({
   id: "products",
   source,
   store,

@@ -1,8 +1,8 @@
 import { Schema } from "effect";
 import {
-  defineMigration,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   SourceIdentity,
   toMigrationDefinitionId,
@@ -14,7 +14,7 @@ const EntrySourceIdentity = SourceIdentity.make({
   id: "entry@v1",
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
-const articles = defineMigration({
+const articles = MigrationDefinition.make({
   id: toMigrationDefinitionId("articles"),
   source: InMemorySourcePlugin.make({
     identity: EntrySourceIdentity,

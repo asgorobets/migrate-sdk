@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import { defineMigration, runMigration } from "migrate-sdk";
+import { MigrationDefinition, runMigration } from "migrate-sdk";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { JsonPlaceholderPostSourcePlugin } from "./json-placeholder-source.ts";
 
@@ -22,7 +22,7 @@ export interface ApiSourceExampleOptions {
 export const makeJsonPlaceholderPostsMigration = (
   options?: ApiSourceExampleOptions
 ) => {
-  return defineMigration({
+  return MigrationDefinition.make({
     id: "jsonplaceholder-posts",
     source: options?.source ?? JsonPlaceholderPostSourcePlugin.make(),
     store: InMemoryMigrationStore.layer(),

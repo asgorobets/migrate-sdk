@@ -1,8 +1,7 @@
 import { Effect, Schema, SchemaAST } from "effect";
 import {
   type ConfiguredSourcePlugin,
-  defineSourcePlugin,
-  defineSourcePluginLayer,
+  SourcePlugin,
   type SourcePluginImplementation,
 } from "../../domain/definition.ts";
 import { SourcePluginError } from "../../domain/errors.ts";
@@ -1468,7 +1467,7 @@ function makeSource<
   const identity = makeDocumentSourceIdentityDefinition(
     compiledOptions.identity
   );
-  const configured = defineSourcePlugin({
+  const configured = SourcePlugin.make({
     cursorSchema,
     identity,
     make: () => makeImplementation(compiledOptions),
@@ -1479,7 +1478,8 @@ function makeSource<
       makeDocumentSourceVersionContractFingerprint(options.version),
   });
 
-  return defineSourcePluginLayer({
+  return SourcePlugin.fromLayer({
+    cursorSchema,
     identity: configured.identity,
     layer: configured.layer,
     sourceIdentityContractFingerprint:

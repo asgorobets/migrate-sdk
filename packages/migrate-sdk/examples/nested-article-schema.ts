@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import {
-  defineMigration,
+  MigrationDefinition,
   type MigrationRunSummary,
   runMigration,
   SourceIdentity,
@@ -98,7 +98,7 @@ const sourceItems = [
 export const makeNestedArticleSchemaMigration = () => {
   const commandFields: ArticleEntryFields[] = [];
 
-  const migration = defineMigration({
+  const migration = MigrationDefinition.make({
     id: "nested-articles",
     source: InMemorySourcePlugin.make({
       identity: NestedArticleIdentity,

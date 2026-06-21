@@ -54,8 +54,9 @@ export interface InMemoryEntryDestinationFixture<
   readonly destination: InMemoryEntryDestinationModule<ContentType, Fields>;
 }
 
-export type InMemoryEntryFieldSchema<Fields extends Schema.JsonObject = Schema.JsonObject> =
-  Schema.Codec<Fields, Fields, never, never>;
+export type InMemoryEntryFieldSchema<
+  Fields extends Schema.JsonObject = Schema.JsonObject,
+> = Schema.Codec<Fields, Fields, never, never>;
 
 type NonEmptyString<Value extends string> = Value extends "" ? never : Value;
 
@@ -119,7 +120,9 @@ const assertTransientFailures = (value: unknown): void => {
   }
 
   if (!isRecord(value)) {
-    throw new Error("In-memory destination transientFailures must be an object");
+    throw new Error(
+      "In-memory destination transientFailures must be an object"
+    );
   }
 
   const execute = value.execute;

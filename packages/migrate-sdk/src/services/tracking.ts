@@ -47,6 +47,10 @@ const diagnosticLogLevel = (
       return "Warn";
     case "info":
       return "Info";
+    default: {
+      const exhaustive: never = severity;
+      return exhaustive;
+    }
   }
 };
 
@@ -58,6 +62,9 @@ const logDiagnosticEvent = (entry: DestinationJournalDiagnosticEntry) =>
 
 export interface TrackingService {
   readonly context: TrackingProcessContext;
+  readonly logDiagnostic: (
+    input: DestinationJournalDiagnosticInput
+  ) => Effect.Effect<DestinationJournalDiagnosticEntry, Schema.SchemaError>;
   readonly recordChange: <
     Value extends DestinationChangeValue,
     Encoded extends Schema.Json,
@@ -65,9 +72,6 @@ export interface TrackingService {
     descriptor: DestinationChangeDescriptor<Value, Encoded>,
     value: Value
   ) => Effect.Effect<DestinationJournalChangeEntry<Value>, Schema.SchemaError>;
-  readonly logDiagnostic: (
-    input: DestinationJournalDiagnosticInput
-  ) => Effect.Effect<DestinationJournalDiagnosticEntry, Schema.SchemaError>;
   readonly records: Effect.Effect<readonly TrackingRecordValue[]>;
   readonly setRecord: <Value extends TrackingRecordValue>(
     value: Value

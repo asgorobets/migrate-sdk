@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, type Layer, Schema } from "effect";
 import {
   type ConfiguredSourcePlugin,
-  defineMigration,
+  MigrationDefinition,
   type MigrationDefinitionId,
   type MigrationItemState,
   type MigrationRunId,
@@ -42,7 +42,7 @@ describe("rollback public API", () => {
   it("normalizes rollback request and option inputs", () => {
     const rollbackPipeline: RollbackPipeline<RollbackPipelineError> = () =>
       Effect.void;
-    const definition = defineMigration<
+    const definition = MigrationDefinition.make<
       ArticleSource,
       never,
       unknown,
@@ -173,13 +173,11 @@ describe("rollback public API", () => {
   );
 });
 
-expectTypeOf<
-  Parameters<RollbackPipeline>[0]
->().toEqualTypeOf<typeof MigrationItemState.Type>();
-const effectVoidRollbackPipeline: RollbackPipeline = () => Effect.void;
-expectTypeOf(effectVoidRollbackPipeline).toEqualTypeOf<
-  RollbackPipeline
+expectTypeOf<Parameters<RollbackPipeline>[0]>().toEqualTypeOf<
+  typeof MigrationItemState.Type
 >();
+const effectVoidRollbackPipeline: RollbackPipeline = () => Effect.void;
+expectTypeOf(effectVoidRollbackPipeline).toEqualTypeOf<RollbackPipeline>();
 expectTypeOf<RollbackContext>().toEqualTypeOf<{
   readonly definitionId: MigrationDefinitionId;
   readonly runId: MigrationRunId;

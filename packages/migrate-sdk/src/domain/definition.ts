@@ -3,7 +3,7 @@ import type { MigrationReferenceLookup } from "../services/migration-reference-l
 import type { MigrationStore } from "../services/migration-store.ts";
 import {
   type AnySourcePlugin,
-  type SourcePlugin,
+  type SourcePlugin as SourcePluginContract,
   SourcePlugin as SourcePluginService,
 } from "../services/source-plugin.ts";
 import type { Tracking } from "../services/tracking.ts";
@@ -53,6 +53,13 @@ export type SourcePayloadSchema<Source, SourceInput = unknown> = Schema.Codec<
   never,
   never
 >;
+
+export type SourcePlugin<
+  Source,
+  Cursor,
+  SourceInput = Source,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+> = SourcePluginContract<Source, Cursor, SourceInput, IdentityKey>;
 
 export interface ConfiguredSourcePlugin<
   Source,
@@ -158,12 +165,13 @@ export interface SourcePluginFactoryInput<
 
 export interface SourcePluginLayerInput<
   Source,
-  _Cursor,
+  Cursor,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
   SourceInput = Source,
   SourceLayerError = never,
   SourceRequirements = never,
 > {
+  readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly layer: Layer.Layer<
     AnySourcePlugin,
@@ -226,6 +234,7 @@ const makeConfiguredSourcePlugin = <
       SourceLayerError | ProvidedError,
       RemainingRequirements | Exclude<SourceRequirements, ProvidedRequirements>
     >({
+      cursorSchema: input.cursorSchema,
       layer: input.layer.pipe(Layer.provide(layer)),
       identity: input.identity,
       sourceSchema: input.sourceSchema,
@@ -250,7 +259,7 @@ const makeConfiguredSourcePlugin = <
     defaultSourceVersionContractFingerprint,
 });
 
-export const defineSourcePlugin = <
+const makeSourcePlugin = <
   Source,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
@@ -273,9 +282,10 @@ export const defineSourcePlugin = <
         });
 
   return makeConfiguredSourcePlugin({
+    cursorSchema: input.cursorSchema,
     layer: Layer.sync(
       SourcePluginService,
-      (): SourcePlugin<Source, Cursor, SourceInput, IdentityKey> => {
+      (): SourcePluginContract<Source, Cursor, SourceInput, IdentityKey> => {
         const implementation = makeImplementation();
         const countTotal = implementation.countTotal;
 
@@ -334,7 +344,7 @@ export const defineSourcePlugin = <
   });
 };
 
-export const defineSourcePluginLayer = <
+const sourcePluginFromLayer = <
   Source,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
@@ -358,6 +368,11 @@ export const defineSourcePluginLayer = <
   SourceLayerError,
   SourceRequirements
 > => makeConfiguredSourcePlugin(input);
+
+export const SourcePlugin = Object.assign(SourcePluginService, {
+  fromLayer: sourcePluginFromLayer,
+  make: makeSourcePlugin,
+});
 
 const normalizeSourceReadResult = <
   SourceInput,
@@ -541,7 +556,7 @@ const normalizeMigrationDefinitionIds = (
   return ids;
 };
 
-export const defineMigration = <
+const makeMigrationDefinition = <
   Source,
   PipelineError = never,
   Cursor = unknown,
@@ -613,3 +628,7 @@ export const defineMigration = <
       : { dependsOn: requiredDependencies }),
   };
 };
+
+export const MigrationDefinition = {
+  make: makeMigrationDefinition,
+} as const;

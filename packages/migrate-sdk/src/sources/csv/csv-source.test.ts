@@ -5,8 +5,8 @@ import { Effect, Layer, PlatformError, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import {
-  defineMigration,
   InMemoryMigrationStore,
+  MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
   runMigration,
@@ -537,7 +537,7 @@ describe("CsvSourcePlugin", () => {
           platform: makeFirstReadFileFailurePlatformLayer(platformState),
           sourceSchema: CsvArticleSource,
         });
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "articles",
           source,
           store: InMemoryMigrationStore.layer(),

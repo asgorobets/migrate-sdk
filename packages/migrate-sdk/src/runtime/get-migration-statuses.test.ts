@@ -3,12 +3,11 @@ import { Deferred, Effect, Fiber, Layer, Schedule, Schema } from "effect";
 import {
   type ConfiguredSourcePlugin,
   DuplicateSourceIdentityStatusWarning,
-  defineMigration,
-  defineSourcePlugin,
   getMigrationStatuses,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
   InvalidSourceItemStatusWarning,
+  MigrationDefinition,
   type MigrationItemState,
   MigrationStatusRequestError,
   MigrationStore,
@@ -48,7 +47,7 @@ const makeStatusOnlyDefinition = (
   store: ReturnType<typeof InMemoryMigrationStore.layer>,
   id = "articles"
 ) =>
-  defineMigration({
+  MigrationDefinition.make({
     id,
     source: failingSource,
     store,
@@ -65,7 +64,7 @@ const makeStatusScanDefinition = <
   source: ConfiguredSourcePlugin<Source, Cursor, IdentityKey, SourceInput>,
   id = "articles"
 ) =>
-  defineMigration({
+  MigrationDefinition.make({
     id,
     source,
     store,
@@ -88,7 +87,7 @@ const makeObservableSource = ({
     readonly events: string[];
   };
 }) =>
-  defineSourcePlugin({
+  SourcePlugin.make({
     cursorSchema: Schema.Struct({
       offset: Schema.Number,
     }),
@@ -233,7 +232,7 @@ describe("getMigrationStatuses", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const store = InMemoryMigrationStore.layer(storeState);
       const authors = makeStatusOnlyDefinition(store, "authors");
-      const articles = defineMigration({
+      const articles = MigrationDefinition.make({
         ...makeStatusOnlyDefinition(store, "articles"),
         dependsOn: ["authors"],
       });
@@ -733,7 +732,7 @@ describe("getMigrationStatuses", () => {
   it.effect("applies source cursor retry wrappers during source scans", () =>
     Effect.gen(function* () {
       const sourceState = InMemorySourcePlugin.makeState();
-      const definition = defineMigration({
+      const definition = MigrationDefinition.make({
         id: "articles",
         source: InMemorySourcePlugin.make({
           identity: ArticleSourceIdentity,

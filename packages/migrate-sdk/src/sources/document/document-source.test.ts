@@ -6,8 +6,8 @@ import { Service } from "effect/Context";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import {
-  defineMigration,
   InMemoryMigrationStore,
+  MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
   runMigration,
@@ -703,7 +703,7 @@ describe("DocumentSourcePlugin", () => {
             value: ({ item }) => item.status,
           },
         });
-        const definition = defineMigration({
+        const definition = MigrationDefinition.make({
           id: "document-business-units",
           process: () => Effect.void,
           source,
