@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/@effect/language-service/schema.json",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "exclude": ["node_modules", "dist"],
+  "include": ["src"]
+}

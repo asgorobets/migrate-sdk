@@ -11,6 +11,7 @@
     ".": "./src/index.ts",
     "./cli": "./src/cli/index.ts",
     "./cli/testing": "./src/cli/testing.ts",
+    "./core": "./src/core.ts",
     "./destinations/in-memory": "./src/destinations/in-memory/index.ts",
     "./destinations/in-memory/testing": "./src/destinations/in-memory/testing.ts",
     "./internal/*": null,

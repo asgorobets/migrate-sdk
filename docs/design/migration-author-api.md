@@ -147,7 +147,7 @@ const program = Effect.gen(function* () {
 
   const executable = yield* MigrationExecutable
   return yield* executable.startRun(plan)
-}).pipe(Effect.provide(MigrationExecutable.inline))
+}).pipe(Effect.provide(MigrationExecutable.inlineDefault))
 ```
 
 Executable registries carry a stable `id` even when running inline. Durable
@@ -164,7 +164,7 @@ const program = Effect.gen(function* () {
   })
 
   return yield* MigrationExecutable.startRun(plan)
-}).pipe(Effect.provide(MigrationExecutable.inline))
+}).pipe(Effect.provide(MigrationExecutable.inlineDefault))
 ```
 
 The service object remains the adapter implementation contract:
@@ -289,9 +289,10 @@ export interface MigrationExecutionEnvelope {
   readonly runId: MigrationRunId
   readonly registryId: MigrationDefinitionRegistryId
   readonly kind: "run" | "rollback"
-  readonly definitionIds: ReadonlyArray<MigrationDefinitionId>
-  /** Diagnostic only; the workflow execution context re-plans before execution. */
-  readonly plannedOrder: ReadonlyArray<MigrationDefinitionId>
+  /** Durable run ownership boundary: locks, run state, status, and progress. */
+  readonly scopeDefinitionIds: ReadonlyArray<MigrationDefinitionId>
+  /** Workflow schedule: forward dependency order for runs, reverse order for rollbacks. */
+  readonly executionDefinitionIds: ReadonlyArray<MigrationDefinitionId>
   readonly request: RunRequest | RollbackRequest
 }
 ```
@@ -301,10 +302,11 @@ serialize the envelope, start a provider-owned workflow execution, and let that
 workflow re-plan against the registry catalog in its own execution context.
 
 The envelope is not a frozen executable plan. `registryId` and `request` are the
-portable durable inputs. `plannedOrder` is diagnostic metadata for logs, status
-views, and operator debugging; the workflow execution context still re-plans
-before it does any work. Providers with immutable deployment boundaries should
-let the provider keep already-started runs on their compatible code world.
+portable durable inputs. `scopeDefinitionIds` is the run ownership boundary:
+locks, queued/running/terminal run state, status, and progress all use this
+scope. `executionDefinitionIds` is the workflow schedule. Providers with
+immutable deployment boundaries should let the provider keep already-started runs
+on their compatible code world.
 
 ```ts
 const plan = yield* registry.executable().planRun({
@@ -316,7 +318,13 @@ const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
 })
 
 const summary = yield* executeMigrationExecutionEnvelope(envelope).pipe(
-  Effect.provide(MigrationDefinitionRegistryCatalog.layer({ registries: [registry] }))
+  Effect.provide(
+    Layer.mergeAll(
+      MigrationDefinitionRegistryCatalog.layer({ registries: [registry] }),
+      MigrationRunExecutor.layer,
+      MigrationRollbackExecutor.layer
+    )
+  )
 )
 ```
 
@@ -338,11 +346,11 @@ const executeMigrationEnvelope = Effect.fn("MigrationExecutionEnvelope.execute")
 
       yield* Effect.logDebug("migration envelope planned order", {
         runId: envelope.runId,
-        scheduled: envelope.plannedOrder,
-        execution: plan.plannedOrder,
+        scheduled: envelope.executionDefinitionIds,
+        execution: plan.executionDefinitionIds,
       })
 
-      return yield* MigrationInlineRuntime.executeRun(plan, {
+      return yield* MigrationRunExecutor.executePlan(plan, {
         runId: envelope.runId,
       })
     }
@@ -351,11 +359,11 @@ const executeMigrationEnvelope = Effect.fn("MigrationExecutionEnvelope.execute")
 
     yield* Effect.logDebug("migration envelope planned order", {
       runId: envelope.runId,
-      scheduled: envelope.plannedOrder,
-      execution: plan.plannedOrder,
+      scheduled: envelope.executionDefinitionIds,
+      execution: plan.executionDefinitionIds,
     })
 
-    return yield* MigrationInlineRuntime.executeRollback(plan, {
+    return yield* MigrationRollbackExecutor.executePlan(plan, {
       runId: envelope.runId,
     })
   }
@@ -381,7 +389,8 @@ const ApplicationMigrationLayers = Layer.mergeAll(
   MigrationDefinitionRegistryCatalog.layer({
     registries: [migrations],
   }),
-  MigrationExecutable.inline
+  MigrationRunExecutor.layer,
+  MigrationRollbackExecutor.layer
 )
 ```
 
@@ -409,10 +418,10 @@ workflow handlers must execute using `envelope.runId`; they must not allocate a
 second migration run id after the provider workflow starts.
 
 Durable adapters should create the initial migration run state before returning
-`started`, so `MigrationExecution.waitForRun(envelope.runId)` can find the run
-immediately after the caller receives the start result. The provider workflow
-transitions that existing state from queued to running and then to a terminal
-state; it is not the first writer for the migration run id.
+`started`, so `MigrationExecutionController.waitForRun(envelope.runId)` can find
+the run immediately after the caller receives the start result. The provider
+workflow transitions that existing state from queued to running and then to a
+terminal state; it is not the first writer for the migration run id.
 
 If a provider rejects the start request after the queued state has been created,
 `startRun` or `startRollback` should fail and mark the migration run state as
@@ -470,8 +479,8 @@ const envelope: MigrationExecutionEnvelope = {
   runId: MigrationRunId.make(),
   registryId: plan.registryId,
   kind: "run",
-  definitionIds: plan.definitionIds,
-  plannedOrder: plan.plannedOrder,
+  scopeDefinitionIds: plan.includedDefinitionIds,
+  executionDefinitionIds: plan.executionDefinitionIds,
   request: plan.request,
 }
 
@@ -479,7 +488,7 @@ yield* MigrationRunStateStore.createQueued({
   runId: envelope.runId,
   registryId: envelope.registryId,
   kind: envelope.kind,
-  definitionIds: envelope.definitionIds,
+  definitionIds: envelope.scopeDefinitionIds,
 })
 
 const run = yield* Effect.tryPromise({
@@ -501,7 +510,7 @@ const run = yield* Effect.tryPromise({
 
 const execution = {
   adapter: "workflow-sdk",
-  workflowRunId: run.runId,
+  executionId: run.runId,
 } as const
 
 yield* MigrationRunStateStore.attachExecution({
@@ -565,8 +574,8 @@ export const MigrationExecutionEnvelopeSchema = Schema.Struct({
   runId: MigrationRunId,
   registryId: MigrationDefinitionRegistryId,
   kind: Schema.Literals(["run", "rollback"]),
-  definitionIds: Schema.Array(MigrationDefinitionId),
-  plannedOrder: Schema.Array(MigrationDefinitionId),
+  scopeDefinitionIds: Schema.Array(MigrationDefinitionId),
+  executionDefinitionIds: Schema.Array(MigrationDefinitionId),
   request: Schema.Union(RunRequest, RollbackRequest),
 })
 
@@ -604,7 +613,7 @@ yield* MigrationRunStateStore.createQueued({
   runId: envelope.runId,
   registryId: envelope.registryId,
   kind: envelope.kind,
-  definitionIds: envelope.definitionIds,
+  definitionIds: envelope.scopeDefinitionIds,
 })
 
 const executionId = yield* MigrationRunWorkflow.execute(envelope, {
@@ -673,8 +682,10 @@ if (start.kind === "started" && start.execution.adapter === "effect-workflow") {
 }
 ```
 
-`MigrationExecutable.inline` uses the built-in runtime and returns a completed
-summary:
+`MigrationExecutable.inline` selects the inline execution strategy and expects
+executor services from the Effect environment. For simple local programs,
+`MigrationExecutable.inlineDefault` bundles the SDK's default run and rollback
+executor services and returns a completed summary:
 
 ```ts
 const result = yield* executable.startRun(plan)
@@ -699,15 +710,10 @@ results may also expose adapter execution metadata, such as a Workflow SDK run i
 or an Effect workflow execution id used for provider-native observability:
 
 ```ts
-export type MigrationExecutionHandle =
-  | {
-      readonly adapter: "workflow-sdk"
-      readonly workflowRunId: string
-    }
-  | {
-      readonly adapter: "effect-workflow"
-      readonly executionId: string
-    }
+export interface MigrationExecutionHandle {
+  readonly adapter: string
+  readonly executionId?: string
+}
 
 export type ExecutionStartResult<Summary> =
   | {
@@ -725,12 +731,13 @@ export type ExecutionStartResult<Summary> =
 For inline execution, `runId` duplicates `summary.runId` so callers can log,
 render, or correlate a run before branching on completion state.
 
-The default layer is named `MigrationExecutable.inline`, not `live` or
-`layerInline`, because inline is the execution strategy being selected:
+The composable layer is named `MigrationExecutable.inline`, because inline is
+the execution strategy being selected. `MigrationExecutable.inlineDefault` is the
+convenience layer for callers that want the SDK's default executor services:
 
 ```ts
 const result = yield* MigrationExecutable.startRun(plan).pipe(
-  Effect.provide(MigrationExecutable.inline)
+  Effect.provide(MigrationExecutable.inlineDefault)
 )
 ```
 
@@ -741,15 +748,15 @@ reading provider return values, streaming progress, or cancelling a run should b
 modeled as a separate execution-management capability.
 
 Execution management is intentionally not part of `MigrationExecutable`. A
-future `MigrationExecution` service can wait for a run, read run state, stream
-progress, cancel a run, or bridge to an adapter-specific workflow backend without
-changing the execution start contract. Its stable public key should be the
-migration run id:
+future `MigrationExecutionController` service can wait for a run, read run
+state, stream progress, cancel a run, or bridge to an adapter-specific workflow
+backend without changing the execution start contract. Its stable public key
+should be the migration run id:
 
 ```ts
 const start = yield* MigrationExecutable.startRun(plan)
 
-const summary = yield* MigrationExecution.waitForRun(start.runId)
+const summary = yield* MigrationExecutionController.waitForRun(start.runId)
 ```
 
 The execution-management service can resolve adapter execution metadata from
@@ -758,8 +765,12 @@ intentionally want native Workflow SDK observability can still use the adapter
 handle from the start result:
 
 ```ts
-if (start.kind === "started" && start.execution.adapter === "workflow-sdk") {
-  const run = getRun(start.execution.workflowRunId)
+if (
+  start.kind === "started" &&
+  start.execution.adapter === "workflow-sdk" &&
+  start.execution.executionId !== undefined
+) {
+  const run = getRun(start.execution.executionId)
   const status = await run.status
 }
 ```
@@ -797,8 +808,8 @@ const articles = defineMigration({
 })
 ```
 
-The execution boundary then has no caller-provided migration service
-requirements:
+The `inlineDefault` execution boundary then has no caller-provided migration
+service requirements:
 
 ```ts
 const result = yield* registry
@@ -806,7 +817,7 @@ const result = yield* registry
   .planRun({ definitionIds: ["articles"] })
   .pipe(
     Effect.flatMap((plan) => MigrationExecutable.startRun(plan)),
-    Effect.provide(MigrationExecutable.inline)
+    Effect.provide(MigrationExecutable.inlineDefault)
   )
 ```
 
@@ -864,7 +875,7 @@ const executableLayer =
         workflow: runMigrationExecutionWorkflow,
         startOptions,
       })
-    : MigrationExecutable.inline
+    : MigrationExecutable.inlineDefault
 
 const program = Effect.gen(function* () {
   const plan = yield* registry.executable().planRun({
@@ -907,7 +918,8 @@ export const runMigrations = (input: RunRequestInput) =>
     return yield* Effect.dieMessage(
       "inline MigrationExecutable returned a started result"
     )
-  }).pipe(Effect.provide(MigrationExecutable.inline))
+  }).pipe(Effect.provide(MigrationExecutable.inlineDefault))
 ```
 
-The wrapper receives `completed` because it provides the inline executable.
+The wrapper receives `completed` because it provides the default inline
+executable layer.

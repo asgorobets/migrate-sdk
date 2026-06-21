@@ -14,6 +14,8 @@ node_modules
 
 # Testing
 coverage
+.workflow-data
+.workflow-vitest
 packages/migrate-sdk/examples/.migration-state/
 
 # Turbo
