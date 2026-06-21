@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import { DestinationPluginError } from "../../domain/errors.ts";
+import { DestinationError } from "../../domain/errors.ts";
 import type { EncodedSourceIdentity } from "../../domain/ids.ts";
 import { EncodedSourceIdentity as EncodedSourceIdentitySchema } from "../../domain/ids.ts";
 import {
@@ -96,7 +96,7 @@ export interface InMemoryEntryDestinationModule<
       fields: Fields
     ) => Effect.Effect<
       InMemoryDestinationEntry<ContentType, Fields>,
-      DestinationPluginError | Schema.SchemaError,
+      DestinationError | Schema.SchemaError,
       Tracking
     >;
   };
@@ -180,8 +180,8 @@ const makeInspection = <
   executeAttempts: () => state.executeAttempts,
 });
 
-const transientDestinationError = (): DestinationPluginError =>
-  new DestinationPluginError({
+const transientDestinationError = (): DestinationError =>
+  new DestinationError({
     message: "In-memory destination execute failed transiently",
   });
 

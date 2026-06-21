@@ -2,7 +2,7 @@
 
 Migration definitions will use composite-capable source identities, scoped
 process execution, and optional tracking record contracts instead of relying on
-destination plugins or returned returned destination work to decide durable tracking state.
+destinations or returned destination work to decide durable tracking state.
 The runtime owns migration item state, while the process pipeline performs
 destination effects inside a scope that records destination changes and
 diagnostics in a journal; the migration definition decides whether successful
@@ -23,15 +23,15 @@ The API direction is expanded in
 ## Considered Options
 
 - Keep the current removed destination model where a process pipeline returns destination effects and the runtime infers one primary destination identity from identity-bearing command results.
-- Let destination plugins decide whether their commands are tracked or untracked.
+- Let destination code decide whether its commands are tracked or untracked.
 - Require process pipelines to return final migration outcomes.
 - Use an Effect PubSub as the canonical tracking mechanism for destination changes.
 - Run process pipelines inside a scoped tracking service, let destination helpers record successful changes and failed-attempt diagnostics, persist journal evidence for failed items, and allow migration definitions to stage an optional schema-validated tracking record for successful items.
 
 ## Decision
 
-Source identity is a schema-backed contract, not just a branded string. A source
-plugin may emit scalar or composite source identity values, and the framework
+Source identity is a schema-backed contract, not just a branded string. A
+source may emit scalar or composite source identity values, and the framework
 encodes those values into a durable source identity key for storage, lookup,
 targeting, and duplicate detection. The contract is required because changing a
 source identity mapping can make existing item state unsafe to reuse even when
@@ -39,10 +39,10 @@ the newly-produced encoded identities are still valid strings.
 
 Source identity authoring standardizes on `identity.id`, `identity.schema`, and
 `identity.key`. The `id` is the versioned compatibility name. The `schema`
-describes the durable identity key. The `key` field is the source-plugin-owned
+describes the durable identity key. The `key` field is the source-owned
 derivation from source-native data into a value that conforms to that schema.
-Composite source identity schemas are fixed positional tuples with required
-part names attached through schema metadata, not `Schema.Struct` objects.
+Composite source identity schemas are fixed positional tuples with required part
+names attached through schema metadata, not `Schema.Struct` objects.
 
 Destination tracking is structured and may be composite. A single source item may affect multiple named destination resources, such as a product and an inventory entry, and those resources may be tracked together as one durable tracking record for that migration item. The tracking record is not limited to identity fields; it may contain created resources, affected resources, rollback buckets, audit references, or any other durable state the migration author chooses.
 
@@ -63,7 +63,7 @@ runtime preserves the original item state and appends a failed rollback attempt
 journal segment. If the rollback attempt succeeds, the runtime deletes the item
 state and no rollback journal evidence remains durable for that item.
 
-Destination plugins become Effect capability modules. They own destination helpers, change descriptors, dependency layers, retryable error classification, and optional rollback helpers, but they do not own migration tracking. They are used as regular values inside the process pipeline and do not need a top-level `destination`, `destinations`, or `provide` slot on the migration definition unless the runtime has a concrete behavior that needs to inspect one.
+Destinations are pluggable capabilities. They own destination helpers, change descriptors, dependency layers, retryable error classification, and optional rollback helpers, but they do not own migration tracking. They are used as regular values inside the process pipeline and do not need a top-level `destination`, `destinations`, or `provide` slot on the migration definition unless the runtime has a concrete behavior that needs to inspect one.
 
 Tracking record contracts are static on the migration definition. A migration
 definition may declare `Tracking.record({ id, schema })`; if it does, a
@@ -76,7 +76,7 @@ execution evidence, while the tracking record is the user-shaped success
 contract.
 
 Destination change kinds are exposed as typed destination change descriptors
-owned by destination capability modules. Rollback code receives journal entries
+owned by destinations. Rollback code receives journal entries
 in journal order, identifies entries with descriptor-owned predicates, and
 decodes typed change values through the descriptor rather than parsing raw change
 kind strings or query methods. The SDK does not try to prove that arbitrary
@@ -127,7 +127,7 @@ Effect PubSub is not the canonical tracking mechanism. It is useful for optional
 Source identity contract fingerprints are SDK-owned, not delegated to Effect as
 a public hashing API. Effect Schema can provide a canonical representation of
 supported identity key schemas, but the mapping contract also includes how a
-source plugin derives those key parts from source-native data. Declarative
+source derives those key parts from source-native data. Declarative
 derivation options, such as CSV column mappings, are fingerprintable. Function
 derivation is not reliably fingerprintable, so function-based identity
 derivation must use an explicit contract id and version bump when its semantics
@@ -144,7 +144,7 @@ inside the schema without making the durable key shape hierarchical.
 ## API Direction
 
 ```ts
-const source = DocumentSourcePlugin.make({
+const source = DocumentSource.make({
   fetcher,
   parser,
   selector: {
@@ -226,8 +226,8 @@ yield* Tracking.setRecord({
 - A successful `Tracking.record(...)` item persists a schema-validated materialized tracking record.
 - A successful item without `Tracking.record(...)` persists item progress but omits destination tracking.
 - A successful progress-only item cannot be rolled back through destination tracking.
-- Destination plugins become Effect capability modules rather than tracking policy owners.
-- Plugin authors still own destination-native helper schemas, request construction, response parsing, change and diagnostic recording, dependency layers, and retryable error classification.
+- Destinations are pluggable capabilities rather than tracking policy owners.
+- Destination authors still own destination-native helper schemas, request construction, response parsing, change and diagnostic recording, dependency layers, and retryable error classification.
 - Migration authors own orchestration, inline retries, and the explicit decision to require a materialized tracking record for successful items.
 - New destination-tracking implementation work should rename the public authoring slot from `pipeline` to `process`; existing examples may keep `pipeline` only where they reflect pre-implementation code.
 - Rollback reads decoded ordered journal entries from the process journal segment and narrows them with typed change descriptors and diagnostic records, not raw change kind strings.

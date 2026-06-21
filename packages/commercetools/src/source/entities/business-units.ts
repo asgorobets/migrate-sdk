@@ -6,7 +6,7 @@ import type {
   CommercetoolsEntitySourceBaseOptions,
   CommercetoolsEntitySourceDescriptor,
   CommercetoolsSourceProjection,
-  ConfiguredCommercetoolsSourcePlugin,
+  ConfiguredCommercetoolsSource,
 } from "../domain.ts";
 import { makeCommercetoolsSourceIdentityDefinitions } from "../domain.ts";
 import { makeProjectedEntitySource } from "../internal/entity-source.ts";
@@ -62,17 +62,17 @@ const businessUnitSourceDescriptor: CommercetoolsEntitySourceDescriptor<
 
 export function makeBusinessUnitSource(
   options: CommercetoolsBusinessUnitSourceOptions
-): ConfiguredCommercetoolsSourcePlugin<BusinessUnit, BusinessUnit>;
+): ConfiguredCommercetoolsSource<BusinessUnit, BusinessUnit>;
 
 export function makeBusinessUnitSource<Source, SourceInput>(
   options: CommercetoolsBusinessUnitSourceProjectionOptions<Source, SourceInput>
-): ConfiguredCommercetoolsSourcePlugin<Source, SourceInput>;
+): ConfiguredCommercetoolsSource<Source, SourceInput>;
 
 export function makeBusinessUnitSource<Source, SourceInput>(
   options:
     | CommercetoolsBusinessUnitSourceOptions
     | CommercetoolsBusinessUnitSourceProjectionOptions<Source, SourceInput>
-): ConfiguredCommercetoolsSourcePlugin<
+): ConfiguredCommercetoolsSource<
   Source | BusinessUnit,
   SourceInput | BusinessUnit
 > {

@@ -21,7 +21,7 @@ import {
   SourceIdentity,
   toMigrationDefinitionId,
 } from "migrate-sdk/core";
-import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import {
   InMemoryMigrationStore,
   type InMemoryMigrationStoreState,
@@ -83,7 +83,7 @@ const articles = MigrationDefinition.make({
   id: articleDefinitionId,
   process: () => Effect.void,
   rollback: () => undefined,
-  source: InMemorySourcePlugin.make({
+  source: InMemorySource.make({
     batchSize: 50,
     identity: ArticleSourceIdentity,
     items: sourceItems,

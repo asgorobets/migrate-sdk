@@ -5,18 +5,18 @@ import { Effect, Layer, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import {
+  InMemorySource,
   InMemorySourceCursor,
-  InMemorySourcePlugin,
 } from "migrate-sdk/sources/in-memory";
 import { FileMigrationStore } from "migrate-sdk/stores/file";
 import { makeSourceVersionContractFingerprint } from "../../domain/migration-contract.ts";
 import {
   MigrationDefinition,
   MigrationStore,
+  Source,
+  SourceError,
   SourceIdentity,
   type SourceItemInput,
-  SourcePlugin,
-  SourcePluginError,
   skipItem,
   toEncodedSourceCursor,
   toEncodedSourceIdentity,
@@ -224,7 +224,7 @@ const makeArticlesMigration = (options: {
 }) =>
   MigrationDefinition.make({
     id: "articles",
-    source: InMemorySourcePlugin.make({
+    source: InMemorySource.make({
       identity: TestSourceIdentity,
       sourceSchema: ArticleSource,
       items: options.items,
@@ -496,7 +496,7 @@ describe("FileMigrationStore", () => {
       Effect.gen(function* () {
         const definition = MigrationDefinition.make({
           id: "articles",
-          source: InMemorySourcePlugin.make({
+          source: InMemorySource.make({
             identity: TestSourceIdentity,
             sourceSchema: ArticleSource,
             batchSize: 1,
@@ -793,12 +793,12 @@ describe("FileMigrationStore", () => {
   it.effect("releases the Migration Definition Lock after a failed run", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
-        const sourceError = new SourcePluginError({
+        const sourceError = new SourceError({
           message: "Source read failed",
         });
         const definition = MigrationDefinition.make({
           id: "articles",
-          source: SourcePlugin.make({
+          source: Source.make({
             cursorSchema: InMemorySourceCursor,
             identity: TestSourceIdentity,
             sourceSchema: Schema.Unknown,
@@ -815,7 +815,7 @@ describe("FileMigrationStore", () => {
 
         expect(error).toEqual(
           expect.objectContaining({
-            _tag: "SourcePluginError",
+            _tag: "SourceError",
             message: "Source read failed",
           })
         );

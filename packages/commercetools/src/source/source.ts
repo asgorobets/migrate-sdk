@@ -3,7 +3,7 @@ import type {
   Customer,
   Product,
 } from "@commercetools/platform-sdk";
-import type { ConfiguredSourcePlugin } from "migrate-sdk";
+import type { ConfiguredSource } from "migrate-sdk";
 import type { CommercetoolsSdk } from "../sdk.ts";
 import {
   type CommercetoolsBusinessUnitSourceOptions,
@@ -22,15 +22,14 @@ import {
 } from "./entities/products.ts";
 import type { CommercetoolsSourceCursor } from "./schemas.ts";
 
-type ConfiguredCommercetoolsSource<Source, SourceInput> =
-  ConfiguredSourcePlugin<
-    Source,
-    CommercetoolsSourceCursor,
-    string,
-    SourceInput,
-    never,
-    CommercetoolsSdk
-  >;
+type ConfiguredCommercetoolsSource<Source, SourceInput> = ConfiguredSource<
+  Source,
+  CommercetoolsSourceCursor,
+  string,
+  SourceInput,
+  never,
+  CommercetoolsSdk
+>;
 
 export type {
   CommercetoolsSourceIdentity,
@@ -86,7 +85,7 @@ export type CommercetoolsProductSourceProjectionFactoryOptions<
   CommercetoolsProductSourceProjectionOptions<Source, SourceInput>
 >;
 
-export interface CommercetoolsSourcePluginFactory {
+export interface CommercetoolsSourceFactory {
   readonly businessUnits: {
     <Source, SourceInput>(
       options: CommercetoolsBusinessUnitSourceProjectionFactoryOptions<
@@ -203,7 +202,7 @@ function products<Source, SourceInput>(
     | CommercetoolsProductSourceProjectionOptions<Source, SourceInput>);
 }
 
-export const CommercetoolsSourcePlugin: CommercetoolsSourcePluginFactory = {
+export const CommercetoolsSource: CommercetoolsSourceFactory = {
   businessUnits,
   customers,
   products,

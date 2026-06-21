@@ -1,4 +1,4 @@
-# Document Source Plugin Design
+# Document Source Design
 
 Status: draft, with source identity authoring updated for
 [ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md).
@@ -6,7 +6,7 @@ Document source identity examples use the new `identity.id`,
 `identity.schema`, and `identity.key` contract shape.
 
 Audience: maintainers and migration authors working with first-party source
-plugins that read structured documents from files or remote APIs.
+sources that read structured documents from files or remote APIs.
 
 ## Context
 
@@ -14,17 +14,17 @@ The SDK now has two related source shapes:
 
 - The API source example fetches remote JSON through an Effect service, decodes
   response payloads, builds source identities and versions, and implements the
-  durable source plugin contract manually.
+  durable source contract manually.
 - The local JSON implementation reads a file, parses JSON, validates a
   document schema, selects items from a hierarchy, preserves optional parent
   context, and builds source items.
 
 Those two implementations are solving the same middle problem: turn a fetched
 resource into schema-backed source items. If we keep adding transport and format
-combinations directly, we will drift toward separate source plugins for each
+combinations directly, we will drift toward separate sources for each
 pair, such as JSON file, JSON API, XML file, XML API, and similar variants.
 
-Drupal Migrate Plus has a useful prior art split: source plugins can combine a
+Drupal Migrate Plus has a useful prior art split: sources can combine a
 transport-oriented data fetcher with a format-oriented data parser. We should
 borrow that separation, but keep the Migrate SDK's Effect-native,
 schema-backed, cursor-window source contract.
@@ -37,7 +37,7 @@ schema-backed, cursor-window source contract.
 - Preserve hierarchical context with an optional parent selector.
 - Keep identity and version derivation explicit and durable.
 - Share local JSON file and remote JSON API source behavior.
-- Keep the existing `SourcePlugin` runtime contract unchanged.
+- Keep the existing `Source` runtime contract unchanged.
 - Avoid format and transport combinations becoming separate implementation
   stacks.
 
@@ -46,13 +46,13 @@ schema-backed, cursor-window source contract.
 - A generic low-code mapping DSL.
 - jq-style transforms, filters, joins, or lookups outside the pipeline.
 - Full JSONPath support as the primary public API.
-- Replacing the CSV source plugin.
+- Replacing the CSV source.
 - Streaming huge documents in the first slice.
 - Supporting XML, SOAP, YAML, S3, or database fetchers in the first slice.
 
 ## Naming
 
-The shared source is named `DocumentSourcePlugin`.
+The shared source is named `DocumentSource`.
 
 In this context, a document is one structured resource or page after parsing. It
 may come from a local JSON file, an HTTP response body, or a future resource
@@ -74,20 +74,20 @@ clearly next to `fetcher`, `parser`, `identity`, and `version`.
 
 ```mermaid
 flowchart LR
-  source["DocumentSourcePlugin.make"] --> fetcher["DocumentFetcher"]
+  source["DocumentSource.make"] --> fetcher["DocumentFetcher"]
   fetcher -->|DocumentFetchResult<Resource, FetcherCursor>| parser["DocumentParser"]
   parser -->|readonly Document[]| selector["selector"]
   selector -->|"{ item } or { parent, item }"| identity["identity"]
   selector --> version["version"]
   identity --> item["SourceItem"]
   version --> item
-  item --> runtime["SDK SourcePlugin runtime"]
+  item --> runtime["SDK Source runtime"]
 ```
 
 The public source configuration should stay shaped around the component graph:
 
 ```ts
-DocumentSourcePlugin.make({
+DocumentSource.make({
   fetcher,
   parser,
   selector,
@@ -102,7 +102,7 @@ DocumentSourcePlugin.make({
 Top-level document selection:
 
 ```ts
-const businessUnitsSource = DocumentSourcePlugin.make({
+const businessUnitsSource = DocumentSource.make({
   fetcher: DocumentFetchers.fileText({
     path: "./examples/document-source/companies.json",
     platform,
@@ -129,7 +129,7 @@ const tuple2 = <A, B>(first: A, second: B): readonly [A, B] => [
   second,
 ];
 
-const contactsSource = DocumentSourcePlugin.make({
+const contactsSource = DocumentSource.make({
   fetcher: DocumentFetchers.fileText({
     path: "./examples/document-source/companies.json",
     platform,
@@ -234,7 +234,7 @@ The document source still composes that fetcher with an explicit parser,
 selector, identity, lookup, and version:
 
 ```ts
-const postsSource = DocumentSourcePlugin.make({
+const postsSource = DocumentSource.make({
   fetcher,
   parser: DocumentParsers.json(JsonPlaceholderPostsPage),
   selector: {
@@ -294,7 +294,7 @@ const fetcher = DocumentFetchers.effect({
   layer: apiLayer,
 });
 
-const postsSource = DocumentSourcePlugin.make({
+const postsSource = DocumentSource.make({
   fetcher,
   parser: DocumentParsers.schema(
     "jsonplaceholder-posts",
@@ -406,7 +406,7 @@ interface DocumentFetcher<Resource, Cursor> {
     cursor: Cursor | null
   ) => Effect.Effect<
     DocumentFetchResult<Resource, Cursor>,
-    SourcePluginError
+    SourceError
   >;
 }
 
@@ -429,7 +429,7 @@ sources prove what should be abstracted.
 
 The document source must compile to the existing runtime `SourceLookupStrategy`.
 There is no second lookup-kind system for fetchers. `lookup` is required on the
-low-level `DocumentSourcePlugin.make` API so scan-based identity reruns are an
+low-level `DocumentSource.make` API so scan-based identity reruns are an
 explicit authoring choice.
 
 Scan lookup reads through resources, parses documents, applies the selector,
@@ -437,7 +437,7 @@ derives identity, and returns the first selected source item whose derived
 identity matches the requested source identity:
 
 ```ts
-const source = DocumentSourcePlugin.make({
+const source = DocumentSource.make({
   fetcher,
   parser,
   selector,
@@ -450,7 +450,7 @@ const source = DocumentSourcePlugin.make({
 Direct lookup is a document-source option, not a fetcher-owned runtime flag:
 
 ```ts
-const source = DocumentSourcePlugin.make({
+const source = DocumentSource.make({
   fetcher,
   parser,
   selector,
@@ -464,12 +464,12 @@ const source = DocumentSourcePlugin.make({
 ```
 
 The direct lookup read returns `Resource | null` to match the existing
-`SourcePlugin.readByIdentity` contract. `null` means the source item is not
+`Source.readByIdentity` contract. `null` means the source item is not
 found for the requested identity. Implementations may internally model
 not-found as a typed error, but they must adapt that case to `null` at the
 document-source boundary. Lookup failures such as unavailable credentials,
 transport failures, invalid responses, or permission errors remain
-`SourcePluginError`.
+`SourceError`.
 
 The direct lookup read still returns a fetched resource. The document source must
 parse it, select items, derive source identities, and verify the requested
@@ -478,12 +478,12 @@ does not bypass parser, selector, identity, version, or Source Payload Schema
 behavior.
 
 Fetcher helpers may provide the underlying resource read used by direct
-lookup, but the lookup declaration lives on `DocumentSourcePlugin.make` and
+lookup, but the lookup declaration lives on `DocumentSource.make` and
 compiles to the existing runtime `SourceLookupStrategy`.
 
 Convenience fetchers such as `DocumentFetchers.fileText(...)` must not imply a
 lookup strategy. Even local file sources should declare scan lookup at the
-`DocumentSourcePlugin.make` call site so identity lookup cost is visible in the
+`DocumentSource.make` call site so identity lookup cost is visible in the
 source configuration.
 
 The configured document source reports the existing runtime lookup strategy:
@@ -515,7 +515,7 @@ interface DocumentParser<Resource, Document> {
   readonly documentSchema: Schema.Codec<Document, unknown, never, never>;
   readonly parse: (
     resource: Resource
-  ) => Effect.Effect<readonly Document[], SourcePluginError>;
+  ) => Effect.Effect<readonly Document[], SourceError>;
 }
 ```
 
@@ -524,11 +524,11 @@ values such as `"json"`, `"ndjson"`, or `"xml"` so parse and schema failures can
 name the parser that failed. The document source core must not use `name` for
 routing or behavior; custom parsers must provide their own label.
 
-The parser exposes `documentSchema` because `DocumentSourcePlugin.make` uses it
+The parser exposes `documentSchema` because `DocumentSource.make` uses it
 to build the schema cursor for `selector.parent` and `selector.item`. The
 document schema should not be passed separately at the source level.
 
-Parser dependencies follow the same ownership model as existing source plugin
+Parser dependencies follow the same ownership model as existing source
 dependencies. The migration author or source author controls parser and fetcher
 dependencies when constructing the configured source. The framework controls the
 runtime boundary after that configured source is handed to a migration
@@ -544,10 +544,10 @@ parser: DocumentParsers.json(CompaniesDocument)
 If a parser needs services, such as an XML library, schema registry, or custom
 decoder, those services should be selected or provided at parser/source
 construction time. The document source can then provide those parser
-dependencies before exposing its configured source plugin layer. This mirrors
+dependencies before exposing its configured source layer. This mirrors
 the API source example where an `apiLayer` is supplied by the caller and
 provided inside the source implementation before the runtime sees the source
-plugin.
+source.
 
 If first-party helpers do not fit, migration authors can define their own
 `DocumentFetcher` or `DocumentParser` and close over whatever dependencies they
@@ -563,7 +563,7 @@ parser factories that close over or provide those dependencies at source
 construction time.
 
 The framework should not implicitly decide parser dependencies. It should call
-the configured source plugin, persist cursors, apply retries, record failures,
+the configured source, persist cursors, apply retries, record failures,
 and run the pipeline. Parser-specific services are controlled by the configured
 source, not by the migration runner.
 
@@ -613,9 +613,9 @@ the raw JavaScript object with ad hoc `JSON.stringify`.
 ## Parser Error Output
 
 Parser failures are source-read failures and should surface as
-`SourcePluginError` at the source plugin boundary. This does not mean schema
+`SourceError` at the source boundary. This does not mean schema
 messages are only a logging concern. Parser helpers must preserve useful parse
-and schema diagnostics in the `SourcePluginError` message or cause so CLI,
+and schema diagnostics in the `SourceError` message or cause so CLI,
 SDK, and logs can render actionable output.
 
 Document parser errors happen before the document source has selected source
@@ -719,7 +719,7 @@ const makeDocumentSourceCursor = <FetcherCursor>(
 
 ## Source Item Construction
 
-`DocumentSourcePlugin.make` owns the common path:
+`DocumentSource.make` owns the common path:
 
 1. Read a resource through the fetcher.
 2. Parse and decode one or more documents through the parser.
@@ -728,15 +728,15 @@ const makeDocumentSourceCursor = <FetcherCursor>(
 4. Decode selected items with the schema inferred from the selector.
 5. Build source identities and versions.
 6. Fail on duplicate identities in the selected document window.
-7. Return a normal configured source plugin.
+7. Return a normal configured source.
 
-The generated source plugin still exposes the existing durable runtime behavior:
+The generated source still exposes the existing durable runtime behavior:
 
 - cursor reads are windowed;
 - identity lookup is required;
 - lookup strategy is declared through the existing `SourceLookupStrategy`;
-- source cursor schema is encoded by the configured source plugin;
-- source payload schema is carried by the configured source plugin.
+- source cursor schema is encoded by the configured source;
+- source payload schema is carried by the configured source.
 
 ## Implementation Plan
 
@@ -746,10 +746,10 @@ The next implementation slice should not replace every source at once.
    identity, version, content hash, and duplicate identity behavior from
    existing JSON-oriented source code into an internal document-source core.
 2. Add `DocumentFetchers.file` and `DocumentParsers.json`, then wire a local
-   JSON document source through `DocumentSourcePlugin.make`.
+   JSON document source through `DocumentSource.make`.
 3. Refactor the API source example so its remote JSON flow uses the same
    document-source core for parsing, selection, identity, and version.
-4. Keep `DocumentSourcePlugin` internal until the API holds up in both local
+4. Keep `DocumentSource` internal until the API holds up in both local
    file and remote API examples.
 5. Expose a public subpath such as `migrate-sdk/sources/document` only after
    the document source proves the ergonomics.

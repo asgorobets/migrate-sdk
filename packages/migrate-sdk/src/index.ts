@@ -2,24 +2,24 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public package entrypoint intentionally re-exports the SDK surface.
 
 export type {
-  ConfiguredSourcePlugin,
+  ConfiguredSource,
   MigrationDefinitionDependencies,
   MigrationDefinitionDependenciesInput,
   MigrationDefinitionInput,
   SourcePayloadSchema,
-  SourcePluginFactoryInput,
-  SourcePluginImplementation,
-  SourcePluginInput,
+  SourceFactoryInput,
+  SourceImplementation,
+  SourceMakeInput,
   SourceReadResultInput,
   SourceRetryStrategy,
 } from "./domain/definition.ts";
 export {
   MigrationDefinition,
-  SourcePlugin,
+  Source,
 } from "./domain/definition.ts";
 
 export {
-  DestinationPluginError,
+  DestinationError,
   makeSkipItem,
   MigrationReferenceLookupError,
   MigrationRuntimeError,
@@ -28,7 +28,7 @@ export {
   RollbackRequestError,
   skipItem,
   SkipItem,
-  SourcePluginError,
+  SourceError,
 } from "./domain/errors.ts";
 
 export type {
@@ -337,7 +337,7 @@ export type {
   InMemoryEntryUpsertedChange,
 } from "./destinations/in-memory/in-memory-destination.ts";
 
-export { InMemorySourcePlugin } from "./sources/in-memory/in-memory-source.ts";
+export { InMemorySource } from "./sources/in-memory/in-memory-source.ts";
 export { InMemorySourceCursor } from "./sources/in-memory/in-memory-source.ts";
 export type {
   InMemorySourceOptions,
@@ -348,7 +348,7 @@ export type {
 export {
   CsvIdentity,
   CsvSourceCursor,
-  CsvSourcePlugin,
+  CsvSource,
 } from "./sources/csv/csv-source.ts";
 export type {
   CsvCompositeIdentityKey,
@@ -364,8 +364,8 @@ export type {
 
 export {
   SqlIdentity,
-  SqlSourcePlugin,
-  SqlSourcePluginName,
+  SqlSource,
+  SqlSourceName,
 } from "./sources/sql/sql-source.ts";
 export type {
   AnySqlIdentityDefinition,

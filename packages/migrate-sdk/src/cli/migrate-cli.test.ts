@@ -2295,7 +2295,7 @@ describe("migrate CLI", () => {
       );
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("SourcePluginError");
+      expect(result.stderr).toContain("SourceError");
       expect(result.progressOutput).toContain("Migration Progress");
       expect(result.progressOutput).toContain("definition=articles");
       expect(result.progressOutput.endsWith("\r\u001B[2K\n")).toBe(true);
@@ -2537,7 +2537,7 @@ describe("migrate CLI", () => {
         .filter((line) => line.startsWith("[progress]"));
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("SourcePluginError");
+      expect(result.stderr).toContain("SourceError");
       expect(progressLines).toEqual([
         "[progress] Run started definitions=articles",
         "[progress] Definition started definition=articles",
@@ -2958,7 +2958,7 @@ describe("migrate CLI", () => {
       );
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("SourcePluginError");
+      expect(result.stderr).toContain("SourceError");
       expect(result.stderr).toContain(
         "In-memory source batchSize must be a positive integer"
       );

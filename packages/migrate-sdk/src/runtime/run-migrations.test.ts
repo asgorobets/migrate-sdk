@@ -21,9 +21,9 @@ import {
   InMemoryDestination,
   InMemoryMigrationStore,
   type InMemoryMigrationStoreState,
+  InMemorySource,
   InMemorySourceCursor,
   type InMemorySourceOptions,
-  InMemorySourcePlugin,
   MigrationDefinition,
   MigrationDefinitionLock,
   MigrationDefinitionRegistryConstructionError,
@@ -46,13 +46,13 @@ import {
   RollbackProgress,
   type RollbackProgressEvent,
   type RollbackRunSummary,
+  Source,
+  SourceError,
   SourceIdentity,
   type SourceIdentityDefinition,
+  type SourceImplementation,
   type SourceItemInput,
   SourceItemTotal,
-  SourcePlugin,
-  SourcePluginError,
-  type SourcePluginImplementation,
   skipItem,
   Tracking,
   type TrackingRecordContractType,
@@ -193,7 +193,7 @@ const makeTestInMemorySource = <A>(
   options: Omit<InMemorySourceOptions<A, string>, "identity" | "sourceSchema"> &
     Partial<Pick<InMemorySourceOptions<A, string>, "sourceSchema">>
 ) =>
-  InMemorySourcePlugin.make({
+  InMemorySource.make({
     identity: ArticleSourceIdentity,
     sourceSchema: Schema.Unknown as Schema.Codec<A, unknown, never, never>,
     ...options,
@@ -215,11 +215,11 @@ const makeObservableTotalCountSource = ({
   readonly items: readonly SourceItemInput<ArticleSource, string>[];
   readonly sourceItemCount?: Effect.Effect<
     number | SourceItemTotal,
-    SourcePluginError
+    SourceError
   >;
   readonly state: ObservableTotalCountSourceState;
 }) =>
-  SourcePlugin.make({
+  Source.make({
     cursorSchema: InMemorySourceCursor,
     identity: ArticleSourceIdentity,
     sourceSchema: ArticleSource,
@@ -555,22 +555,22 @@ describe("runInlineDefinition", () => {
             }),
           readByIdentity: () => Effect.succeed(null),
         };
-        const source = SourcePlugin.make({
+        const source = Source.make({
           cursorSchema,
           identity: ArticleSourceIdentity,
           sourceSchema: Schema.Struct({ title: Schema.String }),
           make: () =>
-            implementationWithConflictingSchema as unknown as SourcePluginImplementation<
+            implementationWithConflictingSchema as unknown as SourceImplementation<
               { readonly title: string },
               number,
               string
             >,
         });
 
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-        expect(plugin.cursorSchema).toBe(cursorSchema);
-        expect(plugin.sourceSchema).toBe(source.sourceSchema);
+        expect(sourceService.cursorSchema).toBe(cursorSchema);
+        expect(sourceService.sourceSchema).toBe(source.sourceSchema);
       })
   );
 
@@ -2200,7 +2200,7 @@ describe("runInlineDefinition", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const changedSourceState = InMemorySourcePlugin.makeState();
+        const changedSourceState = InMemorySource.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const process = () => Effect.void;
         const original = MigrationDefinition.make({
@@ -2228,7 +2228,7 @@ describe("runInlineDefinition", () => {
         });
         const changed = MigrationDefinition.make({
           id: "articles",
-          source: InMemorySourcePlugin.make({
+          source: InMemorySource.make({
             identity: ChangedArticleSourceIdentity,
             sourceSchema: ArticleSource,
             state: changedSourceState,
@@ -2264,7 +2264,7 @@ describe("runInlineDefinition", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const sourceState = InMemorySourcePlugin.makeState();
+        const sourceState = InMemorySource.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
 
         storeState.itemStates.set(
@@ -2316,7 +2316,7 @@ describe("runInlineDefinition", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const changedSourceState = InMemorySourcePlugin.makeState();
+        const changedSourceState = InMemorySource.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const originalTracking = Tracking.record({
           id: "article-entry@v1",
@@ -3054,7 +3054,7 @@ describe("runInlineDefinition", () => {
         });
         const guestAuthors = MigrationDefinition.make({
           id: "guest-authors",
-          source: InMemorySourcePlugin.make({
+          source: InMemorySource.make({
             identity: PublisherAuthorIdentity,
             sourceSchema: ArticleSource,
             items: [],
@@ -3775,7 +3775,7 @@ describe("runInlineDefinition", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const changedSourceState = InMemorySourcePlugin.makeState();
+        const changedSourceState = InMemorySource.makeState();
         const store = InMemoryMigrationStore.layer(storeState);
         const process = () => Effect.void;
         const originalVersionContract = makeSourceVersionContractFingerprint({
@@ -4100,7 +4100,7 @@ describe("runInlineDefinition", () => {
 
   it.effect("wraps Source Cursor reads with Source Cursor Retry", () =>
     Effect.gen(function* () {
-      const sourceState = InMemorySourcePlugin.makeState();
+      const sourceState = InMemorySource.makeState();
       const storeState = InMemoryMigrationStore.makeState();
       const processCalls: string[] = [];
 
@@ -4143,7 +4143,7 @@ describe("runInlineDefinition", () => {
 
   it.effect("wraps Source Identity lookups with Source Lookup Retry", () =>
     Effect.gen(function* () {
-      const sourceState = InMemorySourcePlugin.makeState();
+      const sourceState = InMemorySource.makeState();
       const storeState = InMemoryMigrationStore.makeState();
       const processCalls: string[] = [];
 
@@ -4201,7 +4201,7 @@ describe("runInlineDefinition", () => {
 
       const definition = MigrationDefinition.make({
         id: "business-addresses",
-        source: InMemorySourcePlugin.make({
+        source: InMemorySource.make({
           identity: BusinessAddressSourceIdentity,
           sourceSchema: ArticleSource,
           items: [
@@ -4243,7 +4243,7 @@ describe("runInlineDefinition", () => {
 
         const definition = MigrationDefinition.make({
           id: "articles",
-          source: InMemorySourcePlugin.make({
+          source: InMemorySource.make({
             identity: ArticleSourceIdentity,
             sourceSchema: ArticleSource,
             items: [
@@ -4308,7 +4308,7 @@ describe("runInlineDefinition", () => {
 
       const definition = MigrationDefinition.make({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: InMemorySource.make({
           identity: ArticleSourceIdentity,
           sourceSchema: ArticleSource,
           items: [
@@ -4380,7 +4380,7 @@ describe("runInlineDefinition", () => {
 
       const definition = MigrationDefinition.make({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: InMemorySource.make({
           identity: ArticleSourceIdentity,
           sourceSchema: ManyFieldSource,
           items: [
@@ -4429,7 +4429,7 @@ describe("runInlineDefinition", () => {
 
       const definition = MigrationDefinition.make({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: InMemorySource.make({
           identity: ArticleSourceIdentity,
           sourceSchema: ArticleSource,
           items: [
@@ -4491,7 +4491,7 @@ describe("runInlineDefinition", () => {
 
       const definition = MigrationDefinition.make({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: InMemorySource.make({
           identity: ArticleSourceIdentity,
           sourceSchema: ArticleStatsSource,
           items: [
@@ -4543,7 +4543,7 @@ describe("runInlineDefinition", () => {
 
       expect(error).toEqual(
         expect.objectContaining({
-          _tag: "SourcePluginError",
+          _tag: "SourceError",
           message: "In-memory source batchSize must be a positive integer",
         })
       );
@@ -4896,8 +4896,7 @@ describe("runInlineDefinition", () => {
               definitionId: definition.id,
               kind: "source-item-total-counted",
               sourceItemTotal: SourceItemTotal.unknown({
-                message:
-                  "Source plugin does not support Source Item total count",
+                message: "Source does not support Source Item total count",
                 reason: "unsupported",
               }),
             }),
@@ -4949,7 +4948,7 @@ describe("runInlineDefinition", () => {
           totalCountAttempts: 0,
         };
         const events: MigrationProgressEvent[] = [];
-        const countError = new SourcePluginError({
+        const countError = new SourceError({
           message: "Count endpoint failed",
         });
         const definition = MigrationDefinition.make({
@@ -5248,7 +5247,7 @@ describe("runInlineDefinition", () => {
           status: "failed",
           error: {
             kind: "destination",
-            errorTag: "DestinationPluginError",
+            errorTag: "DestinationError",
             message: "destination effect failed",
           },
         }
@@ -5408,7 +5407,7 @@ describe("runInlineDefinition", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const sourceState = InMemorySourcePlugin.makeState();
+        const sourceState = InMemorySource.makeState();
         const processCalls: string[] = [];
         const previousStates: (typeof MigrationItemState.Type | undefined)[] =
           [];
@@ -6025,7 +6024,7 @@ describe("runInlineDefinition", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const sourceState = InMemorySourcePlugin.makeState();
+        const sourceState = InMemorySource.makeState();
         const sourceItems = [
           {
             identityKey: "article-seen",
@@ -6446,14 +6445,14 @@ describe("runInlineDefinition", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const sourceError = new SourcePluginError({
+        const sourceError = new SourceError({
           message: "Source identity lookup failed",
           cause: new Error("Source system unavailable"),
         });
 
         const definition = MigrationDefinition.make({
           id: "articles",
-          source: SourcePlugin.make({
+          source: Source.make({
             cursorSchema: InMemorySourceCursor,
             identity: ArticleSourceIdentity,
             sourceSchema: Schema.Unknown,
@@ -6506,7 +6505,7 @@ describe("runInlineDefinition", () => {
             lastRunId: summary.runId,
             error: expect.objectContaining({
               kind: "source",
-              errorTag: "SourcePluginError",
+              errorTag: "SourceError",
               message: "Source identity lookup failed",
             }),
           })
@@ -6519,14 +6518,14 @@ describe("runInlineDefinition", () => {
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
-        const sourceError = new SourcePluginError({
+        const sourceError = new SourceError({
           message: "Source identity lookup failed",
           cause: new Error("Source system unavailable"),
         });
 
         const definition = MigrationDefinition.make({
           id: "articles",
-          source: SourcePlugin.make({
+          source: Source.make({
             cursorSchema: InMemorySourceCursor,
             identity: ArticleSourceIdentity,
             sourceSchema: Schema.Unknown,
@@ -6566,7 +6565,7 @@ describe("runInlineDefinition", () => {
             status: "failed",
             error: expect.objectContaining({
               kind: "source",
-              errorTag: "SourcePluginError",
+              errorTag: "SourceError",
               message: "Source identity lookup failed",
             }),
           })
@@ -6580,14 +6579,14 @@ describe("runInlineDefinition", () => {
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
         const processCalls: string[] = [];
-        const sourceError = new SourcePluginError({
+        const sourceError = new SourceError({
           message: "Source identity lookup failed",
           cause: new Error("Source system unavailable"),
         });
 
         const definition = MigrationDefinition.make({
           id: "articles",
-          source: SourcePlugin.make({
+          source: Source.make({
             cursorSchema: InMemorySourceCursor,
             identity: ArticleSourceIdentity,
             sourceSchema: Schema.Unknown,
@@ -6655,7 +6654,7 @@ describe("runInlineDefinition", () => {
             sourceVersion: "source-version-1",
             error: expect.objectContaining({
               kind: "source",
-              errorTag: "SourcePluginError",
+              errorTag: "SourceError",
               message: "Source identity lookup failed",
             }),
           })
@@ -7263,7 +7262,7 @@ describe("runInlineDefinition", () => {
   it.effect("preserves the primary error when failRun cleanup fails", () =>
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
-      const sourceError = new SourcePluginError({
+      const sourceError = new SourceError({
         message: "Source read failed",
       });
       const failRunError = new MigrationStoreError({
@@ -7272,7 +7271,7 @@ describe("runInlineDefinition", () => {
 
       const definition = MigrationDefinition.make({
         id: "articles",
-        source: SourcePlugin.make({
+        source: Source.make({
           cursorSchema: InMemorySourceCursor,
           identity: ArticleSourceIdentity,
           sourceSchema: Schema.Unknown,

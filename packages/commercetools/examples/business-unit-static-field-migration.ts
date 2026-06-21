@@ -1,10 +1,10 @@
 import type { BusinessUnit } from "@commercetools/platform-sdk";
 import type { CommercetoolsSdkLayer } from "@migrate-sdk/commercetools";
 import { CommercetoolsDestination } from "@migrate-sdk/commercetools/destination";
-import { CommercetoolsSourcePlugin } from "@migrate-sdk/commercetools/source";
+import { CommercetoolsSource } from "@migrate-sdk/commercetools/source";
 import { Effect, type Layer, type Schema } from "effect";
 import {
-  type DestinationPluginError,
+  type DestinationError,
   MigrationDefinition,
   type MigrationStore,
   type MigrationStoreError,
@@ -25,14 +25,14 @@ export interface BusinessUnitStaticFieldMigrationOptions {
 }
 
 type BusinessUnitStaticFieldProcessError =
-  | DestinationPluginError
+  | DestinationError
   | Schema.SchemaError;
 
 export const makeBusinessUnitStaticFieldMigration = (
   options: BusinessUnitStaticFieldMigrationOptions
 ) => {
   const ct = CommercetoolsDestination.make().provide(options.sdkLayer);
-  const source = CommercetoolsSourcePlugin.businessUnits({
+  const source = CommercetoolsSource.businessUnits({
     batchSize: options.batchSize ?? 20,
     identity: "key",
   }).provide(options.sdkLayer);

@@ -1,19 +1,17 @@
-import { SourcePluginError } from "migrate-sdk";
+import { SourceError } from "migrate-sdk";
 import type { CommercetoolsSdkError } from "../../sdk.ts";
 
-export const sourcePluginError = (
+export const makeSourceError = (
   message: string,
   cause?: unknown
-): SourcePluginError =>
-  new SourcePluginError({
+): SourceError =>
+  new SourceError({
     ...(cause === undefined ? {} : { cause }),
     message,
   });
 
-export const toSourcePluginError = (
-  cause: CommercetoolsSdkError
-): SourcePluginError =>
-  new SourcePluginError({
+export const toSourceError = (cause: CommercetoolsSdkError): SourceError =>
+  new SourceError({
     cause,
     message: cause.message,
   });

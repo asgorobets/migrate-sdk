@@ -10,7 +10,7 @@ import {
   skipItem,
 } from "migrate-sdk";
 import { InMemoryDestination } from "migrate-sdk/destinations/in-memory";
-import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { FileMigrationStore } from "migrate-sdk/stores/file";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
 import { completedInlineExecution } from "./inline-execution.ts";
@@ -103,7 +103,7 @@ export const makeFileStoreArticlesMigration = ({
       });
     }),
     rollback: () => undefined,
-    source: InMemorySourcePlugin.make({
+    source: InMemorySource.make({
       identity: ArticleSourceIdentity,
       items: sourceItems,
       sourceSchema: Article,

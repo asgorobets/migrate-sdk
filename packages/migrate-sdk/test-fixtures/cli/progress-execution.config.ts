@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import {
   InMemoryMigrationStore,
-  InMemorySourcePlugin,
+  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   SourceIdentity,
@@ -18,7 +18,7 @@ const store = InMemoryMigrationStore.layer();
 
 const articles = MigrationDefinition.make({
   id: toMigrationDefinitionId("articles"),
-  source: InMemorySourcePlugin.make({
+  source: InMemorySource.make({
     identity: EntrySourceIdentity,
     sourceSchema: EntrySource,
     batchSize: 2,

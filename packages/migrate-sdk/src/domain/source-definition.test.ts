@@ -2,14 +2,14 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { Service } from "effect/Context";
 import {
-  type ConfiguredSourcePlugin,
+  type ConfiguredSource,
+  Source,
+  type Source as SourceContract,
+  SourceError,
   SourceIdentity,
   type SourceIdentityTarget,
   type SourceItem,
   SourceItemTotal,
-  SourcePlugin,
-  type SourcePlugin as SourcePluginContract,
-  SourcePluginError,
   type SourceReadResult,
   type SourceReadResultInput,
   toSourceVersion,
@@ -38,29 +38,29 @@ const RemoteArticleIdentity = SourceIdentity.make({
 const tuple2 = <A, B>(first: A, second: B): readonly [A, B] => [first, second];
 
 expectTypeOf<
-  ReturnType<SourcePluginContract<RemoteArticle, RemoteArticleCursor>["read"]>
+  ReturnType<SourceContract<RemoteArticle, RemoteArticleCursor>["read"]>
 >().toEqualTypeOf<
   Effect.Effect<
     SourceReadResult<RemoteArticle, RemoteArticleCursor>,
-    SourcePluginError
+    SourceError
   >
 >();
 
 expectTypeOf<
   ReturnType<
-    SourcePluginContract<RemoteArticle, RemoteArticleCursor>["readByIdentity"]
+    SourceContract<RemoteArticle, RemoteArticleCursor>["readByIdentity"]
   >
 >().toEqualTypeOf<
-  Effect.Effect<SourceItem<RemoteArticle> | null, SourcePluginError>
+  Effect.Effect<SourceItem<RemoteArticle> | null, SourceError>
 >();
 
 expectTypeOf<
   ReturnType<
     NonNullable<
-      SourcePluginContract<RemoteArticle, RemoteArticleCursor>["countTotal"]
+      SourceContract<RemoteArticle, RemoteArticleCursor>["countTotal"]
     >
   >
->().toEqualTypeOf<Effect.Effect<SourceItemTotal, SourcePluginError>>();
+>().toEqualTypeOf<Effect.Effect<SourceItemTotal, SourceError>>();
 
 interface ArticleListEntry {
   readonly id: string;
@@ -75,13 +75,13 @@ class ArticleApi extends Service<
   {
     readonly getDetails: (
       id: string
-    ) => Effect.Effect<RemoteArticle, SourcePluginError>;
+    ) => Effect.Effect<RemoteArticle, SourceError>;
     readonly list: (cursor: RemoteArticleCursor | null) => Effect.Effect<
       {
         readonly entries: readonly ArticleListEntry[];
         readonly nextCursor?: RemoteArticleCursor;
       },
-      SourcePluginError
+      SourceError
     >;
   }
 >()("@migrate-sdk/test/ArticleApi") {}
@@ -113,7 +113,7 @@ const makeArticleApiLayer = (state: ArticleApiState): Layer.Layer<ArticleApi> =>
         const article = articles.get(id);
 
         if (article === undefined) {
-          return yield* new SourcePluginError({
+          return yield* new SourceError({
             message: "Article detail was not found",
             cause: { id },
           });
@@ -137,73 +137,71 @@ const makeArticleApiLayer = (state: ArticleApiState): Layer.Layer<ArticleApi> =>
     };
   });
 
-describe("SourcePlugin", () => {
-  it.effect(
-    "normalizes source item inputs into a configured source plugin",
-    () =>
-      Effect.gen(function* () {
-        const source = SourcePlugin.make({
-          cursorSchema: RemoteArticleCursor,
-          identity: RemoteArticleIdentity,
-          sourceSchema: RemoteArticle,
-          lookupStrategy: "direct",
-          read: () =>
-            Effect.succeed({
-              items: [
-                {
-                  identityKey: "article-1",
-                  version: "2026-06-05T10:00:00.000Z",
-                  item: {
-                    id: "article-1",
-                    title: "One",
-                    updatedAt: "2026-06-05T10:00:00.000Z",
-                  },
+describe("Source", () => {
+  it.effect("normalizes source item inputs into a configured source", () =>
+    Effect.gen(function* () {
+      const source = Source.make({
+        cursorSchema: RemoteArticleCursor,
+        identity: RemoteArticleIdentity,
+        sourceSchema: RemoteArticle,
+        lookupStrategy: "direct",
+        read: () =>
+          Effect.succeed({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "2026-06-05T10:00:00.000Z",
+                item: {
+                  id: "article-1",
+                  title: "One",
+                  updatedAt: "2026-06-05T10:00:00.000Z",
                 },
-              ],
-            } satisfies SourceReadResultInput<
-              RemoteArticle,
-              RemoteArticleCursor
-            >),
-          readByIdentity: (identity) =>
-            Effect.succeed({
-              identityKey: identity.key,
-              version: "2026-06-05T10:00:00.000Z",
-              item: {
-                id: "article-1",
-                title: "One",
-                updatedAt: "2026-06-05T10:00:00.000Z",
               },
-            }),
-        });
+            ],
+          } satisfies SourceReadResultInput<
+            RemoteArticle,
+            RemoteArticleCursor
+          >),
+        readByIdentity: (identity) =>
+          Effect.succeed({
+            identityKey: identity.key,
+            version: "2026-06-05T10:00:00.000Z",
+            item: {
+              id: "article-1",
+              title: "One",
+              updatedAt: "2026-06-05T10:00:00.000Z",
+            },
+          }),
+      });
 
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const page = yield* plugin.read(null);
-        const firstItem = page.items[0];
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const page = yield* sourceService.read(null);
+      const firstItem = page.items[0];
 
-        if (firstItem === undefined) {
-          throw new Error("Expected source page to include one item");
-        }
+      if (firstItem === undefined) {
+        throw new Error("Expected source page to include one item");
+      }
 
-        const item = yield* plugin.readByIdentity(firstItem.identity);
+      const item = yield* sourceService.readByIdentity(firstItem.identity);
 
-        expect(plugin.cursorSchema).toBe(RemoteArticleCursor);
-        expect(plugin.identity).toBe(RemoteArticleIdentity);
-        expect(plugin.sourceSchema).toBe(RemoteArticle);
-        expect(plugin.lookupStrategy).toBe("direct");
-        expect(plugin.countTotal).toBeUndefined();
-        expect(page.items[0]?.identity).toEqual(
-          SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
-        );
-        expect(page.items[0]?.version).toBe("2026-06-05T10:00:00.000Z");
-        expect(item?.identity).toEqual(
-          SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
-        );
-      })
+      expect(sourceService.cursorSchema).toBe(RemoteArticleCursor);
+      expect(sourceService.identity).toBe(RemoteArticleIdentity);
+      expect(sourceService.sourceSchema).toBe(RemoteArticle);
+      expect(sourceService.lookupStrategy).toBe("direct");
+      expect(sourceService.countTotal).toBeUndefined();
+      expect(page.items[0]?.identity).toEqual(
+        SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
+      );
+      expect(page.items[0]?.version).toBe("2026-06-05T10:00:00.000Z");
+      expect(item?.identity).toEqual(
+        SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
+      );
+    })
   );
 
   it.effect("exposes optional Source Item total count", () =>
     Effect.gen(function* () {
-      const source = SourcePlugin.make({
+      const source = Source.make({
         cursorSchema: RemoteArticleCursor,
         identity: RemoteArticleIdentity,
         sourceSchema: RemoteArticle,
@@ -215,25 +213,25 @@ describe("SourcePlugin", () => {
         readByIdentity: () => Effect.succeed(null),
         countTotal: () => Effect.succeed(0),
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-      if (plugin.countTotal === undefined) {
-        throw new Error("Expected source plugin to expose total count");
+      if (sourceService.countTotal === undefined) {
+        throw new Error("Expected source to expose total count");
       }
 
-      const total = yield* plugin.countTotal();
+      const total = yield* sourceService.countTotal();
 
       expect(total).toEqual(SourceItemTotal.known(0));
     })
   );
 
-  it.effect("adapts an existing source plugin layer", () =>
+  it.effect("adapts an existing source layer", () =>
     Effect.gen(function* () {
-      const source = SourcePlugin.fromLayer({
+      const source = Source.fromLayer({
         cursorSchema: RemoteArticleCursor,
         identity: RemoteArticleIdentity,
         sourceSchema: RemoteArticle,
-        layer: Layer.succeed(SourcePlugin, {
+        layer: Layer.succeed(Source, {
           cursorSchema: RemoteArticleCursor,
           identity: RemoteArticleIdentity,
           sourceSchema: RemoteArticle,
@@ -260,11 +258,11 @@ describe("SourcePlugin", () => {
       });
 
       expectTypeOf(source).toMatchTypeOf<
-        ConfiguredSourcePlugin<RemoteArticle, RemoteArticleCursor>
+        ConfiguredSource<RemoteArticle, RemoteArticleCursor>
       >();
 
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const page = yield* plugin.read(null);
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const page = yield* sourceService.read(null);
 
       expect(source.identity).toBe(RemoteArticleIdentity);
       expect(page.items[0]?.identity).toEqual(
@@ -275,7 +273,7 @@ describe("SourcePlugin", () => {
 
   it.effect("exposes lower-bound Source Item totals", () =>
     Effect.gen(function* () {
-      const source = SourcePlugin.make({
+      const source = Source.make({
         cursorSchema: RemoteArticleCursor,
         identity: RemoteArticleIdentity,
         sourceSchema: RemoteArticle,
@@ -293,13 +291,13 @@ describe("SourcePlugin", () => {
             })
           ),
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-      if (plugin.countTotal === undefined) {
-        throw new Error("Expected source plugin to expose total count");
+      if (sourceService.countTotal === undefined) {
+        throw new Error("Expected source to expose total count");
       }
 
-      const total = yield* plugin.countTotal();
+      const total = yield* sourceService.countTotal();
 
       expect(total).toEqual(
         SourceItemTotal.lowerBound(10_000, {
@@ -311,10 +309,10 @@ describe("SourcePlugin", () => {
   );
 
   it.effect(
-    "fails source reads with SourcePluginError when identity keys do not match the Source Identity Schema",
+    "fails source reads with SourceError when identity keys do not match the Source Identity Schema",
     () =>
       Effect.gen(function* () {
-        const source = SourcePlugin.make({
+        const source = Source.make({
           cursorSchema: RemoteArticleCursor,
           identity: RemoteArticleIdentity,
           sourceSchema: RemoteArticle,
@@ -344,19 +342,19 @@ describe("SourcePlugin", () => {
               },
             }),
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const error = yield* Effect.flip(plugin.read(null));
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        const error = yield* Effect.flip(sourceService.read(null));
 
-        expect(error).toBeInstanceOf(SourcePluginError);
+        expect(error).toBeInstanceOf(SourceError);
         expect(error.message).toContain("Source item metadata");
       })
   );
 
   it.effect(
-    "fails source identity lookups with SourcePluginError when returned identity keys do not match the Source Identity Schema",
+    "fails source identity lookups with SourceError when returned identity keys do not match the Source Identity Schema",
     () =>
       Effect.gen(function* () {
-        const source = SourcePlugin.make({
+        const source = Source.make({
           cursorSchema: RemoteArticleCursor,
           identity: RemoteArticleIdentity,
           sourceSchema: RemoteArticle,
@@ -376,14 +374,16 @@ describe("SourcePlugin", () => {
               },
             }),
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
         const identity = SourceIdentity.fromKey(
           RemoteArticleIdentity,
           "article-1"
         );
-        const error = yield* Effect.flip(plugin.readByIdentity(identity));
+        const error = yield* Effect.flip(
+          sourceService.readByIdentity(identity)
+        );
 
-        expect(error).toBeInstanceOf(SourcePluginError);
+        expect(error).toBeInstanceOf(SourceError);
         expect(error.message).toContain("Source item metadata");
       })
   );
@@ -392,7 +392,7 @@ describe("SourcePlugin", () => {
     "fails source identity lookups when the returned item identity does not match the requested target",
     () =>
       Effect.gen(function* () {
-        const source = SourcePlugin.make({
+        const source = Source.make({
           cursorSchema: RemoteArticleCursor,
           identity: RemoteArticleIdentity,
           sourceSchema: RemoteArticle,
@@ -412,14 +412,16 @@ describe("SourcePlugin", () => {
               },
             }),
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
         const identity = SourceIdentity.fromKey(
           RemoteArticleIdentity,
           "article-1"
         );
-        const error = yield* Effect.flip(plugin.readByIdentity(identity));
+        const error = yield* Effect.flip(
+          sourceService.readByIdentity(identity)
+        );
 
-        expect(error).toBeInstanceOf(SourcePluginError);
+        expect(error).toBeInstanceOf(SourceError);
         expect(error.message).toBe(
           "Source identity lookup returned a different Source Identity"
         );
@@ -431,17 +433,17 @@ describe("SourcePlugin", () => {
   );
 
   it.effect(
-    "supports service-backed Effect pipelines inside source plugin methods",
+    "supports service-backed Effect pipelines inside source methods",
     () =>
       Effect.gen(function* () {
         const state: ArticleApiState = { detailCalls: [] };
         const apiLayer = makeArticleApiLayer(state);
         const withArticleApi = <A>(
-          effect: Effect.Effect<A, SourcePluginError, ArticleApi>
-        ): Effect.Effect<A, SourcePluginError> =>
+          effect: Effect.Effect<A, SourceError, ArticleApi>
+        ): Effect.Effect<A, SourceError> =>
           effect.pipe(Effect.provide(apiLayer));
 
-        const source = SourcePlugin.make({
+        const source = Source.make({
           cursorSchema: RemoteArticleCursor,
           identity: RemoteArticleIdentity,
           sourceSchema: RemoteArticle,
@@ -491,9 +493,9 @@ describe("SourcePlugin", () => {
           }),
         });
 
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const page = yield* plugin.read(null);
-        const item = yield* plugin.readByIdentity(
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        const page = yield* sourceService.read(null);
+        const item = yield* sourceService.readByIdentity(
           SourceIdentity.fromKey(RemoteArticleIdentity, "article-2")
         );
 
@@ -526,7 +528,7 @@ describe("SourcePlugin", () => {
         city: Schema.String,
       });
 
-      const source = SourcePlugin.make({
+      const source = Source.make({
         cursorSchema: Schema.Null,
         identity: BusinessAddressIdentity,
         sourceSchema: BusinessAddress,
@@ -557,15 +559,15 @@ describe("SourcePlugin", () => {
           }),
       });
 
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const page = yield* plugin.read(null);
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const page = yield* sourceService.read(null);
       const firstItem = page.items[0];
 
       if (firstItem === undefined) {
         throw new Error("Expected tuple source read to return one item");
       }
 
-      const item = yield* plugin.readByIdentity(firstItem.identity);
+      const item = yield* sourceService.readByIdentity(firstItem.identity);
 
       expect(firstItem.identity).toEqual(
         SourceIdentity.fromKey(BusinessAddressIdentity, ["bu-1", 0])

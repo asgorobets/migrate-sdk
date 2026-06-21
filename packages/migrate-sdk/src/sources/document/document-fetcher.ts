@@ -1,7 +1,7 @@
 import { Effect, type Layer, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
-import { SourcePluginError } from "../../domain/errors.ts";
+import { SourceError } from "../../domain/errors.ts";
 
 export interface DocumentFetchResult<Resource, Cursor> {
   readonly fingerprint?: string | undefined;
@@ -17,7 +17,7 @@ export interface DocumentFetcher<Resource, Cursor> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly read: (
     cursor: Cursor | null
-  ) => Effect.Effect<DocumentFetchResult<Resource, Cursor>, SourcePluginError>;
+  ) => Effect.Effect<DocumentFetchResult<Resource, Cursor>, SourceError>;
   readonly totalCount?: DocumentFetcherTotalCountCapability;
 }
 
@@ -32,7 +32,7 @@ export interface DocumentEffectFetcherOptions<Resource, Cursor> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly read: (
     cursor: Cursor | null
-  ) => Effect.Effect<DocumentFetchResult<Resource, Cursor>, SourcePluginError>;
+  ) => Effect.Effect<DocumentFetchResult<Resource, Cursor>, SourceError>;
 }
 
 export interface DocumentEffectFetcherLayerOptions<
@@ -46,7 +46,7 @@ export interface DocumentEffectFetcherLayerOptions<
     cursor: Cursor | null
   ) => Effect.Effect<
     DocumentFetchResult<Resource, Cursor>,
-    SourcePluginError,
+    SourceError,
     Requirements
   >;
 }
@@ -56,11 +56,8 @@ export const DocumentFileTextFetcherCursor = Schema.Null;
 export type DocumentFileTextFetcherCursor =
   typeof DocumentFileTextFetcherCursor.Type;
 
-const documentFetcherError = (
-  message: string,
-  cause?: unknown
-): SourcePluginError =>
-  new SourcePluginError({
+const documentFetcherError = (message: string, cause?: unknown): SourceError =>
+  new SourceError({
     message,
     ...(cause === undefined ? {} : { cause }),
   });
@@ -68,9 +65,7 @@ const documentFetcherError = (
 const hexFromBytes = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
-const sha256Hex = (
-  bytes: Uint8Array
-): Effect.Effect<string, SourcePluginError> =>
+const sha256Hex = (bytes: Uint8Array): Effect.Effect<string, SourceError> =>
   Effect.tryPromise({
     try: async () => {
       const webCrypto = globalThis.crypto;
@@ -93,7 +88,7 @@ const readFileBytes = (
   filePath: string
 ): Effect.Effect<
   { readonly bytes: Uint8Array; readonly resolvedPath: string },
-  SourcePluginError
+  SourceError
 > => {
   const resolvedPath = path.resolve(filePath);
 
@@ -115,7 +110,7 @@ const readFileBytes = (
 const decodeUtf8 = (
   bytes: Uint8Array,
   resolvedPath: string
-): Effect.Effect<string, SourcePluginError> =>
+): Effect.Effect<string, SourceError> =>
   Effect.try({
     try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
     catch: (cause) =>
@@ -167,7 +162,7 @@ function makeEffectFetcher<Resource, Cursor, Requirements>(
             .read(cursor)
             .pipe(Effect.provide(options.layer)) as Effect.Effect<
             DocumentFetchResult<Resource, Cursor>,
-            SourcePluginError
+            SourceError
           >)
         : options.read(cursor),
   };

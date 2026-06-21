@@ -41,7 +41,7 @@ const defaultPosts = Schema.decodeUnknownSync(
   {
     body: "Effect gives source authors a practical way to compose HTTP calls.",
     id: 1,
-    title: "Composable source plugins",
+    title: "Composable sources",
     userId: 1,
   },
   {

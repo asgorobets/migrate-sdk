@@ -1,7 +1,7 @@
 import { Effect, Layer, Schema } from "effect";
 import {
   InMemoryMigrationStore,
-  InMemorySourcePlugin,
+  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationStore,
@@ -38,7 +38,7 @@ const store = Layer.effect(
 
 const articles = MigrationDefinition.make({
   id: toMigrationDefinitionId("articles"),
-  source: InMemorySourcePlugin.make({
+  source: InMemorySource.make({
     identity: EntrySourceIdentity,
     sourceSchema: EntrySource,
     batchSize: 1,

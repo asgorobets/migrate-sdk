@@ -2,7 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import {
   InMemoryMigrationStore,
-  InMemorySourcePlugin,
+  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecutable,
@@ -35,7 +35,7 @@ const ArticleSourceIdentity = SourceIdentity.make({
 });
 
 const makeArticlesSource = () =>
-  InMemorySourcePlugin.make({
+  InMemorySource.make({
     identity: ArticleSourceIdentity,
     sourceSchema: ArticleSource,
     items: [

@@ -1,10 +1,10 @@
-import { SourcePluginError } from "migrate-sdk";
+import { SourceError } from "migrate-sdk";
 
 export const jsonPlaceholderError = (
   message: string,
   cause?: unknown
-): SourcePluginError =>
-  new SourcePluginError(
+): SourceError =>
+  new SourceError(
     cause === undefined
       ? { message }
       : {

@@ -22,7 +22,7 @@ import { Effect, Schema } from "effect";
 import {
   DestinationChangeDescriptor,
   type DestinationChangeDescriptorType,
-  type DestinationPluginError,
+  type DestinationError,
   type EncodedSourceIdentity,
   EncodedSourceIdentity as EncodedSourceIdentitySchema,
   Tracking,
@@ -50,7 +50,7 @@ import {
   type CustomerUpdateWithActionsInput,
   CustomerUpdateWithActionsInputSchema,
 } from "./customers.ts";
-import { toDestinationPluginError } from "./internal/plugin-errors.ts";
+import { toDestinationError } from "./internal/destination-errors.ts";
 import {
   InventoryEntryDraftSchema,
   type InventoryEntryUpdateWithActionsInput,
@@ -89,9 +89,7 @@ import {
   StoreUpdateWithActionsInputSchema,
 } from "./stores.ts";
 
-type CommercetoolsDestinationError =
-  | DestinationPluginError
-  | Schema.SchemaError;
+type CommercetoolsDestinationError = DestinationError | Schema.SchemaError;
 
 type ResourceKey = string | null;
 
@@ -428,14 +426,14 @@ const runSdkRequest = <A>(input: {
   readonly safeFacts?: Schema.JsonObject;
   readonly selector?: CommercetoolsResourceSelector | undefined;
   readonly sourceIdentity: EncodedSourceIdentity;
-}): Effect.Effect<A, DestinationPluginError | Schema.SchemaError, Tracking> =>
+}): Effect.Effect<A, DestinationError | Schema.SchemaError, Tracking> =>
   input.request.pipe(
     Effect.catch((cause) =>
       Tracking.logDiagnostic({
         details: requestFailureDetails(input, cause),
         message: input.message,
         severity: "error",
-      }).pipe(Effect.andThen(Effect.fail(toDestinationPluginError(cause))))
+      }).pipe(Effect.andThen(Effect.fail(toDestinationError(cause))))
     )
   );
 

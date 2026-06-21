@@ -26,10 +26,10 @@ import {
 } from "@migrate-sdk/commercetools/testing";
 import { Effect, Schema } from "effect";
 import {
+  type DestinationError,
   type DestinationJournalChangeEntry,
-  type DestinationPluginError,
   InMemoryMigrationStore,
-  InMemorySourcePlugin,
+  InMemorySource,
   MigrationDefinition,
   SourceIdentity,
   Tracking,
@@ -84,7 +84,7 @@ expectTypeOf(
 ).toEqualTypeOf<
   Effect.Effect<
     ProductSelection,
-    DestinationPluginError | Schema.SchemaError,
+    DestinationError | Schema.SchemaError,
     CommercetoolsSdk | Tracking
   >
 >();
@@ -95,7 +95,7 @@ expectTypeOf(
 ).toEqualTypeOf<
   Effect.Effect<
     ProductSelection,
-    DestinationPluginError | Schema.SchemaError,
+    DestinationError | Schema.SchemaError,
     Tracking
   >
 >();
@@ -215,7 +215,7 @@ interface ProcessFailedAfterDestination {
 }
 
 const makeOneItemSource = () =>
-  InMemorySourcePlugin.make({
+  InMemorySource.make({
     identity: ResourceSourceIdentity,
     items: [
       {
@@ -323,7 +323,7 @@ const allResourceRoutes = () => [
   ),
 ];
 
-describe("CommercetoolsDestination capability module", () => {
+describe("CommercetoolsDestination", () => {
   it.effect(
     "runs every resource helper inside process and records ordered destination changes",
     () =>

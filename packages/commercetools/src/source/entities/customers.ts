@@ -6,7 +6,7 @@ import type {
   CommercetoolsEntitySourceBaseOptions,
   CommercetoolsEntitySourceDescriptor,
   CommercetoolsSourceProjection,
-  ConfiguredCommercetoolsSourcePlugin,
+  ConfiguredCommercetoolsSource,
 } from "../domain.ts";
 import { makeCommercetoolsSourceIdentityDefinitions } from "../domain.ts";
 import { makeProjectedEntitySource } from "../internal/entity-source.ts";
@@ -62,20 +62,17 @@ const customerSourceDescriptor: CommercetoolsEntitySourceDescriptor<
 
 export function makeCustomerSource(
   options: CommercetoolsCustomerSourceOptions
-): ConfiguredCommercetoolsSourcePlugin<Customer, Customer>;
+): ConfiguredCommercetoolsSource<Customer, Customer>;
 
 export function makeCustomerSource<Source, SourceInput>(
   options: CommercetoolsCustomerSourceProjectionOptions<Source, SourceInput>
-): ConfiguredCommercetoolsSourcePlugin<Source, SourceInput>;
+): ConfiguredCommercetoolsSource<Source, SourceInput>;
 
 export function makeCustomerSource<Source, SourceInput>(
   options:
     | CommercetoolsCustomerSourceOptions
     | CommercetoolsCustomerSourceProjectionOptions<Source, SourceInput>
-): ConfiguredCommercetoolsSourcePlugin<
-  Source | Customer,
-  SourceInput | Customer
-> {
+): ConfiguredCommercetoolsSource<Source | Customer, SourceInput | Customer> {
   const baseOptions: CommercetoolsEntitySourceBaseOptions =
     entitySourceBaseOptions(options);
 

@@ -6,19 +6,19 @@ import {
   InMemoryMigrationStore,
   MigrationDefinition,
   MigrationDefinitionRegistry,
+  Source,
   SourceIdentity,
-  SourcePlugin,
 } from "migrate-sdk";
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
-import { CsvIdentity, CsvSourcePlugin } from "migrate-sdk/sources/csv";
+import { CsvIdentity, CsvSource } from "migrate-sdk/sources/csv";
 import {
   DocumentFetchers,
   DocumentParsers,
+  DocumentSource,
   type DocumentSourceIdentity,
-  DocumentSourcePlugin,
   type DocumentSourceSelectedItem,
 } from "migrate-sdk/sources/document";
-import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
 
 const filePlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
 const store = InMemoryMigrationStore.layer();
@@ -40,7 +40,7 @@ const ArticleIdentity = SourceIdentity.make({
 
 const inMemoryArticles = MigrationDefinition.make({
   id: "totals-in-memory",
-  source: InMemorySourcePlugin.make({
+  source: InMemorySource.make({
     batchSize: 2,
     identity: ArticleIdentity,
     items: [
@@ -73,7 +73,7 @@ const Book = Schema.Struct({
 
 const csvBooks = MigrationDefinition.make({
   id: "totals-csv",
-  source: CsvSourcePlugin.make({
+  source: CsvSource.make({
     dialect: { kind: "standard" },
     emptyRows: { kind: "skip" },
     headers: { kind: "from-row", rowIndex: 0 },
@@ -111,7 +111,7 @@ const CompanyIdentity: DocumentSourceIdentity<
 
 const companies = MigrationDefinition.make({
   id: "totals-document",
-  source: DocumentSourcePlugin.make({
+  source: DocumentSource.make({
     fetcher: DocumentFetchers.fileText({
       path: fixturePath("companies.json"),
       platform: filePlatformLayer,
@@ -128,7 +128,7 @@ const companies = MigrationDefinition.make({
   process: () => undefined,
 });
 
-const unsupportedTotalSource = SourcePlugin.make({
+const unsupportedTotalSource = Source.make({
   cursorSchema: Schema.Null,
   identity: SourceIdentity.make({
     id: "progress-unsupported-total@v1",

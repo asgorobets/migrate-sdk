@@ -1,48 +1,45 @@
-import { SourcePluginError } from "../../../domain/errors.ts";
+import { SourceError } from "../../../domain/errors.ts";
 import type { EncodedSourceIdentityInput } from "../../../domain/ids.ts";
 
 export type SqlSourceOperation = "count" | "read" | "readByIdentity";
 
-export const makeSqlSourceBatchSizeError = (
-  batchSize: number
-): SourcePluginError =>
-  new SourcePluginError({
+export const makeSqlSourceBatchSizeError = (batchSize: number): SourceError =>
+  new SourceError({
     cause: { batchSize },
-    message: "SQL source plugin batchSize must be a positive integer",
+    message: "SQL source batchSize must be a positive integer",
   });
 
 export const makeSqlSourceExecutionError = (
   operation: SqlSourceOperation,
   cause: unknown
-): SourcePluginError =>
-  new SourcePluginError({
+): SourceError =>
+  new SourceError({
     cause,
-    message: `SQL source plugin ${operation} failed`,
+    message: `SQL source ${operation} failed`,
   });
 
 export const makeSqlSourceLookupMultipleRowsError = (
   identity: EncodedSourceIdentityInput,
   rowCount: number
-): SourcePluginError =>
-  new SourcePluginError({
+): SourceError =>
+  new SourceError({
     cause: {
       rowCount,
       sourceIdentity: identity,
     },
-    message: "SQL source plugin readByIdentity returned multiple rows",
+    message: "SQL source readByIdentity returned multiple rows",
   });
 
 export const makeSqlSourceLookupIdentityMismatchError = (
   requestedIdentity: EncodedSourceIdentityInput,
   returnedIdentity: EncodedSourceIdentityInput
-): SourcePluginError =>
-  new SourcePluginError({
+): SourceError =>
+  new SourceError({
     cause: {
       requestedSourceIdentity: requestedIdentity,
       returnedSourceIdentity: returnedIdentity,
     },
-    message:
-      "SQL source plugin readByIdentity returned a different Source Identity",
+    message: "SQL source readByIdentity returned a different Source Identity",
   });
 
 export const makeSqlSourceMetadataError = (
@@ -50,8 +47,8 @@ export const makeSqlSourceMetadataError = (
   rowIndex: number,
   message: string,
   cause?: unknown
-): SourcePluginError =>
-  new SourcePluginError({
+): SourceError =>
+  new SourceError({
     ...(cause === undefined ? {} : { cause }),
-    message: `SQL source plugin ${operation} metadata failed for row ${rowIndex}: ${message}`,
+    message: `SQL source ${operation} metadata failed for row ${rowIndex}: ${message}`,
   });

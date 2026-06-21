@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import type { MigrationStoreError, SourcePluginError } from "./errors.ts";
+import type { MigrationStoreError, SourceError } from "./errors.ts";
 import type {
   MigrationDefinitionId,
   MigrationDefinitionIdInput,
@@ -135,7 +135,7 @@ export class MigrationStatusRequestError extends Schema.TaggedErrorClass<Migrati
 export type GetMigrationStatusesError =
   | MigrationStatusRequestError
   | MigrationStoreError
-  | SourcePluginError;
+  | SourceError;
 
 export const emptyMigrationItemStateSummary =
   (): MigrationItemStateSummary => ({

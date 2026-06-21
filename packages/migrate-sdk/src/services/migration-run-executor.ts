@@ -8,7 +8,7 @@ import {
   RollbackPreflightError,
   RollbackRequestError,
   type SkipItem,
-  SourcePluginError,
+  SourceError,
 } from "../domain/errors.ts";
 import {
   type NormalizedMigrationExecutionOptions,
@@ -80,16 +80,14 @@ import { MigrationProgress } from "./migration-progress.ts";
 import type { MigrationReference } from "./migration-reference-lookup.ts";
 import { MigrationStore } from "./migration-store.ts";
 import { RollbackProgress } from "./rollback-progress.ts";
-import { getSourcePlugin, type SourcePlugin } from "./source-plugin.ts";
+import { getSource, type Source as SourceServiceContract } from "./source.ts";
 import {
   makeProcessScope,
   Tracking,
   type TrackingService,
 } from "./tracking.ts";
 
-export type RunMigrationDefinitionError =
-  | SourcePluginError
-  | MigrationStoreError;
+export type RunMigrationDefinitionError = SourceError | MigrationStoreError;
 
 export type RunMigrationError =
   | MigrationRuntimeError
@@ -1143,7 +1141,12 @@ const countDefinitionSourceItemTotal = <
   readonly definitionId: MigrationDefinitionId;
   readonly itemLimit?: number;
   readonly runId: MigrationRunId;
-  readonly source: SourcePlugin<Source, Cursor, SourceInput, IdentityKey>;
+  readonly source: SourceServiceContract<
+    Source,
+    Cursor,
+    SourceInput,
+    IdentityKey
+  >;
 }) =>
   MigrationProgress.shouldCountSourceItemTotals.pipe(
     Effect.flatMap((shouldCountTotals) => {
@@ -1155,8 +1158,7 @@ const countDefinitionSourceItemTotal = <
         source.countTotal === undefined
           ? Effect.succeed(
               SourceItemTotal.unknown({
-                message:
-                  "Source plugin does not support Source Item total count",
+                message: "Source does not support Source Item total count",
                 reason: "unsupported",
               })
             )
@@ -1389,7 +1391,12 @@ interface ProcessTargetedSourceIdentitiesOptions<
   readonly mode: RunMode;
   readonly processConcurrency: PipelineExecutionConcurrency;
   readonly runId: MigrationRunId;
-  readonly source: SourcePlugin<Source, Cursor, SourceInput, IdentityKey>;
+  readonly source: SourceServiceContract<
+    Source,
+    Cursor,
+    SourceInput,
+    IdentityKey
+  >;
   readonly store: typeof MigrationStore.Service;
 }
 
@@ -1437,7 +1444,7 @@ const processTargetedSourceIdentities = <
             try: () =>
               SourceIdentity.fromEncoded(source.identity, sourceIdentity),
             catch: (cause) =>
-              new SourcePluginError({
+              new SourceError({
                 message:
                   "Encoded source identity did not match Source Identity Schema",
                 cause,
@@ -1454,7 +1461,7 @@ const processTargetedSourceIdentities = <
               sourceItem === null
                 ? ({
                     kind: "missing" as const,
-                    error: new SourcePluginError({
+                    error: new SourceError({
                       message: "Source identity was not found",
                       cause: { sourceIdentity },
                     }),
@@ -1535,7 +1542,12 @@ interface ProcessCursorDiscoveryOptions<
   readonly processConcurrency: PipelineExecutionConcurrency;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
-  readonly source: SourcePlugin<Source, Cursor, SourceInput, IdentityKey>;
+  readonly source: SourceServiceContract<
+    Source,
+    Cursor,
+    SourceInput,
+    IdentityKey
+  >;
   readonly store: typeof MigrationStore.Service;
 }
 
@@ -2064,12 +2076,7 @@ const runMigrationDefinition = <
   SourceRequirements
 > => {
   const program = Effect.gen(function* () {
-    const source = yield* getSourcePlugin<
-      Source,
-      Cursor,
-      SourceInput,
-      IdentityKey
-    >();
+    const source = yield* getSource<Source, Cursor, SourceInput, IdentityKey>();
     const store = yield* MigrationStore;
     const processConcurrency = resolvePipelineExecutionOptions(
       processExecution,
@@ -2224,12 +2231,7 @@ const runMigrationDefinitionCursorWindow = <
   SourceRequirements
 > => {
   const program = Effect.gen(function* () {
-    const source = yield* getSourcePlugin<
-      Source,
-      Cursor,
-      SourceInput,
-      IdentityKey
-    >();
+    const source = yield* getSource<Source, Cursor, SourceInput, IdentityKey>();
     const store = yield* MigrationStore;
     const processConcurrency = resolvePipelineExecutionOptions(
       processExecution,

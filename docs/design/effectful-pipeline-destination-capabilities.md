@@ -1,6 +1,6 @@
 # Effectful Process Destination Capabilities
 
-Audience: SDK users authoring migrations and plugin authors implementing
+Audience: SDK users authoring migrations and destination authors implementing
 destination helper modules.
 
 Status: draft design direction.
@@ -21,9 +21,9 @@ with the `process` property.
 ## Summary
 
 Destination helpers run as normal Effect process pipelines.
-Destination plugins should become Effect capability modules: they expose
-effectful destination helpers, typed change descriptors, dependency layers, and
-optional rollback helpers. The migration definition does not need a
+Destinations are pluggable capabilities: they expose effectful destination
+helpers, typed change descriptors, dependency layers, and optional rollback
+helpers. The migration definition does not need a
 `destination`, `destinations`, or `provide` key unless the runtime has a concrete
 reason to read it.
 
@@ -66,21 +66,21 @@ const products = MigrationDefinition.make({
 ```
 
 The migration definition describes the source, store, optional tracking record
-contract, and process pipeline. Destination capability modules are regular
-values used by the process. Their non-framework requirements are satisfied with normal
-Effect composition.
+contract, and process pipeline. Destinations are regular values used by the
+process. Their non-framework requirements are satisfied with normal Effect
+composition.
 
-## Destination Capability Module
+## Destination
 
-A destination module is not a runtime executor. It is a typed Effect helper
-package for one destination system or destination area.
+A destination is not a runtime executor. It is a typed Effect helper package for
+one destination system or destination area.
 
 ```ts
-interface DestinationCapabilityModule<Requirements> {
+interface Destination<Requirements> {
   readonly changes: ChangeCatalog
   readonly provide: <Provided, Error, Remaining>(
     layer: Layer.Layer<Provided, Error, Remaining>
-  ) => DestinationCapabilityModule<Remaining | Exclude<Requirements, Provided>>
+  ) => Destination<Remaining | Exclude<Requirements, Provided>>
 }
 ```
 
@@ -130,7 +130,7 @@ they can record changes when destination operations succeed.
 The migration definition should not grow a `provide` option unless the runtime
 needs to inspect it. Normal Effect provision is enough.
 
-Plugin-local provision is the recommended authoring style:
+Destination-local provision is the recommended authoring style:
 
 ```ts
 const ct = CommercetoolsDestination.make({
@@ -167,7 +167,7 @@ execution:
 - scoped tracking service
 - tracking evaluation
 
-Destination client layers are user/plugin requirements, not migration definition
+Destination client layers are destination requirements, not migration definition
 properties.
 
 ## Tracking Boundary
@@ -194,7 +194,7 @@ yield* Effect.tryPromise(() =>
 ```
 
 That is valid process code, but it is not a destination helper from a
-capability module and records no destination-native change by default. The
+Destination and records no destination-native change by default. The
 tracking consequences, diagnostic logging, and optional tracking record contract
 are specified by the tracking spec.
 
@@ -206,7 +206,7 @@ path returned destination work descriptions:
 ```ts
 process authoring -> Effect<void, error, requirements | Tracking>
 runtime -> validate command definitions
-runtime -> execute through DestinationPlugin service
+runtime -> execute through legacy DestinationPlugin service
 runtime -> infer destination identity
 ```
 
@@ -258,9 +258,9 @@ Possible future reasons to add a registry:
 - runtime inspection of destination capabilities
 - automatic operator reports grouped by destination system
 - preflight checks against destination systems
-- plugin lifecycle hooks outside the process
+- destination lifecycle hooks outside the process
 - policy enforcement that all tracking descriptors originate from declared
-  capability modules
+  Destinations
 
 Until one of those exists, the registry is ceremony.
 
@@ -313,5 +313,5 @@ tracking spec.
 
 - Should change descriptors carry a module id for diagnostics and
   fingerprinting, even without a destination registry?
-- Should plugin-local `.provide(...)` be the only documented dependency style,
+- Should destination-local `.provide(...)` be the only documented dependency style,
   while process-level and run-level provision remain advanced Effect usage?

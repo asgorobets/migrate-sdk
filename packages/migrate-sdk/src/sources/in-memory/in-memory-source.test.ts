@@ -1,8 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import { SourceIdentity, SourceItemTotal } from "migrate-sdk";
-import { SourcePlugin } from "../../services/source-plugin.ts";
-import { InMemorySourcePlugin } from "./in-memory-source.ts";
+import { Source } from "../../services/source.ts";
+import { InMemorySource } from "./in-memory-source.ts";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -13,13 +13,13 @@ const ArticleSourceIdentity = SourceIdentity.make({
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 
-describe("InMemorySourcePlugin", () => {
+describe("InMemorySource", () => {
   it.effect(
     "counts the configured items without reading or looking up items",
     () =>
       Effect.gen(function* () {
-        const state = InMemorySourcePlugin.makeState();
-        const source = InMemorySourcePlugin.make({
+        const state = InMemorySource.makeState();
+        const source = InMemorySource.make({
           batchSize: 1,
           identity: ArticleSourceIdentity,
           items: [
@@ -37,13 +37,13 @@ describe("InMemorySourcePlugin", () => {
           sourceSchema: ArticleSource,
           state,
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-        if (plugin.countTotal === undefined) {
+        if (sourceService.countTotal === undefined) {
           throw new Error("Expected in-memory source total count");
         }
 
-        const total = yield* plugin.countTotal();
+        const total = yield* sourceService.countTotal();
 
         expect(total).toEqual(SourceItemTotal.known(2));
         expect(state.readAttempts).toBe(0);
@@ -53,18 +53,18 @@ describe("InMemorySourcePlugin", () => {
 
   it.effect("counts zero Source Items", () =>
     Effect.gen(function* () {
-      const source = InMemorySourcePlugin.make({
+      const source = InMemorySource.make({
         identity: ArticleSourceIdentity,
         items: [],
         sourceSchema: ArticleSource,
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-      if (plugin.countTotal === undefined) {
+      if (sourceService.countTotal === undefined) {
         throw new Error("Expected in-memory source total count");
       }
 
-      const total = yield* plugin.countTotal();
+      const total = yield* sourceService.countTotal();
 
       expect(total).toEqual(SourceItemTotal.known(0));
     })

@@ -5,7 +5,7 @@ import {
   type JsonPlaceholderApiState,
   makeJsonPlaceholderApiState,
 } from "./json-placeholder-api.ts";
-import { JsonPlaceholderPostSourcePlugin } from "./json-placeholder-source.ts";
+import { JsonPlaceholderPostSource } from "./json-placeholder-source.ts";
 import { type PostEntryFields, runApiSourceExample } from "./migration.ts";
 
 export interface ApiSourceExampleInspectionOptions {
@@ -36,7 +36,7 @@ export const runApiSourceExampleWithInspection = Effect.fn(
     recordPostEntry: (fields) => {
       commandFields.push(fields);
     },
-    source: JsonPlaceholderPostSourcePlugin.make({ apiLayer }),
+    source: JsonPlaceholderPostSource.make({ apiLayer }),
   });
 
   return {

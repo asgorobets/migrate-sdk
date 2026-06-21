@@ -5,7 +5,7 @@ import {
   defaultSourceVersionContractFingerprint,
   executeMigrationExecutionEnvelope,
   InMemoryMigrationStore,
-  InMemorySourcePlugin,
+  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryCatalog,
@@ -38,7 +38,7 @@ const ArticleSourceIdentity = SourceIdentity.make({
 });
 
 const makeArticlesSource = () =>
-  InMemorySourcePlugin.make({
+  InMemorySource.make({
     identity: ArticleSourceIdentity,
     sourceSchema: ArticleSource,
     items: [

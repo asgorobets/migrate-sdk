@@ -5,13 +5,13 @@ const ErrorFields = {
   cause: Schema.optional(Schema.Defect),
 };
 
-export class SourcePluginError extends Schema.TaggedErrorClass<SourcePluginError>()(
-  "SourcePluginError",
+export class SourceError extends Schema.TaggedErrorClass<SourceError>()(
+  "SourceError",
   ErrorFields
 ) {}
 
-export class DestinationPluginError extends Schema.TaggedErrorClass<DestinationPluginError>()(
-  "DestinationPluginError",
+export class DestinationError extends Schema.TaggedErrorClass<DestinationError>()(
+  "DestinationError",
   ErrorFields
 ) {}
 

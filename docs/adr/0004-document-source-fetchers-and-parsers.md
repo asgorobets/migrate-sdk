@@ -2,8 +2,8 @@
 
 We will introduce a document source architecture for first-party sources that
 fetch structured resources, parse them into schema-backed documents, and select
-source items from those documents. This avoids multiplying source plugins by
-transport and format while preserving the existing durable source plugin
+source items from those documents. This avoids multiplying sources by
+transport and format while preserving the existing durable source
 contract.
 
 ## Status
@@ -17,7 +17,7 @@ now use the ADR 0006 source identity contract shape with `identity.id`,
 
 ## Considered Options
 
-- Keep one source plugin per transport and format combination, such as JSON
+- Keep one source per transport and format combination, such as JSON
   file, JSON API, XML file, and XML API.
 - Introduce a composable source architecture that separates resource fetching,
   document parsing, schema-backed item selection, identity, and version
@@ -25,18 +25,18 @@ now use the ADR 0006 source identity contract shape with `identity.id`,
 
 ## Decision
 
-We will use the name `DocumentSourcePlugin` for the shared first-party source
+We will use the name `DocumentSource` for the shared first-party source
 architecture.
 
 A document source fetches one structured resource or page at a time, parses it
 with a schema-backed parser into one or more documents, selects source items
 from those parsed documents, and adapts the result to the existing
-`SourcePlugin` cursor-window contract.
+`Source` cursor-window contract.
 
 The public authoring model is:
 
 ```ts
-DocumentSourcePlugin.make({
+DocumentSource.make({
   fetcher: DocumentFetchers.fileText({ path, platform }),
   parser: DocumentParsers.json(CompaniesDocument),
   selector: {
@@ -84,27 +84,27 @@ The migration pipeline remains responsible for destination projection and
 mapping. The document source does not expose a field-picking API, jq-style
 mapping, or destination-specific projection outside the pipeline.
 
-The existing durable source plugin boundary remains unchanged:
+The existing durable source boundary remains unchanged:
 
 - `read(cursor)` returns one cursor window and an optional next cursor.
 - `readByIdentity(identity)` receives a decoded source identity target and is
   required for reruns and targeted runs.
 - The document source requires an explicit lookup configuration that compiles
   to the existing runtime `SourceLookupStrategy`.
-- Source cursor encoding belongs to the configured source plugin.
+- Source cursor encoding belongs to the configured source.
 - Source identity and version are normalized by the SDK boundary.
 
 Existing JSON-oriented source code should move toward this architecture so
 local JSON files and remote JSON APIs share parsing, schema-backed selection,
 identity, version, and duplicate identity behavior.
 
-CSV remains a separate first-party source plugin for now. CSV is primarily a
+CSV remains a separate first-party source for now. CSV is primarily a
 row-oriented table format with dialect, header, blank-row, and column-width
 semantics that should stay explicit in the CSV source API.
 
 ## Consequences
 
-- The SDK avoids a combinatorial set of source plugins for every transport and
+- The SDK avoids a combinatorial set of sources for every transport and
   format pair.
 - Local files and remote APIs can share schema-backed document parsing and item
   selection behavior.
@@ -129,7 +129,7 @@ semantics that should stay explicit in the CSV source API.
   factories.
 - Parser and fetcher dependencies are chosen by the migration author or source
   author while constructing the configured source. The migration runner executes
-  the configured source plugin layer; it does not implicitly provide
+  the configured source layer; it does not implicitly provide
   parser-specific services.
 - Parsers expose a required diagnostic `name`, but parser labels do not affect
   source behavior.

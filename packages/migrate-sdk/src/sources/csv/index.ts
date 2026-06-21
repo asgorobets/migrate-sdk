@@ -4,7 +4,7 @@
 export {
   CsvIdentity,
   CsvSourceCursor,
-  CsvSourcePlugin,
+  CsvSource,
 } from "./csv-source.ts";
 export type {
   CsvCompositeIdentityKey,

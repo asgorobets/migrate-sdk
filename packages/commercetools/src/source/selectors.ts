@@ -7,7 +7,7 @@ import type {
   CommercetoolsSourceQueryArgs,
   CommercetoolsSourceWhereVariables,
 } from "./domain.ts";
-import { sourcePluginError } from "./internal/plugin-errors.ts";
+import { makeSourceError } from "./internal/source-errors.ts";
 import type { CommercetoolsSourceCursor } from "./schemas.ts";
 
 export const defaultSourceBatchSize = 100;
@@ -34,7 +34,7 @@ export const resolveBatchSize = (
   return Number.isInteger(size) && size > 0
     ? Effect.succeed(size)
     : Effect.fail(
-        sourcePluginError(
+        makeSourceError(
           `${label} source batchSize must be a positive integer`,
           {
             batchSize: size,
@@ -142,12 +142,9 @@ export const selectSourceIdentity = <
 
   return key === undefined || key.length === 0
     ? Effect.fail(
-        sourcePluginError(
-          `${descriptor.label} source requires a resource key`,
-          {
-            resourceId: descriptor.getId(resource),
-          }
-        )
+        makeSourceError(`${descriptor.label} source requires a resource key`, {
+          resourceId: descriptor.getId(resource),
+        })
       )
     : Effect.succeed(key);
 };

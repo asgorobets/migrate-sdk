@@ -1,6 +1,6 @@
 # Scoped Process Tracking API
 
-Audience: SDK users authoring migrations and plugin authors implementing destination helpers.
+Audience: SDK users authoring migrations and destination authors implementing destination helpers.
 
 This document describes the public API direction from
 [ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md).
@@ -29,10 +29,10 @@ with the `process` property.
 
 ## Source Identity
 
-Source identity remains configured through source plugin options. Source plugins
+Source identity remains configured through source options. Sources
 own how source-native data is read and selected, so they also own the contextual
 shape passed to the identity key callback. The SDK standardizes the identity
-envelope all source plugins expose:
+envelope all sources expose:
 
 ```ts
 const tuple2 = <A, B>(first: A, second: B): readonly [A, B] => [
@@ -51,7 +51,7 @@ identity: {
 ```
 
 `identity.id` is the versioned compatibility name. `identity.schema` describes
-the durable key value. `identity.key` derives that key from the source plugin's
+the durable key value. `identity.key` derives that key from the source's
 selected input before the process pipeline runs.
 
 The common envelope is deliberately small:
@@ -64,13 +64,13 @@ interface SourceIdentityOption<SourceSelection, Key> {
 }
 ```
 
-`SourceIdentityDerivation` is source-plugin specific. A document source can type
+`SourceIdentityDerivation` is source-specific. A document source can type
 it as a callback over `{ parent, item }`; a CSV source can type it as a
 declarative column mapping; a SQL source can type it as a field projection. The
 shared framework contract is that the derivation produces a value matching
 `identity.schema`.
 
-Identity is derived before the process pipeline runs. The source plugin
+Identity is derived before the process pipeline runs. The source
 reads from the source system, selects the source-native item context, derives
 identity and version, and emits a `SourceItem`:
 
@@ -97,7 +97,7 @@ process: Effect.fn(function* (source) {
 
 The process pipeline does not derive source identity. Do not model identity derivation
 as `(sourceItem) => ...` over the `SourceItem` received by the process. Model
-it as `(sourcePluginSelection) => SourceIdentityKey` before the `SourceItem`
+it as `(sourceSelection) => SourceIdentityKey` before the `SourceItem`
 exists. Source identity must exist before process execution so the runtime can
 find previous item state, detect duplicate source identities, target individual
 items, and persist failures even when the process never starts.
@@ -113,7 +113,7 @@ part and carries the Effect schema used for encoding, decoding, validation, CLI
 parsing, status rendering, and contract fingerprinting.
 
 ```ts
-const articlesSource = DocumentSourcePlugin.make({
+const articlesSource = DocumentSource.make({
   fetcher,
   parser,
   selector: {
@@ -142,7 +142,7 @@ Names are still required, but they live in schema metadata on each tuple part
 instead of changing the durable key shape into an object.
 
 ```ts
-const businessAddressesSource = DocumentSourcePlugin.make({
+const businessAddressesSource = DocumentSource.make({
   fetcher,
   parser,
   selector: {
@@ -186,7 +186,7 @@ tuple values.
 
 When the same identity shape is reused, migration authors can extract the
 `id`/`schema` pair and still keep source-specific key derivation inside the
-source plugin options:
+source options:
 
 ```ts
 const BusinessAddressIdentity = SourceIdentity.make({
@@ -198,7 +198,7 @@ const BusinessAddressIdentity = SourceIdentity.make({
 })
 ```
 
-The reusable value is not tied to a source plugin. It is the durable source
+The reusable value is not tied to a source. It is the durable source
 identity schema contract:
 
 ```ts
@@ -217,11 +217,11 @@ interface SourceIdentityDefinition<Key> {
 SDK derives `kind` and `parts` from that helper metadata when the identity
 definition is made.
 
-The source plugin supplies the source selection shape. The reusable identity
+The source supplies the source selection shape. The reusable identity
 definition supplies the durable key shape:
 
 ```ts
-const businessAddressesSource = DocumentSourcePlugin.make({
+const businessAddressesSource = DocumentSource.make({
   fetcher,
   parser,
   selector: {
@@ -238,21 +238,21 @@ const businessAddressesSource = DocumentSourcePlugin.make({
 ```
 
 The schema describes the durable key, not the source item. The source item is
-already described by the configured source plugin's `sourceSchema`. Treat that
+already described by the configured source's `sourceSchema`. Treat that
 schema as the typed field catalog for identity selection instead of adding a
 second generic `fields` API.
 
-### Plugin-Specific Key Derivation
+### Source-Specific Key Derivation
 
-Every source plugin exposes the same `id`/`schema`/`key` envelope, but the
-`key` authoring shape can remain plugin-specific.
+Every source exposes the same `id`/`schema`/`key` envelope, but the
+`key` authoring shape can remain source-specific.
 
-For CSV, identity derivation is naturally column-based. The plugin exposes a
+For CSV, identity derivation is naturally column-based. The source exposes a
 CSV-native helper and compiles it into the shared schema-backed identity
 contract internally:
 
 ```ts
-const csvSource = CsvSourcePlugin.make({
+const csvSource = CsvSource.make({
   path: "business-addresses.csv",
   platform,
   dialect: { kind: "standard" },
@@ -268,11 +268,11 @@ const csvSource = CsvSourcePlugin.make({
 ```
 
 For document sources, identity derivation is naturally selection-based. The
-source plugin derives the key from the selected parent/item context before
+source derives the key from the selected parent/item context before
 emitting the source item:
 
 ```ts
-const documentSource = DocumentSourcePlugin.make({
+const documentSource = DocumentSource.make({
   fetcher,
   parser,
   selector: {
@@ -292,7 +292,7 @@ const documentSource = DocumentSourcePlugin.make({
 })
 ```
 
-If a source plugin can evaluate `identity.key` against a schema cursor at
+If a source can evaluate `identity.key` against a schema cursor at
 configuration time, it may mechanically fingerprint the selected paths:
 
 ```ts
@@ -332,7 +332,7 @@ const BusinessAddressIdentitySchema = SourceIdentity.tuple([
 
 Prefer scalar schemas or fixed tuple parts with primitive, literal, branded,
 refinement, or codec schemas whose decoded and encoded forms are still scalar.
-The decoded key is the public key used by source plugins, lookup methods, and
+The decoded key is the public key used by sources, lookup methods, and
 pipelines. The encoded key is the durable lookup/index key persisted by stores
 and compared by the runtime:
 
@@ -349,11 +349,11 @@ The identity contract fingerprint should include at least:
 - the human-authored contract id
 - the canonical schema fingerprint
 - the tuple part names and positions
-- the plugin identity strategy
+- the source identity strategy
 - any declarative mapping from source-native fields to identity key positions
 
-For declarative plugins, the source-to-key mapping is fingerprintable. The
-plugin should expose a source-native helper rather than asking migration authors
+For declarative sources, the source-to-key mapping is fingerprintable. The
+source should expose a source-native helper rather than asking migration authors
 to assemble the low-level `SourceIdentity` envelope directly:
 
 ```ts
@@ -364,7 +364,7 @@ identity: CsvIdentity.columns({
 ```
 
 Changing the second column from `"address_index"` to `"address_key"` changes
-the derivation fingerprint. The CSV plugin still compiles the helper into a
+the derivation fingerprint. The CSV source still compiles the helper into a
 schema-backed `SourceIdentity` contract internally.
 
 For function-based identity derivation, the schema is fingerprintable but the
@@ -382,7 +382,7 @@ identity: {
 ```
 
 If that function changes from `item.index` to `item.key`, the user must change
-the contract id, or use a plugin-declarative strategy that the framework can
+the contract id, or use a source-declarative strategy that the framework can
 fingerprint mechanically.
 
 Do not use a first-row scan as the primary drift detector. A sampled source item
@@ -459,7 +459,7 @@ The CLI flow is:
 An opaque encoded id may be added later for copy/paste from status output. It is
 not required for the initial public targeting shape.
 
-The source plugin API should evolve from accepting only a branded string to
+The source API should evolve from accepting only a branded string to
 accepting a structured target:
 
 ```ts
@@ -469,14 +469,14 @@ interface SourceIdentityTarget<Key> {
   readonly encoded: EncodedSourceIdentity
 }
 
-interface SourcePlugin<A, Cursor, SourceInput, Key> {
+interface Source<A, Cursor, SourceInput, Key> {
   readonly readByIdentity: (
     identity: SourceIdentityTarget<Key>
-  ) => Effect.Effect<SourceItem<SourceInput> | null, SourcePluginError>
+  ) => Effect.Effect<SourceItem<SourceInput> | null, SourceError>
 }
 ```
 
-Source plugins should not need to parse their own encoded identity strings. The
+Sources should not need to parse their own encoded identity strings. The
 runtime decodes the target through the configured source identity contract before
 calling `readByIdentity`.
 
@@ -488,7 +488,7 @@ correct when the source has no direct lookup primitive:
 lookup: { kind: "scan" }
 ```
 
-For direct lookup sources, the plugin can use the structured key to fetch the
+For direct lookup sources, the source can use the structured key to fetch the
 smallest source resource it can address. For a business address source, the
 direct lookup may destructure the tuple, use `businessUnitKey` to fetch one
 business unit, and use `addressIndex` to select the nested address:
@@ -521,11 +521,11 @@ not:
 
 If the source has no direct lookup by `businessUnitKey`, targeted runs for that
 identity use scan lookup and search all pages. If scan lookup is too expensive,
-the source plugin needs a direct lookup strategy or an external source index.
+the source needs a direct lookup strategy or an external source index.
 
 ## Destination Change Descriptors
 
-Destination capability modules own change descriptors for destination-native
+Destinations own change descriptors for destination-native
 outcomes they can record. A destination change is a typed, destination-native
 outcome recorded by a successful destination helper because it may be needed for
 tracking, rollback, or inspection. It is not necessarily a structural diff.
@@ -552,7 +552,7 @@ const InventoryEntryUpserted = DestinationChangeDescriptor.make(
 )
 ```
 
-Configured destination capability modules expose those descriptors through a
+Configured destinations expose those descriptors through a
 typed change catalog:
 
 ```ts
@@ -603,7 +603,7 @@ but that observability event is separate from the journal write.
 
 ## Automatic Changes
 
-Destination helpers record their plugin-native changes automatically when the
+Destination helpers record their destination-native changes automatically when the
 destination operation succeeds.
 
 ```ts

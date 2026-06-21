@@ -456,7 +456,7 @@ const result = yield* execution.run({
 
 Status is read-only inspection. It does not acquire migration definition locks,
 create run ids, begin or finalize run state, write source cursors, write item
-state, call destination plugins, or execute migration pipelines.
+state, call destinations, or execute migration pipelines.
 
 Durable-only status reads store facts:
 
@@ -522,7 +522,7 @@ Classification:
 Durable buckets count all durable item state for the migration definition,
 including orphaned states. `unchanged` is not included because it is a run
 outcome, not persisted item state. `rollbackable` is not included because
-rollbackability is a plugin/runtime concern, not an operator status column.
+rollbackability is a source/runtime concern, not an operator status column.
 
 Status scan diagnostics are schema-backed returned data, not persisted records:
 
@@ -569,7 +569,7 @@ failures:
 type GetMigrationStatusesError =
   | MigrationStatusRequestError
   | MigrationStoreError
-  | SourcePluginError;
+  | SourceError;
 
 type MigrationDefinitionRegistryStatusError =
   | MigrationDefinitionRegistryPlanningError
@@ -834,7 +834,7 @@ migrate status --all --scan-source --concurrency 4
 ```
 
 `list` renders static registry discovery metadata from `registry.list()`. It
-does not run planning, read stores, initialize plugin layers, or inspect runtime
+does not run planning, read stores, initialize source layers, or inspect runtime
 status. The default table includes definition id, rollback availability,
 required dependencies, and optional dependencies:
 
@@ -851,8 +851,8 @@ Unresolved optional dependencies are marked without failing the command:
 articles  yes       authors    legacy-assets (unresolved)
 ```
 
-`list` does not include source or destination plugin columns in the first slice.
-Those columns require explicit static plugin metadata and can be added when the
+`list` does not include source or destination columns in the first slice.
+Those columns require explicit static source metadata and can be added when the
 catalog view needs them.
 
 `graph` is read-only dependency inspection. `migrate graph` renders the full
@@ -908,10 +908,10 @@ State  Migration ID  Last Run   Migrated  Skipped  Failed  Needs Update
 ok     articles      succeeded         2        1       0             0
 ```
 
-`status --scan-source` additionally initializes source plugins and scans current
+`status --scan-source` additionally initializes sources and scans current
 source inventories from the beginning. It does not read or write persisted
 source cursors, create run state, acquire locks, execute pipelines, call
-destination plugins, or persist warnings.
+destinations, or persist warnings.
 
 ```text
 Migration Status
@@ -927,7 +927,7 @@ State    Migration ID  Last Run   Migrated  Skipped  Failed  Needs Update  Total
 warning  articles      succeeded         2        1       0             0      4            1        0          1         1
 
 Warnings:
-! Duplicate source identity in articles: article-new (1 duplicate item(s)). Check the source plugin identity mapping.
+! Duplicate source identity in articles: article-new (1 duplicate item(s)). Check the source identity mapping.
 ```
 
 Status output is ordered by registry/list order, not dependency execution
@@ -943,7 +943,7 @@ Warnings render below the table with actionable suggestions:
 
 ```text
 Warnings:
-! Duplicate source identity in articles: article-1 (2 duplicate item(s)). Check the source plugin identity mapping.
+! Duplicate source identity in articles: article-1 (2 duplicate item(s)). Check the source identity mapping.
 ! Invalid source item in articles: article-3. Expected string, actual undefined. Check the Source Payload Schema and source data.
 ```
 

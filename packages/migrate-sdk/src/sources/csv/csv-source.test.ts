@@ -11,9 +11,9 @@ import {
   type MigrationProgressEvent,
   SourceItemTotal,
 } from "migrate-sdk";
-import { CsvIdentity, CsvSourcePlugin } from "migrate-sdk/sources/csv";
+import { CsvIdentity, CsvSource } from "migrate-sdk/sources/csv";
 import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
-import { SourcePlugin } from "../../services/source-plugin.ts";
+import { Source } from "../../services/source.ts";
 import { runInlineDefinition } from "../../test-support/inline-registry-execution.ts";
 import { CsvParserCore, type CsvParserOptions } from "./csv-source.ts";
 
@@ -267,10 +267,10 @@ describe("CsvParserCore", () => {
   );
 });
 
-describe("CsvSourcePlugin", () => {
+describe("CsvSource", () => {
   it("includes declarative identity columns in the source identity contract fingerprint", () => {
     const schema = SourceIdentity.key("articleId", Schema.NonEmptyString);
-    const fromId = CsvSourcePlugin.make({
+    const fromId = CsvSource.make({
       ...csvOptions,
       identity: {
         id: "csv-article@v1",
@@ -284,7 +284,7 @@ describe("CsvSourcePlugin", () => {
       platform: testPlatformLayer,
       sourceSchema: CsvArticleSource,
     });
-    const fromSlug = CsvSourcePlugin.make({
+    const fromSlug = CsvSource.make({
       ...csvOptions,
       identity: {
         id: "csv-article@v1",
@@ -306,7 +306,7 @@ describe("CsvSourcePlugin", () => {
   });
 
   it("includes source-native headers in the source identity contract fingerprint", () => {
-    const fromIdColumn = CsvSourcePlugin.make({
+    const fromIdColumn = CsvSource.make({
       ...csvOptions,
       headers: {
         columns: ["id", "title", "views"],
@@ -317,7 +317,7 @@ describe("CsvSourcePlugin", () => {
       platform: testPlatformLayer,
       sourceSchema: CsvArticleSource,
     });
-    const fromTitleColumn = CsvSourcePlugin.make({
+    const fromTitleColumn = CsvSource.make({
       ...csvOptions,
       headers: {
         columns: ["title", "id", "views"],
@@ -338,7 +338,7 @@ describe("CsvSourcePlugin", () => {
   });
 
   it("includes source-native dialect in the source identity contract fingerprint", () => {
-    const commaSeparated = CsvSourcePlugin.make({
+    const commaSeparated = CsvSource.make({
       ...csvOptions,
       headers: {
         columns: ["id", "title", "views"],
@@ -349,7 +349,7 @@ describe("CsvSourcePlugin", () => {
       platform: testPlatformLayer,
       sourceSchema: CsvArticleSource,
     });
-    const semicolonSeparated = CsvSourcePlugin.make({
+    const semicolonSeparated = CsvSource.make({
       ...csvOptions,
       dialect: { kind: "custom", separator: ";" },
       headers: {
@@ -376,14 +376,14 @@ describe("CsvSourcePlugin", () => {
       const fixturePath = yield* path.fromFileUrl(
         new URL("./fixtures/bookstore-book-catalog.csv", import.meta.url)
       );
-      const source = CsvSourcePlugin.make({
+      const source = CsvSource.make({
         ...bookstoreCatalogOptions,
         path: fixturePath,
         platform: testPlatformLayer,
         sourceSchema: CsvBookstoreCatalogRowSource,
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const read = yield* plugin.read(null);
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const read = yield* sourceService.read(null);
 
       expect(read.items).toHaveLength(4);
       expect(read.items.map((item) => item.identity.encoded)).toEqual([
@@ -403,9 +403,9 @@ describe("CsvSourcePlugin", () => {
         "Includes dependency notes"
       );
 
-      const lookedUp = yield* plugin.readByIdentity(
+      const lookedUp = yield* sourceService.readByIdentity(
         SourceIdentity.fromEncoded(
-          plugin.identity,
+          sourceService.identity,
           toEncodedSourceIdentity(JSON.stringify(["BOOK-002", "hardcover"]))
         )
       );
@@ -427,19 +427,19 @@ describe("CsvSourcePlugin", () => {
         "id,title,views\n42,Hello,7\n43,Goodbye,8\n"
       );
 
-      const source = CsvSourcePlugin.make({
+      const source = CsvSource.make({
         ...csvOptions,
         path: filePath,
         platform: testPlatformLayer,
         sourceSchema: CsvArticleSource,
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-      if (plugin.countTotal === undefined) {
+      if (sourceService.countTotal === undefined) {
         throw new Error("Expected CSV source total count");
       }
 
-      const total = yield* plugin.countTotal();
+      const total = yield* sourceService.countTotal();
 
       expect(total).toEqual(SourceItemTotal.known(2));
     }).pipe(Effect.provide(testPlatformLayer))
@@ -460,7 +460,7 @@ describe("CsvSourcePlugin", () => {
           "metadata\n42;Hello;7\n\n43;Goodbye;8\n"
         );
 
-        const source = CsvSourcePlugin.make({
+        const source = CsvSource.make({
           ...csvOptions,
           dialect: { kind: "custom", separator: ";" },
           headers: {
@@ -472,13 +472,13 @@ describe("CsvSourcePlugin", () => {
           platform: testPlatformLayer,
           sourceSchema: CsvArticleSource,
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-        if (plugin.countTotal === undefined) {
+        if (sourceService.countTotal === undefined) {
           throw new Error("Expected CSV source total count");
         }
 
-        const total = yield* plugin.countTotal();
+        const total = yield* sourceService.countTotal();
 
         expect(total).toEqual(SourceItemTotal.known(2));
       }).pipe(Effect.provide(testPlatformLayer))
@@ -494,20 +494,20 @@ describe("CsvSourcePlugin", () => {
       const filePath = path.join(directory, "articles.csv");
       yield* fs.writeFileString(filePath, "id,title,views\n,,\n");
 
-      const source = CsvSourcePlugin.make({
+      const source = CsvSource.make({
         ...csvOptions,
         emptyRows: { kind: "error" },
         path: filePath,
         platform: testPlatformLayer,
         sourceSchema: CsvArticleSource,
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-      if (plugin.countTotal === undefined) {
+      if (sourceService.countTotal === undefined) {
         throw new Error("Expected CSV source total count");
       }
 
-      const error = yield* Effect.flip(plugin.countTotal());
+      const error = yield* Effect.flip(sourceService.countTotal());
 
       expect(error).toEqual(
         expect.objectContaining({
@@ -531,7 +531,7 @@ describe("CsvSourcePlugin", () => {
         const progressEvents: MigrationProgressEvent[] = [];
         yield* fs.writeFileString(filePath, "id,title,views\n42,Hello,7\n");
 
-        const source = CsvSourcePlugin.make({
+        const source = CsvSource.make({
           ...csvOptions,
           path: filePath,
           platform: makeFirstReadFileFailurePlatformLayer(platformState),
@@ -589,24 +589,28 @@ describe("CsvSourcePlugin", () => {
       const filePath = path.join(directory, "articles.csv");
       yield* fs.writeFileString(filePath, "id,title,views\n42,Hello,7\n");
 
-      const source = CsvSourcePlugin.make({
+      const source = CsvSource.make({
         ...csvOptions,
         path: filePath,
         platform: testPlatformLayer,
         sourceSchema: CsvArticleSource,
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const firstRead = yield* plugin.read(null);
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const firstRead = yield* sourceService.read(null);
 
       expect(firstRead.items).toHaveLength(1);
       expect(firstRead.nextCursor?.nextRowIndex).toBe(2);
 
-      const secondRead = yield* plugin.read(firstRead.nextCursor ?? null);
+      const secondRead = yield* sourceService.read(
+        firstRead.nextCursor ?? null
+      );
       expect(secondRead.items).toHaveLength(0);
       expect(secondRead.nextCursor).toBeUndefined();
 
       yield* fs.writeFileString(filePath, "id,title,views\n42,Changed,8\n");
-      const changedRead = yield* plugin.read(firstRead.nextCursor ?? null);
+      const changedRead = yield* sourceService.read(
+        firstRead.nextCursor ?? null
+      );
 
       expect(changedRead.items).toHaveLength(1);
       expect(changedRead.items[0]?.item).toEqual({

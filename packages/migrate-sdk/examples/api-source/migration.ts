@@ -6,7 +6,7 @@ import {
 } from "migrate-sdk";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { completedInlineExecution } from "../inline-execution.ts";
-import { JsonPlaceholderPostSourcePlugin } from "./json-placeholder-source.ts";
+import { JsonPlaceholderPostSource } from "./json-placeholder-source.ts";
 
 export const PostEntryFields = Schema.Struct({
   authorId: Schema.Number,
@@ -16,7 +16,7 @@ export const PostEntryFields = Schema.Struct({
 
 export type PostEntryFields = typeof PostEntryFields.Type;
 export type ApiSourcePostSource = ReturnType<
-  typeof JsonPlaceholderPostSourcePlugin.make
+  typeof JsonPlaceholderPostSource.make
 >;
 
 export interface ApiSourceExampleOptions {
@@ -29,7 +29,7 @@ export const makeJsonPlaceholderPostsMigration = (
 ) => {
   return MigrationDefinition.make({
     id: "jsonplaceholder-posts",
-    source: options?.source ?? JsonPlaceholderPostSourcePlugin.make(),
+    source: options?.source ?? JsonPlaceholderPostSource.make(),
     store: InMemoryMigrationStore.layer(),
     process: (source) => {
       const fields = {

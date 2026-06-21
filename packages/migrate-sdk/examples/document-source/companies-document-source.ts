@@ -14,7 +14,7 @@ import {
   type DocumentFetcherPlatform,
   DocumentFetchers,
   DocumentParsers,
-  DocumentSourcePlugin,
+  DocumentSource,
 } from "migrate-sdk/sources/document";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { completedInlineExecution } from "../inline-execution.ts";
@@ -171,7 +171,7 @@ export const makeBusinessUnitsMigration = (
         sourceIdentity: source.identity.encoded,
       });
     },
-    source: DocumentSourcePlugin.make({
+    source: DocumentSource.make({
       fetcher: makeCompaniesDocumentFetcher(options),
       parser: companiesDocumentParser,
       selector: {
@@ -212,7 +212,7 @@ export const makeContactsMigration = (
         sourceIdentity: source.identity.encoded,
       });
     },
-    source: DocumentSourcePlugin.make({
+    source: DocumentSource.make({
       fetcher: makeCompaniesDocumentFetcher(options),
       parser: companiesDocumentParser,
       selector: {
@@ -255,7 +255,7 @@ export const makeAddressesMigration = (
         sourceIdentity: source.identity.encoded,
       });
     },
-    source: DocumentSourcePlugin.make({
+    source: DocumentSource.make({
       fetcher: makeCompaniesDocumentFetcher(options),
       parser: companiesDocumentParser,
       selector: {

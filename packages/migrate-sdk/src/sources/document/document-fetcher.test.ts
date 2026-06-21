@@ -5,7 +5,7 @@ import { Effect, Layer, Schema } from "effect";
 import { Service } from "effect/Context";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
-import { SourcePluginError } from "migrate-sdk";
+import { SourceError } from "migrate-sdk";
 import type {
   DocumentFetcher,
   DocumentFetchResult,
@@ -41,7 +41,7 @@ class ArticleDocumentApi extends Service<
   {
     readonly getArticle: (
       id: string
-    ) => Effect.Effect<ArticleDocument, SourcePluginError>;
+    ) => Effect.Effect<ArticleDocument, SourceError>;
     readonly listArticleIds: (
       cursor: ArticlePageCursor | null
     ) => Effect.Effect<
@@ -49,7 +49,7 @@ class ArticleDocumentApi extends Service<
         readonly ids: readonly string[];
         readonly nextCursor?: ArticlePageCursor | undefined;
       },
-      SourcePluginError
+      SourceError
     >;
   }
 >()("@migrate-sdk/test/ArticleDocumentApi") {}
@@ -91,7 +91,7 @@ const makeArticleDocumentApiLayer = (
         const article = articles.get(id);
 
         if (article === undefined) {
-          return yield* new SourcePluginError({
+          return yield* new SourceError({
             message: "Article was not found",
             cause: { id },
           });
@@ -188,32 +188,30 @@ describe("DocumentFetchers.fileText", () => {
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
-  it.effect(
-    "fails missing files as source plugin errors with path context",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem;
-        const path = yield* Path;
-        const directory = yield* fs.makeTempDirectoryScoped({
-          prefix: "migrate-sdk-document-fetcher-",
-        });
-        const filePath = path.join(directory, "missing.json");
-        const fetcher = DocumentFetchers.fileText({
+  it.effect("fails missing files as source errors with path context", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem;
+      const path = yield* Path;
+      const directory = yield* fs.makeTempDirectoryScoped({
+        prefix: "migrate-sdk-document-fetcher-",
+      });
+      const filePath = path.join(directory, "missing.json");
+      const fetcher = DocumentFetchers.fileText({
+        path: filePath,
+        platform: testPlatformLayer,
+      });
+
+      const error = yield* fetcher.read(null).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(SourceError);
+      expect(error.message).toBe("Unable to read document resource file");
+      expect(error.cause).toEqual(
+        expect.objectContaining({
           path: filePath,
-          platform: testPlatformLayer,
-        });
-
-        const error = yield* fetcher.read(null).pipe(Effect.flip);
-
-        expect(error).toBeInstanceOf(SourcePluginError);
-        expect(error.message).toBe("Unable to read document resource file");
-        expect(error.cause).toEqual(
-          expect.objectContaining({
-            path: filePath,
-            resolvedPath: path.resolve(filePath),
-          })
-        );
-      }).pipe(Effect.provide(testPlatformLayer))
+          resolvedPath: path.resolve(filePath),
+        })
+      );
+    }).pipe(Effect.provide(testPlatformLayer))
   );
 });
 

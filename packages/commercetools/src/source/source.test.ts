@@ -10,7 +10,7 @@ import type {
   ProductPagedQueryResponse,
 } from "@commercetools/platform-sdk";
 import { describe, expect, it } from "@effect/vitest";
-import { CommercetoolsSourcePlugin } from "@migrate-sdk/commercetools/source";
+import { CommercetoolsSource } from "@migrate-sdk/commercetools/source";
 import {
   makeScriptedCommercetoolsSdk,
   type ScriptedCommercetoolsSdkRequest,
@@ -22,10 +22,10 @@ import {
   MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
+  Source,
+  SourceError,
   SourceIdentity,
   SourceItemTotal,
-  SourcePlugin,
-  SourcePluginError,
 } from "migrate-sdk";
 import { runInlineDefinition } from "migrate-sdk/testing";
 import { expectTypeOf } from "vitest";
@@ -335,12 +335,12 @@ const makeSourceSdk = (
   });
 };
 
-describe("CommercetoolsSourcePlugin", () => {
+describe("CommercetoolsSource", () => {
   it("infers SDK resources by default and SDK-typed resources in projections", () => {
-    const rawProductSource = CommercetoolsSourcePlugin.products();
-    const rawCustomerSource = CommercetoolsSourcePlugin.customers();
-    const rawBusinessUnitSource = CommercetoolsSourcePlugin.businessUnits();
-    const projectedProductSource = CommercetoolsSourcePlugin.products({
+    const rawProductSource = CommercetoolsSource.products();
+    const rawCustomerSource = CommercetoolsSource.customers();
+    const rawBusinessUnitSource = CommercetoolsSource.businessUnits();
+    const projectedProductSource = CommercetoolsSource.products({
       projection: {
         schema: CatalogProductSource,
         select: (product) => {
@@ -353,7 +353,7 @@ describe("CommercetoolsSourcePlugin", () => {
         },
       },
     });
-    const projectedCustomerSource = CommercetoolsSourcePlugin.customers({
+    const projectedCustomerSource = CommercetoolsSource.customers({
       projection: {
         schema: CustomerSource,
         select: (customer) => {
@@ -366,21 +366,19 @@ describe("CommercetoolsSourcePlugin", () => {
         },
       },
     });
-    const projectedBusinessUnitSource = CommercetoolsSourcePlugin.businessUnits(
-      {
-        projection: {
-          schema: BusinessUnitSource,
-          select: (businessUnit) => {
-            expectTypeOf(businessUnit).toEqualTypeOf<BusinessUnit>();
+    const projectedBusinessUnitSource = CommercetoolsSource.businessUnits({
+      projection: {
+        schema: BusinessUnitSource,
+        select: (businessUnit) => {
+          expectTypeOf(businessUnit).toEqualTypeOf<BusinessUnit>();
 
-            return {
-              key: businessUnit.key,
-              name: businessUnit.name,
-            };
-          },
+          return {
+            key: businessUnit.key,
+            name: businessUnit.name,
+          };
         },
-      }
-    );
+      },
+    });
 
     expectTypeOf<
       typeof rawProductSource.sourceSchema.Type
@@ -409,7 +407,7 @@ describe("CommercetoolsSourcePlugin", () => {
         const recording = makeSourceSdk({
           businessUnits: [businessUnitResponse()],
         });
-        const source = CommercetoolsSourcePlugin.businessUnits({
+        const source = CommercetoolsSource.businessUnits({
           batchSize: 10,
           identity: "key",
           where: "key = :businessUnitKey",
@@ -418,12 +416,17 @@ describe("CommercetoolsSourcePlugin", () => {
           },
         }).provide(recording.layer);
 
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const page = yield* plugin.read(null);
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        const page = yield* sourceService.read(null);
 
-        expect(plugin.identity.id).toBe("commercetools-business-unit-key@v1");
+        expect(sourceService.identity.id).toBe(
+          "commercetools-business-unit-key@v1"
+        );
         expect(page.items[0]?.identity).toEqual(
-          SourceIdentity.fromKey(plugin.identity, "example-business-unit")
+          SourceIdentity.fromKey(
+            sourceService.identity,
+            "example-business-unit"
+          )
         );
         expect(recording.requests[0]).toMatchObject({
           operation: "businessUnits.source.read",
@@ -456,7 +459,7 @@ describe("CommercetoolsSourcePlugin", () => {
           },
         ],
       });
-      const source = CommercetoolsSourcePlugin.products({
+      const source = CommercetoolsSource.products({
         batchSize: 50,
         projection: {
           schema: CatalogProductSource,
@@ -475,13 +478,13 @@ describe("CommercetoolsSourcePlugin", () => {
         },
       }).provide(recording.layer);
 
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-      if (plugin.countTotal === undefined) {
+      if (sourceService.countTotal === undefined) {
         throw new Error("Expected Commercetools product total count");
       }
 
-      const total = yield* plugin.countTotal();
+      const total = yield* sourceService.countTotal();
 
       expect(total).toEqual(SourceItemTotal.known(2));
       expect(projectionCalls).toBe(0);
@@ -505,27 +508,28 @@ describe("CommercetoolsSourcePlugin", () => {
         businessUnits: [businessUnitResponse()],
         customers: [customerResponse(), customerResponse()],
       });
-      const customerSource = CommercetoolsSourcePlugin.customers().provide(
+      const customerSource = CommercetoolsSource.customers().provide(
         recording.layer
       );
-      const businessUnitSource =
-        CommercetoolsSourcePlugin.businessUnits().provide(recording.layer);
-      const customerPlugin = yield* SourcePlugin.pipe(
+      const businessUnitSource = CommercetoolsSource.businessUnits().provide(
+        recording.layer
+      );
+      const customerSourceService = yield* Source.pipe(
         Effect.provide(customerSource.layer)
       );
-      const businessUnitPlugin = yield* SourcePlugin.pipe(
+      const businessUnitSourceService = yield* Source.pipe(
         Effect.provide(businessUnitSource.layer)
       );
 
       if (
-        customerPlugin.countTotal === undefined ||
-        businessUnitPlugin.countTotal === undefined
+        customerSourceService.countTotal === undefined ||
+        businessUnitSourceService.countTotal === undefined
       ) {
         throw new Error("Expected Commercetools source total counts");
       }
 
-      const customerTotal = yield* customerPlugin.countTotal();
-      const businessUnitTotal = yield* businessUnitPlugin.countTotal();
+      const customerTotal = yield* customerSourceService.countTotal();
+      const businessUnitTotal = yield* businessUnitSourceService.countTotal();
 
       expect(customerTotal).toEqual(SourceItemTotal.known(2));
       expect(businessUnitTotal).toEqual(SourceItemTotal.known(1));
@@ -539,16 +543,14 @@ describe("CommercetoolsSourcePlugin", () => {
   it.effect("returns zero product totals", () =>
     Effect.gen(function* () {
       const recording = makeSourceSdk();
-      const source = CommercetoolsSourcePlugin.products().provide(
-        recording.layer
-      );
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const source = CommercetoolsSource.products().provide(recording.layer);
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-      if (plugin.countTotal === undefined) {
+      if (sourceService.countTotal === undefined) {
         throw new Error("Expected Commercetools product total count");
       }
 
-      const total = yield* plugin.countTotal();
+      const total = yield* sourceService.countTotal();
 
       expect(total).toEqual(SourceItemTotal.known(0));
       expect(recording.requests.map((request) => request.operation)).toEqual([
@@ -571,16 +573,16 @@ describe("CommercetoolsSourcePlugin", () => {
           }),
         ],
       });
-      const source = CommercetoolsSourcePlugin.products({
+      const source = CommercetoolsSource.products({
         where: "masterData(current(masterVariant(sku is defined)))",
       }).provide(recording.layer);
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-      if (plugin.countTotal === undefined) {
+      if (sourceService.countTotal === undefined) {
         throw new Error("Expected Commercetools product total count");
       }
 
-      const total = yield* plugin.countTotal();
+      const total = yield* sourceService.countTotal();
 
       expect(total).toEqual(
         SourceItemTotal.lowerBound(10_000, {
@@ -613,18 +615,16 @@ describe("CommercetoolsSourcePlugin", () => {
           }),
         ],
       });
-      const source = CommercetoolsSourcePlugin.products().provide(
-        recording.layer
-      );
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const source = CommercetoolsSource.products().provide(recording.layer);
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-      if (plugin.countTotal === undefined) {
+      if (sourceService.countTotal === undefined) {
         throw new Error("Expected Commercetools product total count");
       }
 
-      const error = yield* Effect.flip(plugin.countTotal());
+      const error = yield* Effect.flip(sourceService.countTotal());
 
-      expect(error).toBeInstanceOf(SourcePluginError);
+      expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe(
         "Commercetools products source count returned invalid total"
       );
@@ -651,9 +651,7 @@ describe("CommercetoolsSourcePlugin", () => {
             ),
           ],
         });
-        const source = CommercetoolsSourcePlugin.products().provide(
-          recording.layer
-        );
+        const source = CommercetoolsSource.products().provide(recording.layer);
         const storeState = InMemoryMigrationStore.makeState();
         const progressEvents: MigrationProgressEvent[] = [];
         const progressLayer = Layer.succeed(MigrationProgress, {
@@ -710,18 +708,18 @@ describe("CommercetoolsSourcePlugin", () => {
         const recording = makeSourceSdk({
           products: [productResponse()],
         });
-        const source = CommercetoolsSourcePlugin.products({
+        const source = CommercetoolsSource.products({
           batchSize: 1,
         }).provide(recording.layer);
 
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const firstPage = yield* plugin.read(null);
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        const firstPage = yield* sourceService.read(null);
         const firstItem = firstPage.items[0];
 
         expect(firstPage.items).toHaveLength(1);
-        expect(plugin.identity.id).toBe("commercetools-product-id@v1");
+        expect(sourceService.identity.id).toBe("commercetools-product-id@v1");
         expect(firstItem?.identity).toEqual(
-          SourceIdentity.fromKey(plugin.identity, "recording-product-id")
+          SourceIdentity.fromKey(sourceService.identity, "recording-product-id")
         );
         expect(firstItem?.version).toBe("1");
         expect(firstItem?.item).toMatchObject({
@@ -733,17 +731,19 @@ describe("CommercetoolsSourcePlugin", () => {
           lastId: "recording-product-id",
         });
 
-        const secondPage = yield* plugin.read(firstPage.nextCursor ?? null);
+        const secondPage = yield* sourceService.read(
+          firstPage.nextCursor ?? null
+        );
 
         expect(secondPage.items).toHaveLength(0);
         expect(secondPage.nextCursor).toBeUndefined();
 
-        const lookedUp = yield* plugin.readByIdentity(
-          SourceIdentity.fromKey(plugin.identity, "recording-product-id")
+        const lookedUp = yield* sourceService.readByIdentity(
+          SourceIdentity.fromKey(sourceService.identity, "recording-product-id")
         );
 
         expect(lookedUp?.identity).toEqual(
-          SourceIdentity.fromKey(plugin.identity, "recording-product-id")
+          SourceIdentity.fromKey(sourceService.identity, "recording-product-id")
         );
         expect(lookedUp?.item).toMatchObject({
           id: "recording-product-id",
@@ -772,14 +772,18 @@ describe("CommercetoolsSourcePlugin", () => {
           } satisfies BusinessUnit;
         });
         const recording = makeSourceSdk({ businessUnits });
-        const source = CommercetoolsSourcePlugin.businessUnits({
+        const source = CommercetoolsSource.businessUnits({
           batchSize: 20,
         }).provide(recording.layer);
 
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const firstPage = yield* plugin.read(null);
-        const secondPage = yield* plugin.read(firstPage.nextCursor ?? null);
-        const thirdPage = yield* plugin.read(secondPage.nextCursor ?? null);
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        const firstPage = yield* sourceService.read(null);
+        const secondPage = yield* sourceService.read(
+          firstPage.nextCursor ?? null
+        );
+        const thirdPage = yield* sourceService.read(
+          secondPage.nextCursor ?? null
+        );
 
         expect(firstPage.items).toHaveLength(20);
         expect(firstPage.nextCursor).toEqual({
@@ -827,13 +831,11 @@ describe("CommercetoolsSourcePlugin", () => {
   it.effect("returns null when direct product lookup misses", () =>
     Effect.gen(function* () {
       const recording = makeSourceSdk();
-      const source = CommercetoolsSourcePlugin.products().provide(
-        recording.layer
-      );
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const source = CommercetoolsSource.products().provide(recording.layer);
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-      const lookedUp = yield* plugin.readByIdentity(
-        SourceIdentity.fromKey(plugin.identity, "missing-product")
+      const lookedUp = yield* sourceService.readByIdentity(
+        SourceIdentity.fromKey(sourceService.identity, "missing-product")
       );
 
       expect(lookedUp).toBeNull();
@@ -845,22 +847,22 @@ describe("CommercetoolsSourcePlugin", () => {
       const recording = makeSourceSdk({
         products: [productResponse()],
       });
-      const source = CommercetoolsSourcePlugin.products({
+      const source = CommercetoolsSource.products({
         identity: "key",
       }).provide(recording.layer);
 
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const page = yield* plugin.read(null);
-      const lookedUp = yield* plugin.readByIdentity(
-        SourceIdentity.fromKey(plugin.identity, "example-book")
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const page = yield* sourceService.read(null);
+      const lookedUp = yield* sourceService.readByIdentity(
+        SourceIdentity.fromKey(sourceService.identity, "example-book")
       );
 
-      expect(plugin.identity.id).toBe("commercetools-product-key@v1");
+      expect(sourceService.identity.id).toBe("commercetools-product-key@v1");
       expect(page.items[0]?.identity).toEqual(
-        SourceIdentity.fromKey(plugin.identity, "example-book")
+        SourceIdentity.fromKey(sourceService.identity, "example-book")
       );
       expect(lookedUp?.identity).toEqual(
-        SourceIdentity.fromKey(plugin.identity, "example-book")
+        SourceIdentity.fromKey(sourceService.identity, "example-book")
       );
       expect(lookedUp?.item).toMatchObject({
         id: "recording-product-id",
@@ -869,12 +871,12 @@ describe("CommercetoolsSourcePlugin", () => {
     })
   );
 
-  it.effect("normalizes thrown projection errors as source plugin errors", () =>
+  it.effect("normalizes thrown projection errors as source errors", () =>
     Effect.gen(function* () {
       const recording = makeSourceSdk({
         products: [productResponse()],
       });
-      const source = CommercetoolsSourcePlugin.products({
+      const source = CommercetoolsSource.products({
         projection: {
           schema: CatalogProductSource,
           select: () => {
@@ -883,10 +885,10 @@ describe("CommercetoolsSourcePlugin", () => {
         },
       }).provide(recording.layer);
 
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const error = yield* Effect.flip(plugin.read(null));
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const error = yield* Effect.flip(sourceService.read(null));
 
-      expect(error).toBeInstanceOf(SourcePluginError);
+      expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe(
         "Commercetools products source projection threw"
       );
@@ -901,7 +903,7 @@ describe("CommercetoolsSourcePlugin", () => {
       const recording = makeSourceSdk({
         products: [productResponse()],
       });
-      const source = CommercetoolsSourcePlugin.products({
+      const source = CommercetoolsSource.products({
         projection: {
           schema: CatalogProductSource,
           select: (product) => ({
@@ -911,8 +913,8 @@ describe("CommercetoolsSourcePlugin", () => {
         },
       }).provide(recording.layer);
 
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const page = yield* plugin.read(null);
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const page = yield* sourceService.read(null);
 
       expect(page.items[0]?.item).toEqual({
         key: "example-book",
@@ -926,7 +928,7 @@ describe("CommercetoolsSourcePlugin", () => {
       const recording = makeSourceSdk({
         customers: [customerResponse()],
       });
-      const source = CommercetoolsSourcePlugin.customers({
+      const source = CommercetoolsSource.customers({
         projection: {
           schema: CustomerSource,
           select: (customer) => ({
@@ -936,14 +938,14 @@ describe("CommercetoolsSourcePlugin", () => {
         },
       }).provide(recording.layer);
 
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const page = yield* plugin.read(null);
-      const lookedUp = yield* plugin.readByIdentity(
-        SourceIdentity.fromKey(plugin.identity, "recording-customer-id")
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const page = yield* sourceService.read(null);
+      const lookedUp = yield* sourceService.readByIdentity(
+        SourceIdentity.fromKey(sourceService.identity, "recording-customer-id")
       );
 
       expect(page.items[0]?.identity).toEqual(
-        SourceIdentity.fromKey(plugin.identity, "recording-customer-id")
+        SourceIdentity.fromKey(sourceService.identity, "recording-customer-id")
       );
       expect(page.items[0]).toMatchObject({
         item: {
@@ -953,7 +955,7 @@ describe("CommercetoolsSourcePlugin", () => {
         version: "1",
       });
       expect(lookedUp?.identity).toEqual(
-        SourceIdentity.fromKey(plugin.identity, "recording-customer-id")
+        SourceIdentity.fromKey(sourceService.identity, "recording-customer-id")
       );
     })
   );
@@ -965,7 +967,7 @@ describe("CommercetoolsSourcePlugin", () => {
         const recording = makeSourceSdk({
           businessUnits: [businessUnitResponse()],
         });
-        const source = CommercetoolsSourcePlugin.businessUnits({
+        const source = CommercetoolsSource.businessUnits({
           projection: {
             schema: BusinessUnitSource,
             select: (businessUnit) => ({
@@ -975,14 +977,20 @@ describe("CommercetoolsSourcePlugin", () => {
           },
         }).provide(recording.layer);
 
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const page = yield* plugin.read(null);
-        const lookedUp = yield* plugin.readByIdentity(
-          SourceIdentity.fromKey(plugin.identity, "recording-business-unit-id")
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        const page = yield* sourceService.read(null);
+        const lookedUp = yield* sourceService.readByIdentity(
+          SourceIdentity.fromKey(
+            sourceService.identity,
+            "recording-business-unit-id"
+          )
         );
 
         expect(page.items[0]?.identity).toEqual(
-          SourceIdentity.fromKey(plugin.identity, "recording-business-unit-id")
+          SourceIdentity.fromKey(
+            sourceService.identity,
+            "recording-business-unit-id"
+          )
         );
         expect(page.items[0]).toMatchObject({
           item: {
@@ -992,7 +1000,10 @@ describe("CommercetoolsSourcePlugin", () => {
           version: "1",
         });
         expect(lookedUp?.identity).toEqual(
-          SourceIdentity.fromKey(plugin.identity, "recording-business-unit-id")
+          SourceIdentity.fromKey(
+            sourceService.identity,
+            "recording-business-unit-id"
+          )
         );
       })
   );

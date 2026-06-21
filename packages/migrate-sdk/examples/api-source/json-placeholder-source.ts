@@ -1,10 +1,10 @@
 import { Cause, Effect, type Layer, Schedule, Schema } from "effect";
 import { HttpClientError } from "effect/unstable/http";
-import { SourceIdentity, type SourcePluginError } from "migrate-sdk";
+import { type SourceError, SourceIdentity } from "migrate-sdk";
 import {
   DocumentFetchers,
   DocumentParsers,
-  DocumentSourcePlugin,
+  DocumentSource,
 } from "migrate-sdk/sources/document";
 import { jsonPlaceholderError } from "./errors.ts";
 import {
@@ -42,7 +42,7 @@ const isTransientHttpClientError = (
 const isRetryableApiError = (error: ResilientApiError): boolean =>
   Cause.isTimeoutError(error) || isTransientHttpClientError(error);
 
-const toSourcePluginError = (cause: ResilientApiError) =>
+const toSourceError = (cause: ResilientApiError) =>
   jsonPlaceholderError(
     Cause.isTimeoutError(cause)
       ? "JSONPlaceholder request timed out"
@@ -52,14 +52,14 @@ const toSourcePluginError = (cause: ResilientApiError) =>
 
 const resilient = <A, Requirements>(
   effect: Effect.Effect<A, JsonPlaceholderApiError, Requirements>
-): Effect.Effect<A, SourcePluginError, Requirements> =>
+): Effect.Effect<A, SourceError, Requirements> =>
   effect.pipe(
     Effect.timeout(defaultRequestTimeout),
     Effect.retry({
       schedule: defaultRetrySchedule,
       while: isRetryableApiError,
     }),
-    Effect.mapError(toSourcePluginError)
+    Effect.mapError(toSourceError)
   );
 
 const requirePostDetails = (post: unknown | null, id: number) =>
@@ -129,11 +129,11 @@ const makePostDirectLookup = (apiLayer: Layer.Layer<JsonPlaceholderApi>) => ({
     }).pipe(Effect.provide(apiLayer)),
 });
 
-export const JsonPlaceholderPostSourcePlugin = {
+export const JsonPlaceholderPostSource = {
   make: (options?: JsonPlaceholderPostSourceOptions) => {
     const apiLayer = options?.apiLayer ?? JsonPlaceholderApi.live();
 
-    return DocumentSourcePlugin.make({
+    return DocumentSource.make({
       fetcher: makePostPageFetcher(apiLayer),
       parser: DocumentParsers.schema(
         "jsonplaceholder-posts",

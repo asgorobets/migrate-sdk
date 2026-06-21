@@ -1,13 +1,13 @@
-# Commercetools Source Plugin
+# Commercetools Source
 
 Status: implemented for product, customer, and business-unit sources.
 
-`@migrate-sdk/commercetools/source` exposes source plugins for reading existing
+`@migrate-sdk/commercetools/source` exposes sources for reading existing
 Commercetools resources into migration definitions:
 
-- `CommercetoolsSourcePlugin.products(...)`
-- `CommercetoolsSourcePlugin.customers(...)`
-- `CommercetoolsSourcePlugin.businessUnits(...)`
+- `CommercetoolsSource.products(...)`
+- `CommercetoolsSource.customers(...)`
+- `CommercetoolsSource.businessUnits(...)`
 
 Each source supports cursor-window reads, direct lookup by source identity, and
 an optional Source Item total count for live progress rendering.
@@ -30,5 +30,5 @@ returns a lower-bound total. Progress renderers can show that as `10,000+`
 Source Items without treating it as a percentage denominator.
 
 If Commercetools omits a usable non-negative `total`, or the count request
-fails, the source `countTotal` fails with `SourcePluginError`. Runtime progress
+fails, the source `countTotal` fails with `SourceError`. Runtime progress
 then reports an unknown total and continues the migration run normally.

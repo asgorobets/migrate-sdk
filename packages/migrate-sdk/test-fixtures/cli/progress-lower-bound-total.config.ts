@@ -3,9 +3,9 @@ import {
   InMemoryMigrationStore,
   MigrationDefinition,
   MigrationDefinitionRegistry,
+  Source,
   SourceIdentity,
   SourceItemTotal,
-  SourcePlugin,
   toMigrationDefinitionId,
 } from "migrate-sdk";
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
@@ -16,7 +16,7 @@ const EntrySourceIdentity = SourceIdentity.make({
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 const store = InMemoryMigrationStore.layer();
-const source = SourcePlugin.make({
+const source = Source.make({
   cursorSchema: Schema.Null,
   countTotal: () =>
     Effect.succeed(

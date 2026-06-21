@@ -2,16 +2,16 @@
 // biome-ignore-all lint/performance/noBarrelFile: Core subpath intentionally avoids optional source and store implementations.
 
 export type {
-  ConfiguredSourcePlugin,
+  ConfiguredSource,
   SourcePayloadSchema,
-  SourcePluginFactoryInput,
-  SourcePluginImplementation,
-  SourcePluginInput,
+  SourceFactoryInput,
+  SourceImplementation,
+  SourceMakeInput,
   SourceReadResultInput,
 } from "./domain/definition.ts";
 export {
   MigrationDefinition,
-  SourcePlugin,
+  Source,
 } from "./domain/definition.ts";
 
 export {

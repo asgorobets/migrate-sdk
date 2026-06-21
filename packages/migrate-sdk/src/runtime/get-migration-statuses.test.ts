@@ -1,20 +1,20 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Schedule, Schema } from "effect";
 import {
-  type ConfiguredSourcePlugin,
+  type ConfiguredSource,
   DuplicateSourceIdentityStatusWarning,
   InMemoryMigrationStore,
-  InMemorySourcePlugin,
+  InMemorySource,
   InvalidSourceItemStatusWarning,
   MigrationDefinition,
   type MigrationItemState,
   MigrationStatusRequestError,
   MigrationStore,
   MigrationStoreError,
+  Source,
+  SourceError,
   SourceIdentity,
   type SourceIdentitySnapshotKey,
-  SourcePlugin,
-  SourcePluginError,
   toEncodedSourceCursor,
   toMigrationDefinitionId,
   toMigrationRunId,
@@ -32,11 +32,11 @@ const ArticleSourceIdentity = SourceIdentity.make({
 });
 
 const failingSource = {
-  layer: Layer.sync(SourcePlugin, () => {
-    throw new Error("durable-only status must not initialize source plugins");
+  layer: Layer.sync(Source, () => {
+    throw new Error("durable-only status must not initialize sources");
   }),
   sourceSchema: ArticleSource,
-} as unknown as ConfiguredSourcePlugin<
+} as unknown as ConfiguredSource<
   typeof ArticleSource.Type,
   unknown,
   string,
@@ -61,7 +61,7 @@ const makeStatusScanDefinition = <
   SourceInput,
 >(
   store: ReturnType<typeof InMemoryMigrationStore.layer>,
-  source: ConfiguredSourcePlugin<Source, Cursor, IdentityKey, SourceInput>,
+  source: ConfiguredSource<Source, Cursor, IdentityKey, SourceInput>,
   id = "articles"
 ) =>
   MigrationDefinition.make({
@@ -87,7 +87,7 @@ const makeObservableSource = ({
     readonly events: string[];
   };
 }) =>
-  SourcePlugin.make({
+  Source.make({
     cursorSchema: Schema.Struct({
       offset: Schema.Number,
     }),
@@ -338,7 +338,7 @@ describe("getMigrationStatuses", () => {
         const runId = toMigrationRunId("run-1");
         const updatedAt = new Date("2026-01-01T00:00:02.000Z");
         const storeState = InMemoryMigrationStore.makeState();
-        const sourceState = InMemorySourcePlugin.makeState();
+        const sourceState = InMemorySource.makeState();
         const storedCursor = toEncodedSourceCursor('{"offset":1}');
         const migratedState: MigrationItemState = {
           definitionId,
@@ -361,7 +361,7 @@ describe("getMigrationStatuses", () => {
         );
         const definition = makeStatusScanDefinition(
           InMemoryMigrationStore.layer(storeState),
-          InMemorySourcePlugin.make({
+          InMemorySource.make({
             batchSize: 1,
             identity: ArticleSourceIdentity,
             items: [
@@ -463,7 +463,7 @@ describe("getMigrationStatuses", () => {
       });
       const definition = makeStatusScanDefinition(
         store,
-        InMemorySourcePlugin.make({
+        InMemorySource.make({
           identity: ArticleSourceIdentity,
           items: [
             {
@@ -538,7 +538,7 @@ describe("getMigrationStatuses", () => {
         }
         const definition = makeStatusScanDefinition(
           InMemoryMigrationStore.layer(storeState),
-          InMemorySourcePlugin.make({
+          InMemorySource.make({
             identity: ArticleSourceIdentity,
             items: [
               {
@@ -642,7 +642,7 @@ describe("getMigrationStatuses", () => {
         });
         const definition = makeStatusScanDefinition(
           InMemoryMigrationStore.layer(InMemoryMigrationStore.makeState()),
-          InMemorySourcePlugin.make({
+          InMemorySource.make({
             identity: businessAddressIdentity,
             sourceSchema: BusinessAddress,
             items: [
@@ -699,42 +699,40 @@ describe("getMigrationStatuses", () => {
       })
   );
 
-  it.effect(
-    "fails with source plugin errors when inventory cannot be read",
-    () =>
-      Effect.gen(function* () {
-        const definition = makeStatusScanDefinition(
-          InMemoryMigrationStore.layer(),
-          InMemorySourcePlugin.make({
-            identity: ArticleSourceIdentity,
-            items: [
-              {
-                identityKey: "article-1",
-                item: { title: "First article" },
-                version: "source-version-1",
-              },
-            ],
-            sourceSchema: ArticleSource,
-            transientFailures: { read: 1 },
-          })
-        );
+  it.effect("fails with source errors when inventory cannot be read", () =>
+    Effect.gen(function* () {
+      const definition = makeStatusScanDefinition(
+        InMemoryMigrationStore.layer(),
+        InMemorySource.make({
+          identity: ArticleSourceIdentity,
+          items: [
+            {
+              identityKey: "article-1",
+              item: { title: "First article" },
+              version: "source-version-1",
+            },
+          ],
+          sourceSchema: ArticleSource,
+          transientFailures: { read: 1 },
+        })
+      );
 
-        const error = yield* getMigrationStatuses({
-          definitions: [definition],
-          scanSource: true,
-        }).pipe(Effect.flip);
+      const error = yield* getMigrationStatuses({
+        definitions: [definition],
+        scanSource: true,
+      }).pipe(Effect.flip);
 
-        expect(error).toBeInstanceOf(SourcePluginError);
-        expect(error.message).toBe("In-memory source read failed transiently");
-      })
+      expect(error).toBeInstanceOf(SourceError);
+      expect(error.message).toBe("In-memory source read failed transiently");
+    })
   );
 
   it.effect("applies source cursor retry wrappers during source scans", () =>
     Effect.gen(function* () {
-      const sourceState = InMemorySourcePlugin.makeState();
+      const sourceState = InMemorySource.makeState();
       const definition = MigrationDefinition.make({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: InMemorySource.make({
           identity: ArticleSourceIdentity,
           items: [
             {

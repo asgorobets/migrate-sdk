@@ -34,7 +34,7 @@ describe("api source example", () => {
       expect(
         result.inspection.commandFields.map((fields) => fields.title)
       ).toEqual([
-        "Composable source plugins",
+        "Composable sources",
         "List plus detail API stitching",
         "Bounded detail fetches",
       ]);

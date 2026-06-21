@@ -2,13 +2,13 @@ import { Effect, Layer, type Schema } from "effect";
 import type { MigrationReferenceLookup } from "../services/migration-reference-lookup.ts";
 import type { MigrationStore } from "../services/migration-store.ts";
 import {
-  type AnySourcePlugin,
-  type SourcePlugin as SourcePluginContract,
-  SourcePlugin as SourcePluginService,
-} from "../services/source-plugin.ts";
+  type AnySource,
+  type Source as SourceContract,
+  Source as SourceService,
+} from "../services/source.ts";
 import type { Tracking } from "../services/tracking.ts";
 import type { MigrationStoreError, SkipItem } from "./errors.ts";
-import { SourcePluginError } from "./errors.ts";
+import { SourceError } from "./errors.ts";
 import type {
   MigrationExecutionOptions,
   NormalizedMigrationExecutionOptions,
@@ -43,38 +43,34 @@ import {
 } from "./source.ts";
 import type { TrackingRecordContract } from "./tracking.ts";
 
-const configuredSourcePluginTypeId: unique symbol = Symbol.for(
-  "@migrate-sdk/ConfiguredSourcePlugin"
+const configuredSourceTypeId: unique symbol = Symbol.for(
+  "@migrate-sdk/ConfiguredSource"
 );
 
-export type SourcePayloadSchema<Source, SourceInput = unknown> = Schema.Codec<
-  Source,
+export type SourcePayloadSchema<A, SourceInput = unknown> = Schema.Codec<
+  A,
   SourceInput,
   never,
   never
 >;
 
-export type SourcePlugin<
-  Source,
+export type Source<
+  A,
   Cursor,
-  SourceInput = Source,
+  SourceInput = A,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-> = SourcePluginContract<Source, Cursor, SourceInput, IdentityKey>;
+> = SourceContract<A, Cursor, SourceInput, IdentityKey>;
 
-export interface ConfiguredSourcePlugin<
-  Source,
+export interface ConfiguredSource<
+  A,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  SourceInput = Source,
+  SourceInput = A,
   SourceLayerError = never,
   SourceRequirements = never,
 > {
   readonly identity: SourceIdentityDefinition<IdentityKey>;
-  readonly layer: Layer.Layer<
-    AnySourcePlugin,
-    SourceLayerError,
-    SourceRequirements
-  >;
+  readonly layer: Layer.Layer<AnySource, SourceLayerError, SourceRequirements>;
   readonly provide: <
     ProvidedRequirements,
     ProvidedError,
@@ -85,8 +81,8 @@ export interface ConfiguredSourcePlugin<
       ProvidedError,
       RemainingRequirements
     >
-  ) => ConfiguredSourcePlugin<
-    Source,
+  ) => ConfiguredSource<
+    A,
     Cursor,
     IdentityKey,
     SourceInput,
@@ -94,92 +90,85 @@ export interface ConfiguredSourcePlugin<
     RemainingRequirements | Exclude<SourceRequirements, ProvidedRequirements>
   >;
   readonly sourceIdentityContractFingerprint: SourceIdentityDefinition<IdentityKey>["fingerprint"];
-  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceSchema: SourcePayloadSchema<A, SourceInput>;
   readonly sourceVersionContractFingerprint: SourceVersionContractFingerprint;
-  readonly [configuredSourcePluginTypeId]: {
+  readonly [configuredSourceTypeId]: {
     readonly cursor: Cursor;
     readonly identityKey: IdentityKey;
-    readonly source: Source;
+    readonly source: A;
     readonly sourceLayerError: SourceLayerError;
     readonly sourceRequirements: SourceRequirements;
     readonly sourceInput: SourceInput;
   };
 }
 
-export interface SourcePluginImplementation<
-  Source,
+export interface SourceImplementation<
+  A,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  SourceInput = Source,
+  SourceInput = A,
 > {
-  readonly countTotal?: () => Effect.Effect<
-    SourceItemTotalInput,
-    SourcePluginError
-  >;
+  readonly countTotal?: () => Effect.Effect<SourceItemTotalInput, SourceError>;
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
   ) => Effect.Effect<
     SourceReadResultInput<SourceInput, Cursor, IdentityKey>,
-    SourcePluginError
+    SourceError
   >;
   readonly readByIdentity: (
     identity: SourceIdentityTarget<IdentityKey>
   ) => Effect.Effect<
     SourceItemInput<SourceInput, IdentityKey> | null,
-    SourcePluginError
+    SourceError
   >;
 }
 
-export interface SourcePluginInput<
-  Source,
+export interface SourceMakeInput<
+  A,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  SourceInput = Source,
-> extends SourcePluginImplementation<Source, Cursor, IdentityKey, SourceInput> {
+  SourceInput = A,
+> extends SourceImplementation<A, Cursor, IdentityKey, SourceInput> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly sourceIdentityContractFingerprint?: SourceIdentityDefinition<IdentityKey>["fingerprint"];
-  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceSchema: SourcePayloadSchema<A, SourceInput>;
   readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
 }
 
-export interface SourcePluginFactoryInput<
-  Source,
+export interface SourceFactoryInput<
+  A,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  SourceInput = Source,
+  SourceInput = A,
 > {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
-  readonly make: () => SourcePluginImplementation<
-    Source,
+  readonly make: () => SourceImplementation<
+    A,
     Cursor,
     IdentityKey,
     SourceInput
   >;
   readonly sourceIdentityContractFingerprint?: SourceIdentityDefinition<IdentityKey>["fingerprint"];
-  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceSchema: SourcePayloadSchema<A, SourceInput>;
   readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
 }
 
-export interface SourcePluginLayerInput<
-  Source,
+export interface SourceLayerInput<
+  A,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  SourceInput = Source,
+  SourceInput = A,
   SourceLayerError = never,
   SourceRequirements = never,
 > {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
-  readonly layer: Layer.Layer<
-    AnySourcePlugin,
-    SourceLayerError,
-    SourceRequirements
-  >;
+  readonly layer: Layer.Layer<AnySource, SourceLayerError, SourceRequirements>;
   readonly sourceIdentityContractFingerprint?: SourceIdentityDefinition<IdentityKey>["fingerprint"];
-  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceSchema: SourcePayloadSchema<A, SourceInput>;
   readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
 }
 
@@ -192,31 +181,31 @@ export interface SourceReadResultInput<
   readonly nextCursor?: Cursor | undefined;
 }
 
-const makeConfiguredSourcePlugin = <
-  Source,
+const makeConfiguredSource = <
+  A,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  SourceInput = Source,
+  SourceInput = A,
   SourceLayerError = never,
   SourceRequirements = never,
 >(
-  input: SourcePluginLayerInput<
-    Source,
+  input: SourceLayerInput<
+    A,
     Cursor,
     IdentityKey,
     SourceInput,
     SourceLayerError,
     SourceRequirements
   >
-): ConfiguredSourcePlugin<
-  Source,
+): ConfiguredSource<
+  A,
   Cursor,
   IdentityKey,
   SourceInput,
   SourceLayerError,
   SourceRequirements
 > => ({
-  [configuredSourcePluginTypeId]: undefined as never,
+  [configuredSourceTypeId]: undefined as never,
   identity: input.identity,
   layer: input.layer,
   provide: <ProvidedRequirements, ProvidedError, RemainingRequirements>(
@@ -226,8 +215,8 @@ const makeConfiguredSourcePlugin = <
       RemainingRequirements
     >
   ) =>
-    makeConfiguredSourcePlugin<
-      Source,
+    makeConfiguredSource<
+      A,
       Cursor,
       IdentityKey,
       SourceInput,
@@ -259,16 +248,16 @@ const makeConfiguredSourcePlugin = <
     defaultSourceVersionContractFingerprint,
 });
 
-const makeSourcePlugin = <
-  Source,
+const makeSource = <
+  A,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput = Source,
+  SourceInput = A,
 >(
   input:
-    | SourcePluginFactoryInput<Source, Cursor, IdentityKey, SourceInput>
-    | SourcePluginInput<Source, Cursor, IdentityKey, SourceInput>
-): ConfiguredSourcePlugin<Source, Cursor, IdentityKey, SourceInput> => {
+    | SourceFactoryInput<A, Cursor, IdentityKey, SourceInput>
+    | SourceMakeInput<A, Cursor, IdentityKey, SourceInput>
+): ConfiguredSource<A, Cursor, IdentityKey, SourceInput> => {
   const makeImplementation =
     "make" in input
       ? input.make
@@ -281,11 +270,11 @@ const makeSourcePlugin = <
             : { countTotal: input.countTotal }),
         });
 
-  return makeConfiguredSourcePlugin({
+  return makeConfiguredSource({
     cursorSchema: input.cursorSchema,
     layer: Layer.sync(
-      SourcePluginService,
-      (): SourcePluginContract<Source, Cursor, SourceInput, IdentityKey> => {
+      SourceService,
+      (): SourceContract<A, Cursor, SourceInput, IdentityKey> => {
         const implementation = makeImplementation();
         const countTotal = implementation.countTotal;
 
@@ -344,34 +333,34 @@ const makeSourcePlugin = <
   });
 };
 
-const sourcePluginFromLayer = <
-  Source,
+const sourceFromLayer = <
+  A,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput = Source,
+  SourceInput = A,
   SourceLayerError = never,
   SourceRequirements = never,
 >(
-  input: SourcePluginLayerInput<
-    Source,
+  input: SourceLayerInput<
+    A,
     Cursor,
     IdentityKey,
     SourceInput,
     SourceLayerError,
     SourceRequirements
   >
-): ConfiguredSourcePlugin<
-  Source,
+): ConfiguredSource<
+  A,
   Cursor,
   IdentityKey,
   SourceInput,
   SourceLayerError,
   SourceRequirements
-> => makeConfiguredSourcePlugin(input);
+> => makeConfiguredSource(input);
 
-export const SourcePlugin = Object.assign(SourcePluginService, {
-  fromLayer: sourcePluginFromLayer,
-  make: makeSourcePlugin,
+export const Source = Object.assign(SourceService, {
+  fromLayer: sourceFromLayer,
+  make: makeSource,
 });
 
 const normalizeSourceReadResult = <
@@ -383,7 +372,7 @@ const normalizeSourceReadResult = <
   identity: SourceIdentityDefinition<IdentityKey>
 ): Effect.Effect<
   SourceReadResult<SourceInput, Cursor, IdentityKey>,
-  SourcePluginError
+  SourceError
 > =>
   Effect.gen(function* () {
     const items = yield* Effect.forEach(result.items, (item) =>
@@ -405,13 +394,13 @@ const normalizeSourceLookupResult = <
   item: SourceItemInput<SourceInput, IdentityKey>,
   definition: SourceIdentityDefinition<IdentityKey>,
   target: SourceIdentityTarget<IdentityKey>
-): Effect.Effect<SourceItem<SourceInput, IdentityKey>, SourcePluginError> =>
+): Effect.Effect<SourceItem<SourceInput, IdentityKey>, SourceError> =>
   makeSourceItemEffect(item, definition).pipe(
     Effect.flatMap((sourceItem) =>
       sourceItem.identity.encoded === target.encoded
         ? Effect.succeed(sourceItem)
         : Effect.fail(
-            new SourcePluginError({
+            new SourceError({
               message:
                 "Source identity lookup returned a different Source Identity",
               cause: {
@@ -424,8 +413,8 @@ const normalizeSourceLookupResult = <
   );
 
 export type SourceRetryStrategy = <A>(
-  effect: Effect.Effect<A, SourcePluginError>
-) => Effect.Effect<A, SourcePluginError>;
+  effect: Effect.Effect<A, SourceError>
+) => Effect.Effect<A, SourceError>;
 
 export type ProcessPipeline<
   Source,
@@ -468,7 +457,7 @@ export interface MigrationDefinition<
   readonly id: MigrationDefinitionId;
   readonly process: ProcessPipeline<Source, PipelineError, IdentityKey>;
   readonly rollback?: RollbackPipeline<RollbackPipelineError>;
-  readonly source: ConfiguredSourcePlugin<
+  readonly source: ConfiguredSource<
     Source,
     Cursor,
     IdentityKey,

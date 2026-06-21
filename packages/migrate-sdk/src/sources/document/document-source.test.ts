@@ -10,8 +10,8 @@ import {
   MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
+  SourceError,
   SourceItemTotal,
-  SourcePluginError,
 } from "migrate-sdk";
 import {
   type DocumentFetcher,
@@ -19,12 +19,12 @@ import {
   type DocumentFetchResult,
   type DocumentParser,
   DocumentParsers,
+  DocumentSource,
   type DocumentSourceDirectLookupResult,
-  DocumentSourcePlugin,
 } from "migrate-sdk/sources/document";
 import { expectTypeOf } from "vitest";
 import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
-import { SourcePlugin } from "../../services/source-plugin.ts";
+import { Source } from "../../services/source.ts";
 import { runInlineDefinition } from "../../test-support/inline-registry-execution.ts";
 
 const CompanyContact = Schema.Struct({
@@ -90,11 +90,8 @@ interface ApiPostsState {
 class ApiPosts extends Service<
   ApiPosts,
   {
-    readonly getPost: (id: number) => Effect.Effect<ApiPost, SourcePluginError>;
-    readonly listPostIds: () => Effect.Effect<
-      readonly number[],
-      SourcePluginError
-    >;
+    readonly getPost: (id: number) => Effect.Effect<ApiPost, SourceError>;
+    readonly listPostIds: () => Effect.Effect<readonly number[], SourceError>;
   }
 >()("@migrate-sdk/test/ApiPosts") {}
 
@@ -111,7 +108,7 @@ const makeApiPostsLayer = (state: ApiPostsState): Layer.Layer<ApiPosts> =>
         const post = posts.get(id);
 
         if (post === undefined) {
-          return yield* new SourcePluginError({
+          return yield* new SourceError({
             message: "Post was not found",
             cause: { id },
           });
@@ -197,7 +194,7 @@ const writeCompaniesFile = (filePath: string) =>
     );
   });
 
-describe("DocumentSourcePlugin", () => {
+describe("DocumentSource", () => {
   it("includes value version contract ids in the source version contract fingerprint", () => {
     const fetcher: DocumentFetcher<string, null> = {
       cursorSchema: Schema.Null,
@@ -207,7 +204,7 @@ describe("DocumentSourcePlugin", () => {
         }),
     };
     const makeSource = (versionId: string) =>
-      DocumentSourcePlugin.make({
+      DocumentSource.make({
         fetcher,
         parser: DocumentParsers.json(CompaniesDocument),
         selector: {
@@ -240,7 +237,7 @@ describe("DocumentSourcePlugin", () => {
           detailCalls: [],
           listCalls: 0,
         };
-        const source = DocumentSourcePlugin.make({
+        const source = DocumentSource.make({
           fetcher: DocumentFetchers.effect({
             cursorSchema: Schema.Null,
             read: () =>
@@ -279,8 +276,8 @@ describe("DocumentSourcePlugin", () => {
             value: ({ item }) => item.title,
           },
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const read = yield* plugin.read(null);
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        const read = yield* sourceService.read(null);
 
         expect(
           read.items.map((item) => ({
@@ -314,7 +311,7 @@ describe("DocumentSourcePlugin", () => {
       const filePath = path.join(directory, "companies.json");
       yield* writeCompaniesFile(filePath);
 
-      const source = DocumentSourcePlugin.make({
+      const source = DocumentSource.make({
         fetcher: DocumentFetchers.fileText({
           path: filePath,
           platform: testPlatformLayer,
@@ -334,8 +331,8 @@ describe("DocumentSourcePlugin", () => {
           value: ({ item }) => item.status,
         },
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const read = yield* plugin.read(null);
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const read = yield* sourceService.read(null);
 
       expect(
         read.items.map((sourceItem) => sourceItem.identity.encoded)
@@ -369,7 +366,7 @@ describe("DocumentSourcePlugin", () => {
       const filePath = path.join(directory, "companies.json");
       yield* writeCompaniesFile(filePath);
 
-      const source = DocumentSourcePlugin.make({
+      const source = DocumentSource.make({
         fetcher: DocumentFetchers.fileText({
           path: filePath,
           platform: testPlatformLayer,
@@ -391,11 +388,11 @@ describe("DocumentSourcePlugin", () => {
         lookup: { kind: "scan" },
         version: { kind: "content-hash" },
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const read = yield* plugin.read(null);
-      const found = yield* plugin.readByIdentity(
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const read = yield* sourceService.read(null);
+      const found = yield* sourceService.readByIdentity(
         SourceIdentity.fromEncoded(
-          plugin.identity,
+          sourceService.identity,
           toEncodedSourceIdentity(JSON.stringify(["BU-200", "CONTACT-200-1"]))
         )
       );
@@ -420,7 +417,7 @@ describe("DocumentSourcePlugin", () => {
     () =>
       Effect.gen(function* () {
         let readCalls = 0;
-        const source = DocumentSourcePlugin.make({
+        const source = DocumentSource.make({
           countTotal: () => Effect.succeed(42),
           fetcher: {
             cursorSchema: Schema.Null,
@@ -451,13 +448,13 @@ describe("DocumentSourcePlugin", () => {
             value: ({ item }) => item.status,
           },
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-        if (plugin.countTotal === undefined) {
+        if (sourceService.countTotal === undefined) {
           throw new Error("Expected document source total count");
         }
 
-        const total = yield* plugin.countTotal();
+        const total = yield* sourceService.countTotal();
 
         expect(total).toEqual(SourceItemTotal.known(42));
         expect(readCalls).toBe(0);
@@ -468,7 +465,7 @@ describe("DocumentSourcePlugin", () => {
     "lets total callbacks count final selected items from a source resource",
     () =>
       Effect.gen(function* () {
-        const source = DocumentSourcePlugin.make({
+        const source = DocumentSource.make({
           countTotal: ({ countResource }) =>
             countResource({
               resource: JSON.stringify({
@@ -495,7 +492,7 @@ describe("DocumentSourcePlugin", () => {
             cursorSchema: Schema.Null,
             read: () =>
               Effect.fail(
-                new SourcePluginError({
+                new SourceError({
                   message: "Count callback should not use source read",
                 })
               ),
@@ -515,13 +512,13 @@ describe("DocumentSourcePlugin", () => {
             value: ({ item }) => item.status,
           },
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-        if (plugin.countTotal === undefined) {
+        if (sourceService.countTotal === undefined) {
           throw new Error("Expected document source total count");
         }
 
-        const total = yield* plugin.countTotal();
+        const total = yield* sourceService.countTotal();
 
         expect(total).toEqual(SourceItemTotal.known(2));
       })
@@ -537,7 +534,7 @@ describe("DocumentSourcePlugin", () => {
       const filePath = path.join(directory, "companies.json");
       yield* writeCompaniesFile(filePath);
 
-      const source = DocumentSourcePlugin.make({
+      const source = DocumentSource.make({
         fetcher: DocumentFetchers.fileText({
           path: filePath,
           platform: testPlatformLayer,
@@ -557,13 +554,13 @@ describe("DocumentSourcePlugin", () => {
           value: ({ item }) => item.status,
         },
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-      if (plugin.countTotal === undefined) {
+      if (sourceService.countTotal === undefined) {
         throw new Error("Expected document source total count");
       }
 
-      const total = yield* plugin.countTotal();
+      const total = yield* sourceService.countTotal();
 
       expect(total).toEqual(SourceItemTotal.known(2));
     }).pipe(Effect.provide(testPlatformLayer))
@@ -579,7 +576,7 @@ describe("DocumentSourcePlugin", () => {
       const filePath = path.join(directory, "companies.json");
       yield* writeCompaniesFile(filePath);
 
-      const source = DocumentSourcePlugin.make({
+      const source = DocumentSource.make({
         fetcher: DocumentFetchers.fileText({
           path: filePath,
           platform: testPlatformLayer,
@@ -596,13 +593,13 @@ describe("DocumentSourcePlugin", () => {
         lookup: { kind: "scan" },
         version: { kind: "content-hash" },
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-      if (plugin.countTotal === undefined) {
+      if (sourceService.countTotal === undefined) {
         throw new Error("Expected document source total count");
       }
 
-      const total = yield* plugin.countTotal();
+      const total = yield* sourceService.countTotal();
 
       expect(total).toEqual(SourceItemTotal.known(3));
     }).pipe(Effect.provide(testPlatformLayer))
@@ -635,7 +632,7 @@ describe("DocumentSourcePlugin", () => {
               };
             }),
         };
-        const source = DocumentSourcePlugin.make({
+        const source = DocumentSource.make({
           fetcher,
           parser: DocumentParsers.json(PageDocument),
           selector: {
@@ -652,9 +649,9 @@ describe("DocumentSourcePlugin", () => {
             value: ({ item }) => item.version,
           },
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
 
-        expect(plugin.countTotal).toBeUndefined();
+        expect(sourceService.countTotal).toBeUndefined();
         expect(readCalls).toBe(0);
       })
   );
@@ -663,12 +660,12 @@ describe("DocumentSourcePlugin", () => {
     "continues migration execution when document total count fails",
     () =>
       Effect.gen(function* () {
-        const countError = new SourcePluginError({
+        const countError = new SourceError({
           message: "Manifest count failed",
         });
         const progressEvents: MigrationProgressEvent[] = [];
         const storeState = InMemoryMigrationStore.makeState();
-        const source = DocumentSourcePlugin.make({
+        const source = DocumentSource.make({
           countTotal: () => Effect.fail(countError),
           fetcher: {
             cursorSchema: Schema.Null,
@@ -766,7 +763,7 @@ describe("DocumentSourcePlugin", () => {
           })
         );
 
-        const source = DocumentSourcePlugin.make({
+        const source = DocumentSource.make({
           fetcher: DocumentFetchers.fileText({
             path: filePath,
             platform: testPlatformLayer,
@@ -782,8 +779,8 @@ describe("DocumentSourcePlugin", () => {
           lookup: { kind: "scan" },
           version: { kind: "content-hash" },
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const read = yield* plugin.read(null);
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        const read = yield* sourceService.read(null);
 
         expect(read.items[0]?.identity.encoded).toBe("sku-1");
         expect(read.items[0]?.item.item.inventory).toBe(42n);
@@ -800,7 +797,7 @@ describe("DocumentSourcePlugin", () => {
           cursorSchema: Schema.Null,
           read: () =>
             Effect.fail(
-              new SourcePluginError({
+              new SourceError({
                 message: "Direct lookup should not use scan fetcher read",
               })
             ),
@@ -813,7 +810,7 @@ describe("DocumentSourcePlugin", () => {
               Effect.map((document) => [document]),
               Effect.mapError(
                 (cause) =>
-                  new SourcePluginError({
+                  new SourceError({
                     cause,
                     message: "Object resource did not match document schema",
                   })
@@ -835,7 +832,7 @@ describe("DocumentSourcePlugin", () => {
           DocumentFetchResult<ObjectResource, null>
         >();
 
-        const source = DocumentSourcePlugin.make({
+        const source = DocumentSource.make({
           fetcher,
           parser,
           selector: {
@@ -855,10 +852,10 @@ describe("DocumentSourcePlugin", () => {
             value: ({ item }) => item.version,
           },
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const found = yield* plugin.readByIdentity(
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        const found = yield* sourceService.readByIdentity(
           SourceIdentity.fromEncoded(
-            plugin.identity,
+            sourceService.identity,
             toEncodedSourceIdentity("item-1")
           )
         );
@@ -876,12 +873,12 @@ describe("DocumentSourcePlugin", () => {
           cursorSchema: Schema.Null,
           read: () =>
             Effect.fail(
-              new SourcePluginError({
+              new SourceError({
                 message: "Direct lookup should not use scan fetcher read",
               })
             ),
         };
-        const source = DocumentSourcePlugin.make({
+        const source = DocumentSource.make({
           fetcher,
           parser: DocumentParsers.json(CompaniesDocument),
           selector: {
@@ -924,16 +921,16 @@ describe("DocumentSourcePlugin", () => {
             value: ({ item }) => item.email,
           },
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const found = yield* plugin.readByIdentity(
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        const found = yield* sourceService.readByIdentity(
           SourceIdentity.fromEncoded(
-            plugin.identity,
+            sourceService.identity,
             toEncodedSourceIdentity(JSON.stringify(["BU-200", "CONTACT-200-1"]))
           )
         );
-        const missing = yield* plugin.readByIdentity(
+        const missing = yield* sourceService.readByIdentity(
           SourceIdentity.fromEncoded(
-            plugin.identity,
+            sourceService.identity,
             toEncodedSourceIdentity(JSON.stringify(["BU-200", "missing"]))
           )
         );
@@ -957,7 +954,7 @@ describe("DocumentSourcePlugin", () => {
         const filePath = path.join(directory, "companies.json");
         yield* writeCompaniesFile(filePath);
 
-        const source = DocumentSourcePlugin.make({
+        const source = DocumentSource.make({
           batchSize: 2,
           fetcher: DocumentFetchers.fileText({
             path: filePath,
@@ -979,9 +976,9 @@ describe("DocumentSourcePlugin", () => {
             value: ({ item }) => item.email,
           },
         });
-        const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-        const first = yield* plugin.read(null);
-        const second = yield* plugin.read(first.nextCursor ?? null);
+        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        const first = yield* sourceService.read(null);
+        const second = yield* sourceService.read(first.nextCursor ?? null);
 
         expect(
           first.items.map((sourceItem) => sourceItem.identity.encoded)
@@ -1027,7 +1024,7 @@ describe("DocumentSourcePlugin", () => {
                 }
           ),
       };
-      const source = DocumentSourcePlugin.make({
+      const source = DocumentSource.make({
         fetcher,
         parser: {
           documentSchema: PageDocument,
@@ -1051,9 +1048,9 @@ describe("DocumentSourcePlugin", () => {
           value: ({ item }) => item.version,
         },
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const emptyPage = yield* plugin.read(null);
-      const nextPage = yield* plugin.read(emptyPage.nextCursor ?? null);
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const emptyPage = yield* sourceService.read(null);
+      const nextPage = yield* sourceService.read(emptyPage.nextCursor ?? null);
 
       expect(emptyPage.items).toEqual([]);
       expect(emptyPage.nextCursor).toEqual({
@@ -1093,7 +1090,7 @@ describe("DocumentSourcePlugin", () => {
         cursorSchema: Schema.Null,
         read: () => Effect.succeed({ resource: duplicatedResource }),
       };
-      const source = DocumentSourcePlugin.make({
+      const source = DocumentSource.make({
         fetcher,
         parser: DocumentParsers.json(CompaniesDocument),
         selector: {
@@ -1113,12 +1110,12 @@ describe("DocumentSourcePlugin", () => {
           value: ({ item }) => item.status,
         },
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const readExit = yield* Effect.exit(plugin.read(null));
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const readExit = yield* Effect.exit(sourceService.read(null));
       const lookupExit = yield* Effect.exit(
-        plugin.readByIdentity(
+        sourceService.readByIdentity(
           SourceIdentity.fromEncoded(
-            plugin.identity,
+            sourceService.identity,
             toEncodedSourceIdentity("BU-DUP")
           )
         )
@@ -1145,7 +1142,7 @@ describe("DocumentSourcePlugin", () => {
         cursorSchema: Schema.Null,
         read: () => Effect.succeed({ resource: "{not-json" }),
       };
-      const source = DocumentSourcePlugin.make({
+      const source = DocumentSource.make({
         fetcher,
         parser: DocumentParsers.json(CompaniesDocument),
         selector: {
@@ -1169,17 +1166,17 @@ describe("DocumentSourcePlugin", () => {
           value: ({ item }) => item.status,
         },
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const error = yield* plugin
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const error = yield* sourceService
         .readByIdentity(
           SourceIdentity.fromEncoded(
-            plugin.identity,
+            sourceService.identity,
             toEncodedSourceIdentity("BU-100")
           )
         )
         .pipe(Effect.flip);
 
-      expect(error).toBeInstanceOf(SourcePluginError);
+      expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe("Unable to parse document source resource");
       expect(error.cause).toEqual(
         expect.objectContaining({
@@ -1192,13 +1189,13 @@ describe("DocumentSourcePlugin", () => {
     })
   );
 
-  it.effect("preserves direct lookup source plugin failures", () =>
+  it.effect("preserves direct lookup source failures", () =>
     Effect.gen(function* () {
       const fetcher: DocumentFetcher<string, null> = {
         cursorSchema: Schema.Null,
         read: () => Effect.succeed({ resource: "{}" }),
       };
-      const source = DocumentSourcePlugin.make({
+      const source = DocumentSource.make({
         fetcher,
         parser: DocumentParsers.json(CompaniesDocument),
         selector: {
@@ -1212,7 +1209,7 @@ describe("DocumentSourcePlugin", () => {
           kind: "direct",
           read: () =>
             Effect.fail(
-              new SourcePluginError({
+              new SourceError({
                 message: "Direct lookup failed",
               })
             ),
@@ -1223,17 +1220,17 @@ describe("DocumentSourcePlugin", () => {
           value: ({ item }) => item.status,
         },
       });
-      const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
-      const error = yield* plugin
+      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      const error = yield* sourceService
         .readByIdentity(
           SourceIdentity.fromEncoded(
-            plugin.identity,
+            sourceService.identity,
             toEncodedSourceIdentity("BU-100")
           )
         )
         .pipe(Effect.flip);
 
-      expect(error).toBeInstanceOf(SourcePluginError);
+      expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe("Direct lookup failed");
     })
   );

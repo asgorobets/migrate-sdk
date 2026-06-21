@@ -3,8 +3,8 @@ import {
   InMemoryMigrationStore,
   MigrationDefinition,
   MigrationDefinitionRegistry,
+  Source,
   SourceIdentity,
-  SourcePlugin,
   toMigrationDefinitionId,
 } from "migrate-sdk";
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
@@ -21,7 +21,7 @@ const probe = {
 
 globalThis.__migrateSdkCliTotalCountProbe = probe;
 
-const source = SourcePlugin.make({
+const source = Source.make({
   cursorSchema: Schema.Null,
   countTotal: () =>
     Effect.sync(() => {

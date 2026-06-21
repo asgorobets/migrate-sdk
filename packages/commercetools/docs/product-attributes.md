@@ -3,13 +3,13 @@
 Status: implemented.
 
 Product attribute builders are pure helpers on the Commercetools destination
-capability module. They validate schema-backed attribute bags and project them
-to SDK `Attribute[]` drafts or Product update actions. They do not call
-Commercetools and they do not record Destination Journal entries by themselves.
+Destination. They validate schema-backed attribute bags and project them to SDK
+`Attribute[]` drafts or Product update actions. They do not call Commercetools
+and they do not record Destination Journal entries by themselves.
 
 ## Configure
 
-Use plugin-local provision for the effectful destination helpers, and pass
+Use destination-local provision for the effectful destination helpers, and pass
 Product Type schemas when constructing the module:
 
 ```ts
@@ -37,7 +37,7 @@ const ct = CommercetoolsDestination.make({
 }).provide(commercetoolsSdkLayer);
 ```
 
-Schemas must be same-shape destination schemas. Source plugins own conversion
+Schemas must be same-shape destination schemas. Sources own conversion
 from source-native values; these helpers validate the destination-facing values
 that the process already produced.
 

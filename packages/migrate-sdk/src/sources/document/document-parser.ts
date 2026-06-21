@@ -1,12 +1,12 @@
 import { Effect, Schema } from "effect";
-import { SourcePluginError } from "../../domain/errors.ts";
+import { SourceError } from "../../domain/errors.ts";
 
 export interface DocumentParser<Resource, Document> {
   readonly documentSchema: Schema.Codec<Document, unknown, never, never>;
   readonly name: string;
   readonly parse: (
     resource: Resource
-  ) => Effect.Effect<readonly Document[], SourcePluginError>;
+  ) => Effect.Effect<readonly Document[], SourceError>;
 }
 
 type DocumentParserFailureKind = "document-schema" | "json-syntax";
@@ -21,8 +21,8 @@ interface DocumentParserFailureCause {
 const documentParserError = (
   message: string,
   cause?: DocumentParserFailureCause
-): SourcePluginError =>
-  new SourcePluginError({
+): SourceError =>
+  new SourceError({
     message,
     ...(cause === undefined ? {} : { cause }),
   });

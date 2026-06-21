@@ -6,7 +6,7 @@ import {
   type MigrationRunSummary,
   SourceIdentity,
 } from "migrate-sdk";
-import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
 import { completedInlineExecution } from "./inline-execution.ts";
@@ -102,7 +102,7 @@ export const makeNestedArticleSchemaMigration = () => {
 
   const migration = MigrationDefinition.make({
     id: "nested-articles",
-    source: InMemorySourcePlugin.make({
+    source: InMemorySource.make({
       identity: NestedArticleIdentity,
       items: sourceItems,
       sourceSchema: NestedArticle,

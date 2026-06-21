@@ -1,10 +1,10 @@
 import { Effect, type Layer, Schema } from "effect";
 import {
-  type ConfiguredSourcePlugin,
-  SourcePlugin,
-  type SourcePluginImplementation,
+  type ConfiguredSource,
+  Source,
+  type SourceImplementation,
 } from "../../domain/definition.ts";
-import { SourcePluginError } from "../../domain/errors.ts";
+import { SourceError } from "../../domain/errors.ts";
 import type {
   SourceIdentity,
   SourceIdentityContractFingerprint,
@@ -17,7 +17,7 @@ import {
   type SourceItemInput,
   type SourceLookupStrategy,
 } from "../../domain/source.ts";
-import type { AnySourcePlugin } from "../../services/source-plugin.ts";
+import type { AnySource } from "../../services/source.ts";
 
 export const InMemorySourceCursor = Schema.Struct({
   offset: Schema.Int,
@@ -60,21 +60,21 @@ const makeState = (): InMemorySourceState => ({
   readByIdentityAttempts: 0,
 });
 
-const invalidBatchSizeError = (batchSize: number): SourcePluginError =>
-  new SourcePluginError({
+const invalidBatchSizeError = (batchSize: number): SourceError =>
+  new SourceError({
     message: "In-memory source batchSize must be a positive integer",
     cause: { batchSize },
   });
 
-const transientSourceError = (operation: string): SourcePluginError =>
-  new SourcePluginError({
+const transientSourceError = (operation: string): SourceError =>
+  new SourceError({
     message: `In-memory source ${operation} failed transiently`,
   });
 
 const makeImplementation = <A, IdentityKey extends SourceIdentitySnapshotKey>(
   options: InMemorySourceBaseOptions<A, IdentityKey>,
   identityDefinition: SourceIdentityDefinition<IdentityKey>
-): SourcePluginImplementation<A, InMemorySourceCursor, IdentityKey, A> => {
+): SourceImplementation<A, InMemorySourceCursor, IdentityKey, A> => {
   const items = options.items;
   const batchSize = options.batchSize ?? items.length;
   const lookupStrategy = options.lookupStrategy ?? "direct";
@@ -157,8 +157,8 @@ const makeImplementation = <A, IdentityKey extends SourceIdentitySnapshotKey>(
 
 const make = <A, IdentityKey extends SourceIdentitySnapshotKey>(
   options: InMemorySourceOptions<A, IdentityKey>
-): ConfiguredSourcePlugin<A, InMemorySourceCursor, IdentityKey, unknown> => {
-  return SourcePlugin.make({
+): ConfiguredSource<A, InMemorySourceCursor, IdentityKey, unknown> => {
+  return Source.make({
     cursorSchema: InMemorySourceCursor,
     identity: options.identity,
     make: () => makeImplementation(options, options.identity),
@@ -180,9 +180,9 @@ const make = <A, IdentityKey extends SourceIdentitySnapshotKey>(
 
 const makeLayer = <A, IdentityKey extends SourceIdentitySnapshotKey>(
   options: InMemorySourceOptions<A, IdentityKey>
-): Layer.Layer<AnySourcePlugin> => make(options).layer;
+): Layer.Layer<AnySource> => make(options).layer;
 
-export const InMemorySourcePlugin = {
+export const InMemorySource = {
   layer: makeLayer,
   make,
   makeState,

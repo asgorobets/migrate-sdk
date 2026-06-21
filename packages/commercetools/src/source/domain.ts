@@ -1,7 +1,7 @@
 import type { Effect } from "effect";
 import { Schema } from "effect";
 import {
-  type ConfiguredSourcePlugin,
+  type ConfiguredSource,
   SourceIdentity,
   type SourceIdentityDefinition,
   type SourcePayloadSchema,
@@ -132,8 +132,8 @@ export interface CommercetoolsEntitySourceDescriptor<
   ) => Effect.Effect<Page, CommercetoolsSdkError>;
 }
 
-export type ConfiguredCommercetoolsSourcePlugin<Source, SourceInput> =
-  ConfiguredSourcePlugin<
+export type ConfiguredCommercetoolsSource<Source, SourceInput> =
+  ConfiguredSource<
     Source,
     CommercetoolsSourceCursor,
     CommercetoolsSourceIdentityKey,

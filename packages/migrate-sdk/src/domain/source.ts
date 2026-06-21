@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { SourcePluginError } from "./errors.ts";
+import { SourceError } from "./errors.ts";
 import {
   type EncodedSourceIdentity,
   SourceIdentity,
@@ -40,11 +40,11 @@ export const makeSourceItem = <A, Key extends SourceIdentitySnapshotKey>(
 export const encodeSourceIdentityKey = <Key extends SourceIdentitySnapshotKey>(
   identity: SourceIdentityDefinition<Key>,
   key: Key
-): Effect.Effect<EncodedSourceIdentity, SourcePluginError> =>
+): Effect.Effect<EncodedSourceIdentity, SourceError> =>
   Effect.try({
     try: () => SourceIdentity.fromKey(identity, key).encoded,
     catch: (cause) =>
-      new SourcePluginError({
+      new SourceError({
         message: "Source identity key did not match Source Identity Schema",
         cause,
       }),
@@ -53,11 +53,11 @@ export const encodeSourceIdentityKey = <Key extends SourceIdentitySnapshotKey>(
 export const makeSourceItemEffect = <A, Key extends SourceIdentitySnapshotKey>(
   input: SourceItemInput<A, Key>,
   identity: SourceIdentityDefinition<Key>
-): Effect.Effect<SourceItem<A, Key>, SourcePluginError> =>
+): Effect.Effect<SourceItem<A, Key>, SourceError> =>
   Effect.try({
     try: () => makeSourceItem(input, identity),
     catch: (cause) =>
-      new SourcePluginError({
+      new SourceError({
         message:
           "Source item metadata did not match Source Identity or Source Version schema",
         cause,
@@ -104,7 +104,7 @@ export type SourceItemTotal =
 export type SourceItemTotalInput = number | SourceItemTotal;
 
 const sourceItemTotalCountError = (count: number) =>
-  new SourcePluginError({
+  new SourceError({
     message: "Source Item total must be a non-negative integer",
     cause: { count },
   });
@@ -155,25 +155,23 @@ export const SourceItemTotal = {
 
 export const normalizeSourceItemTotalCount = (
   count: number
-): Effect.Effect<number, SourcePluginError> =>
+): Effect.Effect<number, SourceError> =>
   Effect.try({
     try: () => SourceItemTotal.known(count).count,
     catch: (cause) =>
-      cause instanceof SourcePluginError
-        ? cause
-        : sourceItemTotalCountError(count),
+      cause instanceof SourceError ? cause : sourceItemTotalCountError(count),
   });
 
 export const sourceItemTotalFromCount = (
   count: number
-): Effect.Effect<SourceItemTotal, SourcePluginError> =>
+): Effect.Effect<SourceItemTotal, SourceError> =>
   normalizeSourceItemTotalCount(count).pipe(
     Effect.map((normalizedCount) => SourceItemTotal.known(normalizedCount))
   );
 
 export const normalizeSourceItemTotal = (
   total: SourceItemTotal
-): Effect.Effect<SourceItemTotal, SourcePluginError> => {
+): Effect.Effect<SourceItemTotal, SourceError> => {
   switch (total.kind) {
     case "known":
       return sourceItemTotalFromCount(total.count);
@@ -197,7 +195,7 @@ export const normalizeSourceItemTotal = (
 
 export const normalizeSourceItemTotalInput = (
   total: SourceItemTotalInput
-): Effect.Effect<SourceItemTotal, SourcePluginError> =>
+): Effect.Effect<SourceItemTotal, SourceError> =>
   typeof total === "number"
     ? sourceItemTotalFromCount(total)
     : normalizeSourceItemTotal(total);

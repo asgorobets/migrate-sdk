@@ -4,7 +4,7 @@ import {
   defaultSourceVersionContractFingerprint,
   type ExecutionStartResult,
   InMemoryMigrationStore,
-  InMemorySourcePlugin,
+  InMemorySource,
   MigrationDefinition,
   type MigrationDefinitionDependenciesInput,
   type MigrationDefinitionExecutableRollbackPlan,
@@ -52,7 +52,7 @@ interface TestDefinitionInput {
   readonly rollback?: RollbackPipeline;
 }
 
-const source = InMemorySourcePlugin.make({
+const source = InMemorySource.make({
   identity: ArticleSourceIdentity,
   sourceSchema: ArticleSource,
   items: [],
@@ -136,7 +136,7 @@ const makeRollbackSafetyFixture = () => {
 
   const authors = MigrationDefinition.make({
     id: authorsId,
-    source: InMemorySourcePlugin.make({
+    source: InMemorySource.make({
       identity: ArticleSourceIdentity,
       sourceSchema: ArticleSource,
       items: [],
@@ -150,7 +150,7 @@ const makeRollbackSafetyFixture = () => {
     dependencies: {
       required: [authorsId],
     },
-    source: InMemorySourcePlugin.make({
+    source: InMemorySource.make({
       identity: ArticleSourceIdentity,
       sourceSchema: ArticleSource,
       items: [],
@@ -1107,7 +1107,7 @@ describe("MigrationDefinitionRegistry", () => {
             SourceIdentity.part("addressIndex", Schema.Number),
           ]),
         });
-        const businessAddressSource = InMemorySourcePlugin.make({
+        const businessAddressSource = InMemorySource.make({
           sourceSchema: ArticleSource,
           identity: businessAddressIdentity,
           items: [],
@@ -1147,7 +1147,7 @@ describe("MigrationDefinitionRegistry", () => {
             SourceIdentity.part("addressIndex", Schema.Number),
           ]),
         });
-        const businessAddressSource = InMemorySourcePlugin.make({
+        const businessAddressSource = InMemorySource.make({
           sourceSchema: ArticleSource,
           identity: businessAddressIdentity,
           items: [],
@@ -1435,7 +1435,7 @@ describe("MigrationDefinitionRegistry", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const articles = MigrationDefinition.make({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: InMemorySource.make({
           identity: ArticleSourceIdentity,
           sourceSchema: ArticleSource,
           items: [
@@ -1504,7 +1504,7 @@ describe("MigrationDefinitionRegistry", () => {
         const storeState = InMemoryMigrationStore.makeState();
         const articles = MigrationDefinition.make({
           id: "articles",
-          source: InMemorySourcePlugin.make({
+          source: InMemorySource.make({
             identity: ArticleSourceIdentity,
             sourceSchema: ArticleSource,
             items: [
@@ -1619,7 +1619,7 @@ describe("MigrationDefinitionRegistry", () => {
         );
         const articles = MigrationDefinition.make({
           id: definitionId,
-          source: InMemorySourcePlugin.make({
+          source: InMemorySource.make({
             identity: ArticleSourceIdentity,
             sourceSchema: ArticleSource,
             items: [
@@ -1737,7 +1737,7 @@ describe("MigrationDefinitionRegistry", () => {
       const storeState = InMemoryMigrationStore.makeState();
       const articles = MigrationDefinition.make({
         id: "articles",
-        source: InMemorySourcePlugin.make({
+        source: InMemorySource.make({
           identity: ArticleSourceIdentity,
           sourceSchema: ArticleSource,
           items: [
@@ -1793,7 +1793,7 @@ describe("MigrationDefinitionRegistry", () => {
         const processCalls: string[] = [];
         const articles = MigrationDefinition.make({
           id: "articles",
-          source: InMemorySourcePlugin.make({
+          source: InMemorySource.make({
             identity: ArticleSourceIdentity,
             sourceSchema: ArticleSource,
             batchSize: 1,
@@ -1892,7 +1892,7 @@ describe("MigrationDefinitionRegistry", () => {
         );
         const articles = MigrationDefinition.make({
           id: definitionId,
-          source: InMemorySourcePlugin.make({
+          source: InMemorySource.make({
             identity: ArticleSourceIdentity,
             sourceSchema: ArticleSource,
             items: [
@@ -2076,7 +2076,7 @@ describe("MigrationDefinitionRegistry", () => {
 
         const authors = MigrationDefinition.make({
           id: authorsId,
-          source: InMemorySourcePlugin.make({
+          source: InMemorySource.make({
             identity: ArticleSourceIdentity,
             sourceSchema: ArticleSource,
             items: [],
@@ -2093,7 +2093,7 @@ describe("MigrationDefinitionRegistry", () => {
           dependencies: {
             optional: [authorsId],
           },
-          source: InMemorySourcePlugin.make({
+          source: InMemorySource.make({
             identity: ArticleSourceIdentity,
             sourceSchema: ArticleSource,
             items: [],

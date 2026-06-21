@@ -1,11 +1,11 @@
-# CSV Source Plugin Design
+# CSV Source Design
 
 Status: draft, with source identity authoring updated for
 [ADR 0006](../adr/0006-scoped-pipeline-tracking-with-composite-identities.md).
 CSV identity examples use the new `identity.id`, `identity.schema`, and
 `identity.key` contract shape.
 
-Audience: maintainers and migration authors working on `CsvSourcePlugin`.
+Audience: maintainers and migration authors working on `CsvSource`.
 
 ## Goals
 
@@ -25,10 +25,10 @@ Audience: maintainers and migration authors working on `CsvSourcePlugin`.
 
 ## Public API
 
-`CsvSourcePlugin.make` configures a path-backed CSV source:
+`CsvSource.make` configures a path-backed CSV source:
 
 ```ts
-const source = CsvSourcePlugin.make({
+const source = CsvSource.make({
   path: "bookstore-book-catalog.csv",
   platform: csvPlatform,
   dialect: { kind: "standard" },
@@ -62,23 +62,23 @@ interface CsvSourceOptions<Source, IdentityKey = unknown> {
 `CsvIdentity.columns(...)`; migration authors should not need to construct the
 low-level schema-backed identity definition by hand.
 
-The plugin factory may still derive mechanical details such as cursor schema,
+The source factory may still derive mechanical details such as cursor schema,
 scan lookup strategy, and the canonical row-hash algorithm.
 
 ## Package Location
 
-`CsvSourcePlugin` lives in the main SDK package:
+`CsvSource` lives in the main SDK package:
 
 ```txt
 packages/migrate-sdk/src/sources/csv/
 ```
 
 The SDK should remain one installable package for core types, runtime helpers,
-and first-party source/destination plugins as long as possible. Subpath exports
+and first-party sources and destinations as long as possible. Subpath exports
 can be introduced later, but they should still point into the same package:
 
 ```ts
-import { CsvSourcePlugin } from "migrate-sdk/sources/csv";
+import { CsvSource } from "migrate-sdk/sources/csv";
 ```
 
 ## File Input
@@ -145,7 +145,7 @@ inference comes from `sourceSchema`.
 
 ## Rows
 
-The CSV plugin builds source-native row objects from configured columns:
+The CSV source builds source-native row objects from configured columns:
 
 ```ts
 {
@@ -210,7 +210,7 @@ identity: CsvIdentity.columns({
 ```
 
 `identity.key.columns` is the only v1 identity derivation strategy. The CSV
-plugin converts one column into `SourceIdentity.key(...)` and multiple columns
+source converts one column into `SourceIdentity.key(...)` and multiple columns
 into `SourceIdentity.tuple(...)`, using `Schema.NonEmptyString` for each raw CSV
 identity column. The source trims identity values, rejects empty values, and
 decodes the derived key through the generated `identity.schema` before emitting
@@ -337,7 +337,7 @@ packages/migrate-sdk/src/sources/csv/fixtures/bookstore-book-catalog.csv
 
 It models books as ecommerce products and carries author relationship fields
 such as `primary_author_id`, `primary_author_name`, `co_author_ids`, and
-`co_author_names`. Those fields remain source-native row data. The CSV plugin
+`co_author_names`. Those fields remain source-native row data. The CSV source
 does not split rows into related book and author entities; that belongs to
 migration pipelines and destinations.
 

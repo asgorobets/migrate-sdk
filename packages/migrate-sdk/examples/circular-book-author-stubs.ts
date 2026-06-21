@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import {
-  type DestinationPluginError,
+  type DestinationError,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecution,
@@ -18,8 +18,8 @@ import {
   type InMemoryEntryUpsertedChange,
 } from "migrate-sdk/destinations/in-memory";
 import {
+  InMemorySource,
   type InMemorySourceCursor,
-  InMemorySourcePlugin,
 } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
@@ -137,7 +137,7 @@ type SourceIdentityKey<Definition> =
   Definition extends SourceIdentityDefinition<infer Key> ? Key : never;
 
 type ReferenceLookupProcessError =
-  | DestinationPluginError
+  | DestinationError
   | MigrationReferenceLookupError
   | MigrationStoreError
   | Schema.SchemaError;
@@ -270,7 +270,7 @@ export const makeCircularBookAuthorStubMigrations = () => {
 
   const books: BookMigration = MigrationDefinition.make({
     id: "books",
-    source: InMemorySourcePlugin.make({
+    source: InMemorySource.make({
       identity: BookSourceIdentity,
       items: bookSourceItems,
       sourceSchema: BookSource,
@@ -335,7 +335,7 @@ export const makeCircularBookAuthorStubMigrations = () => {
 
   const authors: AuthorMigration = MigrationDefinition.make({
     id: "authors",
-    source: InMemorySourcePlugin.make({
+    source: InMemorySource.make({
       identity: AuthorSourceIdentity,
       items: authorSourceItems,
       sourceSchema: AuthorSource,

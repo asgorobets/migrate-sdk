@@ -3,8 +3,8 @@
 
 export {
   SqlIdentity,
-  SqlSourcePlugin,
-  SqlSourcePluginName,
+  SqlSource,
+  SqlSourceName,
 } from "./sql-source.ts";
 export type {
   AnySqlIdentityDefinition,

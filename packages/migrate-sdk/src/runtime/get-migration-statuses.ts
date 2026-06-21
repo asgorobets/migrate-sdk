@@ -23,10 +23,7 @@ import {
   summarizeMigrationItemStates,
 } from "../domain/status.ts";
 import { MigrationStore } from "../services/migration-store.ts";
-import {
-  type AnySourcePlugin,
-  SourcePlugin,
-} from "../services/source-plugin.ts";
+import { type AnySource, Source } from "../services/source.ts";
 import { normalizeSourcePayloadSchemaError } from "./item-error.ts";
 
 const missingDefinitionError = (definitionId: MigrationDefinitionId) =>
@@ -132,7 +129,7 @@ interface SourceInventoryScan {
 
 const readSourceInventory = (
   definition: AnyMigrationDefinition,
-  source: AnySourcePlugin
+  source: AnySource
 ): Effect.Effect<readonly SourceItem<unknown>[], GetMigrationStatusesError> =>
   Effect.gen(function* () {
     const items: SourceItem<unknown>[] = [];
@@ -159,7 +156,7 @@ const readSourceInventory = (
 
 const validateSourceItem = (
   definitionId: MigrationDefinitionId,
-  source: AnySourcePlugin,
+  source: AnySource,
   sourceItem: SourceItem<unknown>
 ): Effect.Effect<MigrationStatusWarning | null> =>
   Schema.decodeUnknownEffect(source.sourceSchema, { errors: "all" })(
@@ -184,7 +181,7 @@ const validateSourceItem = (
 
 const scanSourceInventory = (
   definition: AnyMigrationDefinition,
-  source: AnySourcePlugin,
+  source: AnySource,
   itemStates: readonly MigrationItemState[]
 ): Effect.Effect<SourceInventoryScan, GetMigrationStatusesError> =>
   Effect.gen(function* () {
@@ -293,7 +290,7 @@ const getScannedDefinitionStatus = (
 ): Effect.Effect<MigrationDefinitionStatus, GetMigrationStatusesError> => {
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
-    const source = yield* SourcePlugin;
+    const source = yield* Source;
     const lastRun = yield* store.getLatestRunState(definition.id);
     const itemStates = yield* store.listItemStates(definition.id);
     const durable = summarizeMigrationItemStates(itemStates);
@@ -309,7 +306,7 @@ const getScannedDefinitionStatus = (
   });
 
   const sourceLayer = definition.source.layer as Layer.Layer<
-    AnySourcePlugin,
+    AnySource,
     GetMigrationStatusesError
   >;
 

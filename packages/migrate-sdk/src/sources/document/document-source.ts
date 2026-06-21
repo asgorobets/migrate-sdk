@@ -1,10 +1,10 @@
 import { Effect, Schema, SchemaAST } from "effect";
 import {
-  type ConfiguredSourcePlugin,
-  SourcePlugin,
-  type SourcePluginImplementation,
+  type ConfiguredSource,
+  Source,
+  type SourceImplementation,
 } from "../../domain/definition.ts";
-import { SourcePluginError } from "../../domain/errors.ts";
+import { SourceError } from "../../domain/errors.ts";
 import type {
   SourceIdentityContractIdInput,
   SourceIdentityDefinition,
@@ -80,7 +80,7 @@ export interface DocumentSourceSelectedSubitem<Parent, Item> {
 interface DocumentSourceCompiledSelector<Source> {
   readonly select: (
     document: unknown
-  ) => Effect.Effect<readonly unknown[], SourcePluginError>;
+  ) => Effect.Effect<readonly unknown[], SourceError>;
   readonly sourceSchema: DocumentSourceSchema<Source>;
 }
 
@@ -157,22 +157,22 @@ export type DocumentSourceLookup<
         identity: SourceIdentityTarget<IdentityKey>
       ) => Effect.Effect<
         DocumentSourceDirectLookupResult<Resource, FetcherCursor> | null,
-        SourcePluginError
+        SourceError
       >;
     };
 
 export interface DocumentSourceTotalContext<Resource, FetcherCursor, Document> {
   readonly countDocuments: (
     documents: readonly Document[]
-  ) => Effect.Effect<number, SourcePluginError>;
+  ) => Effect.Effect<number, SourceError>;
   readonly countResource: (
     resourceResult: DocumentFetchResult<Resource, FetcherCursor>
-  ) => Effect.Effect<number, SourcePluginError>;
+  ) => Effect.Effect<number, SourceError>;
 }
 
 export type DocumentSourceTotalCallback<Resource, FetcherCursor, Document> = (
   context: DocumentSourceTotalContext<Resource, FetcherCursor, Document>
-) => Effect.Effect<number, SourcePluginError>;
+) => Effect.Effect<number, SourceError>;
 
 export interface DocumentSourceBaseOptions<
   Resource,
@@ -292,17 +292,14 @@ const documentSourceSchemaCursorState = Symbol(
   "DocumentSourceSchemaCursorState"
 );
 
-const documentSourceError = (
-  message: string,
-  cause?: unknown
-): SourcePluginError =>
-  new SourcePluginError({
+const documentSourceError = (message: string, cause?: unknown): SourceError =>
+  new SourceError({
     message,
     ...(cause === undefined ? {} : { cause }),
   });
 
 const diagnosticFromCause = (cause: unknown): string => {
-  if (cause instanceof SourcePluginError) {
+  if (cause instanceof SourceError) {
     const nestedDiagnostic =
       typeof cause.cause === "object" &&
       cause.cause !== null &&
@@ -321,9 +318,7 @@ const diagnosticFromCause = (cause: unknown): string => {
 const hexFromBytes = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
-const sha256Hex = (
-  bytes: Uint8Array
-): Effect.Effect<string, SourcePluginError> =>
+const sha256Hex = (bytes: Uint8Array): Effect.Effect<string, SourceError> =>
   Effect.tryPromise({
     try: async () => {
       const webCrypto = globalThis.crypto;
@@ -470,7 +465,7 @@ const isPathPrefix = (
 const selectProjectionPath = (
   document: unknown,
   segments: readonly DocumentSourcePathSegment[]
-): Effect.Effect<readonly DocumentSourceSelectionFrame[], SourcePluginError> =>
+): Effect.Effect<readonly DocumentSourceSelectionFrame[], SourceError> =>
   Effect.gen(function* () {
     let frames: readonly DocumentSourceSelectionFrame[] = [
       {
@@ -670,7 +665,7 @@ const stringifyIdentityValue = (
   value: DocumentSourceIdentityScalar,
   itemIndex: number,
   label: "identity" | "version"
-): Effect.Effect<string, SourcePluginError> =>
+): Effect.Effect<string, SourceError> =>
   Effect.gen(function* () {
     if (
       typeof value !== "string" &&
@@ -703,7 +698,7 @@ const normalizeIdentityValue = (
   value: DocumentSourceIdentityValue,
   itemIndex: number,
   label: "identity" | "version"
-): Effect.Effect<string, SourcePluginError> =>
+): Effect.Effect<string, SourceError> =>
   Effect.gen(function* () {
     if (isIdentityValueArray(value)) {
       if (value.length === 0) {
@@ -764,7 +759,7 @@ const buildIdentity = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
   item: Source,
   identity: DocumentSourceIdentity<Source, IdentityKey>,
   itemIndex: number
-): Effect.Effect<IdentityKey, SourcePluginError> =>
+): Effect.Effect<IdentityKey, SourceError> =>
   Effect.try({
     try: () => identity.key(item),
     catch: (cause) =>
@@ -778,7 +773,7 @@ const encodeSourceItemJson = <Source>(
   item: Source,
   sourceSchema: Schema.Codec<Source, unknown, never, never>,
   itemIndex: number
-): Effect.Effect<string, SourcePluginError> =>
+): Effect.Effect<string, SourceError> =>
   Effect.gen(function* () {
     const encodedItem = yield* Schema.encodeEffect(sourceSchema)(item).pipe(
       Effect.mapError((cause) =>
@@ -820,7 +815,7 @@ const buildVersion = <Source>(
   version: DocumentSourceVersion<Source>,
   sourceSchema: Schema.Codec<Source, unknown, never, never>,
   itemIndex: number
-): Effect.Effect<SourceVersionInput, SourcePluginError> =>
+): Effect.Effect<SourceVersionInput, SourceError> =>
   Effect.gen(function* () {
     switch (version.kind) {
       case "content-hash": {
@@ -865,10 +860,7 @@ const buildSelectedSourceItem = <
   documentIndex: number,
   itemIndex: number,
   options: DocumentSourceCompiledOptions<unknown, unknown, Source, IdentityKey>
-): Effect.Effect<
-  DocumentSourceLoadedItem<Source, IdentityKey>,
-  SourcePluginError
-> =>
+): Effect.Effect<DocumentSourceLoadedItem<Source, IdentityKey>, SourceError> =>
   Effect.gen(function* () {
     const item = rawItem as Source;
     const identity = yield* buildIdentity(item, options.identity, itemIndex);
@@ -896,7 +888,7 @@ const ensureUniqueIdentities = <
 >(
   identityDefinition: SourceIdentityDefinition<IdentityKey>,
   items: readonly DocumentSourceLoadedItem<Source, IdentityKey>[]
-): Effect.Effect<void, SourcePluginError> =>
+): Effect.Effect<void, SourceError> =>
   Effect.gen(function* () {
     const identityIndexes = new Map<string, number>();
 
@@ -931,7 +923,7 @@ const matchingLoadedItems = <
   identity: SourceIdentity<IdentityKey>
 ): Effect.Effect<
   readonly DocumentSourceLoadedItem<Source, IdentityKey>[],
-  SourcePluginError
+  SourceError
 > =>
   Effect.gen(function* () {
     const matches: DocumentSourceLoadedItem<Source, IdentityKey>[] = [];
@@ -955,7 +947,7 @@ const parseResourceDocuments = <Resource, Document, FetcherCursor>(
   resourceResult: DocumentFetchResult<Resource, FetcherCursor>,
   fetcherCursor: FetcherCursor | null,
   context: Record<string, unknown> = {}
-): Effect.Effect<readonly Document[], SourcePluginError> =>
+): Effect.Effect<readonly Document[], SourceError> =>
   parser.parse(resourceResult.resource).pipe(
     Effect.mapError((cause) =>
       documentSourceError("Unable to parse document source resource", {
@@ -986,7 +978,7 @@ const loadResourceResult = <
   context?: Record<string, unknown>
 ): Effect.Effect<
   DocumentSourceLoadedResource<Source, FetcherCursor, IdentityKey>,
-  SourcePluginError
+  SourceError
 > =>
   Effect.gen(function* () {
     const identityDefinition = makeDocumentSourceIdentityDefinition(
@@ -1045,7 +1037,7 @@ const loadResource = <
   fetcherCursor: FetcherCursor | null
 ): Effect.Effect<
   DocumentSourceLoadedResource<Source, FetcherCursor, IdentityKey>,
-  SourcePluginError
+  SourceError
 > =>
   Effect.gen(function* () {
     const resourceResult = yield* options.fetcher.read(fetcherCursor);
@@ -1066,7 +1058,7 @@ const countDocuments = <
     IdentityKey
   >,
   documents: readonly unknown[]
-): Effect.Effect<number, SourcePluginError> =>
+): Effect.Effect<number, SourceError> =>
   Effect.gen(function* () {
     let count = 0;
 
@@ -1091,7 +1083,7 @@ const countResource = <
     IdentityKey
   >,
   resourceResult: DocumentFetchResult<Resource, FetcherCursor>
-): Effect.Effect<number, SourcePluginError> =>
+): Effect.Effect<number, SourceError> =>
   Effect.gen(function* () {
     const documents = yield* parseResourceDocuments(
       options.parser,
@@ -1134,7 +1126,7 @@ const makeDocumentSourceCountTotal = <
     Source,
     IdentityKey
   >
-): (() => Effect.Effect<number, SourcePluginError>) | undefined => {
+): (() => Effect.Effect<number, SourceError>) | undefined => {
   const configuredCount = options.countTotal;
 
   if (configuredCount !== undefined) {
@@ -1160,7 +1152,7 @@ const makeDocumentSourceCountTotal = <
 
 const configuredBatchSize = (
   batchSize: number | undefined
-): Effect.Effect<number | null, SourcePluginError> => {
+): Effect.Effect<number | null, SourceError> => {
   if (batchSize === undefined) {
     return Effect.succeed(null);
   }
@@ -1223,7 +1215,7 @@ const makeImplementation = <
     Source,
     IdentityKey
   >
-): SourcePluginImplementation<
+): SourceImplementation<
   Source,
   DocumentSourceCursor<FetcherCursor>,
   IdentityKey
@@ -1373,7 +1365,7 @@ function makeSource<
       DocumentSourceSelectedItem<DocumentSourceCursorFocus<Selection>>
     >;
   }
-): ConfiguredSourcePlugin<
+): ConfiguredSource<
   DocumentSourceSelectedItem<DocumentSourceCursorFocus<Selection>>,
   DocumentSourceCursor<FetcherCursor>,
   IdentityKey,
@@ -1412,7 +1404,7 @@ function makeSource<
       >
     >;
   }
-): ConfiguredSourcePlugin<
+): ConfiguredSource<
   DocumentSourceSelectedSubitem<
     DocumentSourceCursorFocus<ParentSelection>,
     DocumentSourceCursorFocus<Selection>
@@ -1444,7 +1436,7 @@ function makeSource<
         unknown,
         IdentityKey
       >
-): ConfiguredSourcePlugin<
+): ConfiguredSource<
   Source,
   DocumentSourceCursor<FetcherCursor>,
   IdentityKey,
@@ -1467,7 +1459,7 @@ function makeSource<
   const identity = makeDocumentSourceIdentityDefinition(
     compiledOptions.identity
   );
-  const configured = SourcePlugin.make({
+  const configured = Source.make({
     cursorSchema,
     identity,
     make: () => makeImplementation(compiledOptions),
@@ -1478,7 +1470,7 @@ function makeSource<
       makeDocumentSourceVersionContractFingerprint(options.version),
   });
 
-  return SourcePlugin.fromLayer({
+  return Source.fromLayer({
     cursorSchema,
     identity: configured.identity,
     layer: configured.layer,
@@ -1490,6 +1482,6 @@ function makeSource<
   });
 }
 
-export const DocumentSourcePlugin = {
+export const DocumentSource = {
   make: makeSource,
 } as const;

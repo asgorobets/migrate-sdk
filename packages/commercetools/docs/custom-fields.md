@@ -3,13 +3,13 @@
 Status: implemented for Business Units.
 
 Custom field builders are pure helpers on the Commercetools destination
-capability module. They validate a schema-backed field bag and project it to a
+Destination. They validate a schema-backed field bag and project it to a
 `CustomFieldsDraft` or Business Unit update actions. They do not call the SDK
 until their output is passed to an effectful destination helper.
 
 ## Configure
 
-Use plugin-local provision for the SDK dependency and configure the Business
+Use destination-local provision for the SDK dependency and configure the Business
 Unit custom type once:
 
 ```ts
@@ -32,7 +32,7 @@ const ct = CommercetoolsDestination.make({
 }).provide(commercetoolsSdkLayer);
 ```
 
-Custom field schemas must be same-shape destination schemas. Source plugins own
+Custom field schemas must be same-shape destination schemas. Sources own
 source-native decoding; these helpers validate values already mapped for
 Commercetools.
 

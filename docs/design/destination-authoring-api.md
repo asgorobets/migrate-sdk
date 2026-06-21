@@ -1,6 +1,6 @@
 # Destination Helper Authoring API
 
-Audience: plugin authors building destination capability modules.
+Audience: destination authors building destinations.
 
 Status: current process-helper model.
 

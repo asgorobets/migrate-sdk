@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import {
   defaultSourceVersionContractFingerprint,
   InMemoryMigrationStore,
-  InMemorySourcePlugin,
+  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   SourceIdentity,
@@ -50,7 +50,7 @@ storeState.itemStates.set(
     status: "failed",
     error: {
       kind: "destination",
-      errorTag: "DestinationPluginError",
+      errorTag: "DestinationError",
       message: "destination effect failed",
     },
   }
@@ -87,7 +87,7 @@ storeState.itemStates.set(
 
 const articles = MigrationDefinition.make({
   id: definitionId,
-  source: InMemorySourcePlugin.make({
+  source: InMemorySource.make({
     identity: EntrySourceIdentity,
     sourceSchema: EntrySource,
     items: [

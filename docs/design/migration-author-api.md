@@ -796,7 +796,7 @@ strategy to be replaced.
 
 Definitions inside executable plans should be fully provided. Runtime service
 requirements are erased while configuring sources, stores, and destination
-capability modules, not at the `startRun` or `startRollback` call site:
+destinations, not at the `startRun` or `startRollback` call site:
 
 ```ts
 const source = SqlSource.make({

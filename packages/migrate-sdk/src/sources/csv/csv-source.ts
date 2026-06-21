@@ -4,11 +4,11 @@ import { Path } from "effect/Path";
 import type { ParseError } from "papaparse";
 import Papa from "papaparse";
 import {
-  type ConfiguredSourcePlugin,
-  SourcePlugin,
-  type SourcePluginImplementation,
+  type ConfiguredSource,
+  Source,
+  type SourceImplementation,
 } from "../../domain/definition.ts";
-import { SourcePluginError } from "../../domain/errors.ts";
+import { SourceError } from "../../domain/errors.ts";
 import {
   SourceIdentity,
   type SourceIdentityContractIdInput,
@@ -24,7 +24,7 @@ import {
   encodeSourceIdentityKey,
   type SourceItemInput,
 } from "../../domain/source.ts";
-import type { AnySourcePlugin } from "../../services/source-plugin.ts";
+import type { AnySource } from "../../services/source.ts";
 
 const textEncoder = new TextEncoder();
 
@@ -185,8 +185,8 @@ interface RawLogicalCsvRecord {
   readonly text: string;
 }
 
-const csvError = (message: string, cause?: unknown): SourcePluginError =>
-  new SourcePluginError({
+const csvError = (message: string, cause?: unknown): SourceError =>
+  new SourceError({
     message,
     ...(cause === undefined ? {} : { cause }),
   });
@@ -196,7 +196,7 @@ const separatorForDialect = (dialect: CsvDialect): string =>
 
 const separatorForDialectEffect = (
   dialect: CsvDialect
-): Effect.Effect<string, SourcePluginError> =>
+): Effect.Effect<string, SourceError> =>
   Effect.gen(function* () {
     const separator = separatorForDialect(dialect);
 
@@ -326,7 +326,7 @@ const papaParseError = (
   errors: readonly ParseError[],
   record: RawLogicalCsvRecord,
   rowIndex: number
-): SourcePluginError =>
+): SourceError =>
   csvError("Unable to parse CSV source", {
     errors: errors.map((error) => ({
       code: error.code,
@@ -342,7 +342,7 @@ const papaParseError = (
 const requireNonNegativeInteger = (
   value: number,
   label: string
-): Effect.Effect<void, SourcePluginError> =>
+): Effect.Effect<void, SourceError> =>
   Number.isInteger(value) && value >= 0
     ? Effect.void
     : Effect.fail(
@@ -352,7 +352,7 @@ const requireNonNegativeInteger = (
 const normalizeColumnNames = (
   columns: readonly string[],
   context: unknown
-): Effect.Effect<readonly string[], SourcePluginError> =>
+): Effect.Effect<readonly string[], SourceError> =>
   Effect.gen(function* () {
     const normalized = columns.map((column) => column.trim());
     const seen = new Map<string, number>();
@@ -391,7 +391,7 @@ const normalizeColumnNames = (
 const normalizeConfiguredColumns = (
   columns: readonly string[],
   label: string
-): Effect.Effect<readonly string[], SourcePluginError> =>
+): Effect.Effect<readonly string[], SourceError> =>
   Effect.gen(function* () {
     const normalized = columns.map((column) => column.trim());
     const seen = new Set<string>();
@@ -430,7 +430,7 @@ const resolveHeader = (
     readonly columns: readonly string[];
     readonly dataStartRowIndex: number;
   },
-  SourcePluginError
+  SourceError
 > =>
   Effect.gen(function* () {
     switch (headers.kind) {
@@ -486,7 +486,7 @@ const ensureConfiguredColumnExists = (
   column: string,
   columns: readonly string[],
   label: string
-): Effect.Effect<void, SourcePluginError> =>
+): Effect.Effect<void, SourceError> =>
   columns.includes(column)
     ? Effect.void
     : Effect.fail(
@@ -502,7 +502,7 @@ const isBlankRow = (cells: readonly string[]): boolean =>
 const rowWidthMismatchError = (
   record: LogicalCsvRecord,
   columns: readonly string[]
-): SourcePluginError =>
+): SourceError =>
   csvError("CSV row width does not match configured columns", {
     actualColumns: record.cells.length,
     expectedColumns: columns.length,
@@ -510,7 +510,7 @@ const rowWidthMismatchError = (
     rowIndex: record.rowIndex,
   });
 
-const emptyRowError = (record: LogicalCsvRecord): SourcePluginError =>
+const emptyRowError = (record: LogicalCsvRecord): SourceError =>
   csvError("CSV row is blank", {
     lineNumber: record.lineNumber,
     rowIndex: record.rowIndex,
@@ -533,7 +533,7 @@ const buildIdentityKey = (
   item: Record<string, string>,
   columns: readonly string[],
   record: LogicalCsvRecord
-): Effect.Effect<unknown, SourcePluginError> =>
+): Effect.Effect<unknown, SourceError> =>
   Effect.gen(function* () {
     const values = columns.map((column) => item[column]?.trim() ?? "");
 
@@ -597,7 +597,7 @@ const decodeIdentityKey = <IdentityKey extends SourceIdentitySnapshotKey>(
   identity: SourceIdentityDefinition<IdentityKey>,
   key: unknown,
   record: LogicalCsvRecord
-): Effect.Effect<IdentityKey, SourcePluginError> =>
+): Effect.Effect<IdentityKey, SourceError> =>
   Effect.try({
     try: () => SourceIdentity.decode(identity, key),
     catch: (cause) =>
@@ -611,9 +611,7 @@ const decodeIdentityKey = <IdentityKey extends SourceIdentitySnapshotKey>(
 const hexFromBytes = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
-const sha256Hex = (
-  bytes: Uint8Array
-): Effect.Effect<string, SourcePluginError> =>
+const sha256Hex = (bytes: Uint8Array): Effect.Effect<string, SourceError> =>
   Effect.tryPromise({
     try: async () => {
       const webCrypto = globalThis.crypto;
@@ -631,7 +629,7 @@ const sha256Hex = (
 
 const decodeParserInput = (
   input: CsvParserInput
-): Effect.Effect<string, SourcePluginError> =>
+): Effect.Effect<string, SourceError> =>
   typeof input === "string"
     ? Effect.succeed(input)
     : Effect.try({
@@ -645,7 +643,7 @@ const buildVersion = (
   columns: readonly string[],
   version: CsvVersion,
   record: LogicalCsvRecord
-): Effect.Effect<string, SourcePluginError> =>
+): Effect.Effect<string, SourceError> =>
   Effect.gen(function* () {
     switch (version.kind) {
       case "column": {
@@ -679,14 +677,14 @@ const buildVersion = (
 const parseDocument = <IdentityKey extends SourceIdentitySnapshotKey>(
   input: CsvParserInput,
   options: CsvParserOptions<IdentityKey>
-): Effect.Effect<CsvParsedDocument<IdentityKey>, SourcePluginError> =>
+): Effect.Effect<CsvParsedDocument<IdentityKey>, SourceError> =>
   Effect.gen(function* () {
     const text = yield* decodeParserInput(input);
     const separator = yield* separatorForDialectEffect(options.dialect);
     const records = yield* Effect.try({
       try: () => parseLogicalRecords(text, separator),
       catch: (cause) =>
-        cause instanceof SourcePluginError
+        cause instanceof SourceError
           ? cause
           : csvError("Unable to parse CSV source", cause),
     });
@@ -802,7 +800,7 @@ const readFileBytes = (
   filePath: string
 ): Effect.Effect<
   { readonly bytes: Uint8Array; readonly resolvedPath: string },
-  SourcePluginError
+  SourceError
 > => {
   const resolvedPath = path.resolve(filePath);
 
@@ -824,7 +822,7 @@ const readFileBytes = (
 const decodeUtf8 = (
   bytes: Uint8Array,
   resolvedPath: string
-): Effect.Effect<string, SourcePluginError> =>
+): Effect.Effect<string, SourceError> =>
   Effect.try({
     try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
     catch: (cause) =>
@@ -843,7 +841,7 @@ const loadPathDocument = <IdentityKey extends SourceIdentitySnapshotKey>(
     readonly fileFingerprint: string;
     readonly resolvedPath: string;
   },
-  SourcePluginError
+  SourceError
 > =>
   Effect.gen(function* () {
     const file = yield* readFileBytes(fs, path, options.path);
@@ -865,12 +863,7 @@ const makeImplementation = <
   options: CsvSourceOptions<Source, IdentityKey>,
   fs: FileSystem,
   path: Path
-): SourcePluginImplementation<
-  Source,
-  CsvSourceCursor,
-  IdentityKey,
-  unknown
-> => {
+): SourceImplementation<Source, CsvSourceCursor, IdentityKey, unknown> => {
   const load = () => loadPathDocument(fs, path, options);
   const identity = makeCsvIdentityDefinition(options.identity);
   const countTotal = Effect.fn("CsvSource.countTotal")(() =>
@@ -933,14 +926,14 @@ const makeLayerWithoutPlatform = <
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   options: CsvSourceOptions<Source, IdentityKey>
-): Layer.Layer<AnySourcePlugin, never, FileSystem | Path> =>
+): Layer.Layer<AnySource, never, FileSystem | Path> =>
   Layer.effect(
-    SourcePlugin,
+    Source,
     Effect.gen(function* () {
       const fs = yield* FileSystem;
       const path = yield* Path;
       const identityDefinition = makeCsvIdentityDefinition(options.identity);
-      const configured = SourcePlugin.make({
+      const configured = Source.make({
         cursorSchema: CsvSourceCursor,
         identity: identityDefinition,
         make: () => makeImplementation(options, fs, path),
@@ -951,21 +944,21 @@ const makeLayerWithoutPlatform = <
           makeCsvSourceVersionContractFingerprint(options.version),
       });
 
-      return yield* SourcePlugin.pipe(Effect.provide(configured.layer));
+      return yield* Source.pipe(Effect.provide(configured.layer));
     })
   );
 
 const makeLayer = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
   options: CsvSourceOptions<Source, IdentityKey>
-): Layer.Layer<AnySourcePlugin> =>
+): Layer.Layer<AnySource> =>
   makeLayerWithoutPlatform(options).pipe(Layer.provide(options.platform));
 
 const make = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
   options: CsvSourceOptions<Source, IdentityKey>
-): ConfiguredSourcePlugin<Source, CsvSourceCursor, IdentityKey, unknown> => {
+): ConfiguredSource<Source, CsvSourceCursor, IdentityKey, unknown> => {
   const identityDefinition = makeCsvIdentityDefinition(options.identity);
 
-  return SourcePlugin.fromLayer({
+  return Source.fromLayer({
     cursorSchema: CsvSourceCursor,
     identity: identityDefinition,
     layer: makeLayer(options),
@@ -984,6 +977,6 @@ export const CsvParserCore = {
   parse: parseDocument,
 } as const;
 
-export const CsvSourcePlugin = {
+export const CsvSource = {
   make,
 } as const;

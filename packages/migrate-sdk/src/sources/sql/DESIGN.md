@@ -1,8 +1,8 @@
-# SQL Source Plugin Design
+# SQL Source Design
 
 Status: draft
 
-Audience: maintainers and migration authors working on `SqlSourcePlugin`.
+Audience: maintainers and migration authors working on `SqlSource`.
 
 ## Goals
 
@@ -18,21 +18,21 @@ Audience: maintainers and migration authors working on `SqlSourcePlugin`.
 - Inferring TypeScript row shapes from arbitrary SQL text.
 - Inferring schemas from table metadata.
 - Owning database pools, connection strings, or concrete database drivers.
-- Making raw SQL queries typed through Drizzle. Drizzle-backed sources should be a separate source plugin.
+- Making raw SQL queries typed through Drizzle. Drizzle-backed sources should be a separate source.
 - Supporting SQL destination writes in this slice.
 
 ## Current Implementation
 
 The current implementation provides the public source folder, package exports,
-a named plugin surface, and the read/lookup happy path:
+a named source surface, and the read/lookup happy path:
 
 ```ts
-SqlSourcePlugin.name; // "sql"
+SqlSource.name; // "sql"
 SqlIdentity.columns({
   id: "article@v1",
   columns: [SqlIdentity.column("id", Schema.NonEmptyString)],
 });
-SqlSourcePlugin.make({
+SqlSource.make({
   batchSize,
   cursorSchema,
   getSourceMetadata,
@@ -47,7 +47,7 @@ The configured source layer requires `SqlClient.SqlClient` unless the migration
 author closes that requirement with `source.provide(sqlClientLayer)`. `read`
 and `readByIdentity` execute configured statement builders, convert rows into
 Source Item inputs through metadata extraction, and normalize SQL execution
-failures into the current `SourcePluginError` boundary.
+failures into the current `SourceError` boundary.
 
 The implementation validates cursor-window configuration and the source-item
 contract at the SQL boundary:
@@ -70,7 +70,7 @@ The target raw SQL source exposes an Effect SQL `SqlClient` layer requirement
 and accepts explicit query callbacks:
 
 ```ts
-const source = SqlSourcePlugin.make({
+const source = SqlSource.make({
   batchSize: 500,
   cursorSchema: LegacyArticleCursor,
   identity: SqlIdentity.columns({
@@ -120,10 +120,10 @@ yield* execution.run({ all: true });
 ```
 
 If a migration config should own more than one SQL connection, close each source
-requirement on its configured plugin:
+requirement on its configured source:
 
 ```ts
-const legacySource = SqlSourcePlugin.make({
+const legacySource = SqlSource.make({
   batchSize: 500,
   cursorSchema: LegacyArticleCursor,
   identity: SqlIdentity.columns({
@@ -136,7 +136,7 @@ const legacySource = SqlSourcePlugin.make({
   getSourceMetadata: legacyMetadata,
 }).provide(legacyPgClientLayer);
 
-const crmSource = SqlSourcePlugin.make({
+const crmSource = SqlSource.make({
   batchSize: 500,
   cursorSchema: CrmUserCursor,
   identity: SqlIdentity.columns({
@@ -151,12 +151,12 @@ const crmSource = SqlSourcePlugin.make({
 ```
 
 After `.provide(...)`, the SQL client requirement is erased from that source
-plugin and does not leak into the migration, registry, CLI, or runner types.
+source and does not leak into the migration, registry, CLI, or runner types.
 Leaving the source unprovided intentionally exposes the requirement so editors
 and applications can provide one shared app layer at the runner boundary.
 
 The important shape is that migration authors supply queries and schemas; the
-SDK supplies the source plugin lifecycle, cursor persistence,
+SDK supplies the source lifecycle, cursor persistence,
 row-to-source-item mapping, and error mapping.
 
 Raw SQL v1 requires exactly one public payload schema: `sourceSchema`. Any
@@ -196,19 +196,19 @@ pipeline-facing item.
 
 The core source contract can preserve the source payload input side as
 `SourceInput` through `SourcePayloadSchema<Source, SourceInput>`. Not every
-source plugin needs to expose that input type: CSV, Document, and in-memory
-sources may choose `unknown` when identity is derived from plugin-owned row,
+source needs to expose that input type: CSV, Document, and in-memory
+sources may choose `unknown` when identity is derived from source-owned row,
 selection, or in-memory item semantics. Raw SQL should preserve it because the
 SQL row returned by `read` and `lookup` is the same value that metadata
 extraction and identity columns inspect.
 
 Read and lookup callbacks are declarative statement builders, not arbitrary
-Effect programs. `SqlSourcePlugin` owns statement execution so it can preserve
+Effect programs. `SqlSource` owns statement execution so it can preserve
 consistent source diagnostics, SQL error mapping, lookup cardinality checks,
 source metadata extraction, and cursor advancement.
 
 `SqlClient.SqlClient` is required by the configured SQL source layer until the
-source plugin itself is provided. The SQL source must not resolve an ambient or
+source itself is provided. The SQL source must not resolve an ambient or
 global SQL client in v1, and it must not own connection pools. Applications can
 provide the SQL client layer at the runner or app composition boundary when
 several migrations should share one database pool, or call
@@ -217,13 +217,13 @@ its own SQL client dependency.
 
 ## Source Row Contract
 
-Raw query rows are external data. The SQL source plugin wraps each row in a
+Raw query rows are external data. The SQL source wraps each row in a
 Source Item input, but Source Payload Schema decoding remains owned by the
 migration runner. This keeps SQL aligned with CSV, JSON, API, and other source
 plugins: a source item with a valid identity and version but an invalid payload
 becomes a failed Migration Item State instead of a cursor-read failure.
 
-The plugin should require a source identity descriptor and a pure source
+The source should require a source identity descriptor and a pure source
 metadata extractor. `SqlIdentity.columns(...)` declares ordered row columns or
 aliases that become the source identity key. Those column names and their
 schema-encoded value types are checked against the input side of `sourceSchema`;
@@ -235,7 +235,7 @@ The metadata extractor returns a Result-style value with:
 - `version`: the durable Source Version input.
 - `cursor`: the next cursor candidate for pagination.
 
-`SqlSourcePlugin` should pass metadata values through the existing source item
+`SqlSource` should pass metadata values through the existing source item
 normalization boundary. It should not require authors to construct branded
 `SourceIdentity` or `SourceVersion` values directly.
 
@@ -293,12 +293,12 @@ Source Version and Source Cursor may share fields, but they are different
 signals: version is for change detection, cursor is for ordering and resume.
 
 Each row's source metadata includes the cursor that resumes after that row. The
-cursor is required for every returned row. The source plugin computes
+cursor is required for every returned row. The source computes
 `nextCursor` from the last emitted row's cursor. An empty window should not
 advance the cursor.
 
 If source metadata extraction cannot produce a cursor for a read row, the
-cursor read fails as a source plugin failure. SQL v1 should not support
+cursor read fails as a source failure. SQL v1 should not support
 non-advancing pages that return items.
 
 SQL v1 should not issue `limit + 1` probes to prove more rows exist. Any
@@ -330,7 +330,7 @@ const ArticleCursor = Schema.Struct({
   id: Schema.String,
 });
 
-SqlSourcePlugin.make({
+SqlSource.make({
   batchSize: 500,
   cursorSchema: ArticleCursor,
   identity: SqlIdentity.columns({
@@ -392,12 +392,12 @@ to recover source items for dependency stubs, failed-item reruns, skipped
 reruns, needs-update backlog, update checks, and single-item runs, so the SQL
 source requires a lookup statement builder.
 
-`SqlSourcePlugin` should declare `lookupStrategy: "direct"` internally and
+`SqlSource` should declare `lookupStrategy: "direct"` internally and
 should not expose scan lookup in v1. If a source cannot address a Source Item by
 Source Identity, it is not a good fit for durable SQL source reruns yet.
 
 Lookup queries must identify at most one Source Item. Multiple returned rows for
-one Source Identity should be a source plugin failure because it makes
+one Source Identity should be a source failure because it makes
 dependency lookup ambiguous. The SQL source should fail when the executed
 lookup statement actually returns more than one row; it should not try to
 rewrite arbitrary SQL to enforce uniqueness.
@@ -414,13 +414,13 @@ source position.
 
 After metadata extraction, lookup must verify that the extracted Source Identity
 matches the requested identity after normal Source Identity input
-normalization. A mismatch is a source plugin failure because the lookup
+normalization. A mismatch is a source failure because the lookup
 statement returned the wrong Source Item.
 
 Cursor reads should reject duplicate Source Identities within one returned
 window after metadata extraction and normal Source Identity input
 normalization. Duplicate detection across different windows is out of scope for
-the SQL source plugin; deterministic SQL ordering and durable item state handle
+the SQL source; deterministic SQL ordering and durable item state handle
 the broader migration behavior.
 
 Metadata extraction failures during cursor reads fail the cursor read because
@@ -432,9 +432,9 @@ version are available.
 
 ## Effect SQL Boundary
 
-The source plugin should depend on the generic `SqlClient` service from Effect
+The source should depend on the generic `SqlClient` service from Effect
 SQL, not on `pg`, `mysql2`, SQLite clients, or SDK-owned driver interfaces.
-Applications provide concrete layers such as a Postgres layer, and the plugin
+Applications provide concrete layers such as a Postgres layer, and the source
 runs query callbacks in that Effect environment.
 
 There are two supported provision boundaries:
@@ -457,11 +457,11 @@ That boundary buys us:
 - Connection acquisition and scoped resource management.
 - Transactions and connection reservation when a future explicit source option
   needs them.
-- Typed SQL errors that can be mapped to `SourcePluginError`.
+- Typed SQL errors that can be mapped to `SourceError`.
 - A path to share SQL infrastructure with a future SQL destination without
   coupling the first source slice to destination semantics.
 
-`SqlClient` does not infer row types from raw SQL text. The source plugin still
+`SqlClient` does not infer row types from raw SQL text. The source still
 requires explicit `sourceSchema`, `cursorSchema`, and row mapping.
 
 Raw SQL v1 should not wrap reads or lookups in SQL transactions automatically.
@@ -488,8 +488,8 @@ broader internal location with a real call site proving the need.
 
 ```txt
 Migration runtime
-  -> SourcePlugin.read(cursor)
-    -> SqlSourcePlugin implementation
+  -> Source.read(cursor)
+    -> SqlSource implementation
       -> acquire SqlClient from source-provided or app-provided layer
       -> execute author read query
       -> extract Source Identity, Source Version, and cursor from each row
@@ -497,8 +497,8 @@ Migration runtime
       -> return SourceReadResult with nextCursor
 
 Migration runtime
-  -> SourcePlugin.readByIdentity(identity)
-    -> SqlSourcePlugin implementation
+  -> Source.readByIdentity(identity)
+    -> SqlSource implementation
       -> acquire SqlClient from source-provided or app-provided layer
       -> execute author lookup query
       -> validate zero-or-one row

@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import {
   InMemoryMigrationStore,
-  InMemorySourcePlugin,
+  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   SourceIdentity,
@@ -50,7 +50,7 @@ storeState.itemStates.set(
 
 const articles = MigrationDefinition.make({
   id: definitionId,
-  source: InMemorySourcePlugin.make({
+  source: InMemorySource.make({
     identity: EntrySourceIdentity,
     sourceSchema: EntrySource,
     items: [

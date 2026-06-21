@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import {
-  InMemorySourcePlugin,
+  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryCatalog,
@@ -25,7 +25,7 @@ const ArticleSourceIdentity = SourceIdentity.make({
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 
-const source = InMemorySourcePlugin.make({
+const source = InMemorySource.make({
   identity: ArticleSourceIdentity,
   sourceSchema: ArticleSource,
   items: [],

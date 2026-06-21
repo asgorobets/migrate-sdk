@@ -18,7 +18,7 @@ import {
   Schema,
 } from "effect";
 import {
-  InMemorySourcePlugin,
+  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecution,
@@ -193,7 +193,7 @@ export const runProductCatalogStoreMigration: (
 
   const products = MigrationDefinition.make({
     id: catalogDefinitionId,
-    source: InMemorySourcePlugin.make({
+    source: InMemorySource.make({
       identity: CatalogProductSourceIdentity,
       items: catalogProducts,
       sourceSchema: CatalogProductSource,

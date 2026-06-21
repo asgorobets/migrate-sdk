@@ -9,7 +9,7 @@ changes through `Tracking`.
 
 ## Provision
 
-The primary style is plugin-local provision:
+The primary style is destination-local provision:
 
 ```ts
 import { CommercetoolsDestination } from "@migrate-sdk/commercetools/destination";
@@ -23,7 +23,7 @@ const ct = CommercetoolsDestination.make({
 After `.provide(commercetoolsSdkLayer)`, helpers require only the framework
 `Tracking` service that the runner supplies inside `process`.
 
-Advanced Effect users can skip plugin-local provision and provide the SDK layer
+Advanced Effect users can skip destination-local provision and provide the SDK layer
 around a larger process or run-level Effect. The unprovided module keeps
 `CommercetoolsSdk | Tracking` in each helper requirement.
 
@@ -89,7 +89,7 @@ diagnostics or changes the rollback process recorded before failing.
 
 ## Diagnostics
 
-Failed SDK requests are mapped to `DestinationPluginError` and record a safe
+Failed SDK requests are mapped to `DestinationError` and record a safe
 Destination Journal diagnostic. Diagnostics include stable operation names,
 resource type, source identity, selector context, and safe status code when
 available. They must not include raw SDK responses, headers, tokens, or

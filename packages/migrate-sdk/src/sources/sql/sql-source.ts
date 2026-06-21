@@ -1,13 +1,13 @@
 import { Effect, Layer, type Schema } from "effect";
 import { SqlClient, type Statement } from "effect/unstable/sql";
 import {
-  type ConfiguredSourcePlugin,
+  type ConfiguredSource,
+  Source,
+  type SourceImplementation,
   type SourcePayloadSchema,
-  SourcePlugin,
-  type SourcePluginImplementation,
   type SourceReadResultInput,
 } from "../../domain/definition.ts";
-import { SourcePluginError } from "../../domain/errors.ts";
+import { SourceError } from "../../domain/errors.ts";
 import {
   SourceIdentity,
   type SourceIdentityContractIdInput,
@@ -28,7 +28,7 @@ import {
   encodeSourceIdentityKey,
   type SourceItemInput,
 } from "../../domain/source.ts";
-import type { AnySourcePlugin } from "../../services/source-plugin.ts";
+import type { AnySource } from "../../services/source.ts";
 import {
   makeSqlSourceBatchSizeError,
   makeSqlSourceExecutionError,
@@ -37,7 +37,7 @@ import {
   makeSqlSourceMetadataError,
 } from "./internal/errors.ts";
 
-export const SqlSourcePluginName = "sql";
+export const SqlSourceName = "sql";
 
 export interface SqlSourceMetadataContext {
   readonly rowIndex: number;
@@ -79,7 +79,7 @@ export type SqlSourceCountStatement<Row> = (
 
 export type SqlSourceCountEffect = (
   sql: SqlClient.SqlClient
-) => Effect.Effect<number, SourcePluginError>;
+) => Effect.Effect<number, SourceError>;
 
 export interface SqlSourceStatementCount<Row = { readonly count: number }> {
   readonly getCount: (row: Readonly<Row>) => number;
@@ -293,7 +293,7 @@ export interface SqlSourceOptions<
 const executeStatement = <Row>(
   operation: "count" | "read" | "readByIdentity",
   statement: Statement.Statement<Row>
-): Effect.Effect<readonly Row[], SourcePluginError> =>
+): Effect.Effect<readonly Row[], SourceError> =>
   statement.pipe(
     Effect.mapError((cause) => makeSqlSourceExecutionError(operation, cause))
   );
@@ -342,7 +342,7 @@ const buildIdentityKey = <Identity extends AnySqlIdentityDefinition>(
   operation: "read" | "readByIdentity",
   row: unknown,
   rowIndex: number
-): Effect.Effect<SqlIdentityDefinitionKey<Identity>, SourcePluginError> =>
+): Effect.Effect<SqlIdentityDefinitionKey<Identity>, SourceError> =>
   Effect.try({
     try: () => {
       const rawKeyParts = identity.key.columns.map((column) =>
@@ -372,7 +372,7 @@ const extractMetadata = <
   operation: "read" | "readByIdentity",
   row: SourceInput,
   rowIndex: number
-): Effect.Effect<SqlSourceMetadataResult<Cursor>, SourcePluginError> =>
+): Effect.Effect<SqlSourceMetadataResult<Cursor>, SourceError> =>
   Effect.try({
     try: () => options.getSourceMetadata(row, { rowIndex }),
     catch: (cause) =>
@@ -400,7 +400,7 @@ const sourceItemFromRow = <
   rowIndex: number
 ): Effect.Effect<
   SourceItemInput<SourceInput, SqlIdentityDefinitionKey<Identity>>,
-  SourcePluginError
+  SourceError
 > =>
   extractMetadata(options, operation, row, rowIndex).pipe(
     Effect.flatMap((metadata) => {
@@ -450,7 +450,7 @@ const readRows = <
     Cursor,
     SqlIdentityDefinitionKey<Identity>
   >,
-  SourcePluginError
+  SourceError
 > =>
   Effect.gen(function* () {
     if (!Number.isInteger(options.batchSize) || options.batchSize <= 0) {
@@ -533,16 +533,16 @@ const readRows = <
     };
   });
 
-const makeSqlSourceCountRowError = (rowCount: number): SourcePluginError =>
-  new SourcePluginError({
+const makeSqlSourceCountRowError = (rowCount: number): SourceError =>
+  new SourceError({
     cause: { rowCount },
-    message: "SQL source plugin count must return exactly one row",
+    message: "SQL source count must return exactly one row",
   });
 
 const readSqlSourceCount = <CountRow>(
   count: SqlSourceCount<CountRow>,
   sql: SqlClient.SqlClient
-): Effect.Effect<number, SourcePluginError> => {
+): Effect.Effect<number, SourceError> => {
   if (count.kind === "effect") {
     return count.effect(sql);
   }
@@ -563,9 +563,9 @@ const readSqlSourceCount = <CountRow>(
     return yield* Effect.try({
       try: () => count.getCount(row),
       catch: (cause) =>
-        new SourcePluginError({
+        new SourceError({
           cause,
-          message: "SQL source plugin count extractor failed",
+          message: "SQL source count extractor failed",
         }),
     });
   });
@@ -583,7 +583,7 @@ const makeImplementation = <
   identityDefinition: SourceIdentityDefinition<
     SqlIdentityDefinitionKey<Identity>
   >
-): SourcePluginImplementation<
+): SourceImplementation<
   Source,
   Cursor,
   SqlIdentityDefinitionKey<Identity>,
@@ -672,7 +672,7 @@ const make = <
     SqlIdentityDefinition<IdentityKey, Columns>,
     CountRow
   >
-): ConfiguredSourcePlugin<
+): ConfiguredSource<
   Source,
   Cursor,
   IdentityKey,
@@ -687,7 +687,7 @@ const make = <
       identityDefinition
     );
 
-  return SourcePlugin.fromLayer<
+  return Source.fromLayer<
     Source,
     Cursor,
     IdentityKey,
@@ -697,15 +697,10 @@ const make = <
   >({
     cursorSchema: options.cursorSchema,
     layer: Layer.effect(
-      SourcePlugin,
+      Source,
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        const source = SourcePlugin.make<
-          Source,
-          Cursor,
-          IdentityKey,
-          SourceInput
-        >({
+        const source = Source.make<Source, Cursor, IdentityKey, SourceInput>({
           cursorSchema: options.cursorSchema,
           identity: identityDefinition,
           make: () =>
@@ -726,7 +721,7 @@ const make = <
               }),
         });
 
-        return yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        return yield* Source.pipe(Effect.provide(source.layer));
       })
     ),
     identity: identityDefinition,
@@ -756,12 +751,12 @@ const makeLayer = <
     SqlIdentityDefinition<IdentityKey, Columns>,
     CountRow
   >
-): Layer.Layer<AnySourcePlugin, never, SqlClient.SqlClient> =>
+): Layer.Layer<AnySource, never, SqlClient.SqlClient> =>
   make<Source, Cursor, SourceInput, IdentityKey, Columns, CountRow>(options)
     .layer;
 
-export const SqlSourcePlugin = {
+export const SqlSource = {
   make,
   layer: makeLayer,
-  name: SqlSourcePluginName,
+  name: SqlSourceName,
 } as const;

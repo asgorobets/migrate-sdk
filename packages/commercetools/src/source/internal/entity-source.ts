@@ -1,9 +1,9 @@
 import { Effect, Layer } from "effect";
 import {
+  Source,
   type SourceIdentityTarget,
+  type SourceImplementation,
   SourceItemTotal,
-  SourcePlugin,
-  type SourcePluginImplementation,
 } from "migrate-sdk";
 import { CommercetoolsSdk } from "../../sdk.ts";
 import type {
@@ -12,7 +12,7 @@ import type {
   CommercetoolsProjectedEntitySourceOptions,
   CommercetoolsSourceCountQueryArgs,
   CommercetoolsSourceIdentityKey,
-  ConfiguredCommercetoolsSourcePlugin,
+  ConfiguredCommercetoolsSource,
 } from "../domain.ts";
 import { CommercetoolsSourceCursor } from "../schemas.ts";
 import {
@@ -25,9 +25,9 @@ import {
 } from "../selectors.ts";
 import {
   isNotFoundSdkError,
-  sourcePluginError,
-  toSourcePluginError,
-} from "./plugin-errors.ts";
+  makeSourceError,
+  toSourceError,
+} from "./source-errors.ts";
 
 const filteredQueryTotalLimit = 10_000;
 
@@ -39,7 +39,7 @@ const projectResource = <SourceInput, Resource>(
 ) =>
   Effect.try({
     catch: (cause) =>
-      sourcePluginError(`${label} source projection threw`, {
+      makeSourceError(`${label} source projection threw`, {
         cause,
         resourceId: getId(resource),
       }),
@@ -100,12 +100,9 @@ const countTotalFromPage = <
   }
 
   return Effect.fail(
-    sourcePluginError(
-      `${descriptor.label} source count returned invalid total`,
-      {
-        total,
-      }
-    )
+    makeSourceError(`${descriptor.label} source count returned invalid total`, {
+      total,
+    })
   );
 };
 
@@ -122,7 +119,7 @@ const makeImplementation = <
     Resource
   >,
   sdk: typeof CommercetoolsSdk.Service
-): SourcePluginImplementation<
+): SourceImplementation<
   Source,
   CommercetoolsSourceCursor,
   CommercetoolsSourceIdentityKey,
@@ -132,7 +129,7 @@ const makeImplementation = <
     const queryArgs = makeCountQueryArgs(options);
     const page = yield* descriptor
       .countPage(sdk, queryArgs)
-      .pipe(Effect.mapError(toSourcePluginError));
+      .pipe(Effect.mapError(toSourceError));
 
     return yield* countTotalFromPage(descriptor, queryArgs, page);
   });
@@ -143,7 +140,7 @@ const makeImplementation = <
     const limit = yield* resolveBatchSize(descriptor.label, options);
     const page = yield* descriptor
       .readPage(sdk, makeReadQueryArgs(options, cursor, limit))
-      .pipe(Effect.mapError(toSourcePluginError));
+      .pipe(Effect.mapError(toSourceError));
     const items = yield* Effect.forEach(page.results, (resource) =>
       sourceItem(descriptor, options, resource)
     );
@@ -165,7 +162,7 @@ const makeImplementation = <
         Effect.catch((cause) =>
           isNotFoundSdkError(cause)
             ? Effect.succeed(null)
-            : Effect.fail(toSourcePluginError(cause))
+            : Effect.fail(toSourceError(cause))
         )
       );
 
@@ -195,18 +192,18 @@ export const makeProjectedEntitySource = <
     SourceInput,
     Resource
   >
-): ConfiguredCommercetoolsSourcePlugin<Source, SourceInput> => {
+): ConfiguredCommercetoolsSource<Source, SourceInput> => {
   const identity =
     descriptor.identity[options.identity ?? defaultSourceIdentity];
 
-  return SourcePlugin.fromLayer({
+  return Source.fromLayer({
     cursorSchema: CommercetoolsSourceCursor,
     identity,
     layer: Layer.effect(
-      SourcePlugin,
+      Source,
       Effect.gen(function* () {
         const sdk = yield* CommercetoolsSdk;
-        const source = SourcePlugin.make<
+        const source = Source.make<
           Source,
           CommercetoolsSourceCursor,
           CommercetoolsSourceIdentityKey,
@@ -223,7 +220,7 @@ export const makeProjectedEntitySource = <
           sourceSchema: options.sourceSchema,
         });
 
-        return yield* SourcePlugin.pipe(Effect.provide(source.layer));
+        return yield* Source.pipe(Effect.provide(source.layer));
       })
     ),
     sourceSchema: options.sourceSchema,

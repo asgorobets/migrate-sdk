@@ -1,4 +1,4 @@
-# Effect SQL Client for SQL Source Plugins
+# Effect SQL Client for SQL Sources
 
 ## Status
 
@@ -8,33 +8,33 @@ Accepted
 
 - Build an SDK-owned SQL driver abstraction.
 - Accept concrete database clients such as `pg` or `mysql2` directly.
-- Use Effect SQL `SqlClient` as the source plugin database boundary.
+- Use Effect SQL `SqlClient` as the source database boundary.
 - Make raw SQL source typing depend on Drizzle.
 
 ## Decision
 
-Raw SQL source plugins will use Effect SQL `SqlClient` as their database
+Raw SQL sources will use Effect SQL `SqlClient` as their database
 boundary.
 
 The SDK will not own connection pools, database drivers, placeholder syntax,
 statement compilation, transaction SQL, or driver-specific error
 classification. Applications will provide concrete Effect SQL layers, and the
-SQL source plugin will consume the generic `SqlClient` service through Effect.
+SQL source will consume the generic `SqlClient` service through Effect.
 
 Raw SQL source queries remain untyped from the SQL text. Migration authors must
 provide an explicit source payload schema, cursor schema, row-to-source-item
 mapping, and identity lookup query. A future Drizzle-backed source can use
-Drizzle's table/query typing, but that should be a separate source plugin rather
+Drizzle's table/query typing, but that should be a separate source rather
 than hidden inside the raw SQL source.
 
 Effect SQL schema-backed row decoding may be used internally, but it does not
 replace the configured Source Payload Schema and does not introduce a second
 required user-facing row schema for raw SQL sources.
 
-Raw SQL source query callbacks return SQL statements for the plugin to execute.
+Raw SQL source query callbacks return SQL statements for the source to execute.
 They do not return arbitrary Effect programs. This keeps execution policy,
 operation diagnostics, SQL error mapping, lookup cardinality checks, row
-metadata extraction, and cursor advancement inside `SqlSourcePlugin`.
+metadata extraction, and cursor advancement inside `SqlSource`.
 
 Raw SQL v1 requires a lookup statement builder and uses direct source lookup
 internally. It does not expose scan lookup because SQL reruns and single-item
@@ -59,7 +59,7 @@ them.
   first-party SDK driver work.
 - Query construction can use Effect SQL tagged templates, parameter binding,
   dialect compilation, connection reservation, and transaction support.
-- SQL failures can be translated from Effect SQL errors into `SourcePluginError`
+- SQL failures can be translated from Effect SQL errors into `SourceError`
   without losing the original cause.
 - Raw SQL source payloads stay schema-backed at the migration boundary, but row
   types are not inferred from arbitrary SQL.

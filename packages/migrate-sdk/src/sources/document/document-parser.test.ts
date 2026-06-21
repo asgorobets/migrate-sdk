@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-import { SourcePluginError } from "migrate-sdk";
+import { SourceError } from "migrate-sdk";
 import type { DocumentParser } from "migrate-sdk/sources/document";
 import { DocumentParsers } from "migrate-sdk/sources/document";
 import { expectTypeOf } from "vitest";
@@ -45,10 +45,7 @@ describe("DocumentParsers.json", () => {
         DocumentParser<string, typeof CompanyDocument.Type>
       >();
       expectTypeOf(parser.parse("{}")).toMatchTypeOf<
-        Effect.Effect<
-          readonly (typeof CompanyDocument.Type)[],
-          SourcePluginError
-        >
+        Effect.Effect<readonly (typeof CompanyDocument.Type)[], SourceError>
       >();
 
       const documents = yield* parser.parse(
@@ -110,7 +107,7 @@ describe("DocumentParsers.json", () => {
       const error = yield* parser.parse('{"companies"').pipe(Effect.flip);
       const cause = error.cause as ParserFailureCause;
 
-      expect(error).toBeInstanceOf(SourcePluginError);
+      expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe("Unable to parse JSON document");
       expect(cause.kind).toBe("json-syntax");
       expect(cause.parser).toBe("json");
@@ -139,7 +136,7 @@ describe("DocumentParsers.json", () => {
         .pipe(Effect.flip);
       const cause = error.cause as ParserFailureCause;
 
-      expect(error).toBeInstanceOf(SourcePluginError);
+      expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe(
         "JSON document does not match document schema"
       );
@@ -244,7 +241,7 @@ describe("DocumentParsers.schema", () => {
         .pipe(Effect.flip);
       const cause = error.cause as ParserFailureCause;
 
-      expect(error).toBeInstanceOf(SourcePluginError);
+      expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe("Document does not match document schema");
       expect(cause.kind).toBe("document-schema");
       expect(cause.parser).toBe("company-api");

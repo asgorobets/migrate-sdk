@@ -6,6 +6,6 @@ export type {
   InMemorySourceTransientFailures,
 } from "./in-memory-source.ts";
 export {
+  InMemorySource,
   InMemorySourceCursor,
-  InMemorySourcePlugin,
 } from "./in-memory-source.ts";

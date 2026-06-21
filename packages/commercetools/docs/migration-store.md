@@ -28,8 +28,8 @@ good native fit because they store JSON documents, are addressable by
 versions.
 
 The store should be useful for destination-only migrations today and should not
-be coupled to destination internals. Future source plugins and destination
-plugins should be able to share the same store package slice.
+be coupled to destination internals. Future sources and destination
+sources and destinations should be able to share the same store package slice.
 
 ## Package Boundary
 
@@ -63,7 +63,7 @@ const storeLayer = CommercetoolsMigrationStore.layer({
 }).pipe(Layer.provide(sdkLayer));
 ```
 
-The store depends on `CommercetoolsSdk`. It does not take a destination plugin
+The store depends on `CommercetoolsSdk`. It does not take a destination
 instance as input. This lets users store migration state in the same project as
 the destination, or provide a separate SDK layer for a dedicated state project.
 
@@ -592,7 +592,7 @@ The package includes a credential-free product catalog example at
 
 It uses:
 
-- `InMemorySourcePlugin` for a small product catalog source fixture
+- `InMemorySource` for a small product catalog source fixture
 - `CommercetoolsDestination` for product creation inside `process`
 - `CommercetoolsMigrationStore` for Custom Object-backed cursors, item state,
   run state, and locks
@@ -632,7 +632,7 @@ The package also includes a CLI-driven live Business Unit scratchpad at
 
 It wires one real Commercetools API root into:
 
-- `CommercetoolsSourcePlugin` for loading existing Business Units
+- `CommercetoolsSource` for loading existing Business Units
 - `CommercetoolsDestination` for updating those Business Units inside
   `process`
 - `CommercetoolsMigrationStore` for storing migration state in Commercetools
@@ -641,7 +641,7 @@ It wires one real Commercetools API root into:
 Edit the batch size or migration body directly in
 `packages/commercetools/examples/migrate.config.ts` and
 `packages/commercetools/examples/business-unit-static-field-migration.ts`. The
-scratchpad loads Business Units with `CommercetoolsSourcePlugin.businessUnits(...)`,
+scratchpad loads Business Units with `CommercetoolsSource.businessUnits(...)`,
 then emits a `setContactEmail` update using each Business Unit's current
 `contactEmail`, so it exercises source, destination, and store wiring without a
 fixture key. Credentials can stay in your shell environment or in

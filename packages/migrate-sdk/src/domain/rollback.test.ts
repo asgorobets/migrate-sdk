@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, type Layer, Schema } from "effect";
 import {
-  type ConfiguredSourcePlugin,
+  type ConfiguredSource,
   MigrationDefinition,
   type MigrationDefinitionId,
   type MigrationItemState,
@@ -37,7 +37,7 @@ interface RollbackPipelineError {
   readonly _tag: "RollbackPipelineError";
 }
 
-const source = {} as ConfiguredSourcePlugin<ArticleSource, unknown, string>;
+const source = {} as ConfiguredSource<ArticleSource, unknown, string>;
 const store = {} as Layer.Layer<MigrationStore, MigrationStoreError>;
 
 describe("rollback public API", () => {
