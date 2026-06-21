@@ -13,12 +13,13 @@ import type {
   RunRequestSourceRequirements,
 } from "../domain/run.ts";
 import {
-  type MigrationRuntimeExecutionOptions,
   type RollbackMigrationError,
   type RunMigrationError,
-  rollbackMigrationsWithEncodedSourceIdentities,
-  runMigrationsWithEncodedRunMode,
-} from "../runtime/run-migrations.ts";
+  MigrationRollbackExecutor,
+  type MigrationRollbackExecutorService,
+  MigrationRunExecutor,
+  type MigrationRunExecutorService,
+} from "./migration-run-executor.ts";
 
 export type MigrationExecutableRunError<
   Definitions extends
@@ -56,88 +57,13 @@ export interface MigrationExecutableService {
   >;
 }
 
-export const executeMigrationRunPlanInline = <
-  Definitions extends readonly AnyMigrationDefinition[],
->(
-  plan: MigrationDefinitionExecutableRunPlan<Definitions>,
-  options: MigrationRuntimeExecutionOptions = {}
-): Effect.Effect<
-  MigrationRunSummary,
-  MigrationExecutableRunError<Definitions>,
-  RunRequestSourceRequirements<Definitions>
-> =>
-  runMigrationsWithEncodedRunMode<Definitions>(
-    plan.target === undefined
-      ? {
-          definitions: plan.definitions,
-          ...(plan.execution === undefined
-            ? {}
-            : { execution: plan.execution }),
-          ...(plan.mode === undefined ? {} : { mode: plan.mode }),
-          ...(plan.update === undefined ? {} : { update: plan.update }),
-        }
-      : {
-          definitions: plan.definitions,
-          ...(plan.execution === undefined
-            ? {}
-            : { execution: plan.execution }),
-          mode: {
-            kind: "item" as const,
-            encodedSourceIdentity: plan.target.sourceIdentities[0],
-          },
-        },
-    options
-  );
-
-const startInlineRun = <Definitions extends readonly AnyMigrationDefinition[]>(
-  plan: MigrationDefinitionExecutableRunPlan<Definitions>
-): Effect.Effect<
-  ExecutionStartResult<MigrationRunSummary>,
-  MigrationExecutableRunError<Definitions>,
-  RunRequestSourceRequirements<Definitions>
-> =>
-  executeMigrationRunPlanInline(plan).pipe(
-    Effect.map((summary) => ({
-      kind: "completed" as const,
-      runId: summary.runId,
-      summary,
-    }))
-  );
-
-export const executeMigrationRollbackPlanInline = (
-  plan: MigrationDefinitionExecutableRollbackPlan,
-  options: MigrationRuntimeExecutionOptions = {}
-): Effect.Effect<RollbackRunSummary, MigrationExecutableRollbackError> =>
-  rollbackMigrationsWithEncodedSourceIdentities(
-    {
-      definitions: plan.registryDefinitions,
-      definitionIds: [...plan.executionDefinitionIds].reverse(),
-      ...(plan.execution === undefined ? {} : { execution: plan.execution }),
-      ...(plan.target === undefined
-        ? {}
-        : { encodedSourceIdentities: plan.target.sourceIdentities }),
-    },
-    options
-  );
-
-const startInlineRollback = (
-  plan: MigrationDefinitionExecutableRollbackPlan
-): Effect.Effect<
-  ExecutionStartResult<RollbackRunSummary>,
-  MigrationExecutableRollbackError
-> =>
-  executeMigrationRollbackPlanInline(plan).pipe(
-    Effect.map((summary) => ({
-      kind: "completed" as const,
-      runId: summary.runId,
-      summary,
-    }))
-  );
-
-const inlineMigrationExecutable: MigrationExecutableService = {
-  startRollback: startInlineRollback,
-  startRun: startInlineRun,
-};
+const makeInlineMigrationExecutable = (
+  runExecutor: MigrationRunExecutorService,
+  rollbackExecutor: MigrationRollbackExecutorService
+): MigrationExecutableService => ({
+  startRollback: (plan) => rollbackExecutor.startPlan(plan),
+  startRun: (plan) => runExecutor.startPlan(plan),
+});
 
 export class MigrationExecutable extends Service<
   MigrationExecutable,
@@ -159,8 +85,19 @@ export class MigrationExecutable extends Service<
       executable.startRollback(plan)
     );
 
-  static readonly inline = Layer.succeed(
+  static readonly inline = Layer.effect(
     MigrationExecutable,
-    inlineMigrationExecutable
+    Effect.gen(function* () {
+      const runExecutor = yield* MigrationRunExecutor;
+      const rollbackExecutor = yield* MigrationRollbackExecutor;
+
+      return makeInlineMigrationExecutable(runExecutor, rollbackExecutor);
+    })
+  );
+
+  static readonly inlineDefault = MigrationExecutable.inline.pipe(
+    Layer.provide(
+      Layer.mergeAll(MigrationRunExecutor.layer, MigrationRollbackExecutor.layer)
+    )
   );
 }

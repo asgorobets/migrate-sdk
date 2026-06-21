@@ -1458,7 +1458,7 @@ describe("MigrationDefinitionRegistry", () => {
       });
 
       const result = yield* MigrationExecutable.startRun(plan).pipe(
-        Effect.provide(MigrationExecutable.inline)
+        Effect.provide(MigrationExecutable.inlineDefault)
       );
 
       expectTypeOf(result).toMatchTypeOf<
@@ -1535,7 +1535,7 @@ describe("MigrationDefinitionRegistry", () => {
         });
 
         const result = yield* MigrationExecutable.startRun(plan).pipe(
-          Effect.provide(MigrationExecutable.inline)
+          Effect.provide(MigrationExecutable.inlineDefault)
         );
 
         expect(result.kind).toBe("completed");
@@ -1646,7 +1646,7 @@ describe("MigrationDefinitionRegistry", () => {
           definitionIds: ["articles"],
         });
         const result = yield* MigrationExecutable.startRollback(plan).pipe(
-          Effect.provide(MigrationExecutable.inline)
+          Effect.provide(MigrationExecutable.inlineDefault)
         );
 
         expectTypeOf(result).toMatchTypeOf<
@@ -1696,7 +1696,7 @@ describe("MigrationDefinitionRegistry", () => {
         });
         const error = yield* Effect.flip(
           MigrationExecutable.startRollback(plan).pipe(
-            Effect.provide(MigrationExecutable.inline)
+            Effect.provide(MigrationExecutable.inlineDefault)
           )
         );
 
