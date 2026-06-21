@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import {
   defineMigration,
   FakeDurableMigrationExecutable,
@@ -9,6 +9,7 @@ import {
   InMemorySourcePlugin,
   MigrationDefinitionRegistry,
   MigrationExecutable,
+  MigrationStore,
   MigrationStoreError,
   SourceIdentity,
   toMigrationDefinitionId,
@@ -40,16 +41,37 @@ const makeArticlesSource = () =>
   });
 
 const makeFixture = (
-  stateInput: Parameters<
-    typeof FakeDurableMigrationExecutable.makeState
-  >[0] = {}
+  stateInput: Parameters<typeof FakeDurableMigrationExecutable.makeState>[0] & {
+    readonly releaseFails?: boolean;
+  } = {}
 ) => {
+  const { releaseFails, ...durableStateInput } = stateInput;
   const storeState = InMemoryMigrationStore.makeState();
   const articlesId = toMigrationDefinitionId("articles");
+  const baseStore = InMemoryMigrationStore.layer(storeState);
+  const store =
+    releaseFails === true
+      ? Layer.effect(
+          MigrationStore,
+          Effect.gen(function* () {
+            const base = yield* MigrationStore;
+
+            return {
+              ...base,
+              releaseDefinitionLock: () =>
+                Effect.fail(
+                  new MigrationStoreError({
+                    message: "Release failed",
+                  })
+                ),
+            };
+          })
+        ).pipe(Layer.provide(baseStore))
+      : baseStore;
   const articles = defineMigration({
     id: articlesId,
     source: makeArticlesSource(),
-    store: InMemoryMigrationStore.layer(storeState),
+    store,
     process: () => Effect.void,
     rollback: () => undefined,
   });
@@ -57,7 +79,8 @@ const makeFixture = (
     id: "catalog",
     definitions: [articles] as const,
   });
-  const durableState = FakeDurableMigrationExecutable.makeState(stateInput);
+  const durableState =
+    FakeDurableMigrationExecutable.makeState(durableStateInput);
 
   return {
     articles,
@@ -90,10 +113,11 @@ describe("FakeDurableMigrationExecutable", () => {
         expect(result.runId).not.toBe(result.execution.executionId);
         expect(durableState.envelopes.get(result.runId)).toEqual(
           expect.objectContaining({
-            definitionIds: [articlesId],
+            executionDefinitionIds: [articlesId],
             kind: "run",
             registryId: "catalog",
             runId: result.runId,
+            scopeDefinitionIds: [articlesId],
           })
         );
         expect(durableState.executions.get(result.runId)).toEqual(
@@ -153,10 +177,17 @@ describe("FakeDurableMigrationExecutable", () => {
           });
           expect(durableState.envelopes.get(result.runId)).toEqual(
             expect.objectContaining({
-              definitionIds: [articlesId],
+              executionDefinitionIds: [articlesId],
               kind: "rollback",
+              locks: [
+                expect.objectContaining({
+                  definitionId: articlesId,
+                  ownerRunId: result.runId,
+                }),
+              ],
               registryId: "catalog",
               runId: result.runId,
+              scopeDefinitionIds: [articlesId],
             })
           );
           expect(storeState.latestRunStates.get(articlesId)).toEqual(
@@ -216,7 +247,45 @@ describe("FakeDurableMigrationExecutable", () => {
   );
 
   it.effect(
-    "fails attach failures with the accepted provider execution identity",
+    "returns a typed store error when lock cleanup fails after provider start rejection",
+    () =>
+      Effect.gen(function* () {
+        const { articlesId, durableState, registry, storeState } = makeFixture({
+          rejectStart: true,
+          releaseFails: true,
+        });
+        const plan = yield* registry.executable().planRun({
+          definitionIds: ["articles"],
+        });
+
+        const error = yield* Effect.flip(
+          MigrationExecutable.startRun(plan).pipe(
+            Effect.provide(FakeDurableMigrationExecutable.layer(durableState))
+          )
+        );
+
+        expect(error).toBeInstanceOf(MigrationStoreError);
+        expect(error).toEqual(
+          expect.objectContaining({
+            message: "Unable to release Migration Definition Lock set",
+          })
+        );
+        expect(storeState.latestRunStates.get(articlesId)).toEqual(
+          expect.objectContaining({
+            runId: toMigrationRunId("run-1"),
+            status: "start-failed",
+          })
+        );
+        expect(storeState.definitionLocks.get(articlesId)).toEqual(
+          expect.objectContaining({
+            ownerRunId: toMigrationRunId("run-1"),
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "keeps workflow locks when attaching the accepted provider execution identity fails",
     () =>
       Effect.gen(function* () {
         const { articlesId, durableState, registry, storeState } = makeFixture({
@@ -252,11 +321,15 @@ describe("FakeDurableMigrationExecutable", () => {
         );
         expect(durableState.executions.size).toBe(0);
         expect(durableState.locks.size).toBe(0);
-        expect(storeState.definitionLocks.size).toBe(0);
+        expect(storeState.definitionLocks.get(articlesId)).toEqual(
+          expect.objectContaining({
+            ownerRunId: toMigrationRunId("run-1"),
+          })
+        );
         expect(storeState.latestRunStates.get(articlesId)).toEqual(
           expect.objectContaining({
             runId: toMigrationRunId("run-1"),
-            status: "start-failed",
+            status: "queued",
           })
         );
         expect(storeState.latestRunStates.get(articlesId)).not.toHaveProperty(

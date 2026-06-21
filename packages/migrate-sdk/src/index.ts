@@ -154,6 +154,16 @@ export type {
   RunRequest,
   RunRequestInput,
 } from "./domain/run.ts";
+export { emptyMigrationRunCursorWindowState } from "./runtime/run-migrations.ts";
+export type {
+  MigrationRunCompletionInput,
+  MigrationRunDefinitionCursorWindowInput,
+  MigrationRunCursorWindowInput,
+  MigrationRunCursorWindowResult,
+  MigrationRunCursorWindowState,
+  MigrationRunExecutionLease,
+  MigrationRunFailureInput,
+} from "./runtime/run-migrations.ts";
 
 export {
   DuplicateSourceIdentityStatusWarning,
@@ -307,6 +317,26 @@ export type {
   MigrationExecutableRunStartError,
   MigrationExecutableService,
 } from "./services/migration-executable.ts";
+export { MigrationExecution } from "./services/migration-execution.ts";
+export type {
+  BoundMigrationExecutionService,
+  MigrationExecutionMakeInput,
+  MigrationExecutionRollbackError,
+  MigrationExecutionRollbackInput,
+  MigrationExecutionRunError,
+  MigrationExecutionRunInput,
+  MigrationExecutionService,
+} from "./services/migration-execution.ts";
+export {
+  MigrationRollbackExecutor,
+  MigrationRunExecutor,
+} from "./services/migration-run-executor.ts";
+export type {
+  MigrationRollbackExecutorService,
+  MigrationRunExecutorService,
+} from "./services/migration-run-executor.ts";
+export { MigrationRunStepExecutor } from "./services/migration-run-step-executor.ts";
+export type { MigrationRunStepExecutorService } from "./services/migration-run-step-executor.ts";
 export {
   FakeDurableMigrationExecutable,
   FakeDurableMigrationExecutableAttachError,

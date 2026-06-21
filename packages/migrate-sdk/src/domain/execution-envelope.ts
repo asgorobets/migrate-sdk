@@ -4,11 +4,13 @@ import {
   type MigrationDefinitionRegistryCatalogLookupError,
 } from "../services/migration-definition-registry-catalog.ts";
 import {
-  executeMigrationRollbackPlanInline,
-  executeMigrationRunPlanInline,
   type MigrationExecutableRollbackError,
   type MigrationExecutableRunError,
 } from "../services/migration-executable.ts";
+import {
+  MigrationRollbackExecutor,
+  MigrationRunExecutor,
+} from "../services/migration-run-executor.ts";
 import {
   MigrationDefinitionId,
   MigrationDefinitionRegistryId,
@@ -16,33 +18,36 @@ import {
   type MigrationRunIdInput,
   toMigrationRunId,
 } from "./ids.ts";
+import { MigrationDefinitionLock } from "./lock.ts";
 import type {
   MigrationDefinitionExecutableRollbackPlan,
   MigrationDefinitionExecutableRunPlan,
-  MigrationDefinitionRegistryExecutableError,
   MigrationDefinitionRegistryPlanningError,
   MigrationDefinitionRegistryRollbackInput,
   MigrationDefinitionRegistryRunInput,
 } from "./registry.ts";
+import { MigrationDefinitionRegistryExecutableError } from "./registry.ts";
 import type { RollbackRunSummary } from "./rollback.ts";
 import type { MigrationRunSummary } from "./run.ts";
 
 export interface MigrationExecutionEnvelopeBase {
-  readonly definitionIds: readonly MigrationDefinitionId[];
-  readonly plannedOrder: readonly MigrationDefinitionId[];
+  readonly executionDefinitionIds: readonly MigrationDefinitionId[];
   readonly registryId: MigrationDefinitionRegistryId;
   readonly runId: MigrationRunId;
+  readonly scopeDefinitionIds: readonly MigrationDefinitionId[];
 }
 
 export interface MigrationRunExecutionEnvelope
   extends MigrationExecutionEnvelopeBase {
   readonly kind: "run";
+  readonly locks?: readonly MigrationDefinitionLock[];
   readonly request: MigrationDefinitionRegistryRunInput;
 }
 
 export interface MigrationRollbackExecutionEnvelope
   extends MigrationExecutionEnvelopeBase {
   readonly kind: "rollback";
+  readonly locks?: readonly MigrationDefinitionLock[];
   readonly request: MigrationDefinitionRegistryRollbackInput;
 }
 
@@ -51,21 +56,23 @@ export type MigrationExecutionEnvelope =
   | MigrationRollbackExecutionEnvelope;
 
 export const MigrationRunExecutionEnvelope = Schema.Struct({
-  definitionIds: Schema.Array(MigrationDefinitionId),
+  executionDefinitionIds: Schema.Array(MigrationDefinitionId),
   kind: Schema.Literal("run"),
-  plannedOrder: Schema.Array(MigrationDefinitionId),
+  locks: Schema.optional(Schema.Array(MigrationDefinitionLock)),
   registryId: MigrationDefinitionRegistryId,
   request: Schema.Unknown,
   runId: MigrationRunId,
+  scopeDefinitionIds: Schema.Array(MigrationDefinitionId),
 });
 
 export const MigrationRollbackExecutionEnvelope = Schema.Struct({
-  definitionIds: Schema.Array(MigrationDefinitionId),
+  executionDefinitionIds: Schema.Array(MigrationDefinitionId),
   kind: Schema.Literal("rollback"),
-  plannedOrder: Schema.Array(MigrationDefinitionId),
+  locks: Schema.optional(Schema.Array(MigrationDefinitionLock)),
   registryId: MigrationDefinitionRegistryId,
   request: Schema.Unknown,
   runId: MigrationRunId,
+  scopeDefinitionIds: Schema.Array(MigrationDefinitionId),
 });
 
 export const MigrationExecutionEnvelope = Schema.Union([
@@ -83,6 +90,7 @@ export class MigrationExecutionEnvelopeMissingRegistryIdError extends Schema.Tag
 ) {}
 
 export interface MigrationExecutionEnvelopeInput {
+  readonly locks?: readonly MigrationDefinitionLock[];
   readonly runId: MigrationRunIdInput;
 }
 
@@ -117,12 +125,13 @@ export const makeMigrationRunExecutionEnvelope = (
   return Effect.map(
     requireRegistryId("run", runId, plan.registryId),
     (registryId) => ({
-      definitionIds: plan.includedDefinitionIds,
+      executionDefinitionIds: plan.executionDefinitionIds,
       kind: "run" as const,
-      plannedOrder: plan.executionDefinitionIds,
       registryId,
       request: plan.request,
       runId,
+      scopeDefinitionIds: plan.includedDefinitionIds,
+      ...(input.locks === undefined ? {} : { locks: input.locks }),
     })
   );
 };
@@ -139,12 +148,13 @@ export const makeMigrationRollbackExecutionEnvelope = (
   return Effect.map(
     requireRegistryId("rollback", runId, plan.registryId),
     (registryId) => ({
-      definitionIds: plan.includedDefinitionIds,
+      executionDefinitionIds: plan.executionDefinitionIds,
       kind: "rollback" as const,
-      plannedOrder: plan.executionDefinitionIds,
+      ...(input.locks === undefined ? {} : { locks: input.locks }),
       registryId,
       request: plan.request,
       runId,
+      scopeDefinitionIds: plan.includedDefinitionIds,
     })
   );
 };
@@ -161,24 +171,34 @@ export const executeMigrationExecutionEnvelope = (
 ): Effect.Effect<
   MigrationRunSummary | RollbackRunSummary,
   MigrationExecutionEnvelopeExecutionError,
-  MigrationDefinitionRegistryCatalog
+  | MigrationDefinitionRegistryCatalog
+  | MigrationRollbackExecutor
+  | MigrationRunExecutor
 > =>
   Effect.gen(function* () {
     const registry = yield* MigrationDefinitionRegistryCatalog.get(
       envelope.registryId
     );
+    const executionOptions = {
+      runId: envelope.runId,
+      ...(envelope.locks === undefined
+        ? {}
+        : {
+            lease: {
+              locks: envelope.locks,
+              runId: envelope.runId,
+              scopeDefinitionIds: envelope.scopeDefinitionIds,
+            },
+          }),
+    };
 
     if (envelope.kind === "run") {
       const plan = yield* registry.executable().planRun(envelope.request);
 
-      return yield* executeMigrationRunPlanInline(plan, {
-        runId: envelope.runId,
-      });
+      return yield* MigrationRunExecutor.executePlan(plan, executionOptions);
     }
 
     const plan = yield* registry.executable().planRollback(envelope.request);
 
-    return yield* executeMigrationRollbackPlanInline(plan, {
-      runId: envelope.runId,
-    });
+    return yield* MigrationRollbackExecutor.executePlan(plan, executionOptions);
   });

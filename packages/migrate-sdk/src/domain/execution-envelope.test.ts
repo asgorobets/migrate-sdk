@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Schema } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import {
   DuplicateMigrationDefinitionRegistryId,
   defaultSourceVersionContractFingerprint,
@@ -12,6 +12,9 @@ import {
   MigrationDefinitionRegistryCatalogConstructionError,
   MigrationDefinitionRegistryCatalogLookupError,
   MigrationExecutionEnvelopeMissingRegistryIdError,
+  MigrationRollbackExecutor,
+  MigrationRunExecutor,
+  MigrationStore,
   MissingMigrationDefinitionRegistryId,
   makeMigrationRollbackExecutionEnvelope,
   makeMigrationRunExecutionEnvelope,
@@ -80,20 +83,20 @@ describe("MigrationExecutionEnvelope", () => {
         );
 
         expect(runEnvelope).toEqual({
-          definitionIds: [toMigrationDefinitionId("articles")],
+          executionDefinitionIds: [toMigrationDefinitionId("articles")],
           kind: "run",
-          plannedOrder: [toMigrationDefinitionId("articles")],
           registryId: toMigrationDefinitionRegistryId("catalog"),
           request: { definitionIds: ["articles"] },
           runId: toMigrationRunId("run-envelope"),
+          scopeDefinitionIds: [toMigrationDefinitionId("articles")],
         });
         expect(rollbackEnvelope).toEqual({
-          definitionIds: [toMigrationDefinitionId("articles")],
+          executionDefinitionIds: [toMigrationDefinitionId("articles")],
           kind: "rollback",
-          plannedOrder: [toMigrationDefinitionId("articles")],
           registryId: toMigrationDefinitionRegistryId("catalog"),
           request: { definitionIds: ["articles"] },
           runId: toMigrationRunId("rollback-envelope"),
+          scopeDefinitionIds: [toMigrationDefinitionId("articles")],
         });
         expect(JSON.stringify(runEnvelope)).not.toContain("definitions");
         expect(JSON.stringify(rollbackEnvelope)).not.toContain("definitions");
@@ -247,10 +250,16 @@ describe("MigrationExecutionEnvelope", () => {
 
         const summary = yield* executeMigrationExecutionEnvelope({
           ...envelope,
-          plannedOrder: [],
+          executionDefinitionIds: [],
         }).pipe(
           Effect.provide(
-            MigrationDefinitionRegistryCatalog.layer({ registries: [registry] })
+            Layer.mergeAll(
+              MigrationDefinitionRegistryCatalog.layer({
+                registries: [registry],
+              }),
+              MigrationRunExecutor.layer,
+              MigrationRollbackExecutor.layer
+            )
           )
         );
 
@@ -263,6 +272,62 @@ describe("MigrationExecutionEnvelope", () => {
             status: "succeeded",
           })
         );
+      })
+  );
+
+  it.effect(
+    "executes run envelopes with workflow-owned locks",
+    () =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("articles");
+        const runId = toMigrationRunId("leased-run-envelope");
+        const lockOwnersDuringProcess: string[] = [];
+        const storeState = InMemoryMigrationStore.makeState();
+        const storeLayer = InMemoryMigrationStore.layer(storeState);
+        const articles = defineMigration({
+          id: definitionId,
+          source: makeArticlesSource(),
+          store: storeLayer,
+          process: () =>
+            Effect.sync(() => {
+              lockOwnersDuringProcess.push(
+                storeState.definitionLocks.get(definitionId)?.ownerRunId ??
+                  "none"
+              );
+            }),
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          id: "catalog",
+          definitions: [articles] as const,
+        });
+        const plan = yield* registry.executable().planRun({
+          definitionIds: ["articles"],
+        });
+        const lock = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.acquireDefinitionLock(definitionId, runId);
+        }).pipe(Effect.provide(storeLayer));
+        const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
+          locks: [lock],
+          runId,
+        });
+
+        const summary = yield* executeMigrationExecutionEnvelope(envelope).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              MigrationDefinitionRegistryCatalog.layer({
+                registries: [registry],
+              }),
+              MigrationRunExecutor.layer,
+              MigrationRollbackExecutor.layer
+            )
+          )
+        );
+
+        expect(summary.runId).toBe(runId);
+        expect(lockOwnersDuringProcess).toEqual([runId]);
+        expect(storeState.definitionLocks.size).toBe(0);
       })
   );
 
@@ -304,7 +369,13 @@ describe("MigrationExecutionEnvelope", () => {
         });
         const summary = yield* executeMigrationExecutionEnvelope(envelope).pipe(
           Effect.provide(
-            MigrationDefinitionRegistryCatalog.layer({ registries: [registry] })
+            Layer.mergeAll(
+              MigrationDefinitionRegistryCatalog.layer({
+                registries: [registry],
+              }),
+              MigrationRunExecutor.layer,
+              MigrationRollbackExecutor.layer
+            )
           )
         );
 
@@ -319,4 +390,5 @@ describe("MigrationExecutionEnvelope", () => {
         );
       })
   );
+
 });

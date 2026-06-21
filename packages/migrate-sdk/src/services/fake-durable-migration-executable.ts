@@ -1,5 +1,5 @@
-import { Effect, Layer, Schema } from "effect";
-import type { MigrationStoreError } from "../domain/errors.ts";
+import { Effect, Exit, Layer, Schema } from "effect";
+import { MigrationStoreError } from "../domain/errors.ts";
 import {
   type MigrationExecutionEnvelope,
   type MigrationExecutionEnvelopeMissingRegistryIdError,
@@ -82,11 +82,40 @@ type FakeDurableMigrationExecutableError =
 
 const releaseLocks = (
   store: typeof MigrationStore.Service,
-  locks: readonly MigrationDefinitionLock[]
+  locks: readonly MigrationDefinitionLock[],
+  primaryCause?: unknown
 ) =>
-  Effect.forEach(locks, (lock) => store.releaseDefinitionLock(lock), {
-    discard: true,
-  }).pipe(Effect.orDie);
+  Effect.gen(function* () {
+    const failures: {
+      readonly error: MigrationStoreError;
+      readonly lock: MigrationDefinitionLock;
+    }[] = [];
+
+    for (const lock of [...locks].reverse()) {
+      yield* store.releaseDefinitionLock(lock).pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            failures.push({ error, lock });
+          })
+        )
+      );
+    }
+
+    if (failures.length > 0) {
+      return yield* new MigrationStoreError({
+        message: "Unable to release Migration Definition Lock set",
+        cause: {
+          releaseFailures: failures.map(({ error, lock }) => ({
+            definitionId: lock.definitionId,
+            error,
+            ownerRunId: lock.ownerRunId,
+            token: lock.token,
+          })),
+          ...(primaryCause === undefined ? {} : { primaryCause }),
+        },
+      });
+    }
+  });
 
 const acquireLocks = (
   store: typeof MigrationStore.Service,
@@ -101,13 +130,39 @@ const acquireLocks = (
         .acquireDefinitionLock(definitionId, runId)
         .pipe(
           Effect.catch((error) =>
-            releaseLocks(store, locks).pipe(Effect.andThen(Effect.fail(error)))
+            releaseLocks(store, locks, error).pipe(
+              Effect.andThen(Effect.fail(error))
+            )
           )
         );
       locks.push(lock);
     }
 
     return locks;
+  });
+
+const markStartFailedAndReleaseLocks = (
+  store: typeof MigrationStore.Service,
+  runId: MigrationRunIdType,
+  definitionIds: readonly MigrationDefinitionId[],
+  locks: readonly MigrationDefinitionLock[],
+  primaryCause?: unknown
+) =>
+  Effect.gen(function* () {
+    const markFailedExit = yield* Effect.exit(
+      store.markRunStartFailed(runId, definitionIds)
+    );
+
+    yield* releaseLocks(store, locks, {
+      ...(primaryCause === undefined ? {} : { primaryCause }),
+      ...(Exit.isFailure(markFailedExit)
+        ? { markStartFailedCause: markFailedExit.cause }
+        : {}),
+    });
+
+    if (Exit.isFailure(markFailedExit)) {
+      yield* markFailedExit;
+    }
   });
 
 const rejectStart = (
@@ -151,18 +206,19 @@ const startProvider = (
       });
 
 const startDurablePlan = <Summary>({
-  definitionIds,
   makeEnvelope,
+  scopeDefinitionIds,
   state,
   storeLayer,
 }: {
-  readonly definitionIds: readonly MigrationDefinitionId[];
   readonly makeEnvelope: (
-    runId: MigrationRunIdType
+    runId: MigrationRunIdType,
+    locks: readonly MigrationDefinitionLock[]
   ) => Effect.Effect<
     MigrationExecutionEnvelope,
     MigrationExecutionEnvelopeMissingRegistryIdError
   >;
+  readonly scopeDefinitionIds: readonly MigrationDefinitionId[];
   readonly state: FakeDurableMigrationExecutableState;
   readonly storeLayer: Layer.Layer<MigrationStore, MigrationStoreError>;
 }): Effect.Effect<
@@ -172,44 +228,49 @@ const startDurablePlan = <Summary>({
   Effect.gen(function* () {
     const store = yield* MigrationStore;
     const runId = yield* store.createRunId;
-    const envelope = yield* makeEnvelope(runId);
-
-    const locks = yield* acquireLocks(store, runId, definitionIds);
+    const locks = yield* acquireLocks(store, runId, scopeDefinitionIds);
+    const envelope = yield* makeEnvelope(runId, locks).pipe(
+      Effect.catch((error) =>
+        releaseLocks(store, locks, error).pipe(
+          Effect.andThen(Effect.fail(error))
+        )
+      )
+    );
     const queuedRunState = yield* store
-      .queueRun(runId, definitionIds)
+      .queueRun(runId, scopeDefinitionIds)
       .pipe(
         Effect.catch((error) =>
-          releaseLocks(store, locks).pipe(Effect.andThen(Effect.fail(error)))
+          releaseLocks(store, locks, error).pipe(
+            Effect.andThen(Effect.fail(error))
+          )
         )
       );
     state.queuedRunStates.push(queuedRunState);
 
     const execution = yield* startProvider(state, envelope).pipe(
       Effect.catch((error) =>
-        store
-          .markRunStartFailed(runId, definitionIds)
-          .pipe(
-            Effect.andThen(releaseLocks(store, locks)),
-            Effect.andThen(Effect.fail(error))
-          )
+        markStartFailedAndReleaseLocks(
+          store,
+          runId,
+          scopeDefinitionIds,
+          locks,
+          error
+        ).pipe(Effect.andThen(Effect.fail(error)))
       )
     );
 
     const failAttach = (cause?: unknown) =>
-      store
-        .markRunStartFailed(runId, definitionIds)
-        .pipe(
-          Effect.andThen(releaseLocks(store, locks)),
-          Effect.andThen(Effect.fail(attachError(runId, execution, cause)))
-        );
+      Effect.fail(attachError(runId, execution, cause));
 
     if (state.rejectAttach) {
       return yield* failAttach();
     }
 
     yield* store
-      .attachRunExecution(runId, definitionIds, execution)
-      .pipe(Effect.catch((error) => failAttach(error)));
+      .attachRunExecution(runId, scopeDefinitionIds, execution)
+      .pipe(
+        Effect.mapError((error) => attachError(runId, execution, error))
+      );
     state.executions.set(runId, execution);
     state.locks.set(runId, locks);
 
@@ -234,9 +295,9 @@ export const FakeDurableMigrationExecutable = {
         }
 
         return startDurablePlan<MigrationRunSummary>({
-          definitionIds: plan.executionDefinitionIds,
-          makeEnvelope: (runId) =>
-            makeMigrationRunExecutionEnvelope(plan, { runId }),
+          makeEnvelope: (runId, locks) =>
+            makeMigrationRunExecutionEnvelope(plan, { locks, runId }),
+          scopeDefinitionIds: plan.includedDefinitionIds,
           state,
           storeLayer: firstDefinition.store,
         });
@@ -252,9 +313,9 @@ export const FakeDurableMigrationExecutable = {
         }
 
         return startDurablePlan<RollbackRunSummary>({
-          definitionIds: plan.executionDefinitionIds,
-          makeEnvelope: (runId) =>
-            makeMigrationRollbackExecutionEnvelope(plan, { runId }),
+          makeEnvelope: (runId, locks) =>
+            makeMigrationRollbackExecutionEnvelope(plan, { locks, runId }),
+          scopeDefinitionIds: plan.includedDefinitionIds,
           state,
           storeLayer: firstDefinition.store,
         });
