@@ -15,12 +15,14 @@
     "./destinations/in-memory": "./src/destinations/in-memory/index.ts",
     "./destinations/in-memory/testing": "./src/destinations/in-memory/testing.ts",
     "./internal/*": null,
+    "./runtime": "./src/runtime/index.ts",
     "./sources/csv": "./src/sources/csv/index.ts",
     "./sources/document": "./src/sources/document/index.ts",
     "./sources/in-memory": "./src/sources/in-memory/index.ts",
     "./sources/sql": "./src/sources/sql/index.ts",
     "./stores/file": "./src/stores/file/index.ts",
     "./stores/in-memory": "./src/stores/in-memory/index.ts",
+    "./testing": "./src/testing.ts",
     "./*/internal/*": null
   },
   "scripts": {

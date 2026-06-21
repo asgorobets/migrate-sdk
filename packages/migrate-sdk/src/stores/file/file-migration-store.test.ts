@@ -13,8 +13,6 @@ import { makeSourceVersionContractFingerprint } from "../../domain/migration-con
 import {
   MigrationDefinition,
   MigrationStore,
-  runMigration,
-  runMigrations,
   SourceIdentity,
   type SourceItemInput,
   SourcePlugin,
@@ -27,6 +25,10 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "../../index.ts";
+import {
+  runInlineDefinition,
+  runInlineRegistry,
+} from "../../test-support/inline-registry-execution.ts";
 
 const TestSourceIdentity = SourceIdentity.make({
   id: "test-source@v1",
@@ -290,7 +292,7 @@ describe("FileMigrationStore", () => {
           ],
         });
 
-        const firstSummary = yield* runMigration(firstDefinition);
+        const firstSummary = yield* runInlineDefinition(firstDefinition);
 
         expect(firstSummary.status).toBe("succeeded");
         expect(firstSummary.definitions[0]?.counts).toEqual({
@@ -319,7 +321,7 @@ describe("FileMigrationStore", () => {
           processCalls: secondProcessCalls,
         });
 
-        const secondSummary = yield* runMigration(secondDefinition);
+        const secondSummary = yield* runInlineDefinition(secondDefinition);
 
         expect(secondSummary.status).toBe("succeeded");
         expect(secondSummary.definitions[0]?.counts).toEqual({
@@ -515,7 +517,7 @@ describe("FileMigrationStore", () => {
           process: () => Effect.void,
         });
 
-        yield* runMigration(definition);
+        yield* runInlineDefinition(definition);
 
         const storedCursor = yield* Effect.gen(function* () {
           const store = yield* MigrationStore;
@@ -555,7 +557,7 @@ describe("FileMigrationStore", () => {
           ],
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
         const hasDefinitionLatestRun = yield* latestRunFileExists(
           directory,
           "articles"
@@ -727,7 +729,7 @@ describe("FileMigrationStore", () => {
           processCalls: firstProcessCalls,
         });
 
-        const firstSummary = yield* runMigration(firstDefinition);
+        const firstSummary = yield* runInlineDefinition(firstDefinition);
 
         expect(firstSummary.definitions[0]?.counts.skipped).toBe(1);
         expect(firstProcessCalls).toEqual([]);
@@ -745,7 +747,7 @@ describe("FileMigrationStore", () => {
           processCalls: secondProcessCalls,
         });
 
-        const secondSummary = yield* runMigrations({
+        const secondSummary = yield* runInlineRegistry({
           definitions: [secondDefinition],
           mode: { kind: "skipped" },
         });
@@ -779,7 +781,7 @@ describe("FileMigrationStore", () => {
             ],
           });
 
-          const summary = yield* runMigration(definition);
+          const summary = yield* runInlineDefinition(definition);
           const hasLockFile = yield* lockFileExists(directory, "articles");
 
           expect(summary.status).toBe("succeeded");
@@ -808,7 +810,7 @@ describe("FileMigrationStore", () => {
           process: () => Effect.void,
         });
 
-        const error = yield* Effect.flip(runMigration(definition));
+        const error = yield* Effect.flip(runInlineDefinition(definition));
         const hasLockFile = yield* lockFileExists(directory, "articles");
 
         expect(error).toEqual(
@@ -951,7 +953,7 @@ describe("FileMigrationStore", () => {
           processCalls,
         });
 
-        const error = yield* Effect.flip(runMigration(definition));
+        const error = yield* Effect.flip(runInlineDefinition(definition));
 
         expect(lock.token).toContain("lock-");
         expect(error).toEqual(

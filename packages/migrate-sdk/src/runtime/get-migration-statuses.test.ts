@@ -3,7 +3,6 @@ import { Deferred, Effect, Fiber, Layer, Schedule, Schema } from "effect";
 import {
   type ConfiguredSourcePlugin,
   DuplicateSourceIdentityStatusWarning,
-  getMigrationStatuses,
   InMemoryMigrationStore,
   InMemorySourcePlugin,
   InvalidSourceItemStatusWarning,
@@ -21,6 +20,7 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
+import { getMigrationStatuses } from "./get-migration-statuses.ts";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,

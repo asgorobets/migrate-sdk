@@ -18,6 +18,7 @@ import {
   MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
   MigrationDefinitionRegistryUnknownDefinitionError,
   MigrationExecutable,
+  MigrationExecution,
   type MigrationExecutionOptions,
   type MigrationRunSummary,
   type MigrationStore,
@@ -1264,7 +1265,7 @@ describe("MigrationDefinitionRegistry", () => {
       );
 
       const runExpandedTargetError = yield* Effect.flip(
-        dependencyRegistry.run({
+        MigrationExecution.make({ registry: dependencyRegistry }).run({
           definitionIds: ["dependent-articles"],
           sourceIdentities: ["article-1"],
           withDependencies: true,
@@ -1278,7 +1279,7 @@ describe("MigrationDefinitionRegistry", () => {
       );
 
       const runTargetMissingDependencyError = yield* Effect.flip(
-        dependencyRegistry.run({
+        MigrationExecution.make({ registry: dependencyRegistry }).run({
           definitionIds: ["dependent-articles"],
           sourceIdentities: ["article-1"],
         })
@@ -1295,7 +1296,7 @@ describe("MigrationDefinitionRegistry", () => {
       );
 
       const rollbackExpandedTargetRunnerError = yield* Effect.flip(
-        dependencyRegistry.rollback({
+        MigrationExecution.make({ registry: dependencyRegistry }).rollback({
           definitionIds: ["dependent-articles"],
           sourceIdentities: ["article-1"],
           withDependencies: true,
@@ -1639,7 +1640,10 @@ describe("MigrationDefinitionRegistry", () => {
           definitions: [articles] as const,
         });
 
-        yield* registry.run({ definitionIds: ["articles"] });
+        const seedRun = yield* MigrationExecution.make({ registry }).run({
+          definitionIds: ["articles"],
+        });
+        expect(seedRun.kind).toBe("completed");
         expect(storeState.itemStates.has(itemStateKey)).toBe(true);
 
         const plan = yield* registry.executable().planRollback({
@@ -1753,7 +1757,16 @@ describe("MigrationDefinitionRegistry", () => {
         definitions: [articles] as const,
       });
 
-      const summary = yield* registry.run({ definitionIds: ["articles"] });
+      const result = yield* MigrationExecution.make({ registry }).run({
+        definitionIds: ["articles"],
+      });
+
+      expect(result.kind).toBe("completed");
+      if (result.kind !== "completed") {
+        return;
+      }
+
+      const { summary } = result;
 
       expect(summary.status).toBe("succeeded");
       expect(summary.definitions).toEqual([
@@ -1772,89 +1785,98 @@ describe("MigrationDefinitionRegistry", () => {
     })
   );
 
-  it.effect("runs update intent through the registry runtime path", () =>
-    Effect.gen(function* () {
-      const storeState = InMemoryMigrationStore.makeState();
-      const processCalls: string[] = [];
-      const articles = MigrationDefinition.make({
-        id: "articles",
-        source: InMemorySourcePlugin.make({
-          identity: ArticleSourceIdentity,
-          sourceSchema: ArticleSource,
-          batchSize: 1,
-          items: [
-            {
-              identityKey: "article-migrated",
-              version: "source-version-1",
-              item: {
-                title: "Already migrated",
+  it.effect(
+    "runs update intent through the registry-bound execution path",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const processCalls: string[] = [];
+        const articles = MigrationDefinition.make({
+          id: "articles",
+          source: InMemorySourcePlugin.make({
+            identity: ArticleSourceIdentity,
+            sourceSchema: ArticleSource,
+            batchSize: 1,
+            items: [
+              {
+                identityKey: "article-migrated",
+                version: "source-version-1",
+                item: {
+                  title: "Already migrated",
+                },
               },
-            },
-            {
-              identityKey: "article-new",
-              version: "source-version-1",
-              item: {
-                title: "New article",
+              {
+                identityKey: "article-new",
+                version: "source-version-1",
+                item: {
+                  title: "New article",
+                },
               },
-            },
-          ],
-        }),
-        store: InMemoryMigrationStore.layer(storeState),
-        process: (sourceItem) =>
-          Effect.sync(() => {
-            processCalls.push(sourceItem.identity.encoded);
+            ],
           }),
-      });
-      const registry = MigrationDefinitionRegistry.make({
-        definitions: [articles] as const,
-      });
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (sourceItem) =>
+            Effect.sync(() => {
+              processCalls.push(sourceItem.identity.encoded);
+            }),
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles] as const,
+        });
 
-      seedMigrationContract(storeState, "articles");
-      storeState.sourceCursors.set(
-        articles.id,
-        toEncodedSourceCursor('{"offset":1}')
-      );
-      storeState.itemStates.set(
-        InMemoryMigrationStore.itemStateKey("articles", "article-migrated"),
-        {
-          definitionId: toMigrationDefinitionId("articles"),
-          sourceIdentity: SourceIdentity.fromKey(
-            ArticleSourceIdentity,
-            "article-migrated"
-          ),
-          sourceVersion: toSourceVersion("source-version-1"),
-          sourceVersionContractFingerprint:
-            defaultSourceVersionContractFingerprint,
-          lastRunId: toMigrationRunId("run-previous"),
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-          status: "migrated",
+        seedMigrationContract(storeState, "articles");
+        storeState.sourceCursors.set(
+          articles.id,
+          toEncodedSourceCursor('{"offset":1}')
+        );
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-migrated"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: SourceIdentity.fromKey(
+              ArticleSourceIdentity,
+              "article-migrated"
+            ),
+            sourceVersion: toSourceVersion("source-version-1"),
+            sourceVersionContractFingerprint:
+              defaultSourceVersionContractFingerprint,
+            lastRunId: toMigrationRunId("run-previous"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "migrated",
+          }
+        );
+
+        const result = yield* MigrationExecution.make({ registry }).run({
+          definitionIds: ["articles"],
+          update: true,
+        });
+
+        expect(result.kind).toBe("completed");
+        if (result.kind !== "completed") {
+          return;
         }
-      );
 
-      const summary = yield* registry.run({
-        definitionIds: ["articles"],
-        update: true,
-      });
+        const { summary } = result;
 
-      expect(summary.definitions[0]?.counts).toEqual({
-        migrated: 2,
-        skipped: 0,
-        failed: 0,
-        unchanged: 0,
-        needsUpdate: 0,
-      });
-      expect(processCalls).toEqual(["article-migrated", "article-new"]);
-      expect(
-        storeState.itemStates.get(
-          InMemoryMigrationStore.itemStateKey("articles", "article-migrated")
-        )
-      ).toEqual(
-        expect.objectContaining({
-          status: "migrated",
-          lastRunId: summary.runId,
-        })
-      );
-    })
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 2,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(processCalls).toEqual(["article-migrated", "article-new"]);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-migrated")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            lastRunId: summary.runId,
+          })
+        );
+      })
   );
 
   it.effect(
@@ -1891,12 +1913,22 @@ describe("MigrationDefinitionRegistry", () => {
           definitions: [articles] as const,
         });
 
-        yield* registry.run({ definitionIds: ["articles"] });
-        expect(storeState.itemStates.has(itemStateKey)).toBe(true);
-
-        const summary = yield* registry.rollback({
+        const seedRun = yield* MigrationExecution.make({ registry }).run({
           definitionIds: ["articles"],
         });
+        expect(seedRun.kind).toBe("completed");
+        expect(storeState.itemStates.has(itemStateKey)).toBe(true);
+
+        const result = yield* MigrationExecution.make({ registry }).rollback({
+          definitionIds: ["articles"],
+        });
+
+        expect(result.kind).toBe("completed");
+        if (result.kind !== "completed") {
+          return;
+        }
+
+        const { summary } = result;
 
         expect(summary.kind).toBe("rollback");
         expect(summary.status).toBe("succeeded");
@@ -1923,7 +1955,7 @@ describe("MigrationDefinitionRegistry", () => {
           makeRollbackSafetyFixture();
 
         const error = yield* Effect.flip(
-          registry.rollback({
+          MigrationExecution.make({ registry }).rollback({
             definitionIds: [authorsId],
           })
         );
@@ -1964,7 +1996,7 @@ describe("MigrationDefinitionRegistry", () => {
           makeRollbackSafetyFixture();
 
         const error = yield* Effect.flip(
-          registry.rollback({
+          MigrationExecution.make({ registry }).rollback({
             definitionIds: [authorsId],
             sourceIdentities: [authorState.sourceIdentity.encoded],
           })
@@ -2077,9 +2109,16 @@ describe("MigrationDefinitionRegistry", () => {
           definitions: [authors, articles] as const,
         });
 
-        const summary = yield* registry.rollback({
+        const result = yield* MigrationExecution.make({ registry }).rollback({
           all: true,
         });
+
+        expect(result.kind).toBe("completed");
+        if (result.kind !== "completed") {
+          return;
+        }
+
+        const { summary } = result;
 
         expect(
           summary.definitions.map((definition) => definition.definitionId)

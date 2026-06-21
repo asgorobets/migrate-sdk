@@ -1,6 +1,11 @@
 import { Effect, Schema } from "effect";
-import { MigrationDefinition, runMigration } from "migrate-sdk";
+import {
+  MigrationDefinition,
+  MigrationDefinitionRegistry,
+  MigrationExecution,
+} from "migrate-sdk";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
+import { completedInlineExecution } from "../inline-execution.ts";
 import { JsonPlaceholderPostSourcePlugin } from "./json-placeholder-source.ts";
 
 export const PostEntryFields = Schema.Struct({
@@ -41,5 +46,10 @@ export const makeJsonPlaceholderPostsMigration = (
 export const runApiSourceExample = Effect.fn("runApiSourceExample")(function* (
   options?: ApiSourceExampleOptions
 ) {
-  return yield* runMigration(makeJsonPlaceholderPostsMigration(options));
+  const registry = MigrationDefinitionRegistry.make({
+    definitions: [makeJsonPlaceholderPostsMigration(options)] as const,
+  });
+  const execution = MigrationExecution.make({ registry });
+
+  return yield* completedInlineExecution(execution.run({ all: true }));
 });

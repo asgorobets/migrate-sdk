@@ -55,7 +55,11 @@ files; examples and tests are typechecked through `tsconfig.check.json`.
 The default entrypoint stays the ergonomic public surface:
 
 ```ts
-import { CsvSourcePlugin, MigrationDefinition, runMigration } from "migrate-sdk";
+import {
+  MigrationDefinition,
+  MigrationDefinitionRegistry,
+  MigrationExecution,
+} from "migrate-sdk";
 ```
 
 Subpath exports are allowed for focused imports and optional dependency
@@ -69,12 +73,26 @@ import { FileMigrationStore } from "migrate-sdk/stores/file";
 
 The `core` subpath carries domain definitions, service tags, and authoring
 helpers such as `SourcePlugin.make` without re-exporting concrete source or
-store implementations. These subpaths still point into the same package.
+store implementations. Adapter-facing execution engine services, such as
+`MigrationRunStepExecutor`, also live there instead of the root entrypoint.
+These subpaths still point into the same package.
+
+Lower-level runtime primitives remain available from the runtime subpath, but
+direct definition run/rollback helpers are not part of the public path:
+
+```ts
+import {
+  emptyMigrationRunCursorWindowState,
+  type MigrationRunCursorWindowInput,
+  type MigrationRunExecutionLease,
+} from "migrate-sdk/runtime";
+```
 
 Testing helpers use explicit testing subpaths:
 
 ```ts
 import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
+import { TestDurableMigrationExecutable } from "migrate-sdk/testing";
 ```
 
 ## Export Map
@@ -86,13 +104,18 @@ import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/t
   "sideEffects": [],
   "exports": {
     ".": "./src/index.ts",
+    "./core": "./src/core.ts",
     "./destinations/in-memory": "./src/destinations/in-memory/index.ts",
     "./destinations/in-memory/testing": "./src/destinations/in-memory/testing.ts",
     "./internal/*": null,
     "./sources/csv": "./src/sources/csv/index.ts",
+    "./sources/document": "./src/sources/document/index.ts",
     "./sources/in-memory": "./src/sources/in-memory/index.ts",
+    "./sources/sql": "./src/sources/sql/index.ts",
+    "./runtime": "./src/runtime/index.ts",
     "./stores/file": "./src/stores/file/index.ts",
     "./stores/in-memory": "./src/stores/in-memory/index.ts",
+    "./testing": "./src/testing.ts",
     "./*/internal/*": null
   }
 }
@@ -122,10 +145,14 @@ CSV does not cross that line. It belongs in the main `migrate-sdk` package.
 
 Keep the public surface compatible for the SDK's two core audiences:
 
-- Migration authors get the ergonomic root entrypoint:
-  `import { MigrationDefinition, runMigration } from "migrate-sdk"`.
+- Migration authors get the ergonomic root entrypoint for definitions,
+  registries, domain types, and the registry-bound `MigrationExecution` facade.
+- Raw runtime helpers stay available for compatibility and small tests from
+  `migrate-sdk/runtime`, not from the root entrypoint.
 - Plugin authors continue to get definition helpers, service tags, domain types,
   and typed errors from the root entrypoint.
+- Adapter authors use `migrate-sdk/core` for lower-level execution services and
+  workflow/cursor-window primitives.
 - First-party plugins and stores also expose focused subpaths, such as
   `migrate-sdk/sources/csv` and `migrate-sdk/stores/file`.
 - Testing and inspection helpers use explicit `*/testing` subpaths and stay out

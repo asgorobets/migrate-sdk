@@ -26,6 +26,12 @@ import {
   InMemorySourcePlugin,
   MigrationDefinition,
   MigrationDefinitionLock,
+  MigrationDefinitionRegistryConstructionError,
+  type MigrationDefinitionRegistryExecutableError,
+  MigrationDefinitionRegistryInvalidSelectionError,
+  type MigrationDefinitionRegistryPlanningError,
+  type MigrationExecutableInlineRollbackStartError,
+  type MigrationExecutableInlineRunStartError,
   MigrationItemState,
   MigrationProgress,
   type MigrationProgressEvent,
@@ -33,21 +39,13 @@ import {
   MigrationReferenceLookup,
   MigrationRunState,
   type MigrationRunSummary,
-  MigrationRuntimeError,
   MigrationStore,
   MigrationStoreError,
   type RollbackContext,
-  type RollbackMigrationError,
   RollbackPreflightError,
   RollbackProgress,
   type RollbackProgressEvent,
-  RollbackRequestError,
   type RollbackRunSummary,
-  type RunMigrationError,
-  rollbackMigration,
-  rollbackMigrations,
-  runMigration,
-  runMigrations,
   SourceIdentity,
   type SourceIdentityDefinition,
   type SourceItemInput,
@@ -65,12 +63,29 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "../index.ts";
+import {
+  rollbackInlineDefinition,
+  rollbackInlineRegistry,
+  runInlineDefinition,
+  runInlineRegistry,
+} from "../test-support/inline-registry-execution.ts";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
   publish: Schema.optional(Schema.Boolean),
 });
 type ArticleSource = typeof ArticleSource.Type;
+
+type InlineRunError =
+  | MigrationDefinitionRegistryConstructionError
+  | MigrationDefinitionRegistryPlanningError
+  | MigrationDefinitionRegistryExecutableError
+  | MigrationExecutableInlineRunStartError;
+type InlineRollbackError =
+  | MigrationDefinitionRegistryConstructionError
+  | MigrationDefinitionRegistryPlanningError
+  | MigrationDefinitionRegistryExecutableError
+  | MigrationExecutableInlineRollbackStartError;
 
 const ArticleSourceIdentity = SourceIdentity.make({
   id: "test-article@v1",
@@ -450,7 +465,7 @@ describe("MigrationStore durable records", () => {
   );
 });
 
-describe("runMigration", () => {
+describe("runInlineDefinition", () => {
   it("keeps item-level process error types out of public run errors", () => {
     const pipelineTestError: PipelineTestError = { _tag: "PipelineTestError" };
     const store = InMemoryMigrationStore.layer();
@@ -488,12 +503,12 @@ describe("runMigration", () => {
         Effect.fail(otherPipelineTestError),
     });
 
-    expectTypeOf(runMigration(definition)).toEqualTypeOf<
-      Effect.Effect<MigrationRunSummary, RunMigrationError>
+    expectTypeOf(runInlineDefinition(definition)).toMatchTypeOf<
+      Effect.Effect<MigrationRunSummary, InlineRunError>
     >();
     expectTypeOf(
-      runMigrations({ definitions: [definition, otherDefinition] })
-    ).toEqualTypeOf<Effect.Effect<MigrationRunSummary, RunMigrationError>>();
+      runInlineRegistry({ definitions: [definition, otherDefinition] })
+    ).toMatchTypeOf<Effect.Effect<MigrationRunSummary, InlineRunError>>();
   });
 
   it.effect("returns typed runtime errors for invalid Run Request input", () =>
@@ -514,13 +529,13 @@ describe("runMigration", () => {
       });
 
       const error = yield* Effect.flip(
-        runMigrations({ definitions: [definition], definitionIds: [""] })
+        runInlineRegistry({ definitions: [definition], definitionIds: [""] })
       );
 
       expect(error).toEqual(
         expect.objectContaining({
-          _tag: "MigrationRuntimeError",
-          message: "Run request contains invalid input",
+          _tag: "MigrationDefinitionRegistryInvalidSelectionError",
+          message: "Migration Definition id selection is invalid",
         })
       );
     })
@@ -589,7 +604,7 @@ describe("runMigration", () => {
             .pipe(Effect.asVoid),
       });
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.status).toBe("succeeded");
       expect(summary.definitions).toHaveLength(1);
@@ -663,7 +678,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
 
         expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts).toEqual({
@@ -732,7 +747,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const fiber = yield* runMigration(definition, {
+        const fiber = yield* runInlineDefinition(definition, {
           execution: { process: { concurrency: 2 } },
         }).pipe(Effect.forkChild);
 
@@ -798,7 +813,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const fiber = yield* runMigration(definition, {
+      const fiber = yield* runInlineDefinition(definition, {
         execution: { process: { concurrency: "unbounded" } },
       }).pipe(Effect.forkChild);
 
@@ -846,13 +861,17 @@ describe("runMigration", () => {
         });
 
         const error = yield* Effect.flip(
-          runMigration(definition, {
+          runInlineDefinition(definition, {
             execution: { process: { concurrency: 0 } },
           })
         );
 
-        expect(error).toBeInstanceOf(MigrationRuntimeError);
-        expect(error.message).toBe("Run request contains invalid input");
+        expect(error).toBeInstanceOf(
+          MigrationDefinitionRegistryInvalidSelectionError
+        );
+        expect(error.message).toBe(
+          'Process Pipeline Execution concurrency must be a positive integer or "unbounded"'
+        );
         expect(processCalled).toBe(false);
         expect(storeState.latestRunStates.size).toBe(0);
         expect(storeState.definitionLocks.size).toBe(0);
@@ -885,7 +904,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.status).toBe("failed");
       expect(
@@ -944,7 +963,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
 
         expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts).toEqual({
@@ -1008,7 +1027,7 @@ describe("runMigration", () => {
           process: () => Effect.void,
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
 
         expect(summary.status).toBe("failed");
         expect(
@@ -1079,7 +1098,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
 
         expect(summary.status).toBe("failed");
         expect(
@@ -1136,7 +1155,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
 
         expect(summary.status).toBe("failed");
         expect(
@@ -1199,7 +1218,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         );
@@ -1256,7 +1275,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
 
         expect(summary.status).toBe("failed");
         expect(summary.definitions[0]?.counts).toEqual({
@@ -1350,7 +1369,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         );
@@ -1402,7 +1421,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         );
@@ -1447,7 +1466,7 @@ describe("runMigration", () => {
             } as never),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         );
@@ -1501,7 +1520,7 @@ describe("runMigration", () => {
             }),
         });
 
-        yield* runMigration(definition).pipe(
+        yield* runInlineDefinition(definition).pipe(
           Effect.provideService(MinimumLogLevel, "Error")
         );
 
@@ -1557,7 +1576,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         );
@@ -1605,7 +1624,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         );
@@ -1663,7 +1682,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         );
@@ -1722,7 +1741,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         );
@@ -1802,7 +1821,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         );
@@ -1880,7 +1899,7 @@ describe("runMigration", () => {
             }),
         });
 
-        yield* runMigration(definition);
+        yield* runInlineDefinition(definition);
 
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
@@ -1937,7 +1956,7 @@ describe("runMigration", () => {
             } as never),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         );
@@ -1998,7 +2017,7 @@ describe("runMigration", () => {
             }),
         });
 
-        yield* runMigration(definition);
+        yield* runInlineDefinition(definition);
 
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
@@ -2050,7 +2069,7 @@ describe("runMigration", () => {
         process: () => Effect.fail(skipItem("Not ready")),
       });
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.status).toBe("succeeded");
       expect(summary.definitions[0]?.counts).toEqual({
@@ -2101,7 +2120,7 @@ describe("runMigration", () => {
         process: () => Effect.fail(processError),
       });
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.status).toBe("failed");
       expect(summary.definitions[0]?.counts).toEqual({
@@ -2155,8 +2174,8 @@ describe("runMigration", () => {
           }),
       });
 
-      const firstSummary = yield* runMigration(definition);
-      const secondSummary = yield* runMigration(definition);
+      const firstSummary = yield* runInlineDefinition(definition);
+      const secondSummary = yield* runInlineDefinition(definition);
 
       expect(firstSummary.definitions[0]?.counts).toEqual({
         migrated: 1,
@@ -2201,7 +2220,7 @@ describe("runMigration", () => {
           process,
         });
 
-        yield* runMigration(original);
+        yield* runInlineDefinition(original);
 
         const ChangedArticleSourceIdentity = SourceIdentity.make({
           id: "test-article@v1",
@@ -2227,7 +2246,7 @@ describe("runMigration", () => {
           process,
         });
 
-        const error = yield* Effect.flip(runMigration(changed));
+        const error = yield* Effect.flip(runInlineDefinition(changed));
 
         expect(error).toEqual(
           expect.objectContaining({
@@ -2278,7 +2297,7 @@ describe("runMigration", () => {
           process: () => Effect.void,
         });
 
-        const error = yield* Effect.flip(runMigration(definition));
+        const error = yield* Effect.flip(runInlineDefinition(definition));
 
         expect(error).toEqual(
           expect.objectContaining({
@@ -2325,7 +2344,7 @@ describe("runMigration", () => {
             }),
         });
 
-        yield* runMigration(original);
+        yield* runInlineDefinition(original);
 
         const changedTracking = Tracking.record({
           id: "article-entry@v2",
@@ -2354,7 +2373,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const error = yield* Effect.flip(runMigration(changed));
+        const error = yield* Effect.flip(runInlineDefinition(changed));
 
         expect(error).toEqual(
           expect.objectContaining({
@@ -2405,7 +2424,7 @@ describe("runMigration", () => {
             }),
         });
 
-        yield* runMigration(originalAuthors);
+        yield* runInlineDefinition(originalAuthors);
 
         const changedAuthorTracking = Tracking.record({
           id: "author-entry@v2",
@@ -2452,7 +2471,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [articles, changedAuthors],
           definitionIds: ["articles"],
         });
@@ -2537,8 +2556,8 @@ describe("runMigration", () => {
             }),
         });
 
-        yield* runMigration(staffAuthors);
-        yield* runMigration(guestAuthors);
+        yield* runInlineDefinition(staffAuthors);
+        yield* runInlineDefinition(guestAuthors);
 
         const changedGuestTracking = Tracking.record({
           id: "guest-author-entry@v2",
@@ -2587,7 +2606,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [articles, staffAuthors, changedGuestAuthors],
           definitionIds: ["articles"],
         });
@@ -2689,9 +2708,10 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [articles, authors],
           definitionIds: ["articles"],
+          withDependencies: true,
         });
 
         expect(summary.status).toBe("succeeded");
@@ -2824,7 +2844,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigrations({
+      const summary = yield* runInlineRegistry({
         definitions: [articles, authors],
         definitionIds: ["articles"],
       });
@@ -2936,7 +2956,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [articles, guestAuthors, staffAuthors],
           definitionIds: ["articles"],
         });
@@ -3076,7 +3096,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [articles, staffAuthors, guestAuthors],
           definitionIds: ["articles"],
         });
@@ -3172,9 +3192,10 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [articles, authors],
           definitionIds: ["articles"],
+          withDependencies: true,
         });
 
         expect(summary.status).toBe("failed");
@@ -3282,7 +3303,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigrations({
+      const summary = yield* runInlineRegistry({
         definitions: [articles, guestAuthors, staffAuthors],
         definitionIds: ["articles"],
       });
@@ -3409,7 +3430,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [articles, staffAuthors, guestAuthors],
           definitionIds: ["articles"],
         });
@@ -3517,9 +3538,10 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [articles, authors],
           definitionIds: ["articles"],
+          withDependencies: true,
         });
 
         expect(summary.status).toBe("succeeded");
@@ -3651,7 +3673,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigrations({
+      const summary = yield* runInlineRegistry({
         definitions: [articles, authors],
         definitionIds: ["articles"],
       });
@@ -3724,9 +3746,10 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [articles, authors],
           definitionIds: ["articles"],
+          withDependencies: true,
         });
 
         expect(summary.status).toBe("failed");
@@ -3777,7 +3800,7 @@ describe("runMigration", () => {
           process,
         });
 
-        yield* runMigration(original);
+        yield* runInlineDefinition(original);
         expect(
           storeState.migrationContracts.get(toMigrationDefinitionId("articles"))
         ).toEqual(
@@ -3820,7 +3843,7 @@ describe("runMigration", () => {
           process,
         });
 
-        const summary = yield* runMigration(changed);
+        const summary = yield* runInlineDefinition(changed);
 
         expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts).toEqual({
@@ -3895,7 +3918,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
 
         expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts).toEqual({
@@ -3945,7 +3968,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.status).toBe("succeeded");
       expect(summary.definitions[0]?.counts).toEqual({
@@ -4009,7 +4032,7 @@ describe("runMigration", () => {
                 }),
         });
 
-        const summary = yield* runMigration(definition, {
+        const summary = yield* runInlineDefinition(definition, {
           execution: { process: { concurrency: 2 } },
         });
 
@@ -4103,7 +4126,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.status).toBe("succeeded");
       expect(summary.definitions[0]?.counts).toEqual({
@@ -4146,7 +4169,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigrations({
+      const summary = yield* runInlineRegistry({
         definitions: [definition],
         mode: { kind: "item", sourceIdentityKey: "article-1" },
       });
@@ -4201,7 +4224,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigrations({
+      const summary = yield* runInlineRegistry({
         definitions: [definition],
         mode: { kind: "item", sourceIdentityKey: ["bu-1", 2] },
       });
@@ -4243,7 +4266,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
 
         expect(summary.status).toBe("failed");
         expect(summary.definitions[0]?.counts).toEqual({
@@ -4319,7 +4342,7 @@ describe("runMigration", () => {
         }
       );
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.status).toBe("failed");
       expect(summary.definitions[0]?.counts).toEqual({
@@ -4372,7 +4395,7 @@ describe("runMigration", () => {
         process: () => Effect.void,
       });
 
-      yield* runMigration(definition);
+      yield* runInlineDefinition(definition);
 
       const itemState = storeState.itemStates.get(
         InMemoryMigrationStore.itemStateKey("articles", "article-many-errors")
@@ -4424,7 +4447,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigrations({
+      const summary = yield* runInlineRegistry({
         definitions: [definition],
         mode: {
           kind: "item",
@@ -4489,7 +4512,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.status).toBe("succeeded");
       expect(decodedPayloads).toEqual([
@@ -4516,7 +4539,7 @@ describe("runMigration", () => {
         process: () => Effect.void,
       });
 
-      const error = yield* Effect.flip(runMigration(definition));
+      const error = yield* Effect.flip(runInlineDefinition(definition));
 
       expect(error).toEqual(
         expect.objectContaining({
@@ -4571,7 +4594,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.definitions[0]?.counts).toEqual({
         migrated: 5,
@@ -4643,7 +4666,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition).pipe(
+        const summary = yield* runInlineDefinition(definition).pipe(
           Effect.provide(progressLayer)
         );
 
@@ -4740,7 +4763,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigration(definition).pipe(
+      const summary = yield* runInlineDefinition(definition).pipe(
         Effect.provide(progressLayer)
       );
 
@@ -4808,7 +4831,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const summary = yield* runMigration(definition).pipe(
+      const summary = yield* runInlineDefinition(definition).pipe(
         Effect.provide(progressLayer)
       );
 
@@ -4862,7 +4885,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition).pipe(
+        const summary = yield* runInlineDefinition(definition).pipe(
           Effect.provide(progressLayer)
         );
 
@@ -4907,7 +4930,7 @@ describe("runMigration", () => {
         process: () => Effect.void,
       });
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.status).toBe("succeeded");
       expect(sourceState.totalCountAttempts).toBe(0);
@@ -4953,7 +4976,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition).pipe(
+        const summary = yield* runInlineDefinition(definition).pipe(
           Effect.provide(progressLayer)
         );
 
@@ -5023,7 +5046,7 @@ describe("runMigration", () => {
               }),
       });
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.status).toBe("failed");
       expect(summary.definitions[0]?.counts).toEqual({
@@ -5095,7 +5118,7 @@ describe("runMigration", () => {
           }
         );
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
 
         expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts).toEqual({
@@ -5160,7 +5183,7 @@ describe("runMigration", () => {
           }
         );
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
 
         expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts).toEqual({
@@ -5243,7 +5266,7 @@ describe("runMigration", () => {
         }
       );
 
-      const summary = yield* runMigrations({
+      const summary = yield* runInlineRegistry({
         definitions: [definition],
         mode: { kind: "failed" },
       });
@@ -5303,7 +5326,7 @@ describe("runMigration", () => {
         }
       );
 
-      const summary = yield* runMigrations({
+      const summary = yield* runInlineRegistry({
         definitions: [definition],
         mode: { kind: "skipped" },
       });
@@ -5362,7 +5385,7 @@ describe("runMigration", () => {
         }
       );
 
-      const summary = yield* runMigrations({
+      const summary = yield* runInlineRegistry({
         definitions: [definition],
         mode: { kind: "item", sourceIdentityKey: "article-target" },
       });
@@ -5454,7 +5477,7 @@ describe("runMigration", () => {
           }
         );
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [definition],
           update: true,
         });
@@ -5570,7 +5593,7 @@ describe("runMigration", () => {
           }
         );
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [definition],
           update: true,
         });
@@ -5587,7 +5610,7 @@ describe("runMigration", () => {
           })
         );
 
-        const rollbackSummary = yield* rollbackMigration(definition);
+        const rollbackSummary = yield* rollbackInlineDefinition(definition);
 
         expect(rollbackSummary.status).toBe("succeeded");
         expect(rollbackState).toEqual(
@@ -5676,7 +5699,7 @@ describe("runMigration", () => {
           );
         }
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [definition],
           update: true,
         });
@@ -5802,12 +5825,12 @@ describe("runMigration", () => {
           }
         );
 
-        const failedSummary = yield* runMigrations({
+        const failedSummary = yield* runInlineRegistry({
           definitions: [definition],
           update: true,
         });
         failUpdate = false;
-        const retrySummary = yield* runMigration(definition);
+        const retrySummary = yield* runInlineDefinition(definition);
         const itemState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-retry")
         );
@@ -5935,7 +5958,7 @@ describe("runMigration", () => {
           }
         );
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [definition],
           update: true,
         });
@@ -6044,7 +6067,7 @@ describe("runMigration", () => {
           );
         }
 
-        const updateSummary = yield* runMigrations({
+        const updateSummary = yield* runInlineRegistry({
           definitions: [definition],
           update: true,
         });
@@ -6088,7 +6111,7 @@ describe("runMigration", () => {
         });
         processCalls.length = 0;
 
-        const retrySummary = yield* runMigration(definition);
+        const retrySummary = yield* runInlineDefinition(definition);
         const durableAfterRetry = yield* Effect.gen(function* () {
           const store = yield* MigrationStore;
 
@@ -6167,7 +6190,7 @@ describe("runMigration", () => {
         }
 
         const error = yield* Effect.flip(
-          runMigrations({
+          runInlineRegistry({
             definitions: [definition],
             update: true,
           })
@@ -6241,7 +6264,7 @@ describe("runMigration", () => {
       );
 
       const error = yield* Effect.flip(
-        runMigrations({
+        runInlineRegistry({
           definitions: [definition],
           update: true,
         })
@@ -6327,7 +6350,7 @@ describe("runMigration", () => {
       );
 
       const error = yield* Effect.flip(
-        runMigrations({
+        runInlineRegistry({
           definitions: [definition],
           update: true,
         })
@@ -6374,7 +6397,7 @@ describe("runMigration", () => {
       });
 
       const failedError = yield* Effect.flip(
-        runMigrations({
+        runInlineRegistry({
           definitions: [definition],
           mode: { kind: "failed" },
           update: true,
@@ -6382,13 +6405,13 @@ describe("runMigration", () => {
       );
       expect(failedError).toEqual(
         expect.objectContaining({
-          _tag: "MigrationRuntimeError",
-          message: "Update run cannot combine with failed mode",
+          _tag: "MigrationDefinitionRegistryInvalidSelectionError",
+          message: "Update run planning cannot combine with failed mode",
         })
       );
 
       const skippedError = yield* Effect.flip(
-        runMigrations({
+        runInlineRegistry({
           definitions: [definition],
           mode: { kind: "skipped" },
           update: true,
@@ -6396,13 +6419,13 @@ describe("runMigration", () => {
       );
       expect(skippedError).toEqual(
         expect.objectContaining({
-          _tag: "MigrationRuntimeError",
-          message: "Update run cannot combine with skipped mode",
+          _tag: "MigrationDefinitionRegistryInvalidSelectionError",
+          message: "Update run planning cannot combine with skipped mode",
         })
       );
 
       const targetError = yield* Effect.flip(
-        runMigrations({
+        runInlineRegistry({
           definitions: [definition],
           mode: { kind: "item", sourceIdentityKey: "article-target" },
           update: true,
@@ -6410,8 +6433,8 @@ describe("runMigration", () => {
       );
       expect(targetError).toEqual(
         expect.objectContaining({
-          _tag: "MigrationRuntimeError",
-          message: "Update run cannot target source identities",
+          _tag: "MigrationDefinitionRegistryInvalidSelectionError",
+          message: "Update run planning cannot target source identities",
         })
       );
       expect(processCalls).toEqual([]);
@@ -6460,7 +6483,7 @@ describe("runMigration", () => {
           }
         );
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [definition],
           mode: { kind: "failed" },
         });
@@ -6528,7 +6551,7 @@ describe("runMigration", () => {
           }
         );
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [definition],
           mode: { kind: "item", sourceIdentityKey: "article-migrated" },
         });
@@ -6611,7 +6634,7 @@ describe("runMigration", () => {
           }
         );
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
 
         expect(summary.status).toBe("failed");
         expect(summary.definitions[0]?.counts).toEqual({
@@ -6709,7 +6732,7 @@ describe("runMigration", () => {
         }
       );
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.definitions[0]?.counts).toEqual({
         migrated: 1,
@@ -6784,7 +6807,7 @@ describe("runMigration", () => {
         }
       );
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.definitions[0]?.counts).toEqual({
         migrated: 1,
@@ -6859,9 +6882,10 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [articles, authors],
           definitionIds: ["articles"],
+          withDependencies: true,
         });
 
         expect(summary.status).toBe("succeeded");
@@ -6919,7 +6943,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [articles, authors],
           definitionIds: ["articles", "authors"],
         });
@@ -6969,7 +6993,7 @@ describe("runMigration", () => {
         process: () => Effect.void,
       });
 
-      const summary = yield* runMigrations({
+      const summary = yield* runInlineRegistry({
         definitions: [unselected, selected],
         definitionIds: ["selected"],
       });
@@ -7035,9 +7059,10 @@ describe("runMigration", () => {
         });
 
         const error = yield* Effect.flip(
-          runMigrations({
+          runInlineRegistry({
             definitions: [articles, authors],
             definitionIds: ["articles"],
+            withDependencies: true,
           })
         );
 
@@ -7055,7 +7080,7 @@ describe("runMigration", () => {
   );
 
   it.effect(
-    "rejects missing Migration Definition dependencies before execution",
+    "rejects registries with missing Migration Definition dependencies before execution",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
@@ -7082,13 +7107,17 @@ describe("runMigration", () => {
         });
 
         const error = yield* Effect.flip(
-          runMigrations({ definitions: [articles] })
+          runInlineRegistry({ definitions: [articles] })
         );
 
+        expect(error).toBeInstanceOf(
+          MigrationDefinitionRegistryConstructionError
+        );
         expect(error).toEqual(
           expect.objectContaining({
-            _tag: "MigrationRuntimeError",
-            message: "Migration Definition was not found",
+            _tag: "MigrationDefinitionRegistryConstructionError",
+            message:
+              "Migration Definition Registry contains invalid definitions",
           })
         );
         expect(pipelineCalls).toEqual([]);
@@ -7097,7 +7126,7 @@ describe("runMigration", () => {
   );
 
   it.effect(
-    "rejects Migration Definition dependency cycles before execution",
+    "rejects registries with Migration Definition dependency cycles before execution",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
@@ -7142,13 +7171,17 @@ describe("runMigration", () => {
         });
 
         const error = yield* Effect.flip(
-          runMigrations({ definitions: [articles, authors] })
+          runInlineRegistry({ definitions: [articles, authors] })
         );
 
+        expect(error).toBeInstanceOf(
+          MigrationDefinitionRegistryConstructionError
+        );
         expect(error).toEqual(
           expect.objectContaining({
-            _tag: "MigrationRuntimeError",
-            message: "Migration Definition dependency cycle detected",
+            _tag: "MigrationDefinitionRegistryConstructionError",
+            message:
+              "Migration Definition Registry contains invalid definitions",
           })
         );
         expect(pipelineCalls).toEqual([]);
@@ -7212,7 +7245,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const summary = yield* runMigrations({
+        const summary = yield* runInlineRegistry({
           definitions: [articles, authors],
         });
 
@@ -7251,7 +7284,7 @@ describe("runMigration", () => {
         process: () => Effect.void,
       });
 
-      const error = yield* Effect.flip(runMigration(definition));
+      const error = yield* Effect.flip(runInlineDefinition(definition));
       const cause = error.cause as
         | {
             readonly failRunError?: unknown;
@@ -7298,7 +7331,7 @@ describe("runMigration", () => {
           }),
       });
 
-      const error = yield* Effect.flip(runMigration(definition));
+      const error = yield* Effect.flip(runInlineDefinition(definition));
       const cause = error.cause as
         | {
             readonly releaseFailures?: readonly {
@@ -7389,7 +7422,7 @@ describe("runMigration", () => {
         });
 
         const error = yield* Effect.flip(
-          runMigrations({ definitions: [articles, authors] })
+          runInlineRegistry({ definitions: [articles, authors] })
         );
         const cause = error.cause as
           | {
@@ -7461,7 +7494,7 @@ describe("runMigration", () => {
             }),
         });
 
-        const error = yield* Effect.flip(runMigration(definition));
+        const error = yield* Effect.flip(runInlineDefinition(definition));
 
         expect(error).toEqual(
           expect.objectContaining({
@@ -7535,7 +7568,7 @@ describe("runMigration", () => {
         });
 
         const error = yield* Effect.flip(
-          runMigrations({ definitions: [articles, authors] })
+          runInlineRegistry({ definitions: [articles, authors] })
         );
 
         expect(error).toEqual(
@@ -7562,7 +7595,7 @@ describe("runMigration", () => {
   );
 });
 
-describe("rollbackMigration", () => {
+describe("rollbackInlineDefinition", () => {
   it.effect("runs a rollback process and deletes migrated item state", () =>
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
@@ -7605,7 +7638,7 @@ describe("rollbackMigration", () => {
         },
       });
 
-      const summary = yield* rollbackMigration(definition);
+      const summary = yield* rollbackInlineDefinition(definition);
 
       expect(summary.status).toBe("succeeded");
       expect(summary.definitions[0]?.counts).toEqual({
@@ -7657,10 +7690,10 @@ describe("rollbackMigration", () => {
         rollback: () => Effect.void,
       });
 
-      const rollbackSummary = yield* rollbackMigration(definition, {
+      const rollbackSummary = yield* rollbackInlineDefinition(definition, {
         sourceIdentityKeys: ["article-rollback"],
       });
-      const runSummary = yield* runMigration(definition);
+      const runSummary = yield* runInlineDefinition(definition);
 
       expect(rollbackSummary.definitions[0]?.counts).toEqual({
         rolledBack: 0,
@@ -7720,7 +7753,7 @@ describe("rollbackMigration", () => {
             }),
         });
 
-        const summary = yield* rollbackMigration(definition).pipe(
+        const summary = yield* rollbackInlineDefinition(definition).pipe(
           Effect.provide(progressLayer)
         );
 
@@ -7807,7 +7840,7 @@ describe("rollbackMigration", () => {
             }),
         });
 
-        const fiber = yield* rollbackMigration(definition, {
+        const fiber = yield* rollbackInlineDefinition(definition, {
           execution: { rollback: { concurrency: 2 } },
         }).pipe(Effect.forkChild);
 
@@ -7849,13 +7882,17 @@ describe("rollbackMigration", () => {
         });
 
         const error = yield* Effect.flip(
-          rollbackMigration(definition, {
+          rollbackInlineDefinition(definition, {
             execution: { rollback: { concurrency: 0 } },
           })
         );
 
-        expect(error).toBeInstanceOf(RollbackRequestError);
-        expect(error.message).toBe("Rollback request contains invalid input");
+        expect(error).toBeInstanceOf(
+          MigrationDefinitionRegistryInvalidSelectionError
+        );
+        expect(error.message).toBe(
+          'Rollback Pipeline Execution concurrency must be a positive integer or "unbounded"'
+        );
         expect(rollbackCalled).toBe(false);
         expect(storeState.latestRunStates.size).toBe(0);
         expect(storeState.definitionLocks.size).toBe(0);
@@ -7864,7 +7901,7 @@ describe("rollbackMigration", () => {
   );
 });
 
-describe("rollbackMigrations", () => {
+describe("rollbackInlineRegistry", () => {
   it.effect(
     "rolls back selected Migration Definitions in reverse dependency order",
     () =>
@@ -7923,12 +7960,12 @@ describe("rollbackMigrations", () => {
         });
 
         expectTypeOf(
-          rollbackMigrations({ definitions: [articles, authors] })
-        ).toEqualTypeOf<
-          Effect.Effect<RollbackRunSummary, RollbackMigrationError>
+          rollbackInlineRegistry({ definitions: [articles, authors] })
+        ).toMatchTypeOf<
+          Effect.Effect<RollbackRunSummary, InlineRollbackError>
         >();
 
-        const summary = yield* rollbackMigrations({
+        const summary = yield* rollbackInlineRegistry({
           definitions: [articles, authors],
         });
 
@@ -8016,7 +8053,7 @@ describe("rollbackMigrations", () => {
           rollback: () => undefined,
         });
 
-        const summary = yield* rollbackMigrations({
+        const summary = yield* rollbackInlineRegistry({
           definitions: [definition],
           sourceIdentityKeys: [targetedIdentity],
         });
@@ -8117,7 +8154,7 @@ describe("rollbackMigrations", () => {
         });
 
         const error = yield* Effect.flip(
-          rollbackMigrations({
+          rollbackInlineRegistry({
             definitions: [authors, articles],
             definitionIds: ["authors"],
           })
@@ -8185,7 +8222,7 @@ describe("rollbackMigrations", () => {
         });
 
         const error = yield* Effect.flip(
-          rollbackMigrations({
+          rollbackInlineRegistry({
             definitions: [authors, articles],
             definitionIds: ["authors"],
           })
@@ -8204,7 +8241,7 @@ describe("rollbackMigrations", () => {
   );
 
   it.effect(
-    "fails preflight before creating a run when the dependent safety graph has a cycle",
+    "rejects registry dependency cycles before creating a rollback run",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
@@ -8247,16 +8284,19 @@ describe("rollbackMigrations", () => {
         });
 
         const error = yield* Effect.flip(
-          rollbackMigrations({
+          rollbackInlineRegistry({
             definitions: [authors, articles, comments],
             definitionIds: ["authors"],
           })
         );
 
-        expect(error).toBeInstanceOf(RollbackPreflightError);
+        expect(error).toBeInstanceOf(
+          MigrationDefinitionRegistryConstructionError
+        );
         expect(error).toEqual(
           expect.objectContaining({
-            message: "Migration Definition dependency cycle detected",
+            message:
+              "Migration Definition Registry contains invalid definitions",
           })
         );
         expect(storeState.latestRunStates.size).toBe(0);
@@ -8332,7 +8372,7 @@ describe("rollbackMigrations", () => {
       });
 
       const error = yield* Effect.flip(
-        rollbackMigrations({
+        rollbackInlineRegistry({
           definitions: [authors, articles],
           definitionIds: ["authors"],
         })
@@ -8383,7 +8423,7 @@ describe("rollbackMigrations", () => {
           process: () => Effect.void,
         });
 
-        const summary = yield* rollbackMigrations({
+        const summary = yield* rollbackInlineRegistry({
           definitions: [definition],
         });
 
@@ -8438,7 +8478,7 @@ describe("rollbackMigrations", () => {
       });
 
       const error = yield* Effect.flip(
-        rollbackMigrations({
+        rollbackInlineRegistry({
           definitions: [definition],
         })
       );
@@ -8469,16 +8509,18 @@ describe("rollbackMigrations", () => {
       });
 
       const error = yield* Effect.flip(
-        rollbackMigrations({
+        rollbackInlineRegistry({
           definitions: [definition],
           definitionIds: [""],
         })
       );
 
-      expect(error).toBeInstanceOf(RollbackRequestError);
+      expect(error).toBeInstanceOf(
+        MigrationDefinitionRegistryInvalidSelectionError
+      );
       expect(error).toEqual(
         expect.objectContaining({
-          message: "Rollback request contains invalid input",
+          message: "Migration Definition id selection is invalid",
         })
       );
       expect(storeState.latestRunStates.size).toBe(0);
@@ -8486,7 +8528,7 @@ describe("rollbackMigrations", () => {
   );
 
   it.effect(
-    "fails preflight before creating a run when selected dependencies are missing",
+    "rejects registries with selected rollback dependencies missing",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
@@ -8504,16 +8546,19 @@ describe("rollbackMigrations", () => {
         });
 
         const error = yield* Effect.flip(
-          rollbackMigrations({
+          rollbackInlineRegistry({
             definitions: [articles],
             definitionIds: ["articles"],
           })
         );
 
-        expect(error).toBeInstanceOf(RollbackPreflightError);
+        expect(error).toBeInstanceOf(
+          MigrationDefinitionRegistryConstructionError
+        );
         expect(error).toEqual(
           expect.objectContaining({
-            message: "Migration Definition was not found",
+            message:
+              "Migration Definition Registry contains invalid definitions",
           })
         );
         expect(storeState.latestRunStates.size).toBe(0);
@@ -8566,7 +8611,7 @@ describe("rollbackMigrations", () => {
           rollback: () => undefined,
         });
 
-        const summary = yield* rollbackMigrations({
+        const summary = yield* rollbackInlineRegistry({
           definitions: [authors],
           definitionIds: ["authors"],
         });

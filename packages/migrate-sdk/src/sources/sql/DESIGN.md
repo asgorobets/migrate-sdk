@@ -111,7 +111,12 @@ const definition = MigrationDefinition.make({
   store,
 });
 
-yield* runMigration(definition);
+const registry = MigrationDefinitionRegistry.make({
+  definitions: [definition],
+});
+const execution = MigrationExecution.make({ registry });
+
+yield* execution.run({ all: true });
 ```
 
 If a migration config should own more than one SQL connection, close each source
@@ -435,8 +440,7 @@ runs query callbacks in that Effect environment.
 There are two supported provision boundaries:
 
 - App-level provision: keep `SqlClient.SqlClient` in the source requirement and
-  provide a shared app layer to `runMigration`, `runMigrations`, or the
-  registry runner.
+  provide a shared app layer to the registry-bound `MigrationExecution` runner.
 - Source-level provision: call `source.provide(sqlClientLayer)` so that the
   configured source owns that SQL client layer and the migration no longer
   requires `SqlClient.SqlClient`.

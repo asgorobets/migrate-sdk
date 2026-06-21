@@ -1899,6 +1899,34 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
+  it.effect(
+    "starts run execution through a config-provided executable layer",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          yield* readCliFixture("executable-layer.config.ts")
+        );
+
+        const result = yield* runCli(
+          ["run", "--config", "migrate.config.ts", "articles"],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Run Started");
+        expect(result.stdout).toContain("Run id run-configured-executable");
+        expect(result.stdout).toContain("Adapter test-cli-executable");
+        expect(result.stdout).toContain("Execution id run:articles");
+        expect(result.stdout).not.toContain("Run Completed");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
   it.effect("renders checkpoint progress logs for run execution", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -2454,7 +2482,7 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
-  it.effect("executes update runs through the CLI runtime path", () =>
+  it.effect("executes update runs through the CLI execution path", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const project = yield* makeProject;
@@ -2568,6 +2596,36 @@ describe("migrate CLI", () => {
         "rollback:tags",
       ]);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "starts rollback execution through a config-provided executable layer",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          yield* readCliFixture("executable-layer.config.ts")
+        );
+
+        const result = yield* runCli(
+          ["rollback", "--config", "migrate.config.ts", "articles"],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Rollback Started");
+        expect(result.stdout).toContain(
+          "Run id rollback-configured-executable"
+        );
+        expect(result.stdout).toContain("Adapter test-cli-executable");
+        expect(result.stdout).toContain("Execution id rollback:articles");
+        expect(result.stdout).not.toContain("Rollback Completed");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
   it.effect(
@@ -2955,7 +3013,7 @@ describe("migrate CLI", () => {
 
         expect(result.exitCode).toBe(ChildProcessSpawner.ExitCode(1));
         expect(output).toContain(
-          "Migration CLI config must be created with defineMigrationCliConfig({ registry })"
+          "Migration CLI config must be created with defineMigrationCliConfig({ registry, executableLayer? })"
         );
         expect(output).not.toContain("CliError/UserError");
         expect(output).not.toContain("at failConfigLoad");

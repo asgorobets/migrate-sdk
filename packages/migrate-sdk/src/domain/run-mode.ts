@@ -1,10 +1,8 @@
 import {
   type EncodedSourceIdentity,
-  type EncodedSourceIdentityInput,
   SourceIdentity,
   type SourceIdentityDefinition,
   type SourceIdentitySnapshotKey,
-  toEncodedSourceIdentity,
 } from "./ids.ts";
 
 export type RunMode =
@@ -27,15 +25,6 @@ export type RunModeInput<
       readonly sourceIdentityKey: IdentityKey;
     };
 
-export type EncodedRunModeInput =
-  | { readonly kind: "normal" }
-  | { readonly kind: "failed" }
-  | { readonly kind: "skipped" }
-  | {
-      readonly kind: "item";
-      readonly encodedSourceIdentity: EncodedSourceIdentityInput;
-    };
-
 export const normalRunMode: RunMode = { kind: "normal" };
 
 export const makeRunMode = <IdentityKey extends SourceIdentitySnapshotKey>(
@@ -49,19 +38,6 @@ export const makeRunMode = <IdentityKey extends SourceIdentitySnapshotKey>(
         identity,
         mode.sourceIdentityKey
       ).encoded,
-    };
-  }
-
-  return mode;
-};
-
-export const makeEncodedRunMode = (mode: EncodedRunModeInput): RunMode => {
-  if (mode.kind === "item") {
-    return {
-      kind: "item",
-      encodedSourceIdentity: toEncodedSourceIdentity(
-        mode.encodedSourceIdentity
-      ),
     };
   }
 

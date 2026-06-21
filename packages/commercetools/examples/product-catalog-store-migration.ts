@@ -20,12 +20,13 @@ import {
 import {
   InMemorySourcePlugin,
   MigrationDefinition,
+  MigrationDefinitionRegistry,
+  MigrationExecution,
+  type MigrationExecutionRunError,
   type MigrationItemState,
   type MigrationRunSummary,
   MigrationStore,
   type MigrationStoreError,
-  type RunMigrationError,
-  runMigrations,
   SourceIdentity,
   type SourceItemInput,
   Tracking,
@@ -179,7 +180,7 @@ export const runProductCatalogStoreMigration: (
   options: ProductCatalogStoreMigrationExampleOptions
 ) => Effect.Effect<
   ProductCatalogStoreMigrationExampleResult,
-  MigrationStoreError | RunMigrationError
+  MigrationStoreError | MigrationExecutionRunError
 > = Effect.fn("runProductCatalogStoreMigration")(function* (options) {
   const ct = CommercetoolsDestination.make({
     productTypes: {
@@ -242,9 +243,15 @@ export const runProductCatalogStoreMigration: (
     }),
   });
 
-  const summary = yield* runMigrations({
-    definitions: [products],
+  const registry = MigrationDefinitionRegistry.make({
+    definitions: [products] as const,
   });
+  const execution = MigrationExecution.make({ registry });
+  const result = yield* execution.run({ all: true });
+  const summary =
+    result.kind === "completed"
+      ? result.summary
+      : yield* Effect.die("Inline example execution unexpectedly started");
   const itemStates = yield* listProductItemStates(options.storeLayer);
 
   return {
@@ -259,7 +266,7 @@ export const runProductCatalogStoreMigration: (
 
 export const runProductCatalogStoreMigrationExample: () => Effect.Effect<
   ProductCatalogStoreMigrationExampleResult,
-  MigrationStoreError | RunMigrationError
+  MigrationStoreError | MigrationExecutionRunError
 > = Effect.fn("runProductCatalogStoreMigrationExample")(function* () {
   const customObjects = makeScriptedCustomObjectRoutes();
   const sdk = makeScriptedCommercetoolsSdk({

@@ -2,12 +2,13 @@ import { Effect, Schema } from "effect";
 import {
   type DestinationPluginError,
   MigrationDefinition,
+  MigrationDefinitionRegistry,
+  MigrationExecution,
   type MigrationItemState,
   MigrationReferenceLookup,
   type MigrationReferenceLookupError,
   type MigrationRunSummary,
   type MigrationStoreError,
-  runMigrations,
   SourceIdentity,
   type SourceIdentityDefinition,
   Tracking,
@@ -22,6 +23,7 @@ import {
 } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
+import { completedInlineExecution } from "./inline-execution.ts";
 
 const Money = Schema.Struct({
   amount: Schema.Number,
@@ -404,10 +406,13 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
 )(function* () {
   const { definitions, destinationFixture, storeState } =
     makeCircularBookAuthorStubMigrations();
-  const summary = yield* runMigrations({
-    definitions,
-    definitionIds: ["books", "authors"],
-  });
+  const registry = MigrationDefinitionRegistry.make({ definitions });
+  const execution = MigrationExecution.make({ registry });
+  const summary = yield* completedInlineExecution(
+    execution.run({
+      definitionIds: ["books", "authors"],
+    })
+  );
   const itemStates = Array.from(storeState.itemStates.values());
   const upsertChanges = (yield* collectUpsertChanges(
     destinationFixture,

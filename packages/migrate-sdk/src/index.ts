@@ -149,19 +149,7 @@ export type {
   MigrationExecutionHandle,
   MigrationDefinitionRunSummary,
   MigrationRunSummary,
-  RunRequest,
-  RunRequestInput,
 } from "./domain/run.ts";
-export { emptyMigrationRunCursorWindowState } from "./runtime/run-migrations.ts";
-export type {
-  MigrationRunCompletionInput,
-  MigrationRunDefinitionCursorWindowInput,
-  MigrationRunCursorWindowInput,
-  MigrationRunCursorWindowResult,
-  MigrationRunCursorWindowState,
-  MigrationRunExecutionLease,
-  MigrationRunFailureInput,
-} from "./runtime/run-migrations.ts";
 
 export {
   DuplicateSourceIdentityStatusWarning,
@@ -209,10 +197,8 @@ export type {
   MigrationDefinitionRegistryEntry,
   MigrationDefinitionRegistryInput,
   MigrationDefinitionRegistryPlanningError,
-  MigrationDefinitionRegistryRollbackError,
   MigrationDefinitionRegistryRollbackInput,
   MigrationDefinitionRegistryDurableStatusInput,
-  MigrationDefinitionRegistryRunError,
   MigrationDefinitionRegistryRunInput,
   MigrationDefinitionRegistrySelectionInput,
   MigrationDefinitionRegistrySourceScanStatusInput,
@@ -225,20 +211,14 @@ export type {
 } from "./domain/registry.ts";
 
 export {
-  makeRollbackMigrationOptions,
-  makeRollbackRequest,
   RollbackContext,
   RollbackDefinitionRunSummary,
-  RollbackMigrationOptions,
   RollbackRunSummary,
 } from "./domain/rollback.ts";
 export type {
   AnyRollbackMigrationDefinition,
   MigrationDefinitionRollbackPipelineError,
-  RollbackMigrationOptionsInput,
   RollbackPipeline,
-  RollbackRequest,
-  RollbackRequestInput,
 } from "./domain/rollback.ts";
 
 export type { RunModeInput } from "./domain/run-mode.ts";
@@ -309,6 +289,8 @@ export type {
 export { MigrationExecutable } from "./services/migration-executable.ts";
 export type {
   MigrationExecutableAdapterError,
+  MigrationExecutableInlineRollbackStartError,
+  MigrationExecutableInlineRunStartError,
   MigrationExecutableRollbackError,
   MigrationExecutableRollbackStartError,
   MigrationExecutableRunError,
@@ -325,23 +307,6 @@ export type {
   MigrationExecutionRunInput,
   MigrationExecutionService,
 } from "./services/migration-execution.ts";
-export {
-  MigrationRollbackExecutor,
-  MigrationRunExecutor,
-} from "./services/migration-run-executor.ts";
-export type {
-  MigrationRollbackExecutorService,
-  MigrationRunExecutorService,
-} from "./services/migration-run-executor.ts";
-export { MigrationRunStepExecutor } from "./services/migration-run-step-executor.ts";
-export type { MigrationRunStepExecutorService } from "./services/migration-run-step-executor.ts";
-export {
-  TestDurableMigrationExecutable,
-  TestDurableMigrationExecutableAttachError,
-  TestDurableMigrationExecutableStartRejectedError,
-  makeTestDurableMigrationExecutableState,
-} from "./services/test-durable-migration-executable.ts";
-export type { TestDurableMigrationExecutableState } from "./services/test-durable-migration-executable.ts";
 export {
   DuplicateMigrationDefinitionRegistryId,
   MigrationDefinitionRegistryCatalog,
@@ -362,18 +327,6 @@ export type {
   TrackingProcessContext,
   TrackingService,
 } from "./services/tracking.ts";
-
-export { getMigrationStatuses } from "./runtime/get-migration-statuses.ts";
-export {
-  rollbackMigration,
-  rollbackMigrations,
-  runMigration,
-  runMigrations,
-} from "./runtime/run-migrations.ts";
-export type {
-  RollbackMigrationError,
-  RunMigrationError,
-} from "./runtime/run-migrations.ts";
 
 export { InMemoryDestination } from "./destinations/in-memory/in-memory-destination.ts";
 export type {

@@ -22,12 +22,12 @@ import {
   MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
-  runMigration,
   SourceIdentity,
   SourceItemTotal,
   SourcePlugin,
   SourcePluginError,
 } from "migrate-sdk";
+import { runInlineDefinition } from "migrate-sdk/testing";
 import { expectTypeOf } from "vitest";
 
 const CatalogProductSource = Schema.Struct({
@@ -670,7 +670,7 @@ describe("CommercetoolsSourcePlugin", () => {
           store: InMemoryMigrationStore.layer(storeState),
         });
 
-        const summary = yield* runMigration(definition).pipe(
+        const summary = yield* runInlineDefinition(definition).pipe(
           Effect.provide(progressLayer)
         );
 

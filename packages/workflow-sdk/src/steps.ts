@@ -105,7 +105,11 @@ const resolveRunPlan = (envelope: MigrationRunExecutionEnvelopeType) =>
 
 export const beginMigrationRunExecutionEnvelope = (
   envelope: MigrationRunExecutionEnvelopeType
-) =>
+): Effect.Effect<
+  MigrationRunExecutionEnvelopeType["runId"],
+  WorkflowSdkMigrationRunStepError,
+  WorkflowSdkMigrationRunStepRequirements
+> =>
   Effect.gen(function* () {
     const plan = yield* resolveRunPlan(envelope);
     const lease = yield* makeLease(envelope);
@@ -160,7 +164,11 @@ export const executeMigrationRunCursorWindow = (input: {
 export const completeMigrationRunExecutionEnvelope = (input: {
   readonly definitions: MigrationRunSummary["definitions"];
   readonly envelope: MigrationRunExecutionEnvelopeType;
-}) =>
+}): Effect.Effect<
+  MigrationRunSummary,
+  WorkflowSdkMigrationRunStepError,
+  WorkflowSdkMigrationRunStepRequirements
+> =>
   Effect.gen(function* () {
     const plan = yield* resolveRunPlan(input.envelope);
     const lease = yield* makeLease(input.envelope);
@@ -180,7 +188,11 @@ export const completeMigrationRunExecutionEnvelope = (input: {
 export const failMigrationRunExecutionEnvelope = (input: {
   readonly envelope: MigrationRunExecutionEnvelopeType;
   readonly error: unknown;
-}) =>
+}): Effect.Effect<
+  void,
+  WorkflowSdkMigrationRunStepError,
+  WorkflowSdkMigrationRunStepRequirements
+> =>
   Effect.gen(function* () {
     const plan = yield* resolveRunPlan(input.envelope);
     const lease = yield* makeLease(input.envelope);

@@ -19,6 +19,8 @@ import {
   type MigrationRunExecutorService,
   type RollbackMigrationError,
   type RunMigrationError,
+  startMigrationRollbackPlanInline,
+  startMigrationRunPlanInline,
 } from "./migration-run-executor.ts";
 
 export type MigrationExecutableRunError<
@@ -40,6 +42,14 @@ export type MigrationExecutableRunStartError<
 export type MigrationExecutableRollbackStartError =
   | MigrationExecutableRollbackError
   | MigrationExecutableAdapterError;
+
+export type MigrationExecutableInlineRunStartError<
+  Definitions extends
+    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
+> = MigrationExecutableRunError<Definitions>;
+
+export type MigrationExecutableInlineRollbackStartError =
+  MigrationExecutableRollbackError;
 
 export interface MigrationExecutableService {
   readonly startRollback: (
@@ -69,6 +79,11 @@ export class MigrationExecutable extends Service<
   MigrationExecutable,
   MigrationExecutableService
 >()("@migrate-sdk/MigrationExecutable") {
+  static readonly inlineService: MigrationExecutableService = {
+    startRollback: (plan) => startMigrationRollbackPlanInline(plan),
+    startRun: (plan) => startMigrationRunPlanInline(plan),
+  };
+
   static readonly startRun = <
     Definitions extends readonly AnyMigrationDefinition[],
   >(

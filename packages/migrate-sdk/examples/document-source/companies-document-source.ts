@@ -4,9 +4,10 @@ import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
 import { Effect, Layer, Schema } from "effect";
 import {
   MigrationDefinition,
+  MigrationDefinitionRegistry,
+  MigrationExecution,
   type MigrationRunSummary,
   type MigrationStore,
-  runMigrations,
   SourceIdentity,
 } from "migrate-sdk";
 import {
@@ -16,6 +17,7 @@ import {
   DocumentSourcePlugin,
 } from "migrate-sdk/sources/document";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
+import { completedInlineExecution } from "../inline-execution.ts";
 
 const NullableString = Schema.NullOr(Schema.String);
 
@@ -312,9 +314,11 @@ export const runCompaniesDocumentSourceExample = Effect.fn(
     },
     store,
   });
-  const summary = yield* runMigrations({
-    definitions: [businessUnits, contacts, addresses],
+  const registry = MigrationDefinitionRegistry.make({
+    definitions: [businessUnits, contacts, addresses] as const,
   });
+  const execution = MigrationExecution.make({ registry });
+  const summary = yield* completedInlineExecution(execution.run({ all: true }));
 
   return {
     addressEntries,

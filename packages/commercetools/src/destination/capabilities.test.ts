@@ -31,11 +31,13 @@ import {
   InMemoryMigrationStore,
   InMemorySourcePlugin,
   MigrationDefinition,
-  rollbackMigration,
-  runMigrations,
   SourceIdentity,
   Tracking,
 } from "migrate-sdk";
+import {
+  rollbackInlineDefinition,
+  runInlineRegistry,
+} from "migrate-sdk/testing";
 import { expectTypeOf } from "vitest";
 
 const ResourceSource = Schema.Struct({
@@ -474,7 +476,7 @@ describe("CommercetoolsDestination capability module", () => {
           tracking: ResourceTrackingRecord,
         });
 
-        const summary = yield* runMigrations({ definitions: [definition] });
+        const summary = yield* runInlineRegistry({ definitions: [definition] });
         const itemState = storeItem(storeState);
         const journalEntries =
           itemState?.status === "migrated"
@@ -799,7 +801,7 @@ describe("CommercetoolsDestination capability module", () => {
           store: InMemoryMigrationStore.layer(storeState),
         });
 
-        const summary = yield* runMigrations({ definitions: [definition] });
+        const summary = yield* runInlineRegistry({ definitions: [definition] });
         const itemState = storeItem(storeState);
         const journalEntries =
           itemState?.status === "failed"
@@ -861,7 +863,7 @@ describe("CommercetoolsDestination capability module", () => {
           store: InMemoryMigrationStore.layer(storeState),
         });
 
-        const summary = yield* runMigrations({ definitions: [definition] });
+        const summary = yield* runInlineRegistry({ definitions: [definition] });
         const itemState = storeItem(storeState);
         const journalEntries =
           itemState?.status === "failed"
@@ -929,7 +931,7 @@ describe("CommercetoolsDestination capability module", () => {
           store: InMemoryMigrationStore.layer(storeState),
         });
 
-        const summary = yield* runMigrations({ definitions: [definition] });
+        const summary = yield* runInlineRegistry({ definitions: [definition] });
         const itemState = storeItem(storeState);
         const journalEntries =
           itemState?.status === "failed"
@@ -1023,8 +1025,10 @@ describe("CommercetoolsDestination capability module", () => {
           store: InMemoryMigrationStore.layer(storeState),
         });
 
-        const runSummary = yield* runMigrations({ definitions: [definition] });
-        const rollbackSummary = yield* rollbackMigration(definition);
+        const runSummary = yield* runInlineRegistry({
+          definitions: [definition],
+        });
+        const rollbackSummary = yield* rollbackInlineDefinition(definition);
         const itemState = storeItem(storeState);
         const rollbackAttempt = itemState?.journal?.rollbackAttempts[0];
 

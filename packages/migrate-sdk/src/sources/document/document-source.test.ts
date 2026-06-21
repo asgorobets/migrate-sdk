@@ -10,7 +10,6 @@ import {
   MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
-  runMigration,
   SourceItemTotal,
   SourcePluginError,
 } from "migrate-sdk";
@@ -26,6 +25,7 @@ import {
 import { expectTypeOf } from "vitest";
 import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
 import { SourcePlugin } from "../../services/source-plugin.ts";
+import { runInlineDefinition } from "../../test-support/inline-registry-execution.ts";
 
 const CompanyContact = Schema.Struct({
   email: Schema.String,
@@ -717,7 +717,7 @@ describe("DocumentSourcePlugin", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition).pipe(
+        const summary = yield* runInlineDefinition(definition).pipe(
           Effect.provide(progressLayer)
         );
 

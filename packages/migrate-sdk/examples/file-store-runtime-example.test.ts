@@ -1,7 +1,10 @@
 import { layer as nodeServicesLayer } from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem } from "effect";
-import { rollbackMigration, runMigration } from "migrate-sdk";
+import {
+  rollbackInlineDefinition,
+  runInlineDefinition,
+} from "migrate-sdk/testing";
 import { makeFileStoreArticlesMigration } from "./file-store-runtime.ts";
 
 describe("file store runtime example", () => {
@@ -15,7 +18,7 @@ describe("file store runtime example", () => {
         });
         const first = makeFileStoreArticlesMigration({ storeDirectory });
 
-        const runSummary = yield* runMigration(first.migration);
+        const runSummary = yield* runInlineDefinition(first.migration);
 
         expect(runSummary.status).toBe("succeeded");
         expect(runSummary.definitions[0]?.counts).toEqual({
@@ -27,7 +30,9 @@ describe("file store runtime example", () => {
         });
 
         const rollback = makeFileStoreArticlesMigration({ storeDirectory });
-        const rollbackSummary = yield* rollbackMigration(rollback.migration);
+        const rollbackSummary = yield* rollbackInlineDefinition(
+          rollback.migration
+        );
 
         expect(rollbackSummary.status).toBe("succeeded");
         expect(rollbackSummary.definitions[0]?.counts).toEqual({
@@ -37,7 +42,9 @@ describe("file store runtime example", () => {
         });
 
         const secondRun = makeFileStoreArticlesMigration({ storeDirectory });
-        const secondRunSummary = yield* runMigration(secondRun.migration);
+        const secondRunSummary = yield* runInlineDefinition(
+          secondRun.migration
+        );
 
         expect(secondRunSummary.status).toBe("succeeded");
         expect(secondRunSummary.definitions[0]?.counts).toEqual({
@@ -51,7 +58,7 @@ describe("file store runtime example", () => {
         const secondRollback = makeFileStoreArticlesMigration({
           storeDirectory,
         });
-        const secondRollbackSummary = yield* rollbackMigration(
+        const secondRollbackSummary = yield* rollbackInlineDefinition(
           secondRollback.migration
         );
 
@@ -65,7 +72,7 @@ describe("file store runtime example", () => {
         const thirdRollback = makeFileStoreArticlesMigration({
           storeDirectory,
         });
-        const thirdRollbackSummary = yield* rollbackMigration(
+        const thirdRollbackSummary = yield* rollbackInlineDefinition(
           thirdRollback.migration
         );
 

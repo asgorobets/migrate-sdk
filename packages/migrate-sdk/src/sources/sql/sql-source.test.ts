@@ -7,11 +7,13 @@ import {
   type EncodedSourceIdentityInput,
   InMemoryMigrationStore,
   MigrationDefinition,
+  type MigrationDefinitionRegistryConstructionError,
+  type MigrationDefinitionRegistryExecutableError,
+  type MigrationDefinitionRegistryPlanningError,
+  type MigrationExecutableInlineRunStartError,
   MigrationProgress,
   type MigrationProgressEvent,
   type MigrationRunSummary,
-  type RunMigrationError,
-  runMigration,
   SourceIdentity,
   SourceItemTotal,
   type SourcePayloadSchema,
@@ -26,6 +28,7 @@ import {
   SqlSourcePlugin,
 } from "migrate-sdk/sources/sql";
 import { expectTypeOf } from "vitest";
+import { runInlineDefinition } from "../../test-support/inline-registry-execution.ts";
 
 const SqlArticleRow = Schema.Struct({
   id: Schema.String,
@@ -36,6 +39,11 @@ const SqlArticleRow = Schema.Struct({
 
 type SqlArticle = typeof SqlArticleRow.Type;
 type SqlArticleRow = Schema.Codec.Encoded<typeof SqlArticleRow>;
+type InlineRunError =
+  | MigrationDefinitionRegistryConstructionError
+  | MigrationDefinitionRegistryPlanningError
+  | MigrationDefinitionRegistryExecutableError
+  | MigrationExecutableInlineRunStartError;
 
 const SqlArticleCursor = Schema.Struct({
   id: Schema.String,
@@ -633,7 +641,7 @@ describe("SqlSourcePlugin", () => {
           }),
       });
 
-      const summary = yield* runMigration(definition).pipe(
+      const summary = yield* runInlineDefinition(definition).pipe(
         Effect.provide(Layer.mergeAll(fakeSql.layer, progressLayer))
       );
 
@@ -877,11 +885,11 @@ describe("SqlSourcePlugin", () => {
         store: InMemoryMigrationStore.layer(storeState),
       });
 
-      expectTypeOf(runMigration(definition)).toMatchTypeOf<
-        Effect.Effect<MigrationRunSummary, RunMigrationError, never>
+      expectTypeOf(runInlineDefinition(definition)).toMatchTypeOf<
+        Effect.Effect<MigrationRunSummary, InlineRunError, never>
       >();
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
 
       expect(summary.status).toBe("succeeded");
       expect(summary.definitions[0]?.counts).toEqual({
@@ -1170,15 +1178,11 @@ describe("SqlSourcePlugin", () => {
         store: InMemoryMigrationStore.layer(storeState),
       });
 
-      expectTypeOf(runMigration(definition)).toMatchTypeOf<
-        Effect.Effect<
-          MigrationRunSummary,
-          RunMigrationError,
-          SqlClient.SqlClient
-        >
+      expectTypeOf(runInlineDefinition(definition)).toMatchTypeOf<
+        Effect.Effect<MigrationRunSummary, InlineRunError, SqlClient.SqlClient>
       >();
 
-      const summary = yield* runMigration(definition).pipe(
+      const summary = yield* runInlineDefinition(definition).pipe(
         Effect.provide(fakeSql.layer)
       );
 
@@ -1272,7 +1276,7 @@ describe("SqlSourcePlugin", () => {
           store: InMemoryMigrationStore.layer(storeState),
         });
 
-        const summary = yield* runMigration(definition);
+        const summary = yield* runInlineDefinition(definition);
         const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
         const lookupItem = yield* plugin.readByIdentity(
           SourceIdentity.fromEncoded(
@@ -1386,7 +1390,7 @@ describe("SqlSourcePlugin", () => {
         store: InMemoryMigrationStore.layer(storeState),
       });
 
-      const summary = yield* runMigration(definition);
+      const summary = yield* runInlineDefinition(definition);
       const plugin = yield* SourcePlugin.pipe(Effect.provide(source.layer));
       const lookupItem = yield* plugin.readByIdentity(
         SourceIdentity.fromEncoded(
@@ -1446,7 +1450,7 @@ describe("SqlSourcePlugin", () => {
           store: InMemoryMigrationStore.layer(storeState),
         });
 
-        const summary = yield* runMigration(definition).pipe(
+        const summary = yield* runInlineDefinition(definition).pipe(
           Effect.provide(fakeSql.layer)
         );
         const itemState = storeState.itemStates.get(

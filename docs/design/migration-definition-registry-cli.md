@@ -141,14 +141,17 @@ registry invalid, and optional dependencies do not model lookup or stub
 relationships. Missing optional dependency ids are retained as unresolved
 optional edges for inspection commands.
 
-Raw `runMigrations` and `rollbackMigrations` remain public lower-level SDK
-primitives. They keep request-scoped validation because callers can bypass the
-registry and pass raw definitions directly.
+Registry-bound execution through `MigrationExecution` is the public execution
+path. Application code can bind an inline registry with
+`MigrationExecution.make({ registry })`; CLI and durable hosts can provide a
+catalog layer and execute by `registryId`. The `migrate-sdk/runtime` subpath
+keeps lower-level cursor-window, run lifecycle handoff, and status primitives,
+but it does not expose raw definition run/rollback helpers.
 
-Registry-backed rollback helpers delegate to `rollbackMigrations` with the full
-registry definition graph and the planned selected definition ids. This keeps
-dependent rollback safety in the existing lower-level preflight, where
-rollbackable durable item state and unselected dependents are visible.
+Registry-backed rollback planning carries the full registry definition graph
+into the executable rollback plan. This keeps dependent rollback safety in the
+shared lower-level preflight, where rollbackable durable item state and
+unselected dependents are visible.
 
 ## Public SDK Shape
 
@@ -190,22 +193,11 @@ class MigrationDefinitionRegistry<
     MigrationDefinitionRegistryPlanningError
   >;
 
-  run(
-    input: MigrationDefinitionRegistryRunInput
-  ): Effect.Effect<MigrationRunSummary, MigrationDefinitionRegistryRunError>;
-
   planRollback(
     input: MigrationDefinitionRegistryRollbackInput
   ): Effect.Effect<
     MigrationDefinitionRollbackPlan,
     MigrationDefinitionRegistryPlanningError
-  >;
-
-  rollback(
-    input: MigrationDefinitionRegistryRollbackInput
-  ): Effect.Effect<
-    RollbackRunSummary,
-    MigrationDefinitionRegistryRollbackError
   >;
 
   status(
@@ -339,8 +331,9 @@ migration definitions may scan their sources at the same time. It defaults to
 Status rows are returned in registry order even when source scans run with
 concurrency greater than one.
 
-The standalone SDK status API accepts explicit definitions and optional
-definition filtering, but it does not expand dependencies:
+The standalone runtime status API from `migrate-sdk/runtime` accepts explicit
+definitions and optional definition filtering, but it does not expand
+dependencies:
 
 ```ts
 interface MigrationStatusRequestInput<
@@ -445,14 +438,18 @@ interface MigrationDefinitionOptionalDependencyCycleIgnored {
   readonly definitionIds: readonly MigrationDefinitionId[];
   readonly edges: readonly MigrationDefinitionDependencyEdge[];
 }
+```
 
-type MigrationDefinitionRegistryRunError =
-  | MigrationDefinitionRegistryPlanningError
-  | RunMigrationError;
+Registry-bound execution starts through `MigrationExecution`, not through
+methods on the registry itself:
 
-type MigrationDefinitionRegistryRollbackError =
-  | MigrationDefinitionRegistryPlanningError
-  | RollbackMigrationError;
+```ts
+const execution = MigrationExecution.make({ registry });
+
+const result = yield* execution.run({
+  definitionIds: ["articles"],
+  withDependencies: true,
+});
 ```
 
 ## Status
@@ -672,15 +669,24 @@ error without a suggested command.
 ## CLI Config
 
 The CLI uses a CLI-only executable config module. The SDK exposes
-`MigrationDefinitionRegistry`; the CLI package/export exposes
-`defineMigrationCliConfig`.
+`MigrationDefinitionRegistry` and `MigrationExecutable`; the CLI
+package/export exposes `defineMigrationCliConfig`.
 
 ```ts
 // migrate.config.ts
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
+import { WorkflowSdkMigrationExecutable } from "@migrate-sdk/workflow-sdk";
+import { start } from "workflow/api";
 import { migrations } from "./src/migrations.ts";
+import { runMigrationExecutionWorkflow } from "./src/workflows.ts";
+
+const executableLayer = WorkflowSdkMigrationExecutable.layer({
+  workflow: runMigrationExecutionWorkflow,
+  start,
+});
 
 export default defineMigrationCliConfig({
+  executableLayer,
   registry: migrations,
 });
 ```
@@ -692,6 +698,7 @@ Public config shape:
 
 ```ts
 interface MigrationCliConfig {
+  readonly executableLayer?: Layer.Layer<MigrationExecutable>;
   readonly registry: MigrationDefinitionRegistry;
 }
 
@@ -704,8 +711,9 @@ const defineMigrationCliConfig = <Config extends MigrationCliConfig>(
 setup belongs in Effect layers and execution-time services, not CLI config
 loading.
 
-The first slice keeps CLI config to the registry only. Rendering options,
-default flags, command aliases, and output customization are out of scope.
+CLI config accepts the registry and, when execution should be durable, an
+already-composed `MigrationExecutable` layer. Rendering options, default flags,
+command aliases, and output customization are out of scope.
 
 The first CLI config format is executable TS/JS module config. The CLI supports
 loading `migrate.config.ts` and `migrate.config.mts` directly; users do not need

@@ -13,7 +13,7 @@ Add the first CLI entrypoint path by loading a registry from an executable CLI c
 ## Acceptance criteria
 
 - [x] The CLI exposes `defineMigrationCliConfig` from the CLI-facing public API.
-- [x] `defineMigrationCliConfig` accepts a synchronous registry-only config object.
+- [x] `defineMigrationCliConfig` accepts a synchronous config object with a registry and optional execution adapter layer.
 - [x] Config modules must provide the config as the default export.
 - [x] Named config exports are out of scope and are rejected or ignored with a clear error.
 - [x] Async config factories are rejected or not accepted by the public config helper.

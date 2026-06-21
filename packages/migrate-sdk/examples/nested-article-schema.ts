@@ -1,13 +1,15 @@
 import { Effect, Schema } from "effect";
 import {
   MigrationDefinition,
+  MigrationDefinitionRegistry,
+  MigrationExecution,
   type MigrationRunSummary,
-  runMigration,
   SourceIdentity,
 } from "migrate-sdk";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
+import { completedInlineExecution } from "./inline-execution.ts";
 
 const ArticleLocale = Schema.Literals(["en-US", "fr-FR"]);
 
@@ -134,7 +136,11 @@ export const runNestedArticleSchemaExample = Effect.fn(
   "runNestedArticleSchemaExample"
 )(function* () {
   const { commandFields, migration } = makeNestedArticleSchemaMigration();
-  const summary = yield* runMigration(migration);
+  const registry = MigrationDefinitionRegistry.make({
+    definitions: [migration] as const,
+  });
+  const execution = MigrationExecution.make({ registry });
+  const summary = yield* completedInlineExecution(execution.run({ all: true }));
 
   return {
     commandFields,

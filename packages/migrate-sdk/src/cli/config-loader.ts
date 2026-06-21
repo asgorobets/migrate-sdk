@@ -231,7 +231,7 @@ const readDefaultExport = (
         configPath,
         kind: "InvalidConfig",
         message:
-          "Migration CLI config must be created with defineMigrationCliConfig({ registry })",
+          "Migration CLI config must be created with defineMigrationCliConfig({ registry, executableLayer? })",
       })
     );
   }

@@ -4,10 +4,9 @@ Status: ready-for-agent
 
 ## Problem Statement
 
-Migration execution is still centered on function-style `runMigrations` and
-`rollbackMigrations` calls. That is fine for inline execution, but it gives the
-SDK no stable public seam for swapping execution strategy when a host wants to
-start work through a durable workflow runtime.
+Migration execution needs to be registry-first. Inline execution, tests, CLIs,
+and durable workflow hosts should all start from registry planning and delegate
+the resulting executable plan to a swappable service.
 
 The SDK now has a **Migration Definition Registry** that can select and plan
 multi-definition runs and rollbacks. The next step is to make execution
@@ -125,9 +124,8 @@ executable registry and inline executable.
     service, so that start, observe, cancel, and resume do not get mixed into one
     public primitive.
 
-21. As an existing SDK user, I want `runMigrations` and `rollbackMigrations` to
-    keep working, so that adopting executable registries is not a breaking
-    change.
+21. As an SDK user, I want raw definition run/rollback helpers removed before
+    1.0, so that the public API converges on registry-bound execution.
 
 ## Implementation Decisions
 
@@ -212,9 +210,9 @@ executable registry and inline executable.
   Assertions should focus on returned summaries, run state, item state, and lock
   behavior rather than implementation details.
 
-- Test compatibility wrappers to prove `runMigrations`, `rollbackMigrations`,
-  registry-backed run helpers, and registry-backed rollback helpers still return
-  completed summaries on the inline executable path.
+- Test inline registries through `MigrationExecution.make({ registry })` to
+  prove registry-bound run and rollback return completed summaries on the inline
+  executable path.
 
 - Test envelope construction as a pure domain operation. Assert it contains the
   migration run id, registry id, request, definition ids, and diagnostic planned

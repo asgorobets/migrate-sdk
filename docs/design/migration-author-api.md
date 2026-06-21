@@ -119,14 +119,20 @@ up against the same destination dependency.
 
 ## Swappable Execution
 
-The registry owns selection and planning. A swappable `MigrationExecutable`
-service executes the resolved run or rollback plan.
+The registry owns selection and planning. `MigrationExecution` is the
+registry-bound execution facade: it looks up a registered
+`MigrationDefinitionRegistry`, plans the requested run or rollback, and delegates
+the resulting plan to the provided `MigrationExecutable` adapter. It starts new
+executions; it is not an observer or controller for already-started execution
+handles.
 
 ```ts
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import {
   MigrationDefinitionRegistry,
+  MigrationDefinitionRegistryCatalog,
   MigrationExecutable,
+  MigrationExecution,
 } from "migrate-sdk"
 
 const registry = MigrationDefinitionRegistry.make({
@@ -134,28 +140,34 @@ const registry = MigrationDefinitionRegistry.make({
   definitions: [authors, articles],
 })
 
-const executableRegistry = registry.executable()
+const executionLayer = MigrationExecution.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      MigrationDefinitionRegistryCatalog.layer({ registries: [registry] }),
+      MigrationExecutable.inlineDefault
+    )
+  )
+)
 
 const program = Effect.gen(function* () {
-  const plan = yield* executableRegistry.planRun({
-    definitionIds: ["articles"],
+  return yield* MigrationExecution.run({
+    registryId: "catalog-migration",
+    all: true,
     withDependencies: true,
     execution: {
       process: { concurrency: 4 },
     },
   })
-
-  const executable = yield* MigrationExecutable
-  return yield* executable.startRun(plan)
-}).pipe(Effect.provide(MigrationExecutable.inlineDefault))
+}).pipe(Effect.provide(executionLayer))
 ```
 
 Executable registries carry a stable `id` even when running inline. Durable
 adapters use the same id later to serialize an execution envelope and rehydrate
 the registry in the workflow execution context.
 
-`MigrationExecutable` exposes static helpers that delegate to the currently
-provided service, matching the SDK's scoped helper style:
+`MigrationExecutable` is the lower-level adapter contract. It exposes static
+helpers that delegate to the currently provided service, matching the SDK's
+scoped helper style:
 
 ```ts
 const program = Effect.gen(function* () {
@@ -293,7 +305,9 @@ export interface MigrationExecutionEnvelope {
   readonly scopeDefinitionIds: ReadonlyArray<MigrationDefinitionId>
   /** Workflow schedule: forward dependency order for runs, reverse order for rollbacks. */
   readonly executionDefinitionIds: ReadonlyArray<MigrationDefinitionId>
-  readonly request: RunRequest | RollbackRequest
+  readonly request:
+    | MigrationDefinitionRegistryRunInput
+    | MigrationDefinitionRegistryRollbackInput
 }
 ```
 
@@ -576,7 +590,7 @@ export const MigrationExecutionEnvelopeSchema = Schema.Struct({
   kind: Schema.Literals(["run", "rollback"]),
   scopeDefinitionIds: Schema.Array(MigrationDefinitionId),
   executionDefinitionIds: Schema.Array(MigrationDefinitionId),
-  request: Schema.Union(RunRequest, RollbackRequest),
+  request: Schema.Unknown,
 })
 
 export const MigrationRunWorkflow = Workflow.make({
@@ -865,8 +879,9 @@ const result = yield* registry
   )
 ```
 
-Execution adapters are selected with layers. The caller provides the adapter
-layer once at the program boundary, and the execution call stays the same:
+Execution adapters are selected with layers. The caller provides the catalog,
+execution facade, and adapter layers once at the program boundary, and the
+execution call stays the same:
 
 ```ts
 const executableLayer =
@@ -877,48 +892,45 @@ const executableLayer =
       })
     : MigrationExecutable.inlineDefault
 
+const executionLayer = MigrationExecution.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      MigrationDefinitionRegistryCatalog.layer({ registries: [registry] }),
+      executableLayer
+    )
+  )
+)
+
 const program = Effect.gen(function* () {
-  const plan = yield* registry.executable().planRun({
+  return yield* MigrationExecution.run({
+    registryId: "catalog-migration",
     definitionIds: ["articles"],
     withDependencies: true,
   })
-
-  return yield* MigrationExecutable.startRun(plan)
-}).pipe(Effect.provide(executableLayer))
+}).pipe(Effect.provide(executionLayer))
 ```
 
-Runtime command functions remain available while the service API settles:
+Inline execution uses the same registry-bound facade as durable execution; the
+only difference is that callers construct the registry in code and bind it with
+`MigrationExecution.make` instead of looking it up from a catalog layer:
 
 ```ts
-runMigration(definition, options)
-runMigrations(input)
-rollbackMigration(definition, options)
-rollbackMigrations(input)
+const registry = MigrationDefinitionRegistry.make({
+  definitions: [articles, authors],
+})
+
+const execution = MigrationExecution.make({ registry })
+
+const result = yield* execution.run({
+  all: true,
+  withDependencies: true,
+})
+
+if (result.kind === "completed") {
+  return result.summary
+}
 ```
 
-Those wrappers should use the executable registry and inline executable
-internally, so existing SDK users keep the simple completed-summary path:
-
-```ts
-export const runMigrations = (input: RunRequestInput) =>
-  Effect.gen(function* () {
-    const registry = MigrationDefinitionRegistry.make({
-      id: input.registryId,
-      definitions: input.definitions,
-    })
-
-    const plan = yield* registry.executable().planRun(input)
-    const result = yield* MigrationExecutable.startRun(plan)
-
-    if (result.kind === "completed") {
-      return result.summary
-    }
-
-    return yield* Effect.dieMessage(
-      "inline MigrationExecutable returned a started result"
-    )
-  }).pipe(Effect.provide(MigrationExecutable.inlineDefault))
-```
-
-The wrapper receives `completed` because it provides the default inline
-executable layer.
+The `migrate-sdk/runtime` subpath remains for lower-level cursor-window, run
+lifecycle handoff, and status primitives. It should not expose raw definition
+run/rollback helpers as peer public APIs.

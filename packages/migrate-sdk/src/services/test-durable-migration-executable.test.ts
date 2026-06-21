@@ -9,12 +9,14 @@ import {
   MigrationStore,
   MigrationStoreError,
   SourceIdentity,
-  TestDurableMigrationExecutable,
-  TestDurableMigrationExecutableAttachError,
-  TestDurableMigrationExecutableStartRejectedError,
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "migrate-sdk";
+import {
+  TestDurableMigrationExecutable,
+  TestDurableMigrationExecutableAttachError,
+  TestDurableMigrationExecutableStartRejectedError,
+} from "migrate-sdk/testing";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,

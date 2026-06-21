@@ -9,12 +9,12 @@ import {
   MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
-  runMigration,
   SourceItemTotal,
 } from "migrate-sdk";
 import { CsvIdentity, CsvSourcePlugin } from "migrate-sdk/sources/csv";
 import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
 import { SourcePlugin } from "../../services/source-plugin.ts";
+import { runInlineDefinition } from "../../test-support/inline-registry-execution.ts";
 import { CsvParserCore, type CsvParserOptions } from "./csv-source.ts";
 
 const CsvArticleSource = Schema.Struct({
@@ -551,7 +551,7 @@ describe("CsvSourcePlugin", () => {
             }),
         });
 
-        const summary = yield* runMigration(definition).pipe(
+        const summary = yield* runInlineDefinition(definition).pipe(
           Effect.provide(progressLayer)
         );
 

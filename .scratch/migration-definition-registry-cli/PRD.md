@@ -10,7 +10,7 @@ Migration operators need a simple command surface for listing available migratio
 
 ## Solution
 
-Add a static **Migration Definition Registry** as the executable catalog for SDK and CLI hosts. The registry owns pure catalog validation, metadata listing, lookup, run planning, rollback planning, and thin run/rollback helpers over the existing runtime operations. It remains static from the runner's point of view even when future workflows compile serializable migration specs into executable migration definitions before registry initialization.
+Add a static **Migration Definition Registry** as the executable catalog for SDK and CLI hosts. The registry owns pure catalog validation, metadata listing, lookup, run planning, and rollback planning for registry-bound execution through `MigrationExecution`. It remains static from the runner's point of view even when future workflows compile serializable migration specs into executable migration definitions before registry initialization.
 
 Add a first CLI slice that discovers a CLI-only executable config file, loads one registry, and exposes `list`, `graph`, `run`, and `rollback` commands. The CLI requires explicit scope for execution and rollback, supports `--with-dependencies` for required dependency expansion, supports `--plan` for planning without runtime execution, and uses `--ids` as an operator shorthand for source identity targeting.
 
@@ -46,7 +46,7 @@ The first slice keeps static inspection separate from runtime status. `list` and
 
 14. As an SDK user, I want structured rollback plans, so that I can inspect selected definitions, rollback targets, included definitions, execution order, optional edges, and notices before rollback.
 
-15. As an SDK user, I want raw `runMigrations` and `rollbackMigrations` requests to remain public, so that lower-level callers can bypass the registry while still getting request-boundary validation.
+15. As an SDK user, I want registry-bound `MigrationExecution` to be the public execution path, so that inline and durable hosts share the same selection and planning boundary.
 
 16. As an SDK user, I want registry-backed run and rollback helpers, so that common calls can start from the registry instead of rebuilding definition arrays.
 
@@ -64,7 +64,7 @@ The first slice keeps static inspection separate from runtime status. `list` and
 
 23. As a CLI user, I want TypeScript config files to load directly, so that I do not need to precompile migration configs before running the CLI.
 
-24. As a CLI user, I want the config shape to be synchronous and registry-only, so that configuration stays focused on which registry the CLI uses.
+24. As a CLI user, I want the config shape to be synchronous and registry-focused, so that configuration stays focused on which registry the CLI uses and which execution adapter starts plans.
 
 25. As a CLI user, I want config load failures from registry construction to render all catalog issues, so that I can fix duplicate ids, missing required dependencies, and required cycles in one pass.
 
@@ -232,13 +232,13 @@ The first slice keeps static inspection separate from runtime status. `list` and
 
 - Make CLI config CLI-only and executable.
 
-- Expose a `defineMigrationCliConfig` helper that accepts a synchronous object with one registry.
+- Expose a `defineMigrationCliConfig` helper that accepts a synchronous object with one registry and an optional execution adapter layer.
 
 - Accept only the default export from the config module in the first slice.
 
 - Do not accept async config factories in the first slice.
 
-- Keep CLI config registry-only. Do not add rendering options, default flags, command aliases, or output customization.
+- Keep CLI config focused on registry and execution adapter wiring. Do not add rendering options, default flags, command aliases, or output customization.
 
 - Support direct loading for TypeScript and JavaScript config files in the first slice, including `.ts`, `.mts`, `.js`, and `.mjs` discovery names.
 

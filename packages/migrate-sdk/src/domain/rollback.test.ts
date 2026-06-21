@@ -8,23 +8,25 @@ import {
   type MigrationRunId,
   type MigrationStore,
   type MigrationStoreError,
-  makeRollbackMigrationOptions,
-  makeRollbackRequest,
   type RollbackContext,
   type RollbackDefinitionRunSummary,
-  type RollbackMigrationOptionsInput,
   type RollbackPipeline,
   RollbackPreflightError,
-  type RollbackRequest,
   RollbackRequestError,
-  type RollbackRequestInput,
   RollbackRunSummary,
   type SourceIdentitySnapshotKey,
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "migrate-sdk";
 import { expectTypeOf } from "vitest";
-import type { RollbackMigrationOptions } from "./rollback.ts";
+import {
+  makeRollbackMigrationOptions,
+  makeRollbackRequest,
+  type RollbackMigrationOptions,
+  type RollbackMigrationOptionsInput,
+  type RollbackRequest,
+  type RollbackRequestInput,
+} from "./rollback.ts";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,

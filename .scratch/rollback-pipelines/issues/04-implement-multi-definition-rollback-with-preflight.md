@@ -8,14 +8,14 @@ Status: done
 
 ## What to build
 
-Implement `rollbackMigrations` for selected sets of migration definitions. Multi-definition rollback should use the same definition selection semantics as `runMigrations`, acquire locks for selected rollback definitions, enforce dependency safety through preflight, execute selected definitions in reverse dependency order, and avoid silently expanding destructive scope to dependents.
+Implement registry-bound rollback for selected sets of migration definitions. Multi-definition rollback should use the same registry definition selection semantics as forward runs, acquire locks for selected rollback definitions, enforce dependency safety through preflight, execute selected definitions in reverse dependency order, and avoid silently expanding destructive scope to dependents.
 
 Keep the public rollback usage documentation aligned with the implemented multi-definition and dependency behavior.
 
 ## Acceptance criteria
 
-- [x] `rollbackMigrations` accepts multiple definitions and optional definition selection.
-- [x] Omitting `definitionIds` selects all provided definitions, matching `runMigrations`.
+- [x] `MigrationExecution.make({ registry }).rollback(...)` accepts multiple definitions and optional definition selection.
+- [x] Omitting `definitionIds` selects all registry definitions, matching forward runs.
 - [x] Selected rollback definitions are locked before rollback commands execute and released afterward.
 - [x] Unselected dependent definitions are not locked in the first slice.
 - [x] Dependency cycles fail preflight before durable run creation.

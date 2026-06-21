@@ -1,5 +1,6 @@
-// biome-ignore-all lint/performance/noBarrelFile: Runtime module for lower-level execution primitives.
+// biome-ignore-all lint/performance/noBarrelFile: Runtime entrypoint for lower-level execution primitives.
 
+export { getMigrationStatuses } from "./get-migration-statuses.ts";
 export type {
   MigrationRunBeginInput,
   MigrationRunCompletionInput,
@@ -14,5 +15,5 @@ export type {
   RollbackMigrationError,
   RunMigrationDefinitionError,
   RunMigrationError,
-} from "../services/migration-run-executor.ts";
-export { emptyMigrationRunCursorWindowState } from "../services/migration-run-executor.ts";
+} from "./run-migrations.ts";
+export { emptyMigrationRunCursorWindowState } from "./run-migrations.ts";

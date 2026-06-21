@@ -1,14 +1,16 @@
 import { Effect, Schema } from "effect";
 import {
   MigrationDefinition,
+  MigrationDefinitionRegistry,
+  MigrationExecution,
   type MigrationRunSummary,
-  runMigration,
   SourceIdentity,
   skipItem,
 } from "migrate-sdk";
 import { InMemoryDestination } from "migrate-sdk/destinations/in-memory";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
+import { completedInlineExecution } from "./inline-execution.ts";
 
 const Article = Schema.Struct({
   publish: Schema.Boolean,
@@ -78,7 +80,12 @@ export const makeInMemoryArticlesMigration = () => {
 };
 
 export const runInMemoryExample = Effect.fn("runInMemoryExample")(function* () {
-  return yield* runMigration(makeInMemoryArticlesMigration());
+  const registry = MigrationDefinitionRegistry.make({
+    definitions: [makeInMemoryArticlesMigration()] as const,
+  });
+  const execution = MigrationExecution.make({ registry });
+
+  return yield* completedInlineExecution(execution.run({ all: true }));
 });
 
 export const formatMigrationRunSummary = (

@@ -10,7 +10,11 @@ import type {
   MigrationDefinitionRunPlan,
 } from "../domain/registry.ts";
 import type { RollbackRunSummary } from "../domain/rollback.ts";
-import type { MigrationRunSummary } from "../domain/run.ts";
+import type {
+  ExecutionStartResult,
+  MigrationExecutionHandle,
+  MigrationRunSummary,
+} from "../domain/run.ts";
 
 interface RenderOptions {
   readonly colors?: boolean;
@@ -623,6 +627,39 @@ export const renderRollbackSummary = (
     bold("Definitions", options),
     ...renderRollbackSummaryTable(summary, options),
   ].join("\n");
+
+const renderExecutionHandle = (
+  execution: MigrationExecutionHandle
+): readonly string[] => [
+  `Adapter ${execution.adapter}`,
+  ...(execution.executionId === undefined
+    ? []
+    : [`Execution id ${execution.executionId}`]),
+];
+
+export const renderRunStartResult = (
+  result: ExecutionStartResult<MigrationRunSummary>,
+  options: RenderOptions = {}
+): string =>
+  result.kind === "completed"
+    ? renderRunSummary(result.summary, options)
+    : [
+        bold("Run Started", options),
+        `Run id ${result.runId}`,
+        ...renderExecutionHandle(result.execution),
+      ].join("\n");
+
+export const renderRollbackStartResult = (
+  result: ExecutionStartResult<RollbackRunSummary>,
+  options: RenderOptions = {}
+): string =>
+  result.kind === "completed"
+    ? renderRollbackSummary(result.summary, options)
+    : [
+        bold("Rollback Started", options),
+        `Run id ${result.runId}`,
+        ...renderExecutionHandle(result.execution),
+      ].join("\n");
 
 type StatusDefinition =
   MigrationDefinitionRegistryStatusReport["definitions"][number];

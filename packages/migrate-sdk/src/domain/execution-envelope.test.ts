@@ -11,9 +11,8 @@ import {
   MigrationDefinitionRegistryCatalog,
   MigrationDefinitionRegistryCatalogConstructionError,
   MigrationDefinitionRegistryCatalogLookupError,
+  MigrationExecution,
   MigrationExecutionEnvelopeMissingRegistryIdError,
-  MigrationRollbackExecutor,
-  MigrationRunExecutor,
   MigrationStore,
   MissingMigrationDefinitionRegistryId,
   makeMigrationRollbackExecutionEnvelope,
@@ -24,6 +23,10 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
+import {
+  MigrationRollbackExecutor,
+  MigrationRunExecutor,
+} from "migrate-sdk/core";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -345,7 +348,10 @@ describe("MigrationExecutionEnvelope", () => {
           definitions: [articles] as const,
         });
 
-        yield* registry.run({ definitionIds: ["articles"] });
+        const run = yield* MigrationExecution.make({ registry }).run({
+          definitionIds: ["articles"],
+        });
+        expect(run.kind).toBe("completed");
         const migratedState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         );

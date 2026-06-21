@@ -11,13 +11,18 @@ import {
 import type {
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryPlanningError,
-  MigrationDefinitionRegistryRollbackError,
   MigrationDefinitionRegistryRollbackInput,
-  MigrationDefinitionRegistryRunError,
   MigrationDefinitionRegistryRunInput,
   MigrationDefinitionRegistryStatusError,
   MigrationDefinitionRegistryStatusInput,
 } from "../domain/registry.ts";
+import { MigrationExecutable } from "../services/migration-executable.ts";
+import {
+  MigrationExecution,
+  type MigrationExecutionRollbackError,
+  type MigrationExecutionRunError,
+} from "../services/migration-execution.ts";
+import type { MigrationCliConfig } from "./config.ts";
 import {
   loadMigrationCliConfig,
   type MigrationCliConfigLoadError,
@@ -33,9 +38,9 @@ import {
   renderRegistryGraph,
   renderRegistryList,
   renderRollbackPlan,
-  renderRollbackSummary,
+  renderRollbackStartResult,
   renderRunPlan,
-  renderRunSummary,
+  renderRunStartResult,
   renderRuntimeError,
   renderStatusReport,
 } from "./render.ts";
@@ -82,7 +87,7 @@ const failReportedCliMessage = (
     )
   );
 
-const loadConfiguredRegistry = Effect.gen(function* () {
+const loadConfiguredConfig = Effect.gen(function* () {
   const root = yield* migrateBaseCommand;
   const runtime = yield* MigrationCliRuntime;
   const configPath = Option.getOrUndefined(root.config);
@@ -94,8 +99,25 @@ const loadConfiguredRegistry = Effect.gen(function* () {
     failConfigLoad
   );
 
-  return loadedConfig.registry;
+  return loadedConfig;
 });
+
+const loadConfiguredRegistry = Effect.map(
+  loadConfiguredConfig,
+  (loadedConfig) => loadedConfig.registry
+);
+
+const makeConfiguredExecution = (config: MigrationCliConfig) =>
+  config.executableLayer === undefined
+    ? Effect.succeed(MigrationExecution.make({ registry: config.registry }))
+    : Effect.gen(function* () {
+        const executable = yield* MigrationExecutable;
+
+        return MigrationExecution.make({
+          registry: config.registry,
+          executable,
+        });
+      }).pipe(Effect.provide(config.executableLayer));
 
 const hasRegisteredDefinition = (
   registry: MigrationDefinitionRegistry,
@@ -119,7 +141,8 @@ const graphCommand = Command.make(
   { definition: graphDefinition },
   ({ definition }) =>
     Effect.gen(function* () {
-      const registry = yield* loadConfiguredRegistry;
+      const loadedConfig = yield* loadConfiguredConfig;
+      const registry = loadedConfig.registry;
       const focusedDefinitionId = Option.getOrUndefined(definition);
 
       if (focusedDefinitionId !== undefined) {
@@ -387,8 +410,8 @@ const makeStatusInput = (input: {
 
 const isPlanningError = (
   error:
-    | MigrationDefinitionRegistryRollbackError
-    | MigrationDefinitionRegistryRunError
+    | MigrationExecutionRollbackError
+    | MigrationExecutionRunError
     | MigrationDefinitionRegistryStatusError
 ): error is MigrationDefinitionRegistryPlanningError => {
   switch (error._tag) {
@@ -402,7 +425,7 @@ const isPlanningError = (
 };
 
 const renderRunCommandError = (
-  error: MigrationDefinitionRegistryRunError,
+  error: MigrationExecutionRunError,
   input: {
     readonly definitionIds: readonly string[];
     readonly hasTarget: boolean;
@@ -421,7 +444,7 @@ const renderRunCommandError = (
     : renderRuntimeError(error);
 
 const renderRollbackCommandError = (
-  error: MigrationDefinitionRegistryRollbackError,
+  error: MigrationExecutionRollbackError,
   input: {
     readonly definitionIds: readonly string[];
     readonly hasTarget: boolean;
@@ -467,7 +490,8 @@ const statusCommand = Command.make(
   },
   (input) =>
     Effect.gen(function* () {
-      const registry = yield* loadConfiguredRegistry;
+      const loadedConfig = yield* loadConfiguredConfig;
+      const registry = loadedConfig.registry;
       const concurrencyInput = Option.getOrUndefined(input.concurrency);
       const statusInput = makeStatusInput({
         all: input.all,
@@ -516,7 +540,8 @@ const runCommand = Command.make(
         );
       }
 
-      const registry = yield* loadConfiguredRegistry;
+      const loadedConfig = yield* loadConfiguredConfig;
+      const registry = loadedConfig.registry;
       const idsInput = Option.getOrUndefined(input.id);
       const sourceIdentities =
         idsInput === undefined || idsInput.length === 0
@@ -530,7 +555,7 @@ const runCommand = Command.make(
         mode = "skipped";
       }
       const concurrencyInput = Option.getOrUndefined(input.concurrency);
-      const execution =
+      const executionOptions =
         concurrencyInput === undefined
           ? undefined
           : {
@@ -544,7 +569,9 @@ const runCommand = Command.make(
       const runInput = makeRunPlanInput({
         all: input.all,
         definitionIds: input.definitions,
-        ...(execution === undefined ? {} : { execution }),
+        ...(executionOptions === undefined
+          ? {}
+          : { execution: executionOptions }),
         ...(mode === undefined ? {} : { mode }),
         ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
         update: input.update,
@@ -576,7 +603,8 @@ const runCommand = Command.make(
       }
 
       const runtime = yield* MigrationCliRuntime;
-      const summary = yield* registry.run(runInput).pipe(
+      const configuredExecution = yield* makeConfiguredExecution(loadedConfig);
+      const result = yield* configuredExecution.run(runInput).pipe(
         Effect.provide(makeCliProgressLayer(input.progress, runtime)),
         Effect.catch((error) =>
           failReportedCliMessage(
@@ -591,7 +619,7 @@ const runCommand = Command.make(
       );
 
       yield* Console.log(
-        renderRunSummary(summary, { colors: shouldUseColor() })
+        renderRunStartResult(result, { colors: shouldUseColor() })
       );
     })
 ).pipe(Command.withDescription("Plan or run Migration Definitions"));
@@ -609,14 +637,15 @@ const rollbackCommand = Command.make(
   },
   (input) =>
     Effect.gen(function* () {
-      const registry = yield* loadConfiguredRegistry;
+      const loadedConfig = yield* loadConfiguredConfig;
+      const registry = loadedConfig.registry;
       const idsInput = Option.getOrUndefined(input.id);
       const sourceIdentities =
         idsInput === undefined || idsInput.length === 0
           ? undefined
           : yield* parseSourceIdentityTargets(idsInput);
       const concurrencyInput = Option.getOrUndefined(input.concurrency);
-      const execution =
+      const executionOptions =
         concurrencyInput === undefined
           ? undefined
           : {
@@ -630,7 +659,9 @@ const rollbackCommand = Command.make(
       const rollbackInput = makeRollbackPlanInput({
         all: input.all,
         definitionIds: input.definitions,
-        ...(execution === undefined ? {} : { execution }),
+        ...(executionOptions === undefined
+          ? {}
+          : { execution: executionOptions }),
         ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
         withDependencies: input.withDependencies,
       });
@@ -655,7 +686,8 @@ const rollbackCommand = Command.make(
       }
 
       const runtime = yield* MigrationCliRuntime;
-      const summary = yield* registry.rollback(rollbackInput).pipe(
+      const configuredExecution = yield* makeConfiguredExecution(loadedConfig);
+      const result = yield* configuredExecution.rollback(rollbackInput).pipe(
         Effect.provide(makeCliRollbackProgressLayer(input.progress, runtime)),
         Effect.catch((error) =>
           failReportedCliMessage(
@@ -668,7 +700,7 @@ const rollbackCommand = Command.make(
       );
 
       yield* Console.log(
-        renderRollbackSummary(summary, { colors: shouldUseColor() })
+        renderRollbackStartResult(result, { colors: shouldUseColor() })
       );
     })
 ).pipe(Command.withDescription("Plan or rollback Migration Definitions"));

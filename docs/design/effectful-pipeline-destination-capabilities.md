@@ -150,7 +150,12 @@ Run-level provision can also work if the returned migration definition preserves
 process requirements in its type:
 
 ```ts
-runMigration(products).pipe(Effect.provide(CommercetoolsLive.layer))
+const registry = MigrationDefinitionRegistry.make({
+  definitions: [products],
+})
+const execution = MigrationExecution.make({ registry })
+
+execution.run({ all: true }).pipe(Effect.provide(CommercetoolsLive.layer))
 ```
 
 The framework still provides framework-owned services around each item

@@ -8,13 +8,13 @@ Status: done
 
 ## What to build
 
-Implement the core rollback tracer bullet for one migration definition. `rollbackMigration(definition)` should select all rollbackable item states for the definition, execute side-effect-only rollback command plans through the existing destination command machinery, delete item state immediately after each successful rollback, preserve item state on failures, and return a rollback-specific summary.
+Implement the core rollback tracer bullet for one migration definition through the registry-bound execution path. A single selected definition rollback should select all rollbackable item states for the definition, execute side-effect-only rollback command plans through the existing destination command machinery, delete item state immediately after each successful rollback, preserve item state on failures, and return a rollback-specific summary.
 
 Keep the public rollback usage documentation aligned with the implemented single-definition behavior.
 
 ## Acceptance criteria
 
-- [x] `rollbackMigration(definition)` rolls back all rollbackable item states for the definition.
+- [x] `MigrationExecution.make({ registry }).rollback({ definitionIds: [...] })` rolls back all rollbackable item states for the selected definition.
 - [x] Rollback execution uses durable item state and does not call source cursor reads or source identity lookups.
 - [x] Rollback execution does not update or clear source cursor state.
 - [x] The rollback pipeline receives the full narrowed rollbackable item state and a minimal rollback context.

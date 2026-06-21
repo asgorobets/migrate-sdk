@@ -8,15 +8,12 @@ import type {
 } from "./execution.ts";
 import { normalizeMigrationExecutionOptions } from "./execution.ts";
 import type {
-  EncodedSourceIdentity,
-  EncodedSourceIdentityInput,
   MigrationDefinitionIdInput,
   SourceIdentitySnapshotKey,
 } from "./ids.ts";
 import {
   MigrationDefinitionId,
   MigrationRunId,
-  toEncodedSourceIdentity,
   toMigrationDefinitionId,
 } from "./ids.ts";
 import type { MigrationItemState } from "./state.ts";
@@ -188,119 +185,6 @@ export const makeRollbackMigrationOptions = <
       ? {}
       : { execution: normalizeMigrationExecutionOptions(input.execution) }),
     sourceIdentityKeys: [firstKey, ...remainingKeys],
-  };
-};
-
-export interface EncodedRollbackRequest<
-  Definitions extends
-    readonly AnyRollbackMigrationDefinition[] = readonly AnyRollbackMigrationDefinition[],
-> {
-  readonly definitionIds?: readonly MigrationDefinitionId[];
-  readonly definitions: Definitions;
-  readonly encodedSourceIdentities?: readonly [
-    EncodedSourceIdentity,
-    ...EncodedSourceIdentity[],
-  ];
-  readonly execution?: NormalizedMigrationExecutionOptions;
-}
-
-export interface EncodedRollbackRequestInput<
-  Definitions extends
-    readonly AnyRollbackMigrationDefinition[] = readonly AnyRollbackMigrationDefinition[],
-> {
-  readonly definitionIds?: readonly MigrationDefinitionIdInput[];
-  readonly definitions: Definitions;
-  readonly encodedSourceIdentities?: readonly EncodedSourceIdentityInput[];
-  readonly execution?: MigrationExecutionOptions;
-}
-
-export interface EncodedRollbackMigrationOptions {
-  readonly encodedSourceIdentities?: readonly [
-    EncodedSourceIdentity,
-    ...EncodedSourceIdentity[],
-  ];
-  readonly execution?: NormalizedMigrationExecutionOptions;
-}
-
-export interface EncodedRollbackMigrationOptionsInput {
-  readonly encodedSourceIdentities?: readonly EncodedSourceIdentityInput[];
-  readonly execution?: MigrationExecutionOptions;
-}
-
-export const makeEncodedRollbackMigrationOptions = (
-  input: EncodedRollbackMigrationOptionsInput = {}
-): EncodedRollbackMigrationOptions => {
-  if (
-    input.encodedSourceIdentities !== undefined &&
-    input.encodedSourceIdentities.length === 0
-  ) {
-    throw new RollbackRequestError({
-      message:
-        "Rollback encodedSourceIdentities must include at least one identity",
-    });
-  }
-
-  if (input.encodedSourceIdentities === undefined) {
-    return {
-      ...(input.execution === undefined
-        ? {}
-        : { execution: normalizeMigrationExecutionOptions(input.execution) }),
-    };
-  }
-
-  const sourceIdentities: EncodedSourceIdentity[] = [];
-  const seenSourceIdentities = new Set<EncodedSourceIdentity>();
-
-  for (const sourceIdentityInput of input.encodedSourceIdentities) {
-    const sourceIdentity = toEncodedSourceIdentity(sourceIdentityInput);
-
-    if (seenSourceIdentities.has(sourceIdentity)) {
-      continue;
-    }
-
-    seenSourceIdentities.add(sourceIdentity);
-    sourceIdentities.push(sourceIdentity);
-  }
-
-  const [firstIdentity, ...remainingIdentities] = sourceIdentities;
-
-  if (firstIdentity === undefined) {
-    throw new RollbackRequestError({
-      message:
-        "Rollback encodedSourceIdentities must include at least one identity",
-    });
-  }
-
-  return {
-    ...(input.execution === undefined
-      ? {}
-      : { execution: normalizeMigrationExecutionOptions(input.execution) }),
-    encodedSourceIdentities: [firstIdentity, ...remainingIdentities],
-  };
-};
-
-export const makeEncodedRollbackRequest = <
-  Definitions extends readonly AnyRollbackMigrationDefinition[],
->(
-  input: EncodedRollbackRequestInput<Definitions>
-): EncodedRollbackRequest<Definitions> => {
-  const options = makeEncodedRollbackMigrationOptions(
-    input.encodedSourceIdentities === undefined
-      ? {}
-      : { encodedSourceIdentities: input.encodedSourceIdentities }
-  );
-
-  return {
-    definitions: input.definitions,
-    ...(input.definitionIds === undefined
-      ? {}
-      : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
-    ...(input.execution === undefined
-      ? {}
-      : { execution: normalizeMigrationExecutionOptions(input.execution) }),
-    ...(options.encodedSourceIdentities === undefined
-      ? {}
-      : { encodedSourceIdentities: options.encodedSourceIdentities }),
   };
 };
 

@@ -23,6 +23,8 @@ import {
 } from "./migration-definition-registry-catalog.ts";
 import {
   MigrationExecutable,
+  type MigrationExecutableInlineRollbackStartError,
+  type MigrationExecutableInlineRunStartError,
   type MigrationExecutableRollbackStartError,
   type MigrationExecutableRunStartError,
   type MigrationExecutableService,
@@ -69,6 +71,8 @@ export interface MigrationExecutionService {
 export interface BoundMigrationExecutionService<
   Definitions extends
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
+  RunStartError = MigrationExecutableRunStartError<Definitions>,
+  RollbackStartError = MigrationExecutableRollbackStartError,
 > {
   readonly rollback: (
     input: MigrationDefinitionRegistryRollbackInput
@@ -76,7 +80,7 @@ export interface BoundMigrationExecutionService<
     ExecutionStartResult<RollbackRunSummary>,
     | MigrationDefinitionRegistryPlanningError
     | MigrationDefinitionRegistryExecutableError
-    | MigrationExecutableRollbackStartError
+    | RollbackStartError
   >;
 
   readonly run: (
@@ -85,7 +89,7 @@ export interface BoundMigrationExecutionService<
     ExecutionStartResult<MigrationRunSummary>,
     | MigrationDefinitionRegistryPlanningError
     | MigrationDefinitionRegistryExecutableError
-    | MigrationExecutableRunStartError<Definitions>,
+    | RunStartError,
     RunRequestSourceRequirements<Definitions>
   >;
 }
@@ -94,26 +98,52 @@ export interface MigrationExecutionMakeInput<
   Definitions extends
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
 > {
-  readonly executable: MigrationExecutableService;
+  readonly executable?: MigrationExecutableService | undefined;
   readonly registry: MigrationDefinitionRegistry<Definitions>;
 }
 
-export const makeMigrationExecution = <
+export function makeMigrationExecution<
+  Definitions extends readonly AnyMigrationDefinition[],
+>(input: {
+  readonly executable: MigrationExecutableService;
+  readonly registry: MigrationDefinitionRegistry<Definitions>;
+}): BoundMigrationExecutionService<
+  Definitions,
+  MigrationExecutableRunStartError<Definitions>,
+  MigrationExecutableRollbackStartError
+>;
+export function makeMigrationExecution<
+  Definitions extends readonly AnyMigrationDefinition[],
+>(input: {
+  readonly executable?: undefined;
+  readonly registry: MigrationDefinitionRegistry<Definitions>;
+}): BoundMigrationExecutionService<
+  Definitions,
+  MigrationExecutableInlineRunStartError<Definitions>,
+  MigrationExecutableInlineRollbackStartError
+>;
+export function makeMigrationExecution<
   Definitions extends readonly AnyMigrationDefinition[],
 >(
   input: MigrationExecutionMakeInput<Definitions>
-): BoundMigrationExecutionService<Definitions> => ({
-  rollback: (request) =>
-    Effect.flatMap(input.registry.executable().planRollback(request), (plan) =>
-      input.executable.startRollback(plan)
-    ),
-  run: (request) =>
-    Effect.flatMap(
-      input.registry.executable().planRun(request),
-      (plan: MigrationDefinitionExecutableRunPlan<Definitions>) =>
-        input.executable.startRun(plan)
-    ),
-});
+): BoundMigrationExecutionService<Definitions, unknown, unknown> {
+  return {
+    rollback: (request) =>
+      Effect.flatMap(
+        input.registry.executable().planRollback(request),
+        (plan) =>
+          (input.executable ?? MigrationExecutable.inlineService).startRollback(
+            plan
+          )
+      ),
+    run: (request) =>
+      Effect.flatMap(
+        input.registry.executable().planRun(request),
+        (plan: MigrationDefinitionExecutableRunPlan<Definitions>) =>
+          (input.executable ?? MigrationExecutable.inlineService).startRun(plan)
+      ),
+  };
+}
 
 const makeCatalogExecution = (
   catalog: typeof MigrationDefinitionRegistryCatalog.Service,
@@ -139,6 +169,13 @@ const makeCatalogExecution = (
   ),
 });
 
+/**
+ * Registry-bound execution facade.
+ *
+ * Looks up a Migration Definition Registry from the catalog, plans the requested
+ * run or rollback, and delegates the resulting plan to the provided executable
+ * adapter.
+ */
 export class MigrationExecution extends Service<
   MigrationExecution,
   MigrationExecutionService

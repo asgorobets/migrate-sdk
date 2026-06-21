@@ -11,7 +11,6 @@ import {
   SourcePluginError,
 } from "../domain/errors.ts";
 import {
-  type MigrationExecutionOptions,
   type NormalizedMigrationExecutionOptions,
   normalizeMigrationExecutionOptions,
   type PipelineExecutionConcurrency,
@@ -33,39 +32,20 @@ import type {
 } from "../domain/registry.ts";
 import type {
   AnyRollbackMigrationDefinition,
-  EncodedRollbackMigrationOptions,
-  EncodedRollbackRequest,
-  EncodedRollbackRequestInput,
   RollbackDefinitionRunSummary,
-  RollbackMigrationOptions,
-  RollbackMigrationOptionsInput,
   RollbackPipeline,
-  RollbackRequestInput,
   RollbackRunSummary,
-} from "../domain/rollback.ts";
-import {
-  makeEncodedRollbackRequest,
-  makeRollbackMigrationOptions,
-  makeRollbackRequest,
 } from "../domain/rollback.ts";
 import type {
   AnyMigrationDefinition,
-  EncodedRunRequest,
-  EncodedRunRequestInput,
   ExecutionStartResult,
   MigrationDefinitionRunSummary,
   MigrationRunState,
   MigrationRunSummary,
-  RunRequestInput,
   RunRequestSourceLayerError,
   RunRequestSourceRequirements,
 } from "../domain/run.ts";
-import { makeEncodedRunRequest, makeRunRequest } from "../domain/run.ts";
-import {
-  makeRunMode,
-  normalRunMode,
-  type RunMode,
-} from "../domain/run-mode.ts";
+import { normalRunMode, type RunMode } from "../domain/run-mode.ts";
 import { normalizeSourceItemTotal, SourceItemTotal } from "../domain/source.ts";
 import type {
   FailedItemState,
@@ -122,21 +102,17 @@ export type RollbackMigrationError =
   | RollbackPreflightError
   | RollbackRequestError;
 
+interface MigrationRollbackExecutionOptions {
+  readonly encodedSourceIdentities?: readonly [
+    EncodedSourceIdentity,
+    ...EncodedSourceIdentity[],
+  ];
+  readonly execution?: NormalizedMigrationExecutionOptions;
+}
+
 const emptyRunError = new MigrationRuntimeError({
   message: "Run request must include at least one Migration Definition",
 });
-
-const missingDefinitionError = (definitionId: MigrationDefinitionId) =>
-  new MigrationRuntimeError({
-    message: "Migration Definition was not found",
-    cause: { definitionId },
-  });
-
-const dependencyCycleError = (definitionId: MigrationDefinitionId) =>
-  new MigrationRuntimeError({
-    message: "Migration Definition dependency cycle detected",
-    cause: { definitionId },
-  });
 
 const splitStoreRunError = (
   definitionId: MigrationDefinitionId,
@@ -148,12 +124,6 @@ const splitStoreRunError = (
     cause: { definitionId, storeOwnerDefinitionId },
   });
 
-const invalidRunRequestError = (cause: unknown) =>
-  new MigrationRuntimeError({
-    message: "Run request contains invalid input",
-    cause,
-  });
-
 const invalidUpdateRunModeError = (mode: RunMode) =>
   new MigrationRuntimeError({
     message:
@@ -161,112 +131,6 @@ const invalidUpdateRunModeError = (mode: RunMode) =>
         ? "Update run cannot target source identities"
         : `Update run cannot combine with ${mode.kind} mode`,
   });
-
-const invalidRollbackRequestError = (cause: unknown) =>
-  cause instanceof RollbackRequestError
-    ? cause
-    : new RollbackRequestError({
-        message: "Rollback request contains invalid input",
-        cause,
-      });
-
-const itemModeDefinitionCountError = new MigrationRuntimeError({
-  message:
-    "Run source identity key targeting requires exactly one selected Migration Definition",
-});
-
-const rollbackSourceIdentityKeyDefinitionCountError = new RollbackRequestError({
-  message:
-    "Rollback sourceIdentityKeys require exactly one selected Migration Definition",
-});
-
-const normalizeRunMode = (
-  definitions: readonly AnyMigrationDefinition[],
-  mode: RunRequestInput<readonly AnyMigrationDefinition[]>["mode"] | undefined
-): Effect.Effect<RunMode, MigrationRuntimeError> => {
-  if (mode === undefined || mode.kind !== "item") {
-    return Effect.succeed(mode ?? normalRunMode);
-  }
-
-  if (definitions.length !== 1) {
-    return Effect.fail(itemModeDefinitionCountError);
-  }
-
-  const definition = definitions[0];
-
-  if (definition === undefined) {
-    return Effect.fail(itemModeDefinitionCountError);
-  }
-
-  return Effect.try({
-    try: () => makeRunMode(definition.source.identity, mode),
-    catch: (cause) =>
-      new MigrationRuntimeError({
-        message: "Run sourceIdentityKey did not match Source Identity Schema",
-        cause,
-      }),
-  });
-};
-
-const encodeRollbackMigrationOptions = (
-  definition: AnyRollbackMigrationDefinition,
-  options: RollbackMigrationOptions
-): Effect.Effect<EncodedRollbackMigrationOptions, RollbackRequestError> => {
-  if (options.sourceIdentityKeys === undefined) {
-    return Effect.succeed({
-      ...(options.execution === undefined
-        ? {}
-        : { execution: options.execution }),
-    });
-  }
-
-  const sourceIdentityKeys = options.sourceIdentityKeys;
-
-  return Effect.try({
-    try: () => {
-      const sourceIdentities: EncodedSourceIdentity[] = [];
-      const seenSourceIdentities = new Set<EncodedSourceIdentity>();
-
-      for (const sourceIdentityKey of sourceIdentityKeys) {
-        const sourceIdentity = SourceIdentity.fromKey(
-          definition.source.identity,
-          sourceIdentityKey
-        ).encoded;
-
-        if (seenSourceIdentities.has(sourceIdentity)) {
-          continue;
-        }
-
-        seenSourceIdentities.add(sourceIdentity);
-        sourceIdentities.push(sourceIdentity);
-      }
-
-      const [firstIdentity, ...remainingIdentities] = sourceIdentities;
-
-      if (firstIdentity === undefined) {
-        throw new RollbackRequestError({
-          message:
-            "Rollback sourceIdentityKeys must include at least one identity",
-        });
-      }
-
-      return {
-        ...(options.execution === undefined
-          ? {}
-          : { execution: options.execution }),
-        encodedSourceIdentities: [firstIdentity, ...remainingIdentities],
-      };
-    },
-    catch: (cause) =>
-      cause instanceof RollbackRequestError
-        ? cause
-        : new RollbackRequestError({
-            message:
-              "Rollback sourceIdentityKeys did not match Source Identity Schema",
-            cause,
-          }),
-  });
-};
 
 const unsafeDependentRollbackError = (
   definitionId: MigrationDefinitionId,
@@ -829,77 +693,6 @@ const decodeSourceCursor = <Cursor>(
     )
   );
 
-type OrderedDefinitionsResult =
-  | {
-      readonly definitions: readonly AnyMigrationDefinition[];
-      readonly kind: "ordered";
-    }
-  | {
-      readonly error: MigrationRuntimeError;
-      readonly kind: "failed";
-    };
-
-const orderDefinitions = (
-  definitions: readonly AnyMigrationDefinition[],
-  selectedDefinitionIds: readonly MigrationDefinitionId[] | undefined
-): OrderedDefinitionsResult => {
-  const definitionsById = new Map(
-    definitions.map((definition) => [definition.id, definition])
-  );
-  const orderedDefinitions: AnyMigrationDefinition[] = [];
-  const activeDefinitionIds = new Set<MigrationDefinitionId>();
-  const visitedDefinitionIds = new Set<MigrationDefinitionId>();
-  const rootDefinitionIds =
-    selectedDefinitionIds === undefined
-      ? definitions.map((definition) => definition.id)
-      : selectedDefinitionIds;
-
-  const visit = (
-    definitionId: MigrationDefinitionId
-  ): MigrationRuntimeError | null => {
-    if (visitedDefinitionIds.has(definitionId)) {
-      return null;
-    }
-
-    if (activeDefinitionIds.has(definitionId)) {
-      return dependencyCycleError(definitionId);
-    }
-
-    const definition = definitionsById.get(definitionId);
-
-    if (definition === undefined) {
-      return missingDefinitionError(definitionId);
-    }
-
-    activeDefinitionIds.add(definitionId);
-
-    for (const dependencyId of definition.dependsOn ?? []) {
-      const error = visit(dependencyId);
-
-      if (error !== null) {
-        activeDefinitionIds.delete(definitionId);
-        return error;
-      }
-    }
-
-    activeDefinitionIds.delete(definitionId);
-    visitedDefinitionIds.add(definitionId);
-    orderedDefinitions.push(definition);
-
-    return null;
-  };
-
-  for (const definitionId of rootDefinitionIds) {
-    const error = visit(definitionId);
-
-    if (error !== null) {
-      return { kind: "failed", error };
-    }
-  }
-
-  return { kind: "ordered", definitions: orderedDefinitions };
-};
-
 const validateSharedStore = (
   definitions: readonly AnyMigrationDefinition[]
 ): MigrationRuntimeError | null => {
@@ -918,9 +711,10 @@ const validateSharedStore = (
   return null;
 };
 
-const validateUpdateRunRequest = (
-  request: EncodedRunRequest<readonly AnyMigrationDefinition[]>
-): MigrationRuntimeError | null => {
+const validateUpdateRunRequest = (request: {
+  readonly mode?: RunMode;
+  readonly update?: boolean;
+}): MigrationRuntimeError | null => {
   if (request.update !== true) {
     return null;
   }
@@ -2602,7 +2396,7 @@ const runRollbackMigrationDefinition = <
     SourceRequirements
   >,
   runId: MigrationRunId,
-  options: EncodedRollbackMigrationOptions
+  options: MigrationRollbackExecutionOptions
 ): Effect.Effect<
   RollbackDefinitionRunSummary,
   RollbackMigrationDefinitionError | RollbackPreflightError
@@ -2705,7 +2499,7 @@ const runRollbackMigrationDefinition = <
 const hasSelectedItemState = (
   store: typeof MigrationStore.Service,
   definition: AnyMigrationDefinition,
-  options: EncodedRollbackMigrationOptions
+  options: MigrationRollbackExecutionOptions
 ): Effect.Effect<boolean, MigrationStoreError> =>
   Effect.gen(function* () {
     if (options.encodedSourceIdentities !== undefined) {
@@ -2731,7 +2525,7 @@ const hasSelectedItemState = (
 const validateRollbackPipelinePreflight = (
   store: typeof MigrationStore.Service,
   definition: AnyMigrationDefinition,
-  options: EncodedRollbackMigrationOptions
+  options: MigrationRollbackExecutionOptions
 ): Effect.Effect<void, MigrationStoreError | RollbackPreflightError> =>
   definition.rollback === undefined
     ? Effect.gen(function* () {
@@ -2842,168 +2636,21 @@ const validateRollbackDependencyPreflight = (
     }
   });
 
-export function rollbackMigration<
-  Source,
-  PipelineError,
-  Cursor = unknown,
-  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  RollbackPipelineError = PipelineError,
-  SourceInput = Source,
-  SourceLayerError = never,
-  SourceRequirements = never,
->(
-  definition: MigrationDefinition<
-    Source,
-    PipelineError,
-    Cursor,
-    IdentityKey,
-    RollbackPipelineError,
-    SourceInput,
-    SourceLayerError,
-    SourceRequirements
-  >,
-  optionsInput?: undefined
-): Effect.Effect<
-  RollbackRunSummary,
-  RollbackMigrationDefinitionError | RollbackPreflightError
->;
-export function rollbackMigration<
-  Source,
-  PipelineError,
-  Cursor = unknown,
-  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  RollbackPipelineError = PipelineError,
-  SourceInput = Source,
-  SourceLayerError = never,
-  SourceRequirements = never,
->(
-  definition: MigrationDefinition<
-    Source,
-    PipelineError,
-    Cursor,
-    IdentityKey,
-    RollbackPipelineError,
-    SourceInput,
-    SourceLayerError,
-    SourceRequirements
-  >,
-  optionsInput: RollbackMigrationOptionsInput<IdentityKey> | undefined
-): Effect.Effect<RollbackRunSummary, RollbackMigrationError>;
-export function rollbackMigration<
-  Source,
-  PipelineError,
-  Cursor = unknown,
-  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  RollbackPipelineError = PipelineError,
-  SourceInput = Source,
-  SourceLayerError = never,
-  SourceRequirements = never,
->(
-  definition: MigrationDefinition<
-    Source,
-    PipelineError,
-    Cursor,
-    IdentityKey,
-    RollbackPipelineError,
-    SourceInput,
-    SourceLayerError,
-    SourceRequirements
-  >,
-  optionsInput: RollbackMigrationOptionsInput<IdentityKey> = {}
-): Effect.Effect<RollbackRunSummary, RollbackMigrationError> {
-  const optionsEffect = Effect.try({
-    try: () => makeRollbackMigrationOptions(optionsInput),
-    catch: invalidRollbackRequestError,
-  }).pipe(
-    Effect.flatMap((options) =>
-      encodeRollbackMigrationOptions(definition, options)
-    )
-  );
-
-  return Effect.flatMap(optionsEffect, (options) => {
-    const program = Effect.gen(function* () {
-      const store = yield* MigrationStore;
-      const definitionIds = [definition.id];
-      const progressDefinitionIds = [definition.id];
-      const run = yield* executeMigrationRun(
-        store,
-        definitionIds,
-        (runId) =>
-          Effect.gen(function* () {
-            yield* RollbackProgress.emit({
-              definitionIds: progressDefinitionIds,
-              kind: "rollback-started",
-              runId,
-            });
-            const summary = yield* runRollbackMigrationDefinition(
-              definition,
-              runId,
-              options
-            );
-
-            return {
-              status:
-                summary.status === "failed"
-                  ? ("failed" as const)
-                  : ("succeeded" as const),
-              value: [summary],
-            };
-          }).pipe(
-            Effect.catch((error) =>
-              RollbackProgress.emit({
-                definitionIds: progressDefinitionIds,
-                error,
-                kind: "rollback-failed",
-                runId,
-              }).pipe(Effect.andThen(Effect.fail(error)))
-            )
-          ),
-        () => validateRollbackPipelinePreflight(store, definition, options)
-      );
-      yield* RollbackProgress.emit({
-        definitionIds: progressDefinitionIds,
-        kind: "rollback-completed",
-        runId: run.runState.runId,
-        status: rollbackStatusForDefinitions(run.value),
-      });
-
-      return {
-        kind: "rollback" as const,
-        definitions: run.value,
-        finishedAt: run.completedRun.finishedAt ?? new Date(),
-        runId: run.runState.runId,
-        startedAt: run.runState.startedAt,
-        status: rollbackStatusForDefinitions(run.value),
-      };
-    });
-
-    return program.pipe(Effect.provide(definition.store));
-  });
-}
-
-const rollbackMigrationsWithRequest = <
+const executePlannedRollbackDefinitions = <
   Definitions extends readonly AnyRollbackMigrationDefinition[],
 >(
-  request: EncodedRollbackRequest<Definitions>,
+  input: {
+    readonly execution?: NormalizedMigrationExecutionOptions;
+    readonly registryDefinitions: readonly AnyRollbackMigrationDefinition[];
+    readonly rollbackDefinitions: Definitions;
+    readonly selectedDefinitionsInRunOrder: readonly AnyRollbackMigrationDefinition[];
+    readonly target?: MigrationDefinitionExecutableRollbackPlan["target"];
+  },
   executionOptions: MigrationRuntimeExecutionOptions = {}
 ): Effect.Effect<RollbackRunSummary, RollbackMigrationError> => {
-  const orderedDefinitions = orderDefinitions(
-    request.definitions,
-    request.definitionIds
-  );
+  const firstSelectedDefinition = input.selectedDefinitionsInRunOrder[0];
 
-  if (orderedDefinitions.kind === "failed") {
-    return Effect.fail(
-      new RollbackPreflightError({
-        message: orderedDefinitions.error.message,
-        cause: orderedDefinitions.error.cause,
-      })
-    );
-  }
-
-  const firstOrderedDefinition = orderedDefinitions.definitions[0];
-
-  if (firstOrderedDefinition === undefined) {
+  if (firstSelectedDefinition === undefined) {
     return Effect.fail(
       new RollbackRequestError({
         message:
@@ -3012,23 +2659,23 @@ const rollbackMigrationsWithRequest = <
     );
   }
 
-  const options: EncodedRollbackMigrationOptions =
-    request.encodedSourceIdentities === undefined
+  const options: MigrationRollbackExecutionOptions =
+    input.target === undefined
       ? {
-          ...(request.execution === undefined
+          ...(input.execution === undefined
             ? {}
-            : { execution: request.execution }),
+            : { execution: input.execution }),
         }
       : {
-          ...(request.execution === undefined
+          ...(input.execution === undefined
             ? {}
-            : { execution: request.execution }),
-          encodedSourceIdentities: request.encodedSourceIdentities,
+            : { execution: input.execution }),
+          encodedSourceIdentities: input.target.sourceIdentities,
         };
 
   if (
     options.encodedSourceIdentities !== undefined &&
-    orderedDefinitions.definitions.length !== 1
+    input.selectedDefinitionsInRunOrder.length !== 1
   ) {
     return Effect.fail(
       new RollbackRequestError({
@@ -3038,7 +2685,9 @@ const rollbackMigrationsWithRequest = <
     );
   }
 
-  const sharedStoreError = validateSharedStore(orderedDefinitions.definitions);
+  const sharedStoreError = validateSharedStore(
+    input.selectedDefinitionsInRunOrder
+  );
 
   if (sharedStoreError !== null) {
     return Effect.fail(
@@ -3049,11 +2698,10 @@ const rollbackMigrationsWithRequest = <
     );
   }
 
-  const definitionIds = orderedDefinitions.definitions.map(
+  const definitionIds = input.selectedDefinitionsInRunOrder.map(
     (definition) => definition.id
   );
-  const rollbackDefinitions = [...orderedDefinitions.definitions].reverse();
-  const progressDefinitionIds = rollbackDefinitions.map(
+  const progressDefinitionIds = input.rollbackDefinitions.map(
     (definition) => definition.id
   );
 
@@ -3068,7 +2716,7 @@ const rollbackMigrationsWithRequest = <
         });
         const summaries: RollbackDefinitionRunSummary[] = [];
 
-        for (const definition of rollbackDefinitions) {
+        for (const definition of input.rollbackDefinitions) {
           const summary = yield* runRollbackMigrationDefinition(
             definition,
             runId,
@@ -3099,12 +2747,12 @@ const rollbackMigrationsWithRequest = <
       () =>
         validateRollbackDependencyPreflight(
           store,
-          request.definitions,
-          orderedDefinitions.definitions
+          input.registryDefinitions,
+          input.selectedDefinitionsInRunOrder
         ).pipe(
           Effect.andThen(
             Effect.forEach(
-              rollbackDefinitions,
+              input.rollbackDefinitions,
               (definition) =>
                 validateRollbackPipelinePreflight(store, definition, options),
               { discard: true }
@@ -3130,158 +2778,53 @@ const rollbackMigrationsWithRequest = <
     };
   });
 
-  return program.pipe(Effect.provide(firstOrderedDefinition.store));
+  return program.pipe(Effect.provide(firstSelectedDefinition.store));
 };
 
-export const rollbackMigrationsWithEncodedSourceIdentities = <
-  Definitions extends readonly AnyRollbackMigrationDefinition[],
->(
-  input: EncodedRollbackRequestInput<Definitions>,
-  executionOptions: MigrationRuntimeExecutionOptions = {}
-): Effect.Effect<RollbackRunSummary, RollbackMigrationError> => {
-  const requestEffect = Effect.try({
-    try: () => makeEncodedRollbackRequest(input),
-    catch: invalidRollbackRequestError,
-  });
-
-  return Effect.flatMap(requestEffect, (request) =>
-    rollbackMigrationsWithRequest(request, executionOptions)
-  );
-};
-
-export const rollbackMigrations = <
-  Definitions extends readonly AnyRollbackMigrationDefinition[],
->(
-  input: RollbackRequestInput<Definitions>
-): Effect.Effect<RollbackRunSummary, RollbackMigrationError> => {
-  const requestEffect = Effect.try({
-    try: () => makeRollbackRequest(input),
-    catch: invalidRollbackRequestError,
-  });
-
-  return Effect.flatMap(requestEffect, (request) => {
-    const orderedDefinitions = orderDefinitions(
-      request.definitions,
-      request.definitionIds
-    );
-
-    if (orderedDefinitions.kind === "failed") {
-      return Effect.fail(
-        new RollbackPreflightError({
-          message: orderedDefinitions.error.message,
-          cause: orderedDefinitions.error.cause,
-        })
-      );
-    }
-
-    const firstOrderedDefinition = orderedDefinitions.definitions[0];
-
-    if (firstOrderedDefinition === undefined) {
-      return Effect.fail(
-        new RollbackRequestError({
-          message:
-            "Rollback request must include at least one Migration Definition",
-        })
-      );
-    }
-
-    const publicOptions: RollbackMigrationOptions =
-      request.sourceIdentityKeys === undefined
-        ? {
-            ...(request.execution === undefined
-              ? {}
-              : { execution: request.execution }),
-          }
-        : {
-            ...(request.execution === undefined
-              ? {}
-              : { execution: request.execution }),
-            sourceIdentityKeys: request.sourceIdentityKeys,
-          };
-
-    if (
-      publicOptions.sourceIdentityKeys !== undefined &&
-      orderedDefinitions.definitions.length !== 1
-    ) {
-      return Effect.fail(rollbackSourceIdentityKeyDefinitionCountError);
-    }
-
-    return Effect.flatMap(
-      encodeRollbackMigrationOptions(firstOrderedDefinition, publicOptions),
-      (options) =>
-        rollbackMigrationsWithRequest({
-          definitions: request.definitions,
-          ...(request.definitionIds === undefined
-            ? {}
-            : { definitionIds: request.definitionIds }),
-          ...(request.execution === undefined
-            ? {}
-            : { execution: request.execution }),
-          ...(options.encodedSourceIdentities === undefined
-            ? {}
-            : { encodedSourceIdentities: options.encodedSourceIdentities }),
-        })
-    );
-  });
-};
-
-const runMigrationsWithRequest = <
+const executePlannedRunDefinitions = <
   Definitions extends readonly AnyMigrationDefinition[],
 >(
-  request: EncodedRunRequest<Definitions>,
+  input: {
+    readonly definitionIds: readonly MigrationDefinitionId[];
+    readonly definitions: Definitions;
+    readonly execution?: NormalizedMigrationExecutionOptions;
+    readonly mode: RunMode;
+    readonly update?: boolean;
+  },
   executionOptions: MigrationRuntimeExecutionOptions = {}
 ): Effect.Effect<
   MigrationRunSummary,
   RunMigrationError | RunRequestSourceLayerError<Definitions>,
   RunRequestSourceRequirements<Definitions>
 > => {
-  const firstDefinition = request.definitions[0];
+  const firstDefinition = input.definitions[0];
 
   if (firstDefinition === undefined) {
     return Effect.fail(emptyRunError);
   }
 
-  const updateRunRequestError = validateUpdateRunRequest(request);
+  const updateRunRequestError = validateUpdateRunRequest(input);
 
   if (updateRunRequestError !== null) {
     return Effect.fail(updateRunRequestError);
   }
 
-  const orderedDefinitions = orderDefinitions(
-    request.definitions,
-    request.definitionIds
-  );
-
-  if (orderedDefinitions.kind === "failed") {
-    return Effect.fail(orderedDefinitions.error);
-  }
-
-  const firstOrderedDefinition = orderedDefinitions.definitions[0];
-
-  if (firstOrderedDefinition === undefined) {
-    return Effect.fail(emptyRunError);
-  }
-
-  const sharedStoreError = validateSharedStore(orderedDefinitions.definitions);
+  const sharedStoreError = validateSharedStore(input.definitions);
 
   if (sharedStoreError !== null) {
     return Effect.fail(sharedStoreError);
   }
-
-  const definitionIds = orderedDefinitions.definitions.map(
-    (definition) => definition.id
-  );
 
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
 
     const run = yield* executeMigrationRun(
       store,
-      definitionIds,
+      input.definitionIds,
       (runId) =>
         withStubRunScope(
           {
-            definitionIds,
+            definitionIds: input.definitionIds,
             runId,
             store,
           },
@@ -3289,14 +2832,14 @@ const runMigrationsWithRequest = <
             Effect.gen(function* () {
               const summaries: MigrationDefinitionRunSummary[] = [];
 
-              for (const definition of orderedDefinitions.definitions) {
+              for (const definition of input.definitions) {
                 const summary = yield* runMigrationDefinition(
                   definition,
                   runId,
-                  request.mode ?? normalRunMode,
-                  request.update === true,
+                  input.mode,
+                  input.update === true,
                   stubRunScope.createStubReference,
-                  request.execution?.process
+                  input.execution?.process
                 );
                 summaries.push(summary);
               }
@@ -3307,7 +2850,7 @@ const runMigrationsWithRequest = <
               };
             })
         ),
-      () => validateMigrationContracts(store, orderedDefinitions.definitions),
+      () => validateMigrationContracts(store, input.definitions),
       executionOptions
     );
 
@@ -3320,158 +2863,7 @@ const runMigrationsWithRequest = <
     };
   });
 
-  return program.pipe(Effect.provide(firstOrderedDefinition.store));
-};
-
-export const runMigrationsWithEncodedRunMode = <
-  Definitions extends readonly AnyMigrationDefinition[],
->(
-  input: EncodedRunRequestInput<Definitions>,
-  executionOptions: MigrationRuntimeExecutionOptions = {}
-): Effect.Effect<
-  MigrationRunSummary,
-  RunMigrationError | RunRequestSourceLayerError<Definitions>,
-  RunRequestSourceRequirements<Definitions>
-> => {
-  const requestEffect = Effect.try({
-    try: () => makeEncodedRunRequest(input),
-    catch: invalidRunRequestError,
-  });
-
-  return Effect.flatMap(requestEffect, (request) =>
-    runMigrationsWithRequest(request, executionOptions)
-  );
-};
-
-export const runMigrations = <
-  Definitions extends readonly AnyMigrationDefinition[],
->(
-  input: RunRequestInput<Definitions>
-): Effect.Effect<
-  MigrationRunSummary,
-  RunMigrationError | RunRequestSourceLayerError<Definitions>,
-  RunRequestSourceRequirements<Definitions>
-> => {
-  const requestEffect = Effect.try({
-    try: () => makeRunRequest(input),
-    catch: invalidRunRequestError,
-  });
-
-  return Effect.flatMap(requestEffect, (request) => {
-    const orderedDefinitions = orderDefinitions(
-      request.definitions,
-      request.definitionIds
-    );
-
-    if (orderedDefinitions.kind === "failed") {
-      return Effect.fail(orderedDefinitions.error);
-    }
-
-    return Effect.flatMap(
-      normalizeRunMode(orderedDefinitions.definitions, request.mode),
-      (mode) =>
-        runMigrationsWithRequest({
-          definitions: request.definitions,
-          ...(request.definitionIds === undefined
-            ? {}
-            : { definitionIds: request.definitionIds }),
-          ...(request.execution === undefined
-            ? {}
-            : { execution: request.execution }),
-          mode,
-          ...(request.update === undefined ? {} : { update: request.update }),
-        })
-    );
-  });
-};
-
-export const runMigration = <
-  Source,
-  PipelineError,
-  Cursor = unknown,
-  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  SourceInput = Source,
-  SourceLayerError = never,
-  SourceRequirements = never,
->(
-  definition: MigrationDefinition<
-    Source,
-    PipelineError,
-    Cursor,
-    IdentityKey,
-    unknown,
-    SourceInput,
-    SourceLayerError,
-    SourceRequirements
-  >,
-  options: { readonly execution?: MigrationExecutionOptions } = {}
-): Effect.Effect<
-  MigrationRunSummary,
-  RunMigrationError | SourceLayerError,
-  SourceRequirements
-> => {
-  const runWithExecution = (
-    execution: NormalizedMigrationExecutionOptions | undefined
-  ) => {
-    const program = Effect.gen(function* () {
-      const store = yield* MigrationStore;
-      const definitionIds = [definition.id];
-
-      const run = yield* executeMigrationRun(
-        store,
-        definitionIds,
-        (runId) => {
-          const activeRun = {
-            definitionIds,
-            runId,
-            store,
-          };
-
-          return withStubRunScope(activeRun, (stubRunScope) =>
-            runMigrationDefinition(
-              definition,
-              runId,
-              normalRunMode,
-              false,
-              stubRunScope.createStubReference,
-              execution?.process
-            ).pipe(
-              Effect.map((summary) => ({
-                status:
-                  summary.status === "failed"
-                    ? ("failed" as const)
-                    : ("succeeded" as const),
-                value: [summary],
-              }))
-            )
-          );
-        },
-        () => validateMigrationContract(store, definition)
-      );
-
-      return {
-        runId: run.runState.runId,
-        status: run.status,
-        startedAt: run.runState.startedAt,
-        finishedAt: run.completedRun.finishedAt ?? new Date(),
-        definitions: run.value,
-      };
-    });
-
-    return program.pipe(Effect.provide(definition.store));
-  };
-
-  if (options.execution === undefined) {
-    return runWithExecution(undefined);
-  }
-
-  return Effect.flatMap(
-    Effect.try({
-      try: () => normalizeMigrationExecutionOptions(options.execution),
-      catch: invalidRunRequestError,
-    }),
-    runWithExecution
-  );
+  return program.pipe(Effect.provide(firstDefinition.store));
 };
 
 export const executeMigrationRunPlanInline = <
@@ -3484,26 +2876,22 @@ export const executeMigrationRunPlanInline = <
   RunMigrationError | RunRequestSourceLayerError<Definitions>,
   RunRequestSourceRequirements<Definitions>
 > =>
-  runMigrationsWithEncodedRunMode<Definitions>(
-    plan.target === undefined
-      ? {
-          definitions: plan.definitions,
-          ...(plan.execution === undefined
-            ? {}
-            : { execution: plan.execution }),
-          ...(plan.mode === undefined ? {} : { mode: plan.mode }),
-          ...(plan.update === undefined ? {} : { update: plan.update }),
-        }
-      : {
-          definitions: plan.definitions,
-          ...(plan.execution === undefined
-            ? {}
-            : { execution: plan.execution }),
-          mode: {
-            kind: "item" as const,
-            encodedSourceIdentity: plan.target.sourceIdentities[0],
-          },
-        },
+  executePlannedRunDefinitions(
+    {
+      definitionIds: plan.executionDefinitionIds,
+      definitions: plan.definitions,
+      ...(plan.execution === undefined
+        ? {}
+        : { execution: normalizeMigrationExecutionOptions(plan.execution) }),
+      mode:
+        plan.target === undefined
+          ? (plan.mode ?? normalRunMode)
+          : {
+              kind: "item" as const,
+              encodedSourceIdentity: plan.target.sourceIdentities[0],
+            },
+      ...(plan.update === undefined ? {} : { update: plan.update }),
+    },
     options
   );
 
@@ -3527,18 +2915,22 @@ export const startMigrationRunPlanInline = <
 export const executeMigrationRollbackPlanInline = (
   plan: MigrationDefinitionExecutableRollbackPlan,
   options: MigrationRuntimeExecutionOptions = {}
-): Effect.Effect<RollbackRunSummary, RollbackMigrationError> =>
-  rollbackMigrationsWithEncodedSourceIdentities(
+): Effect.Effect<RollbackRunSummary, RollbackMigrationError> => {
+  const selectedDefinitionsInRunOrder = [...plan.definitions].reverse();
+
+  return executePlannedRollbackDefinitions(
     {
-      definitions: plan.registryDefinitions,
-      definitionIds: [...plan.executionDefinitionIds].reverse(),
-      ...(plan.execution === undefined ? {} : { execution: plan.execution }),
-      ...(plan.target === undefined
+      registryDefinitions: plan.registryDefinitions,
+      rollbackDefinitions: plan.definitions,
+      selectedDefinitionsInRunOrder,
+      ...(plan.execution === undefined
         ? {}
-        : { encodedSourceIdentities: plan.target.sourceIdentities }),
+        : { execution: normalizeMigrationExecutionOptions(plan.execution) }),
+      ...(plan.target === undefined ? {} : { target: plan.target }),
     },
     options
   );
+};
 
 export const startMigrationRollbackPlanInline = (
   plan: MigrationDefinitionExecutableRollbackPlan

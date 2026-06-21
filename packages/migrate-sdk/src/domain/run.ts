@@ -14,8 +14,7 @@ import {
   MigrationRunId,
   toMigrationDefinitionId,
 } from "./ids.ts";
-import type { EncodedRunModeInput, RunMode, RunModeInput } from "./run-mode.ts";
-import { makeEncodedRunMode } from "./run-mode.ts";
+import type { RunModeInput } from "./run-mode.ts";
 import type { TrackingRecordContract } from "./tracking.ts";
 
 export type AnyMigrationDefinition = MigrationDefinition<
@@ -166,44 +165,6 @@ export const makeRunRequest = <
     ? {}
     : { execution: normalizeMigrationExecutionOptions(input.execution) }),
   ...(input.mode === undefined ? {} : { mode: input.mode }),
-  ...(input.update === undefined ? {} : { update: input.update }),
-  ...(input.definitionIds === undefined
-    ? {}
-    : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
-});
-
-export interface EncodedRunRequest<
-  Definitions extends
-    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
-> {
-  readonly definitionIds?: readonly MigrationDefinitionId[];
-  readonly definitions: Definitions;
-  readonly execution?: NormalizedMigrationExecutionOptions;
-  readonly mode?: RunMode;
-  readonly update?: boolean;
-}
-
-export interface EncodedRunRequestInput<
-  Definitions extends
-    readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
-> {
-  readonly definitionIds?: readonly MigrationDefinitionIdInput[];
-  readonly definitions: Definitions;
-  readonly execution?: MigrationExecutionOptions;
-  readonly mode?: EncodedRunModeInput;
-  readonly update?: boolean;
-}
-
-export const makeEncodedRunRequest = <
-  Definitions extends readonly AnyMigrationDefinition[],
->(
-  input: EncodedRunRequestInput<Definitions>
-): EncodedRunRequest<Definitions> => ({
-  definitions: input.definitions,
-  ...(input.execution === undefined
-    ? {}
-    : { execution: normalizeMigrationExecutionOptions(input.execution) }),
-  ...(input.mode === undefined ? {} : { mode: makeEncodedRunMode(input.mode) }),
   ...(input.update === undefined ? {} : { update: input.update }),
   ...(input.definitionIds === undefined
     ? {}

@@ -3,8 +3,9 @@ import { Effect, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import {
   MigrationDefinition,
+  MigrationDefinitionRegistry,
+  MigrationExecution,
   type MigrationRunSummary,
-  runMigration,
   SourceIdentity,
   skipItem,
 } from "migrate-sdk";
@@ -12,6 +13,7 @@ import { InMemoryDestination } from "migrate-sdk/destinations/in-memory";
 import { InMemorySourcePlugin } from "migrate-sdk/sources/in-memory";
 import { FileMigrationStore } from "migrate-sdk/stores/file";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
+import { completedInlineExecution } from "./inline-execution.ts";
 
 const Article = Schema.Struct({
   publish: Schema.Boolean,
@@ -123,10 +125,22 @@ export const runFileStoreExample = Effect.fn("runFileStoreExample")(function* (
   }
 
   const first = makeFileStoreArticlesMigration({ storeDirectory });
-  const firstRun = yield* runMigration(first.migration);
+  const firstRegistry = MigrationDefinitionRegistry.make({
+    definitions: [first.migration] as const,
+  });
+  const firstExecution = MigrationExecution.make({ registry: firstRegistry });
+  const firstRun = yield* completedInlineExecution(
+    firstExecution.run({ all: true })
+  );
 
   const second = makeFileStoreArticlesMigration({ storeDirectory });
-  const secondRun = yield* runMigration(second.migration);
+  const secondRegistry = MigrationDefinitionRegistry.make({
+    definitions: [second.migration] as const,
+  });
+  const secondExecution = MigrationExecution.make({ registry: secondRegistry });
+  const secondRun = yield* completedInlineExecution(
+    secondExecution.run({ all: true })
+  );
 
   return {
     firstRun,

@@ -12,8 +12,8 @@ Accepted
 - Use an ambient global registry that modules or plugins mutate during import.
 - Make registry-backed execution silently expand dependency scope.
 - Require CLI users to select dependencies explicitly unless they opt into expansion.
-- Make the registry the only execution path and remove raw definition requests.
-- Keep raw `runMigrations` and `rollbackMigrations` requests as lower-level SDK primitives.
+- Make registry-bound execution the public execution path and remove raw definition run/rollback helpers.
+- Keep lower-level runtime primitives for cursor windows, run lifecycle handoff, and status inspection.
 - Model migration definition dependencies as required and optional ordering edges.
 
 ## External Reference
@@ -30,9 +30,9 @@ Registry construction is lazy and synchronous. It may perform pure catalog valid
 
 Registry-backed SDK and CLI operations require explicit selection. Running or rolling back every registered definition uses an explicit all selection rather than omitting definition ids. CLI commands must not silently expand required dependency scope; callers include required definitions explicitly or pass `--with-dependencies`. `--with-dependencies` expands only required dependencies; optional dependencies affect ordering only when already included by explicit selection or by all-registry execution.
 
-The registry exposes catalog lookup, CLI-oriented listing, command-specific planning, and thin run/rollback helpers. Planning methods return structured plans and typed planning errors so CLI renderers can explain dependency policy failures without embedding CLI copy in the SDK. The CLI exposes planning through `run --plan` and `rollback --plan`, not through separate top-level plan or validation commands. `--plan` uses the same planning path as execution and only skips runtime execution after a valid plan is produced.
+The registry exposes catalog lookup, CLI-oriented listing, and command-specific planning. Planning methods return structured plans and typed planning errors so CLI renderers can explain dependency policy failures without embedding CLI copy in the SDK. The CLI exposes planning through `run --plan` and `rollback --plan`, not through separate top-level plan or validation commands. `--plan` uses the same planning path as execution and only skips runtime execution after a valid plan is produced.
 
-Raw `runMigrations` and `rollbackMigrations` requests remain public lower-level SDK primitives. They keep request-scoped validation because callers can still bypass the registry by supplying definitions directly.
+Registry-bound execution through `MigrationExecution` is the public execution path. Inline callers can construct a `MigrationDefinitionRegistry` in code and call `MigrationExecution.make({ registry }).run(...)` or `.rollback(...)` without a catalog. Durable hosts can provide a `MigrationDefinitionRegistryCatalog` layer and use `MigrationExecution.run({ registryId, ... })`. The `migrate-sdk/runtime` subpath remains for lower-level cursor-window, run lifecycle handoff, and status primitives, not for raw definition run/rollback helpers.
 
 ## Consequences
 
@@ -42,5 +42,5 @@ Raw `runMigrations` and `rollbackMigrations` requests remain public lower-level 
 - Optional dependency cycles and Migration Reference Lookup relationships do not invalidate a registry because they do not promise strict execution ordering.
 - CLI renderers can warn about unresolved optional dependencies and ignored optional dependency cycles without failing the command.
 - CLI `--plan` prints selection and ordering only; durable state inspection belongs to future status commands.
-- Existing raw SDK calls continue to defend their own request boundary and can keep their current dependency expansion semantics until public ergonomics are revisited.
+- Raw definition run/rollback helpers are removed before 1.0 so public ergonomics converge on explicit registry selection.
 - Rollback CLI commands can make destructive scope visible by default and use `--with-dependencies` as an explicit operator choice.

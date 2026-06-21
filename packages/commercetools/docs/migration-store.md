@@ -94,10 +94,9 @@ const storeLayer = CommercetoolsMigrationStore.layer({
 const ct = CommercetoolsDestination.make().provide(commercetoolsSdkLayer);
 ```
 
-Pass `storeLayer` to every migration definition in the same `runMigrations`
-call. The core runtime expects one shared `MigrationStore` layer per run so
-definition locks, source cursors, run state, and item state all agree on the
-same durable backend.
+Pass `storeLayer` to every migration definition in the same execution. The core
+runtime expects one shared `MigrationStore` layer per run so definition locks,
+source cursors, run state, and item state all agree on the same durable backend.
 
 An ergonomic convenience is available when only the store needs a layer:
 

@@ -1,11 +1,5 @@
 import { Effect, Option, Schema } from "effect";
 import { getMigrationStatuses } from "../runtime/get-migration-statuses.ts";
-import {
-  type RollbackMigrationError,
-  type RunMigrationError,
-  rollbackMigrationsWithEncodedSourceIdentities,
-  runMigrationsWithEncodedRunMode,
-} from "../runtime/run-migrations.ts";
 import type {
   MigrationExecutionOptions,
   PipelineExecutionConcurrency,
@@ -25,13 +19,9 @@ import {
   toMigrationDefinitionId,
   toMigrationDefinitionRegistryId,
 } from "./ids.ts";
-import type {
-  AnyRollbackMigrationDefinition,
-  RollbackRunSummary,
-} from "./rollback.ts";
+import type { AnyRollbackMigrationDefinition } from "./rollback.ts";
 import type {
   AnyMigrationDefinition,
-  MigrationRunSummary,
   RunRequestSourceLayerError,
   RunRequestSourceRequirements,
 } from "./run.ts";
@@ -244,14 +234,6 @@ export interface MigrationDefinitionRegistryStatusReport
   readonly notices: readonly MigrationDefinitionPlanNotice[];
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
 }
-
-export type MigrationDefinitionRegistryRunError =
-  | MigrationDefinitionRegistryPlanningError
-  | RunMigrationError;
-
-export type MigrationDefinitionRegistryRollbackError =
-  | MigrationDefinitionRegistryPlanningError
-  | RollbackMigrationError;
 
 export type MigrationDefinitionRegistryStatusError =
   | MigrationDefinitionRegistryPlanningError
@@ -635,32 +617,38 @@ const resolveSelectionInput = (
     );
   }
 
-  const notices: MigrationDefinitionPlanNotice[] = [];
-  const requestedDefinitionIds = selectsAll
-    ? "all"
-    : (inputDefinitionIds ?? []).map(toMigrationDefinitionId);
-  const uniqueRequestedDefinitionIds =
-    requestedDefinitionIds === "all"
-      ? definitions.map((definition) => definition.id)
-      : dedupeRequestedDefinitionIds(requestedDefinitionIds, notices);
+  return Effect.gen(function* () {
+    const notices: MigrationDefinitionPlanNotice[] = [];
+    const requestedDefinitionIds = selectsAll
+      ? "all"
+      : yield* Effect.try({
+          try: () => (inputDefinitionIds ?? []).map(toMigrationDefinitionId),
+          catch: () =>
+            new MigrationDefinitionRegistryInvalidSelectionError({
+              message: "Migration Definition id selection is invalid",
+            }),
+        });
+    const uniqueRequestedDefinitionIds =
+      requestedDefinitionIds === "all"
+        ? definitions.map((definition) => definition.id)
+        : dedupeRequestedDefinitionIds(requestedDefinitionIds, notices);
 
-  for (const definitionId of uniqueRequestedDefinitionIds) {
-    if (!definitionsById.has(definitionId)) {
-      return Effect.fail(
-        new MigrationDefinitionRegistryUnknownDefinitionError({
+    for (const definitionId of uniqueRequestedDefinitionIds) {
+      if (!definitionsById.has(definitionId)) {
+        return yield* new MigrationDefinitionRegistryUnknownDefinitionError({
           definitionId,
           message: "Migration Definition was not found in the registry",
-        })
-      );
+        });
+      }
     }
-  }
 
-  return Effect.succeed({
-    notices,
-    requestedDefinitionIds,
-    selectsAll,
-    uniqueRequestedDefinitionIds,
-    withDependencies: input.withDependencies ?? false,
+    return {
+      notices,
+      requestedDefinitionIds,
+      selectsAll,
+      uniqueRequestedDefinitionIds,
+      withDependencies: input.withDependencies ?? false,
+    };
   });
 };
 
@@ -1426,60 +1414,6 @@ export class MigrationDefinitionRegistry<
         withDependencies: selection.withDependencies,
       };
     });
-  }
-
-  run(
-    input: MigrationDefinitionRegistryRunInput
-  ): Effect.Effect<
-    MigrationRunSummary,
-    | MigrationDefinitionRegistryRunError
-    | RunRequestSourceLayerError<Definitions>,
-    RunRequestSourceRequirements<Definitions>
-  > {
-    return Effect.flatMap(this.planRun(input), (plan) =>
-      runMigrationsWithEncodedRunMode<Definitions>(
-        plan.target === undefined
-          ? {
-              definitions: plan.definitions as Definitions,
-              ...(plan.execution === undefined
-                ? {}
-                : { execution: plan.execution }),
-              ...(plan.mode === undefined ? {} : { mode: plan.mode }),
-              ...(plan.update === undefined ? {} : { update: plan.update }),
-            }
-          : {
-              definitions: plan.definitions as Definitions,
-              ...(plan.execution === undefined
-                ? {}
-                : { execution: plan.execution }),
-              mode: {
-                kind: "item" as const,
-                encodedSourceIdentity: plan.target.sourceIdentities[0],
-              },
-            }
-      )
-    );
-  }
-
-  rollback(
-    input: MigrationDefinitionRegistryRollbackInput
-  ): Effect.Effect<
-    RollbackRunSummary,
-    MigrationDefinitionRegistryRollbackError
-  > {
-    const definitions = this
-      .#definitions as unknown as AnyRollbackMigrationDefinitions;
-
-    return Effect.flatMap(this.planRollback(input), (plan) =>
-      rollbackMigrationsWithEncodedSourceIdentities({
-        definitions,
-        definitionIds: [...plan.executionDefinitionIds].reverse(),
-        ...(plan.execution === undefined ? {} : { execution: plan.execution }),
-        ...(plan.target === undefined
-          ? {}
-          : { encodedSourceIdentities: plan.target.sourceIdentities }),
-      })
-    );
   }
 
   status(
