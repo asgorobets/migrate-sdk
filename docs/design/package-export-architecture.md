@@ -1,6 +1,7 @@
 # Package Export Architecture
 
-Status: implemented for current first-party source and store subpaths
+Status: implemented for current first-party source and store subpaths; npm
+package shape uses emitted `dist` entrypoints
 
 Audience: maintainers shaping the public SDK surface.
 
@@ -125,6 +126,88 @@ Use curated subpaths instead of Effect's broad `./*` export pattern for now.
 Effect's top-level source files are already shaped as public modules; this SDK
 still has domain, runtime, service, store, and source implementation details in
 folder trees that should not all become public by accident.
+
+## Publish Shape
+
+The npm package exposes emitted JavaScript from `dist` to default ESM
+consumers, emitted declarations from `dist` to TypeScript, and source
+TypeScript to explicitly source-aware conditions. The local Effect repository
+keeps source-oriented exports and publish-oriented exports in `publishConfig`,
+but plain `npm pack` preserves the source export map. Alchemy v2 uses
+conditional exports for the same source-plus-build package shape. For this SDK,
+raw tarball installation must work for external consumer smoke tests, so the
+checked-in default `import` condition points at `dist`.
+
+`files` allow-lists source TypeScript and emitted `dist` JavaScript,
+declarations, and source maps while excluding tests, examples, state files, and
+build metadata. Source TypeScript remains in the package for source maps and
+inspection, but public imports resolve through emitted JavaScript.
+
+For `migrate-sdk`, the package exposes curated public subpaths with conditional
+targets:
+
+```json
+{
+  "bin": {
+    "migrate": "./dist/cli/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "source": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "bun": "./src/core.ts",
+      "source": "./src/core.ts",
+      "import": "./dist/core.js"
+    }
+  }
+}
+```
+
+Build scripts run TypeScript emit and then rewrite declaration-file relative
+`.ts` specifiers to `.js`, matching the emitted JavaScript graph.
+
+Consumer smoke tests may keep `skipLibCheck` enabled while Effect v4 beta.85's
+published declarations still fail strict library checking. A reduced consumer
+that imports only `Effect` from `effect` fails on
+`dist/internal/schema/schema.d.ts` because `SchemaErrorTypeId` is referenced in
+the generated declaration without a local declaration.
+
+## Release Versioning
+
+The publishable SDK packages use one shared public version:
+
+```txt
+migrate-sdk
+@migrate-sdk/commercetools
+@migrate-sdk/workflow-sdk
+```
+
+Changesets keeps these packages in a fixed group so a release bumps and
+publishes them together. Extension packages declare `migrate-sdk` as a
+`workspace:^` peer for local development; pnpm rewrites that to the matching
+semver peer range in packed and published package manifests.
+
+Release publishing is driven from the repository root:
+
+```sh
+pnpm run publish-packages
+```
+
+That script runs package check and test tasks through Turborepo before
+`changeset publish`. Package-level `build`, `check-types`, and `test` scripts
+stay package-local; dependency ordering comes from declared workspace
+dependencies plus `turbo.json`'s `build.dependsOn: ["^build"]`. Build outputs
+include emitted `dist/**` files and TypeScript `*.tsbuildinfo` files so package
+builds can be restored from the Turbo cache.
+
+Do not add a `worker` condition until the corresponding subpath is actually
+supported in worker runtimes. A source condition should not imply a runtime
+support guarantee.
 
 ## Split-Package Rule
 

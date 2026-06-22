@@ -2,7 +2,7 @@ import { Schema } from "effect";
 
 const ErrorFields = {
   message: Schema.String,
-  cause: Schema.optional(Schema.Defect),
+  cause: Schema.optional(Schema.Defect()),
 };
 
 export class SourceError extends Schema.TaggedErrorClass<SourceError>()(

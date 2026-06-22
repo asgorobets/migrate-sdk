@@ -2,7 +2,30 @@
   "$schema": "./node_modules/@effect/language-service/schema.json",
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "baseUrl": ".",
+    "composite": false,
+    "incremental": false,
     "noEmit": true,
+    "paths": {
+      "migrate-sdk": ["src/index.ts"],
+      "migrate-sdk/cli": ["src/cli/index.ts"],
+      "migrate-sdk/cli/testing": ["src/cli/testing.ts"],
+      "migrate-sdk/core": ["src/core.ts"],
+      "migrate-sdk/destinations/in-memory": [
+        "src/destinations/in-memory/index.ts"
+      ],
+      "migrate-sdk/destinations/in-memory/testing": [
+        "src/destinations/in-memory/testing.ts"
+      ],
+      "migrate-sdk/runtime": ["src/runtime/index.ts"],
+      "migrate-sdk/sources/csv": ["src/sources/csv/index.ts"],
+      "migrate-sdk/sources/document": ["src/sources/document/index.ts"],
+      "migrate-sdk/sources/in-memory": ["src/sources/in-memory/index.ts"],
+      "migrate-sdk/sources/sql": ["src/sources/sql/index.ts"],
+      "migrate-sdk/stores/file": ["src/stores/file/index.ts"],
+      "migrate-sdk/stores/in-memory": ["src/stores/in-memory/index.ts"],
+      "migrate-sdk/testing": ["src/testing.ts"]
+    },
     "rootDir": "."
   },
   "exclude": ["node_modules", "dist"],

@@ -1,47 +1,130 @@
 {
   "name": "migrate-sdk",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
-  "private": true,
   "sideEffects": [],
   "bin": {
-    "migrate": "./bin/migrate-sdk.mjs"
+    "migrate": "./dist/cli/bin.js"
   },
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "dist/**/*.js",
+    "dist/**/*.js.map"
+  ],
   "exports": {
-    ".": "./src/index.ts",
-    "./cli": "./src/cli/index.ts",
-    "./cli/testing": "./src/cli/testing.ts",
-    "./core": "./src/core.ts",
-    "./destinations/in-memory": "./src/destinations/in-memory/index.ts",
-    "./destinations/in-memory/testing": "./src/destinations/in-memory/testing.ts",
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "source": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./cli": {
+      "types": "./dist/cli/index.d.ts",
+      "bun": "./src/cli/index.ts",
+      "source": "./src/cli/index.ts",
+      "import": "./dist/cli/index.js"
+    },
+    "./cli/testing": {
+      "types": "./dist/cli/testing.d.ts",
+      "bun": "./src/cli/testing.ts",
+      "source": "./src/cli/testing.ts",
+      "import": "./dist/cli/testing.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "bun": "./src/core.ts",
+      "source": "./src/core.ts",
+      "import": "./dist/core.js"
+    },
+    "./destinations/in-memory": {
+      "types": "./dist/destinations/in-memory/index.d.ts",
+      "bun": "./src/destinations/in-memory/index.ts",
+      "source": "./src/destinations/in-memory/index.ts",
+      "import": "./dist/destinations/in-memory/index.js"
+    },
+    "./destinations/in-memory/testing": {
+      "types": "./dist/destinations/in-memory/testing.d.ts",
+      "bun": "./src/destinations/in-memory/testing.ts",
+      "source": "./src/destinations/in-memory/testing.ts",
+      "import": "./dist/destinations/in-memory/testing.js"
+    },
     "./internal/*": null,
-    "./runtime": "./src/runtime/index.ts",
-    "./sources/csv": "./src/sources/csv/index.ts",
-    "./sources/document": "./src/sources/document/index.ts",
-    "./sources/in-memory": "./src/sources/in-memory/index.ts",
-    "./sources/sql": "./src/sources/sql/index.ts",
-    "./stores/file": "./src/stores/file/index.ts",
-    "./stores/in-memory": "./src/stores/in-memory/index.ts",
-    "./testing": "./src/testing.ts",
+    "./runtime": {
+      "types": "./dist/runtime/index.d.ts",
+      "bun": "./src/runtime/index.ts",
+      "source": "./src/runtime/index.ts",
+      "import": "./dist/runtime/index.js"
+    },
+    "./sources/csv": {
+      "types": "./dist/sources/csv/index.d.ts",
+      "bun": "./src/sources/csv/index.ts",
+      "source": "./src/sources/csv/index.ts",
+      "import": "./dist/sources/csv/index.js"
+    },
+    "./sources/document": {
+      "types": "./dist/sources/document/index.d.ts",
+      "bun": "./src/sources/document/index.ts",
+      "source": "./src/sources/document/index.ts",
+      "import": "./dist/sources/document/index.js"
+    },
+    "./sources/in-memory": {
+      "types": "./dist/sources/in-memory/index.d.ts",
+      "bun": "./src/sources/in-memory/index.ts",
+      "source": "./src/sources/in-memory/index.ts",
+      "import": "./dist/sources/in-memory/index.js"
+    },
+    "./sources/sql": {
+      "types": "./dist/sources/sql/index.d.ts",
+      "bun": "./src/sources/sql/index.ts",
+      "source": "./src/sources/sql/index.ts",
+      "import": "./dist/sources/sql/index.js"
+    },
+    "./stores/file": {
+      "types": "./dist/stores/file/index.d.ts",
+      "bun": "./src/stores/file/index.ts",
+      "source": "./src/stores/file/index.ts",
+      "import": "./dist/stores/file/index.js"
+    },
+    "./stores/in-memory": {
+      "types": "./dist/stores/in-memory/index.d.ts",
+      "bun": "./src/stores/in-memory/index.ts",
+      "source": "./src/stores/in-memory/index.ts",
+      "import": "./dist/stores/in-memory/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "bun": "./src/testing.ts",
+      "source": "./src/testing.ts",
+      "import": "./dist/testing.js"
+    },
     "./*/internal/*": null
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "cli": "node ./bin/migrate-sdk.mjs",
-    "dev": "tsx examples/dev.ts",
-    "dev:circular-stubs": "tsx examples/dev.ts circular-stubs",
-    "dev:api-source": "tsx examples/dev.ts api-source",
-    "dev:document-source": "tsx examples/dev.ts document-source",
-    "dev:file-store": "tsx examples/dev.ts file-store",
-    "dev:nested-article": "tsx examples/dev.ts nested-article",
+    "dev": "pnpm run build && tsx examples/dev.ts",
+    "dev:circular-stubs": "pnpm run build && tsx examples/dev.ts circular-stubs",
+    "dev:api-source": "pnpm run build && tsx examples/dev.ts api-source",
+    "dev:document-source": "pnpm run build && tsx examples/dev.ts document-source",
+    "dev:file-store": "pnpm run build && tsx examples/dev.ts file-store",
+    "dev:nested-article": "pnpm run build && tsx examples/dev.ts nested-article",
     "prepare": "effect-language-service patch",
-    "check-types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.check.json",
+    "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
+    "check-types": "tsc --noEmit -p tsconfig.check.json",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.86.2",
-    "@effect/sql-sqlite-node": "4.0.0-beta.75",
-    "@effect/vitest": "4.0.0-beta.75",
+    "@effect/language-service": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
+    "@effect/vitest": "catalog:",
     "@repo/typescript-config": "workspace:*",
     "@types/node": "^24.13.1",
     "@types/papaparse": "^5.5.2",
@@ -49,8 +132,8 @@
     "vitest": "^4.1.8"
   },
   "dependencies": {
-    "@effect/platform-node": "4.0.0-beta.75",
-    "effect": "4.0.0-beta.75",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
     "papaparse": "^5.5.3",
     "tsx": "^4.22.4"
   }

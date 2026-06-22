@@ -1,35 +1,64 @@
 {
   "name": "@migrate-sdk/workflow-sdk",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
-  "private": true,
   "sideEffects": [],
+  "files": [
+    "src/*.ts",
+    "!src/*.test.ts",
+    "dist/*.d.ts",
+    "dist/*.d.ts.map",
+    "dist/*.js",
+    "dist/*.js.map",
+    "README.md"
+  ],
   "exports": {
-    ".": "./src/index.ts",
-    "./steps": "./src/steps.ts",
-    "./workflow": "./src/workflow.ts",
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "source": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./steps": {
+      "types": "./dist/steps.d.ts",
+      "bun": "./src/steps.ts",
+      "source": "./src/steps.ts",
+      "import": "./dist/steps.js"
+    },
+    "./workflow": {
+      "types": "./dist/workflow.d.ts",
+      "bun": "./src/workflow.ts",
+      "source": "./src/workflow.ts",
+      "import": "./dist/workflow.js"
+    },
     "./internal/*": null,
     "./*/internal/*": null
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
-    "check-types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.check.json",
+    "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
+    "check-types": "tsc --noEmit -p tsconfig.check.json",
     "prepare": "effect-language-service patch",
     "test": "vitest run",
     "test:workflow": "vitest run --config vitest.workflow.config.ts",
     "test:watch": "vitest"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.75",
-    "migrate-sdk": "0.0.0",
+    "effect": "catalog:",
+    "migrate-sdk": "workspace:^",
     "workflow": "^4.5.0"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.86.2",
-    "@effect/vitest": "4.0.0-beta.75",
+    "@effect/language-service": "catalog:",
+    "@effect/vitest": "catalog:",
     "@repo/typescript-config": "workspace:*",
     "@types/node": "^24.13.1",
     "@workflow/vitest": "4.0.11",
-    "effect": "4.0.0-beta.75",
+    "effect": "catalog:",
     "migrate-sdk": "workspace:*",
     "typescript": "5.9.2",
     "vitest": "^4.1.8"

@@ -1,20 +1,28 @@
 {
-  "name": "migrate-sdk",
+  "name": "@migrate-sdk/monorepo",
   "private": true,
   "scripts": {
     "build": "turbo run build",
+    "build-packages": "turbo run build --filter=migrate-sdk --filter=@migrate-sdk/commercetools --filter=@migrate-sdk/workflow-sdk",
+    "changeset": "changeset",
     "dev": "turbo run dev",
     "check": "ultracite check",
     "fix": "ultracite fix",
-    "check-types": "turbo run check-types"
+    "check-types": "turbo run check-types",
+    "check-types-packages": "turbo run check-types --filter=migrate-sdk --filter=@migrate-sdk/commercetools --filter=@migrate-sdk/workflow-sdk",
+    "test": "turbo run test",
+    "test-packages": "turbo run test --filter=migrate-sdk --filter=@migrate-sdk/commercetools --filter=@migrate-sdk/workflow-sdk",
+    "version-packages": "changeset version",
+    "publish-packages": "turbo run check-types test --filter=migrate-sdk --filter=@migrate-sdk/commercetools --filter=@migrate-sdk/workflow-sdk && changeset publish"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.11",
+    "@changesets/cli": "^2.31.0",
     "turbo": "^2.9.16",
     "typescript": "5.9.2",
     "ultracite": "latest"
   },
-  "packageManager": "pnpm@9.0.0",
+  "packageManager": "pnpm@9.15.9",
   "engines": {
     "node": "24.x"
   }

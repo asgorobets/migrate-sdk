@@ -42,7 +42,7 @@ export class TestDurableMigrationExecutableStartRejectedError extends Schema.Tag
 export class TestDurableMigrationExecutableAttachError extends Schema.TaggedErrorClass<TestDurableMigrationExecutableAttachError>()(
   "TestDurableMigrationExecutableAttachError",
   {
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
     execution: TestDurableExecutionHandle,
     message: Schema.String,
     runId: MigrationRunId,

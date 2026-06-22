@@ -2,6 +2,8 @@
   "$schema": "./node_modules/@effect/language-service/schema.json",
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "composite": false,
+    "incremental": false,
     "noEmit": true,
     "rootDir": "."
   },

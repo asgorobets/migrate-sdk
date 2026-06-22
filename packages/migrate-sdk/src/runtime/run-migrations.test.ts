@@ -68,7 +68,7 @@ import {
   rollbackInlineRegistry,
   runInlineDefinition,
   runInlineRegistry,
-} from "../test-support/inline-registry-execution.ts";
+} from "../testing/inline-registry-execution.ts";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,

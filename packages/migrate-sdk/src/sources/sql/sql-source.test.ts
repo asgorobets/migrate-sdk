@@ -28,7 +28,7 @@ import {
   type SqlSourceCount,
 } from "migrate-sdk/sources/sql";
 import { expectTypeOf } from "vitest";
-import { runInlineDefinition } from "../../test-support/inline-registry-execution.ts";
+import { runInlineDefinition } from "../../testing/inline-registry-execution.ts";
 
 const SqlArticleRow = Schema.Struct({
   id: Schema.String,

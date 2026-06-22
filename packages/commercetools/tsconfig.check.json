@@ -2,7 +2,21 @@
   "$schema": "./node_modules/@effect/language-service/schema.json",
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "baseUrl": ".",
+    "composite": false,
+    "incremental": false,
     "noEmit": true,
+    "paths": {
+      "@migrate-sdk/commercetools": ["src/index.ts"],
+      "@migrate-sdk/commercetools/destination": [
+        "src/destination/index.ts"
+      ],
+      "@migrate-sdk/commercetools/migration-store": [
+        "src/migration-store/index.ts"
+      ],
+      "@migrate-sdk/commercetools/source": ["src/source/index.ts"],
+      "@migrate-sdk/commercetools/testing": ["src/testing/index.ts"]
+    },
     "rootDir": "."
   },
   "exclude": ["node_modules", "dist"],

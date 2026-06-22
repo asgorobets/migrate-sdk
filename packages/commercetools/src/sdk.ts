@@ -29,7 +29,7 @@ export interface CommercetoolsSdkLayerOptions {
 export class CommercetoolsSdkError extends Schema.TaggedErrorClass<CommercetoolsSdkError>()(
   "CommercetoolsSdkError",
   {
-    cause: Schema.Defect,
+    cause: Schema.Defect(),
     message: Schema.String,
     operation: Schema.String,
   }

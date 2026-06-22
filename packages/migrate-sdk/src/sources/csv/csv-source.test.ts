@@ -14,7 +14,7 @@ import {
 import { CsvIdentity, CsvSource } from "migrate-sdk/sources/csv";
 import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
 import { Source } from "../../services/source.ts";
-import { runInlineDefinition } from "../../test-support/inline-registry-execution.ts";
+import { runInlineDefinition } from "../../testing/inline-registry-execution.ts";
 import { CsvParserCore, type CsvParserOptions } from "./csv-source.ts";
 
 const CsvArticleSource = Schema.Struct({

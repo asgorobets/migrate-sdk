@@ -8,7 +8,7 @@
     "noImplicitOverride": true,
     "noUnusedLocals": true,
     "outDir": "dist",
-    "rootDir": ".",
+    "rootDir": "src",
     "sourceMap": true,
     "verbatimModuleSyntax": true,
     "rewriteRelativeImportExtensions": true,
@@ -19,5 +19,10 @@
     ]
   },
   "include": ["src"],
-  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/**/*.test.ts",
+    "src/test-fixtures/**"
+  ]
 }

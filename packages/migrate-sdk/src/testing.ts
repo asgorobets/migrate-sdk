@@ -10,10 +10,10 @@ export {
 export type {
   InlineRegistryRollbackInput,
   InlineRegistryRunInput,
-} from "./test-support/inline-registry-execution.ts";
+} from "./testing/inline-registry-execution.ts";
 export {
   rollbackInlineDefinition,
   rollbackInlineRegistry,
   runInlineDefinition,
   runInlineRegistry,
-} from "./test-support/inline-registry-execution.ts";
+} from "./testing/inline-registry-execution.ts";

@@ -128,7 +128,7 @@ export class MigrationStatusRequestError extends Schema.TaggedErrorClass<Migrati
   "MigrationStatusRequestError",
   {
     message: Schema.String,
-    cause: Schema.optional(Schema.Defect),
+    cause: Schema.optional(Schema.Defect()),
   }
 ) {}
 

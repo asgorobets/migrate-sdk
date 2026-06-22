@@ -1,38 +1,77 @@
 {
   "name": "@migrate-sdk/commercetools",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
-  "private": true,
   "sideEffects": [],
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "docs/**/*.md"
+  ],
   "exports": {
-    ".": "./src/index.ts",
-    "./destination": "./src/destination/index.ts",
-    "./migration-store": "./src/migration-store/index.ts",
-    "./source": "./src/source/index.ts",
-    "./testing": "./src/testing/index.ts",
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "source": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./destination": {
+      "types": "./dist/destination/index.d.ts",
+      "bun": "./src/destination/index.ts",
+      "source": "./src/destination/index.ts",
+      "import": "./dist/destination/index.js"
+    },
+    "./migration-store": {
+      "types": "./dist/migration-store/index.d.ts",
+      "bun": "./src/migration-store/index.ts",
+      "source": "./src/migration-store/index.ts",
+      "import": "./dist/migration-store/index.js"
+    },
+    "./source": {
+      "types": "./dist/source/index.d.ts",
+      "bun": "./src/source/index.ts",
+      "source": "./src/source/index.ts",
+      "import": "./dist/source/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "bun": "./src/testing/index.ts",
+      "source": "./src/testing/index.ts",
+      "import": "./dist/testing/index.js"
+    },
     "./internal/*": null,
     "./*/internal/*": null
   },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "scripts": {
-    "check-types": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.check.json",
-    "example:business-units:live": "migrate run --config examples/migrate.config.ts business-unit-static-field",
-    "example:product-catalog-store": "tsx examples/product-catalog-store-migration.ts",
-    "example:product-catalog-store:live": "tsx examples/product-catalog-store-migration.live.ts",
-    "example:products": "tsx examples/product-destination.ts",
+    "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
+    "check-types": "tsc --noEmit -p tsconfig.check.json",
+    "example:business-units:live": "pnpm run build && migrate run --config examples/migrate.config.ts business-unit-static-field",
+    "example:product-catalog-store": "pnpm run build && tsx examples/product-catalog-store-migration.ts",
+    "example:product-catalog-store:live": "pnpm run build && tsx examples/product-catalog-store-migration.live.ts",
+    "example:products": "pnpm run build && tsx examples/product-destination.ts",
     "prepare": "effect-language-service patch",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "peerDependencies": {
-    "effect": "4.0.0-beta.75",
-    "migrate-sdk": "0.0.0"
+    "effect": "catalog:",
+    "migrate-sdk": "workspace:^"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.86.2",
-    "@effect/vitest": "4.0.0-beta.75",
+    "@effect/language-service": "catalog:",
+    "@effect/vitest": "catalog:",
     "@repo/typescript-config": "workspace:*",
     "@types/node": "^22.15.3",
-    "effect": "4.0.0-beta.75",
+    "effect": "catalog:",
     "migrate-sdk": "workspace:*",
     "tsx": "^4.22.4",
     "typescript": "5.9.2",
