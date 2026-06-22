@@ -104,8 +104,7 @@
     "./*/internal/*": null
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "scripts": {
     "cli": "node ./bin/migrate-sdk.mjs",

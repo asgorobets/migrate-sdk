@@ -209,6 +209,9 @@ lifecycle scripts do not run during publish. The `publish-packages` script is
 kept as the local publish operation only: `changeset publish`. Do not keep a
 repository or organization `NPM_TOKEN` secret for this workflow; a merged
 malicious workflow could read any available repo secret by name.
+Package manifests keep only `publishConfig.access: "public"` so the first
+publish can still be run locally before npm trusted publishing is configured;
+provenance is enabled by CI, not by package manifest defaults.
 
 Package-level `build`, `check-types`, and `test` scripts stay package-local;
 dependency ordering comes from declared workspace dependencies plus
