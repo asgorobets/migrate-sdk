@@ -198,12 +198,23 @@ Release publishing is driven from the repository root:
 pnpm run publish-packages
 ```
 
-That script runs package check and test tasks through Turborepo before
-`changeset publish`. Package-level `build`, `check-types`, and `test` scripts
-stay package-local; dependency ordering comes from declared workspace
-dependencies plus `turbo.json`'s `build.dependsOn: ["^build"]`. Build outputs
-include emitted `dist/**` files and TypeScript `*.tsbuildinfo` files so package
-builds can be restored from the Turbo cache.
+CI runs `pnpm run validate-packages` in a read-only validation job, without npm
+publish credentials or OIDC publish permission. That job uploads package `dist`
+artifacts for the release job. The release workflow does not use an `NPM_TOKEN`;
+npm publishing must be configured through npm trusted publishing for
+`.github/workflows/release.yml`, using GitHub Actions OIDC. The credentialed
+publish job installs dependencies with lifecycle scripts disabled, calls
+Changesets directly, and sets `NPM_CONFIG_IGNORE_SCRIPTS=true` so package
+lifecycle scripts do not run during publish. The `publish-packages` script is
+kept as the local publish operation only: `changeset publish`. Do not keep a
+repository or organization `NPM_TOKEN` secret for this workflow; a merged
+malicious workflow could read any available repo secret by name.
+
+Package-level `build`, `check-types`, and `test` scripts stay package-local;
+dependency ordering comes from declared workspace dependencies plus
+`turbo.json`'s `build.dependsOn: ["^build"]`. Build outputs include emitted
+`dist/**` files and TypeScript `*.tsbuildinfo` files so package builds can be
+restored from the Turbo cache.
 
 Do not add a `worker` condition until the corresponding subpath is actually
 supported in worker runtimes. A source condition should not imply a runtime

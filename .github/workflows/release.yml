@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Packages
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate packages
+        run: pnpm run validate-packages
+
+      - name: Upload package build outputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-build-output
+          if-no-files-found: error
+          path: |
+            packages/migrate-sdk/dist
+            packages/commercetools/dist
+            packages/workflow-sdk/dist
+
+  release:
+    name: Release
+    needs: validate
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      id-token: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Download package build outputs
+        uses: actions/download-artifact@v4
+        with:
+          name: package-build-output
+          path: .
+
+      - name: Create release PR or publish packages
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          version: pnpm exec changeset version
+          publish: pnpm exec changeset publish
+          commit: "chore(migrate-sdk): version packages"
+          title: "chore(migrate-sdk): version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
+          NPM_CONFIG_PROVENANCE: "true"

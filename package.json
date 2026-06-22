@@ -12,8 +12,9 @@
     "check-types-packages": "turbo run check-types --filter=migrate-sdk --filter=@migrate-sdk/commercetools --filter=@migrate-sdk/workflow-sdk",
     "test": "turbo run test",
     "test-packages": "turbo run test --filter=migrate-sdk --filter=@migrate-sdk/commercetools --filter=@migrate-sdk/workflow-sdk",
+    "validate-packages": "turbo run check-types test --filter=migrate-sdk --filter=@migrate-sdk/commercetools --filter=@migrate-sdk/workflow-sdk",
     "version-packages": "changeset version",
-    "publish-packages": "turbo run check-types test --filter=migrate-sdk --filter=@migrate-sdk/commercetools --filter=@migrate-sdk/workflow-sdk && changeset publish"
+    "publish-packages": "changeset publish"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.11",
