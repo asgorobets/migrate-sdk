@@ -104,6 +104,10 @@ export class MigrationStore extends Service<
       ownerRunId: MigrationRunId
     ) => Effect.Effect<MigrationDefinitionLock, MigrationStoreError>;
 
+    readonly getDefinitionLock: (
+      definitionId: MigrationDefinitionId
+    ) => Effect.Effect<MigrationDefinitionLock | null, MigrationStoreError>;
+
     readonly assertDefinitionLocks: (
       locks: readonly MigrationDefinitionLock[]
     ) => Effect.Effect<void, MigrationStoreError>;
@@ -111,5 +115,9 @@ export class MigrationStore extends Service<
     readonly releaseDefinitionLock: (
       lock: MigrationDefinitionLock
     ) => Effect.Effect<void, MigrationStoreError>;
+
+    readonly breakDefinitionLock: (
+      definitionId: MigrationDefinitionId
+    ) => Effect.Effect<MigrationDefinitionLock | null, MigrationStoreError>;
   }
 >()("@migrate-sdk/MigrationStore") {}

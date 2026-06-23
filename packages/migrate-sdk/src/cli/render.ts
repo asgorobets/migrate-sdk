@@ -474,8 +474,8 @@ export const renderRunPlan = (
 export const renderRollbackPlan = (
   plan: MigrationDefinitionRollbackPlan,
   options: RenderOptions = {}
-): string => {
-  return [
+): string =>
+  [
     bold("Rollback Plan", options),
     "",
     ...renderPlanScope(
@@ -497,7 +497,6 @@ export const renderRollbackPlan = (
     ...renderRollbackExecutionPolicyTable(plan, options),
     ...renderNoticeSection(plan.notices, options),
   ].join("\n");
-};
 
 const styleCompletionStatus = (
   value: string,
@@ -711,6 +710,9 @@ type DefinitionState =
 const latestStatus = (definition: StatusDefinition): string =>
   definition.lastRun === null ? "none" : definition.lastRun.status;
 
+const lockStatus = (definition: StatusDefinition): "clear" | "locked" =>
+  definition.lock == null ? "clear" : "locked";
+
 const hasDurableItems = (definition: StatusDefinition): boolean =>
   definition.durable.migrated > 0 ||
   definition.durable.skipped > 0 ||
@@ -720,7 +722,7 @@ const hasDurableItems = (definition: StatusDefinition): boolean =>
 const definitionState = (definition: StatusDefinition): DefinitionState => {
   const source = definition.source;
 
-  if (definition.lastRun?.status === "running") {
+  if (lockStatus(definition) === "locked") {
     return "running";
   }
 
@@ -730,6 +732,10 @@ const definitionState = (definition: StatusDefinition): DefinitionState => {
     (source?.invalid ?? 0) > 0
   ) {
     return "failed";
+  }
+
+  if (definition.lastRun?.status === "running") {
+    return "warning";
   }
 
   if (
@@ -794,6 +800,15 @@ const styleLatestStatus = (
   }
 };
 
+const styleLockStatus = (
+  value: string,
+  definition: StatusDefinition,
+  options: RenderOptions
+): string =>
+  lockStatus(definition) === "locked"
+    ? yellow(value, options)
+    : dim(value, options);
+
 const stylePositiveCount =
   <Row>(
     getValue: (row: Row) => number,
@@ -816,6 +831,11 @@ const durableStatusColumns = [
     header: "Last Run",
     render: latestStatus,
     style: styleLatestStatus,
+  },
+  {
+    header: "Lock",
+    render: lockStatus,
+    style: styleLockStatus,
   },
   {
     align: "right",

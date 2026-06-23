@@ -92,7 +92,7 @@ const customObjectKey = (
     return body.key;
   }
 
-  return undefined;
+  return;
 };
 
 const customObjectValue = (request: RecordedCustomObjectRequest): unknown => {
@@ -108,7 +108,7 @@ const customObjectValue = (request: RecordedCustomObjectRequest): unknown => {
     return body.value;
   }
 
-  return undefined;
+  return;
 };
 
 const customObjectQueryRequests = (
@@ -411,6 +411,67 @@ describe("CommercetoolsMigrationStore", () => {
             version: 0,
           },
           method: "POST",
+        });
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  it.effect(
+    "breaks definition locks by reading and deleting the current Custom Object version",
+    () => {
+      const recording = makeRecordingCustomObjectApiRoot();
+      const ownerRunId = toMigrationRunId("run-lock-break");
+      const expectedKey = definitionLockKey(definitionId);
+
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const lock = yield* store.acquireDefinitionLock(
+          definitionId,
+          ownerRunId
+        );
+
+        const observedLock = yield* store.getDefinitionLock(definitionId);
+        const brokenLock = yield* store.breakDefinitionLock(definitionId);
+        const missingLock = yield* store.breakDefinitionLock(definitionId);
+
+        expect(observedLock).toEqual(lock);
+        expect(brokenLock).toEqual(lock);
+        expect(missingLock).toBeNull();
+        expect(recording.requests).toHaveLength(5);
+        expect(recording.requests[1]).toMatchObject({
+          method: "GET",
+          pathVariables: {
+            container: "migrate-sdk",
+            key: expectedKey,
+            projectKey: "test-project",
+          },
+        });
+        expect(recording.requests[2]).toMatchObject({
+          method: "GET",
+          pathVariables: {
+            container: "migrate-sdk",
+            key: expectedKey,
+            projectKey: "test-project",
+          },
+        });
+        expect(recording.requests[3]).toMatchObject({
+          method: "DELETE",
+          pathVariables: {
+            container: "migrate-sdk",
+            key: expectedKey,
+            projectKey: "test-project",
+          },
+          queryParams: {
+            version: 1,
+          },
+        });
+        expect(recording.requests[4]).toMatchObject({
+          method: "GET",
+          pathVariables: {
+            container: "migrate-sdk",
+            key: expectedKey,
+            projectKey: "test-project",
+          },
         });
       }).pipe(Effect.provide(makeStoreLayer(recording)));
     }

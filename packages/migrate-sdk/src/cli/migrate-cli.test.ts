@@ -11,6 +11,8 @@ import {
   DuplicateSourceIdentityStatusWarning,
   toEncodedSourceIdentity,
   toMigrationDefinitionId,
+  toMigrationDefinitionLockToken,
+  toMigrationRunId,
 } from "migrate-sdk";
 import { MigrationCliRuntime, migrateCommand } from "migrate-sdk/cli/testing";
 import { renderStatusReport } from "./render.ts";
@@ -33,6 +35,8 @@ const selectedRunSummaryPattern =
 const articleRunSummaryPattern = /1\s+articles\s+succeeded\s+1\s+0\s+0\s+0\s+0/;
 const progressArticleRunSummaryPattern =
   /1\s+articles\s+succeeded\s+3\s+0\s+0\s+0\s+0/;
+const activeLockedStatusRowPattern = /running\s+active\s+running\s+locked/;
+const staleRunningStatusRowPattern = /warning\s+stale\s+running\s+clear/;
 const rollbackAllSummaryPattern =
   /1\s+articles\s+succeeded\s+1\s+0\s+0[\s\S]*2\s+authors\s+succeeded\s+1\s+0\s+0[\s\S]*3\s+tags\s+succeeded\s+1\s+0\s+0/;
 const tagRollbackSummaryPattern = /1\s+tags\s+succeeded\s+1\s+0\s+0/;
@@ -259,6 +263,73 @@ const planNoticeConfigSource = (): string => `
         definition("articles", ["tags"]),
         definition("tags", ["articles"])
       ] as never
+    })
+  });
+`;
+
+const lockedStoreConfigSource = (): string => `
+  import { Effect, Layer, Schema } from "effect";
+  import {
+    InMemorySource,
+    MigrationDefinition,
+    MigrationDefinitionRegistry,
+    MigrationStore,
+    SourceIdentity,
+    toMigrationDefinitionId,
+    toMigrationDefinitionLockToken,
+    toMigrationRunId
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  const EntrySource = Schema.Struct({ title: Schema.String });
+  const EntrySourceIdentity = SourceIdentity.make({
+    id: "entry@v1",
+    schema: SourceIdentity.key("id", Schema.NonEmptyString)
+  });
+  const storeState = {
+    definitionLocks: new Map(),
+    latestRunStates: new Map()
+  };
+  const articlesId = toMigrationDefinitionId("articles");
+
+  storeState.definitionLocks.set(articlesId, {
+    createdAt: new Date("2026-06-23T00:00:00.000Z"),
+    definitionId: articlesId,
+    ownerRunId: toMigrationRunId("run-stuck"),
+    token: toMigrationDefinitionLockToken("lock-stuck")
+  });
+
+  globalThis.__migrateSdkCliExecutionProbe = {
+    executions: [],
+    storeState
+  };
+
+  const store = Layer.succeed(MigrationStore, {
+    getDefinitionLock: (definitionId) =>
+      Effect.sync(() => storeState.definitionLocks.get(definitionId) ?? null),
+    breakDefinitionLock: (definitionId) =>
+      Effect.sync(() => {
+        const lock = storeState.definitionLocks.get(definitionId) ?? null;
+        storeState.definitionLocks.delete(definitionId);
+
+        return lock;
+      })
+  });
+
+  const articles = MigrationDefinition.make({
+    id: articlesId,
+    source: InMemorySource.make({
+      identity: EntrySourceIdentity,
+      sourceSchema: EntrySource,
+      items: []
+    }),
+    store,
+    process: () => undefined
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [articles]
     })
   });
 `;
@@ -592,6 +663,69 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
+  it.effect("breaks a selected Migration Definition lock", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        lockedStoreConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["unlock", "--config", "migrate.config.ts", "articles"],
+        project
+      );
+      const probe = getExecutionProbe();
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Migration Definition lock cleared");
+      expect(result.stdout).toContain("Migration ID  articles");
+      expect(result.stdout).toContain("Owner Run ID  run-stuck");
+      expect(result.stdout).toContain("Token         lock-stuck");
+      expect(probe.storeState.definitionLocks.size).toBe(0);
+
+      const secondResult = yield* runCli(
+        ["unlock", "--config", "migrate.config.ts", "articles"],
+        project
+      );
+
+      expect(secondResult.stderr).toBe("");
+      expect(secondResult.cause).toBe("");
+      expect(secondResult.exitCode).toBe(0);
+      expect(secondResult.stdout).toContain(
+        "Migration Definition lock is already clear: articles"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects unlocking an unknown Migration Definition", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        lockedStoreConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["unlock", "--config", "migrate.config.ts", "missing"],
+        project
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        "Migration Definition was not found in the registry: missing"
+      );
+      expect(result.stderr).not.toContain("CliError/UserError");
+      expect(result.stdout).toBe("");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
   it.effect(
     "renders status missing dependency suggestions without plan flags",
     () =>
@@ -773,6 +907,7 @@ describe("migrate CLI", () => {
               skipped: 0,
             },
             lastRun: { status: "succeeded" },
+            lock: null,
             source: {
               duplicate: 0,
               invalid: 0,
@@ -795,6 +930,56 @@ describe("migrate CLI", () => {
     expect(output).toContain("\x1b[32msucceeded");
   });
 
+  it("renders lock state separately from latest run state", () => {
+    const activeDefinitionId = toMigrationDefinitionId("active");
+    const staleDefinitionId = toMigrationDefinitionId("stale");
+    const output = renderStatusReport(
+      {
+        definitions: [
+          {
+            definitionId: activeDefinitionId,
+            durable: {
+              failed: 0,
+              migrated: 1,
+              needsUpdate: 0,
+              skipped: 0,
+            },
+            lastRun: { status: "running" },
+            lock: {
+              createdAt: new Date("2026-06-23T00:00:00.000Z"),
+              definitionId: activeDefinitionId,
+              ownerRunId: toMigrationRunId("run-active"),
+              token: toMigrationDefinitionLockToken("lock-active"),
+            },
+            warnings: [],
+          },
+          {
+            definitionId: staleDefinitionId,
+            durable: {
+              failed: 0,
+              migrated: 1,
+              needsUpdate: 0,
+              skipped: 0,
+            },
+            lastRun: { status: "running" },
+            lock: null,
+            warnings: [],
+          },
+        ],
+        includedDefinitionIds: [activeDefinitionId, staleDefinitionId],
+        notices: [],
+        requestedDefinitionIds: [activeDefinitionId, staleDefinitionId],
+        scanSource: false,
+        warnings: [],
+      } as never,
+      { colors: false }
+    );
+
+    expect(output).toContain("Lock");
+    expect(output).toMatch(activeLockedStatusRowPattern);
+    expect(output).toMatch(staleRunningStatusRowPattern);
+  });
+
   it("renders named source identity parts in duplicate status warnings", () => {
     const definitionId = toMigrationDefinitionId("business-addresses");
     const output = renderStatusReport(
@@ -809,6 +994,7 @@ describe("migrate CLI", () => {
               skipped: 0,
             },
             lastRun: null,
+            lock: null,
             source: {
               duplicate: 1,
               invalid: 0,
@@ -1089,34 +1275,32 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
-  it.effect(
-    "renders omitted required dependencies as run preflight",
-    () =>
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const project = yield* makeProject;
+  it.effect("renders omitted required dependencies as run preflight", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
 
-        yield* fs.writeFileString(
-          `${project}/migrate.config.ts`,
-          planConfigSource()
-        );
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
 
-        const result = yield* runCli(
-          ["run", "--config", "migrate.config.ts", "--plan", "articles"],
-          project
-        );
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--plan", "articles"],
+        project
+      );
 
-        expect(result.stderr).toBe("");
-        expect(result.cause).toBe("");
-        expect(result.exitCode).toBe(0);
-        expect(result.stdout).toContain("Run Plan");
-        expect(result.stdout).toContain("Requested  articles");
-        expect(result.stdout).toContain("Included   articles");
-        expect(result.stdout).toContain("Dependency Preflight");
-        expect(result.stdout).toContain("authors");
-        expect(result.stdout).toContain("articles");
-        expect(result.stdout).toMatch(singleArticlesRowPattern);
-      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run Plan");
+      expect(result.stdout).toContain("Requested  articles");
+      expect(result.stdout).toContain("Included   articles");
+      expect(result.stdout).toContain("Dependency Preflight");
+      expect(result.stdout).toContain("authors");
+      expect(result.stdout).toContain("articles");
+      expect(result.stdout).toMatch(singleArticlesRowPattern);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
   it.effect("preserves run mode flags in dependency preflight plans", () =>
@@ -3089,22 +3273,24 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
-  it.effect("runs list through the package bin", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const project = yield* makeProject;
+  it.effect(
+    "runs list through the package bin",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
 
-      yield* fs.writeFileString(
-        `${project}/migrate.config.ts`,
-        configSource("from-bin")
-      );
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          configSource("from-bin")
+        );
 
-      const result = yield* runCliProcess(["list"], project);
+        const result = yield* runCliProcess(["list"], project);
 
-      expect(result.exitCode).toBe(ChildProcessSpawner.ExitCode(0));
-      expect(result.stderr).toBe("");
-      expect(result.stdout).toContain("from-bin");
-    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer)),
+        expect(result.exitCode).toBe(ChildProcessSpawner.ExitCode(0));
+        expect(result.stderr).toBe("");
+        expect(result.stdout).toContain("from-bin");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer)),
     10_000
   );
 

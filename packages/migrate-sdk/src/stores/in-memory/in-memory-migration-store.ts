@@ -342,6 +342,12 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       return lock;
     });
 
+    const getDefinitionLock = Effect.fn(
+      "InMemoryMigrationStore.getDefinitionLock"
+    )((definitionId: MigrationDefinitionId) =>
+      Effect.sync(() => state.definitionLocks.get(definitionId) ?? null)
+    );
+
     const assertDefinitionLocks = Effect.fn(
       "InMemoryMigrationStore.assertDefinitionLocks"
     )(function* (locks: readonly MigrationDefinitionLock[]) {
@@ -387,6 +393,20 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       });
     });
 
+    const breakDefinitionLock = Effect.fn(
+      "InMemoryMigrationStore.breakDefinitionLock"
+    )(function* (definitionId: MigrationDefinitionId) {
+      const current = yield* Effect.sync(
+        () => state.definitionLocks.get(definitionId) ?? null
+      );
+
+      yield* Effect.sync(() => {
+        state.definitionLocks.delete(definitionId);
+      });
+
+      return current;
+    });
+
     return {
       getSourceCursor,
       setSourceCursor,
@@ -407,8 +427,10 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       completeRun,
       failRun,
       acquireDefinitionLock,
+      getDefinitionLock,
       assertDefinitionLocks,
       releaseDefinitionLock,
+      breakDefinitionLock,
     };
   });
 

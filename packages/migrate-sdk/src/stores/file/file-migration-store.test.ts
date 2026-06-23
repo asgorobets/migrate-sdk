@@ -1012,4 +1012,50 @@ describe("FileMigrationStore", () => {
       })
     )
   );
+
+  it.effect("breaks a Definition Lock without the owner token", () =>
+    withTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("articles");
+        const ownerRunId = toMigrationRunId("run-stuck");
+        const lock = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.acquireDefinitionLock(definitionId, ownerRunId);
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        const brokenLock = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          const observedLock = yield* store.getDefinitionLock(definitionId);
+          expect(observedLock).toEqual(lock);
+
+          return yield* store.breakDefinitionLock(definitionId);
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+        const hasLockFile = yield* lockFileExists(directory, "articles");
+
+        expect(brokenLock).toEqual(lock);
+        expect(hasLockFile).toBe(false);
+
+        const missingLock = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          const observedLock = yield* store.getDefinitionLock(definitionId);
+          expect(observedLock).toBeNull();
+
+          return yield* store.breakDefinitionLock(definitionId);
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        expect(missingLock).toBeNull();
+
+        const reacquiredLock = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.acquireDefinitionLock(definitionId, ownerRunId);
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        expect(reacquiredLock.definitionId).toBe(definitionId);
+      })
+    )
+  );
 });

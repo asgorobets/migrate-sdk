@@ -61,7 +61,7 @@ const describeSourceIdentityParts = (
     const part = identity.parts[0];
 
     if (part === undefined) {
-      return undefined;
+      return;
     }
 
     const statusPart = makeSourceIdentityStatusPart(part.name, key);
@@ -70,7 +70,7 @@ const describeSourceIdentityParts = (
   }
 
   if (!Array.isArray(key)) {
-    return undefined;
+    return;
   }
 
   const parts: SourceIdentityStatusPart[] = [];
@@ -79,13 +79,13 @@ const describeSourceIdentityParts = (
     const part = identity.parts[index];
 
     if (part === undefined) {
-      return undefined;
+      return;
     }
 
     const statusPart = makeSourceIdentityStatusPart(part.name, key[index]);
 
     if (statusPart === null) {
-      return undefined;
+      return;
     }
 
     parts.push(statusPart);
@@ -275,12 +275,14 @@ const getDurableDefinitionStatus = (
   Effect.gen(function* () {
     const store = yield* MigrationStore;
     const lastRun = yield* store.getLatestRunState(definition.id);
+    const lock = yield* store.getDefinitionLock(definition.id);
     const durable = yield* store.getItemStateSummary(definition.id);
 
     return {
       definitionId: definition.id,
       durable,
       lastRun,
+      lock,
       warnings: [],
     };
   }).pipe(Effect.provide(definition.store));
@@ -292,6 +294,7 @@ const getScannedDefinitionStatus = (
     const store = yield* MigrationStore;
     const source = yield* Source;
     const lastRun = yield* store.getLatestRunState(definition.id);
+    const lock = yield* store.getDefinitionLock(definition.id);
     const itemStates = yield* store.listItemStates(definition.id);
     const durable = summarizeMigrationItemStates(itemStates);
     const scan = yield* scanSourceInventory(definition, source, itemStates);
@@ -300,6 +303,7 @@ const getScannedDefinitionStatus = (
       definitionId: definition.id,
       durable,
       lastRun,
+      lock,
       source: scan.source,
       warnings: scan.warnings,
     };

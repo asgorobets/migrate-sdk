@@ -418,7 +418,7 @@ const formatVersionValue = (value: unknown): unknown => {
     value === null ||
     !("formatVersion" in value)
   ) {
-    return undefined;
+    return;
   }
 
   return value.formatVersion;
@@ -1560,6 +1560,27 @@ const makeService = (
     }
   });
 
+  const getDefinitionLock = Effect.fn(
+    "CommercetoolsMigrationStore.getDefinitionLock"
+  )(function* (definitionId: MigrationDefinitionId) {
+    const key = definitionLockKey(options.namespace, definitionId);
+    const customObject = yield* readCustomObjectOptional(sdk, options, key);
+
+    if (customObject === null) {
+      return null;
+    }
+
+    const record = yield* decodeRecord(
+      MigrationDefinitionLockRecord,
+      customObject.value,
+      key
+    );
+
+    yield* validateDefinitionLockRecord(options, key, definitionId, record);
+
+    return record.state;
+  });
+
   const releaseDefinitionLock = Effect.fn(
     "CommercetoolsMigrationStore.releaseDefinitionLock"
   )(function* (lock: MigrationDefinitionLock) {
@@ -1593,6 +1614,28 @@ const makeService = (
     yield* deleteCustomObject(sdk, options, key, customObject.version);
   });
 
+  const breakDefinitionLock = Effect.fn(
+    "CommercetoolsMigrationStore.breakDefinitionLock"
+  )(function* (definitionId: MigrationDefinitionId) {
+    const key = definitionLockKey(options.namespace, definitionId);
+    const customObject = yield* readCustomObjectOptional(sdk, options, key);
+
+    if (customObject === null) {
+      return null;
+    }
+
+    const record = yield* decodeRecord(
+      MigrationDefinitionLockRecord,
+      customObject.value,
+      key
+    );
+
+    yield* validateDefinitionLockRecord(options, key, definitionId, record);
+    yield* deleteCustomObject(sdk, options, key, customObject.version);
+
+    return record.state;
+  });
+
   return {
     getSourceCursor,
     setSourceCursor,
@@ -1614,8 +1657,10 @@ const makeService = (
     attachRunExecution,
     markRunStartFailed,
     acquireDefinitionLock,
+    getDefinitionLock,
     assertDefinitionLocks,
     releaseDefinitionLock,
+    breakDefinitionLock,
   };
 };
 

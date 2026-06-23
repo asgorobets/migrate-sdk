@@ -17,6 +17,7 @@ import {
   type SourceIdentitySnapshotKey,
   toEncodedSourceCursor,
   toMigrationDefinitionId,
+  toMigrationDefinitionLockToken,
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
@@ -135,6 +136,12 @@ describe("getMigrationStatuses", () => {
         startedAt: new Date("2026-01-01T00:00:00.000Z"),
         status: "succeeded" as const,
       };
+      const lock = {
+        createdAt: new Date("2026-01-01T00:00:03.000Z"),
+        definitionId,
+        ownerRunId: runId,
+        token: toMigrationDefinitionLockToken("lock-1"),
+      };
       const updatedAt = new Date("2026-01-01T00:00:02.000Z");
       const itemStates: readonly MigrationItemState[] = [
         {
@@ -189,6 +196,7 @@ describe("getMigrationStatuses", () => {
       ];
 
       storeState.latestRunStates.set(definitionId, lastRun);
+      storeState.definitionLocks.set(definitionId, lock);
       for (const itemState of itemStates) {
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey(
@@ -218,6 +226,7 @@ describe("getMigrationStatuses", () => {
               skipped: 1,
             },
             lastRun,
+            lock,
             warnings: [],
           },
         ],
@@ -273,6 +282,11 @@ describe("getMigrationStatuses", () => {
             calls.push(`getLatestRunState:${id}`);
             return null;
           }),
+        getDefinitionLock: (id) =>
+          Effect.sync(() => {
+            calls.push(`getDefinitionLock:${id}`);
+            return null;
+          }),
         getItemStateSummary: (id) =>
           Effect.sync(() => {
             calls.push(`getItemStateSummary:${id}`);
@@ -302,6 +316,7 @@ describe("getMigrationStatuses", () => {
         acquireDefinitionLock: () => fail("acquireDefinitionLock"),
         assertDefinitionLocks: () => fail("assertDefinitionLocks"),
         releaseDefinitionLock: () => fail("releaseDefinitionLock"),
+        breakDefinitionLock: () => fail("breakDefinitionLock"),
       });
       const definition = makeStatusOnlyDefinition(store);
 
@@ -312,6 +327,7 @@ describe("getMigrationStatuses", () => {
       expect(report.definitions[0]?.definitionId).toBe(definitionId);
       expect(calls).toEqual([
         "getLatestRunState:articles",
+        "getDefinitionLock:articles",
         "getItemStateSummary:articles",
       ]);
     })
@@ -399,6 +415,7 @@ describe("getMigrationStatuses", () => {
                 skipped: 0,
               },
               lastRun: null,
+              lock: null,
               source: {
                 duplicate: 0,
                 invalid: 0,
@@ -438,6 +455,11 @@ describe("getMigrationStatuses", () => {
             calls.push(`getLatestRunState:${id}`);
             return null;
           }),
+        getDefinitionLock: (id) =>
+          Effect.sync(() => {
+            calls.push(`getDefinitionLock:${id}`);
+            return null;
+          }),
         listItemStates: (id) =>
           Effect.sync(() => {
             calls.push(`listItemStates:${id}`);
@@ -462,6 +484,7 @@ describe("getMigrationStatuses", () => {
         acquireDefinitionLock: () => fail("acquireDefinitionLock"),
         assertDefinitionLocks: () => fail("assertDefinitionLocks"),
         releaseDefinitionLock: () => fail("releaseDefinitionLock"),
+        breakDefinitionLock: () => fail("breakDefinitionLock"),
       });
       const definition = makeStatusScanDefinition(
         store,
@@ -493,6 +516,7 @@ describe("getMigrationStatuses", () => {
       });
       expect(calls).toEqual([
         "getLatestRunState:articles",
+        "getDefinitionLock:articles",
         "listItemStates:articles",
       ]);
     })

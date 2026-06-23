@@ -443,9 +443,10 @@ const result = yield* execution.run({
 
 ## Status
 
-Status is read-only inspection. It does not acquire migration definition locks,
-create run ids, begin or finalize run state, write source cursors, write item
-state, call destinations, or execute migration pipelines.
+Status is read-only inspection. It may read migration definition lock records,
+but it does not acquire or release locks, create run ids, begin or finalize run
+state, write source cursors, write item state, call destinations, or execute
+migration pipelines.
 
 Durable-only status reads store facts:
 
@@ -460,6 +461,7 @@ interface MigrationItemStateSummary {
 interface MigrationDefinitionStatus {
   readonly definitionId: MigrationDefinitionId;
   readonly lastRun: MigrationRunState | null;
+  readonly lock: MigrationDefinitionLock | null;
   readonly durable: MigrationItemStateSummary;
   readonly source?: MigrationDefinitionSourceStatus;
   readonly warnings: readonly MigrationStatusWarning[];
@@ -485,6 +487,10 @@ interface MigrationDefinitionRegistryStatusReport
 finished time, and `running | succeeded | failed`. It is not a persisted copy of
 the latest run's item counts. The durable counts are current item-state counts
 from the migration store.
+
+`lock` is the current Migration Definition lock record when one exists. It is
+reported separately from `lastRun` so operators can distinguish an active
+locked run from stale `running` lifecycle metadata after `unlock`.
 
 Source scanning adds current-source inventory counts:
 
@@ -820,6 +826,7 @@ migrate status articles --with-dependencies
 migrate status --all
 migrate status --all --scan-source
 migrate status --all --scan-source --concurrency 4
+migrate unlock articles
 ```
 
 `list` renders static registry discovery metadata from `registry.list()`. It
@@ -878,9 +885,10 @@ lifecycle metadata and current item-state counts. It does not initialize source
 or destination systems.
 
 The `State` column is a compact presentation summary for CLI scanning. It uses
-the highest-priority condition from durable state and, when source scanning is
-enabled, source inventory diagnostics: `failed`, `running`, `warning`,
-`pending`, `new`, or `ok`.
+the highest-priority condition from durable state, lock state, and, when source
+scanning is enabled, source inventory diagnostics: `failed`, `running`,
+`warning`, `pending`, `new`, or `ok`. A current lock renders as `running`; a
+`running` last run with a clear lock renders as `warning`.
 
 ```text
 Migration Status
@@ -892,9 +900,9 @@ Scan       durable store only
 Hint       Pass --scan-source to include source inventory counts.
 
 Definitions
-State  Migration ID  Last Run   Migrated  Skipped  Failed  Needs Update
------  ------------  ---------  --------  -------  ------  ------------
-ok     articles      succeeded         2        1       0             0
+State  Migration ID  Last Run   Lock   Migrated  Skipped  Failed  Needs Update
+-----  ------------  ---------  -----  --------  -------  ------  ------------
+ok     articles      succeeded  clear         2        1       0             0
 ```
 
 `status --scan-source` additionally initializes sources and scans current
@@ -911,9 +919,9 @@ Included   articles
 Scan       source inventory
 
 Definitions
-State    Migration ID  Last Run   Migrated  Skipped  Failed  Needs Update  Total  Unprocessed  Invalid  Duplicate  Orphaned
--------  ------------  ---------  --------  -------  ------  ------------  -----  -----------  -------  ---------  --------
-warning  articles      succeeded         2        1       0             0      4            1        0          1         1
+State    Migration ID  Last Run   Lock   Migrated  Skipped  Failed  Needs Update  Total  Unprocessed  Invalid  Duplicate  Orphaned
+-------  ------------  ---------  -----  --------  -------  ------  ------------  -----  -----------  -------  ---------  --------
+warning  articles      succeeded  clear         2        1       0             0      4            1        0          1         1
 
 Warnings:
 ! Duplicate source identity in articles: article-new (1 duplicate item(s)). Check the source identity mapping.
@@ -938,6 +946,20 @@ Warnings:
 
 `status` does not accept `--id` in the first version. Item-level inspection is
 a separate future design.
+
+`unlock` is an operator repair command for a stale Migration Definition lock.
+It accepts exactly one registered Migration Definition id and clears only that
+definition's lock record from the definition's configured Migration Store:
+
+```sh
+migrate unlock articles
+```
+
+The command is deliberately not dependency-expanded and does not accept
+`--all`, `--with-dependencies`, or `--id`. It does not modify Migration Item
+State, Migration Run State, Source Cursors, or Migration Contracts. Use it only
+when an interrupted host left a definition locked and the operator has verified
+that no runner still owns the lock.
 
 Run commands:
 

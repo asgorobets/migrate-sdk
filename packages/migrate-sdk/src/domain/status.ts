@@ -10,6 +10,7 @@ import {
   SourceIdentityKeyScalar,
   toMigrationDefinitionId,
 } from "./ids.ts";
+import { MigrationDefinitionLock } from "./lock.ts";
 import type { AnyMigrationDefinition } from "./run.ts";
 import { MigrationRunState } from "./run.ts";
 import { MigrationItemErrorDetail, type MigrationItemState } from "./state.ts";
@@ -72,8 +73,9 @@ export type MigrationStatusWarning = typeof MigrationStatusWarning.Type;
 
 export const MigrationDefinitionStatus = Schema.Struct({
   definitionId: MigrationDefinitionIdSchema,
-  lastRun: Schema.NullOr(MigrationRunState),
   durable: MigrationItemStateSummary,
+  lastRun: Schema.NullOr(MigrationRunState),
+  lock: Schema.NullOr(MigrationDefinitionLock),
   source: Schema.optional(MigrationDefinitionSourceStatus),
   warnings: Schema.Array(MigrationStatusWarning),
 });

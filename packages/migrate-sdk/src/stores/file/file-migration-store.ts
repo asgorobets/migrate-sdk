@@ -848,6 +848,18 @@ const makeLayerWithoutPlatform = (
         return lock;
       });
 
+      const getDefinitionLock = Effect.fn(
+        "FileMigrationStore.getDefinitionLock"
+      )(function* (definitionId: MigrationDefinitionId) {
+        const record = yield* readRecordOptional(
+          fs,
+          paths.lock(definitionId),
+          MigrationDefinitionLockRecord
+        );
+
+        return record?.state ?? null;
+      });
+
       const assertDefinitionLocks = Effect.fn(
         "FileMigrationStore.assertDefinitionLocks"
       )(function* (locks: readonly MigrationDefinitionLock[]) {
@@ -893,6 +905,21 @@ const makeLayerWithoutPlatform = (
         yield* removeFileIfExists(fs, lockPath);
       });
 
+      const breakDefinitionLock = Effect.fn(
+        "FileMigrationStore.breakDefinitionLock"
+      )(function* (definitionId: MigrationDefinitionId) {
+        const lockPath = paths.lock(definitionId);
+        const lock = yield* getDefinitionLock(definitionId);
+
+        if (lock === null) {
+          return null;
+        }
+
+        yield* removeFileIfExists(fs, lockPath);
+
+        return lock;
+      });
+
       return {
         getSourceCursor,
         setSourceCursor,
@@ -913,8 +940,10 @@ const makeLayerWithoutPlatform = (
         completeRun,
         failRun,
         acquireDefinitionLock,
+        getDefinitionLock,
         assertDefinitionLocks,
         releaseDefinitionLock,
+        breakDefinitionLock,
       };
     })
   );

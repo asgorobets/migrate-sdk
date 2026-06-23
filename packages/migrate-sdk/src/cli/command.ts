@@ -22,6 +22,7 @@ import {
   type MigrationExecutionRollbackError,
   type MigrationExecutionRunError,
 } from "../services/migration-execution.ts";
+import { MigrationStore } from "../services/migration-store.ts";
 import type { MigrationCliConfig } from "./config.ts";
 import {
   loadMigrationCliConfig,
@@ -537,6 +538,59 @@ const statusCommand = Command.make(
     })
 ).pipe(Command.withDescription("Inspect Migration Definition status"));
 
+const unlockDefinition = Argument.string("definition").pipe(
+  Argument.withDescription(
+    "Migration Definition id whose lock should be cleared"
+  )
+);
+
+const unlockCommand = Command.make(
+  "unlock",
+  { definition: unlockDefinition },
+  ({ definition }) =>
+    Effect.gen(function* () {
+      const loadedConfig = yield* loadConfiguredConfig;
+      const registry = loadedConfig.registry;
+      const definitionId = toMigrationDefinitionId(definition);
+      const migrationDefinition = Option.getOrUndefined(
+        registry.get(definitionId)
+      );
+
+      if (migrationDefinition === undefined) {
+        return yield* failReportedCliMessage(
+          `Migration Definition was not found in the registry: ${definitionId}`
+        );
+      }
+
+      const lock = yield* Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        return yield* store.breakDefinitionLock(definitionId);
+      }).pipe(
+        Effect.provide(migrationDefinition.store),
+        Effect.catch((error) =>
+          failReportedCliMessage(renderRuntimeError(error))
+        )
+      );
+
+      if (lock === null) {
+        yield* Console.log(
+          `Migration Definition lock is already clear: ${definitionId}`
+        );
+        return;
+      }
+
+      yield* Console.log(
+        [
+          "Migration Definition lock cleared",
+          `Migration ID  ${definitionId}`,
+          `Owner Run ID  ${lock.ownerRunId}`,
+          `Token         ${lock.token}`,
+        ].join("\n")
+      );
+    })
+).pipe(Command.withDescription("Break a Migration Definition lock"));
+
 const runCommand = Command.make(
   "run",
   {
@@ -734,6 +788,7 @@ export const migrateCommand = migrateBaseCommand.pipe(
     listCommand,
     graphCommand,
     statusCommand,
+    unlockCommand,
     runCommand,
     rollbackCommand,
   ])
