@@ -1,8 +1,9 @@
-import type { StoreDraft } from "@commercetools/platform-sdk";
 import { Schema } from "effect";
+import type {
+  CommercetoolsCustomFieldSchema,
+  StoreCustomFieldsHelper,
+} from "./custom-fields.ts";
 import {
-  hasStringField,
-  isRecord,
   makeUpdateActionsSchema,
   ResourceVersionSchema,
 } from "./internal/command-schemas.ts";
@@ -11,14 +12,10 @@ import {
   CommercetoolsStoreSelectorSchema,
 } from "./selectors.ts";
 import type { StoreUpdateAction } from "./store-actions.ts";
-import {
-  type EmptyUpdateActionBuilder,
-  makeUpdateActionFactory,
-  type NonEmptyUpdateActions,
-  type UpdateActionBuilder,
-  type UpdateActionFactory,
-  type UpdateInput,
-  type UpdateWithActionsInput,
+import type {
+  NonEmptyUpdateActions,
+  UpdateInput,
+  UpdateWithActionsInput,
 } from "./update-action-builder.ts";
 
 export type NonEmptyStoreUpdateActions<
@@ -31,26 +28,11 @@ export type StoreUpdateWithActionsInput<
   Action extends StoreUpdateAction = StoreUpdateAction,
 > = UpdateWithActionsInput<CommercetoolsStoreSelector, Action>;
 
-export type EmptyStoreUpdateActionBuilder = EmptyUpdateActionBuilder<
-  CommercetoolsStoreSelector,
-  StoreUpdateAction
->;
-
-export type StoreUpdateActionBuilder<
-  Action extends StoreUpdateAction = StoreUpdateAction,
-> = UpdateActionBuilder<CommercetoolsStoreSelector, StoreUpdateAction, Action>;
-
-export type StoreUpdateFactory = UpdateActionFactory<
-  CommercetoolsStoreSelector,
-  StoreUpdateAction
->;
-
-const isStoreDraft = (value: unknown): value is StoreDraft =>
-  isRecord(value) && hasStringField(value, "key");
-
-export const StoreDraftSchema = Schema.declare<StoreDraft>(isStoreDraft, {
-  identifier: "StoreDraft",
-});
+export interface CommercetoolsStorePureHelpers<
+  StoreCustomFieldSchema extends CommercetoolsCustomFieldSchema | never,
+> {
+  readonly customFields: StoreCustomFieldsHelper<StoreCustomFieldSchema>;
+}
 
 export const StoreUpdateActionsSchema =
   makeUpdateActionsSchema<StoreUpdateAction>("StoreUpdateActions");
@@ -89,10 +71,3 @@ export interface StoreProductSelectionAssignmentInput {
   readonly selector: CommercetoolsStoreSelector;
   readonly version: number;
 }
-
-export const makeStoreUpdate = makeUpdateActionFactory<
-  CommercetoolsStoreSelector,
-  StoreUpdateAction
->({
-  label: "Store update",
-});

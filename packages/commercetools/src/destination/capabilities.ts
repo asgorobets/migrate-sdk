@@ -34,7 +34,6 @@ import {
 } from "../sdk.ts";
 import type { BusinessUnitUpdateAction } from "./business-unit-actions.ts";
 import {
-  BusinessUnitDraftSchema,
   type CommercetoolsBusinessUnitHelpers as BusinessUnitPureHelpers,
   type BusinessUnitUpdateWithActionsInput,
   BusinessUnitUpdateWithActionsInputSchema,
@@ -43,16 +42,20 @@ import {
   type CommercetoolsCustomFieldSchema,
   type CommercetoolsCustomTypeConfig,
   makeBusinessUnitCustomFieldsHelper,
+  makeCustomerCustomFieldsHelper,
+  makeInventoryEntryCustomFieldsHelper,
+  makeProductSelectionCustomFieldsHelper,
+  makeStoreCustomFieldsHelper,
 } from "./custom-fields.ts";
 import type { CustomerUpdateAction } from "./customer-actions.ts";
 import {
-  CustomerDraftSchema,
+  type CommercetoolsCustomerHelpers as CustomerPureHelpers,
   type CustomerUpdateWithActionsInput,
   CustomerUpdateWithActionsInputSchema,
 } from "./customers.ts";
 import { toDestinationError } from "./internal/destination-errors.ts";
 import {
-  InventoryEntryDraftSchema,
+  type CommercetoolsInventoryEntryHelpers as InventoryEntryPureHelpers,
   type InventoryEntryUpdateWithActionsInput,
   InventoryEntryUpdateWithActionsInputSchema,
 } from "./inventory.ts";
@@ -64,14 +67,13 @@ import {
 } from "./product-attributes.ts";
 import type { ProductSelectionUpdateAction } from "./product-selection-actions.ts";
 import {
-  ProductSelectionDraftSchema,
+  type CommercetoolsProductSelectionHelpers as ProductSelectionPureHelpers,
   type ProductSelectionUpdateWithActionsInput,
   ProductSelectionUpdateWithActionsInputSchema,
 } from "./product-selections.ts";
 import {
   type CommercetoolsProductAttributeSchemaRecord,
   type ProductDraftInput,
-  ProductDraftSchema,
   type CommercetoolsProductHelpers as ProductPureHelpers,
   type ProductUpdateWithActionsInput,
   ProductUpdateWithActionsInputSchema,
@@ -82,7 +84,7 @@ import type {
 } from "./selectors.ts";
 import type { StoreUpdateAction } from "./store-actions.ts";
 import {
-  StoreDraftSchema,
+  type CommercetoolsStorePureHelpers,
   type StoreProductSelectionAssignmentInput,
   StoreProductSelectionAssignmentInputSchema,
   type StoreUpdateWithActionsInput,
@@ -164,13 +166,53 @@ export interface CommercetoolsBusinessUnitHelpers<
       BusinessUnitUpdateWithActionsInput
     > {}
 
-export interface CommercetoolsStoreHelpers<Requirements>
-  extends CommercetoolsResourceHelpers<
-    Requirements,
-    Store,
-    StoreDraft,
-    StoreUpdateWithActionsInput
-  > {
+export interface CommercetoolsCustomerHelpers<
+  Requirements,
+  CustomerCustomFieldSchema extends CommercetoolsCustomFieldSchema | never,
+> extends CustomerPureHelpers<CustomerCustomFieldSchema>,
+    CommercetoolsResourceHelpers<
+      Requirements,
+      Customer,
+      CustomerDraft,
+      CustomerUpdateWithActionsInput
+    > {}
+
+export interface CommercetoolsInventoryEntryHelpers<
+  Requirements,
+  InventoryEntryCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+> extends InventoryEntryPureHelpers<InventoryEntryCustomFieldSchema>,
+    CommercetoolsResourceHelpers<
+      Requirements,
+      InventoryEntry,
+      InventoryEntryDraft,
+      InventoryEntryUpdateWithActionsInput
+    > {}
+
+export interface CommercetoolsProductSelectionHelpers<
+  Requirements,
+  ProductSelectionCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+> extends ProductSelectionPureHelpers<ProductSelectionCustomFieldSchema>,
+    CommercetoolsResourceHelpers<
+      Requirements,
+      ProductSelection,
+      ProductSelectionDraft,
+      ProductSelectionUpdateWithActionsInput
+    > {}
+
+export interface CommercetoolsStoreHelpers<
+  Requirements,
+  StoreCustomFieldSchema extends CommercetoolsCustomFieldSchema | never = never,
+> extends CommercetoolsStorePureHelpers<StoreCustomFieldSchema>,
+    CommercetoolsResourceHelpers<
+      Requirements,
+      Store,
+      StoreDraft,
+      StoreUpdateWithActionsInput
+    > {
   readonly assignProductSelection: (
     input: StoreProductSelectionAssignmentInput
   ) => Effect.Effect<Store, CommercetoolsDestinationError, Requirements>;
@@ -194,9 +236,23 @@ export interface CommercetoolsDestinationOptions<
   BusinessUnitCustomFieldSchema extends
     | CommercetoolsCustomFieldSchema
     | never = never,
+  CustomerCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  InventoryEntryCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  ProductSelectionCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  StoreCustomFieldSchema extends CommercetoolsCustomFieldSchema | never = never,
 > {
   readonly customTypes?: {
-    readonly businessUnits: CommercetoolsCustomTypeConfig<BusinessUnitCustomFieldSchema>;
+    readonly businessUnits?: CommercetoolsCustomTypeConfig<BusinessUnitCustomFieldSchema>;
+    readonly customers?: CommercetoolsCustomTypeConfig<CustomerCustomFieldSchema>;
+    readonly inventory?: CommercetoolsCustomTypeConfig<InventoryEntryCustomFieldSchema>;
+    readonly productSelections?: CommercetoolsCustomTypeConfig<ProductSelectionCustomFieldSchema>;
+    readonly stores?: CommercetoolsCustomTypeConfig<StoreCustomFieldSchema>;
   };
   readonly productTypes?: CommercetoolsProductAttributeSchemasInput<ProductAttributeSchemaRecord>;
 }
@@ -207,28 +263,32 @@ export interface ProvidedCommercetoolsDestination<
   BusinessUnitCustomFieldSchema extends
     | CommercetoolsCustomFieldSchema
     | never = never,
+  CustomerCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  InventoryEntryCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  ProductSelectionCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  StoreCustomFieldSchema extends CommercetoolsCustomFieldSchema | never = never,
 > {
   readonly businessUnits: CommercetoolsBusinessUnitHelpers<
     Tracking,
     BusinessUnitCustomFieldSchema
   >;
-  readonly customers: CommercetoolsResourceHelpers<
+  readonly customers: CommercetoolsCustomerHelpers<
     Tracking,
-    Customer,
-    CustomerDraft,
-    CustomerUpdateWithActionsInput
+    CustomerCustomFieldSchema
   >;
-  readonly inventory: CommercetoolsResourceHelpers<
+  readonly inventory: CommercetoolsInventoryEntryHelpers<
     Tracking,
-    InventoryEntry,
-    InventoryEntryDraft,
-    InventoryEntryUpdateWithActionsInput
+    InventoryEntryCustomFieldSchema
   >;
-  readonly productSelections: CommercetoolsResourceHelpers<
+  readonly productSelections: CommercetoolsProductSelectionHelpers<
     Tracking,
-    ProductSelection,
-    ProductSelectionDraft,
-    ProductSelectionUpdateWithActionsInput
+    ProductSelectionCustomFieldSchema
   >;
   readonly products: CommercetoolsProductHelpers<
     Tracking,
@@ -238,9 +298,13 @@ export interface ProvidedCommercetoolsDestination<
     sdkLayer: CommercetoolsSdkLayer
   ) => ProvidedCommercetoolsDestination<
     ProductAttributeSchemaRecord,
-    BusinessUnitCustomFieldSchema
+    BusinessUnitCustomFieldSchema,
+    CustomerCustomFieldSchema,
+    InventoryEntryCustomFieldSchema,
+    ProductSelectionCustomFieldSchema,
+    StoreCustomFieldSchema
   >;
-  readonly stores: CommercetoolsStoreHelpers<Tracking>;
+  readonly stores: CommercetoolsStoreHelpers<Tracking, StoreCustomFieldSchema>;
 }
 
 export interface UnprovidedCommercetoolsDestination<
@@ -249,28 +313,32 @@ export interface UnprovidedCommercetoolsDestination<
   BusinessUnitCustomFieldSchema extends
     | CommercetoolsCustomFieldSchema
     | never = never,
+  CustomerCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  InventoryEntryCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  ProductSelectionCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  StoreCustomFieldSchema extends CommercetoolsCustomFieldSchema | never = never,
 > {
   readonly businessUnits: CommercetoolsBusinessUnitHelpers<
     CommercetoolsSdk | Tracking,
     BusinessUnitCustomFieldSchema
   >;
-  readonly customers: CommercetoolsResourceHelpers<
+  readonly customers: CommercetoolsCustomerHelpers<
     CommercetoolsSdk | Tracking,
-    Customer,
-    CustomerDraft,
-    CustomerUpdateWithActionsInput
+    CustomerCustomFieldSchema
   >;
-  readonly inventory: CommercetoolsResourceHelpers<
+  readonly inventory: CommercetoolsInventoryEntryHelpers<
     CommercetoolsSdk | Tracking,
-    InventoryEntry,
-    InventoryEntryDraft,
-    InventoryEntryUpdateWithActionsInput
+    InventoryEntryCustomFieldSchema
   >;
-  readonly productSelections: CommercetoolsResourceHelpers<
+  readonly productSelections: CommercetoolsProductSelectionHelpers<
     CommercetoolsSdk | Tracking,
-    ProductSelection,
-    ProductSelectionDraft,
-    ProductSelectionUpdateWithActionsInput
+    ProductSelectionCustomFieldSchema
   >;
   readonly products: CommercetoolsProductHelpers<
     CommercetoolsSdk | Tracking,
@@ -280,9 +348,16 @@ export interface UnprovidedCommercetoolsDestination<
     sdkLayer: CommercetoolsSdkLayer
   ) => ProvidedCommercetoolsDestination<
     ProductAttributeSchemaRecord,
-    BusinessUnitCustomFieldSchema
+    BusinessUnitCustomFieldSchema,
+    CustomerCustomFieldSchema,
+    InventoryEntryCustomFieldSchema,
+    ProductSelectionCustomFieldSchema,
+    StoreCustomFieldSchema
   >;
-  readonly stores: CommercetoolsStoreHelpers<CommercetoolsSdk | Tracking>;
+  readonly stores: CommercetoolsStoreHelpers<
+    CommercetoolsSdk | Tracking,
+    StoreCustomFieldSchema
+  >;
 }
 
 const ChangeSelectorSchema = Schema.Union([
@@ -358,7 +433,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 const statusCodeFromCause = (cause: unknown): number | undefined => {
   if (!isRecord(cause)) {
-    return undefined;
+    return;
   }
 
   if (typeof cause.statusCode === "number") {
@@ -369,7 +444,7 @@ const statusCodeFromCause = (cause: unknown): number | undefined => {
     return cause.body.statusCode;
   }
 
-  return undefined;
+  return;
 };
 
 const diagnosticField = (
@@ -463,10 +538,7 @@ const recordResourceChange = (
 ) => Tracking.recordChange(descriptor, change);
 
 const createProduct = Effect.fn("CommercetoolsDestination.products.create")(
-  function* (draftInput: ProductDraftInput) {
-    const draft = yield* Schema.decodeUnknownEffect(ProductDraftSchema, {
-      errors: "all",
-    })(draftInput);
+  function* (draft: ProductDraftInput) {
     const sdk = yield* CommercetoolsSdk;
     const context = yield* Tracking.currentContext;
     const product = yield* runSdkRequest({
@@ -557,10 +629,7 @@ const updateProduct = Effect.fn("CommercetoolsDestination.products.update")(
 
 const createInventoryEntry = Effect.fn(
   "CommercetoolsDestination.inventory.create"
-)(function* (draftInput: InventoryEntryDraft) {
-  const draft = yield* Schema.decodeUnknownEffect(InventoryEntryDraftSchema, {
-    errors: "all",
-  })(draftInput);
+)(function* (draft: InventoryEntryDraft) {
   const sdk = yield* CommercetoolsSdk;
   const context = yield* Tracking.currentContext;
   const inventoryEntry = yield* runSdkRequest({
@@ -648,10 +717,7 @@ const updateInventoryEntry = Effect.fn(
 });
 
 const createCustomer = Effect.fn("CommercetoolsDestination.customers.create")(
-  function* (draftInput: CustomerDraft) {
-    const draft = yield* Schema.decodeUnknownEffect(CustomerDraftSchema, {
-      errors: "all",
-    })(draftInput);
+  function* (draft: CustomerDraft) {
     const sdk = yield* CommercetoolsSdk;
     const context = yield* Tracking.currentContext;
     const result = yield* runSdkRequest<CustomerSignInResult>({
@@ -740,10 +806,7 @@ const updateCustomer = Effect.fn("CommercetoolsDestination.customers.update")(
 
 const createBusinessUnit = Effect.fn(
   "CommercetoolsDestination.businessUnits.create"
-)(function* (draftInput: BusinessUnitDraft) {
-  const draft = yield* Schema.decodeUnknownEffect(BusinessUnitDraftSchema, {
-    errors: "all",
-  })(draftInput);
+)(function* (draft: BusinessUnitDraft) {
   const sdk = yield* CommercetoolsSdk;
   const context = yield* Tracking.currentContext;
   const businessUnit = yield* runSdkRequest({
@@ -832,10 +895,7 @@ const updateBusinessUnit = Effect.fn(
 });
 
 const createStore = Effect.fn("CommercetoolsDestination.stores.create")(
-  function* (draftInput: StoreDraft) {
-    const draft = yield* Schema.decodeUnknownEffect(StoreDraftSchema, {
-      errors: "all",
-    })(draftInput);
+  function* (draft: StoreDraft) {
     const sdk = yield* CommercetoolsSdk;
     const context = yield* Tracking.currentContext;
     const store = yield* runSdkRequest({
@@ -1001,10 +1061,7 @@ const removeProductSelectionFromStore = Effect.fn(
 
 const createProductSelection = Effect.fn(
   "CommercetoolsDestination.productSelections.create"
-)(function* (draftInput: ProductSelectionDraft) {
-  const draft = yield* Schema.decodeUnknownEffect(ProductSelectionDraftSchema, {
-    errors: "all",
-  })(draftInput);
+)(function* (draft: ProductSelectionDraft) {
   const sdk = yield* CommercetoolsSdk;
   const context = yield* Tracking.currentContext;
   const productSelection = yield* runSdkRequest({
@@ -1097,14 +1154,34 @@ const makeUnprovided = <
   const BusinessUnitCustomFieldSchema extends
     | CommercetoolsCustomFieldSchema
     | never = never,
+  const CustomerCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  const InventoryEntryCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  const ProductSelectionCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  const StoreCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
 >(
   options: CommercetoolsDestinationOptions<
     ProductAttributeSchemaRecord,
-    BusinessUnitCustomFieldSchema
+    BusinessUnitCustomFieldSchema,
+    CustomerCustomFieldSchema,
+    InventoryEntryCustomFieldSchema,
+    ProductSelectionCustomFieldSchema,
+    StoreCustomFieldSchema
   >
 ): UnprovidedCommercetoolsDestination<
   ProductAttributeSchemaRecord,
-  BusinessUnitCustomFieldSchema
+  BusinessUnitCustomFieldSchema,
+  CustomerCustomFieldSchema,
+  InventoryEntryCustomFieldSchema,
+  ProductSelectionCustomFieldSchema,
+  StoreCustomFieldSchema
 > => ({
   businessUnits: {
     customFields: makeBusinessUnitCustomFieldsHelper(
@@ -1115,16 +1192,25 @@ const makeUnprovided = <
     update: updateBusinessUnit,
   },
   customers: {
+    customFields: makeCustomerCustomFieldsHelper(
+      options.customTypes?.customers
+    ),
     changes: customerChanges,
     create: createCustomer,
     update: updateCustomer,
   },
   inventory: {
+    customFields: makeInventoryEntryCustomFieldsHelper(
+      options.customTypes?.inventory
+    ),
     changes: inventoryChanges,
     create: createInventoryEntry,
     update: updateInventoryEntry,
   },
   productSelections: {
+    customFields: makeProductSelectionCustomFieldsHelper(
+      options.customTypes?.productSelections
+    ),
     changes: productSelectionChanges,
     create: createProductSelection,
     update: updateProductSelection,
@@ -1139,6 +1225,7 @@ const makeUnprovided = <
   stores: {
     assignProductSelection: assignProductSelectionToStore,
     changes: storeChanges,
+    customFields: makeStoreCustomFieldsHelper(options.customTypes?.stores),
     create: createStore,
     removeProductSelection: removeProductSelectionFromStore,
     update: updateStore,
@@ -1151,15 +1238,35 @@ const makeProvided = <
   const BusinessUnitCustomFieldSchema extends
     | CommercetoolsCustomFieldSchema
     | never = never,
+  const CustomerCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  const InventoryEntryCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  const ProductSelectionCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  const StoreCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
 >(
   options: CommercetoolsDestinationOptions<
     ProductAttributeSchemaRecord,
-    BusinessUnitCustomFieldSchema
+    BusinessUnitCustomFieldSchema,
+    CustomerCustomFieldSchema,
+    InventoryEntryCustomFieldSchema,
+    ProductSelectionCustomFieldSchema,
+    StoreCustomFieldSchema
   >,
   sdkLayer: CommercetoolsSdkLayer
 ): ProvidedCommercetoolsDestination<
   ProductAttributeSchemaRecord,
-  BusinessUnitCustomFieldSchema
+  BusinessUnitCustomFieldSchema,
+  CustomerCustomFieldSchema,
+  InventoryEntryCustomFieldSchema,
+  ProductSelectionCustomFieldSchema,
+  StoreCustomFieldSchema
 > => ({
   businessUnits: {
     customFields: makeBusinessUnitCustomFieldsHelper(
@@ -1170,11 +1277,17 @@ const makeProvided = <
     update: (input) => updateBusinessUnit(input).pipe(Effect.provide(sdkLayer)),
   },
   customers: {
+    customFields: makeCustomerCustomFieldsHelper(
+      options.customTypes?.customers
+    ),
     changes: customerChanges,
     create: (draft) => createCustomer(draft).pipe(Effect.provide(sdkLayer)),
     update: (input) => updateCustomer(input).pipe(Effect.provide(sdkLayer)),
   },
   inventory: {
+    customFields: makeInventoryEntryCustomFieldsHelper(
+      options.customTypes?.inventory
+    ),
     changes: inventoryChanges,
     create: (draft) =>
       createInventoryEntry(draft).pipe(Effect.provide(sdkLayer)),
@@ -1182,6 +1295,9 @@ const makeProvided = <
       updateInventoryEntry(input).pipe(Effect.provide(sdkLayer)),
   },
   productSelections: {
+    customFields: makeProductSelectionCustomFieldsHelper(
+      options.customTypes?.productSelections
+    ),
     changes: productSelectionChanges,
     create: (draft) =>
       createProductSelection(draft).pipe(Effect.provide(sdkLayer)),
@@ -1199,6 +1315,7 @@ const makeProvided = <
     assignProductSelection: (input) =>
       assignProductSelectionToStore(input).pipe(Effect.provide(sdkLayer)),
     changes: storeChanges,
+    customFields: makeStoreCustomFieldsHelper(options.customTypes?.stores),
     create: (draft) => createStore(draft).pipe(Effect.provide(sdkLayer)),
     removeProductSelection: (input) =>
       removeProductSelectionFromStore(input).pipe(Effect.provide(sdkLayer)),
@@ -1212,14 +1329,34 @@ const make = <
   const BusinessUnitCustomFieldSchema extends
     | CommercetoolsCustomFieldSchema
     | never = never,
+  const CustomerCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  const InventoryEntryCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  const ProductSelectionCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
+  const StoreCustomFieldSchema extends
+    | CommercetoolsCustomFieldSchema
+    | never = never,
 >(
   options: CommercetoolsDestinationOptions<
     ProductAttributeSchemaRecord,
-    BusinessUnitCustomFieldSchema
+    BusinessUnitCustomFieldSchema,
+    CustomerCustomFieldSchema,
+    InventoryEntryCustomFieldSchema,
+    ProductSelectionCustomFieldSchema,
+    StoreCustomFieldSchema
   > = {}
 ): UnprovidedCommercetoolsDestination<
   ProductAttributeSchemaRecord,
-  BusinessUnitCustomFieldSchema
+  BusinessUnitCustomFieldSchema,
+  CustomerCustomFieldSchema,
+  InventoryEntryCustomFieldSchema,
+  ProductSelectionCustomFieldSchema,
+  StoreCustomFieldSchema
 > => makeUnprovided(options);
 
 export const CommercetoolsDestination = {

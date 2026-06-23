@@ -6,17 +6,12 @@ import type { ProductUpdateAction } from "./product-actions.ts";
 import type { CommercetoolsProductHelpers as ProductHelpers } from "./product-attributes.ts";
 import {
   hasOptionalResourceIdentifier,
-  hasOptionalResourceIdentifierArray,
   hasRequiredResourceIdentifier,
   isNonEmptySdkUpdateActions,
-  isRecord,
   isResourceIdentifier,
-  isStringRecord,
   ResourceVersionSchema,
 } from "./internal/command-schemas.ts";
 import {
-  hasOptionalProductVariantDraftArrayPriceResourceIdentifiers,
-  hasOptionalProductVariantDraftPriceResourceIdentifiers,
   hasValidProductUpdateActionPriceDraftResourceIdentifiers,
   type ProductPriceDraftInput as InternalProductPriceDraftInput,
   type ProductVariantDraftInput as InternalProductVariantDraftInput,
@@ -29,14 +24,10 @@ import {
   type CommercetoolsProductSelector,
   CommercetoolsProductSelectorSchema,
 } from "./selectors.ts";
-import {
-  type EmptyUpdateActionBuilder,
-  makeUpdateActionFactory,
-  type NonEmptyUpdateActions,
-  type UpdateActionBuilder,
-  type UpdateActionFactory,
-  type UpdateInput,
-  type UpdateWithActionsInput,
+import type {
+  NonEmptyUpdateActions,
+  UpdateInput,
+  UpdateWithActionsInput,
 } from "./update-action-builder.ts";
 
 export type {
@@ -70,24 +61,6 @@ export type ProductUpdateWithActionsInput<
   Action extends ProductUpdateAction = ProductUpdateAction,
 > = UpdateWithActionsInput<CommercetoolsProductSelector, Action>;
 
-export type EmptyProductUpdateActionBuilder = EmptyUpdateActionBuilder<
-  CommercetoolsProductSelector,
-  ProductUpdateAction
->;
-
-export type ProductUpdateActionBuilder<
-  Action extends ProductUpdateAction = ProductUpdateAction,
-> = UpdateActionBuilder<
-  CommercetoolsProductSelector,
-  ProductUpdateAction,
-  Action
->;
-
-export type ProductUpdateFactory = UpdateActionFactory<
-  CommercetoolsProductSelector,
-  ProductUpdateAction
->;
-
 export type CommercetoolsProductAttributeSchemaRecord = object;
 
 export type ProductDraftInput = RefineResourceIdentifierArrayFields<
@@ -113,45 +86,10 @@ export interface CommercetoolsProductHelpers<
 export type { CommercetoolsProductAttributeSchemasInput } from "./product-attributes.ts";
 export type { CommercetoolsProductSelector } from "./selectors.ts";
 
-const isProductTypeResourceIdentifier = isResourceIdentifier("product-type");
 const isCategoryResourceIdentifier = isResourceIdentifier("category");
 const isStateResourceIdentifier = isResourceIdentifier("state");
 const isTaxCategoryResourceIdentifier = isResourceIdentifier("tax-category");
 const isTypeResourceIdentifier = isResourceIdentifier("type");
-
-const isProductDraft = (value: unknown): value is ProductDraftInput =>
-  isRecord(value) &&
-  isProductTypeResourceIdentifier(value.productType) &&
-  hasOptionalResourceIdentifierArray(
-    value,
-    "categories",
-    isCategoryResourceIdentifier
-  ) &&
-  hasOptionalResourceIdentifier(value, "state", isStateResourceIdentifier) &&
-  hasOptionalResourceIdentifier(
-    value,
-    "taxCategory",
-    isTaxCategoryResourceIdentifier
-  ) &&
-  hasOptionalProductVariantDraftPriceResourceIdentifiers(
-    value,
-    "masterVariant"
-  ) &&
-  hasOptionalProductVariantDraftArrayPriceResourceIdentifiers(
-    value,
-    "variants"
-  ) &&
-  isStringRecord(value.name) &&
-  isStringRecord(value.slug);
-
-export const ProductDraftSchema: Schema.Codec<
-  ProductDraftInput,
-  ProductDraftInput,
-  never,
-  never
-> = Schema.declare<ProductDraftInput>(isProductDraft, {
-  identifier: "ProductDraft",
-});
 
 const hasValidProductUpdateActionResourceIdentifiers = (
   action: Readonly<Record<string, unknown>>
@@ -207,11 +145,4 @@ export const ProductUpdateWithActionsInputSchema = Schema.Struct({
   actions: ProductUpdateActionsSchema,
   selector: CommercetoolsProductSelectorSchema,
   version: ResourceVersionSchema,
-});
-
-export const makeProductUpdate = makeUpdateActionFactory<
-  CommercetoolsProductSelector,
-  ProductUpdateAction
->({
-  label: "Product update",
 });

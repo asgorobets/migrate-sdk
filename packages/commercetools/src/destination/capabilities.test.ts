@@ -4,6 +4,7 @@ import type {
   Customer,
   CustomerDraft,
   CustomerSignInResult,
+  CustomFieldsDraft,
   InventoryEntry,
   InventoryEntryDraft,
   Product,
@@ -63,12 +64,45 @@ const RepoBusinessUnitCustomFields = Schema.Struct({
   taxId: Schema.optional(Schema.String),
 });
 
+const RepoCustomerCustomFields = Schema.Struct({
+  acceptsMarketing: Schema.Boolean,
+  externalId: Schema.optional(Schema.String),
+  loyaltyTier: Schema.Literals(["bronze", "silver", "gold"]),
+});
+
+const RepoInventoryEntryCustomFields = Schema.Struct({
+  externalWarehouseId: Schema.optional(Schema.String),
+  fragile: Schema.Boolean,
+  replenishmentZone: Schema.String,
+});
+
+const RepoProductSelectionCustomFields = Schema.Struct({
+  campaignCode: Schema.optional(Schema.String),
+  featured: Schema.Boolean,
+  season: Schema.String,
+});
+
+const RepoStoreCustomFields = Schema.Struct({
+  legacyStoreId: Schema.optional(Schema.String),
+  marketCode: Schema.String,
+  pickupEnabled: Schema.Boolean,
+});
+
 const ProductSelectionDraftForTypes = {
   key: "typed-selection",
   name: {
     "en-US": "Typed selection",
   },
 } satisfies ProductSelectionDraft;
+const CustomerDraftForTypes = {
+  email: "typed-customer@example.com",
+  key: "typed-customer",
+} satisfies CustomerDraft;
+const BusinessUnitDraftForTypes = {
+  key: "typed-business-unit",
+  name: "Typed Business Unit",
+  unitType: "Company",
+} satisfies BusinessUnitDraft;
 const CapabilityModuleForTypes = CommercetoolsDestination.make();
 const ProvidedCapabilityModuleForTypes = CapabilityModuleForTypes.provide(
   makeScriptedCommercetoolsSdk({
@@ -76,6 +110,14 @@ const ProvidedCapabilityModuleForTypes = CapabilityModuleForTypes.provide(
     routes: [],
   }).layer
 );
+const CustomerCustomFieldsModuleForTypes = CommercetoolsDestination.make({
+  customTypes: {
+    customers: {
+      fields: RepoCustomerCustomFields,
+      typeKey: "repoCustomer",
+    },
+  },
+});
 
 expectTypeOf(
   CapabilityModuleForTypes.productSelections.create(
@@ -97,6 +139,63 @@ expectTypeOf(
     ProductSelection,
     DestinationError | Schema.SchemaError,
     Tracking
+  >
+>();
+expectTypeOf(
+  CapabilityModuleForTypes.customers.create(CustomerDraftForTypes)
+).toEqualTypeOf<
+  Effect.Effect<
+    Customer,
+    DestinationError | Schema.SchemaError,
+    CommercetoolsSdk | Tracking
+  >
+>();
+expectTypeOf(
+  CustomerCustomFieldsModuleForTypes.customers.customFields
+    .withFields({
+      acceptsMarketing: true,
+      loyaltyTier: "gold",
+    })
+    .toDraft()
+).toEqualTypeOf<Effect.Effect<CustomFieldsDraft, Schema.SchemaError>>();
+expectTypeOf(
+  ProvidedCapabilityModuleForTypes.customers.update({
+    actions: [{ action: "setFirstName", firstName: "Ada" }],
+    selector: {
+      key: "typed-customer",
+      kind: "key",
+    },
+    version: 1,
+  })
+).toEqualTypeOf<
+  Effect.Effect<Customer, DestinationError | Schema.SchemaError, Tracking>
+>();
+expectTypeOf(
+  ProvidedCapabilityModuleForTypes.businessUnits.create(
+    BusinessUnitDraftForTypes
+  )
+).toEqualTypeOf<
+  Effect.Effect<BusinessUnit, DestinationError | Schema.SchemaError, Tracking>
+>();
+expectTypeOf(
+  CapabilityModuleForTypes.businessUnits.update({
+    actions: [
+      {
+        action: "setContactEmail",
+        contactEmail: "buyer@example.com",
+      },
+    ],
+    selector: {
+      key: "typed-business-unit",
+      kind: "key",
+    },
+    version: 1,
+  })
+).toEqualTypeOf<
+  Effect.Effect<
+    BusinessUnit,
+    DestinationError | Schema.SchemaError,
+    CommercetoolsSdk | Tracking
   >
 >();
 
@@ -339,6 +438,22 @@ describe("CommercetoolsDestination", () => {
               fields: RepoBusinessUnitCustomFields,
               typeKey: "repoBusinessUnit",
             },
+            customers: {
+              fields: RepoCustomerCustomFields,
+              typeKey: "repoCustomer",
+            },
+            inventory: {
+              fields: RepoInventoryEntryCustomFields,
+              typeKey: "repoInventoryEntry",
+            },
+            productSelections: {
+              fields: RepoProductSelectionCustomFields,
+              typeKey: "repoProductSelection",
+            },
+            stores: {
+              fields: RepoStoreCustomFields,
+              typeKey: "repoStore",
+            },
           },
         }).provide(sdk.layer);
 
@@ -367,24 +482,56 @@ describe("CommercetoolsDestination", () => {
                 },
                 version: product.version,
               });
+              const inventoryCustomFields = yield* ct.inventory.customFields
+                .withFields({
+                  fragile: true,
+                  replenishmentZone: "north",
+                })
+                .set("externalWarehouseId", "warehouse-1")
+                .toDraft();
               yield* ct.inventory.create({
+                custom: inventoryCustomFields,
                 quantityOnStock: 5,
                 sku: "sku-1",
               });
+              const inventoryCustomFieldActions =
+                yield* ct.inventory.customFields
+                  .withFields({
+                    fragile: false,
+                    replenishmentZone: "south",
+                  })
+                  .unset("externalWarehouseId")
+                  .toActions();
               yield* ct.inventory.update({
-                actions: [{ action: "changeQuantity", quantity: 6 }],
+                actions: inventoryCustomFieldActions,
                 selector: {
                   key: "inventory-key-1",
                   kind: "key",
                 },
                 version: 1,
               });
+              const customerCustomFields = yield* ct.customers.customFields
+                .withFields({
+                  acceptsMarketing: true,
+                  loyaltyTier: "silver",
+                })
+                .set("externalId", "external-customer-1")
+                .toDraft();
               yield* ct.customers.create({
+                custom: customerCustomFields,
                 email: "customer@example.com",
                 key: "customer-1",
               });
+              const customerCustomFieldActions =
+                yield* ct.customers.customFields
+                  .withFields({
+                    acceptsMarketing: false,
+                    loyaltyTier: "gold",
+                  })
+                  .unset("externalId")
+                  .toActions();
               yield* ct.customers.update({
-                actions: [{ action: "setFirstName", firstName: "Ada" }],
+                actions: customerCustomFieldActions,
                 selector: {
                   key: "customer-1",
                   kind: "key",
@@ -412,9 +559,26 @@ describe("CommercetoolsDestination", () => {
                 },
                 version: 1,
               });
-              const store = yield* ct.stores.create({ key: "store-1" });
+              const storeCustomFields = yield* ct.stores.customFields
+                .withFields({
+                  marketCode: "US",
+                  pickupEnabled: true,
+                })
+                .set("legacyStoreId", "legacy-store-1")
+                .toDraft();
+              const store = yield* ct.stores.create({
+                custom: storeCustomFields,
+                key: "store-1",
+              });
+              const storeCustomFieldActions = yield* ct.stores.customFields
+                .withFields({
+                  marketCode: "CA",
+                  pickupEnabled: false,
+                })
+                .unset("legacyStoreId")
+                .toActions();
               yield* ct.stores.update({
-                actions: [{ action: "setName", name: { "en-US": "Store" } }],
+                actions: storeCustomFieldActions,
                 selector: {
                   key: store.key,
                   kind: "key",
@@ -443,21 +607,31 @@ describe("CommercetoolsDestination", () => {
                 },
                 version: 3,
               });
+              const productSelectionCustomFields =
+                yield* ct.productSelections.customFields
+                  .withFields({
+                    featured: true,
+                    season: "spring",
+                  })
+                  .set("campaignCode", "campaign-1")
+                  .toDraft();
               yield* ct.productSelections.create({
+                custom: productSelectionCustomFields,
                 key: "product-selection-1",
                 name: {
                   "en-US": "Product Selection",
                 },
               });
+              const productSelectionCustomFieldActions =
+                yield* ct.productSelections.customFields
+                  .withFields({
+                    featured: false,
+                    season: "summer",
+                  })
+                  .unset("campaignCode")
+                  .toActions();
               yield* ct.productSelections.update({
-                actions: [
-                  {
-                    action: "changeName",
-                    name: {
-                      "en-US": "Product Selection",
-                    },
-                  },
-                ],
+                actions: productSelectionCustomFieldActions,
                 selector: {
                   key: "product-selection-1",
                   kind: "key",
@@ -547,6 +721,17 @@ describe("CommercetoolsDestination", () => {
           },
           {
             body: {
+              custom: {
+                fields: {
+                  externalWarehouseId: "warehouse-1",
+                  fragile: true,
+                  replenishmentZone: "north",
+                },
+                type: {
+                  key: "repoInventoryEntry",
+                  typeId: "type",
+                },
+              },
               quantityOnStock: 5,
               sku: "sku-1",
             },
@@ -555,7 +740,22 @@ describe("CommercetoolsDestination", () => {
           },
           {
             body: {
-              actions: [{ action: "changeQuantity", quantity: 6 }],
+              actions: [
+                {
+                  action: "setCustomField",
+                  name: "fragile",
+                  value: false,
+                },
+                {
+                  action: "setCustomField",
+                  name: "replenishmentZone",
+                  value: "south",
+                },
+                {
+                  action: "setCustomField",
+                  name: "externalWarehouseId",
+                },
+              ],
               version: 1,
             },
             method: "POST",
@@ -566,6 +766,17 @@ describe("CommercetoolsDestination", () => {
           },
           {
             body: {
+              custom: {
+                fields: {
+                  acceptsMarketing: true,
+                  externalId: "external-customer-1",
+                  loyaltyTier: "silver",
+                },
+                type: {
+                  key: "repoCustomer",
+                  typeId: "type",
+                },
+              },
               email: "customer@example.com",
               key: "customer-1",
             },
@@ -574,7 +785,22 @@ describe("CommercetoolsDestination", () => {
           },
           {
             body: {
-              actions: [{ action: "setFirstName", firstName: "Ada" }],
+              actions: [
+                {
+                  action: "setCustomField",
+                  name: "acceptsMarketing",
+                  value: false,
+                },
+                {
+                  action: "setCustomField",
+                  name: "loyaltyTier",
+                  value: "gold",
+                },
+                {
+                  action: "setCustomField",
+                  name: "externalId",
+                },
+              ],
               version: 1,
             },
             method: "POST",
@@ -621,6 +847,17 @@ describe("CommercetoolsDestination", () => {
           },
           {
             body: {
+              custom: {
+                fields: {
+                  legacyStoreId: "legacy-store-1",
+                  marketCode: "US",
+                  pickupEnabled: true,
+                },
+                type: {
+                  key: "repoStore",
+                  typeId: "type",
+                },
+              },
               key: "store-1",
             },
             method: "POST",
@@ -628,7 +865,22 @@ describe("CommercetoolsDestination", () => {
           },
           {
             body: {
-              actions: [{ action: "setName", name: { "en-US": "Store" } }],
+              actions: [
+                {
+                  action: "setCustomField",
+                  name: "marketCode",
+                  value: "CA",
+                },
+                {
+                  action: "setCustomField",
+                  name: "pickupEnabled",
+                  value: false,
+                },
+                {
+                  action: "setCustomField",
+                  name: "legacyStoreId",
+                },
+              ],
               version: 1,
             },
             method: "POST",
@@ -677,6 +929,17 @@ describe("CommercetoolsDestination", () => {
           },
           {
             body: {
+              custom: {
+                fields: {
+                  campaignCode: "campaign-1",
+                  featured: true,
+                  season: "spring",
+                },
+                type: {
+                  key: "repoProductSelection",
+                  typeId: "type",
+                },
+              },
               key: "product-selection-1",
               name: {
                 "en-US": "Product Selection",
@@ -689,10 +952,18 @@ describe("CommercetoolsDestination", () => {
             body: {
               actions: [
                 {
-                  action: "changeName",
-                  name: {
-                    "en-US": "Product Selection",
-                  },
+                  action: "setCustomField",
+                  name: "featured",
+                  value: false,
+                },
+                {
+                  action: "setCustomField",
+                  name: "season",
+                  value: "summer",
+                },
+                {
+                  action: "setCustomField",
+                  name: "campaignCode",
                 },
               ],
               version: 1,

@@ -41,8 +41,7 @@ Helpers are grouped by Commercetools resource area:
 - `ct.productSelections.create(...)` and `ct.productSelections.update(...)`
 
 Pure builders remain available beside the effectful helpers: product attribute
-builders, Business Unit custom field builders, selectors, and update-action
-builders.
+builders, custom field builders for non-product resources, and selectors.
 
 ```ts
 const product = yield* ct.products.create(draft);
