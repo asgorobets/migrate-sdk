@@ -1480,6 +1480,50 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
+  it.effect("expands rollback dependents only", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const leafResult = yield* runCli(
+        [
+          "rollback",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--with-dependencies",
+          "articles",
+        ],
+        project
+      );
+      const parentResult = yield* runCli(
+        [
+          "rollback",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--with-dependencies",
+          "authors",
+        ],
+        project
+      );
+
+      expect(leafResult.stderr).toBe("");
+      expect(leafResult.exitCode).toBe(0);
+      expect(leafResult.stdout).toContain("Included   articles");
+      expect(leafResult.stdout).not.toContain("Included   articles, authors");
+      expect(parentResult.stderr).toBe("");
+      expect(parentResult.exitCode).toBe(0);
+      expect(parentResult.stdout).toContain("Included   articles, authors");
+      expect(parentResult.stdout).toMatch(articlesAuthorsOrderPattern);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
   it.effect(
     "parses source identity targets and renders duplicate target notices",
     () =>
@@ -1779,7 +1823,7 @@ describe("migrate CLI", () => {
       );
       expect(expandedResult.exitCode).toBe(1);
       expect(expandedResult.stderr).toContain(
-        "Rollback source identity targeting cannot expand required dependencies"
+        "Rollback source identity targeting cannot expand dependencies"
       );
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );

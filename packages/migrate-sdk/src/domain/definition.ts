@@ -452,7 +452,6 @@ export interface MigrationDefinition<
     | undefined,
 > {
   readonly dependencies?: MigrationDefinitionDependencies;
-  readonly dependsOn?: readonly MigrationDefinitionId[];
   readonly execution?: NormalizedMigrationExecutionOptions;
   readonly id: MigrationDefinitionId;
   readonly process: ProcessPipeline<Source, PipelineError, IdentityKey>;
@@ -509,10 +508,9 @@ export interface MigrationDefinitionInput<
       SourceRequirements,
       TrackingContract
     >,
-    "dependencies" | "dependsOn" | "execution" | "id"
+    "dependencies" | "execution" | "id"
   > {
   readonly dependencies?: MigrationDefinitionDependenciesInput;
-  readonly dependsOn?: readonly MigrationDefinitionIdInput[];
   readonly execution?: MigrationExecutionOptions;
   readonly id: MigrationDefinitionIdInput;
 }
@@ -578,13 +576,7 @@ const makeMigrationDefinition = <
   SourceRequirements,
   TrackingContract
 > => {
-  const {
-    dependencies,
-    dependsOn,
-    execution: executionInput,
-    id,
-    ...rest
-  } = definition;
+  const { dependencies, execution: executionInput, id, ...rest } = definition;
   validateProcessAuthoring(definition);
   const execution =
     executionInput === undefined
@@ -592,7 +584,6 @@ const makeMigrationDefinition = <
       : normalizeMigrationExecutionOptions(executionInput);
   const requiredDependencies = normalizeMigrationDefinitionIds([
     ...(dependencies?.required ?? []),
-    ...(dependsOn ?? []),
   ]);
   const optionalDependencies = normalizeMigrationDefinitionIds(
     dependencies?.optional ?? []
@@ -612,9 +603,6 @@ const makeMigrationDefinition = <
           },
         }
       : {}),
-    ...(requiredDependencies.length === 0
-      ? {}
-      : { dependsOn: requiredDependencies }),
   };
 };
 

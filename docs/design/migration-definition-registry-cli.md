@@ -48,8 +48,8 @@ flows can collect definitions elsewhere and then initialize this static registry
 
 ## Definition Dependency Shape
 
-Migration definitions should distinguish required and optional ordering
-dependencies:
+Migration definitions declare ordering dependencies through the `dependencies`
+field:
 
 ```ts
 interface MigrationDefinitionDependenciesInput {
@@ -58,9 +58,9 @@ interface MigrationDefinitionDependenciesInput {
 }
 ```
 
-Required dependencies are hard ordering prerequisites. Optional dependencies are
-ordering preferences when both definitions participate in the same selected run
-or full-registry run.
+Use `required` for hard ordering prerequisites. Use `optional` for ordering
+preferences when both definitions participate in the same selected run or
+full-registry run.
 
 ```ts
 const articles = MigrationDefinition.make({
@@ -69,17 +69,6 @@ const articles = MigrationDefinition.make({
     required: ["authors"],
     optional: ["asset-cleanup"],
   },
-  // source, destination, store, pipeline...
-});
-```
-
-The existing `dependsOn` property can remain a compatibility shorthand for
-`dependencies.required` while the public API transitions:
-
-```ts
-const articles = MigrationDefinition.make({
-  id: "articles",
-  dependsOn: ["authors"],
   // source, destination, store, pipeline...
 });
 ```

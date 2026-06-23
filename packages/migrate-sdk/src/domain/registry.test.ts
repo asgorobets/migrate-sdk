@@ -46,7 +46,6 @@ const ArticleSourceIdentity = SourceIdentity.make({
 
 interface TestDefinitionInput {
   readonly dependencies?: MigrationDefinitionDependenciesInput;
-  readonly dependsOn?: readonly MigrationDefinitionIdInput[];
   readonly execution?: MigrationExecutionOptions;
   readonly id: MigrationDefinitionIdInput;
   readonly rollback?: RollbackPipeline;
@@ -76,7 +75,6 @@ const makeDefinition = (input: TestDefinitionInput) =>
     ...(input.dependencies === undefined
       ? {}
       : { dependencies: input.dependencies }),
-    ...(input.dependsOn === undefined ? {} : { dependsOn: input.dependsOn }),
     ...(input.execution === undefined ? {} : { execution: input.execution }),
     source,
     store,
@@ -94,7 +92,6 @@ const makeStatusDefinition = (
     ...(input.dependencies === undefined
       ? {}
       : { dependencies: input.dependencies }),
-    ...(input.dependsOn === undefined ? {} : { dependsOn: input.dependsOn }),
     source,
     store: input.store,
     process: () => Effect.void,
@@ -188,8 +185,8 @@ describe("MigrationDefinitionRegistry", () => {
     const authors = makeDefinition({ id: "authors" });
     const articles = makeDefinition({
       id: "articles",
-      dependsOn: ["authors"],
       dependencies: {
+        required: ["authors"],
         optional: ["asset-cleanup"],
       },
       rollback: () => Effect.void,
@@ -457,6 +454,50 @@ describe("MigrationDefinitionRegistry", () => {
           notices: [],
           withDependencies: true,
         });
+      })
+  );
+
+  it.effect(
+    "expands rollback dependencies through required dependents",
+    () =>
+      Effect.gen(function* () {
+        const authors = makeDefinition({ id: "authors" });
+        const articles = makeDefinition({
+          id: "articles",
+          dependencies: {
+            required: ["authors"],
+            optional: ["tags"],
+          },
+        });
+        const tags = makeDefinition({ id: "tags" });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [tags, articles, authors] as const,
+        });
+
+        const leafPlan = yield* registry.planRollback({
+          definitionIds: ["articles"],
+          withDependencies: true,
+        });
+        const parentPlan = yield* registry.planRollback({
+          definitionIds: ["authors"],
+          withDependencies: true,
+        });
+
+        expect(leafPlan.includedDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+        ]);
+        expect(leafPlan.executionDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+        ]);
+        expect(parentPlan.includedDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+          toMigrationDefinitionId("authors"),
+        ]);
+        expect(parentPlan.executionDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+          toMigrationDefinitionId("authors"),
+        ]);
+        expect(parentPlan.definitions).toEqual([articles, authors]);
       })
   );
 
@@ -1276,7 +1317,7 @@ describe("MigrationDefinitionRegistry", () => {
       expect(rollbackExpandedTargetError).toEqual(
         new MigrationDefinitionRegistryInvalidSelectionError({
           message:
-            "Rollback source identity targeting cannot expand required dependencies",
+            "Rollback source identity targeting cannot expand dependencies",
         })
       );
 
@@ -1317,7 +1358,7 @@ describe("MigrationDefinitionRegistry", () => {
       expect(rollbackExpandedTargetRunnerError).toEqual(
         new MigrationDefinitionRegistryInvalidSelectionError({
           message:
-            "Rollback source identity targeting cannot expand required dependencies",
+            "Rollback source identity targeting cannot expand dependencies",
         })
       );
     })
@@ -1723,8 +1764,9 @@ describe("MigrationDefinitionRegistry", () => {
         expect(error).toBeInstanceOf(RollbackPreflightError);
         expect(error).toEqual(
           expect.objectContaining({
-            message:
-              "Rollback would leave dependent Migration Definition item state",
+            message: expect.stringContaining(
+              "Rollback would leave dependent Migration Definition item state"
+            ),
           })
         );
         expect(storeState.latestRunStates.size).toBe(0);
@@ -1979,8 +2021,9 @@ describe("MigrationDefinitionRegistry", () => {
         expect(error).toBeInstanceOf(RollbackPreflightError);
         expect(error).toEqual(
           expect.objectContaining({
-            message:
-              "Rollback would leave dependent Migration Definition item state",
+            message: expect.stringContaining(
+              "Rollback would leave dependent Migration Definition item state"
+            ),
           })
         );
         expect(storeState.latestRunStates.size).toBe(0);
@@ -2021,8 +2064,9 @@ describe("MigrationDefinitionRegistry", () => {
         expect(error).toBeInstanceOf(RollbackPreflightError);
         expect(error).toEqual(
           expect.objectContaining({
-            message:
-              "Rollback would leave dependent Migration Definition item state",
+            message: expect.stringContaining(
+              "Rollback would leave dependent Migration Definition item state"
+            ),
           })
         );
         expect(storeState.latestRunStates.size).toBe(0);

@@ -6864,7 +6864,9 @@ describe("runInlineDefinition", () => {
         });
         const articles = MigrationDefinition.make({
           id: "articles",
-          dependsOn: ["authors"],
+          dependencies: {
+            required: ["authors"],
+          },
           source: makeTestInMemorySource({
             items: [
               {
@@ -6937,7 +6939,9 @@ describe("runInlineDefinition", () => {
         });
         const articles = MigrationDefinition.make({
           id: articlesId,
-          dependsOn: [authorsId],
+          dependencies: {
+            required: [authorsId],
+          },
           source: makeTestInMemorySource({
             items: [
               {
@@ -7012,7 +7016,9 @@ describe("runInlineDefinition", () => {
         });
         const articles = MigrationDefinition.make({
           id: articlesId,
-          dependsOn: [authorsId],
+          dependencies: {
+            required: [authorsId],
+          },
           source: makeTestInMemorySource({
             items: [
               {
@@ -7092,7 +7098,9 @@ describe("runInlineDefinition", () => {
         });
         const articles = MigrationDefinition.make({
           id: "articles",
-          dependsOn: ["authors"],
+          dependencies: {
+            required: ["authors"],
+          },
           source: makeTestInMemorySource({
             items: [
               {
@@ -7207,7 +7215,9 @@ describe("runInlineDefinition", () => {
         });
         const articles = MigrationDefinition.make({
           id: "articles",
-          dependsOn: ["authors"],
+          dependencies: {
+            required: ["authors"],
+          },
           source: makeTestInMemorySource({
             items: [
               {
@@ -7255,7 +7265,9 @@ describe("runInlineDefinition", () => {
 
         const articles = MigrationDefinition.make({
           id: "articles",
-          dependsOn: ["authors"],
+          dependencies: {
+            required: ["authors"],
+          },
           source: makeTestInMemorySource({
             items: [
               {
@@ -7301,7 +7313,9 @@ describe("runInlineDefinition", () => {
 
         const authors = MigrationDefinition.make({
           id: "authors",
-          dependsOn: ["articles"],
+          dependencies: {
+            required: ["articles"],
+          },
           source: makeTestInMemorySource({
             items: [
               {
@@ -7319,7 +7333,9 @@ describe("runInlineDefinition", () => {
         });
         const articles = MigrationDefinition.make({
           id: "articles",
-          dependsOn: ["authors"],
+          dependencies: {
+            required: ["authors"],
+          },
           source: makeTestInMemorySource({
             items: [
               {
@@ -7394,7 +7410,9 @@ describe("runInlineDefinition", () => {
         });
         const articles = MigrationDefinition.make({
           id: "articles",
-          dependsOn: ["authors"],
+          dependencies: {
+            required: ["authors"],
+          },
           source: makeTestInMemorySource({
             items: [
               {
@@ -7570,7 +7588,9 @@ describe("runInlineDefinition", () => {
         });
         const articles = MigrationDefinition.make({
           id: "articles",
-          dependsOn: ["authors"],
+          dependencies: {
+            required: ["authors"],
+          },
           source: makeTestInMemorySource({
             items: [
               {
@@ -7716,7 +7736,9 @@ describe("runInlineDefinition", () => {
         });
         const articles = MigrationDefinition.make({
           id: "articles",
-          dependsOn: ["authors"],
+          dependencies: {
+            required: ["authors"],
+          },
           source: makeTestInMemorySource({
             items: [
               {
@@ -8115,7 +8137,9 @@ describe("rollbackInlineRegistry", () => {
         });
         const articles = MigrationDefinition.make({
           id: articlesId,
-          dependsOn: [authorsId],
+          dependencies: {
+            required: [authorsId],
+          },
           source: makeTestInMemorySource({
             items: [],
             sourceSchema: ArticleSource,
@@ -8309,7 +8333,9 @@ describe("rollbackInlineRegistry", () => {
         });
         const articles = MigrationDefinition.make({
           id: articlesId,
-          dependsOn: [authorsId],
+          dependencies: {
+            required: [authorsId],
+          },
           source: makeTestInMemorySource({
             items: [],
             sourceSchema: ArticleSource,
@@ -8329,8 +8355,9 @@ describe("rollbackInlineRegistry", () => {
         expect(error).toBeInstanceOf(RollbackPreflightError);
         expect(error).toEqual(
           expect.objectContaining({
-            message:
-              "Rollback would leave dependent Migration Definition item state",
+            message: expect.stringContaining(
+              "Rollback would leave dependent Migration Definition item state"
+            ),
           })
         );
         expect(acquiredDefinitionIds).toEqual([authorsId]);
@@ -8377,7 +8404,9 @@ describe("rollbackInlineRegistry", () => {
         });
         const articles = MigrationDefinition.make({
           id: articlesId,
-          dependsOn: [authorsId],
+          dependencies: {
+            required: [authorsId],
+          },
           source: makeTestInMemorySource({
             items: [],
             sourceSchema: ArticleSource,
@@ -8428,7 +8457,9 @@ describe("rollbackInlineRegistry", () => {
         });
         const articles = MigrationDefinition.make({
           id: articlesId,
-          dependsOn: [authorsId, commentsId],
+          dependencies: {
+            required: [authorsId, commentsId],
+          },
           source: makeTestInMemorySource({
             items: [],
             sourceSchema: ArticleSource,
@@ -8439,7 +8470,9 @@ describe("rollbackInlineRegistry", () => {
         });
         const comments = MigrationDefinition.make({
           id: commentsId,
-          dependsOn: [articlesId],
+          dependencies: {
+            required: [articlesId],
+          },
           source: makeTestInMemorySource({
             items: [],
             sourceSchema: ArticleSource,
@@ -8528,7 +8561,9 @@ describe("rollbackInlineRegistry", () => {
       });
       const articles = MigrationDefinition.make({
         id: articlesId,
-        dependsOn: [authorsId],
+        dependencies: {
+          required: [authorsId],
+        },
         source: makeTestInMemorySource({
           items: [],
           sourceSchema: ArticleSource,
@@ -8547,8 +8582,9 @@ describe("rollbackInlineRegistry", () => {
       expect(error).toBeInstanceOf(RollbackPreflightError);
       expect(error).toEqual(
         expect.objectContaining({
-          message:
-            "Rollback would leave dependent Migration Definition item state",
+          message: expect.stringContaining(
+            "Rollback would leave dependent Migration Definition item state"
+          ),
         })
       );
       expect(lockObservations).toEqual([]);
@@ -8570,6 +8606,101 @@ describe("rollbackInlineRegistry", () => {
           )
         )
       ).toEqual(articleSkippedState);
+    })
+  );
+
+  it.effect("rolls back a leaf while parent item state remains", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const store = InMemoryMigrationStore.layer(storeState);
+      const authorsId = toMigrationDefinitionId("authors");
+      const articlesId = toMigrationDefinitionId("articles");
+      const rollbackCalls: string[] = [];
+      const authorState = {
+        definitionId: authorsId,
+        lastRunId: toMigrationRunId("run-previous"),
+        sourceIdentity: articleSourceIdentity("author-1"),
+        sourceVersion: toSourceVersion("source-version-1"),
+        status: "migrated" as const,
+        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+      };
+      const articleState = {
+        definitionId: articlesId,
+        lastRunId: toMigrationRunId("run-previous"),
+        sourceIdentity: articleSourceIdentity("article-1"),
+        sourceVersion: toSourceVersion("source-version-1"),
+        status: "migrated" as const,
+        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+      };
+
+      for (const itemState of [authorState, articleState]) {
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey(
+            itemState.definitionId,
+            itemState.sourceIdentity.encoded
+          ),
+          itemState
+        );
+      }
+
+      const authors = MigrationDefinition.make({
+        id: authorsId,
+        source: makeTestInMemorySource({
+          items: [],
+          sourceSchema: ArticleSource,
+        }),
+        store,
+        process: () => Effect.void,
+        rollback: () => {
+          rollbackCalls.push("authors");
+        },
+      });
+      const articles = MigrationDefinition.make({
+        id: articlesId,
+        dependencies: {
+          required: [authorsId],
+        },
+        source: makeTestInMemorySource({
+          items: [],
+          sourceSchema: ArticleSource,
+        }),
+        store,
+        process: () => Effect.void,
+        rollback: () => {
+          rollbackCalls.push("articles");
+        },
+      });
+
+      const summary = yield* rollbackInlineRegistry({
+        definitions: [authors, articles],
+        definitionIds: [articlesId],
+      });
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions).toEqual([
+        {
+          counts: { failed: 0, rolledBack: 1, skipped: 0 },
+          definitionId: articlesId,
+          status: "succeeded",
+        },
+      ]);
+      expect(rollbackCalls).toEqual(["articles"]);
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey(
+            authorsId,
+            authorState.sourceIdentity.encoded
+          )
+        )
+      ).toEqual(authorState);
+      expect(
+        storeState.itemStates.has(
+          InMemoryMigrationStore.itemStateKey(
+            articlesId,
+            articleState.sourceIdentity.encoded
+          )
+        )
+      ).toBe(false);
     })
   );
 
@@ -8621,7 +8752,9 @@ describe("rollbackInlineRegistry", () => {
       });
       const articles = MigrationDefinition.make({
         id: articlesId,
-        dependsOn: [authorsId],
+        dependencies: {
+          required: [authorsId],
+        },
         source: makeTestInMemorySource({
           items: [],
           sourceSchema: ArticleSource,
@@ -8792,7 +8925,9 @@ describe("rollbackInlineRegistry", () => {
         const articlesId = toMigrationDefinitionId("articles");
         const articles = MigrationDefinition.make({
           id: articlesId,
-          dependsOn: ["authors"],
+          dependencies: {
+            required: ["authors"],
+          },
           source: makeTestInMemorySource({
             items: [],
             sourceSchema: ArticleSource,

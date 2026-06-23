@@ -234,7 +234,9 @@ describe("getMigrationStatuses", () => {
       const authors = makeStatusOnlyDefinition(store, "authors");
       const articles = MigrationDefinition.make({
         ...makeStatusOnlyDefinition(store, "articles"),
-        dependsOn: ["authors"],
+        dependencies: {
+          required: ["authors"],
+        },
       });
 
       const report = yield* getMigrationStatuses({

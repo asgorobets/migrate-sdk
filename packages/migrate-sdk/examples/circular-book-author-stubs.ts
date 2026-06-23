@@ -390,8 +390,8 @@ export const makeCircularBookAuthorStubMigrations = () => {
     }),
   });
 
-  // Do not write `dependsOn` here. Books and Authors form a source-level cycle:
-  // Books need Authors, and Authors need popular Books. Running both
+  // Do not declare dependencies here. Books and Authors form a source-level
+  // cycle: Books need Authors, and Authors need popular Books. Running both
   // definitions together lets processes resolve the cycle with lookup-created
   // stubs instead of impossible dependency ordering.
   return {

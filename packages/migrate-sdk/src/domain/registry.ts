@@ -350,8 +350,7 @@ export type MigrationDefinitionRegistryPlanningError =
 
 const definitionRequiredDependencies = (
   definition: AnyMigrationDefinition
-): readonly MigrationDefinitionId[] =>
-  definition.dependencies?.required ?? definition.dependsOn ?? [];
+): readonly MigrationDefinitionId[] => definition.dependencies?.required ?? [];
 
 const definitionOptionalDependencies = (
   definition: AnyMigrationDefinition
@@ -697,6 +696,55 @@ const resolveIncludedDefinitionIds = (
   return includedDefinitionIds;
 };
 
+const resolveRollbackIncludedDefinitionIds = (
+  definitions: readonly AnyMigrationDefinition[],
+  selection: ResolvedRegistrySelection
+): ReadonlySet<MigrationDefinitionId> => {
+  const includedDefinitionIds = new Set<MigrationDefinitionId>(
+    selection.uniqueRequestedDefinitionIds
+  );
+
+  if (!selection.withDependencies) {
+    return includedDefinitionIds;
+  }
+
+  const dependentsByDependency = new Map<
+    MigrationDefinitionId,
+    AnyMigrationDefinition[]
+  >();
+
+  for (const definition of definitions) {
+    for (const dependencyId of definitionRequiredDependencies(definition)) {
+      const dependents = dependentsByDependency.get(dependencyId);
+
+      if (dependents === undefined) {
+        dependentsByDependency.set(dependencyId, [definition]);
+      } else {
+        dependents.push(definition);
+      }
+    }
+  }
+
+  const includeRequiredDependents = (
+    definitionId: MigrationDefinitionId
+  ): void => {
+    for (const dependent of dependentsByDependency.get(definitionId) ?? []) {
+      if (includedDefinitionIds.has(dependent.id)) {
+        continue;
+      }
+
+      includedDefinitionIds.add(dependent.id);
+      includeRequiredDependents(dependent.id);
+    }
+  };
+
+  for (const definitionId of selection.uniqueRequestedDefinitionIds) {
+    includeRequiredDependents(definitionId);
+  }
+
+  return includedDefinitionIds;
+};
+
 const validateExplicitRequiredDependencies = (
   definitionsById: ReadonlyMap<MigrationDefinitionId, AnyMigrationDefinition>,
   selection: ResolvedRegistrySelection
@@ -1035,7 +1083,7 @@ const normalizeRollbackTarget = (
     return Effect.fail(
       new MigrationDefinitionRegistryInvalidSelectionError({
         message:
-          "Rollback source identity targeting cannot expand required dependencies",
+          "Rollback source identity targeting cannot expand dependencies",
       })
     );
   }
@@ -1462,8 +1510,8 @@ export class MigrationDefinitionRegistry<
         selection,
         definitionsById
       );
-      const includedDefinitionIds = resolveIncludedDefinitionIds(
-        definitionsById,
+      const includedDefinitionIds = resolveRollbackIncludedDefinitionIds(
+        definitions,
         selection
       );
       const planDetails = resolveDefinitionPlanDetails(

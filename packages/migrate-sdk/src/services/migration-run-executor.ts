@@ -135,7 +135,11 @@ const unsafeDependentRollbackError = (
   dependentDefinitionId: MigrationDefinitionId
 ) =>
   new RollbackPreflightError({
-    message: "Rollback would leave dependent Migration Definition item state",
+    message: [
+      "Rollback would leave dependent Migration Definition item state",
+      `${definitionId} cannot be rolled back while dependent ${dependentDefinitionId} still has item state.`,
+      `Rollback ${dependentDefinitionId} first, rerun with --with-dependencies, or use --force.`,
+    ].join("\n"),
     cause: { definitionId, dependentDefinitionId },
   });
 
@@ -2642,13 +2646,17 @@ const validateRollbackPipelinePreflight = (
       })
     : Effect.void;
 
+const definitionRequiredDependencies = (
+  definition: AnyMigrationDefinition
+): readonly MigrationDefinitionId[] => definition.dependencies?.required ?? [];
+
 const definitionsByDependency = (
   definitions: readonly AnyMigrationDefinition[]
 ): ReadonlyMap<MigrationDefinitionId, readonly AnyMigrationDefinition[]> => {
   const dependents = new Map<MigrationDefinitionId, AnyMigrationDefinition[]>();
 
   for (const definition of definitions) {
-    for (const dependencyId of definition.dependsOn ?? []) {
+    for (const dependencyId of definitionRequiredDependencies(definition)) {
       const existing = dependents.get(dependencyId);
 
       if (existing === undefined) {
