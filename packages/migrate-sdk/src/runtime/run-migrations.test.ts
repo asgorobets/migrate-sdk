@@ -6899,6 +6899,173 @@ describe("runInlineDefinition", () => {
   );
 
   it.effect(
+    "validates omitted run dependencies from durable state without executing them",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const authorsId = toMigrationDefinitionId("authors");
+        const articlesId = toMigrationDefinitionId("articles");
+        const previousDate = new Date("2026-01-01T00:00:00.000Z");
+        const previousRunId = toMigrationRunId("run-previous");
+        const executionOrder: string[] = [];
+
+        storeState.latestRunStates.set(authorsId, {
+          definitionIds: [authorsId],
+          finishedAt: previousDate,
+          runId: previousRunId,
+          startedAt: previousDate,
+          status: "succeeded",
+        });
+
+        const authors = MigrationDefinition.make({
+          id: authorsId,
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          store,
+          process: (source) =>
+            Effect.sync(() => {
+              executionOrder.push(`authors:${source.identity.encoded}`);
+            }),
+        });
+        const articles = MigrationDefinition.make({
+          id: articlesId,
+          dependsOn: [authorsId],
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: { title: "Dependent article" },
+              },
+            ],
+          }),
+          store,
+          process: (source) =>
+            Effect.sync(() => {
+              executionOrder.push(`articles:${source.identity.encoded}`);
+            }),
+        });
+
+        const summary = yield* runInlineRegistry({
+          definitions: [articles, authors],
+          definitionIds: [articlesId],
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(
+          summary.definitions.map((definition) => definition.definitionId)
+        ).toEqual([articlesId]);
+        expect(executionOrder).toEqual(["articles:article-1"]);
+        expect(storeState.latestRunStates.get(authorsId)).toEqual(
+          expect.objectContaining({
+            runId: previousRunId,
+            status: "succeeded",
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "rejects omitted run dependencies with failed durable state unless forced",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const authorsId = toMigrationDefinitionId("authors");
+        const articlesId = toMigrationDefinitionId("articles");
+        const previousDate = new Date("2026-01-01T00:00:00.000Z");
+        const previousRunId = toMigrationRunId("run-previous");
+        const executionOrder: string[] = [];
+
+        storeState.latestRunStates.set(authorsId, {
+          definitionIds: [authorsId],
+          finishedAt: previousDate,
+          runId: previousRunId,
+          startedAt: previousDate,
+          status: "failed",
+        });
+
+        const authors = MigrationDefinition.make({
+          id: authorsId,
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          store,
+          process: (source) =>
+            Effect.sync(() => {
+              executionOrder.push(`authors:${source.identity.encoded}`);
+            }),
+        });
+        const articles = MigrationDefinition.make({
+          id: articlesId,
+          dependsOn: [authorsId],
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: { title: "Dependent article" },
+              },
+            ],
+          }),
+          store,
+          process: (source) =>
+            Effect.sync(() => {
+              executionOrder.push(`articles:${source.identity.encoded}`);
+            }),
+        });
+
+        const error = yield* Effect.flip(
+          runInlineRegistry({
+            definitions: [articles, authors],
+            definitionIds: [articlesId],
+          })
+        );
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationRuntimeError",
+          })
+        );
+        expect(String(error.message)).toContain(
+          "required dependency state is not satisfied"
+        );
+        expect(String(error.message)).toContain(
+          "authors latest run is failed"
+        );
+        expect(String(error.message)).toContain("--force");
+        expect(executionOrder).toEqual([]);
+        expect(storeState.latestRunStates.get(articlesId)).toBeUndefined();
+
+        const forcedSummary = yield* runInlineRegistry({
+          definitions: [articles, authors],
+          definitionIds: [articlesId],
+          force: true,
+        });
+
+        expect(forcedSummary.status).toBe("succeeded");
+        expect(
+          forcedSummary.definitions.map((definition) => definition.definitionId)
+        ).toEqual([articlesId]);
+        expect(executionOrder).toEqual(["articles:article-1"]);
+      })
+  );
+
+  it.effect(
     "summarizes selected dependencies once when also explicitly selected",
     () =>
       Effect.gen(function* () {
@@ -8403,6 +8570,97 @@ describe("rollbackInlineRegistry", () => {
           )
         )
       ).toEqual(articleSkippedState);
+    })
+  );
+
+  it.effect("force bypasses rollback dependent state preflight", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const store = InMemoryMigrationStore.layer(storeState);
+      const authorsId = toMigrationDefinitionId("authors");
+      const articlesId = toMigrationDefinitionId("articles");
+      const rollbackCalls: string[] = [];
+      const authorState = {
+        definitionId: authorsId,
+        lastRunId: toMigrationRunId("run-previous"),
+        sourceIdentity: articleSourceIdentity("author-1"),
+        sourceVersion: toSourceVersion("source-version-1"),
+        status: "migrated" as const,
+        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+      };
+      const articleState = {
+        definitionId: articlesId,
+        lastRunId: toMigrationRunId("run-previous"),
+        sourceIdentity: articleSourceIdentity("article-1"),
+        sourceVersion: toSourceVersion("source-version-1"),
+        status: "migrated" as const,
+        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+      };
+
+      for (const itemState of [authorState, articleState]) {
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey(
+            itemState.definitionId,
+            itemState.sourceIdentity.encoded
+          ),
+          itemState
+        );
+      }
+
+      const authors = MigrationDefinition.make({
+        id: authorsId,
+        source: makeTestInMemorySource({
+          items: [],
+          sourceSchema: ArticleSource,
+        }),
+        store,
+        process: () => Effect.void,
+        rollback: () => {
+          rollbackCalls.push("authors");
+        },
+      });
+      const articles = MigrationDefinition.make({
+        id: articlesId,
+        dependsOn: [authorsId],
+        source: makeTestInMemorySource({
+          items: [],
+          sourceSchema: ArticleSource,
+        }),
+        store,
+        process: () => Effect.void,
+      });
+
+      const summary = yield* rollbackInlineRegistry({
+        definitions: [authors, articles],
+        definitionIds: [authorsId],
+        force: true,
+      });
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions).toEqual([
+        {
+          counts: { failed: 0, rolledBack: 1, skipped: 0 },
+          definitionId: authorsId,
+          status: "succeeded",
+        },
+      ]);
+      expect(rollbackCalls).toEqual(["authors"]);
+      expect(
+        storeState.itemStates.has(
+          InMemoryMigrationStore.itemStateKey(
+            authorsId,
+            authorState.sourceIdentity.encoded
+          )
+        )
+      ).toBe(false);
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey(
+            articlesId,
+            articleState.sourceIdentity.encoded
+          )
+        )
+      ).toEqual(articleState);
     })
   );
 

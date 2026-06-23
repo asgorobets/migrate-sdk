@@ -223,6 +223,10 @@ const update = Flag.boolean("update").pipe(
   Flag.withDescription("Plan an update run")
 );
 
+const force = Flag.boolean("force").pipe(
+  Flag.withDescription("Bypass Migration Definition dependency preflight")
+);
+
 const id = Flag.string("id").pipe(
   Flag.atMost(Number.MAX_SAFE_INTEGER),
   Flag.optional,
@@ -272,6 +276,7 @@ const makeRunPlanInput = (input: {
   readonly all: boolean;
   readonly definitionIds: readonly string[];
   readonly execution?: MigrationExecutionOptions;
+  readonly force: boolean;
   readonly mode?: "failed" | "skipped";
   readonly sourceIdentities?: readonly string[];
   readonly update: boolean;
@@ -280,11 +285,15 @@ const makeRunPlanInput = (input: {
   const updateInput: { readonly update?: true } = input.update
     ? { update: true }
     : {};
+  const forceInput: { readonly force?: true } = input.force
+    ? { force: true }
+    : {};
 
   if (input.all) {
     return input.definitionIds.length === 0
       ? {
           all: true,
+          ...forceInput,
           ...updateInput,
           ...(input.sourceIdentities === undefined
             ? {}
@@ -298,6 +307,7 @@ const makeRunPlanInput = (input: {
       : ({
           all: true,
           definitionIds: input.definitionIds,
+          ...forceInput,
           ...updateInput,
           ...(input.sourceIdentities === undefined
             ? {}
@@ -314,6 +324,7 @@ const makeRunPlanInput = (input: {
     ? ({} as MigrationDefinitionRegistryRunInput)
     : {
         definitionIds: input.definitionIds as [string, ...string[]],
+        ...forceInput,
         ...updateInput,
         ...(input.sourceIdentities === undefined
           ? {}
@@ -330,13 +341,19 @@ const makeRollbackPlanInput = (input: {
   readonly all: boolean;
   readonly definitionIds: readonly string[];
   readonly execution?: MigrationExecutionOptions;
+  readonly force: boolean;
   readonly sourceIdentities?: readonly string[];
   readonly withDependencies: boolean;
 }): MigrationDefinitionRegistryRollbackInput => {
+  const forceInput: { readonly force?: true } = input.force
+    ? { force: true }
+    : {};
+
   if (input.all) {
     return input.definitionIds.length === 0
       ? {
           all: true,
+          ...forceInput,
           ...(input.sourceIdentities === undefined
             ? {}
             : { sourceIdentities: input.sourceIdentities }),
@@ -348,6 +365,7 @@ const makeRollbackPlanInput = (input: {
       : ({
           all: true,
           definitionIds: input.definitionIds,
+          ...forceInput,
           ...(input.sourceIdentities === undefined
             ? {}
             : { sourceIdentities: input.sourceIdentities }),
@@ -362,6 +380,7 @@ const makeRollbackPlanInput = (input: {
     ? ({} as MigrationDefinitionRegistryRollbackInput)
     : {
         definitionIds: input.definitionIds as [string, ...string[]],
+        ...forceInput,
         ...(input.sourceIdentities === undefined
           ? {}
           : { sourceIdentities: input.sourceIdentities }),
@@ -525,6 +544,7 @@ const runCommand = Command.make(
     definitions: runDefinitions,
     failed,
     id,
+    force,
     plan,
     progress,
     concurrency: processConcurrency,
@@ -572,6 +592,7 @@ const runCommand = Command.make(
         ...(executionOptions === undefined
           ? {}
           : { execution: executionOptions }),
+        force: input.force,
         ...(mode === undefined ? {} : { mode }),
         ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
         update: input.update,
@@ -630,6 +651,7 @@ const rollbackCommand = Command.make(
     all,
     definitions: runDefinitions,
     id,
+    force,
     plan,
     progress,
     concurrency: rollbackConcurrency,
@@ -662,6 +684,7 @@ const rollbackCommand = Command.make(
         ...(executionOptions === undefined
           ? {}
           : { execution: executionOptions }),
+        force: input.force,
         ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
         withDependencies: input.withDependencies,
       });

@@ -58,6 +58,7 @@ export type { MigrationDefinitionRegistryCatalogLookupError } from "./services/m
 export {
   MigrationRollbackExecutor,
   MigrationRunExecutor,
+  validateMigrationRunDependencyPreflight,
 } from "./services/migration-run-executor.ts";
 export type {
   MigrationRollbackExecutorService,

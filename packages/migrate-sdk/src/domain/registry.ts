@@ -78,6 +78,7 @@ export type MigrationDefinitionRegistrySelectionInput =
 export type MigrationDefinitionRegistryRunInput =
   MigrationDefinitionRegistrySelectionInput & {
     readonly execution?: MigrationExecutionOptions;
+    readonly force?: boolean;
     readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
     readonly sourceIdentities?: readonly string[];
     readonly update?: boolean;
@@ -86,6 +87,7 @@ export type MigrationDefinitionRegistryRunInput =
 export type MigrationDefinitionRegistryRollbackInput =
   MigrationDefinitionRegistrySelectionInput & {
     readonly execution?: MigrationExecutionOptions;
+    readonly force?: boolean;
     readonly sourceIdentities?: readonly string[];
   };
 
@@ -118,6 +120,11 @@ type MigrationDefinitionRegistryStatusImplementationEffect = Effect.Effect<
 export interface MigrationDefinitionDependencyEdge {
   readonly fromDefinitionId: MigrationDefinitionId;
   readonly kind: "required" | "optional";
+  readonly toDefinitionId: MigrationDefinitionId;
+}
+
+export interface MigrationDefinitionRequiredDependencyPreflight {
+  readonly fromDefinitionId: MigrationDefinitionId;
   readonly toDefinitionId: MigrationDefinitionId;
 }
 
@@ -179,12 +186,14 @@ export interface MigrationDefinitionRunPlan<
   readonly execution?: MigrationExecutionOptions;
   readonly executionDefinitionIds: readonly MigrationDefinitionId[];
   readonly executionPolicy: readonly MigrationDefinitionExecutionPolicy[];
+  readonly force?: boolean;
   readonly includedDefinitionIds: readonly MigrationDefinitionId[];
   readonly kind: "run";
   readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
   readonly notices: readonly MigrationDefinitionPlanNotice[];
   readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
   readonly registryId?: MigrationDefinitionRegistryId;
+  readonly requiredDependencyPreflight?: readonly MigrationDefinitionRequiredDependencyPreflight[];
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
   readonly target?: MigrationDefinitionPlanTarget;
   readonly update?: boolean;
@@ -202,6 +211,7 @@ export interface MigrationDefinitionExecutableRunPlan<
   Definitions extends
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
 > extends MigrationDefinitionRunPlan<Definitions> {
+  readonly registryDefinitions: readonly AnyMigrationDefinition[];
   readonly request: MigrationDefinitionRegistryRunInput;
   readonly [executableRunPlanTypeId]: "run";
 }
@@ -211,6 +221,7 @@ export interface MigrationDefinitionRollbackPlan {
   readonly execution?: MigrationExecutionOptions;
   readonly executionDefinitionIds: readonly MigrationDefinitionId[];
   readonly executionPolicy: readonly MigrationDefinitionExecutionPolicy[];
+  readonly force?: boolean;
   readonly includedDefinitionIds: readonly MigrationDefinitionId[];
   readonly kind: "rollback";
   readonly notices: readonly MigrationDefinitionPlanNotice[];
@@ -655,10 +666,7 @@ const resolveSelectionInput = (
 const resolveIncludedDefinitionIds = (
   definitionsById: ReadonlyMap<MigrationDefinitionId, AnyMigrationDefinition>,
   selection: ResolvedRegistrySelection
-): Effect.Effect<
-  ReadonlySet<MigrationDefinitionId>,
-  MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError
-> => {
+): ReadonlySet<MigrationDefinitionId> => {
   const includedDefinitionIds = new Set<MigrationDefinitionId>(
     selection.uniqueRequestedDefinitionIds
   );
@@ -684,9 +692,25 @@ const resolveIncludedDefinitionIds = (
     for (const definitionId of selection.uniqueRequestedDefinitionIds) {
       includeRequiredDependencies(definitionId);
     }
-
-    return Effect.succeed(includedDefinitionIds);
   }
+
+  return includedDefinitionIds;
+};
+
+const validateExplicitRequiredDependencies = (
+  definitionsById: ReadonlyMap<MigrationDefinitionId, AnyMigrationDefinition>,
+  selection: ResolvedRegistrySelection
+): Effect.Effect<
+  void,
+  MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError
+> => {
+  if (selection.withDependencies) {
+    return Effect.void;
+  }
+
+  const includedDefinitionIds = new Set<MigrationDefinitionId>(
+    selection.uniqueRequestedDefinitionIds
+  );
 
   for (const definitionId of selection.uniqueRequestedDefinitionIds) {
     const definition = definitionsById.get(definitionId);
@@ -717,7 +741,57 @@ const resolveIncludedDefinitionIds = (
     }
   }
 
-  return Effect.succeed(includedDefinitionIds);
+  return Effect.void;
+};
+
+const collectRequiredDependencyPreflight = (
+  definitionsById: ReadonlyMap<MigrationDefinitionId, AnyMigrationDefinition>,
+  includedDefinitionIds: ReadonlySet<MigrationDefinitionId>
+): readonly MigrationDefinitionRequiredDependencyPreflight[] => {
+  const edges: MigrationDefinitionRequiredDependencyPreflight[] = [];
+  const seenEdgeKeys = new Set<string>();
+  const visitedDefinitionIds = new Set<MigrationDefinitionId>();
+
+  const addEdge = (
+    fromDefinitionId: MigrationDefinitionId,
+    toDefinitionId: MigrationDefinitionId
+  ): void => {
+    const edgeKey = `${fromDefinitionId}\u0000${toDefinitionId}`;
+
+    if (seenEdgeKeys.has(edgeKey)) {
+      return;
+    }
+
+    seenEdgeKeys.add(edgeKey);
+    edges.push({ fromDefinitionId, toDefinitionId });
+  };
+
+  const visit = (definitionId: MigrationDefinitionId): void => {
+    if (visitedDefinitionIds.has(definitionId)) {
+      return;
+    }
+
+    visitedDefinitionIds.add(definitionId);
+
+    const definition = definitionsById.get(definitionId);
+
+    if (definition === undefined) {
+      return;
+    }
+
+    for (const dependencyId of definitionRequiredDependencies(definition)) {
+      if (!includedDefinitionIds.has(dependencyId)) {
+        addEdge(definitionId, dependencyId);
+        visit(dependencyId);
+      }
+    }
+  };
+
+  for (const definitionId of includedDefinitionIds) {
+    visit(definitionId);
+  }
+
+  return edges;
 };
 
 const resolveDefinitionPlanDetails = (
@@ -1142,6 +1216,7 @@ const makeExecutableRunPlan = <
   Definitions extends readonly AnyMigrationDefinition[],
 >(
   plan: MigrationDefinitionRunPlan<Definitions>,
+  registryDefinitions: readonly AnyMigrationDefinition[],
   request: MigrationDefinitionRegistryRunInput
 ): MigrationDefinitionExecutableRunPlan<Definitions> => {
   const executablePlan = {
@@ -1149,6 +1224,10 @@ const makeExecutableRunPlan = <
     [executableRunPlanTypeId]: "run",
   };
 
+  Object.defineProperty(executablePlan, "registryDefinitions", {
+    enumerable: false,
+    value: Object.freeze([...registryDefinitions]),
+  });
   Object.defineProperty(executablePlan, "request", {
     enumerable: false,
     value: request,
@@ -1314,9 +1393,13 @@ export class MigrationDefinitionRegistry<
         selection,
         definitionsById
       );
-      const includedDefinitionIds = yield* resolveIncludedDefinitionIds(
+      const includedDefinitionIds = resolveIncludedDefinitionIds(
         definitionsById,
         selection
+      );
+      const requiredDependencyPreflight = collectRequiredDependencyPreflight(
+        definitionsById,
+        includedDefinitionIds
       );
       const planDetails = resolveDefinitionPlanDetails(
         definitions,
@@ -1344,10 +1427,14 @@ export class MigrationDefinitionRegistry<
         ...(registryId === undefined ? {} : { registryId }),
         ...(target === undefined ? {} : { target }),
         notices: selection.notices,
+        ...(input.force === undefined ? {} : { force: input.force }),
         ...(input.execution === undefined
           ? {}
           : { execution: input.execution }),
         ...(input.mode === undefined ? {} : { mode: input.mode }),
+        ...(requiredDependencyPreflight.length === 0
+          ? {}
+          : { requiredDependencyPreflight }),
         ...(input.update === undefined ? {} : { update: input.update }),
         withDependencies: selection.withDependencies,
       };
@@ -1375,7 +1462,7 @@ export class MigrationDefinitionRegistry<
         selection,
         definitionsById
       );
-      const includedDefinitionIds = yield* resolveIncludedDefinitionIds(
+      const includedDefinitionIds = resolveIncludedDefinitionIds(
         definitionsById,
         selection
       );
@@ -1408,6 +1495,7 @@ export class MigrationDefinitionRegistry<
         ...(registryId === undefined ? {} : { registryId }),
         ...(target === undefined ? {} : { target }),
         notices: selection.notices,
+        ...(input.force === undefined ? {} : { force: input.force }),
         ...(input.execution === undefined
           ? {}
           : { execution: input.execution }),
@@ -1455,7 +1543,8 @@ export class MigrationDefinitionRegistry<
         definitionsById,
         input
       );
-      const includedDefinitionIds = yield* resolveIncludedDefinitionIds(
+      yield* validateExplicitRequiredDependencies(definitionsById, selection);
+      const includedDefinitionIds = resolveIncludedDefinitionIds(
         definitionsById,
         selection
       );
@@ -1535,11 +1624,13 @@ export class ExecutableMigrationDefinitionRegistry<
     | MigrationDefinitionRegistryPlanningError
     | MigrationDefinitionRegistryExecutableError
   > {
+    const registryDefinitions = this.#registry.definitions();
+
     return Effect.flatMap(this.#registry.planRun(input), (plan) =>
       validateExecutableDefinitions(
         plan.definitions,
         this.#missingRequirements
-      ).pipe(Effect.as(makeExecutableRunPlan(plan, input)))
+      ).pipe(Effect.as(makeExecutableRunPlan(plan, registryDefinitions, input)))
     );
   }
 

@@ -994,7 +994,7 @@ describe("MigrationDefinitionRegistry", () => {
   );
 
   it.effect(
-    "rejects unknown and missing required dependencies while planning",
+    "rejects unknown definitions and records omitted required dependency preflight while planning runs",
     () =>
       Effect.gen(function* () {
         const authors = makeDefinition({ id: "authors" });
@@ -1018,10 +1018,26 @@ describe("MigrationDefinitionRegistry", () => {
           })
         );
 
-        const dependencyError = yield* Effect.flip(
-          registry.planRun({ definitionIds: ["articles"] })
+        const dependencyPlan = yield* registry.planRun({
+          definitionIds: ["articles"],
+        });
+        expect(dependencyPlan.includedDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+        ]);
+        expect(dependencyPlan.executionDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+        ]);
+        expect(dependencyPlan.requiredDependencyPreflight).toEqual([
+          {
+            fromDefinitionId: toMigrationDefinitionId("articles"),
+            toDefinitionId: toMigrationDefinitionId("authors"),
+          },
+        ]);
+
+        const statusDependencyError = yield* Effect.flip(
+          registry.status({ definitionIds: ["articles"] })
         );
-        expect(dependencyError).toEqual(
+        expect(statusDependencyError).toEqual(
           new MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError(
             {
               definitionId: toMigrationDefinitionId("articles"),
@@ -1278,22 +1294,18 @@ describe("MigrationDefinitionRegistry", () => {
         })
       );
 
-      const runTargetMissingDependencyError = yield* Effect.flip(
-        MigrationExecution.make({ registry: dependencyRegistry }).run({
-          definitionIds: ["dependent-articles"],
-          sourceIdentities: ["article-1"],
-        })
-      );
-      expect(runTargetMissingDependencyError).toEqual(
-        new MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError(
-          {
-            definitionId: toMigrationDefinitionId("dependent-articles"),
-            message:
-              "Migration Definition selection is missing required dependencies",
-            missingDependencyIds: [toMigrationDefinitionId("authors")],
-          }
-        )
-      );
+      const runTargetMissingDependencyPlan = yield* dependencyRegistry.planRun({
+        definitionIds: ["dependent-articles"],
+        sourceIdentities: ["article-1"],
+      });
+      expect(
+        runTargetMissingDependencyPlan.requiredDependencyPreflight
+      ).toEqual([
+        {
+          fromDefinitionId: toMigrationDefinitionId("dependent-articles"),
+          toDefinitionId: toMigrationDefinitionId("authors"),
+        },
+      ]);
 
       const rollbackExpandedTargetRunnerError = yield* Effect.flip(
         MigrationExecution.make({ registry: dependencyRegistry }).rollback({
@@ -1383,6 +1395,10 @@ describe("MigrationDefinitionRegistry", () => {
       expectTypeOf(
         executablePlan
       ).toMatchTypeOf<MigrationDefinitionExecutableRunPlan>();
+      expect(executablePlan.registryDefinitions).toEqual([articles]);
+      expect(Object.keys(executablePlan)).not.toContain(
+        "registryDefinitions"
+      );
       // @ts-expect-error Ordinary registry plans are not accepted by startRun.
       const rejectedOrdinaryPlanStartInput: Parameters<
         typeof MigrationExecutable.startRun

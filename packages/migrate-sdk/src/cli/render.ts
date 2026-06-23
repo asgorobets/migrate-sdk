@@ -325,6 +325,35 @@ const renderRunExecutionPolicyTable = (
         options
       );
 
+const renderRequiredDependencyPreflightTable = (
+  plan: MigrationDefinitionRunPlan,
+  options: RenderOptions
+): readonly string[] => {
+  const preflight = plan.requiredDependencyPreflight ?? [];
+
+  return preflight.length === 0
+    ? [dim("No omitted required dependencies.", options)]
+    : renderTable(
+        [
+          {
+            align: "right",
+            header: "#",
+            render: (_edge, index) => String(index + 1),
+          },
+          {
+            header: "Migration ID",
+            render: (edge) => edge.toDefinitionId,
+          },
+          {
+            header: "Required By",
+            render: (edge) => edge.fromDefinitionId,
+          },
+        ],
+        preflight,
+        options
+      );
+};
+
 const renderRollbackExecutionPolicyTable = (
   plan: MigrationDefinitionRollbackPlan,
   options: RenderOptions
@@ -385,6 +414,7 @@ const renderNoticeSection = (
 
 const renderPlanScope = (
   input: {
+    readonly force?: boolean;
     readonly includedDefinitionIds: readonly MigrationDefinitionId[];
     readonly mode?: "failed" | "skipped";
     readonly requestedDefinitionIds:
@@ -398,6 +428,7 @@ const renderPlanScope = (
   bold("Scope", options),
   `Requested  ${renderRequestedDefinitionIdsInline(input.requestedDefinitionIds)}`,
   `Included   ${renderDefinitionIdInlineList(input.includedDefinitionIds)}`,
+  ...(input.force === true ? ["Force      yes"] : []),
   ...(input.mode === undefined ? [] : [`Mode       ${input.mode}`]),
   ...(input.update === true ? ["Update     yes"] : []),
   ...(input.sourceIdentities === undefined
@@ -417,6 +448,7 @@ export const renderRunPlan = (
     "",
     ...renderPlanScope(
       {
+        ...(plan.force === undefined ? {} : { force: plan.force }),
         includedDefinitionIds: plan.includedDefinitionIds,
         ...(options.mode === undefined ? {} : { mode: options.mode }),
         requestedDefinitionIds: plan.requestedDefinitionIds,
@@ -430,6 +462,9 @@ export const renderRunPlan = (
     "",
     bold("Execution Order", options),
     ...renderExecutionOrderTable(plan.executionDefinitionIds, options),
+    "",
+    bold("Dependency Preflight", options),
+    ...renderRequiredDependencyPreflightTable(plan, options),
     "",
     bold("Execution Policy", options),
     ...renderRunExecutionPolicyTable(plan, options),
@@ -445,6 +480,7 @@ export const renderRollbackPlan = (
     "",
     ...renderPlanScope(
       {
+        ...(plan.force === undefined ? {} : { force: plan.force }),
         includedDefinitionIds: plan.includedDefinitionIds,
         requestedDefinitionIds: plan.requestedDefinitionIds,
         ...(plan.target === undefined

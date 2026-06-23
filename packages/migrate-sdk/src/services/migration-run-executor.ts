@@ -722,6 +722,105 @@ const validateUpdateRunRequest = (request: {
   return mode.kind === "normal" ? null : invalidUpdateRunModeError(mode);
 };
 
+const runDependencyPreflightFailure = (input: {
+  readonly dependencyId: MigrationDefinitionId;
+  readonly failedItems?: number;
+  readonly requiredByDefinitionId: MigrationDefinitionId;
+  readonly status?: MigrationRunState["status"];
+}) => {
+  const reason =
+    input.status === undefined
+      ? `${input.dependencyId} has no completed Migration Run State`
+      : input.failedItems !== undefined && input.failedItems > 0
+        ? `${input.dependencyId} has failed Migration Item State (failed=${input.failedItems})`
+        : `${input.dependencyId} latest run is ${input.status}`;
+
+  return new MigrationRuntimeError({
+    message: [
+      "Migration Definition required dependency state is not satisfied",
+      `${input.requiredByDefinitionId} requires ${input.dependencyId}, but ${reason}.`,
+      `Run ${input.dependencyId} without failures, rerun with --with-dependencies, or use --force.`,
+    ].join("\n"),
+    cause: input,
+  });
+};
+
+const missingRunDependencyDefinitionError = (
+  dependencyId: MigrationDefinitionId,
+  requiredByDefinitionId: MigrationDefinitionId
+) =>
+  new MigrationRuntimeError({
+    message: "Required dependency was not found in the executable registry plan",
+    cause: { dependencyId, requiredByDefinitionId },
+  });
+
+export const validateMigrationRunDependencyPreflight = (
+  plan: Pick<
+    MigrationDefinitionExecutableRunPlan,
+    "force" | "registryDefinitions" | "requiredDependencyPreflight"
+  >
+): Effect.Effect<void, MigrationRuntimeError | MigrationStoreError> => {
+  if (plan.force === true) {
+    return Effect.void;
+  }
+
+  const preflightEdges = plan.requiredDependencyPreflight ?? [];
+
+  if (preflightEdges.length === 0) {
+    return Effect.void;
+  }
+
+  const registryDefinitionsById = new Map(
+    plan.registryDefinitions.map((definition) => [definition.id, definition])
+  );
+  const checkedDependencyIds = new Set<MigrationDefinitionId>();
+
+  return Effect.gen(function* () {
+    for (const edge of preflightEdges) {
+      if (checkedDependencyIds.has(edge.toDefinitionId)) {
+        continue;
+      }
+
+      checkedDependencyIds.add(edge.toDefinitionId);
+
+      const dependency = registryDefinitionsById.get(edge.toDefinitionId);
+
+      if (dependency === undefined) {
+        return yield* missingRunDependencyDefinitionError(
+          edge.toDefinitionId,
+          edge.fromDefinitionId
+        );
+      }
+
+      yield* Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const latestRun = yield* store.getLatestRunState(dependency.id);
+
+        if (latestRun?.status !== "succeeded") {
+          return yield* runDependencyPreflightFailure({
+            dependencyId: dependency.id,
+            requiredByDefinitionId: edge.fromDefinitionId,
+            ...(latestRun === null ? {} : { status: latestRun.status }),
+          });
+        }
+
+        const itemStateSummary = yield* store.getItemStateSummary(
+          dependency.id
+        );
+
+        if (itemStateSummary.failed > 0) {
+          return yield* runDependencyPreflightFailure({
+            dependencyId: dependency.id,
+            failedItems: itemStateSummary.failed,
+            requiredByDefinitionId: edge.fromDefinitionId,
+            status: latestRun.status,
+          });
+        }
+      }).pipe(Effect.provide(dependency.store));
+    }
+  });
+};
+
 const isTargetedMode = (mode: RunMode): boolean => mode.kind !== "normal";
 
 const shouldReprocessUnchangedTerminal = (mode: RunMode): boolean =>
@@ -2643,6 +2742,7 @@ const executePlannedRollbackDefinitions = <
 >(
   input: {
     readonly execution?: NormalizedMigrationExecutionOptions;
+    readonly force?: boolean;
     readonly registryDefinitions: readonly AnyRollbackMigrationDefinition[];
     readonly rollbackDefinitions: Definitions;
     readonly selectedDefinitionsInRunOrder: readonly AnyRollbackMigrationDefinition[];
@@ -2747,10 +2847,13 @@ const executePlannedRollbackDefinitions = <
       definitionIds,
       runRollbackBody,
       () =>
-        validateRollbackDependencyPreflight(
-          store,
-          input.registryDefinitions,
-          input.selectedDefinitionsInRunOrder
+        (input.force === true
+          ? Effect.void
+          : validateRollbackDependencyPreflight(
+              store,
+              input.registryDefinitions,
+              input.selectedDefinitionsInRunOrder
+            )
         ).pipe(
           Effect.andThen(
             Effect.forEach(
@@ -2790,7 +2893,10 @@ const executePlannedRunDefinitions = <
     readonly definitionIds: readonly MigrationDefinitionId[];
     readonly definitions: Definitions;
     readonly execution?: NormalizedMigrationExecutionOptions;
+    readonly force?: boolean;
     readonly mode: RunMode;
+    readonly registryDefinitions: readonly AnyMigrationDefinition[];
+    readonly requiredDependencyPreflight?: MigrationDefinitionExecutableRunPlan["requiredDependencyPreflight"];
     readonly update?: boolean;
   },
   executionOptions: MigrationRuntimeExecutionOptions = {}
@@ -2852,7 +2958,19 @@ const executePlannedRunDefinitions = <
               };
             })
         ),
-      () => validateMigrationContracts(store, input.definitions),
+      () =>
+        validateMigrationRunDependencyPreflight({
+          ...(input.force === undefined ? {} : { force: input.force }),
+          registryDefinitions: input.registryDefinitions,
+          ...(input.requiredDependencyPreflight === undefined
+            ? {}
+            : {
+                requiredDependencyPreflight:
+                  input.requiredDependencyPreflight,
+              }),
+        }).pipe(
+          Effect.andThen(validateMigrationContracts(store, input.definitions))
+        ),
       executionOptions
     );
 
@@ -2885,6 +3003,7 @@ export const executeMigrationRunPlanInline = <
       ...(plan.execution === undefined
         ? {}
         : { execution: normalizeMigrationExecutionOptions(plan.execution) }),
+      ...(plan.force === undefined ? {} : { force: plan.force }),
       mode:
         plan.target === undefined
           ? (plan.mode ?? normalRunMode)
@@ -2892,6 +3011,10 @@ export const executeMigrationRunPlanInline = <
               kind: "item" as const,
               encodedSourceIdentity: plan.target.sourceIdentities[0],
             },
+      registryDefinitions: plan.registryDefinitions,
+      ...(plan.requiredDependencyPreflight === undefined
+        ? {}
+        : { requiredDependencyPreflight: plan.requiredDependencyPreflight }),
       ...(plan.update === undefined ? {} : { update: plan.update }),
     },
     options
@@ -2928,6 +3051,7 @@ export const executeMigrationRollbackPlanInline = (
       ...(plan.execution === undefined
         ? {}
         : { execution: normalizeMigrationExecutionOptions(plan.execution) }),
+      ...(plan.force === undefined ? {} : { force: plan.force }),
       ...(plan.target === undefined ? {} : { target: plan.target }),
     },
     options

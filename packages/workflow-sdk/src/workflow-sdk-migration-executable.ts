@@ -18,6 +18,7 @@ import {
   makeMigrationRollbackExecutionEnvelope,
   makeMigrationRunExecutionEnvelope,
   type RollbackRunSummary,
+  validateMigrationRunDependencyPreflight,
 } from "migrate-sdk";
 import type { Run, StartOptions } from "workflow/api";
 
@@ -352,16 +353,20 @@ export const WorkflowSdkMigrationExecutable = {
   layer: (input: WorkflowSdkMigrationExecutableLayerOptions) =>
     Layer.succeed(MigrationExecutable, {
       startRun: (plan: MigrationDefinitionExecutableRunPlan) => {
-        return Effect.flatMap(
-          validateSharedStore(plan.definitions),
-          (storeLayer) =>
-            startDurablePlan<MigrationRunSummary>({
-              input,
-              makeEnvelope: (runId, locks) =>
-                makeMigrationRunExecutionEnvelope(plan, { locks, runId }),
-              scopeDefinitionIds: plan.includedDefinitionIds,
-              storeLayer,
-            })
+        return validateMigrationRunDependencyPreflight(plan).pipe(
+          Effect.andThen(
+            Effect.flatMap(
+              validateSharedStore(plan.definitions),
+              (storeLayer) =>
+                startDurablePlan<MigrationRunSummary>({
+                  input,
+                  makeEnvelope: (runId, locks) =>
+                    makeMigrationRunExecutionEnvelope(plan, { locks, runId }),
+                  scopeDefinitionIds: plan.includedDefinitionIds,
+                  storeLayer,
+                })
+            )
+          )
         );
       },
       startRollback: (plan: MigrationDefinitionExecutableRollbackPlan) => {

@@ -40,6 +40,7 @@ export type InlineRegistryRunInput<
 > = InlineRegistrySelectionInput & {
   readonly definitions: Definitions;
   readonly execution?: MigrationExecutionOptions;
+  readonly force?: boolean;
   readonly mode?: RunModeInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
@@ -53,6 +54,7 @@ export type InlineRegistryRollbackInput<
 > = InlineRegistrySelectionInput & {
   readonly definitions: Definitions;
   readonly execution?: MigrationExecutionOptions;
+  readonly force?: boolean;
   readonly sourceIdentities?: readonly string[];
   readonly sourceIdentityKeys?: readonly RollbackMigrationDefinitionSourceIdentityKey<
     Definitions[number]
@@ -117,6 +119,7 @@ const runRequestInput = <Definitions extends readonly AnyMigrationDefinition[]>(
     return {
       ...selection,
       ...(input.execution === undefined ? {} : { execution: input.execution }),
+      ...(input.force === undefined ? {} : { force: input.force }),
       sourceIdentities: [sourceIdentityKeyToText(input.mode.sourceIdentityKey)],
       ...(input.update === undefined ? {} : { update: input.update }),
     };
@@ -125,6 +128,7 @@ const runRequestInput = <Definitions extends readonly AnyMigrationDefinition[]>(
   return {
     ...selection,
     ...(input.execution === undefined ? {} : { execution: input.execution }),
+    ...(input.force === undefined ? {} : { force: input.force }),
     ...(input.mode === undefined ? {} : { mode: input.mode }),
     ...(input.sourceIdentities === undefined
       ? {}
@@ -152,6 +156,7 @@ const rollbackRequestInput = <
   return {
     ...selection,
     ...(input.execution === undefined ? {} : { execution: input.execution }),
+    ...(input.force === undefined ? {} : { force: input.force }),
     ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
   };
 };

@@ -298,6 +298,7 @@ export type {
   MigrationExecutableService,
 } from "./services/migration-executable.ts";
 export { MigrationExecution } from "./services/migration-execution.ts";
+export { validateMigrationRunDependencyPreflight } from "./services/migration-run-executor.ts";
 export type {
   BoundMigrationExecutionService,
   MigrationExecutionMakeInput,

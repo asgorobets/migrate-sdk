@@ -23,6 +23,7 @@ const binPath = fileURLToPath(
 const tagsAuthorsArticlesOrderPattern =
   /1\s+tags[\s\S]*2\s+authors[\s\S]*3\s+articles/;
 const singleTagsRowPattern = /1\s+tags/;
+const singleArticlesRowPattern = /1\s+articles/;
 const articlesAuthorsOrderPattern = /1\s+articles[\s\S]*2\s+authors/;
 const authorsArticlesOrderPattern = /1\s+authors[\s\S]*2\s+articles/;
 const articlesAuthorsTagsOrderPattern =
@@ -1089,7 +1090,7 @@ describe("migrate CLI", () => {
   );
 
   it.effect(
-    "renders missing required dependency suggestions for run plans",
+    "renders omitted required dependencies as run preflight",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -1105,24 +1106,20 @@ describe("migrate CLI", () => {
           project
         );
 
-        expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain(
-          "Migration Definition selection is missing required dependencies"
-        );
-        expect(result.stderr).toContain(
-          "articles is missing required dependencies: authors"
-        );
-        expect(result.stderr).toContain(
-          "migrate run --plan --with-dependencies articles"
-        );
-        expect(result.stderr).toContain("migrate run --plan authors articles");
-        expect(result.stderr).not.toContain(
-          "MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError"
-        );
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Run Plan");
+        expect(result.stdout).toContain("Requested  articles");
+        expect(result.stdout).toContain("Included   articles");
+        expect(result.stdout).toContain("Dependency Preflight");
+        expect(result.stdout).toContain("authors");
+        expect(result.stdout).toContain("articles");
+        expect(result.stdout).toMatch(singleArticlesRowPattern);
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
-  it.effect("preserves run mode flags in missing dependency suggestions", () =>
+  it.effect("preserves run mode flags in dependency preflight plans", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const project = yield* makeProject;
@@ -1144,17 +1141,18 @@ describe("migrate CLI", () => {
         project
       );
 
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain(
-        "migrate run --plan --failed --with-dependencies articles"
-      );
-      expect(result.stderr).toContain(
-        "migrate run --plan --failed authors articles"
-      );
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run Plan");
+      expect(result.stdout).toContain("Mode       failed");
+      expect(result.stdout).toContain("Dependency Preflight");
+      expect(result.stdout).toContain("authors");
+      expect(result.stdout).toContain("articles");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
-  it.effect("preserves update flags in missing dependency suggestions", () =>
+  it.effect("preserves update flags in dependency preflight plans", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const project = yield* makeProject;
@@ -1176,18 +1174,19 @@ describe("migrate CLI", () => {
         project
       );
 
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain(
-        "migrate run --plan --update --with-dependencies articles"
-      );
-      expect(result.stderr).toContain(
-        "migrate run --plan --update authors articles"
-      );
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run Plan");
+      expect(result.stdout).toContain("Update     yes");
+      expect(result.stdout).toContain("Dependency Preflight");
+      expect(result.stdout).toContain("authors");
+      expect(result.stdout).toContain("articles");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
   it.effect(
-    "does not render missing dependency suggestions for targeted plans",
+    "renders targeted selected-only plans without dependency suggestions",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -1223,18 +1222,32 @@ describe("migrate CLI", () => {
           project
         );
 
-        for (const result of [runResult, rollbackResult]) {
-          expect(result.exitCode).toBe(1);
-          expect(result.stderr).toContain(
-            "Migration Definition selection is missing required dependencies"
-          );
-          expect(result.stderr).toContain(
-            "articles is missing required dependencies: authors"
-          );
-          expect(result.stderr).not.toContain("Try:");
-          expect(result.stderr).not.toContain("--with-dependencies");
-          expect(result.stderr).not.toContain("authors articles");
-        }
+        expect(runResult.stderr).toBe("");
+        expect(runResult.cause).toBe("");
+        expect(runResult.exitCode).toBe(0);
+        expect(runResult.stdout).toContain("Run Plan");
+        expect(runResult.stdout).toContain("Included   articles");
+        expect(runResult.stdout).toContain(
+          "Target source identities article-1"
+        );
+        expect(runResult.stdout).toContain("Dependency Preflight");
+        expect(runResult.stdout).toContain("authors");
+        expect(runResult.stdout).not.toContain("Try:");
+
+        expect(rollbackResult.stderr).toBe("");
+        expect(rollbackResult.cause).toBe("");
+        expect(rollbackResult.exitCode).toBe(0);
+        expect(rollbackResult.stdout).toContain("Rollback Plan");
+        expect(rollbackResult.stdout).toContain("Included   articles");
+        expect(rollbackResult.stdout).toContain(
+          "Target source identities article-1"
+        );
+        expect(rollbackResult.stdout).not.toContain("Try:");
+        expect(
+          rollbackResult.stdout.slice(
+            rollbackResult.stdout.lastIndexOf("Rollback Plan")
+          )
+        ).not.toContain("Dependency Preflight");
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -1334,7 +1347,7 @@ describe("migrate CLI", () => {
   );
 
   it.effect(
-    "renders rollback missing dependency suggestions with dependency expansion first",
+    "renders selected-only rollback plans without dependency expansion",
     () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -1349,18 +1362,16 @@ describe("migrate CLI", () => {
           ["rollback", "--config", "migrate.config.ts", "--plan", "articles"],
           project
         );
-        const expansionSuggestion =
-          "migrate rollback --plan --with-dependencies articles";
-        const explicitSuggestion = "migrate rollback --plan authors articles";
 
-        expect(result.exitCode).toBe(1);
-        expect(result.stderr).toContain(
-          "Migration Definition selection is missing required dependencies"
-        );
-        expect(result.stderr.indexOf(expansionSuggestion)).toBeGreaterThan(-1);
-        expect(result.stderr.indexOf(expansionSuggestion)).toBeLessThan(
-          result.stderr.indexOf(explicitSuggestion)
-        );
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Rollback Plan");
+        expect(result.stdout).toContain("Requested  articles");
+        expect(result.stdout).toContain("Included   articles");
+        expect(result.stdout).toMatch(singleArticlesRowPattern);
+        expect(result.stdout).not.toContain("Try:");
+        expect(result.stdout).not.toContain("Included   articles, authors");
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -1896,6 +1907,32 @@ describe("migrate CLI", () => {
       expect(result.stdout).toMatch(selectedRunSummaryPattern);
       expect(result.stdout).not.toContain("tags          succeeded");
       expect(getExecutionProbe().executions).toEqual(["authors", "articles"]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("forces selected run definitions past dependency preflight", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        yield* readCliFixture("execution.config.ts")
+      );
+
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--force", "articles"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run Completed succeeded");
+      expect(result.stdout).toMatch(articleRunSummaryPattern);
+      expect(result.stdout).not.toContain("authors       succeeded");
+      expect(getExecutionProbe().executions).toEqual(["articles"]);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -2914,7 +2951,33 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
-  it.effect("rejects invalid execution selections before runtime work", () =>
+  it.effect("forces rollback past dependent state preflight", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        yield* readCliFixture("rollback-execution.config.ts")
+      );
+
+      const result = yield* runCli(
+        ["rollback", "--config", "migrate.config.ts", "--force", "authors"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Rollback Completed succeeded");
+      expect(result.stdout).toContain("authors       succeeded");
+      expect(result.stdout).not.toContain("articles     succeeded");
+      expect(getExecutionProbe().executions).toEqual(["rollback:authors"]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("validates omitted run dependencies before runtime work", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const project = yield* makeProject;
@@ -2933,8 +2996,12 @@ describe("migrate CLI", () => {
 
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain(
-        "Migration Definition selection is missing required dependencies"
+        "Migration Definition required dependency state is not satisfied"
       );
+      expect(result.stderr).toContain(
+        "articles requires authors, but authors has no completed Migration Run State"
+      );
+      expect(result.stderr).toContain("--force");
       expect(result.stderr).not.toContain("Run completed");
       expect(probe.executions).toEqual([]);
       expect(probe.storeState.latestRunStates.size).toBe(0);

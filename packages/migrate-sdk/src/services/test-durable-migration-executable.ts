@@ -1,5 +1,8 @@
 import { Effect, Exit, Layer, Schema } from "effect";
-import { MigrationStoreError } from "../domain/errors.ts";
+import {
+  MigrationRuntimeError,
+  MigrationStoreError,
+} from "../domain/errors.ts";
 import {
   type MigrationExecutionEnvelope,
   type MigrationExecutionEnvelopeMissingRegistryIdError,
@@ -24,6 +27,7 @@ import type {
   MigrationRunSummary,
 } from "../domain/run.ts";
 import { MigrationExecutable } from "./migration-executable.ts";
+import { validateMigrationRunDependencyPreflight } from "./migration-run-executor.ts";
 import { MigrationStore } from "./migration-store.ts";
 
 const TestDurableExecutionHandle = Schema.Struct({
@@ -78,6 +82,7 @@ type TestDurableMigrationExecutableError =
   | TestDurableMigrationExecutableStartRejectedError
   | TestDurableMigrationExecutableAttachError
   | MigrationExecutionEnvelopeMissingRegistryIdError
+  | MigrationRuntimeError
   | MigrationStoreError;
 
 const releaseLocks = (
@@ -292,13 +297,17 @@ export const TestDurableMigrationExecutable = {
           );
         }
 
-        return startDurablePlan<MigrationRunSummary>({
-          makeEnvelope: (runId, locks) =>
-            makeMigrationRunExecutionEnvelope(plan, { locks, runId }),
-          scopeDefinitionIds: plan.includedDefinitionIds,
-          state,
-          storeLayer: firstDefinition.store,
-        });
+        return validateMigrationRunDependencyPreflight(plan).pipe(
+          Effect.andThen(
+            startDurablePlan<MigrationRunSummary>({
+              makeEnvelope: (runId, locks) =>
+                makeMigrationRunExecutionEnvelope(plan, { locks, runId }),
+              scopeDefinitionIds: plan.includedDefinitionIds,
+              state,
+              storeLayer: firstDefinition.store,
+            })
+          )
+        );
       },
       startRollback: (plan: MigrationDefinitionExecutableRollbackPlan) => {
         const firstDefinition = plan.definitions[0];
