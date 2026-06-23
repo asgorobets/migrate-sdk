@@ -48,7 +48,7 @@
   },
   "peerDependencies": {
     "effect": "catalog:",
-    "migrate-sdk": "workspace:^",
+    "migrate-sdk": "workspace:>=0.1.0 <1.0.0",
     "workflow": "^4.5.0"
   },
   "devDependencies": {
