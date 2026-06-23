@@ -1,5 +1,11 @@
 # migrate-sdk
 
+## 0.3.0
+
+### Minor Changes
+
+- 6b37d1b: Add ability to break the migration lock and display lock status in migration status
+
 ## 0.2.0
 
 ### Minor Changes
