@@ -1,6 +1,10 @@
 {
   "name": "@migrate-sdk/monorepo",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/asgorobets/migrate-sdk"
+  },
   "scripts": {
     "build": "turbo run build",
     "build-packages": "turbo run build --filter=migrate-sdk --filter=@migrate-sdk/commercetools --filter=@migrate-sdk/workflow-sdk",

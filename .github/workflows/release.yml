@@ -41,16 +41,6 @@ jobs:
       - name: Validate packages
         run: pnpm run validate-packages
 
-      - name: Upload package build outputs
-        uses: actions/upload-artifact@v4
-        with:
-          name: package-build-output
-          if-no-files-found: error
-          path: |
-            packages/migrate-sdk/dist
-            packages/commercetools/dist
-            packages/workflow-sdk/dist
-
   release:
     name: Release
     needs: validate
@@ -81,11 +71,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Download package build outputs
-        uses: actions/download-artifact@v4
-        with:
-          name: package-build-output
-          path: .
+      - name: Build package outputs
+        run: pnpm run build-packages
 
       - name: Create release PR or publish packages
         id: changesets

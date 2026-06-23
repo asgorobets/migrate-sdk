@@ -3,6 +3,11 @@
   "version": "0.2.0",
   "type": "module",
   "sideEffects": [],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/asgorobets/migrate-sdk",
+    "directory": "packages/commercetools"
+  },
   "files": [
     "src/**/*.ts",
     "!src/**/*.test.ts",
