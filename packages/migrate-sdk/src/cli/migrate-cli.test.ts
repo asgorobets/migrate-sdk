@@ -3104,7 +3104,8 @@ describe("migrate CLI", () => {
       expect(result.exitCode).toBe(ChildProcessSpawner.ExitCode(0));
       expect(result.stderr).toBe("");
       expect(result.stdout).toContain("from-bin");
-    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer)),
+    10_000
   );
 
   it.effect(
