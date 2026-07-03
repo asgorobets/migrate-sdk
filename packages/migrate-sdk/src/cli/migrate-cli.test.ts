@@ -146,91 +146,165 @@ const readCliFixture = (name: string) =>
     )
   );
 
+const tsDefinitionFixtureSource = (
+  processExpression = "() => undefined"
+): string => `
+  const CliFixtureSource = Schema.Struct({ id: Schema.NonEmptyString });
+  const cliFixtureSourceIdentity = SourceIdentity.make({
+    id: "cli-fixture@v1",
+    schema: SourceIdentity.key("id", Schema.NonEmptyString)
+  });
+  const cliFixtureSource = InMemorySource.make({
+    batchSize: 1,
+    identity: cliFixtureSourceIdentity,
+    sourceSchema: CliFixtureSource,
+    items: []
+  });
+  const cliFixtureStore = InMemoryMigrationStore.layer(InMemoryMigrationStore.makeState());
+
+  interface DefinitionFixtureInput {
+    readonly dependencies?: {
+      readonly required?: readonly string[];
+      readonly optional?: readonly string[];
+    };
+    readonly rollback?: () => undefined;
+  }
+
+  const definition = (id: string, input: DefinitionFixtureInput = {}) =>
+    MigrationDefinition.make({
+      id,
+      source: cliFixtureSource,
+      store: cliFixtureStore,
+      process: ${processExpression},
+      ...input
+    });
+`;
+
+const jsDefinitionFixtureSource = (): string => `
+  const CliFixtureSource = Schema.Struct({ id: Schema.NonEmptyString });
+  const cliFixtureSourceIdentity = SourceIdentity.make({
+    id: "cli-fixture@v1",
+    schema: SourceIdentity.key("id", Schema.NonEmptyString)
+  });
+  const cliFixtureSource = InMemorySource.make({
+    batchSize: 1,
+    identity: cliFixtureSourceIdentity,
+    sourceSchema: CliFixtureSource,
+    items: []
+  });
+  const cliFixtureStore = InMemoryMigrationStore.layer(InMemoryMigrationStore.makeState());
+
+  const definition = (id, input = {}) =>
+    MigrationDefinition.make({
+      id,
+      source: cliFixtureSource,
+      store: cliFixtureStore,
+      process: () => undefined,
+      ...input
+    });
+`;
+
 const configSource = (definitionId: string): string => `
-  import { MigrationDefinitionRegistry, toMigrationDefinitionId } from "migrate-sdk";
+  import {
+    InMemoryMigrationStore,
+    InMemorySource,
+    MigrationDefinition,
+    MigrationDefinitionRegistry,
+    SourceIdentity
+  } from "migrate-sdk";
+  import { Schema } from "effect";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  ${tsDefinitionFixtureSource()}
 
   export default defineMigrationCliConfig({
     registry: MigrationDefinitionRegistry.make({
-      definitions: [{ id: toMigrationDefinitionId("${definitionId}") }] as never
+      definitions: [definition("${definitionId}")]
     })
   });
 `;
 
 const jsConfigSource = (definitionId: string): string => `
-  import { MigrationDefinitionRegistry, toMigrationDefinitionId } from "migrate-sdk";
+  import {
+    InMemoryMigrationStore,
+    InMemorySource,
+    MigrationDefinition,
+    MigrationDefinitionRegistry,
+    SourceIdentity
+  } from "migrate-sdk";
+  import { Schema } from "effect";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
+
+  ${jsDefinitionFixtureSource()}
 
   export default defineMigrationCliConfig({
     registry: MigrationDefinitionRegistry.make({
-      definitions: [{ id: toMigrationDefinitionId("${definitionId}") }]
+      definitions: [definition("${definitionId}")]
     })
   });
 `;
 
 const graphConfigSource = (): string => `
-  import { MigrationDefinitionRegistry, toMigrationDefinitionId } from "migrate-sdk";
+  import {
+    InMemoryMigrationStore,
+    InMemorySource,
+    MigrationDefinition,
+    MigrationDefinitionRegistry,
+    SourceIdentity
+  } from "migrate-sdk";
+  import { Schema } from "effect";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
-  const definition = (id: string, input: Record<string, unknown> = {}) => ({
-    id: toMigrationDefinitionId(id),
-    ...input
-  });
+  ${tsDefinitionFixtureSource()}
 
   const authors = definition("authors");
   const articles = definition("articles", {
     dependencies: {
-      required: [toMigrationDefinitionId("authors")],
+      required: ["authors"],
       optional: [
-        toMigrationDefinitionId("images"),
-        toMigrationDefinitionId("article-tags")
+        "images",
+        "article-tags"
       ]
     }
   });
   const articleTags = definition("article-tags", {
     dependencies: {
       required: [],
-      optional: [toMigrationDefinitionId("articles")]
+      optional: ["articles"]
     }
   });
   const comments = definition("comments", {
     dependencies: {
-      required: [toMigrationDefinitionId("articles")],
+      required: ["articles"],
       optional: []
     }
   });
 
   export default defineMigrationCliConfig({
     registry: MigrationDefinitionRegistry.make({
-      definitions: [authors, articles, articleTags, comments] as never
+      definitions: [authors, articles, articleTags, comments]
     })
   });
 `;
 
 const planConfigSource = (): string => `
-  import { MigrationDefinitionRegistry, SourceIdentity, toMigrationDefinitionId } from "migrate-sdk";
+  import {
+    InMemoryMigrationStore,
+    InMemorySource,
+    MigrationDefinition,
+    MigrationDefinitionRegistry,
+    SourceIdentity
+  } from "migrate-sdk";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
   import { Schema } from "effect";
 
-  const identity = SourceIdentity.make({
-    id: "plan-fixture@v1",
-    schema: SourceIdentity.key("id", Schema.NonEmptyString)
-  });
-
-  const definition = (id: string, input: Record<string, unknown> = {}) => ({
-    id: toMigrationDefinitionId(id),
-    source: { identity },
-    process: () => {
-      throw new Error(id + " executed");
-    },
-    ...input
-  });
+  ${tsDefinitionFixtureSource("() => { throw new Error(\"definition executed\"); }")}
 
   const authors = definition("authors");
   const articles = definition("articles", {
     dependencies: {
-      required: [toMigrationDefinitionId("authors")],
-      optional: [toMigrationDefinitionId("tags")]
+      required: ["authors"],
+      optional: ["tags"]
     },
     rollback: () => undefined
   });
@@ -240,29 +314,30 @@ const planConfigSource = (): string => `
 
   export default defineMigrationCliConfig({
     registry: MigrationDefinitionRegistry.make({
-      definitions: [tags, articles, authors] as never
+      definitions: [tags, articles, authors]
     })
   });
 `;
 
 const planNoticeConfigSource = (): string => `
-  import { MigrationDefinitionRegistry, toMigrationDefinitionId } from "migrate-sdk";
+  import {
+    InMemoryMigrationStore,
+    InMemorySource,
+    MigrationDefinition,
+    MigrationDefinitionRegistry,
+    SourceIdentity
+  } from "migrate-sdk";
+  import { Schema } from "effect";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
-  const definition = (id: string, optional: readonly string[] = []) => ({
-    id: toMigrationDefinitionId(id),
-    dependencies: {
-      required: [],
-      optional: optional.map(toMigrationDefinitionId)
-    }
-  });
+  ${tsDefinitionFixtureSource()}
 
   export default defineMigrationCliConfig({
     registry: MigrationDefinitionRegistry.make({
       definitions: [
-        definition("articles", ["tags"]),
-        definition("tags", ["articles"])
-      ] as never
+        definition("articles", { dependencies: { required: [], optional: ["tags"] } }),
+        definition("tags", { dependencies: { required: [], optional: ["articles"] } })
+      ]
     })
   });
 `;
@@ -389,26 +464,30 @@ describe("migrate CLI", () => {
         yield* fs.writeFileString(
           `${project}/migrate.config.ts`,
           `
-          import { MigrationDefinitionRegistry, toMigrationDefinitionId } from "migrate-sdk";
+          import {
+            InMemoryMigrationStore,
+            InMemorySource,
+            MigrationDefinition,
+            MigrationDefinitionRegistry,
+            SourceIdentity
+          } from "migrate-sdk";
+          import { Schema } from "effect";
           import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
-          const definition = (id: string, input: Record<string, unknown> = {}) => ({
-            id: toMigrationDefinitionId(id),
-            ...input
-          });
+          ${tsDefinitionFixtureSource()}
 
           const authors = definition("authors");
           const articles = definition("articles", {
             dependencies: {
-              required: [toMigrationDefinitionId("authors")],
-              optional: [toMigrationDefinitionId("images")]
+              required: ["authors"],
+              optional: ["images"]
             },
             rollback: () => undefined
           });
 
           export default defineMigrationCliConfig({
             registry: MigrationDefinitionRegistry.make({
-              definitions: [authors, articles] as never
+              definitions: [authors, articles]
             })
           });
         `
@@ -553,16 +632,7 @@ describe("migrate CLI", () => {
 
       yield* fs.writeFileString(
         `${project}/migrate.config.ts`,
-        `
-          import { MigrationDefinitionRegistry, toMigrationDefinitionId } from "migrate-sdk";
-          import { defineMigrationCliConfig } from "migrate-sdk/cli";
-
-          export default defineMigrationCliConfig({
-            registry: MigrationDefinitionRegistry.make({
-              definitions: [{ id: toMigrationDefinitionId("standalone") }] as never
-            })
-          });
-        `
+        configSource("standalone")
       );
 
       const result = yield* runCli(
@@ -3414,23 +3484,24 @@ describe("migrate CLI", () => {
         yield* fs.writeFileString(
           configPath,
           `
-          import { MigrationDefinitionRegistry, toMigrationDefinitionId } from "migrate-sdk";
+          import {
+            InMemoryMigrationStore,
+            InMemorySource,
+            MigrationDefinition,
+            MigrationDefinitionRegistry,
+            SourceIdentity
+          } from "migrate-sdk";
+          import { Schema } from "effect";
           import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
-          const definition = (id: string, required: readonly string[]) => ({
-            dependencies: {
-              required: required.map(toMigrationDefinitionId),
-              optional: []
-            },
-            id: toMigrationDefinitionId(id)
-          });
+          ${tsDefinitionFixtureSource()}
 
           export default defineMigrationCliConfig({
             registry: MigrationDefinitionRegistry.make({
               definitions: [
-                definition("articles", ["authors"]),
-                definition("articles", ["images"])
-              ] as never
+                definition("articles", { dependencies: { required: ["authors"], optional: [] } }),
+                definition("articles", { dependencies: { required: ["images"], optional: [] } })
+              ]
             })
           });
         `
@@ -3543,10 +3614,19 @@ describe("migrate CLI", () => {
       yield* fs.writeFileString(
         `${configDirectory}/registry.ts`,
         `
-          import { MigrationDefinitionRegistry, toMigrationDefinitionId } from "migrate-sdk";
+          import {
+            InMemoryMigrationStore,
+            InMemorySource,
+            MigrationDefinition,
+            MigrationDefinitionRegistry,
+            SourceIdentity
+          } from "migrate-sdk";
+          import { Schema } from "effect";
+
+          ${tsDefinitionFixtureSource()}
 
           export const registry = MigrationDefinitionRegistry.make({
-            definitions: [{ id: toMigrationDefinitionId("relative-import") }] as never
+            definitions: [definition("relative-import")]
           });
         `
       );

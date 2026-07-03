@@ -1644,9 +1644,14 @@ describe("MigrationDefinitionRegistry", () => {
         expect(executablePlan).toEqual(
           expect.objectContaining({
             kind: "rollback",
-            definitions: [articles],
             executionDefinitionIds: [toMigrationDefinitionId("articles")],
           })
+        );
+        expect(
+          executablePlan.definitions.map((definition) => definition.definition)
+        ).toEqual([articles]);
+        expect(executablePlan.definitions[0]?.rollback).toEqual(
+          expect.any(Function)
         );
         expectTypeOf(
           executablePlan

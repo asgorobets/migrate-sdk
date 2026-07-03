@@ -2,7 +2,6 @@ import { Effect, Layer } from "effect";
 import { Service } from "effect/Context";
 import type { MigrationDefinitionRegistryIdInput } from "../domain/ids.ts";
 import type {
-  MigrationDefinitionExecutableRollbackPlan,
   MigrationDefinitionExecutableRunPlan,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryExecutableError,
@@ -154,9 +153,7 @@ const makeCatalogExecution = (
       const registry = yield* catalog.get(input.registryId);
       const plan = yield* registry.executable().planRollback(input);
 
-      return yield* executable.startRollback(
-        plan as MigrationDefinitionExecutableRollbackPlan
-      );
+      return yield* executable.startRollback(plan);
     })
   ),
   run: Effect.fn("MigrationExecution.run")((input) =>

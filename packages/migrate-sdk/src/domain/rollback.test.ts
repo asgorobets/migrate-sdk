@@ -5,6 +5,7 @@ import {
   MigrationDefinition,
   type MigrationDefinitionId,
   type MigrationItemState,
+  type MigrationItemStateWithTrackingRecord,
   type MigrationRunId,
   type MigrationStore,
   type MigrationStoreError,
@@ -15,6 +16,7 @@ import {
   RollbackRequestError,
   RollbackRunSummary,
   type SourceIdentitySnapshotKey,
+  type TrackingRecord,
   TrackingRecordContract,
   toMigrationDefinitionId,
   toMigrationRunId,
@@ -49,6 +51,10 @@ const articleTracking = TrackingRecordContract.make({
   id: "article-tracking",
   schema: ArticleTrackingRecord,
 });
+const articleRollbackPipeline: RollbackPipeline<
+  never,
+  MigrationItemStateWithTrackingRecord<ArticleTrackingRecord>
+> = () => Effect.void;
 
 describe("rollback public API", () => {
   it("normalizes rollback request and option inputs", () => {
@@ -207,6 +213,11 @@ expectTypeOf<Parameters<RollbackPipeline>[0]>().toEqualTypeOf<
 >();
 const effectVoidRollbackPipeline: RollbackPipeline = () => Effect.void;
 expectTypeOf(effectVoidRollbackPipeline).toEqualTypeOf<RollbackPipeline>();
+// @ts-expect-error RollbackPipeline item state parameters are intentionally strict.
+const genericRollbackPipeline: RollbackPipeline<
+  never,
+  MigrationItemStateWithTrackingRecord<TrackingRecord>
+> = articleRollbackPipeline;
 expectTypeOf<RollbackContext>().toEqualTypeOf<{
   readonly definitionId: MigrationDefinitionId;
   readonly runId: MigrationRunId;

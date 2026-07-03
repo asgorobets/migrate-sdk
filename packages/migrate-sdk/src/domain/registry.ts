@@ -1,5 +1,10 @@
 import { Effect, Option, Schema } from "effect";
 import { getMigrationStatuses } from "../runtime/get-migration-statuses.ts";
+import type { Tracking } from "../services/tracking.ts";
+import type {
+  MigrationDefinition,
+  MigrationDefinitionForRuntime,
+} from "./definition.ts";
 import type {
   MigrationExecutionOptions,
   PipelineExecutionConcurrency,
@@ -19,7 +24,12 @@ import {
   toMigrationDefinitionId,
   toMigrationDefinitionRegistryId,
 } from "./ids.ts";
-import type { AnyRollbackMigrationDefinition } from "./rollback.ts";
+import type {
+  AnyRollbackMigrationDefinition,
+  MigrationDefinitionRollbackPipelineError,
+  RollbackContext,
+  RollbackPipeline,
+} from "./rollback.ts";
 import type {
   AnyMigrationDefinition,
   RunRequestSourceLayerError,
@@ -27,12 +37,44 @@ import type {
 } from "./run.ts";
 import type { RunModeInput } from "./run-mode.ts";
 import type {
+  MigrationItemState,
+  MigrationItemStateForTrackingContract,
+} from "./state.ts";
+import type {
   GetMigrationStatusesError,
   MigrationStatusReport,
 } from "./status.ts";
+import type { TrackingRecordContract } from "./tracking.ts";
 
 type AnyRollbackMigrationDefinitions =
   readonly AnyRollbackMigrationDefinition[];
+
+type MigrationDefinitionTrackingContract<Definition> =
+  Definition extends MigrationDefinition<
+    infer _Source,
+    infer _PipelineError,
+    infer _Cursor,
+    infer _IdentityKey,
+    infer _RollbackPipelineError,
+    infer _SourceInput,
+    infer _SourceLayerError,
+    infer _SourceRequirements,
+    infer TrackingContract
+  >
+    ? TrackingContract
+    : Definition extends MigrationDefinitionForRuntime<
+          infer _Source,
+          infer _PipelineError,
+          infer _Cursor,
+          infer _IdentityKey,
+          infer _RollbackPipelineError,
+          infer _SourceInput,
+          infer _SourceLayerError,
+          infer _SourceRequirements,
+          infer TrackingContract
+        >
+      ? TrackingContract
+      : TrackingRecordContract | undefined;
 
 export interface MigrationDefinitionRegistryInput<
   Definitions extends
@@ -216,6 +258,15 @@ export interface MigrationDefinitionExecutableRunPlan<
   readonly [executableRunPlanTypeId]: "run";
 }
 
+export interface ExecutableRollbackDefinition {
+  readonly definition: AnyRollbackMigrationDefinition;
+  readonly rollback?: (
+    itemState: MigrationItemState,
+    context: RollbackContext
+  ) => void | Effect.Effect<void, unknown, Tracking>;
+  readonly tracking?: TrackingRecordContract | undefined;
+}
+
 export interface MigrationDefinitionRollbackPlan {
   readonly definitions: readonly AnyRollbackMigrationDefinition[];
   readonly execution?: MigrationExecutionOptions;
@@ -232,10 +283,22 @@ export interface MigrationDefinitionRollbackPlan {
   readonly withDependencies: boolean;
 }
 
-export interface MigrationDefinitionExecutableRollbackPlan
-  extends MigrationDefinitionRollbackPlan {
+export interface MigrationDefinitionExecutableRollbackPlan {
+  readonly definitions: readonly ExecutableRollbackDefinition[];
+  readonly execution?: MigrationExecutionOptions;
+  readonly executionDefinitionIds: readonly MigrationDefinitionId[];
+  readonly executionPolicy: readonly MigrationDefinitionExecutionPolicy[];
+  readonly force?: boolean;
+  readonly includedDefinitionIds: readonly MigrationDefinitionId[];
+  readonly kind: "rollback";
+  readonly notices: readonly MigrationDefinitionPlanNotice[];
+  readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
   readonly registryDefinitions: readonly AnyRollbackMigrationDefinition[];
+  readonly registryId?: MigrationDefinitionRegistryId;
+  readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
   readonly request: MigrationDefinitionRegistryRollbackInput;
+  readonly target?: MigrationDefinitionPlanTarget;
+  readonly withDependencies: boolean;
   readonly [executableRollbackPlanTypeId]: "rollback";
 }
 
@@ -1147,11 +1210,13 @@ const collectConstructionIssues = (
   const duplicateDefinitionIds = new Set<MigrationDefinitionId>();
 
   for (const definition of definitions) {
-    if (definitionIds.has(definition.id)) {
-      duplicateDefinitionIds.add(definition.id);
+    const definitionId = definition.id;
+
+    if (definitionIds.has(definitionId)) {
+      duplicateDefinitionIds.add(definitionId);
     }
 
-    definitionIds.add(definition.id);
+    definitionIds.add(definitionId);
   }
 
   for (const definitionId of duplicateDefinitionIds) {
@@ -1260,6 +1325,44 @@ const freezeEntry = (
     }),
   });
 
+const hasRollbackPipeline = (definition: {
+  readonly rollback?: unknown;
+}): boolean => typeof definition.rollback === "function";
+
+const makeExecutableRollbackDefinition = <
+  Definition extends AnyRollbackMigrationDefinition,
+>(
+  definition: Definition
+): ExecutableRollbackDefinition => {
+  const rollback = definition.rollback;
+  type TrackingContract = MigrationDefinitionTrackingContract<Definition>;
+  const tracking = definition.tracking as TrackingRecordContract | undefined;
+
+  return Object.freeze({
+    definition,
+    ...(typeof rollback === "function"
+      ? {
+          rollback: (itemState: MigrationItemState, context: RollbackContext) =>
+            (
+              rollback as RollbackPipeline<
+                MigrationDefinitionRollbackPipelineError<Definition>,
+                MigrationItemStateForTrackingContract<TrackingContract>
+              >
+            )(
+              itemState as MigrationItemStateForTrackingContract<TrackingContract>,
+              context
+            ),
+        }
+      : {}),
+    ...(tracking === undefined ? {} : { tracking }),
+  });
+};
+
+const makeExecutableRollbackDefinitions = (
+  definitions: readonly AnyRollbackMigrationDefinition[]
+): readonly ExecutableRollbackDefinition[] =>
+  Object.freeze(definitions.map(makeExecutableRollbackDefinition));
+
 const makeExecutableRunPlan = <
   Definitions extends readonly AnyMigrationDefinition[],
 >(
@@ -1267,23 +1370,23 @@ const makeExecutableRunPlan = <
   registryDefinitions: readonly AnyMigrationDefinition[],
   request: MigrationDefinitionRegistryRunInput
 ): MigrationDefinitionExecutableRunPlan<Definitions> => {
-  const executablePlan = {
+  const executablePlan: MigrationDefinitionExecutableRunPlan<Definitions> = {
     ...plan,
+    registryDefinitions: Object.freeze([...registryDefinitions]),
+    request,
     [executableRunPlanTypeId]: "run",
   };
 
   Object.defineProperty(executablePlan, "registryDefinitions", {
     enumerable: false,
-    value: Object.freeze([...registryDefinitions]),
+    value: executablePlan.registryDefinitions,
   });
   Object.defineProperty(executablePlan, "request", {
     enumerable: false,
-    value: request,
+    value: executablePlan.request,
   });
 
-  return Object.freeze(
-    executablePlan
-  ) as MigrationDefinitionExecutableRunPlan<Definitions>;
+  return Object.freeze(executablePlan);
 };
 
 const makeExecutableRollbackPlan = (
@@ -1291,23 +1394,24 @@ const makeExecutableRollbackPlan = (
   registryDefinitions: readonly AnyRollbackMigrationDefinition[],
   request: MigrationDefinitionRegistryRollbackInput
 ): MigrationDefinitionExecutableRollbackPlan => {
-  const executablePlan = {
+  const executablePlan: MigrationDefinitionExecutableRollbackPlan = {
     ...plan,
+    definitions: makeExecutableRollbackDefinitions(plan.definitions),
+    registryDefinitions: Object.freeze([...registryDefinitions]),
+    request,
     [executableRollbackPlanTypeId]: "rollback",
   };
 
   Object.defineProperty(executablePlan, "registryDefinitions", {
     enumerable: false,
-    value: Object.freeze([...registryDefinitions]),
+    value: executablePlan.registryDefinitions,
   });
   Object.defineProperty(executablePlan, "request", {
     enumerable: false,
-    value: request,
+    value: executablePlan.request,
   });
 
-  return Object.freeze(
-    executablePlan
-  ) as MigrationDefinitionExecutableRollbackPlan;
+  return Object.freeze(executablePlan);
 };
 
 const validateExecutableDefinitions = (
@@ -1358,9 +1462,7 @@ export class MigrationDefinitionRegistry<
   ) {
     validateConstruction(definitions);
 
-    this.#definitions = Object.freeze([
-      ...definitions,
-    ]) as unknown as Definitions;
+    this.#definitions = Object.freeze([...definitions]) as unknown as Definitions;
     this.#id = id;
     this.#missingRequirements = missingRequirements;
     this.#definitionsById = new Map(
@@ -1374,7 +1476,7 @@ export class MigrationDefinitionRegistry<
             optional: definitionOptionalDependencies(definition),
             required: definitionRequiredDependencies(definition),
           },
-          hasRollback: definition.rollback !== undefined,
+          hasRollback: hasRollbackPipeline(definition),
         })
       )
     );

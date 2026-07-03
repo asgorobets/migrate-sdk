@@ -7986,6 +7986,90 @@ describe("rollbackInlineDefinition", () => {
     })
   );
 
+  it.effect(
+    "fails rollback before calling the pipeline when tracking evidence is invalid",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const definitionId = toMigrationDefinitionId("articles");
+        const sourceIdentity = toEncodedSourceIdentity("article-rollback");
+        const itemStateKey = InMemoryMigrationStore.itemStateKey(
+          definitionId,
+          sourceIdentity
+        );
+        const tracking = Tracking.record({
+          id: "article-views@v1",
+          schema: ArticleViewsTrackingRecord,
+        });
+        let rollbackCalled = false;
+
+        seedTrackingMigrationContract(storeState, "articles", tracking);
+        storeState.itemStates.set(itemStateKey, {
+          definitionId,
+          lastRunId: toMigrationRunId("run-previous"),
+          sourceIdentity: SourceIdentity.fromEncoded(
+            ArticleSourceIdentity,
+            sourceIdentity
+          ),
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "migrated" as const,
+          trackingRecord: {
+            entryId: 123,
+            views: "42",
+          },
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        });
+
+        const definition = MigrationDefinition.make({
+          id: definitionId,
+          source: makeTestInMemorySource({
+            items: [],
+            sourceSchema: ArticleSource,
+          }),
+          store,
+          tracking,
+          process: () => Effect.void,
+          rollback: () =>
+            Effect.sync(() => {
+              rollbackCalled = true;
+            }),
+        });
+
+        const summary = yield* rollbackInlineDefinition(definition);
+        const itemState = storeState.itemStates.get(itemStateKey);
+
+        expect(summary.status).toBe("failed");
+        expect(summary.definitions[0]?.counts).toEqual({
+          rolledBack: 0,
+          failed: 1,
+          skipped: 0,
+        });
+        expect(rollbackCalled).toBe(false);
+        expect(itemState).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            trackingRecord: {
+              entryId: 123,
+              views: "42",
+            },
+          })
+        );
+        expect(itemState?.journal?.rollbackAttempts).toHaveLength(1);
+        expect(itemState?.journal?.rollbackAttempts[0]).toEqual(
+          expect.objectContaining({
+            entries: [],
+            runId: summary.runId,
+            error: expect.objectContaining({
+              errorTag: "TrackingRecordContractError",
+              kind: "tracking",
+              message: "Tracking record did not match Tracking Record Contract",
+            }),
+          })
+        );
+      })
+  );
+
   it.effect("clears the Source Cursor when rollback finds no item state", () =>
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();

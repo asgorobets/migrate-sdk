@@ -208,6 +208,7 @@ export type {
   MigrationDefinitionRollbackPlan,
   MigrationDefinitionRunPlan,
   MigrationRuntimeRequirement,
+  ExecutableRollbackDefinition,
 } from "./domain/registry.ts";
 
 export {
@@ -247,6 +248,7 @@ export type {
   MigrationItemOutcome,
   MigrationItemStateBase,
   MigrationItemStateForTrackingContract,
+  MigrationItemStateWithTrackingRecord,
 } from "./domain/state.ts";
 
 export {

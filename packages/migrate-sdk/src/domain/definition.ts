@@ -516,6 +516,35 @@ export type MigrationDefinition<
 > &
   MigrationDefinitionTracking<TrackingContract>;
 
+// Runtime code carries definitions without calling the author rollback callback
+// directly. Executable rollback plans carry the callback with its contract.
+export type MigrationDefinitionForRuntime<
+  Source,
+  PipelineError = never,
+  Cursor = unknown,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+  RollbackPipelineError = PipelineError,
+  SourceInput = Source,
+  SourceLayerError = never,
+  SourceRequirements = never,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
+> = Omit<
+  MigrationDefinition<
+    Source,
+    PipelineError,
+    Cursor,
+    IdentityKey,
+    RollbackPipelineError,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements,
+    TrackingContract
+  >,
+  "rollback"
+> & {
+  readonly rollback?: unknown;
+};
+
 export interface MigrationDefinitionDependencies {
   readonly optional: readonly MigrationDefinitionId[];
   readonly required: readonly MigrationDefinitionId[];
@@ -703,7 +732,7 @@ function makeMigrationDefinition<
   const hasDependencies =
     requiredDependencies.length > 0 || optionalDependencies.length > 0;
 
-  return {
+  const normalizedDefinition = {
     ...rest,
     ...(execution === undefined ? {} : { execution }),
     id: toMigrationDefinitionId(id),
@@ -727,6 +756,7 @@ function makeMigrationDefinition<
     SourceRequirements,
     TrackingContract
   >;
+  return normalizedDefinition;
 }
 
 export const MigrationDefinition = {

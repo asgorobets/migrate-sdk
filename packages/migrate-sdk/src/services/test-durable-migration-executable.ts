@@ -310,8 +310,8 @@ export const TestDurableMigrationExecutable = {
         );
       },
       startRollback: (plan: MigrationDefinitionExecutableRollbackPlan) => {
-        const firstDefinition = plan.definitions[0];
-        if (firstDefinition === undefined) {
+        const firstExecutableDefinition = plan.definitions[0];
+        if (firstExecutableDefinition === undefined) {
           return Effect.die(
             new Error(
               "Test durable migration executable requires at least one selected migration definition"
@@ -324,7 +324,7 @@ export const TestDurableMigrationExecutable = {
             makeMigrationRollbackExecutionEnvelope(plan, { locks, runId }),
           scopeDefinitionIds: plan.includedDefinitionIds,
           state,
-          storeLayer: firstDefinition.store,
+          storeLayer: firstExecutableDefinition.definition.store,
         });
       },
     }),

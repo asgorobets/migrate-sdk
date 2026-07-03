@@ -1,6 +1,9 @@
 import { type Effect, Schema } from "effect";
 import type { Tracking } from "../services/tracking.ts";
-import type { MigrationDefinition } from "./definition.ts";
+import type {
+  MigrationDefinition,
+  MigrationDefinitionForRuntime,
+} from "./definition.ts";
 import { RollbackRequestError } from "./errors.ts";
 import type {
   MigrationExecutionOptions,
@@ -17,7 +20,6 @@ import {
   toMigrationDefinitionId,
 } from "./ids.ts";
 import type { MigrationItemState } from "./state.ts";
-import type { TrackingRecordContract } from "./tracking.ts";
 
 export interface RollbackContext {
   readonly definitionId: MigrationDefinitionId;
@@ -32,18 +34,13 @@ export const RollbackContext = Schema.Struct({
 export type RollbackPipeline<
   RollbackError = never,
   ItemState extends MigrationItemState = MigrationItemState,
-> = {
-  // Rollback definitions are stored in heterogeneous registries, then decoded
-  // back to their contract-specific item state immediately before invocation.
-  bivarianceHack(
-    state: ItemState,
-    context: RollbackContext
-  ): void | Effect.Effect<void, RollbackError, Tracking>;
-}["bivarianceHack"];
+> = (
+  state: ItemState,
+  context: RollbackContext
+) => void | Effect.Effect<void, RollbackError, Tracking>;
 
-type AnyRollbackMigrationDefinitionForTracking<
-  TrackingContract extends TrackingRecordContract | undefined,
-> = MigrationDefinition<
+export type AnyRollbackMigrationDefinition =
+  MigrationDefinitionForRuntime<
   // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous rollback requests.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Forward process error is not relevant to rollback request shape.
@@ -60,12 +57,9 @@ type AnyRollbackMigrationDefinitionForTracking<
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Source requirements are not relevant to rollback request shape.
   any,
-  TrackingContract
+  // biome-ignore lint/suspicious/noExplicitAny: Tracking contract is existential across heterogeneous rollback requests.
+  any
 >;
-
-export type AnyRollbackMigrationDefinition =
-  | AnyRollbackMigrationDefinitionForTracking<undefined>
-  | AnyRollbackMigrationDefinitionForTracking<TrackingRecordContract>;
 
 export type MigrationDefinitionRollbackPipelineError<Definition> =
   Definition extends MigrationDefinition<
@@ -80,7 +74,19 @@ export type MigrationDefinitionRollbackPipelineError<Definition> =
     infer _TrackingContract
   >
     ? RollbackPipelineError
-    : never;
+    : Definition extends MigrationDefinitionForRuntime<
+          infer _Source,
+          infer _PipelineError,
+          infer _Cursor,
+          infer _IdentityKey,
+          infer RollbackPipelineError,
+          infer _SourceInput,
+          infer _SourceLayerError,
+          infer _SourceRequirements,
+          infer _TrackingContract
+        >
+      ? RollbackPipelineError
+      : never;
 
 export type RollbackMigrationDefinitionSourceIdentityKey<Definition> =
   Definition extends MigrationDefinition<
@@ -95,7 +101,19 @@ export type RollbackMigrationDefinitionSourceIdentityKey<Definition> =
     infer _TrackingContract
   >
     ? IdentityKey
-    : never;
+    : Definition extends MigrationDefinitionForRuntime<
+          infer _Source,
+          infer _PipelineError,
+          infer _Cursor,
+          infer IdentityKey,
+          infer _RollbackPipelineError,
+          infer _SourceInput,
+          infer _SourceLayerError,
+          infer _SourceRequirements,
+          infer _TrackingContract
+        >
+      ? IdentityKey
+      : never;
 
 export interface RollbackRequest<
   Definitions extends

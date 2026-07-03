@@ -50,7 +50,7 @@ export const normalizeItemError = (
   message: errorMessage(error),
 });
 
-export const sourcePayloadSchemaErrorTag = "SourcePayloadSchemaError";
+const sourcePayloadSchemaErrorTag = "SourcePayloadSchemaError";
 
 const maxSchemaErrorDetails = 5;
 
@@ -139,7 +139,7 @@ export const normalizeSourcePayloadSchemaError = (
   details: schemaErrorDetails(error),
 });
 
-export const trackingRecordContractErrorTag = "TrackingRecordContractError";
+const trackingRecordContractErrorTag = "TrackingRecordContractError";
 
 const trackingRecordContractDetails = (
   contract: TrackingRecordContract,
