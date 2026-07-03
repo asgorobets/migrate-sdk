@@ -41,6 +41,7 @@ import {
   makeSourceItemEffect,
   normalizeSourceItemTotalInput,
 } from "./source.ts";
+import type { MigrationItemStateForTrackingContract } from "./state.ts";
 import type { TrackingRecordContract } from "./tracking.ts";
 
 const configuredSourceTypeId: unique symbol = Symbol.for(
@@ -420,9 +421,10 @@ export type ProcessPipeline<
   Source,
   ProcessError,
   IdentityKey extends SourceIdentitySnapshotKey,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
 > = (
   source: SourceItem<Source, IdentityKey>,
-  context: ProcessContext
+  context: ProcessContext<TrackingContract>
 ) => void | Effect.Effect<
   void,
   ProcessError | SkipItem,
@@ -438,7 +440,7 @@ export interface DestinationStubContext {
   readonly runId: MigrationRunId;
 }
 
-export interface MigrationDefinition<
+interface MigrationDefinitionBase<
   Source,
   PipelineError = never,
   Cursor = unknown,
@@ -447,15 +449,21 @@ export interface MigrationDefinition<
   SourceInput = Source,
   SourceLayerError = never,
   SourceRequirements = never,
-  TrackingContract extends TrackingRecordContract | undefined =
-    | TrackingRecordContract
-    | undefined,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
 > {
   readonly dependencies?: MigrationDefinitionDependencies;
   readonly execution?: NormalizedMigrationExecutionOptions;
   readonly id: MigrationDefinitionId;
-  readonly process: ProcessPipeline<Source, PipelineError, IdentityKey>;
-  readonly rollback?: RollbackPipeline<RollbackPipelineError>;
+  readonly process: ProcessPipeline<
+    Source,
+    PipelineError,
+    IdentityKey,
+    TrackingContract
+  >;
+  readonly rollback?: RollbackPipeline<
+    RollbackPipelineError,
+    MigrationItemStateForTrackingContract<TrackingContract>
+  >;
   readonly source: ConfiguredSource<
     Source,
     Cursor,
@@ -471,8 +479,42 @@ export interface MigrationDefinition<
     input: DestinationStubInput,
     context: DestinationStubContext
   ) => void | Effect.Effect<void, PipelineError | SkipItem, Tracking>;
-  readonly tracking?: TrackingContract;
 }
+
+type MigrationDefinitionTracking<
+  TrackingContract extends TrackingRecordContract | undefined,
+> = TrackingContract extends TrackingRecordContract
+  ? { readonly tracking: TrackingContract }
+  : { readonly tracking?: undefined };
+
+type MigrationDefinitionTrackingInput<
+  TrackingContract extends TrackingRecordContract | undefined,
+> = TrackingContract extends TrackingRecordContract
+  ? { readonly tracking: TrackingContract }
+  : { readonly tracking?: undefined };
+
+export type MigrationDefinition<
+  Source,
+  PipelineError = never,
+  Cursor = unknown,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+  RollbackPipelineError = PipelineError,
+  SourceInput = Source,
+  SourceLayerError = never,
+  SourceRequirements = never,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
+> = MigrationDefinitionBase<
+  Source,
+  PipelineError,
+  Cursor,
+  IdentityKey,
+  RollbackPipelineError,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements,
+  TrackingContract
+> &
+  MigrationDefinitionTracking<TrackingContract>;
 
 export interface MigrationDefinitionDependencies {
   readonly optional: readonly MigrationDefinitionId[];
@@ -484,7 +526,7 @@ export interface MigrationDefinitionDependenciesInput {
   readonly required?: readonly MigrationDefinitionIdInput[];
 }
 
-export interface MigrationDefinitionInput<
+export type MigrationDefinitionInput<
   Source,
   PipelineError = never,
   Cursor = unknown,
@@ -493,27 +535,26 @@ export interface MigrationDefinitionInput<
   SourceInput = Source,
   SourceLayerError = never,
   SourceRequirements = never,
-  TrackingContract extends TrackingRecordContract | undefined =
-    | TrackingRecordContract
-    | undefined,
-> extends Omit<
-    MigrationDefinition<
-      Source,
-      PipelineError,
-      Cursor,
-      IdentityKey,
-      RollbackPipelineError,
-      SourceInput,
-      SourceLayerError,
-      SourceRequirements,
-      TrackingContract
-    >,
-    "dependencies" | "execution" | "id"
-  > {
-  readonly dependencies?: MigrationDefinitionDependenciesInput;
-  readonly execution?: MigrationExecutionOptions;
-  readonly id: MigrationDefinitionIdInput;
-}
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
+> = Omit<
+  MigrationDefinitionBase<
+    Source,
+    PipelineError,
+    Cursor,
+    IdentityKey,
+    RollbackPipelineError,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements,
+    TrackingContract
+  >,
+  "dependencies" | "execution" | "id"
+> &
+  MigrationDefinitionTrackingInput<TrackingContract> & {
+    readonly dependencies?: MigrationDefinitionDependenciesInput;
+    readonly execution?: MigrationExecutionOptions;
+    readonly id: MigrationDefinitionIdInput;
+  };
 
 const validateProcessAuthoring = (definition: {
   readonly process?: unknown;
@@ -543,7 +584,72 @@ const normalizeMigrationDefinitionIds = (
   return ids;
 };
 
-const makeMigrationDefinition = <
+function makeMigrationDefinition<
+  Source,
+  PipelineError = never,
+  Cursor = unknown,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+  RollbackPipelineError = PipelineError,
+  SourceInput = Source,
+  SourceLayerError = never,
+  SourceRequirements = never,
+>(
+  definition: MigrationDefinitionInput<
+    Source,
+    PipelineError,
+    Cursor,
+    IdentityKey,
+    RollbackPipelineError,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements,
+    undefined
+  >
+): MigrationDefinition<
+  Source,
+  PipelineError,
+  Cursor,
+  IdentityKey,
+  RollbackPipelineError,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements,
+  undefined
+>;
+function makeMigrationDefinition<
+  Source,
+  PipelineError = never,
+  Cursor = unknown,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+  RollbackPipelineError = PipelineError,
+  SourceInput = Source,
+  SourceLayerError = never,
+  SourceRequirements = never,
+  TrackingContract extends TrackingRecordContract = TrackingRecordContract,
+>(
+  definition: MigrationDefinitionInput<
+    Source,
+    PipelineError,
+    Cursor,
+    IdentityKey,
+    RollbackPipelineError,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements,
+    TrackingContract
+  >
+): MigrationDefinition<
+  Source,
+  PipelineError,
+  Cursor,
+  IdentityKey,
+  RollbackPipelineError,
+  SourceInput,
+  SourceLayerError,
+  SourceRequirements,
+  TrackingContract
+>;
+function makeMigrationDefinition<
   Source,
   PipelineError = never,
   Cursor = unknown,
@@ -575,8 +681,14 @@ const makeMigrationDefinition = <
   SourceLayerError,
   SourceRequirements,
   TrackingContract
-> => {
-  const { dependencies, execution: executionInput, id, ...rest } = definition;
+> {
+  const {
+    dependencies,
+    execution: executionInput,
+    id,
+    tracking,
+    ...rest
+  } = definition;
   validateProcessAuthoring(definition);
   const execution =
     executionInput === undefined
@@ -595,6 +707,7 @@ const makeMigrationDefinition = <
     ...rest,
     ...(execution === undefined ? {} : { execution }),
     id: toMigrationDefinitionId(id),
+    ...(tracking === undefined ? {} : { tracking }),
     ...(hasDependencies
       ? {
           dependencies: {
@@ -603,8 +716,18 @@ const makeMigrationDefinition = <
           },
         }
       : {}),
-  };
-};
+  } as unknown as MigrationDefinition<
+    Source,
+    PipelineError,
+    Cursor,
+    IdentityKey,
+    RollbackPipelineError,
+    SourceInput,
+    SourceLayerError,
+    SourceRequirements,
+    TrackingContract
+  >;
+}
 
 export const MigrationDefinition = {
   make: makeMigrationDefinition,

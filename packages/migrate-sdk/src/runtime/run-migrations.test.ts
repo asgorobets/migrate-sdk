@@ -133,6 +133,11 @@ const ArticleTrackingRecord = Schema.Struct({
   locale: Schema.String,
 });
 type ArticleTrackingRecord = typeof ArticleTrackingRecord.Type;
+const ArticleViewsTrackingRecord = Schema.Struct({
+  entryId: Schema.String,
+  views: Schema.NumberFromString,
+});
+type ArticleViewsTrackingRecord = typeof ArticleViewsTrackingRecord.Type;
 const DecodingArticleEntryFields = Schema.Struct({
   views: Schema.NumberFromString,
 });
@@ -5766,7 +5771,10 @@ describe("runInlineDefinition", () => {
           entryId: "entry-previous",
           locale: "en-US",
         };
-        const retryPreviousTrackingRecords: unknown[] = [];
+        const retryPreviousTrackingRecords: (
+          | ArticleTrackingRecord
+          | undefined
+        )[] = [];
         let failUpdate = true;
 
         const definition = MigrationDefinition.make({
@@ -5788,13 +5796,9 @@ describe("runInlineDefinition", () => {
                 return yield* Effect.fail(processError);
               }
 
-              const priorTrackingRecord =
-                context.previousState !== undefined &&
-                "trackingRecord" in context.previousState
-                  ? context.previousState.trackingRecord
-                  : undefined;
-
-              retryPreviousTrackingRecords.push(priorTrackingRecord);
+              retryPreviousTrackingRecords.push(
+                context.previousState?.trackingRecord
+              );
 
               yield* Tracking.logDiagnostic({
                 severity: "info",
@@ -5851,6 +5855,80 @@ describe("runInlineDefinition", () => {
             ? itemState.journal?.process.runId
             : undefined
         ).toBe(retrySummary.runId);
+      })
+  );
+
+  it.effect(
+    "decodes prior tracking evidence before passing it to Process callbacks",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const tracking = Tracking.record({
+          id: "article-views@v1",
+          schema: ArticleViewsTrackingRecord,
+        });
+        const previousRunId = toMigrationRunId("run-previous");
+        const previousTrackingRecords: (
+          | ArticleViewsTrackingRecord
+          | undefined
+        )[] = [];
+
+        const definition = MigrationDefinition.make({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-views",
+                version: "source-version-2",
+                item: { title: "Article views" },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          tracking,
+          process: (_source, context) =>
+            Effect.gen(function* () {
+              previousTrackingRecords.push(
+                context.previousState?.trackingRecord
+              );
+              yield* Tracking.setRecord({
+                entryId: "entry-next",
+                views: 43,
+              });
+            }),
+        });
+
+        seedTrackingMigrationContract(storeState, "articles", tracking);
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-views"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: articleSourceIdentity("article-views"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            sourceVersionContractFingerprint:
+              defaultSourceVersionContractFingerprint,
+            lastRunId: previousRunId,
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "migrated",
+            trackingRecord: {
+              entryId: "entry-previous",
+              views: "42",
+            },
+          }
+        );
+
+        const summary = yield* runInlineRegistry({
+          definitions: [definition],
+          update: true,
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(previousTrackingRecords).toEqual([
+          {
+            entryId: "entry-previous",
+            views: 42,
+          },
+        ]);
       })
   );
 
@@ -7050,9 +7128,7 @@ describe("runInlineDefinition", () => {
         expect(String(error.message)).toContain(
           "required dependency state is not satisfied"
         );
-        expect(String(error.message)).toContain(
-          "authors latest run is failed"
-        );
+        expect(String(error.message)).toContain("authors latest run is failed");
         expect(String(error.message)).toContain("--force");
         expect(executionOrder).toEqual([]);
         expect(storeState.latestRunStates.get(articlesId)).toBeUndefined();
@@ -7846,6 +7922,67 @@ describe("rollbackInlineDefinition", () => {
           InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity)
         )
       ).toBe(false);
+    })
+  );
+
+  it.effect("decodes tracking evidence before passing it to rollback", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const store = InMemoryMigrationStore.layer(storeState);
+      const definitionId = toMigrationDefinitionId("articles");
+      const sourceIdentity = toEncodedSourceIdentity("article-rollback");
+      const tracking = Tracking.record({
+        id: "article-views@v1",
+        schema: ArticleViewsTrackingRecord,
+      });
+      const rollbackTrackingRecords: (
+        | ArticleViewsTrackingRecord
+        | undefined
+      )[] = [];
+
+      seedTrackingMigrationContract(storeState, "articles", tracking);
+      storeState.itemStates.set(
+        InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity),
+        {
+          definitionId,
+          lastRunId: toMigrationRunId("run-previous"),
+          sourceIdentity: SourceIdentity.fromEncoded(
+            ArticleSourceIdentity,
+            sourceIdentity
+          ),
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "migrated" as const,
+          trackingRecord: {
+            entryId: "entry-previous",
+            views: "42",
+          },
+          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+        }
+      );
+
+      const definition = MigrationDefinition.make({
+        id: definitionId,
+        source: makeTestInMemorySource({
+          items: [],
+          sourceSchema: ArticleSource,
+        }),
+        store,
+        tracking,
+        process: () => Effect.void,
+        rollback: (state) => {
+          rollbackTrackingRecords.push(state.trackingRecord);
+        },
+      });
+
+      const summary = yield* rollbackInlineDefinition(definition);
+
+      expect(summary.status).toBe("succeeded");
+      expect(rollbackTrackingRecords).toEqual([
+        {
+          entryId: "entry-previous",
+          views: 42,
+        },
+      ]);
     })
   );
 

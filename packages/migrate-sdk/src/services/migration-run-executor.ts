@@ -72,6 +72,7 @@ import {
   makeMigrationReferenceLookupLayer,
 } from "../runtime/migration-reference-lookup-layer.ts";
 import {
+  decodeStoredItemStateForDefinition,
   makeProcessJournal,
   processSourceItem,
   validateStagedTrackingRecord,
@@ -754,7 +755,8 @@ const missingRunDependencyDefinitionError = (
   requiredByDefinitionId: MigrationDefinitionId
 ) =>
   new MigrationRuntimeError({
-    message: "Required dependency was not found in the executable registry plan",
+    message:
+      "Required dependency was not found in the executable registry plan",
     cause: { dependencyId, requiredByDefinitionId },
   });
 
@@ -1065,7 +1067,6 @@ const executeTrackingStub = (
       definitionId: definition.id,
       runId,
       sourceIdentity,
-      ...(previousState === null ? {} : { previousState }),
     });
 
     const stubOutcome = yield* Effect.try({
@@ -1331,10 +1332,13 @@ const recordRollbackOutcome = ({
     )
   );
 
-const runRollbackPipeline = <RollbackError>(
-  rollback: RollbackPipeline<RollbackError>,
+const runRollbackPipeline = <
+  RollbackError,
+  ItemState extends MigrationItemState,
+>(
+  rollback: RollbackPipeline<RollbackError, ItemState>,
   definitionId: MigrationDefinitionId,
-  itemState: MigrationItemState,
+  itemState: ItemState,
   runId: MigrationRunId
 ): Effect.Effect<void, RollbackError, Tracking> =>
   Effect.try({
@@ -1396,6 +1400,7 @@ const rollbackItemState = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
 >({
   definition,
   itemState,
@@ -1410,7 +1415,8 @@ const rollbackItemState = <
     RollbackPipelineError,
     SourceInput,
     SourceLayerError,
-    SourceRequirements
+    SourceRequirements,
+    TrackingContract
   >;
   readonly itemState: MigrationItemState;
   readonly runId: MigrationRunId;
@@ -1428,7 +1434,6 @@ const rollbackItemState = <
 
     const tracking = yield* makeProcessScope({
       definitionId: definition.id,
-      previousState: itemState,
       runId,
       sourceIdentity: itemState.sourceIdentity.encoded,
       ...(itemState.sourceVersion === undefined
@@ -1436,10 +1441,26 @@ const rollbackItemState = <
         : { sourceVersion: itemState.sourceVersion }),
     });
 
+    const typedItemState = yield* decodeStoredItemStateForDefinition(
+      itemState,
+      definition
+    ).pipe(
+      Effect.catch((error) =>
+        appendFailedRollbackAttempt(itemState, runId, tracking, error).pipe(
+          Effect.flatMap((updatedState) => store.upsertItemState(updatedState)),
+          Effect.as(null)
+        )
+      )
+    );
+
+    if (typedItemState === null) {
+      return "failed" as const;
+    }
+
     const rollbackOutcome = yield* runRollbackPipeline(
       rollback,
       definition.id,
-      itemState,
+      typedItemState,
       runId
     ).pipe(
       Effect.provide(Layer.succeed(Tracking, tracking)),
@@ -1478,6 +1499,7 @@ interface ProcessTargetedSourceIdentitiesOptions<
   SourceInput,
   SourceLayerError,
   SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
 > {
   readonly counts: MutableDefinitionCounts;
   readonly definition: MigrationDefinition<
@@ -1488,7 +1510,8 @@ interface ProcessTargetedSourceIdentitiesOptions<
     unknown,
     SourceInput,
     SourceLayerError,
-    SourceRequirements
+    SourceRequirements,
+    TrackingContract
   >;
   readonly itemStates: readonly MigrationItemState[];
   readonly mode: RunMode;
@@ -1511,6 +1534,7 @@ const processTargetedSourceIdentities = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
 >({
   counts,
   definition,
@@ -1527,7 +1551,8 @@ const processTargetedSourceIdentities = <
   IdentityKey,
   SourceInput,
   SourceLayerError,
-  SourceRequirements
+  SourceRequirements,
+  TrackingContract
 >) =>
   Effect.gen(function* () {
     const sourceIdentities = sourceIdentitiesForMode(
@@ -1629,6 +1654,7 @@ interface ProcessCursorDiscoveryOptions<
   SourceInput,
   SourceLayerError,
   SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
 > {
   readonly counts: MutableDefinitionCounts;
   readonly definition: MigrationDefinition<
@@ -1639,7 +1665,8 @@ interface ProcessCursorDiscoveryOptions<
     unknown,
     SourceInput,
     SourceLayerError,
-    SourceRequirements
+    SourceRequirements,
+    TrackingContract
   >;
   readonly excludedSourceIdentities: readonly EncodedSourceIdentity[];
   readonly processConcurrency: PipelineExecutionConcurrency;
@@ -1662,6 +1689,7 @@ const processNextCursorWindow = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
 >({
   counts,
   definition,
@@ -1678,7 +1706,8 @@ const processNextCursorWindow = <
   IdentityKey,
   SourceInput,
   SourceLayerError,
-  SourceRequirements
+  SourceRequirements,
+  TrackingContract
 >) =>
   Effect.gen(function* () {
     const storedCursor = yield* store.getSourceCursor(definition.id);
@@ -1750,6 +1779,7 @@ const processCursorDiscovery = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
 >({
   counts,
   definition,
@@ -1766,7 +1796,8 @@ const processCursorDiscovery = <
   IdentityKey,
   SourceInput,
   SourceLayerError,
-  SourceRequirements
+  SourceRequirements,
+  TrackingContract
 >) =>
   Effect.gen(function* () {
     let committedCursor: Cursor | undefined;
@@ -2157,6 +2188,7 @@ const runMigrationDefinition = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
 >(
   definition: MigrationDefinition<
     Source,
@@ -2166,7 +2198,8 @@ const runMigrationDefinition = <
     unknown,
     SourceInput,
     SourceLayerError,
-    SourceRequirements
+    SourceRequirements,
+    TrackingContract
   >,
   runId: MigrationRunId,
   mode: RunMode,
@@ -2314,6 +2347,7 @@ const runMigrationDefinitionCursorWindow = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
 >(
   definition: MigrationDefinition<
     Source,
@@ -2323,7 +2357,8 @@ const runMigrationDefinitionCursorWindow = <
     unknown,
     SourceInput,
     SourceLayerError,
-    SourceRequirements
+    SourceRequirements,
+    TrackingContract
   >,
   input: MigrationRunCursorWindowInput,
   createStubReference: CreateMigrationReferenceStub,
@@ -2434,6 +2469,7 @@ const executeMigrationRunDefinitionCursorWindow = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
 >(
   definition: MigrationDefinition<
     Source,
@@ -2443,7 +2479,8 @@ const executeMigrationRunDefinitionCursorWindow = <
     unknown,
     SourceInput,
     SourceLayerError,
-    SourceRequirements
+    SourceRequirements,
+    TrackingContract
   >,
   input: MigrationRunDefinitionCursorWindowInput,
   processExecution?: PipelineExecutionOptions
@@ -2489,6 +2526,7 @@ const runRollbackMigrationDefinition = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
 >(
   definition: MigrationDefinition<
     Source,
@@ -2498,7 +2536,8 @@ const runRollbackMigrationDefinition = <
     RollbackPipelineError,
     SourceInput,
     SourceLayerError,
-    SourceRequirements
+    SourceRequirements,
+    TrackingContract
   >,
   runId: MigrationRunId,
   options: MigrationRollbackExecutionOptions
@@ -2973,8 +3012,7 @@ const executePlannedRunDefinitions = <
           ...(input.requiredDependencyPreflight === undefined
             ? {}
             : {
-                requiredDependencyPreflight:
-                  input.requiredDependencyPreflight,
+                requiredDependencyPreflight: input.requiredDependencyPreflight,
               }),
         }).pipe(
           Effect.andThen(validateMigrationContracts(store, input.definitions))
@@ -3097,6 +3135,7 @@ export interface MigrationRunExecutorService {
     SourceInput,
     SourceLayerError,
     SourceRequirements,
+    TrackingContract extends TrackingRecordContract | undefined,
   >(
     definition: MigrationDefinition<
       Source,
@@ -3106,7 +3145,8 @@ export interface MigrationRunExecutorService {
       unknown,
       SourceInput,
       SourceLayerError,
-      SourceRequirements
+      SourceRequirements,
+      TrackingContract
     >,
     input: MigrationRunDefinitionCursorWindowInput,
     processExecution?: PipelineExecutionOptions
@@ -3184,6 +3224,7 @@ export class MigrationRunExecutor extends Service<
     SourceInput,
     SourceLayerError,
     SourceRequirements,
+    TrackingContract extends TrackingRecordContract | undefined,
   >(
     definition: MigrationDefinition<
       Source,
@@ -3193,7 +3234,8 @@ export class MigrationRunExecutor extends Service<
       unknown,
       SourceInput,
       SourceLayerError,
-      SourceRequirements
+      SourceRequirements,
+      TrackingContract
     >,
     input: MigrationRunDefinitionCursorWindowInput,
     processExecution?: PipelineExecutionOptions

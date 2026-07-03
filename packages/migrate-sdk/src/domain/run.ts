@@ -17,7 +17,9 @@ import {
 import type { RunModeInput } from "./run-mode.ts";
 import type { TrackingRecordContract } from "./tracking.ts";
 
-export type AnyMigrationDefinition = MigrationDefinition<
+type AnyMigrationDefinitionForTracking<
+  TrackingContract extends TrackingRecordContract | undefined,
+> = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous run requests.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Process error is re-extracted by MigrationDefinitionPipelineError.
@@ -34,9 +36,12 @@ export type AnyMigrationDefinition = MigrationDefinition<
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Source requirements are re-extracted by MigrationDefinitionSourceRequirements.
   any,
-  // biome-ignore lint/suspicious/noExplicitAny: Tracking contract is existential across heterogeneous run requests.
-  any
+  TrackingContract
 >;
+
+export type AnyMigrationDefinition =
+  | AnyMigrationDefinitionForTracking<undefined>
+  | AnyMigrationDefinitionForTracking<TrackingRecordContract>;
 
 export type MigrationDefinitionPipelineError<Definition> =
   Definition extends MigrationDefinition<

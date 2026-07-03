@@ -246,6 +246,7 @@ export {
 export type {
   MigrationItemOutcome,
   MigrationItemStateBase,
+  MigrationItemStateForTrackingContract,
 } from "./domain/state.ts";
 
 export {

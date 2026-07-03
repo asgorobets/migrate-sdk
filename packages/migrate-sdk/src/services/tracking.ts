@@ -6,7 +6,6 @@ import type {
   MigrationRunId,
   SourceVersion,
 } from "../domain/ids.ts";
-import type { MigrationItemState } from "../domain/state.ts";
 import type {
   DestinationChangeDescriptor,
   DestinationChangeValue,
@@ -25,7 +24,6 @@ import {
 
 export interface TrackingProcessContext {
   readonly definitionId: MigrationDefinitionId;
-  readonly previousState?: MigrationItemState;
   readonly runId: MigrationRunId;
   readonly sourceIdentity: EncodedSourceIdentity;
   readonly sourceVersion?: SourceVersion;

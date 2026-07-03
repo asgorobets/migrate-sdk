@@ -17,6 +17,7 @@ import {
   toMigrationDefinitionId,
 } from "./ids.ts";
 import type { MigrationItemState } from "./state.ts";
+import type { TrackingRecordContract } from "./tracking.ts";
 
 export interface RollbackContext {
   readonly definitionId: MigrationDefinitionId;
@@ -28,12 +29,21 @@ export const RollbackContext = Schema.Struct({
   runId: MigrationRunId,
 });
 
-export type RollbackPipeline<RollbackError = never> = (
-  state: MigrationItemState,
-  context: RollbackContext
-) => void | Effect.Effect<void, RollbackError, Tracking>;
+export type RollbackPipeline<
+  RollbackError = never,
+  ItemState extends MigrationItemState = MigrationItemState,
+> = {
+  // Rollback definitions are stored in heterogeneous registries, then decoded
+  // back to their contract-specific item state immediately before invocation.
+  bivarianceHack(
+    state: ItemState,
+    context: RollbackContext
+  ): void | Effect.Effect<void, RollbackError, Tracking>;
+}["bivarianceHack"];
 
-export type AnyRollbackMigrationDefinition = MigrationDefinition<
+type AnyRollbackMigrationDefinitionForTracking<
+  TrackingContract extends TrackingRecordContract | undefined,
+> = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous rollback requests.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Forward process error is not relevant to rollback request shape.
@@ -49,8 +59,13 @@ export type AnyRollbackMigrationDefinition = MigrationDefinition<
   // biome-ignore lint/suspicious/noExplicitAny: Source layer error is not relevant to rollback request shape.
   any,
   // biome-ignore lint/suspicious/noExplicitAny: Source requirements are not relevant to rollback request shape.
-  any
+  any,
+  TrackingContract
 >;
+
+export type AnyRollbackMigrationDefinition =
+  | AnyRollbackMigrationDefinitionForTracking<undefined>
+  | AnyRollbackMigrationDefinitionForTracking<TrackingRecordContract>;
 
 export type MigrationDefinitionRollbackPipelineError<Definition> =
   Definition extends MigrationDefinition<
@@ -61,7 +76,8 @@ export type MigrationDefinitionRollbackPipelineError<Definition> =
     infer RollbackPipelineError,
     infer _SourceInput,
     infer _SourceLayerError,
-    infer _SourceRequirements
+    infer _SourceRequirements,
+    infer _TrackingContract
   >
     ? RollbackPipelineError
     : never;
@@ -75,7 +91,8 @@ export type RollbackMigrationDefinitionSourceIdentityKey<Definition> =
     infer _RollbackPipelineError,
     infer _SourceInput,
     infer _SourceLayerError,
-    infer _SourceRequirements
+    infer _SourceRequirements,
+    infer _TrackingContract
   >
     ? IdentityKey
     : never;

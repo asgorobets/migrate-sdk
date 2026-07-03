@@ -20,8 +20,11 @@ import type {
   MigrationItemOutcome,
   MigrationItemState,
   MigrationItemStateBase,
+  MigrationItemStateForTrackingContract,
+  MigrationItemStateWithTrackingRecord,
   SkippedItemState,
 } from "../domain/state.ts";
+import { makeMigrationItemStateWithTrackingRecordSchema } from "../domain/state.ts";
 import type {
   DestinationJournalSegment,
   TrackingRecord,
@@ -52,6 +55,7 @@ export interface ProcessSourceItemOptions<
   SourceInput = unknown,
   SourceLayerError = never,
   SourceRequirements = never,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
 > {
   readonly definition: MigrationDefinition<
     Source,
@@ -61,7 +65,8 @@ export interface ProcessSourceItemOptions<
     unknown,
     SourceInput,
     SourceLayerError,
-    SourceRequirements
+    SourceRequirements,
+    TrackingContract
   >;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
@@ -70,6 +75,23 @@ export interface ProcessSourceItemOptions<
 }
 
 export type ProcessSourceItemError = MigrationStoreError;
+
+type TrackingDefinition<
+  TrackingContract extends TrackingRecordContract | undefined,
+> = Pick<
+  MigrationDefinition<
+    unknown,
+    unknown,
+    unknown,
+    SourceIdentitySnapshotKey,
+    unknown,
+    unknown,
+    unknown,
+    unknown,
+    TrackingContract
+  >,
+  "tracking"
+>;
 
 type ProcessOutcome =
   | {
@@ -114,6 +136,52 @@ const previousTrackingRecord = (
   previousState !== null && "trackingRecord" in previousState
     ? previousState.trackingRecord
     : undefined;
+
+const decodeStoredItemStateWithTrackingRecord = <
+  Value extends TrackingRecordValue,
+  Encoded extends TrackingRecordValue,
+>(
+  itemState: MigrationItemState,
+  contract: TrackingRecordContract<Value, Encoded>
+): Effect.Effect<
+  MigrationItemStateWithTrackingRecord<Value>,
+  MigrationItemError
+> => {
+  const itemStateSchema = makeMigrationItemStateWithTrackingRecordSchema(
+    contract.schema
+  );
+
+  return Schema.decodeUnknownEffect(itemStateSchema, { errors: "all" })(
+    itemState
+  ).pipe(
+    Effect.mapError((error) =>
+      normalizeTrackingRecordSchemaError(contract, error)
+    )
+  );
+};
+
+export const decodeStoredItemStateForDefinition = <
+  TrackingContract extends TrackingRecordContract | undefined,
+>(
+  itemState: MigrationItemState,
+  definition: TrackingDefinition<TrackingContract>
+): Effect.Effect<
+  MigrationItemStateForTrackingContract<TrackingContract>,
+  MigrationItemError
+> => {
+  // TypeScript loses the conditional tracking branch on generic property access;
+  // callers bind decoding through the full definition so the contract and state stay coupled.
+  const contract = definition.tracking as TrackingRecordContract | undefined;
+
+  return (
+    contract === undefined
+      ? Effect.succeed(itemState)
+      : decodeStoredItemStateWithTrackingRecord(itemState, contract)
+  ) as Effect.Effect<
+    MigrationItemStateForTrackingContract<TrackingContract>,
+    MigrationItemError
+  >;
+};
 
 const makeSkippedItemState = <Source>(
   sourceVersionContractContext: SourceVersionContractContext,
@@ -388,6 +456,7 @@ const runProcess = <
   SourceInput = Source,
   SourceLayerError = never,
   SourceRequirements = never,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
 >(
   definition: MigrationDefinition<
     Source,
@@ -397,10 +466,11 @@ const runProcess = <
     unknown,
     SourceInput,
     SourceLayerError,
-    SourceRequirements
+    SourceRequirements,
+    TrackingContract
   >,
   sourceItem: SourceItem<Source, IdentityKey>,
-  context: ProcessContext
+  context: ProcessContext<TrackingContract>
 ) =>
   Effect.try({
     try: () => definition.process?.(sourceItem, context),
@@ -425,6 +495,7 @@ const processWithProcessPipeline = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
 >({
   decodedSourceItem,
   definition,
@@ -443,9 +514,10 @@ const processWithProcessPipeline = <
     unknown,
     SourceInput,
     SourceLayerError,
-    SourceRequirements
+    SourceRequirements,
+    TrackingContract
   >;
-  readonly processContext: ProcessContext;
+  readonly processContext: ProcessContext<TrackingContract>;
   readonly previousState: MigrationItemState | null;
   readonly runId: MigrationRunId;
   readonly sourceVersionContractContext: SourceVersionContractContext;
@@ -461,7 +533,6 @@ const processWithProcessPipeline = <
       runId,
       sourceIdentity: decodedSourceItem.identity.encoded,
       sourceVersion: decodedSourceItem.version,
-      ...(previousState === null ? {} : { previousState }),
     });
     const processOutcome = yield* runProcess(
       definition,
@@ -537,6 +608,7 @@ export const processSourceItem = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
 >({
   definition,
   reprocessUnchangedTerminal = false,
@@ -550,7 +622,8 @@ export const processSourceItem = <
   IdentityKey,
   SourceInput,
   SourceLayerError,
-  SourceRequirements
+  SourceRequirements,
+  TrackingContract
 >): Effect.Effect<
   MigrationItemOutcome,
   ProcessSourceItemError,
@@ -591,10 +664,38 @@ export const processSourceItem = <
       return "unchanged" as const;
     }
 
-    const processContext: ProcessContext = {
+    const typedPreviousState: MigrationItemStateForTrackingContract<TrackingContract> | null =
+      previousState === null
+        ? null
+        : yield* decodeStoredItemStateForDefinition<TrackingContract>(
+            previousState,
+            definition
+          ).pipe(
+            Effect.catch((error) =>
+              store
+                .upsertItemState(
+                  makeFailedItemState(
+                    sourceVersionContractContext,
+                    runId,
+                    decodedSourceItem,
+                    error,
+                    previousState
+                  )
+                )
+                .pipe(Effect.as(null))
+            )
+          );
+
+    if (previousState !== null && typedPreviousState === null) {
+      return "failed" as const;
+    }
+
+    const processContext: ProcessContext<TrackingContract> = {
       definitionId: definition.id,
       runId,
-      ...(previousState === null ? {} : { previousState }),
+      ...(typedPreviousState === null
+        ? {}
+        : { previousState: typedPreviousState }),
     };
 
     return yield* processWithProcessPipeline({

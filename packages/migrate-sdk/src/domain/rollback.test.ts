@@ -15,6 +15,7 @@ import {
   RollbackRequestError,
   RollbackRunSummary,
   type SourceIdentitySnapshotKey,
+  TrackingRecordContract,
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "migrate-sdk";
@@ -32,6 +33,11 @@ const ArticleSource = Schema.Struct({
   title: Schema.String,
 });
 type ArticleSource = typeof ArticleSource.Type;
+const ArticleTrackingRecord = Schema.Struct({
+  entryId: Schema.String,
+  locale: Schema.String,
+});
+type ArticleTrackingRecord = typeof ArticleTrackingRecord.Type;
 
 interface RollbackPipelineError {
   readonly _tag: "RollbackPipelineError";
@@ -39,6 +45,10 @@ interface RollbackPipelineError {
 
 const source = {} as ConfiguredSource<ArticleSource, unknown, string>;
 const store = {} as Layer.Layer<MigrationStore, MigrationStoreError>;
+const articleTracking = TrackingRecordContract.make({
+  id: "article-tracking",
+  schema: ArticleTrackingRecord,
+});
 
 describe("rollback public API", () => {
   it("normalizes rollback request and option inputs", () => {
@@ -114,6 +124,23 @@ describe("rollback public API", () => {
       "article-2",
       "article-1",
     ]);
+  });
+
+  it("types rollback item state with the definition tracking record contract", () => {
+    const definition = MigrationDefinition.make({
+      id: "articles",
+      source,
+      store,
+      tracking: articleTracking,
+      process: () => Effect.void,
+      rollback: (itemState) => {
+        expectTypeOf(itemState.trackingRecord).toEqualTypeOf<
+          ArticleTrackingRecord | undefined
+        >();
+      },
+    });
+
+    expect(definition.rollback).toBeDefined();
   });
 
   it.effect("schema-round-trips rollback summaries", () =>

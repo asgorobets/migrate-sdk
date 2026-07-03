@@ -4,6 +4,7 @@ import type { MigrationDefinition } from "../domain/definition.ts";
 import type { PipelineExecutionOptions } from "../domain/execution.ts";
 import type { SourceIdentitySnapshotKey } from "../domain/ids.ts";
 import type { MigrationRunState, MigrationRunSummary } from "../domain/run.ts";
+import type { TrackingRecordContract } from "../domain/tracking.ts";
 import {
   type MigrationRunBeginInput,
   type MigrationRunCompletionInput,
@@ -32,6 +33,7 @@ export interface MigrationRunStepExecutorService {
     SourceInput,
     SourceLayerError,
     SourceRequirements,
+    TrackingContract extends TrackingRecordContract | undefined,
   >(
     definition: MigrationDefinition<
       Source,
@@ -41,7 +43,8 @@ export interface MigrationRunStepExecutorService {
       unknown,
       SourceInput,
       SourceLayerError,
-      SourceRequirements
+      SourceRequirements,
+      TrackingContract
     >,
     input: MigrationRunDefinitionCursorWindowInput,
     processExecution?: PipelineExecutionOptions
@@ -87,6 +90,7 @@ export class MigrationRunStepExecutor extends Service<
     SourceInput,
     SourceLayerError,
     SourceRequirements,
+    TrackingContract extends TrackingRecordContract | undefined,
   >(
     definition: MigrationDefinition<
       Source,
@@ -96,7 +100,8 @@ export class MigrationRunStepExecutor extends Service<
       unknown,
       SourceInput,
       SourceLayerError,
-      SourceRequirements
+      SourceRequirements,
+      TrackingContract
     >,
     input: MigrationRunDefinitionCursorWindowInput,
     processExecution?: PipelineExecutionOptions

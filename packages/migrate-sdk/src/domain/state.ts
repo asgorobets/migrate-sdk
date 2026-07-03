@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Schema, Tuple } from "effect";
 import {
   MigrationDefinitionId,
   MigrationRunId,
@@ -6,7 +6,12 @@ import {
   SourceVersion,
 } from "./ids.ts";
 import { SourceVersionContractFingerprint } from "./migration-contract.ts";
-import { DestinationJournal, TrackingRecord } from "./tracking.ts";
+import {
+  DestinationJournal,
+  TrackingRecord,
+  type TrackingRecordContract,
+  type TrackingRecordValue,
+} from "./tracking.ts";
 
 const MigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionId,
@@ -96,6 +101,62 @@ export const MigrationItemState = Schema.Union([
   NeedsUpdateItemState,
 ]);
 export type MigrationItemState = typeof MigrationItemState.Type;
+
+export const makeMigrationItemStateWithTrackingRecordSchema = <
+  const TrackingRecordSchema extends Schema.Codec<
+    TrackingRecordValue,
+    TrackingRecordValue,
+    never,
+    never
+  >,
+>(
+  trackingRecord: TrackingRecordSchema
+) =>
+  MigrationItemState.mapMembers(
+    Tuple.map(
+      Schema.fieldsAssign({
+        trackingRecord: Schema.optional(trackingRecord),
+      })
+    )
+  );
+
+type WithTrackingRecord<
+  State extends MigrationItemState,
+  Record extends TrackingRecordValue,
+> = Omit<State, "trackingRecord"> & {
+  readonly trackingRecord?: Record | undefined;
+};
+
+export type TrackingRecordForContract<
+  TrackingContract extends TrackingRecordContract | undefined,
+> = [TrackingContract] extends [
+  {
+    readonly schema: infer TrackingRecordSchema extends Schema.Codec<
+      TrackingRecordValue,
+      TrackingRecordValue,
+      never,
+      never
+    >;
+  },
+]
+  ? Schema.Schema.Type<TrackingRecordSchema>
+  : never;
+
+export type MigrationItemStateWithTrackingRecord<
+  Record extends TrackingRecordValue = TrackingRecord,
+> =
+  | WithTrackingRecord<MigratedItemState, Record>
+  | WithTrackingRecord<SkippedItemState, Record>
+  | WithTrackingRecord<FailedItemState, Record>
+  | WithTrackingRecord<NeedsUpdateItemState, Record>;
+
+export type MigrationItemStateForTrackingContract<
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
+> = [TrackingContract] extends [TrackingRecordContract]
+  ? MigrationItemStateWithTrackingRecord<
+      TrackingRecordForContract<TrackingContract>
+    >
+  : MigrationItemState;
 
 export interface MigrationItemStateBase {
   readonly definitionId: MigrationDefinitionId;
