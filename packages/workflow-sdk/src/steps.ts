@@ -8,6 +8,8 @@ import {
   type MigrationExecutableRollbackError,
   type MigrationExecutableRunError,
   type MigrationExecutionEnvelopeType,
+  MigrationExecutionJob,
+  type MigrationExecutionJobType,
   type MigrationRollbackExecutionEnvelopeType,
   MigrationRollbackExecutor,
   type MigrationRunCursorWindowResult,
@@ -71,36 +73,32 @@ const unsupportedRunPlanError = (envelope: MigrationRunExecutionEnvelopeType) =>
     ],
   });
 
-const makeLease = (
-  envelope: MigrationExecutionEnvelopeType
+const requireExecutionLease = (
+  envelope: MigrationExecutionEnvelopeType,
+  job: MigrationExecutionJobType
 ): Effect.Effect<
   MigrationRunExecutionLease,
   MigrationDefinitionRegistryExecutableError
 > =>
-  envelope.locks === undefined
+  job.options.lease === undefined
     ? Effect.fail(missingLocksError(envelope))
-    : Effect.succeed({
-        locks: envelope.locks,
-        runId: envelope.runId,
-        scopeDefinitionIds: envelope.scopeDefinitionIds,
-      });
+    : Effect.succeed(job.options.lease);
 
-const resolveRunPlan = (envelope: MigrationRunExecutionEnvelopeType) =>
+const resolveRunJob = (envelope: MigrationRunExecutionEnvelopeType) =>
   Effect.gen(function* () {
-    const registry = yield* MigrationDefinitionRegistryCatalog.get(
-      envelope.registryId
-    );
-    const plan = yield* registry.executable().planRun(envelope.request);
+    const job = yield* MigrationExecutionJob.fromEnvelope(envelope);
 
     if (
-      plan.target !== undefined ||
-      plan.update === true ||
-      (plan.mode !== undefined && plan.mode.kind !== "normal")
+      job.plan.target !== undefined ||
+      job.plan.update === true ||
+      (job.plan.mode !== undefined && job.plan.mode.kind !== "normal")
     ) {
       return yield* unsupportedRunPlanError(envelope);
     }
 
-    return plan;
+    const lease = yield* requireExecutionLease(envelope, job);
+
+    return { job, lease };
   });
 
 export const beginMigrationRunExecutionEnvelope = (
@@ -111,10 +109,9 @@ export const beginMigrationRunExecutionEnvelope = (
   WorkflowSdkMigrationRunStepRequirements
 > =>
   Effect.gen(function* () {
-    const plan = yield* resolveRunPlan(envelope);
-    const lease = yield* makeLease(envelope);
+    const { job, lease } = yield* resolveRunJob(envelope);
     const runState = yield* MigrationRunStepExecutor.begin({
-      definitions: plan.definitions,
+      definitions: job.plan.definitions,
       lease,
     });
 
@@ -132,9 +129,8 @@ export const executeMigrationRunCursorWindow = (input: {
   WorkflowSdkMigrationRunStepRequirements
 > =>
   Effect.gen(function* () {
-    const plan = yield* resolveRunPlan(input.envelope);
-    const lease = yield* makeLease(input.envelope);
-    const definition = plan.definitions.find(
+    const { job, lease } = yield* resolveRunJob(input.envelope);
+    const definition = job.plan.definitions.find(
       (candidate) => candidate.id === input.definitionId
     );
 
@@ -154,7 +150,7 @@ export const executeMigrationRunCursorWindow = (input: {
 
     return yield* MigrationRunStepExecutor.executeCursorWindow(definition, {
       definitionId: input.definitionId,
-      definitionIds: plan.executionDefinitionIds,
+      definitionIds: job.plan.executionDefinitionIds,
       lease,
       runId: input.runId,
       state: input.state,
@@ -170,9 +166,8 @@ export const completeMigrationRunExecutionEnvelope = (input: {
   WorkflowSdkMigrationRunStepRequirements
 > =>
   Effect.gen(function* () {
-    const plan = yield* resolveRunPlan(input.envelope);
-    const lease = yield* makeLease(input.envelope);
-    const firstDefinition = plan.definitions[0];
+    const { job, lease } = yield* resolveRunJob(input.envelope);
+    const firstDefinition = job.plan.definitions[0];
 
     if (firstDefinition === undefined) {
       return yield* unsupportedRunPlanError(input.envelope);
@@ -194,16 +189,15 @@ export const failMigrationRunExecutionEnvelope = (input: {
   WorkflowSdkMigrationRunStepRequirements
 > =>
   Effect.gen(function* () {
-    const plan = yield* resolveRunPlan(input.envelope);
-    const lease = yield* makeLease(input.envelope);
-    const firstDefinition = plan.definitions[0];
+    const { job, lease } = yield* resolveRunJob(input.envelope);
+    const firstDefinition = job.plan.definitions[0];
 
     if (firstDefinition === undefined) {
       return yield* unsupportedRunPlanError(input.envelope);
     }
 
     return yield* MigrationRunStepExecutor.fail({
-      definitionIds: plan.executionDefinitionIds,
+      definitionIds: job.plan.executionDefinitionIds,
       error: input.error,
       lease,
       storeLayer: firstDefinition.store,
@@ -218,11 +212,11 @@ export const executeMigrationRollbackExecutionEnvelope = (
   MigrationDefinitionRegistryCatalog | MigrationRollbackExecutor
 > =>
   Effect.gen(function* () {
-    const registry = yield* MigrationDefinitionRegistryCatalog.get(
-      envelope.registryId
-    );
-    const plan = yield* registry.executable().planRollback(envelope.request);
-    const lease = yield* makeLease(envelope);
+    const job = yield* MigrationExecutionJob.fromEnvelope(envelope);
+    const lease = yield* requireExecutionLease(envelope, job);
 
-    return yield* MigrationRollbackExecutor.executePlan(plan, { lease });
+    return yield* MigrationRollbackExecutor.executePlan(job.plan, {
+      ...job.options,
+      lease,
+    });
   });

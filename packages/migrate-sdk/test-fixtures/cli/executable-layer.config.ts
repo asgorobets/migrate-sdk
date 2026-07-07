@@ -1,13 +1,13 @@
 import { Effect, Layer, Schema } from "effect";
 import {
-  InMemoryMigrationStore,
-  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecutable,
   SourceIdentity,
   toMigrationRunId,
 } from "migrate-sdk";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
 const EntrySource = Schema.Struct({ title: Schema.String });

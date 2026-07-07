@@ -1,6 +1,6 @@
 import { Effect, Layer, Predicate, Schema } from "effect";
 import type {
-  MigrationDefinitionForRuntime,
+  MigrationDefinition,
   SourcePayloadSchema,
 } from "../domain/definition.ts";
 import type { MigrationStoreError, SkipItem } from "../domain/errors.ts";
@@ -56,7 +56,7 @@ export interface ProcessSourceItemOptions<
   SourceRequirements = never,
   TrackingContract extends TrackingRecordContract | undefined = undefined,
 > {
-  readonly definition: MigrationDefinitionForRuntime<
+  readonly definition: MigrationDefinition<
     Source,
     PipelineError,
     Cursor,
@@ -394,7 +394,7 @@ const runProcess = <
   SourceRequirements = never,
   TrackingContract extends TrackingRecordContract | undefined = undefined,
 >(
-  definition: MigrationDefinitionForRuntime<
+  definition: MigrationDefinition<
     Source,
     PipelineError,
     Cursor,
@@ -442,7 +442,7 @@ const processWithProcessPipeline = <
   store,
 }: {
   readonly decodedSourceItem: SourceItem<Source, IdentityKey>;
-  readonly definition: MigrationDefinitionForRuntime<
+  readonly definition: MigrationDefinition<
     Source,
     PipelineError,
     Cursor,

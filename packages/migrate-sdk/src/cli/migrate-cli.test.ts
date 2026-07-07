@@ -206,12 +206,16 @@ const jsDefinitionFixtureSource = (): string => `
 
 const configSource = (definitionId: string): string => `
   import {
-    InMemoryMigrationStore,
-    InMemorySource,
     MigrationDefinition,
     MigrationDefinitionRegistry,
-    SourceIdentity
+    SourceIdentity,
   } from "migrate-sdk";
+  import {
+    InMemorySource,
+  } from "migrate-sdk/sources/in-memory";
+  import {
+    InMemoryMigrationStore,
+  } from "migrate-sdk/stores/in-memory";
   import { Schema } from "effect";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
@@ -226,12 +230,16 @@ const configSource = (definitionId: string): string => `
 
 const jsConfigSource = (definitionId: string): string => `
   import {
-    InMemoryMigrationStore,
-    InMemorySource,
     MigrationDefinition,
     MigrationDefinitionRegistry,
-    SourceIdentity
+    SourceIdentity,
   } from "migrate-sdk";
+  import {
+    InMemorySource,
+  } from "migrate-sdk/sources/in-memory";
+  import {
+    InMemoryMigrationStore,
+  } from "migrate-sdk/stores/in-memory";
   import { Schema } from "effect";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
@@ -246,12 +254,16 @@ const jsConfigSource = (definitionId: string): string => `
 
 const graphConfigSource = (): string => `
   import {
-    InMemoryMigrationStore,
-    InMemorySource,
     MigrationDefinition,
     MigrationDefinitionRegistry,
-    SourceIdentity
+    SourceIdentity,
   } from "migrate-sdk";
+  import {
+    InMemorySource,
+  } from "migrate-sdk/sources/in-memory";
+  import {
+    InMemoryMigrationStore,
+  } from "migrate-sdk/stores/in-memory";
   import { Schema } from "effect";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
@@ -289,12 +301,16 @@ const graphConfigSource = (): string => `
 
 const planConfigSource = (): string => `
   import {
-    InMemoryMigrationStore,
-    InMemorySource,
     MigrationDefinition,
     MigrationDefinitionRegistry,
-    SourceIdentity
+    SourceIdentity,
   } from "migrate-sdk";
+  import {
+    InMemorySource,
+  } from "migrate-sdk/sources/in-memory";
+  import {
+    InMemoryMigrationStore,
+  } from "migrate-sdk/stores/in-memory";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
   import { Schema } from "effect";
 
@@ -321,12 +337,16 @@ const planConfigSource = (): string => `
 
 const planNoticeConfigSource = (): string => `
   import {
-    InMemoryMigrationStore,
-    InMemorySource,
     MigrationDefinition,
     MigrationDefinitionRegistry,
-    SourceIdentity
+    SourceIdentity,
   } from "migrate-sdk";
+  import {
+    InMemorySource,
+  } from "migrate-sdk/sources/in-memory";
+  import {
+    InMemoryMigrationStore,
+  } from "migrate-sdk/stores/in-memory";
   import { Schema } from "effect";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
@@ -345,15 +365,17 @@ const planNoticeConfigSource = (): string => `
 const lockedStoreConfigSource = (): string => `
   import { Effect, Layer, Schema } from "effect";
   import {
-    InMemorySource,
     MigrationDefinition,
     MigrationDefinitionRegistry,
     MigrationStore,
     SourceIdentity,
     toMigrationDefinitionId,
     toMigrationDefinitionLockToken,
-    toMigrationRunId
+    toMigrationRunId,
   } from "migrate-sdk";
+  import {
+    InMemorySource,
+  } from "migrate-sdk/sources/in-memory";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
   const EntrySource = Schema.Struct({ title: Schema.String });
@@ -465,12 +487,16 @@ describe("migrate CLI", () => {
           `${project}/migrate.config.ts`,
           `
           import {
-            InMemoryMigrationStore,
-            InMemorySource,
             MigrationDefinition,
             MigrationDefinitionRegistry,
-            SourceIdentity
+            SourceIdentity,
           } from "migrate-sdk";
+          import {
+            InMemorySource,
+          } from "migrate-sdk/sources/in-memory";
+          import {
+            InMemoryMigrationStore,
+          } from "migrate-sdk/stores/in-memory";
           import { Schema } from "effect";
           import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
@@ -3485,12 +3511,16 @@ describe("migrate CLI", () => {
           configPath,
           `
           import {
-            InMemoryMigrationStore,
-            InMemorySource,
             MigrationDefinition,
             MigrationDefinitionRegistry,
-            SourceIdentity
+            SourceIdentity,
           } from "migrate-sdk";
+          import {
+            InMemorySource,
+          } from "migrate-sdk/sources/in-memory";
+          import {
+            InMemoryMigrationStore,
+          } from "migrate-sdk/stores/in-memory";
           import { Schema } from "effect";
           import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
@@ -3615,12 +3645,16 @@ describe("migrate CLI", () => {
         `${configDirectory}/registry.ts`,
         `
           import {
-            InMemoryMigrationStore,
-            InMemorySource,
             MigrationDefinition,
             MigrationDefinitionRegistry,
-            SourceIdentity
+            SourceIdentity,
           } from "migrate-sdk";
+          import {
+            InMemorySource,
+          } from "migrate-sdk/sources/in-memory";
+          import {
+            InMemoryMigrationStore,
+          } from "migrate-sdk/stores/in-memory";
           import { Schema } from "effect";
 
           ${tsDefinitionFixtureSource()}

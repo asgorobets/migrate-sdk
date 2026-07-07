@@ -1,6 +1,5 @@
 import { Effect, Schema } from "effect";
 import {
-  InMemoryMigrationStore,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   Source,
@@ -8,6 +7,7 @@ import {
   SourceItemTotal,
   toMigrationDefinitionId,
 } from "migrate-sdk";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
 const EntrySource = Schema.Struct({ title: Schema.String });

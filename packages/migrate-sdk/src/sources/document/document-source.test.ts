@@ -6,13 +6,13 @@ import { Service } from "effect/Context";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import {
-  InMemoryMigrationStore,
   MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
   SourceError,
   SourceItemTotal,
 } from "migrate-sdk";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import {
   type DocumentFetcher,
   DocumentFetchers,

@@ -18,7 +18,6 @@ import {
   Schema,
 } from "effect";
 import {
-  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecution,
@@ -32,6 +31,7 @@ import {
   Tracking,
   toMigrationDefinitionId,
 } from "migrate-sdk";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
 
 const catalogDefinitionId = "products";
 export const catalogStoreOptions = {

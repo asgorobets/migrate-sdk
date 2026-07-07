@@ -5,12 +5,12 @@ import { Effect, Layer, PlatformError, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import {
-  InMemoryMigrationStore,
   MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
   SourceItemTotal,
 } from "migrate-sdk";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { CsvIdentity, CsvSource } from "migrate-sdk/sources/csv";
 import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
 import { Source } from "../../services/source.ts";

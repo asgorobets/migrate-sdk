@@ -1,8 +1,9 @@
 import { type Effect, Schema } from "effect";
 import type { Tracking } from "../services/tracking.ts";
 import type {
-  MigrationDefinition,
-  MigrationDefinitionForRuntime,
+  AnyMigrationDefinition as AnyMigrationDefinitionShape,
+  MigrationDefinitionRollbackError,
+  MigrationDefinitionSourceIdentityKey,
 } from "./definition.ts";
 import { RollbackRequestError } from "./errors.ts";
 import type {
@@ -39,81 +40,15 @@ export type RollbackPipeline<
   context: RollbackContext
 ) => void | Effect.Effect<void, RollbackError, Tracking>;
 
-export type AnyRollbackMigrationDefinition =
-  MigrationDefinitionForRuntime<
-  // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous rollback requests.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Forward process error is not relevant to rollback request shape.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Cursor is existential across heterogeneous rollback requests.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Source identity key is existential across heterogeneous rollback requests.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Rollback process error is re-extracted by callers when execution exists.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Source input is not relevant to rollback request shape.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Source layer error is not relevant to rollback request shape.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Source requirements are not relevant to rollback request shape.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Tracking contract is existential across heterogeneous rollback requests.
-  any
->;
+export type AnyRollbackMigrationDefinition = AnyMigrationDefinitionShape;
 
-export type MigrationDefinitionRollbackPipelineError<Definition> =
-  Definition extends MigrationDefinition<
-    infer _Source,
-    infer _PipelineError,
-    infer _Cursor,
-    infer _IdentityKey,
-    infer RollbackPipelineError,
-    infer _SourceInput,
-    infer _SourceLayerError,
-    infer _SourceRequirements,
-    infer _TrackingContract
-  >
-    ? RollbackPipelineError
-    : Definition extends MigrationDefinitionForRuntime<
-          infer _Source,
-          infer _PipelineError,
-          infer _Cursor,
-          infer _IdentityKey,
-          infer RollbackPipelineError,
-          infer _SourceInput,
-          infer _SourceLayerError,
-          infer _SourceRequirements,
-          infer _TrackingContract
-        >
-      ? RollbackPipelineError
-      : never;
+export type MigrationDefinitionRollbackPipelineError<
+  Definition extends AnyRollbackMigrationDefinition,
+> = MigrationDefinitionRollbackError<Definition>;
 
-export type RollbackMigrationDefinitionSourceIdentityKey<Definition> =
-  Definition extends MigrationDefinition<
-    infer _Source,
-    infer _PipelineError,
-    infer _Cursor,
-    infer IdentityKey,
-    infer _RollbackPipelineError,
-    infer _SourceInput,
-    infer _SourceLayerError,
-    infer _SourceRequirements,
-    infer _TrackingContract
-  >
-    ? IdentityKey
-    : Definition extends MigrationDefinitionForRuntime<
-          infer _Source,
-          infer _PipelineError,
-          infer _Cursor,
-          infer IdentityKey,
-          infer _RollbackPipelineError,
-          infer _SourceInput,
-          infer _SourceLayerError,
-          infer _SourceRequirements,
-          infer _TrackingContract
-        >
-      ? IdentityKey
-      : never;
+export type RollbackMigrationDefinitionSourceIdentityKey<
+  Definition extends AnyRollbackMigrationDefinition,
+> = MigrationDefinitionSourceIdentityKey<Definition>;
 
 export interface RollbackRequest<
   Definitions extends

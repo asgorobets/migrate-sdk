@@ -5,7 +5,6 @@ import { SqlClient, type Statement } from "effect/unstable/sql";
 import {
   type ConfiguredSource,
   type EncodedSourceIdentityInput,
-  InMemoryMigrationStore,
   MigrationDefinition,
   type MigrationDefinitionRegistryConstructionError,
   type MigrationDefinitionRegistryExecutableError,
@@ -22,6 +21,7 @@ import {
   type SourceVersionInput,
   toEncodedSourceIdentity,
 } from "migrate-sdk";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import {
   SqlIdentity,
   SqlSource,

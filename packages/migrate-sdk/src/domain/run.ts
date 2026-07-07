@@ -1,7 +1,11 @@
 import { Schema } from "effect";
 import type {
-  MigrationDefinition,
-  MigrationDefinitionForRuntime,
+  AnyMigrationDefinition as AnyMigrationDefinitionShape,
+  MigrationDefinitionProcessError,
+  MigrationDefinitionSourceIdentityKey,
+  MigrationDefinitionSourceLayerError,
+  MigrationDefinitionSourceRequirements,
+  MigrationDefinitionTrackingContract,
 } from "./definition.ts";
 import type {
   MigrationExecutionOptions,
@@ -20,163 +24,22 @@ import {
 import type { RunModeInput } from "./run-mode.ts";
 import type { TrackingRecordContract } from "./tracking.ts";
 
-export type AnyMigrationDefinition = MigrationDefinitionForRuntime<
-  // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous run requests.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Process error is re-extracted by MigrationDefinitionPipelineError.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Cursor is existential across heterogeneous run requests.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Source identity key is existential across heterogeneous run requests.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Rollback process error is not relevant to forward run requests.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Source input is existential across heterogeneous run requests.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Source layer error is re-extracted by MigrationDefinitionSourceLayerError.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Source requirements are re-extracted by MigrationDefinitionSourceRequirements.
-  any,
-  // biome-ignore lint/suspicious/noExplicitAny: Tracking contract is existential across heterogeneous run requests.
-  any
->;
+export type {
+  MigrationDefinitionSourceIdentityKey,
+  MigrationDefinitionSourceLayerError,
+  MigrationDefinitionSourceRequirements,
+  MigrationDefinitionTrackingContract,
+} from "./definition.ts";
 
-export type MigrationDefinitionPipelineError<Definition> =
-  Definition extends MigrationDefinition<
-    infer _Source,
-    infer PipelineError,
-    infer _Cursor,
-    infer _IdentityKey,
-    infer _RollbackPipelineError,
-    infer _SourceInput,
-    infer _SourceLayerError,
-    infer _SourceRequirements,
-    infer _TrackingContract
-  >
-    ? PipelineError
-    : Definition extends MigrationDefinitionForRuntime<
-          infer _Source,
-          infer PipelineError,
-          infer _Cursor,
-          infer _IdentityKey,
-          infer _RollbackPipelineError,
-          infer _SourceInput,
-          infer _SourceLayerError,
-          infer _SourceRequirements,
-          infer _TrackingContract
-        >
-      ? PipelineError
-      : never;
+export type AnyMigrationDefinition = AnyMigrationDefinitionShape;
 
-export type MigrationDefinitionSourceLayerError<Definition> =
-  Definition extends MigrationDefinition<
-    infer _Source,
-    infer _PipelineError,
-    infer _Cursor,
-    infer _IdentityKey,
-    infer _RollbackPipelineError,
-    infer _SourceInput,
-    infer SourceLayerError,
-    infer _SourceRequirements,
-    infer _TrackingContract
-  >
-    ? SourceLayerError
-    : Definition extends MigrationDefinitionForRuntime<
-          infer _Source,
-          infer _PipelineError,
-          infer _Cursor,
-          infer _IdentityKey,
-          infer _RollbackPipelineError,
-          infer _SourceInput,
-          infer SourceLayerError,
-          infer _SourceRequirements,
-          infer _TrackingContract
-        >
-      ? SourceLayerError
-      : never;
+export type MigrationDefinitionPipelineError<
+  Definition extends AnyMigrationDefinition,
+> = MigrationDefinitionProcessError<Definition>;
 
-export type MigrationDefinitionSourceRequirements<Definition> =
-  Definition extends MigrationDefinition<
-    infer _Source,
-    infer _PipelineError,
-    infer _Cursor,
-    infer _IdentityKey,
-    infer _RollbackPipelineError,
-    infer _SourceInput,
-    infer _SourceLayerError,
-    infer SourceRequirements,
-    infer _TrackingContract
-  >
-    ? SourceRequirements
-    : Definition extends MigrationDefinitionForRuntime<
-          infer _Source,
-          infer _PipelineError,
-          infer _Cursor,
-          infer _IdentityKey,
-          infer _RollbackPipelineError,
-          infer _SourceInput,
-          infer _SourceLayerError,
-          infer SourceRequirements,
-          infer _TrackingContract
-        >
-      ? SourceRequirements
-      : never;
-
-export type MigrationDefinitionSourceIdentityKey<Definition> =
-  Definition extends MigrationDefinition<
-    infer _Source,
-    infer _PipelineError,
-    infer _Cursor,
-    infer IdentityKey,
-    infer _RollbackPipelineError,
-    infer _SourceInput,
-    infer _SourceLayerError,
-    infer _SourceRequirements,
-    infer _TrackingContract
-  >
-    ? IdentityKey
-    : Definition extends MigrationDefinitionForRuntime<
-          infer _Source,
-          infer _PipelineError,
-          infer _Cursor,
-          infer IdentityKey,
-          infer _RollbackPipelineError,
-          infer _SourceInput,
-          infer _SourceLayerError,
-          infer _SourceRequirements,
-          infer _TrackingContract
-        >
-      ? IdentityKey
-      : never;
-
-export type MigrationDefinitionTrackingContract<Definition> =
-  Definition extends MigrationDefinition<
-    infer _Source,
-    infer _PipelineError,
-    infer _Cursor,
-    infer _IdentityKey,
-    infer _RollbackPipelineError,
-    infer _SourceInput,
-    infer _SourceLayerError,
-    infer _SourceRequirements,
-    infer TrackingContract
-  >
-    ? TrackingContract
-    : Definition extends MigrationDefinitionForRuntime<
-          infer _Source,
-          infer _PipelineError,
-          infer _Cursor,
-          infer _IdentityKey,
-          infer _RollbackPipelineError,
-          infer _SourceInput,
-          infer _SourceLayerError,
-          infer _SourceRequirements,
-          infer TrackingContract
-        >
-      ? TrackingContract
-      : never;
-
-export type MigrationDefinitionTrackingRecord<Definition> =
+export type MigrationDefinitionTrackingRecord<
+  Definition extends AnyMigrationDefinition,
+> =
   MigrationDefinitionTrackingContract<Definition> extends TrackingRecordContract<
     infer Value,
     infer _Encoded

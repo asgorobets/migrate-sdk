@@ -3,12 +3,12 @@ import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSyst
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
 import { Effect, Layer, Schema } from "effect";
 import {
-  InMemoryMigrationStore,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   Source,
   SourceIdentity,
 } from "migrate-sdk";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
 import { CsvIdentity, CsvSource } from "migrate-sdk/sources/csv";
 import {

@@ -1,17 +1,5 @@
 import { Effect, Schema } from "effect";
 import {
-  MigrationDefinitionRegistryCatalog,
-  type MigrationDefinitionRegistryCatalogLookupError,
-} from "../services/migration-definition-registry-catalog.ts";
-import type {
-  MigrationExecutableRollbackError,
-  MigrationExecutableRunError,
-} from "../services/migration-executable.ts";
-import {
-  MigrationRollbackExecutor,
-  MigrationRunExecutor,
-} from "../services/migration-run-executor.ts";
-import {
   MigrationDefinitionId,
   MigrationDefinitionRegistryId,
   MigrationRunId,
@@ -22,13 +10,9 @@ import { MigrationDefinitionLock } from "./lock.ts";
 import type {
   MigrationDefinitionExecutableRollbackPlan,
   MigrationDefinitionExecutableRunPlan,
-  MigrationDefinitionRegistryExecutableError,
-  MigrationDefinitionRegistryPlanningError,
   MigrationDefinitionRegistryRollbackInput,
   MigrationDefinitionRegistryRunInput,
 } from "./registry.ts";
-import type { RollbackRunSummary } from "./rollback.ts";
-import type { MigrationRunSummary } from "./run.ts";
 
 export interface MigrationExecutionEnvelopeBase {
   readonly executionDefinitionIds: readonly MigrationDefinitionId[];
@@ -158,47 +142,3 @@ export const makeMigrationRollbackExecutionEnvelope = (
     })
   );
 };
-
-export type MigrationExecutionEnvelopeExecutionError =
-  | MigrationDefinitionRegistryCatalogLookupError
-  | MigrationDefinitionRegistryPlanningError
-  | MigrationDefinitionRegistryExecutableError
-  | MigrationExecutableRunError
-  | MigrationExecutableRollbackError;
-
-export const executeMigrationExecutionEnvelope = (
-  envelope: MigrationExecutionEnvelope
-): Effect.Effect<
-  MigrationRunSummary | RollbackRunSummary,
-  MigrationExecutionEnvelopeExecutionError,
-  | MigrationDefinitionRegistryCatalog
-  | MigrationRollbackExecutor
-  | MigrationRunExecutor
-> =>
-  Effect.gen(function* () {
-    const registry = yield* MigrationDefinitionRegistryCatalog.get(
-      envelope.registryId
-    );
-    const executionOptions = {
-      runId: envelope.runId,
-      ...(envelope.locks === undefined
-        ? {}
-        : {
-            lease: {
-              locks: envelope.locks,
-              runId: envelope.runId,
-              scopeDefinitionIds: envelope.scopeDefinitionIds,
-            },
-          }),
-    };
-
-    if (envelope.kind === "run") {
-      const plan = yield* registry.executable().planRun(envelope.request);
-
-      return yield* MigrationRunExecutor.executePlan(plan, executionOptions);
-    }
-
-    const plan = yield* registry.executable().planRollback(envelope.request);
-
-    return yield* MigrationRollbackExecutor.executePlan(plan, executionOptions);
-  });

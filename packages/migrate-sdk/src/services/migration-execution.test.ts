@@ -1,7 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import {
-  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryCatalog,
@@ -15,6 +14,7 @@ import {
   SourceIdentity,
   toMigrationRunId,
 } from "migrate-sdk";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,

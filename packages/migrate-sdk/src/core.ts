@@ -15,12 +15,17 @@ export {
 } from "./domain/definition.ts";
 
 export {
-  executeMigrationExecutionEnvelope,
   makeMigrationRollbackExecutionEnvelope,
   makeMigrationRunExecutionEnvelope,
+  MigrationExecutionEnvelope,
+  MigrationExecutionEnvelopeMissingRegistryIdError,
+  MigrationRollbackExecutionEnvelope,
+  MigrationRunExecutionEnvelope,
 } from "./domain/execution-envelope.ts";
 export type {
   MigrationExecutionEnvelope as MigrationExecutionEnvelopeType,
+  MigrationExecutionEnvelopeBase,
+  MigrationExecutionEnvelopeInput,
   MigrationRollbackExecutionEnvelope as MigrationRollbackExecutionEnvelopeType,
   MigrationRunExecutionEnvelope as MigrationRunExecutionEnvelopeType,
 } from "./domain/execution-envelope.ts";
@@ -53,6 +58,15 @@ export type {
   MigrationExecutionRunInput,
   MigrationExecutionService,
 } from "./services/migration-execution.ts";
+export { MigrationExecutionJob } from "./services/migration-execution-job.ts";
+export type {
+  MigrationExecutionJob as MigrationExecutionJobType,
+  MigrationExecutionJobExecutionError,
+  MigrationExecutionJobExecutionRequirements,
+  MigrationExecutionJobResolutionError,
+  MigrationRollbackExecutionJob,
+  MigrationRunExecutionJob,
+} from "./services/migration-execution-job.ts";
 export { MigrationDefinitionRegistryCatalog } from "./services/migration-definition-registry-catalog.ts";
 export type { MigrationDefinitionRegistryCatalogLookupError } from "./services/migration-definition-registry-catalog.ts";
 export {

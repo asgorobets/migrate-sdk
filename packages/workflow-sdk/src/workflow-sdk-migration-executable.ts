@@ -6,8 +6,6 @@ import {
   type MigrationDefinitionId,
   type MigrationDefinitionLock,
   MigrationExecutable,
-  type MigrationExecutionEnvelope,
-  type MigrationExecutionEnvelopeMissingRegistryIdError,
   type MigrationExecutionHandle,
   type MigrationRunId,
   MigrationRunId as MigrationRunIdSchema,
@@ -15,14 +13,19 @@ import {
   MigrationRuntimeError,
   MigrationStore,
   MigrationStoreError,
+  type RollbackRunSummary,
+} from "migrate-sdk";
+import {
+  MigrationExecutionEnvelopeMissingRegistryIdError,
+  type MigrationExecutionEnvelopeType,
   makeMigrationRollbackExecutionEnvelope,
   makeMigrationRunExecutionEnvelope,
-  type RollbackRunSummary,
   validateMigrationRunDependencyPreflight,
-} from "migrate-sdk";
+} from "migrate-sdk/core";
 import type { Run, StartOptions } from "workflow/api";
 
 export type WorkflowSdkRun = Run<unknown>;
+type MigrationExecutionEnvelope = MigrationExecutionEnvelopeType;
 
 export type WorkflowSdkMigrationWorkflow = (
   envelope: MigrationExecutionEnvelope
@@ -371,7 +374,9 @@ export const WorkflowSdkMigrationExecutable = {
       },
       startRollback: (plan: MigrationDefinitionExecutableRollbackPlan) => {
         return Effect.flatMap(
-          validateSharedStore(plan.definitions),
+          validateSharedStore(
+            plan.definitions.map(({ definition }) => definition)
+          ),
           (storeLayer) =>
             startDurablePlan<RollbackRunSummary>({
               input,

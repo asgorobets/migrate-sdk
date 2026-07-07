@@ -301,6 +301,8 @@ export interface MigrationExecutionEnvelope {
   readonly runId: MigrationRunId
   readonly registryId: MigrationDefinitionRegistryId
   readonly kind: "run" | "rollback"
+  /** Locks acquired before handing execution to a durable provider. */
+  readonly locks?: ReadonlyArray<MigrationDefinitionLock>
   /** Durable run ownership boundary: locks, run state, status, and progress. */
   readonly scopeDefinitionIds: ReadonlyArray<MigrationDefinitionId>
   /** Workflow schedule: forward dependency order for runs, reverse order for rollbacks. */
@@ -318,11 +320,20 @@ workflow re-plan against the registry catalog in its own execution context.
 The envelope is not a frozen executable plan. `registryId` and `request` are the
 portable durable inputs. `scopeDefinitionIds` is the run ownership boundary:
 locks, queued/running/terminal run state, status, and progress all use this
-scope. `executionDefinitionIds` is the workflow schedule. Providers with
-immutable deployment boundaries should let the provider keep already-started runs
-on their compatible code world.
+scope. `locks` carries the pre-acquired definition locks when a durable provider
+owns the run lifecycle. `executionDefinitionIds` is the workflow schedule.
+Providers with immutable deployment boundaries should let the provider keep
+already-started runs on their compatible code world.
 
 ```ts
+import {
+  makeMigrationRunExecutionEnvelope,
+  MigrationDefinitionRegistryCatalog,
+  MigrationExecutionJob,
+  MigrationRollbackExecutor,
+  MigrationRunExecutor,
+} from "migrate-sdk/core"
+
 const plan = yield* registry.executable().planRun({
   definitionIds: ["articles"],
 })
@@ -331,10 +342,15 @@ const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
   runId,
 })
 
-const summary = yield* executeMigrationExecutionEnvelope(envelope).pipe(
+const job = yield* MigrationExecutionJob.fromEnvelope(envelope).pipe(
+  Effect.provide(
+    MigrationDefinitionRegistryCatalog.layer({ registries: [registry] })
+  )
+)
+
+const summary = yield* MigrationExecutionJob.execute(job).pipe(
   Effect.provide(
     Layer.mergeAll(
-      MigrationDefinitionRegistryCatalog.layer({ registries: [registry] }),
       MigrationRunExecutor.layer,
       MigrationRollbackExecutor.layer
     )
@@ -345,48 +361,31 @@ const summary = yield* executeMigrationExecutionEnvelope(envelope).pipe(
 The durable workflow handler must execute with `envelope.runId`; it must not
 call the public `MigrationExecutable.startRun(plan)` or `startRollback(plan)`
 after the durable adapter has already allocated a migration run id. Adapter
-implementations can share an internal envelope executor with the inline
-executable:
+implementations should share the core envelope-to-job resolver, then choose the
+execution style their runtime needs:
 
 ```ts
-const executeMigrationEnvelope = Effect.fn("MigrationExecutionEnvelope.execute")(
+const executeMigrationJob = Effect.fn("MigrationExecutionJob.execute")(
   function* (envelope: MigrationExecutionEnvelope) {
-    const registry = yield* MigrationDefinitionRegistryCatalog.get(
-      envelope.registryId
-    )
-
-    if (envelope.kind === "run") {
-      const plan = yield* registry.executable().planRun(envelope.request)
-
-      yield* Effect.logDebug("migration envelope planned order", {
-        runId: envelope.runId,
-        scheduled: envelope.executionDefinitionIds,
-        execution: plan.executionDefinitionIds,
-      })
-
-      return yield* MigrationRunExecutor.executePlan(plan, {
-        runId: envelope.runId,
-      })
-    }
-
-    const plan = yield* registry.executable().planRollback(envelope.request)
+    const job = yield* MigrationExecutionJob.fromEnvelope(envelope)
 
     yield* Effect.logDebug("migration envelope planned order", {
       runId: envelope.runId,
       scheduled: envelope.executionDefinitionIds,
-      execution: plan.executionDefinitionIds,
+      execution: job.plan.executionDefinitionIds,
     })
 
-    return yield* MigrationRollbackExecutor.executePlan(plan, {
-      runId: envelope.runId,
-    })
+    return yield* MigrationExecutionJob.execute(job)
   }
 )
 ```
 
-The envelope executor is an adapter implementation helper, not a second public
-start API. Public callers still start execution through `MigrationExecutable`;
-workflow handlers use the helper only after a run id already exists.
+`MigrationExecutionJob` is not durable data. It is the in-memory result of
+resolving an envelope through the registry catalog: executable plan plus runtime
+options. Whole-plan adapters can call `MigrationExecutionJob.execute(job)`;
+step-based adapters can use `job.plan` and `job.options` directly. Public
+callers still start execution through `MigrationExecutable`; workflow handlers
+resolve jobs only after a run id already exists.
 
 The workflow execution should acquire the selected migration definition locks
 before it starts processing and hold them for the duration of the provider-owned
@@ -463,6 +462,7 @@ migration runtime should therefore execute inside a `"use step"` function called
 by the workflow:
 
 ```ts
+import { MigrationExecutionJob } from "migrate-sdk/core"
 import { start } from "workflow/api"
 
 export async function runMigrationExecutionWorkflow(
@@ -470,18 +470,20 @@ export async function runMigrationExecutionWorkflow(
 ) {
   "use workflow"
 
-  return await executeMigrationEnvelopeStep(envelope)
+  return await executeMigrationJobStep(envelope)
 }
 
-async function executeMigrationEnvelopeStep(
+async function executeMigrationJobStep(
   envelope: MigrationExecutionEnvelope
 ) {
   "use step"
 
   return await Effect.runPromise(
-    executeMigrationEnvelope(envelope).pipe(
-      Effect.provide(ApplicationMigrationLayers)
-    )
+    Effect.gen(function* () {
+      const job = yield* MigrationExecutionJob.fromEnvelope(envelope)
+
+      return yield* MigrationExecutionJob.execute(job)
+    }).pipe(Effect.provide(ApplicationMigrationLayers))
   )
 }
 ```
@@ -489,14 +491,12 @@ async function executeMigrationEnvelopeStep(
 The Workflow SDK adapter starts that workflow with the envelope:
 
 ```ts
-const envelope: MigrationExecutionEnvelope = {
-  runId: MigrationRunId.make(),
-  registryId: plan.registryId,
-  kind: "run",
-  scopeDefinitionIds: plan.includedDefinitionIds,
-  executionDefinitionIds: plan.executionDefinitionIds,
-  request: plan.request,
-}
+const runId = MigrationRunId.make()
+const locks = yield* acquireLocks(store, runId, plan.includedDefinitionIds)
+const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
+  locks,
+  runId,
+})
 
 yield* MigrationRunStateStore.createQueued({
   runId: envelope.runId,
@@ -582,12 +582,14 @@ experimental until that Effect API stabilizes.
 
 ```ts
 import { Schema } from "effect"
+import { MigrationExecutionJob } from "migrate-sdk/core"
 import { Workflow } from "effect/unstable/workflow"
 
 export const MigrationExecutionEnvelopeSchema = Schema.Struct({
   runId: MigrationRunId,
   registryId: MigrationDefinitionRegistryId,
   kind: Schema.Literals(["run", "rollback"]),
+  locks: Schema.optional(Schema.Array(MigrationDefinitionLock)),
   scopeDefinitionIds: Schema.Array(MigrationDefinitionId),
   executionDefinitionIds: Schema.Array(MigrationDefinitionId),
   request: Schema.Unknown,
@@ -603,7 +605,9 @@ export const MigrationRunWorkflow = Workflow.make({
 
 export const MigrationRunWorkflowLayer = MigrationRunWorkflow.toLayer(
   Effect.fn("MigrationRunWorkflow")(function* (envelope) {
-    return yield* executeMigrationEnvelope(envelope)
+    const job = yield* MigrationExecutionJob.fromEnvelope(envelope)
+
+    return yield* MigrationExecutionJob.execute(job)
   })
 )
 ```
@@ -618,9 +622,11 @@ The Effect workflow adapter starts the workflow with `discard: true`, receives
 the provider execution id immediately, and returns `started`:
 
 ```ts
-const envelope = MigrationExecutionEnvelope.fromPlan({
-  runId: MigrationRunId.make(),
-  plan,
+const runId = MigrationRunId.make()
+const locks = yield* acquireLocks(store, runId, plan.includedDefinitionIds)
+const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
+  locks,
+  runId,
 })
 
 yield* MigrationRunStateStore.createQueued({

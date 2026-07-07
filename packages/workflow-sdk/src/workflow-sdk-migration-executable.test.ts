@@ -1,12 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import {
-  InMemoryMigrationStore,
-  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecutable,
-  type MigrationExecutionEnvelope,
   MigrationRuntimeError,
   MigrationStore,
   MigrationStoreError,
@@ -14,6 +11,9 @@ import {
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "migrate-sdk";
+import type { MigrationExecutionEnvelopeType } from "migrate-sdk/core";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { Run, start as workflowStart } from "workflow/api";
 import {
   WorkflowSdkMigrationExecutable,
@@ -24,6 +24,8 @@ import {
   type WorkflowSdkStartOptions,
   type WorkflowSdkWorkflowMetadata,
 } from "./workflow-sdk-migration-executable.ts";
+
+type MigrationExecutionEnvelope = MigrationExecutionEnvelopeType;
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,

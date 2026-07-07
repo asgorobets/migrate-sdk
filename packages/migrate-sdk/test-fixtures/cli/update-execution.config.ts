@@ -1,8 +1,6 @@
 import { Schema } from "effect";
 import {
   defaultSourceVersionContractFingerprint,
-  InMemoryMigrationStore,
-  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   SourceIdentity,
@@ -11,6 +9,8 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
 const EntrySource = Schema.Struct({ title: Schema.String });

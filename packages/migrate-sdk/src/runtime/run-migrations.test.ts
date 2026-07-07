@@ -10,7 +10,19 @@ import {
 } from "effect";
 import { MinimumLogLevel } from "effect/References";
 import { TestClock } from "effect/testing";
-import type { InMemoryEntryUpsertedChange } from "migrate-sdk/destinations/in-memory";
+import {
+  InMemoryDestination,
+  type InMemoryEntryUpsertedChange,
+} from "migrate-sdk/destinations/in-memory";
+import {
+  InMemorySource,
+  InMemorySourceCursor,
+  type InMemorySourceOptions,
+} from "migrate-sdk/sources/in-memory";
+import {
+  InMemoryMigrationStore,
+  type InMemoryMigrationStoreState,
+} from "migrate-sdk/stores/in-memory";
 import { expectTypeOf } from "vitest";
 import {
   defaultSourceVersionContractFingerprint,
@@ -18,12 +30,6 @@ import {
 } from "../domain/migration-contract.ts";
 import {
   DestinationChangeDescriptor,
-  InMemoryDestination,
-  InMemoryMigrationStore,
-  type InMemoryMigrationStoreState,
-  InMemorySource,
-  InMemorySourceCursor,
-  type InMemorySourceOptions,
   MigrationDefinition,
   MigrationDefinitionLock,
   MigrationDefinitionRegistryConstructionError,

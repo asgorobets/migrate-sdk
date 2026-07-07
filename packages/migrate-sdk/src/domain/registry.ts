@@ -1,10 +1,7 @@
 import { Effect, Option, Schema } from "effect";
 import { getMigrationStatuses } from "../runtime/get-migration-statuses.ts";
 import type { Tracking } from "../services/tracking.ts";
-import type {
-  MigrationDefinition,
-  MigrationDefinitionForRuntime,
-} from "./definition.ts";
+import type { MigrationDefinitionTrackingContract } from "./definition.ts";
 import type {
   MigrationExecutionOptions,
   PipelineExecutionConcurrency,
@@ -48,33 +45,6 @@ import type { TrackingRecordContract } from "./tracking.ts";
 
 type AnyRollbackMigrationDefinitions =
   readonly AnyRollbackMigrationDefinition[];
-
-type MigrationDefinitionTrackingContract<Definition> =
-  Definition extends MigrationDefinition<
-    infer _Source,
-    infer _PipelineError,
-    infer _Cursor,
-    infer _IdentityKey,
-    infer _RollbackPipelineError,
-    infer _SourceInput,
-    infer _SourceLayerError,
-    infer _SourceRequirements,
-    infer TrackingContract
-  >
-    ? TrackingContract
-    : Definition extends MigrationDefinitionForRuntime<
-          infer _Source,
-          infer _PipelineError,
-          infer _Cursor,
-          infer _IdentityKey,
-          infer _RollbackPipelineError,
-          infer _SourceInput,
-          infer _SourceLayerError,
-          infer _SourceRequirements,
-          infer TrackingContract
-        >
-      ? TrackingContract
-      : TrackingRecordContract | undefined;
 
 export interface MigrationDefinitionRegistryInput<
   Definitions extends
@@ -1462,7 +1432,9 @@ export class MigrationDefinitionRegistry<
   ) {
     validateConstruction(definitions);
 
-    this.#definitions = Object.freeze([...definitions]) as unknown as Definitions;
+    this.#definitions = Object.freeze([
+      ...definitions,
+    ]) as unknown as Definitions;
     this.#id = id;
     this.#missingRequirements = missingRequirements;
     this.#definitionsById = new Map(

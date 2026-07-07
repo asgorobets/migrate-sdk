@@ -29,12 +29,12 @@ import { Effect, Schema } from "effect";
 import {
   type DestinationError,
   type DestinationJournalChangeEntry,
-  InMemoryMigrationStore,
-  InMemorySource,
   MigrationDefinition,
   SourceIdentity,
   Tracking,
 } from "migrate-sdk";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import {
   rollbackInlineDefinition,
   runInlineRegistry,

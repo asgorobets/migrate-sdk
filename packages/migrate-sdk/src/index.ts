@@ -73,24 +73,6 @@ export {
   toSourceVersion,
 } from "./domain/ids.ts";
 
-export {
-  executeMigrationExecutionEnvelope,
-  makeMigrationRollbackExecutionEnvelope,
-  makeMigrationRunExecutionEnvelope,
-  MigrationExecutionEnvelope,
-  MigrationExecutionEnvelopeMissingRegistryIdError,
-  MigrationRollbackExecutionEnvelope,
-  MigrationRunExecutionEnvelope,
-} from "./domain/execution-envelope.ts";
-export type {
-  MigrationExecutionEnvelope as MigrationExecutionEnvelopeType,
-  MigrationExecutionEnvelopeBase,
-  MigrationExecutionEnvelopeExecutionError,
-  MigrationExecutionEnvelopeInput,
-  MigrationRollbackExecutionEnvelope as MigrationRollbackExecutionEnvelopeType,
-  MigrationRunExecutionEnvelope as MigrationRunExecutionEnvelopeType,
-} from "./domain/execution-envelope.ts";
-
 export type {
   MigrationContract,
   SourceVersionContractIdInput,
@@ -301,7 +283,6 @@ export type {
   MigrationExecutableService,
 } from "./services/migration-executable.ts";
 export { MigrationExecution } from "./services/migration-execution.ts";
-export { validateMigrationRunDependencyPreflight } from "./services/migration-run-executor.ts";
 export type {
   BoundMigrationExecutionService,
   MigrationExecutionMakeInput,
@@ -331,71 +312,3 @@ export type {
   TrackingProcessContext,
   TrackingService,
 } from "./services/tracking.ts";
-
-export { InMemoryDestination } from "./destinations/in-memory/in-memory-destination.ts";
-export type {
-  InMemoryEntryDestinationModule,
-  InMemoryEntryDestinationModuleOptions,
-  InMemoryEntryFieldSchema,
-  InMemoryDestinationTransientFailures,
-  InMemoryEntryUpsertedChange,
-} from "./destinations/in-memory/in-memory-destination.ts";
-
-export { InMemorySource } from "./sources/in-memory/in-memory-source.ts";
-export { InMemorySourceCursor } from "./sources/in-memory/in-memory-source.ts";
-export type {
-  InMemorySourceOptions,
-  InMemorySourceState,
-  InMemorySourceTransientFailures,
-} from "./sources/in-memory/in-memory-source.ts";
-
-export {
-  CsvIdentity,
-  CsvSourceCursor,
-  CsvSource,
-} from "./sources/csv/csv-source.ts";
-export type {
-  CsvCompositeIdentityKey,
-  CsvDialect,
-  CsvEmptyRows,
-  CsvHeaders,
-  CsvIdentityDefinition,
-  CsvIdentityKeySelector,
-  CsvSourceOptions,
-  CsvSourcePlatform,
-  CsvVersion,
-} from "./sources/csv/csv-source.ts";
-
-export {
-  SqlIdentity,
-  SqlSource,
-  SqlSourceName,
-} from "./sources/sql/sql-source.ts";
-export type {
-  AnySqlIdentityDefinition,
-  SqlIdentityColumn,
-  SqlIdentityColumns,
-  SqlIdentityDefinition,
-  SqlSourceCount,
-  SqlSourceCountEffect,
-  SqlSourceCountStatement,
-  SqlSourceEffectCount,
-  SqlSourceLookup,
-  SqlSourceMetadata,
-  SqlSourceMetadataContext,
-  SqlSourceMetadataFailure,
-  SqlSourceMetadataResult,
-  SqlSourceMetadataSuccess,
-  SqlSourceOptions,
-  SqlSourceRead,
-  SqlSourceStatementCount,
-} from "./sources/sql/sql-source.ts";
-
-export { InMemoryMigrationStore } from "./stores/in-memory/in-memory-migration-store.ts";
-export type { InMemoryMigrationStoreState } from "./stores/in-memory/in-memory-migration-store.ts";
-
-export {
-  FileMigrationStore,
-  FileMigrationStorePlatform,
-} from "./stores/file/file-migration-store.ts";
-export type { FileMigrationStoreOptions } from "./stores/file/file-migration-store.ts";

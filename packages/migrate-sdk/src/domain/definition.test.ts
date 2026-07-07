@@ -1,15 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, type Layer, Schema } from "effect";
-import { expectTypeOf } from "vitest";
 import {
   type ConfiguredSource,
   MigrationDefinition,
-  type MigrationDefinitionInput,
   type MigrationStore,
   type MigrationStoreError,
   type TrackingRecord,
   TrackingRecordContract,
 } from "migrate-sdk";
+import { expectTypeOf } from "vitest";
+import type { MigrationDefinitionInputForSource } from "./definition.ts";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -38,13 +38,8 @@ describe("MigrationDefinition", () => {
       process: () => Effect.void,
     };
     // @ts-expect-error tracked definition inputs must provide the tracking contract.
-    const trackedDefinitionMissingTracking: MigrationDefinitionInput<
-      ArticleSource,
-      never,
-      unknown,
-      string,
-      never,
-      ArticleSource,
+    const trackedDefinitionMissingTracking: MigrationDefinitionInputForSource<
+      typeof source,
       never,
       never,
       typeof articleTracking

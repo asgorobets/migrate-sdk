@@ -18,7 +18,6 @@ import {
 } from "@migrate-sdk/commercetools/testing";
 import { Effect, Layer, Schema } from "effect";
 import {
-  InMemoryMigrationStore,
   MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
@@ -27,6 +26,7 @@ import {
   SourceIdentity,
   SourceItemTotal,
 } from "migrate-sdk";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { runInlineDefinition } from "migrate-sdk/testing";
 import { expectTypeOf } from "vitest";
 

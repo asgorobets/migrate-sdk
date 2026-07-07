@@ -1,9 +1,6 @@
 import { Deferred, Effect, Exit, Layer, Predicate, Schema } from "effect";
 import { Service } from "effect/Context";
-import {
-  type MigrationDefinition,
-  type MigrationDefinitionForRuntime,
-} from "../domain/definition.ts";
+import type { MigrationDefinition } from "../domain/definition.ts";
 import {
   MigrationReferenceLookupError,
   MigrationRuntimeError,
@@ -1418,20 +1415,17 @@ const rollbackItemState = ({
         : { sourceVersion: itemState.sourceVersion }),
     });
 
-    const typedItemState =
-      yield* decodeStoredItemStateForTrackingContract(
-        itemState,
-        executable.tracking
-      ).pipe(
-        Effect.catch((error) =>
-          appendFailedRollbackAttempt(itemState, runId, tracking, error).pipe(
-            Effect.flatMap((updatedState) =>
-              store.upsertItemState(updatedState)
-            ),
-            Effect.as(null)
-          )
+    const typedItemState = yield* decodeStoredItemStateForTrackingContract(
+      itemState,
+      executable.tracking
+    ).pipe(
+      Effect.catch((error) =>
+        appendFailedRollbackAttempt(itemState, runId, tracking, error).pipe(
+          Effect.flatMap((updatedState) => store.upsertItemState(updatedState)),
+          Effect.as(null)
         )
-      );
+      )
+    );
 
     if (typedItemState === null) {
       return "failed" as const;
@@ -1480,11 +1474,12 @@ interface ProcessTargetedSourceIdentitiesOptions<
   SourceInput,
   SourceLayerError,
   SourceRequirements,
-  TrackingContract extends
-    TrackingRecordContract | undefined = TrackingRecordContract | undefined,
+  TrackingContract extends TrackingRecordContract | undefined =
+    | TrackingRecordContract
+    | undefined,
 > {
   readonly counts: MutableDefinitionCounts;
-  readonly definition: MigrationDefinitionForRuntime<
+  readonly definition: MigrationDefinition<
     Source,
     PipelineError,
     Cursor,
@@ -1516,8 +1511,9 @@ const processTargetedSourceIdentities = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
-  TrackingContract extends
-    TrackingRecordContract | undefined = TrackingRecordContract | undefined,
+  TrackingContract extends TrackingRecordContract | undefined =
+    | TrackingRecordContract
+    | undefined,
 >({
   counts,
   definition,
@@ -1637,11 +1633,12 @@ interface ProcessCursorDiscoveryOptions<
   SourceInput,
   SourceLayerError,
   SourceRequirements,
-  TrackingContract extends
-    TrackingRecordContract | undefined = TrackingRecordContract | undefined,
+  TrackingContract extends TrackingRecordContract | undefined =
+    | TrackingRecordContract
+    | undefined,
 > {
   readonly counts: MutableDefinitionCounts;
-  readonly definition: MigrationDefinitionForRuntime<
+  readonly definition: MigrationDefinition<
     Source,
     PipelineError,
     Cursor,
@@ -1673,8 +1670,9 @@ const processNextCursorWindow = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
-  TrackingContract extends
-    TrackingRecordContract | undefined = TrackingRecordContract | undefined,
+  TrackingContract extends TrackingRecordContract | undefined =
+    | TrackingRecordContract
+    | undefined,
 >({
   counts,
   definition,
@@ -1764,8 +1762,9 @@ const processCursorDiscovery = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
-  TrackingContract extends
-    TrackingRecordContract | undefined = TrackingRecordContract | undefined,
+  TrackingContract extends TrackingRecordContract | undefined =
+    | TrackingRecordContract
+    | undefined,
 >({
   counts,
   definition,
@@ -2174,10 +2173,11 @@ const runMigrationDefinition = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
-  TrackingContract extends
-    TrackingRecordContract | undefined = TrackingRecordContract | undefined,
+  TrackingContract extends TrackingRecordContract | undefined =
+    | TrackingRecordContract
+    | undefined,
 >(
-  definition: MigrationDefinitionForRuntime<
+  definition: MigrationDefinition<
     Source,
     PipelineError,
     Cursor,
@@ -2336,10 +2336,11 @@ const runMigrationDefinitionCursorWindow = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
-  TrackingContract extends
-    TrackingRecordContract | undefined = TrackingRecordContract | undefined,
+  TrackingContract extends TrackingRecordContract | undefined =
+    | TrackingRecordContract
+    | undefined,
 >(
-  definition: MigrationDefinitionForRuntime<
+  definition: MigrationDefinition<
     Source,
     PipelineError,
     Cursor,
@@ -2461,10 +2462,11 @@ const executeMigrationRunDefinitionCursorWindow = <
   SourceInput,
   SourceLayerError,
   SourceRequirements,
-  TrackingContract extends
-    TrackingRecordContract | undefined = TrackingRecordContract | undefined,
+  TrackingContract extends TrackingRecordContract | undefined =
+    | TrackingRecordContract
+    | undefined,
 >(
-  definition: MigrationDefinitionForRuntime<
+  definition: MigrationDefinition<
     Source,
     PipelineError,
     Cursor,
@@ -2883,11 +2885,7 @@ const executePlannedRollbackDefinitions = <
             Effect.forEach(
               input.definitions,
               (executable) =>
-                validateRollbackPipelinePreflight(
-                  store,
-                  executable,
-                  options
-                ),
+                validateRollbackPipelinePreflight(store, executable, options),
               { discard: true }
             )
           )
@@ -3118,8 +3116,9 @@ export interface MigrationRunExecutorService {
     SourceInput,
     SourceLayerError,
     SourceRequirements,
-    TrackingContract extends
-      TrackingRecordContract | undefined = TrackingRecordContract | undefined,
+    TrackingContract extends TrackingRecordContract | undefined =
+      | TrackingRecordContract
+      | undefined,
   >(
     definition: MigrationDefinition<
       Source,
@@ -3208,8 +3207,9 @@ export class MigrationRunExecutor extends Service<
     SourceInput,
     SourceLayerError,
     SourceRequirements,
-    TrackingContract extends
-      TrackingRecordContract | undefined = TrackingRecordContract | undefined,
+    TrackingContract extends TrackingRecordContract | undefined =
+      | TrackingRecordContract
+      | undefined,
   >(
     definition: MigrationDefinition<
       Source,

@@ -48,6 +48,10 @@ const configuredSourceTypeId: unique symbol = Symbol.for(
   "@migrate-sdk/ConfiguredSource"
 );
 
+const migrationDefinitionTypeId: unique symbol = Symbol.for(
+  "@migrate-sdk/MigrationDefinition"
+);
+
 export type SourcePayloadSchema<A, SourceInput = unknown> = Schema.Codec<
   A,
   SourceInput,
@@ -102,6 +106,39 @@ export interface ConfiguredSource<
     readonly sourceInput: SourceInput;
   };
 }
+
+export type AnyConfiguredSource = ConfiguredSource<
+  // biome-ignore lint/suspicious/noExplicitAny: Configured sources are existential in heterogeneous registries.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Cursor is recovered through ConfiguredSourceCursor.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Identity key is recovered through ConfiguredSourceIdentityKey.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source input is recovered through ConfiguredSourceInput.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source layer error is recovered through ConfiguredSourceLayerError.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Source requirements are recovered through ConfiguredSourceRequirements.
+  any
+>;
+
+export type ConfiguredSourceSource<Source extends AnyConfiguredSource> =
+  Source[typeof configuredSourceTypeId]["source"];
+
+export type ConfiguredSourceCursor<Source extends AnyConfiguredSource> =
+  Source[typeof configuredSourceTypeId]["cursor"];
+
+export type ConfiguredSourceIdentityKey<Source extends AnyConfiguredSource> =
+  Source[typeof configuredSourceTypeId]["identityKey"];
+
+export type ConfiguredSourceInput<Source extends AnyConfiguredSource> =
+  Source[typeof configuredSourceTypeId]["sourceInput"];
+
+export type ConfiguredSourceLayerError<Source extends AnyConfiguredSource> =
+  Source[typeof configuredSourceTypeId]["sourceLayerError"];
+
+export type ConfiguredSourceRequirements<Source extends AnyConfiguredSource> =
+  Source[typeof configuredSourceTypeId]["sourceRequirements"];
 
 export interface SourceImplementation<
   A,
@@ -451,6 +488,19 @@ interface MigrationDefinitionBase<
   SourceRequirements = never,
   TrackingContract extends TrackingRecordContract | undefined = undefined,
 > {
+  readonly [migrationDefinitionTypeId]: {
+    readonly processError: PipelineError;
+    readonly rollbackError: RollbackPipelineError;
+    readonly source: ConfiguredSource<
+      Source,
+      Cursor,
+      IdentityKey,
+      SourceInput,
+      SourceLayerError,
+      SourceRequirements
+    >;
+    readonly tracking: TrackingContract;
+  };
   readonly dependencies?: MigrationDefinitionDependencies;
   readonly execution?: NormalizedMigrationExecutionOptions;
   readonly id: MigrationDefinitionId;
@@ -516,34 +566,78 @@ export type MigrationDefinition<
 > &
   MigrationDefinitionTracking<TrackingContract>;
 
-// Runtime code carries definitions without calling the author rollback callback
-// directly. Executable rollback plans carry the callback with its contract.
-export type MigrationDefinitionForRuntime<
-  Source,
-  PipelineError = never,
-  Cursor = unknown,
-  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  RollbackPipelineError = PipelineError,
-  SourceInput = Source,
-  SourceLayerError = never,
-  SourceRequirements = never,
-  TrackingContract extends TrackingRecordContract | undefined = undefined,
-> = Omit<
-  MigrationDefinition<
-    Source,
-    PipelineError,
-    Cursor,
-    IdentityKey,
-    RollbackPipelineError,
-    SourceInput,
-    SourceLayerError,
-    SourceRequirements,
-    TrackingContract
+export type AnyMigrationDefinition = Omit<
+  MigrationDefinitionBase<
+    // biome-ignore lint/suspicious/noExplicitAny: Source is existential across heterogeneous definition collections.
+    any,
+    // biome-ignore lint/suspicious/noExplicitAny: Process error is recovered through MigrationDefinitionProcessError.
+    any,
+    // biome-ignore lint/suspicious/noExplicitAny: Cursor is recovered through the definition source.
+    any,
+    // biome-ignore lint/suspicious/noExplicitAny: Identity key is recovered through MigrationDefinitionSourceIdentityKey.
+    any,
+    // biome-ignore lint/suspicious/noExplicitAny: Rollback error is recovered through MigrationDefinitionRollbackError.
+    any,
+    // biome-ignore lint/suspicious/noExplicitAny: Source input is recovered through the definition source.
+    any,
+    // biome-ignore lint/suspicious/noExplicitAny: Source layer error is recovered through the definition source.
+    any,
+    // biome-ignore lint/suspicious/noExplicitAny: Source requirements are recovered through the definition source.
+    any,
+    // biome-ignore lint/suspicious/noExplicitAny: Tracking contract is recovered through MigrationDefinitionTrackingContract.
+    any
   >,
   "rollback"
 > & {
-  readonly rollback?: unknown;
+  // biome-ignore lint/suspicious/noExplicitAny: Any definition is the heterogeneous registry boundary; concrete rollback state is preserved on individual definitions.
+  readonly rollback?: RollbackPipeline<any, any>;
+  readonly tracking?: TrackingRecordContract | undefined;
 };
+
+export type MigrationDefinitionSource<
+  Definition extends AnyMigrationDefinition,
+> = Definition[typeof migrationDefinitionTypeId]["source"];
+
+export type MigrationDefinitionProcessError<
+  Definition extends AnyMigrationDefinition,
+> = Definition[typeof migrationDefinitionTypeId]["processError"];
+
+export type MigrationDefinitionRollbackError<
+  Definition extends AnyMigrationDefinition,
+> = Definition[typeof migrationDefinitionTypeId]["rollbackError"];
+
+export type MigrationDefinitionTrackingContract<
+  Definition extends AnyMigrationDefinition,
+> = Definition[typeof migrationDefinitionTypeId]["tracking"];
+
+export type MigrationDefinitionSourceLayerError<
+  Definition extends AnyMigrationDefinition,
+> = ConfiguredSourceLayerError<MigrationDefinitionSource<Definition>>;
+
+export type MigrationDefinitionSourceRequirements<
+  Definition extends AnyMigrationDefinition,
+> = ConfiguredSourceRequirements<MigrationDefinitionSource<Definition>>;
+
+export type MigrationDefinitionSourceIdentityKey<
+  Definition extends AnyMigrationDefinition,
+> = ConfiguredSourceIdentityKey<MigrationDefinitionSource<Definition>>;
+
+export type MigrationDefinitionInputForSource<
+  Source extends AnyConfiguredSource,
+  PipelineError = never,
+  RollbackPipelineError = PipelineError,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
+> = MigrationDefinitionInput<
+  ConfiguredSourceSource<Source>,
+  PipelineError,
+  ConfiguredSourceCursor<Source>,
+  ConfiguredSourceIdentityKey<Source>,
+  RollbackPipelineError,
+  ConfiguredSourceInput<Source>,
+  ConfiguredSourceLayerError<Source>,
+  ConfiguredSourceRequirements<Source>,
+  TrackingContract
+>;
 
 export interface MigrationDefinitionDependencies {
   readonly optional: readonly MigrationDefinitionId[];
@@ -577,7 +671,7 @@ export type MigrationDefinitionInput<
     SourceRequirements,
     TrackingContract
   >,
-  "dependencies" | "execution" | "id"
+  "dependencies" | "execution" | "id" | typeof migrationDefinitionTypeId
 > &
   MigrationDefinitionTrackingInput<TrackingContract> & {
     readonly dependencies?: MigrationDefinitionDependenciesInput;
@@ -733,6 +827,7 @@ function makeMigrationDefinition<
     requiredDependencies.length > 0 || optionalDependencies.length > 0;
 
   const normalizedDefinition = {
+    [migrationDefinitionTypeId]: undefined as never,
     ...rest,
     ...(execution === undefined ? {} : { execution }),
     id: toMigrationDefinitionId(id),

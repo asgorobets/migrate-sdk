@@ -1,8 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import {
-  InMemoryMigrationStore,
-  InMemorySource,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecutable,
@@ -12,6 +10,8 @@ import {
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "migrate-sdk";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import {
   TestDurableMigrationExecutable,
   TestDurableMigrationExecutableAttachError,

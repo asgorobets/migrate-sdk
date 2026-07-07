@@ -3,8 +3,6 @@ import { Effect, type Layer, Option, Schema } from "effect";
 import {
   defaultSourceVersionContractFingerprint,
   type ExecutionStartResult,
-  InMemoryMigrationStore,
-  InMemorySource,
   MigrationDefinition,
   type MigrationDefinitionDependenciesInput,
   type MigrationDefinitionExecutableRollbackPlan,
@@ -33,6 +31,12 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
+import {
+  InMemorySource,
+} from "migrate-sdk/sources/in-memory";
+import {
+  InMemoryMigrationStore,
+} from "migrate-sdk/stores/in-memory";
 import { expectTypeOf } from "vitest";
 
 const ArticleSource = Schema.Struct({
