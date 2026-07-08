@@ -3,6 +3,7 @@ import { Effect, Layer, Schema } from "effect";
 import { Service } from "effect/Context";
 import {
   type ConfiguredSource,
+  MigrationDefinition,
   Source,
   type Source as SourceContract,
   SourceError,
@@ -14,7 +15,10 @@ import {
   type SourceReadResultInput,
   toSourceVersion,
 } from "migrate-sdk";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { expectTypeOf } from "vitest";
+import { MigrationDefinitionSource } from "../services/migration-definition-source.ts";
+import { useConfiguredSource } from "../testing/configured-source-runtime.ts";
 
 const RemoteArticle = Schema.Struct({
   id: Schema.String,
@@ -85,6 +89,62 @@ class ArticleApi extends Service<
     >;
   }
 >()("@migrate-sdk/test/ArticleApi") {}
+
+interface ScopedSourceDependencyState {
+  closed: boolean;
+  reads: number;
+  releases: number;
+}
+
+class ScopedSourceDependency extends Service<
+  ScopedSourceDependency,
+  {
+    readonly read: () => Effect.Effect<
+      SourceReadResultInput<RemoteArticle, RemoteArticleCursor, string>,
+      SourceError
+    >;
+  }
+>()("@migrate-sdk/test/ScopedSourceDependency") {}
+
+const makeScopedSourceDependencyLayer = (
+  state: ScopedSourceDependencyState
+): Layer.Layer<ScopedSourceDependency> =>
+  Layer.effect(
+    ScopedSourceDependency,
+    Effect.acquireRelease(
+      Effect.sync(() => ({
+        read: () =>
+          Effect.gen(function* () {
+            state.reads += 1;
+
+            if (state.closed) {
+              return yield* new SourceError({
+                message: "Scoped source dependency was closed before read",
+              });
+            }
+
+            return {
+              items: [
+                {
+                  identityKey: "article-1",
+                  item: {
+                    id: "article-1",
+                    title: "One",
+                    updatedAt: "2026-06-05T10:00:00.000Z",
+                  },
+                  version: "2026-06-05T10:00:00.000Z",
+                },
+              ],
+            };
+          }),
+      })),
+      () =>
+        Effect.sync(() => {
+          state.closed = true;
+          state.releases += 1;
+        })
+    )
+  );
 
 const makeArticleApiLayer = (state: ArticleApiState): Layer.Layer<ArticleApi> =>
   Layer.sync(ArticleApi, () => {
@@ -174,27 +234,30 @@ describe("Source", () => {
           }),
       });
 
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const page = yield* sourceService.read(null);
-      const firstItem = page.items[0];
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const page = yield* sourceRuntime.read(null);
+          const firstItem = page.items[0];
 
-      if (firstItem === undefined) {
-        throw new Error("Expected source page to include one item");
-      }
+          if (firstItem === undefined) {
+            throw new Error("Expected source page to include one item");
+          }
 
-      const item = yield* sourceService.readByIdentity(firstItem.identity);
+          const item = yield* sourceRuntime.readByIdentity(firstItem.identity);
 
-      expect(sourceService.cursorSchema).toBe(RemoteArticleCursor);
-      expect(sourceService.identity).toBe(RemoteArticleIdentity);
-      expect(sourceService.sourceSchema).toBe(RemoteArticle);
-      expect(sourceService.lookupStrategy).toBe("direct");
-      expect(sourceService.countTotal).toBeUndefined();
-      expect(page.items[0]?.identity).toEqual(
-        SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
-      );
-      expect(page.items[0]?.version).toBe("2026-06-05T10:00:00.000Z");
-      expect(item?.identity).toEqual(
-        SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
+          expect(sourceRuntime.cursorSchema).toBe(RemoteArticleCursor);
+          expect(sourceRuntime.identity).toBe(RemoteArticleIdentity);
+          expect(sourceRuntime.sourceSchema).toBe(RemoteArticle);
+          expect(sourceRuntime.lookupStrategy).toBe("direct");
+          expect(sourceRuntime.countTotal).toBeUndefined();
+          expect(page.items[0]?.identity).toEqual(
+            SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
+          );
+          expect(page.items[0]?.version).toBe("2026-06-05T10:00:00.000Z");
+          expect(item?.identity).toEqual(
+            SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
+          );
+        })
       );
     })
   );
@@ -213,62 +276,153 @@ describe("Source", () => {
         readByIdentity: () => Effect.succeed(null),
         countTotal: () => Effect.succeed(0),
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected source to expose total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected source to expose total count");
-      }
+          const total = yield* sourceRuntime.countTotal();
 
-      const total = yield* sourceService.countTotal();
-
-      expect(total).toEqual(SourceItemTotal.known(0));
+          expect(total).toEqual(SourceItemTotal.known(0));
+        })
+      );
     })
   );
 
-  it.effect("adapts an existing source layer", () =>
+  it.effect("adapts a source runtime layer", () =>
     Effect.gen(function* () {
       const source = Source.fromLayer({
+        layer: (SourceRuntimeService) =>
+          Layer.effect(
+            SourceRuntimeService,
+            Effect.succeed(
+              SourceRuntimeService.of({
+                lookupStrategy: "direct",
+                read: () =>
+                  Effect.succeed({
+                    items: [
+                      {
+                        identityKey: "article-1",
+                        version: toSourceVersion("2026-06-05T10:00:00.000Z"),
+                        item: {
+                          id: "article-1",
+                          title: "One",
+                          updatedAt: "2026-06-05T10:00:00.000Z",
+                        },
+                      },
+                    ],
+                  }),
+                readByIdentity: () => Effect.succeed(null),
+              })
+            )
+          ),
         cursorSchema: RemoteArticleCursor,
         identity: RemoteArticleIdentity,
         sourceSchema: RemoteArticle,
-        layer: Layer.succeed(Source, {
-          cursorSchema: RemoteArticleCursor,
-          identity: RemoteArticleIdentity,
-          sourceSchema: RemoteArticle,
-          lookupStrategy: "direct",
-          read: () =>
-            Effect.succeed({
-              items: [
-                {
-                  identity: SourceIdentity.fromKey(
-                    RemoteArticleIdentity,
-                    "article-1"
-                  ),
-                  version: toSourceVersion("2026-06-05T10:00:00.000Z"),
-                  item: {
-                    id: "article-1",
-                    title: "One",
-                    updatedAt: "2026-06-05T10:00:00.000Z",
-                  },
-                },
-              ],
-            }),
-          readByIdentity: () => Effect.succeed(null),
-        }),
       });
 
       expectTypeOf(source).toMatchTypeOf<
-        ConfiguredSource<RemoteArticle, RemoteArticleCursor>
+        ConfiguredSource<RemoteArticle, RemoteArticleCursor, string>
       >();
 
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const page = yield* sourceService.read(null);
+      const page = yield* useConfiguredSource(source, (sourceRuntime) =>
+        sourceRuntime.read(null)
+      );
 
       expect(source.identity).toBe(RemoteArticleIdentity);
       expect(page.items[0]?.identity).toEqual(
         SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
       );
     })
+  );
+
+  it.effect("keeps provided source dependencies alive for source use", () =>
+    Effect.gen(function* () {
+      const state: ScopedSourceDependencyState = {
+        closed: false,
+        reads: 0,
+        releases: 0,
+      };
+      const source = Source.fromLayer({
+        layer: (SourceRuntimeService) =>
+          Layer.effect(
+            SourceRuntimeService,
+            Effect.gen(function* () {
+              const dependency = yield* ScopedSourceDependency;
+
+              return SourceRuntimeService.of({
+                lookupStrategy: "scan" as const,
+                read: () => dependency.read(),
+                readByIdentity: () => Effect.succeed(null),
+              });
+            })
+          ),
+        cursorSchema: RemoteArticleCursor,
+        identity: RemoteArticleIdentity,
+        sourceSchema: RemoteArticle,
+      }).provide(makeScopedSourceDependencyLayer(state));
+
+      const page = yield* useConfiguredSource(source, (sourceRuntime) =>
+        sourceRuntime.read(null)
+      );
+
+      expect(page.items[0]?.identity).toEqual(
+        SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
+      );
+      expect(state.reads).toBe(1);
+      expect(state.closed).toBe(true);
+      expect(state.releases).toBe(1);
+    })
+  );
+
+  it.effect(
+    "keeps provided source dependencies alive through the definition source service",
+    () =>
+      Effect.gen(function* () {
+        const state: ScopedSourceDependencyState = {
+          closed: false,
+          reads: 0,
+          releases: 0,
+        };
+        const source = Source.fromLayer({
+          layer: (SourceRuntimeService) =>
+            Layer.effect(
+              SourceRuntimeService,
+              Effect.gen(function* () {
+                const dependency = yield* ScopedSourceDependency;
+
+                return SourceRuntimeService.of({
+                  lookupStrategy: "scan" as const,
+                  read: () => dependency.read(),
+                  readByIdentity: () => Effect.succeed(null),
+                });
+              })
+            ),
+          cursorSchema: RemoteArticleCursor,
+          identity: RemoteArticleIdentity,
+          sourceSchema: RemoteArticle,
+        }).provide(makeScopedSourceDependencyLayer(state));
+        const definition = MigrationDefinition.make({
+          id: "scoped-source-service",
+          source,
+          store: InMemoryMigrationStore.layer(),
+          process: () => Effect.void,
+        });
+
+        const page = yield* Effect.gen(function* () {
+          const sourceRuntime =
+            yield* MigrationDefinitionSource.get(definition);
+          return yield* sourceRuntime.read(null);
+        }).pipe(Effect.provide(MigrationDefinitionSource.layer(definition)));
+
+        expect(page.items[0]?.identity).toEqual(
+          SourceIdentity.fromKey(RemoteArticleIdentity, "article-1")
+        );
+        expect(state.reads).toBe(1);
+        expect(state.closed).toBe(true);
+        expect(state.releases).toBe(1);
+      })
   );
 
   it.effect("exposes lower-bound Source Item totals", () =>
@@ -291,18 +445,20 @@ describe("Source", () => {
             })
           ),
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected source to expose total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected source to expose total count");
-      }
+          const total = yield* sourceRuntime.countTotal();
 
-      const total = yield* sourceService.countTotal();
-
-      expect(total).toEqual(
-        SourceItemTotal.lowerBound(10_000, {
-          message: "Remote total is capped",
-          reason: "capped",
+          expect(total).toEqual(
+            SourceItemTotal.lowerBound(10_000, {
+              message: "Remote total is capped",
+              reason: "capped",
+            })
+          );
         })
       );
     })
@@ -342,8 +498,9 @@ describe("Source", () => {
               },
             }),
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-        const error = yield* Effect.flip(sourceService.read(null));
+        const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.flip(sourceRuntime.read(null))
+        );
 
         expect(error).toBeInstanceOf(SourceError);
         expect(error.message).toContain("Source item metadata");
@@ -374,13 +531,12 @@ describe("Source", () => {
               },
             }),
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
         const identity = SourceIdentity.fromKey(
           RemoteArticleIdentity,
           "article-1"
         );
-        const error = yield* Effect.flip(
-          sourceService.readByIdentity(identity)
+        const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.flip(sourceRuntime.readByIdentity(identity))
         );
 
         expect(error).toBeInstanceOf(SourceError);
@@ -412,13 +568,12 @@ describe("Source", () => {
               },
             }),
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
         const identity = SourceIdentity.fromKey(
           RemoteArticleIdentity,
           "article-1"
         );
-        const error = yield* Effect.flip(
-          sourceService.readByIdentity(identity)
+        const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.flip(sourceRuntime.readByIdentity(identity))
         );
 
         expect(error).toBeInstanceOf(SourceError);
@@ -493,23 +648,28 @@ describe("Source", () => {
           }),
         });
 
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-        const page = yield* sourceService.read(null);
-        const item = yield* sourceService.readByIdentity(
-          SourceIdentity.fromKey(RemoteArticleIdentity, "article-2")
-        );
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            const page = yield* sourceRuntime.read(null);
+            const item = yield* sourceRuntime.readByIdentity(
+              SourceIdentity.fromKey(RemoteArticleIdentity, "article-2")
+            );
 
-        expect(page.items.map((sourceItem) => sourceItem.identity)).toEqual([
-          SourceIdentity.fromKey(RemoteArticleIdentity, "article-1"),
-          SourceIdentity.fromKey(RemoteArticleIdentity, "article-2"),
-        ]);
-        expect(page.nextCursor).toEqual({ page: 2 });
-        expect(item?.item.title).toBe("Two");
-        expect(state.detailCalls).toEqual([
-          "article-1",
-          "article-2",
-          "article-2",
-        ]);
+            expect(page.items.map((sourceItem) => sourceItem.identity)).toEqual(
+              [
+                SourceIdentity.fromKey(RemoteArticleIdentity, "article-1"),
+                SourceIdentity.fromKey(RemoteArticleIdentity, "article-2"),
+              ]
+            );
+            expect(page.nextCursor).toEqual({ page: 2 });
+            expect(item?.item.title).toBe("Two");
+            expect(state.detailCalls).toEqual([
+              "article-1",
+              "article-2",
+              "article-2",
+            ]);
+          })
+        );
       })
   );
 
@@ -559,21 +719,24 @@ describe("Source", () => {
           }),
       });
 
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const page = yield* sourceService.read(null);
-      const firstItem = page.items[0];
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const page = yield* sourceRuntime.read(null);
+          const firstItem = page.items[0];
 
-      if (firstItem === undefined) {
-        throw new Error("Expected tuple source read to return one item");
-      }
+          if (firstItem === undefined) {
+            throw new Error("Expected tuple source read to return one item");
+          }
 
-      const item = yield* sourceService.readByIdentity(firstItem.identity);
+          const item = yield* sourceRuntime.readByIdentity(firstItem.identity);
 
-      expect(firstItem.identity).toEqual(
-        SourceIdentity.fromKey(BusinessAddressIdentity, ["bu-1", 0])
-      );
-      expect(item?.identity).toEqual(
-        SourceIdentity.fromKey(BusinessAddressIdentity, ["bu-1", 0])
+          expect(firstItem.identity).toEqual(
+            SourceIdentity.fromKey(BusinessAddressIdentity, ["bu-1", 0])
+          );
+          expect(item?.identity).toEqual(
+            SourceIdentity.fromKey(BusinessAddressIdentity, ["bu-1", 0])
+          );
+        })
       );
     })
   );

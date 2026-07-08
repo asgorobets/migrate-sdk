@@ -1,15 +1,24 @@
 import { Effect, Layer, Schema } from "effect";
+import type {
+  MigrationDefinitionSourceImplementationError,
+  MigrationDefinitionSourceRequirements,
+} from "../domain/definition.ts";
 import {
   type EncodedSourceIdentity,
   type MigrationDefinitionId,
   SourceIdentityKeyScalar,
   type SourceIdentitySnapshotKey,
 } from "../domain/ids.ts";
-import type { AnyMigrationDefinition } from "../domain/run.ts";
+import type {
+  AnyMigrationDefinition,
+  RunRequestSourceImplementationError,
+  RunRequestSourceRequirements,
+} from "../domain/run.ts";
 import type { SourceItem } from "../domain/source.ts";
 import type { MigrationItemState } from "../domain/state.ts";
 import {
   DuplicateSourceIdentityStatusWarning,
+  type DurableMigrationStatusRequestInput,
   type GetMigrationStatusesError,
   InvalidSourceItemStatusWarning,
   type MigrationDefinitionSourceStatus,
@@ -20,11 +29,20 @@ import {
   type MigrationStatusWarning,
   makeMigrationStatusRequest,
   type SourceIdentityStatusPart,
+  type SourceScanMigrationStatusRequestInput,
   summarizeMigrationItemStates,
 } from "../domain/status.ts";
+import { MigrationDefinitionSource } from "../services/migration-definition-source.ts";
 import { MigrationStore } from "../services/migration-store.ts";
-import { type AnySource, Source } from "../services/source.ts";
+import type { SourceRuntime } from "../services/source.ts";
 import { normalizeSourcePayloadSchemaError } from "./item-error.ts";
+
+type UnknownSourceRuntime = SourceRuntime<
+  unknown,
+  unknown,
+  unknown,
+  SourceIdentitySnapshotKey
+>;
 
 const missingDefinitionError = (definitionId: MigrationDefinitionId) =>
   new MigrationStatusRequestError({
@@ -129,7 +147,7 @@ interface SourceInventoryScan {
 
 const readSourceInventory = (
   definition: AnyMigrationDefinition,
-  source: AnySource
+  source: UnknownSourceRuntime
 ): Effect.Effect<readonly SourceItem<unknown>[], GetMigrationStatusesError> =>
   Effect.gen(function* () {
     const items: SourceItem<unknown>[] = [];
@@ -156,7 +174,7 @@ const readSourceInventory = (
 
 const validateSourceItem = (
   definitionId: MigrationDefinitionId,
-  source: AnySource,
+  source: UnknownSourceRuntime,
   sourceItem: SourceItem<unknown>
 ): Effect.Effect<MigrationStatusWarning | null> =>
   Schema.decodeUnknownEffect(source.sourceSchema, { errors: "all" })(
@@ -181,7 +199,7 @@ const validateSourceItem = (
 
 const scanSourceInventory = (
   definition: AnyMigrationDefinition,
-  source: AnySource,
+  source: UnknownSourceRuntime,
   itemStates: readonly MigrationItemState[]
 ): Effect.Effect<SourceInventoryScan, GetMigrationStatusesError> =>
   Effect.gen(function* () {
@@ -287,12 +305,17 @@ const getDurableDefinitionStatus = (
     };
   }).pipe(Effect.provide(definition.store));
 
-const getScannedDefinitionStatus = (
-  definition: AnyMigrationDefinition
-): Effect.Effect<MigrationDefinitionStatus, GetMigrationStatusesError> => {
+const getScannedDefinitionStatus = <Definition extends AnyMigrationDefinition>(
+  definition: Definition
+): Effect.Effect<
+  MigrationDefinitionStatus,
+  | GetMigrationStatusesError
+  | MigrationDefinitionSourceImplementationError<Definition>,
+  MigrationDefinitionSourceRequirements<Definition>
+> => {
   const program = Effect.gen(function* () {
+    const source = yield* MigrationDefinitionSource.get(definition);
     const store = yield* MigrationStore;
-    const source = yield* Source;
     const lastRun = yield* store.getLatestRunState(definition.id);
     const lock = yield* store.getDefinitionLock(definition.id);
     const itemStates = yield* store.listItemStates(definition.id);
@@ -308,31 +331,54 @@ const getScannedDefinitionStatus = (
       warnings: scan.warnings,
     };
   });
+  const sourceLayer = MigrationDefinitionSource.layer(definition);
+  const layer = sourceLayer.pipe(Layer.provideMerge(definition.store));
 
-  const sourceLayer = definition.source.layer as Layer.Layer<
-    AnySource,
-    GetMigrationStatusesError
-  >;
-
-  return program.pipe(
-    Effect.provide(Layer.mergeAll(sourceLayer, definition.store))
-  );
+  return program.pipe(Effect.provide(layer));
 };
 
-const getDefinitionStatus = (
-  definition: AnyMigrationDefinition,
+const getDefinitionStatus = <Definition extends AnyMigrationDefinition>(
+  definition: Definition,
   scanSource: boolean
-): Effect.Effect<MigrationDefinitionStatus, GetMigrationStatusesError> =>
+): Effect.Effect<
+  MigrationDefinitionStatus,
+  | GetMigrationStatusesError
+  | MigrationDefinitionSourceImplementationError<Definition>,
+  MigrationDefinitionSourceRequirements<Definition>
+> =>
   scanSource
     ? getScannedDefinitionStatus(definition)
     : getDurableDefinitionStatus(definition);
 
-export const getMigrationStatuses = <
+export function getMigrationStatuses<
   Definitions extends readonly AnyMigrationDefinition[],
 >(
-  input: MigrationStatusRequestInput<Definitions>
-): Effect.Effect<MigrationStatusReport, GetMigrationStatusesError> =>
-  Effect.gen(function* () {
+  input: DurableMigrationStatusRequestInput<Definitions>
+): Effect.Effect<MigrationStatusReport, GetMigrationStatusesError>;
+export function getMigrationStatuses<
+  Definitions extends readonly AnyMigrationDefinition[],
+>(
+  input:
+    | MigrationStatusRequestInput<Definitions>
+    | SourceScanMigrationStatusRequestInput<Definitions>
+): Effect.Effect<
+  MigrationStatusReport,
+  GetMigrationStatusesError | RunRequestSourceImplementationError<Definitions>,
+  RunRequestSourceRequirements<Definitions>
+>;
+export function getMigrationStatuses<
+  Definitions extends readonly AnyMigrationDefinition[],
+>(
+  input:
+    | DurableMigrationStatusRequestInput<Definitions>
+    | SourceScanMigrationStatusRequestInput<Definitions>
+    | MigrationStatusRequestInput<Definitions>
+): Effect.Effect<
+  MigrationStatusReport,
+  GetMigrationStatusesError | RunRequestSourceImplementationError<Definitions>,
+  RunRequestSourceRequirements<Definitions>
+> {
+  return Effect.gen(function* () {
     const request = yield* Effect.try({
       try: () => makeMigrationStatusRequest(input),
       catch: invalidStatusRequestError,
@@ -354,3 +400,4 @@ export const getMigrationStatuses = <
       warnings: definitions.flatMap((definition) => definition.warnings),
     };
   });
+}

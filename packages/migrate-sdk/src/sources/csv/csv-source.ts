@@ -6,7 +6,6 @@ import Papa from "papaparse";
 import {
   type ConfiguredSource,
   Source,
-  type SourceImplementation,
 } from "../../domain/definition.ts";
 import { SourceError } from "../../domain/errors.ts";
 import {
@@ -24,7 +23,7 @@ import {
   encodeSourceIdentityKey,
   type SourceItemInput,
 } from "../../domain/source.ts";
-import type { AnySource } from "../../services/source.ts";
+import type { SourceRuntimeImplementation } from "../../services/source.ts";
 
 const textEncoder = new TextEncoder();
 
@@ -142,12 +141,12 @@ export type CsvParserInput = string | Uint8Array;
 export type CsvSourcePlatform = Layer.Layer<FileSystem | Path>;
 
 export interface CsvSourceOptions<
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
 > extends CsvParserOptions<IdentityKey> {
   readonly path: string;
   readonly platform: CsvSourcePlatform;
-  readonly sourceSchema: Schema.Codec<Source, unknown, never, never>;
+  readonly sourceSchema: Schema.Codec<Payload, CsvEncodedPayload, never, never>;
 }
 
 export const CsvSourceCursor = Schema.Struct({
@@ -164,6 +163,8 @@ export interface CsvParsedRow<
   readonly rowIndex: number;
   readonly sourceItem: SourceItemInput<Record<string, string>, IdentityKey>;
 }
+
+type CsvEncodedPayload = Record<string, string>;
 
 export interface CsvParsedDocument<
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
@@ -857,13 +858,17 @@ const loadPathDocument = <IdentityKey extends SourceIdentitySnapshotKey>(
   });
 
 const makeImplementation = <
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
-  options: CsvSourceOptions<Source, IdentityKey>,
+  options: CsvSourceOptions<Payload, IdentityKey>,
   fs: FileSystem,
   path: Path
-): SourceImplementation<Source, CsvSourceCursor, IdentityKey, unknown> => {
+): SourceRuntimeImplementation<
+  CsvEncodedPayload,
+  CsvSourceCursor,
+  IdentityKey
+> => {
   const load = () => loadPathDocument(fs, path, options);
   const identity = makeCsvIdentityDefinition(options.identity);
   const countTotal = Effect.fn("CsvSource.countTotal")(() =>
@@ -921,47 +926,45 @@ const makeImplementation = <
   };
 };
 
-const makeLayerWithoutPlatform = <
-  Source,
+const makeImplementationWithoutPlatform = <
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
-  options: CsvSourceOptions<Source, IdentityKey>
-): Layer.Layer<AnySource, never, FileSystem | Path> =>
-  Layer.effect(
-    Source,
-    Effect.gen(function* () {
-      const fs = yield* FileSystem;
-      const path = yield* Path;
-      const identityDefinition = makeCsvIdentityDefinition(options.identity);
-      const configured = Source.make({
-        cursorSchema: CsvSourceCursor,
-        identity: identityDefinition,
-        make: () => makeImplementation(options, fs, path),
-        sourceIdentityContractFingerprint:
-          makeCsvSourceIdentityContractFingerprint(options, identityDefinition),
-        sourceSchema: options.sourceSchema,
-        sourceVersionContractFingerprint:
-          makeCsvSourceVersionContractFingerprint(options.version),
-      });
+  options: CsvSourceOptions<Payload, IdentityKey>
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem;
+    const path = yield* Path;
 
-      return yield* Source.pipe(Effect.provide(configured.layer));
-    })
-  );
+    return makeImplementation(options, fs, path);
+  });
 
-const makeLayer = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
-  options: CsvSourceOptions<Source, IdentityKey>
-): Layer.Layer<AnySource> =>
-  makeLayerWithoutPlatform(options).pipe(Layer.provide(options.platform));
-
-const make = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
-  options: CsvSourceOptions<Source, IdentityKey>
-): ConfiguredSource<Source, CsvSourceCursor, IdentityKey, unknown> => {
+const make = <Payload, IdentityKey extends SourceIdentitySnapshotKey>(
+  options: CsvSourceOptions<Payload, IdentityKey>
+): ConfiguredSource<
+  Payload,
+  CsvSourceCursor,
+  IdentityKey,
+  CsvEncodedPayload
+> => {
   const identityDefinition = makeCsvIdentityDefinition(options.identity);
 
-  return Source.fromLayer({
+  return Source.fromLayer<
+    Payload,
+    CsvSourceCursor,
+    IdentityKey,
+    CsvEncodedPayload
+  >({
+    layer: (SourceRuntime) =>
+      Layer.effect(
+        SourceRuntime,
+        makeImplementationWithoutPlatform(options).pipe(
+          Effect.map(SourceRuntime.of),
+          Effect.provide(options.platform)
+        )
+      ),
     cursorSchema: CsvSourceCursor,
     identity: identityDefinition,
-    layer: makeLayer(options),
     sourceIdentityContractFingerprint: makeCsvSourceIdentityContractFingerprint(
       options,
       identityDefinition

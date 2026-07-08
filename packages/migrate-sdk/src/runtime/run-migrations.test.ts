@@ -29,6 +29,7 @@ import {
   makeSourceVersionContractFingerprint,
 } from "../domain/migration-contract.ts";
 import {
+  type ConfiguredSource,
   DestinationChangeDescriptor,
   MigrationDefinition,
   MigrationDefinitionLock,
@@ -56,8 +57,8 @@ import {
   SourceError,
   SourceIdentity,
   type SourceIdentityDefinition,
-  type SourceImplementation,
   type SourceItemInput,
+  type SourceRuntimeImplementation,
   SourceItemTotal,
   skipItem,
   Tracking,
@@ -75,6 +76,7 @@ import {
   runInlineDefinition,
   runInlineRegistry,
 } from "../testing/inline-registry-execution.ts";
+import { useConfiguredSource } from "../testing/configured-source-runtime.ts";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -181,6 +183,9 @@ const ArticleStatsSource = Schema.Struct({
   views: Schema.NumberFromString,
 });
 type ArticleStatsSource = typeof ArticleStatsSource.Type;
+type ArticleStatsEncodedPayload = Schema.Codec.Encoded<
+  typeof ArticleStatsSource
+>;
 
 const ManyFieldSource = Schema.Struct({
   a: Schema.String,
@@ -194,21 +199,53 @@ type ManyFieldSource = typeof ManyFieldSource.Type;
 
 const asArticleSource = (item: unknown): ArticleSource => item as ArticleSource;
 
-const asArticleStatsSource = (item: unknown): ArticleStatsSource =>
-  item as ArticleStatsSource;
-
 const asManyFieldSource = (item: unknown): ManyFieldSource =>
   item as ManyFieldSource;
 
-const makeTestInMemorySource = <A>(
-  options: Omit<InMemorySourceOptions<A, string>, "identity" | "sourceSchema"> &
-    Partial<Pick<InMemorySourceOptions<A, string>, "sourceSchema">>
-) =>
-  InMemorySource.make({
+type TestLooseInMemorySourceOptions<Payload> = Omit<
+  InMemorySourceOptions<Payload, Payload, string>,
+  "identity" | "sourceSchema"
+> &
+  Partial<
+    Pick<InMemorySourceOptions<Payload, Payload, string>, "sourceSchema">
+  >;
+
+type TestInMemorySourceOptions<Payload, EncodedPayload> = Omit<
+  InMemorySourceOptions<Payload, EncodedPayload, string>,
+  "identity"
+>;
+
+function makeTestInMemorySource<Payload>(
+  options: TestLooseInMemorySourceOptions<Payload>
+): ConfiguredSource<Payload, InMemorySourceCursor, string, Payload>;
+function makeTestInMemorySource<Payload, EncodedPayload = Payload>(
+  options: TestInMemorySourceOptions<Payload, EncodedPayload>
+): ConfiguredSource<Payload, InMemorySourceCursor, string, EncodedPayload>;
+function makeTestInMemorySource<Payload, EncodedPayload = Payload>(
+  options:
+    | TestLooseInMemorySourceOptions<Payload>
+    | TestInMemorySourceOptions<Payload, EncodedPayload>
+) {
+  const { sourceSchema, ...sourceOptions } = options as Omit<
+    InMemorySourceOptions<Payload, EncodedPayload, string>,
+    "identity"
+  > & {
+    readonly sourceSchema?: Schema.Codec<Payload, EncodedPayload, never, never>;
+  };
+
+  return InMemorySource.make<Payload, EncodedPayload, string>({
+    ...sourceOptions,
     identity: ArticleSourceIdentity,
-    sourceSchema: Schema.Unknown as Schema.Codec<A, unknown, never, never>,
-    ...options,
+    sourceSchema:
+      sourceSchema ??
+      (Schema.Unknown as unknown as Schema.Codec<
+        Payload,
+        EncodedPayload,
+        never,
+        never
+      >),
   });
+}
 
 interface ObservableTotalCountSourceState {
   readAttempts: number;
@@ -571,17 +608,19 @@ describe("runInlineDefinition", () => {
           identity: ArticleSourceIdentity,
           sourceSchema: Schema.Struct({ title: Schema.String }),
           make: () =>
-            implementationWithConflictingSchema as unknown as SourceImplementation<
+            implementationWithConflictingSchema as unknown as SourceRuntimeImplementation<
               { readonly title: string },
               number,
               string
             >,
         });
 
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-
-        expect(sourceService.cursorSchema).toBe(cursorSchema);
-        expect(sourceService.sourceSchema).toBe(source.sourceSchema);
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.sync(() => {
+            expect(sourceRuntime.cursorSchema).toBe(cursorSchema);
+            expect(sourceRuntime.sourceSchema).toBe(source.sourceSchema);
+          })
+        );
       })
   );
 
@@ -4509,10 +4548,10 @@ describe("runInlineDefinition", () => {
             {
               identityKey: "article-stats",
               version: "source-version-1",
-              item: asArticleStatsSource({
+              item: {
                 title: "  Decoded article  ",
                 views: "42",
-              }),
+              } satisfies ArticleStatsEncodedPayload,
             },
           ],
         }),

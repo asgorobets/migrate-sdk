@@ -9,7 +9,7 @@ import type {
   AnyMigrationDefinition,
   ExecutionStartResult,
   MigrationRunSummary,
-  RunRequestSourceLayerError,
+  RunRequestSourceImplementationError,
   RunRequestSourceRequirements,
 } from "../domain/run.ts";
 import {
@@ -26,7 +26,7 @@ import {
 export type MigrationExecutableRunError<
   Definitions extends
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
-> = RunMigrationError | RunRequestSourceLayerError<Definitions>;
+> = RunMigrationError | RunRequestSourceImplementationError<Definitions>;
 
 export type MigrationExecutableRollbackError = RollbackMigrationError;
 

@@ -33,8 +33,8 @@ import type {
 } from "../domain/registry.ts";
 import type {
   AnyRollbackMigrationDefinition,
-  RollbackDefinitionRunSummary,
   RollbackContext,
+  RollbackDefinitionRunSummary,
   RollbackRunSummary,
 } from "../domain/rollback.ts";
 import type {
@@ -43,7 +43,7 @@ import type {
   MigrationDefinitionRunSummary,
   MigrationRunState,
   MigrationRunSummary,
-  RunRequestSourceLayerError,
+  RunRequestSourceImplementationError,
   RunRequestSourceRequirements,
 } from "../domain/run.ts";
 import { normalRunMode, type RunMode } from "../domain/run-mode.ts";
@@ -78,11 +78,12 @@ import {
   validateStagedTrackingRecord,
 } from "../runtime/process-source-item.ts";
 import { decodeStoredItemStateForTrackingContract } from "../runtime/stored-item-state-decode.ts";
+import { MigrationDefinitionSource } from "./migration-definition-source.ts";
 import { MigrationProgress } from "./migration-progress.ts";
 import type { MigrationReference } from "./migration-reference-lookup.ts";
 import { MigrationStore } from "./migration-store.ts";
 import { RollbackProgress } from "./rollback-progress.ts";
-import { getSource, type Source as SourceServiceContract } from "./source.ts";
+import type { SourceRuntime as SourceRuntimeContract } from "./source.ts";
 import {
   makeProcessScope,
   Tracking,
@@ -1236,7 +1237,7 @@ const countDefinitionSourceItemTotal = <
   Source,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput,
+  EncodedPayload,
 >({
   definitionId,
   itemLimit,
@@ -1246,10 +1247,10 @@ const countDefinitionSourceItemTotal = <
   readonly definitionId: MigrationDefinitionId;
   readonly itemLimit?: number;
   readonly runId: MigrationRunId;
-  readonly source: SourceServiceContract<
+  readonly source: SourceRuntimeContract<
     Source,
     Cursor,
-    SourceInput,
+    EncodedPayload,
     IdentityKey
   >;
 }) =>
@@ -1471,8 +1472,8 @@ interface ProcessTargetedSourceIdentitiesOptions<
   PipelineError,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract extends TrackingRecordContract | undefined =
     | TrackingRecordContract
@@ -1485,8 +1486,8 @@ interface ProcessTargetedSourceIdentitiesOptions<
     Cursor,
     IdentityKey,
     unknown,
-    SourceInput,
-    SourceLayerError,
+    EncodedPayload,
+    SourceImplementationError,
     SourceRequirements,
     TrackingContract
   >;
@@ -1494,10 +1495,10 @@ interface ProcessTargetedSourceIdentitiesOptions<
   readonly mode: RunMode;
   readonly processConcurrency: PipelineExecutionConcurrency;
   readonly runId: MigrationRunId;
-  readonly source: SourceServiceContract<
+  readonly source: SourceRuntimeContract<
     Source,
     Cursor,
-    SourceInput,
+    EncodedPayload,
     IdentityKey
   >;
   readonly store: typeof MigrationStore.Service;
@@ -1508,8 +1509,8 @@ const processTargetedSourceIdentities = <
   PipelineError,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract extends TrackingRecordContract | undefined =
     | TrackingRecordContract
@@ -1528,8 +1529,8 @@ const processTargetedSourceIdentities = <
   PipelineError,
   Cursor,
   IdentityKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract
 >) =>
@@ -1630,8 +1631,8 @@ interface ProcessCursorDiscoveryOptions<
   PipelineError,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract extends TrackingRecordContract | undefined =
     | TrackingRecordContract
@@ -1644,8 +1645,8 @@ interface ProcessCursorDiscoveryOptions<
     Cursor,
     IdentityKey,
     unknown,
-    SourceInput,
-    SourceLayerError,
+    EncodedPayload,
+    SourceImplementationError,
     SourceRequirements,
     TrackingContract
   >;
@@ -1653,10 +1654,10 @@ interface ProcessCursorDiscoveryOptions<
   readonly processConcurrency: PipelineExecutionConcurrency;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
-  readonly source: SourceServiceContract<
+  readonly source: SourceRuntimeContract<
     Source,
     Cursor,
-    SourceInput,
+    EncodedPayload,
     IdentityKey
   >;
   readonly store: typeof MigrationStore.Service;
@@ -1667,8 +1668,8 @@ const processNextCursorWindow = <
   PipelineError,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract extends TrackingRecordContract | undefined =
     | TrackingRecordContract
@@ -1687,8 +1688,8 @@ const processNextCursorWindow = <
   PipelineError,
   Cursor,
   IdentityKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract
 >) =>
@@ -1759,8 +1760,8 @@ const processCursorDiscovery = <
   PipelineError,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract extends TrackingRecordContract | undefined =
     | TrackingRecordContract
@@ -1779,8 +1780,8 @@ const processCursorDiscovery = <
   PipelineError,
   Cursor,
   IdentityKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract
 >) =>
@@ -2170,8 +2171,8 @@ const runMigrationDefinition = <
   PipelineError,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract extends TrackingRecordContract | undefined =
     | TrackingRecordContract
@@ -2183,8 +2184,8 @@ const runMigrationDefinition = <
     Cursor,
     IdentityKey,
     unknown,
-    SourceInput,
-    SourceLayerError,
+    EncodedPayload,
+    SourceImplementationError,
     SourceRequirements,
     TrackingContract
   >,
@@ -2195,11 +2196,11 @@ const runMigrationDefinition = <
   processExecution?: PipelineExecutionOptions
 ): Effect.Effect<
   MigrationDefinitionRunSummary,
-  RunMigrationError | SourceLayerError,
+  RunMigrationError | SourceImplementationError,
   SourceRequirements
 > => {
   const program = Effect.gen(function* () {
-    const source = yield* getSource<Source, Cursor, SourceInput, IdentityKey>();
+    const source = yield* MigrationDefinitionSource.get(definition);
     const store = yield* MigrationStore;
     const processConcurrency = resolvePipelineExecutionOptions(
       processExecution,
@@ -2317,13 +2318,11 @@ const runMigrationDefinition = <
   const lookupLayer = makeMigrationReferenceLookupLayer({
     createStubReference,
   });
+  const sourceLayer = MigrationDefinitionSource.layer(definition);
   const storeLayer: Layer.Layer<MigrationStore, MigrationStoreError> =
     definition.store;
-  const layer = Layer.mergeAll(
-    definition.source.layer,
-    storeLayer,
-    lookupLayer
-  );
+  const dependencyLayer = Layer.mergeAll(storeLayer, lookupLayer);
+  const layer = sourceLayer.pipe(Layer.provideMerge(dependencyLayer));
 
   return program.pipe(Effect.provide(layer));
 };
@@ -2333,8 +2332,8 @@ const runMigrationDefinitionCursorWindow = <
   PipelineError,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract extends TrackingRecordContract | undefined =
     | TrackingRecordContract
@@ -2346,8 +2345,8 @@ const runMigrationDefinitionCursorWindow = <
     Cursor,
     IdentityKey,
     unknown,
-    SourceInput,
-    SourceLayerError,
+    EncodedPayload,
+    SourceImplementationError,
     SourceRequirements,
     TrackingContract
   >,
@@ -2356,11 +2355,11 @@ const runMigrationDefinitionCursorWindow = <
   processExecution?: PipelineExecutionOptions
 ): Effect.Effect<
   MigrationRunCursorWindowResult,
-  RunMigrationError | SourceLayerError,
+  RunMigrationError | SourceImplementationError,
   SourceRequirements
 > => {
   const program = Effect.gen(function* () {
-    const source = yield* getSource<Source, Cursor, SourceInput, IdentityKey>();
+    const source = yield* MigrationDefinitionSource.get(definition);
     const store = yield* MigrationStore;
     const processConcurrency = resolvePipelineExecutionOptions(
       processExecution,
@@ -2443,13 +2442,11 @@ const runMigrationDefinitionCursorWindow = <
   const lookupLayer = makeMigrationReferenceLookupLayer({
     createStubReference,
   });
+  const sourceLayer = MigrationDefinitionSource.layer(definition);
   const storeLayer: Layer.Layer<MigrationStore, MigrationStoreError> =
     definition.store;
-  const layer = Layer.mergeAll(
-    definition.source.layer,
-    storeLayer,
-    lookupLayer
-  );
+  const dependencyLayer = Layer.mergeAll(storeLayer, lookupLayer);
+  const layer = sourceLayer.pipe(Layer.provideMerge(dependencyLayer));
 
   return program.pipe(Effect.provide(layer));
 };
@@ -2459,8 +2456,8 @@ const executeMigrationRunDefinitionCursorWindow = <
   PipelineError,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract extends TrackingRecordContract | undefined =
     | TrackingRecordContract
@@ -2472,8 +2469,8 @@ const executeMigrationRunDefinitionCursorWindow = <
     Cursor,
     IdentityKey,
     unknown,
-    SourceInput,
-    SourceLayerError,
+    EncodedPayload,
+    SourceImplementationError,
     SourceRequirements,
     TrackingContract
   >,
@@ -2481,7 +2478,7 @@ const executeMigrationRunDefinitionCursorWindow = <
   processExecution?: PipelineExecutionOptions
 ): Effect.Effect<
   MigrationRunCursorWindowResult,
-  RunMigrationError | SourceLayerError,
+  RunMigrationError | SourceImplementationError,
   SourceRequirements
 > =>
   Effect.gen(function* () {
@@ -2928,7 +2925,7 @@ const executePlannedRunDefinitions = <
   executionOptions: MigrationRuntimeExecutionOptions = {}
 ): Effect.Effect<
   MigrationRunSummary,
-  RunMigrationError | RunRequestSourceLayerError<Definitions>,
+  RunMigrationError | RunRequestSourceImplementationError<Definitions>,
   RunRequestSourceRequirements<Definitions>
 > => {
   const firstDefinition = input.definitions[0];
@@ -3018,7 +3015,7 @@ export const executeMigrationRunPlanInline = <
   options: MigrationRuntimeExecutionOptions = {}
 ): Effect.Effect<
   MigrationRunSummary,
-  RunMigrationError | RunRequestSourceLayerError<Definitions>,
+  RunMigrationError | RunRequestSourceImplementationError<Definitions>,
   RunRequestSourceRequirements<Definitions>
 > =>
   executePlannedRunDefinitions(
@@ -3051,7 +3048,7 @@ export const startMigrationRunPlanInline = <
   plan: MigrationDefinitionExecutableRunPlan<Definitions>
 ): Effect.Effect<
   ExecutionStartResult<MigrationRunSummary>,
-  RunMigrationError | RunRequestSourceLayerError<Definitions>,
+  RunMigrationError | RunRequestSourceImplementationError<Definitions>,
   RunRequestSourceRequirements<Definitions>
 > =>
   executeMigrationRunPlanInline(plan).pipe(
@@ -3113,8 +3110,8 @@ export interface MigrationRunExecutorService {
     PipelineError,
     Cursor,
     IdentityKey extends SourceIdentitySnapshotKey,
-    SourceInput,
-    SourceLayerError,
+    EncodedPayload,
+    SourceImplementationError,
     SourceRequirements,
     TrackingContract extends TrackingRecordContract | undefined =
       | TrackingRecordContract
@@ -3126,8 +3123,8 @@ export interface MigrationRunExecutorService {
       Cursor,
       IdentityKey,
       unknown,
-      SourceInput,
-      SourceLayerError,
+      EncodedPayload,
+      SourceImplementationError,
       SourceRequirements,
       TrackingContract
     >,
@@ -3135,7 +3132,7 @@ export interface MigrationRunExecutorService {
     processExecution?: PipelineExecutionOptions
   ) => Effect.Effect<
     MigrationRunCursorWindowResult,
-    RunMigrationError | SourceLayerError,
+    RunMigrationError | SourceImplementationError,
     SourceRequirements
   >;
 
@@ -3144,7 +3141,7 @@ export interface MigrationRunExecutorService {
     options?: MigrationRuntimeExecutionOptions
   ) => Effect.Effect<
     MigrationRunSummary,
-    RunMigrationError | RunRequestSourceLayerError<Definitions>,
+    RunMigrationError | RunRequestSourceImplementationError<Definitions>,
     RunRequestSourceRequirements<Definitions>
   >;
 
@@ -3156,7 +3153,7 @@ export interface MigrationRunExecutorService {
     plan: MigrationDefinitionExecutableRunPlan<Definitions>
   ) => Effect.Effect<
     ExecutionStartResult<MigrationRunSummary>,
-    RunMigrationError | RunRequestSourceLayerError<Definitions>,
+    RunMigrationError | RunRequestSourceImplementationError<Definitions>,
     RunRequestSourceRequirements<Definitions>
   >;
 }
@@ -3204,8 +3201,8 @@ export class MigrationRunExecutor extends Service<
     PipelineError,
     Cursor,
     IdentityKey extends SourceIdentitySnapshotKey,
-    SourceInput,
-    SourceLayerError,
+    EncodedPayload,
+    SourceImplementationError,
     SourceRequirements,
     TrackingContract extends TrackingRecordContract | undefined =
       | TrackingRecordContract
@@ -3217,8 +3214,8 @@ export class MigrationRunExecutor extends Service<
       Cursor,
       IdentityKey,
       unknown,
-      SourceInput,
-      SourceLayerError,
+      EncodedPayload,
+      SourceImplementationError,
       SourceRequirements,
       TrackingContract
     >,

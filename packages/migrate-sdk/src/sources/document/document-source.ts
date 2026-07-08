@@ -2,7 +2,6 @@ import { Effect, Schema, SchemaAST } from "effect";
 import {
   type ConfiguredSource,
   Source,
-  type SourceImplementation,
 } from "../../domain/definition.ts";
 import { SourceError } from "../../domain/errors.ts";
 import type {
@@ -24,6 +23,7 @@ import {
   encodeSourceIdentityKey,
   type SourceItemInput,
 } from "../../domain/source.ts";
+import type { SourceRuntimeImplementation } from "../../services/source.ts";
 import type {
   DocumentFetcher,
   DocumentFetchResult,
@@ -33,6 +33,13 @@ import type { DocumentParser } from "./document-parser.ts";
 export type DocumentSourceSchema<Decoded = unknown> = Schema.Codec<
   Decoded,
   unknown,
+  never,
+  never
+>;
+
+type DocumentSourceSelectedSchema<Decoded> = Schema.Codec<
+  Decoded,
+  Decoded,
   never,
   never
 >;
@@ -63,9 +70,9 @@ export interface DocumentSourcePathSegment {
   readonly kind: "array" | "property";
 }
 
-interface DocumentSourceSchemaCursorState<Source> {
+interface DocumentSourceSchemaCursorState<Payload> {
   readonly path: readonly DocumentSourcePathSegment[];
-  readonly schema: DocumentSourceSchema<Source>;
+  readonly schema: DocumentSourceSchema<Payload>;
 }
 
 export interface DocumentSourceSelectedItem<Item> {
@@ -77,27 +84,27 @@ export interface DocumentSourceSelectedSubitem<Parent, Item> {
   readonly parent: Parent;
 }
 
-interface DocumentSourceCompiledSelector<Source> {
+interface DocumentSourceCompiledSelector<Payload> {
   readonly select: (
     document: unknown
   ) => Effect.Effect<readonly unknown[], SourceError>;
-  readonly sourceSchema: DocumentSourceSchema<Source>;
+  readonly sourceSchema: DocumentSourceSelectedSchema<Payload>;
 }
 
 declare const documentSourceSchemaSelectionType: unique symbol;
 
-export interface DocumentSourceSchemaSelection<Source> {
-  readonly [documentSourceSchemaSelectionType]: (source: Source) => Source;
+export interface DocumentSourceSchemaSelection<Payload> {
+  readonly [documentSourceSchemaSelectionType]: (source: Payload) => Payload;
 }
 
-export type DocumentSourceSchemaCursor<Source> =
-  DocumentSourceSchemaSelection<Source> &
-    (DocumentSourceCursorFocus<Source> extends object
+export type DocumentSourceSchemaCursor<Payload> =
+  DocumentSourceSchemaSelection<Payload> &
+    (DocumentSourceCursorFocus<Payload> extends object
       ? {
           readonly [Key in DocumentSourceObjectKeys<
-            DocumentSourceCursorFocus<Source>
+            DocumentSourceCursorFocus<Payload>
           >]: DocumentSourceSchemaCursor<
-            DocumentSourceCursorFocus<Source>[Key]
+            DocumentSourceCursorFocus<Payload>[Key]
           >;
         }
       : Record<never, never>);
@@ -125,22 +132,22 @@ export interface DocumentSourceSubitemSelector<
 }
 
 export interface DocumentSourceIdentity<
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 > {
   readonly id: SourceIdentityContractIdInput;
-  readonly key: (item: Source) => IdentityKey;
+  readonly key: (item: Payload) => IdentityKey;
   readonly schema: SourceIdentitySchema<IdentityKey>;
 }
 
-export type DocumentSourceVersion<Source> =
+export type DocumentSourceVersion<Payload> =
   | {
       readonly kind: "content-hash";
     }
   | {
       readonly id: SourceVersionContractIdInput;
       readonly kind: "value";
-      readonly value: (item: Source) => DocumentSourceIdentityValue;
+      readonly value: (item: Payload) => DocumentSourceIdentityValue;
     };
 
 export type DocumentSourceLookup<
@@ -249,7 +256,7 @@ export interface DocumentSourceSubitemOptions<
 interface DocumentSourceCompiledOptions<
   Resource,
   FetcherCursor,
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 > extends DocumentSourceBaseOptions<
     Resource,
@@ -257,17 +264,17 @@ interface DocumentSourceCompiledOptions<
     unknown,
     IdentityKey
   > {
-  readonly identity: DocumentSourceIdentity<Source, IdentityKey>;
-  readonly selector: DocumentSourceCompiledSelector<Source>;
-  readonly version: DocumentSourceVersion<Source>;
+  readonly identity: DocumentSourceIdentity<Payload, IdentityKey>;
+  readonly selector: DocumentSourceCompiledSelector<Payload>;
+  readonly version: DocumentSourceVersion<Payload>;
 }
 
 interface DocumentSourceLoadedItem<
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 > {
   readonly documentIndex: number;
-  readonly item: SourceItemInput<Source, IdentityKey>;
+  readonly item: SourceItemInput<Payload, IdentityKey>;
   readonly itemIndex: number;
 }
 
@@ -277,13 +284,13 @@ interface DocumentSourceSelectionFrame {
 }
 
 interface DocumentSourceLoadedResource<
-  Source,
+  Payload,
   FetcherCursor,
   IdentityKey extends SourceIdentitySnapshotKey,
 > {
   readonly fetcherCursor: FetcherCursor | null;
   readonly fingerprint?: string | undefined;
-  readonly items: readonly DocumentSourceLoadedItem<Source, IdentityKey>[];
+  readonly items: readonly DocumentSourceLoadedItem<Payload, IdentityKey>[];
   readonly nextFetcherCursor?: FetcherCursor | undefined;
 }
 
@@ -375,10 +382,10 @@ const objectFieldSchema = (
 const pathKey = (segments: readonly DocumentSourcePathSegment[]): string =>
   segments.map((segment) => `${segment.key}:${segment.kind}`).join("/");
 
-const makeSchemaCursor = <Source>(
-  schema: DocumentSourceSchema<Source>,
+const makeSchemaCursor = <Payload>(
+  schema: DocumentSourceSchema<Payload>,
   path: readonly DocumentSourcePathSegment[]
-): DocumentSourceSchemaCursor<Source> =>
+): DocumentSourceSchemaCursor<Payload> =>
   new Proxy(
     {},
     {
@@ -387,11 +394,11 @@ const makeSchemaCursor = <Source>(
           return {
             path,
             schema,
-          } satisfies DocumentSourceSchemaCursorState<Source>;
+          } satisfies DocumentSourceSchemaCursorState<Payload>;
         }
 
         if (typeof property !== "string") {
-          return undefined;
+          return;
         }
 
         if (!SchemaAST.isObjects(schema.ast)) {
@@ -423,15 +430,15 @@ const makeSchemaCursor = <Source>(
         ]);
       },
     }
-  ) as DocumentSourceSchemaCursor<Source>;
+  ) as DocumentSourceSchemaCursor<Payload>;
 
-const schemaCursorState = <Source>(
+const schemaCursorState = <Payload>(
   cursor: unknown
-): DocumentSourceSchemaCursorState<DocumentSourceCursorFocus<Source>> => {
+): DocumentSourceSchemaCursorState<DocumentSourceCursorFocus<Payload>> => {
   const state = (
     cursor as {
       readonly [documentSourceSchemaCursorState]?:
-        | DocumentSourceSchemaCursorState<DocumentSourceCursorFocus<Source>>
+        | DocumentSourceSchemaCursorState<DocumentSourceCursorFocus<Payload>>
         | undefined;
     }
   )[documentSourceSchemaCursorState];
@@ -534,9 +541,9 @@ const hasParentSelector = <Document>(
 ): selector is DocumentSourceSubitemSelector<Document, unknown, unknown> =>
   "parent" in selector;
 
-const parentStateCursor = <Source>(
-  state: DocumentSourceSchemaCursorState<Source>
-): DocumentSourceSchemaCursor<Source> =>
+const parentStateCursor = <Payload>(
+  state: DocumentSourceSchemaCursorState<Payload>
+): DocumentSourceSchemaCursor<Payload> =>
   makeSchemaCursor(state.schema, state.path);
 
 const compileItemSelector = <Document, Selection>(
@@ -552,7 +559,7 @@ const compileItemSelector = <Document, Selection>(
   assertArraySelection(itemState, "Document source item selector");
   const sourceSchema = Schema.Struct({
     item: itemState.schema,
-  }) as unknown as DocumentSourceSchema<
+  }) as unknown as DocumentSourceSelectedSchema<
     DocumentSourceSelectedItem<DocumentSourceCursorFocus<Selection>>
   >;
 
@@ -598,7 +605,7 @@ const compileSubitemSelector = <Document, ParentSelection, Selection>(
   const sourceSchema = Schema.Struct({
     item: itemState.schema,
     parent: parentState.schema,
-  }) as unknown as DocumentSourceSchema<
+  }) as unknown as DocumentSourceSelectedSchema<
     DocumentSourceSelectedSubitem<
       DocumentSourceCursorFocus<ParentSelection>,
       DocumentSourceCursorFocus<Selection>
@@ -719,10 +726,10 @@ const normalizeIdentityValue = (
   });
 
 const makeDocumentSourceIdentityDefinition = <
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
-  identity: DocumentSourceIdentity<Source, IdentityKey>
+  identity: DocumentSourceIdentity<Payload, IdentityKey>
 ): SourceIdentityDefinition<IdentityKey> =>
   SourceIdentity.make({
     id: identity.id,
@@ -739,8 +746,8 @@ const makeDocumentSourceIdentityContractFingerprint = <
     source: "document@v1",
   });
 
-const makeDocumentSourceVersionContractFingerprint = <Source>(
-  version: DocumentSourceVersion<Source>
+const makeDocumentSourceVersionContractFingerprint = <Payload>(
+  version: DocumentSourceVersion<Payload>
 ) =>
   makeSourceVersionContractFingerprint({
     source: "document@v1",
@@ -755,9 +762,9 @@ const makeDocumentSourceVersionContractFingerprint = <Source>(
           },
   });
 
-const buildIdentity = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
-  item: Source,
-  identity: DocumentSourceIdentity<Source, IdentityKey>,
+const buildIdentity = <Payload, IdentityKey extends SourceIdentitySnapshotKey>(
+  item: Payload,
+  identity: DocumentSourceIdentity<Payload, IdentityKey>,
   itemIndex: number
 ): Effect.Effect<IdentityKey, SourceError> =>
   Effect.try({
@@ -769,9 +776,9 @@ const buildIdentity = <Source, IdentityKey extends SourceIdentitySnapshotKey>(
       }),
   });
 
-const encodeSourceItemJson = <Source>(
-  item: Source,
-  sourceSchema: Schema.Codec<Source, unknown, never, never>,
+const encodeSourceItemJson = <Payload>(
+  item: Payload,
+  sourceSchema: DocumentSourceSelectedSchema<Payload>,
   itemIndex: number
 ): Effect.Effect<string, SourceError> =>
   Effect.gen(function* () {
@@ -810,10 +817,10 @@ const encodeSourceItemJson = <Source>(
     });
   });
 
-const buildVersion = <Source>(
-  item: Source,
-  version: DocumentSourceVersion<Source>,
-  sourceSchema: Schema.Codec<Source, unknown, never, never>,
+const buildVersion = <Payload>(
+  item: Payload,
+  version: DocumentSourceVersion<Payload>,
+  sourceSchema: DocumentSourceSelectedSchema<Payload>,
   itemIndex: number
 ): Effect.Effect<SourceVersionInput, SourceError> =>
   Effect.gen(function* () {
@@ -853,16 +860,16 @@ const buildVersion = <Source>(
   });
 
 const buildSelectedSourceItem = <
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   rawItem: unknown,
   documentIndex: number,
   itemIndex: number,
-  options: DocumentSourceCompiledOptions<unknown, unknown, Source, IdentityKey>
-): Effect.Effect<DocumentSourceLoadedItem<Source, IdentityKey>, SourceError> =>
+  options: DocumentSourceCompiledOptions<unknown, unknown, Payload, IdentityKey>
+): Effect.Effect<DocumentSourceLoadedItem<Payload, IdentityKey>, SourceError> =>
   Effect.gen(function* () {
-    const item = rawItem as Source;
+    const item = rawItem as Payload;
     const identity = yield* buildIdentity(item, options.identity, itemIndex);
     const version = yield* buildVersion(
       item,
@@ -883,11 +890,11 @@ const buildSelectedSourceItem = <
   });
 
 const ensureUniqueIdentities = <
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   identityDefinition: SourceIdentityDefinition<IdentityKey>,
-  items: readonly DocumentSourceLoadedItem<Source, IdentityKey>[]
+  items: readonly DocumentSourceLoadedItem<Payload, IdentityKey>[]
 ): Effect.Effect<void, SourceError> =>
   Effect.gen(function* () {
     const identityIndexes = new Map<string, number>();
@@ -915,18 +922,18 @@ const ensureUniqueIdentities = <
   });
 
 const matchingLoadedItems = <
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   identityDefinition: SourceIdentityDefinition<IdentityKey>,
-  items: readonly DocumentSourceLoadedItem<Source, IdentityKey>[],
+  items: readonly DocumentSourceLoadedItem<Payload, IdentityKey>[],
   identity: SourceIdentity<IdentityKey>
 ): Effect.Effect<
-  readonly DocumentSourceLoadedItem<Source, IdentityKey>[],
+  readonly DocumentSourceLoadedItem<Payload, IdentityKey>[],
   SourceError
 > =>
   Effect.gen(function* () {
-    const matches: DocumentSourceLoadedItem<Source, IdentityKey>[] = [];
+    const matches: DocumentSourceLoadedItem<Payload, IdentityKey>[] = [];
 
     for (const loadedItem of items) {
       const encodedIdentity = yield* encodeSourceIdentityKey(
@@ -964,20 +971,20 @@ const parseResourceDocuments = <Resource, Document, FetcherCursor>(
 const loadResourceResult = <
   Resource,
   FetcherCursor,
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   options: DocumentSourceCompiledOptions<
     Resource,
     FetcherCursor,
-    Source,
+    Payload,
     IdentityKey
   >,
   fetcherCursor: FetcherCursor | null,
   resourceResult: DocumentFetchResult<Resource, FetcherCursor>,
   context?: Record<string, unknown>
 ): Effect.Effect<
-  DocumentSourceLoadedResource<Source, FetcherCursor, IdentityKey>,
+  DocumentSourceLoadedResource<Payload, FetcherCursor, IdentityKey>,
   SourceError
 > =>
   Effect.gen(function* () {
@@ -990,7 +997,7 @@ const loadResourceResult = <
       fetcherCursor,
       context
     );
-    const loadedItems: DocumentSourceLoadedItem<Source, IdentityKey>[] = [];
+    const loadedItems: DocumentSourceLoadedItem<Payload, IdentityKey>[] = [];
 
     for (const [documentIndex, document] of documents.entries()) {
       const selectedItems = yield* options.selector.select(document);
@@ -1004,7 +1011,7 @@ const loadResourceResult = <
             options as DocumentSourceCompiledOptions<
               unknown,
               unknown,
-              Source,
+              Payload,
               IdentityKey
             >
           )
@@ -1025,18 +1032,18 @@ const loadResourceResult = <
 const loadResource = <
   Resource,
   FetcherCursor,
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   options: DocumentSourceCompiledOptions<
     Resource,
     FetcherCursor,
-    Source,
+    Payload,
     IdentityKey
   >,
   fetcherCursor: FetcherCursor | null
 ): Effect.Effect<
-  DocumentSourceLoadedResource<Source, FetcherCursor, IdentityKey>,
+  DocumentSourceLoadedResource<Payload, FetcherCursor, IdentityKey>,
   SourceError
 > =>
   Effect.gen(function* () {
@@ -1048,13 +1055,13 @@ const loadResource = <
 const countDocuments = <
   Resource,
   FetcherCursor,
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   options: DocumentSourceCompiledOptions<
     Resource,
     FetcherCursor,
-    Source,
+    Payload,
     IdentityKey
   >,
   documents: readonly unknown[]
@@ -1073,13 +1080,13 @@ const countDocuments = <
 const countResource = <
   Resource,
   FetcherCursor,
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   options: DocumentSourceCompiledOptions<
     Resource,
     FetcherCursor,
-    Source,
+    Payload,
     IdentityKey
   >,
   resourceResult: DocumentFetchResult<Resource, FetcherCursor>
@@ -1100,13 +1107,13 @@ const countResource = <
 const makeDocumentSourceTotalContext = <
   Resource,
   FetcherCursor,
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   options: DocumentSourceCompiledOptions<
     Resource,
     FetcherCursor,
-    Source,
+    Payload,
     IdentityKey
   >
 ): DocumentSourceTotalContext<Resource, FetcherCursor, unknown> => ({
@@ -1117,13 +1124,13 @@ const makeDocumentSourceTotalContext = <
 const makeDocumentSourceCountTotal = <
   Resource,
   FetcherCursor,
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   options: DocumentSourceCompiledOptions<
     Resource,
     FetcherCursor,
-    Source,
+    Payload,
     IdentityKey
   >
 ): (() => Effect.Effect<number, SourceError>) | undefined => {
@@ -1147,7 +1154,7 @@ const makeDocumentSourceCountTotal = <
     );
   }
 
-  return undefined;
+  return;
 };
 
 const configuredBatchSize = (
@@ -1168,11 +1175,11 @@ const configuredBatchSize = (
 };
 
 const startIndexForCursor = <
-  Source,
+  Payload,
   FetcherCursor,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
-  resource: DocumentSourceLoadedResource<Source, FetcherCursor, IdentityKey>,
+  resource: DocumentSourceLoadedResource<Payload, FetcherCursor, IdentityKey>,
   cursor: DocumentSourceCursor<FetcherCursor> | null
 ): number => {
   if (
@@ -1206,17 +1213,17 @@ const nextResourceCursor = <FetcherCursor>(
 const makeImplementation = <
   Resource,
   FetcherCursor,
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   options: DocumentSourceCompiledOptions<
     Resource,
     FetcherCursor,
-    Source,
+    Payload,
     IdentityKey
   >
-): SourceImplementation<
-  Source,
+): SourceRuntimeImplementation<
+  Payload,
   DocumentSourceCursor<FetcherCursor>,
   IdentityKey
 > => {
@@ -1300,11 +1307,11 @@ const makeImplementation = <
     }
 
     let fetcherCursor: FetcherCursor | null = null;
-    let found: SourceItemInput<Source, IdentityKey> | null = null;
+    let found: SourceItemInput<Payload, IdentityKey> | null = null;
 
     while (true) {
       const resource: DocumentSourceLoadedResource<
-        Source,
+        Payload,
         FetcherCursor,
         IdentityKey
       > = yield* loadResource(options, fetcherCursor);
@@ -1368,8 +1375,7 @@ function makeSource<
 ): ConfiguredSource<
   DocumentSourceSelectedItem<DocumentSourceCursorFocus<Selection>>,
   DocumentSourceCursor<FetcherCursor>,
-  IdentityKey,
-  unknown
+  IdentityKey
 >;
 function makeSource<
   Resource,
@@ -1410,14 +1416,13 @@ function makeSource<
     DocumentSourceCursorFocus<Selection>
   >,
   DocumentSourceCursor<FetcherCursor>,
-  IdentityKey,
-  unknown
+  IdentityKey
 >;
 function makeSource<
   Resource,
   FetcherCursor,
   Document,
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   options:
@@ -1436,50 +1441,36 @@ function makeSource<
         unknown,
         IdentityKey
       >
-): ConfiguredSource<
-  Source,
-  DocumentSourceCursor<FetcherCursor>,
-  IdentityKey,
-  unknown
-> {
+): ConfiguredSource<Payload, DocumentSourceCursor<FetcherCursor>, IdentityKey> {
   const compiledSelector = compileSelector(
     options.parser.documentSchema,
     options.selector
-  ) as DocumentSourceCompiledSelector<Source>;
+  ) as DocumentSourceCompiledSelector<Payload>;
   const compiledOptions = {
     ...options,
     selector: compiledSelector,
   } as DocumentSourceCompiledOptions<
     Resource,
     FetcherCursor,
-    Source,
+    Payload,
     IdentityKey
   >;
   const cursorSchema = makeCursorSchema(options.fetcher.cursorSchema);
   const identity = makeDocumentSourceIdentityDefinition(
     compiledOptions.identity
   );
-  const configured = Source.make({
-    cursorSchema,
-    identity,
-    make: () => makeImplementation(compiledOptions),
-    sourceIdentityContractFingerprint:
-      makeDocumentSourceIdentityContractFingerprint(identity),
-    sourceSchema: compiledSelector.sourceSchema,
-    sourceVersionContractFingerprint:
-      makeDocumentSourceVersionContractFingerprint(options.version),
-  });
-
-  return Source.fromLayer({
-    cursorSchema,
-    identity: configured.identity,
-    layer: configured.layer,
-    sourceIdentityContractFingerprint:
-      configured.sourceIdentityContractFingerprint,
-    sourceSchema: compiledSelector.sourceSchema,
-    sourceVersionContractFingerprint:
-      configured.sourceVersionContractFingerprint,
-  });
+  return Source.make<Payload, DocumentSourceCursor<FetcherCursor>, IdentityKey>(
+    {
+      cursorSchema,
+      identity,
+      make: () => makeImplementation(compiledOptions),
+      sourceIdentityContractFingerprint:
+        makeDocumentSourceIdentityContractFingerprint(identity),
+      sourceSchema: compiledSelector.sourceSchema,
+      sourceVersionContractFingerprint:
+        makeDocumentSourceVersionContractFingerprint(options.version),
+    }
+  );
 }
 
 export const DocumentSource = {

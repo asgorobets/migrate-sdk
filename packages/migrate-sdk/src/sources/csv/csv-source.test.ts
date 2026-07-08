@@ -10,10 +10,10 @@ import {
   type MigrationProgressEvent,
   SourceItemTotal,
 } from "migrate-sdk";
-import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { CsvIdentity, CsvSource } from "migrate-sdk/sources/csv";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
-import { Source } from "../../services/source.ts";
+import { useConfiguredSource } from "../../testing/configured-source-runtime.ts";
 import { runInlineDefinition } from "../../testing/inline-registry-execution.ts";
 import { CsvParserCore, type CsvParserOptions } from "./csv-source.ts";
 
@@ -382,35 +382,38 @@ describe("CsvSource", () => {
         platform: testPlatformLayer,
         sourceSchema: CsvBookstoreCatalogRowSource,
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const read = yield* sourceService.read(null);
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const read = yield* sourceRuntime.read(null);
 
-      expect(read.items).toHaveLength(4);
-      expect(read.items.map((item) => item.identity.encoded)).toEqual([
-        JSON.stringify(["BOOK-001", "paperback"]),
-        JSON.stringify(["BOOK-001", "ebook"]),
-        JSON.stringify(["BOOK-002", "hardcover"]),
-        JSON.stringify(["BOOK-003", "box-set"]),
-      ]);
-      expect(read.items[0]?.version).toBe("2026-05-01T10:00:00Z");
-      expect(read.items[0]?.item.co_author_ids).toBe("AUTH-002|AUTH-003");
-      expect(read.items[1]?.item.attributes_json).toBe(
-        '{"language":"en","drm_free":true}'
-      );
-      expect(read.items[2]?.item.title).toBe('Designing "Durable" Systems');
-      expect(read.items[2]?.item.primary_author_name).toBe("Patel, Mina");
-      expect(read.items[2]?.item.description).toContain(
-        "Includes dependency notes"
-      );
+          expect(read.items).toHaveLength(4);
+          expect(read.items.map((item) => item.identity.encoded)).toEqual([
+            JSON.stringify(["BOOK-001", "paperback"]),
+            JSON.stringify(["BOOK-001", "ebook"]),
+            JSON.stringify(["BOOK-002", "hardcover"]),
+            JSON.stringify(["BOOK-003", "box-set"]),
+          ]);
+          expect(read.items[0]?.version).toBe("2026-05-01T10:00:00Z");
+          expect(read.items[0]?.item.co_author_ids).toBe("AUTH-002|AUTH-003");
+          expect(read.items[1]?.item.attributes_json).toBe(
+            '{"language":"en","drm_free":true}'
+          );
+          expect(read.items[2]?.item.title).toBe('Designing "Durable" Systems');
+          expect(read.items[2]?.item.primary_author_name).toBe("Patel, Mina");
+          expect(read.items[2]?.item.description).toContain(
+            "Includes dependency notes"
+          );
 
-      const lookedUp = yield* sourceService.readByIdentity(
-        SourceIdentity.fromEncoded(
-          sourceService.identity,
-          toEncodedSourceIdentity(JSON.stringify(["BOOK-002", "hardcover"]))
-        )
-      );
+          const lookedUp = yield* sourceRuntime.readByIdentity(
+            SourceIdentity.fromEncoded(
+              sourceRuntime.identity,
+              toEncodedSourceIdentity(JSON.stringify(["BOOK-002", "hardcover"]))
+            )
+          );
 
-      expect(lookedUp?.item.primary_author_id).toBe("AUTH-002");
+          expect(lookedUp?.item.primary_author_id).toBe("AUTH-002");
+        })
+      );
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
@@ -433,15 +436,17 @@ describe("CsvSource", () => {
         platform: testPlatformLayer,
         sourceSchema: CsvArticleSource,
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected CSV source total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected CSV source total count");
-      }
+          const total = yield* sourceRuntime.countTotal();
 
-      const total = yield* sourceService.countTotal();
-
-      expect(total).toEqual(SourceItemTotal.known(2));
+          expect(total).toEqual(SourceItemTotal.known(2));
+        })
+      );
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
@@ -472,15 +477,17 @@ describe("CsvSource", () => {
           platform: testPlatformLayer,
           sourceSchema: CsvArticleSource,
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            if (sourceRuntime.countTotal === undefined) {
+              throw new Error("Expected CSV source total count");
+            }
 
-        if (sourceService.countTotal === undefined) {
-          throw new Error("Expected CSV source total count");
-        }
+            const total = yield* sourceRuntime.countTotal();
 
-        const total = yield* sourceService.countTotal();
-
-        expect(total).toEqual(SourceItemTotal.known(2));
+            expect(total).toEqual(SourceItemTotal.known(2));
+          })
+        );
       }).pipe(Effect.provide(testPlatformLayer))
   );
 
@@ -501,17 +508,19 @@ describe("CsvSource", () => {
         platform: testPlatformLayer,
         sourceSchema: CsvArticleSource,
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected CSV source total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected CSV source total count");
-      }
+          const error = yield* Effect.flip(sourceRuntime.countTotal());
 
-      const error = yield* Effect.flip(sourceService.countTotal());
-
-      expect(error).toEqual(
-        expect.objectContaining({
-          message: "CSV row is blank",
+          expect(error).toEqual(
+            expect.objectContaining({
+              message: "CSV row is blank",
+            })
+          );
         })
       );
     }).pipe(Effect.provide(testPlatformLayer))
@@ -595,29 +604,32 @@ describe("CsvSource", () => {
         platform: testPlatformLayer,
         sourceSchema: CsvArticleSource,
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const firstRead = yield* sourceService.read(null);
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const firstRead = yield* sourceRuntime.read(null);
 
-      expect(firstRead.items).toHaveLength(1);
-      expect(firstRead.nextCursor?.nextRowIndex).toBe(2);
+          expect(firstRead.items).toHaveLength(1);
+          expect(firstRead.nextCursor?.nextRowIndex).toBe(2);
 
-      const secondRead = yield* sourceService.read(
-        firstRead.nextCursor ?? null
+          const secondRead = yield* sourceRuntime.read(
+            firstRead.nextCursor ?? null
+          );
+          expect(secondRead.items).toHaveLength(0);
+          expect(secondRead.nextCursor).toBeUndefined();
+
+          yield* fs.writeFileString(filePath, "id,title,views\n42,Changed,8\n");
+          const changedRead = yield* sourceRuntime.read(
+            firstRead.nextCursor ?? null
+          );
+
+          expect(changedRead.items).toHaveLength(1);
+          expect(changedRead.items[0]?.item).toEqual({
+            id: "42",
+            title: "Changed",
+            views: "8",
+          });
+        })
       );
-      expect(secondRead.items).toHaveLength(0);
-      expect(secondRead.nextCursor).toBeUndefined();
-
-      yield* fs.writeFileString(filePath, "id,title,views\n42,Changed,8\n");
-      const changedRead = yield* sourceService.read(
-        firstRead.nextCursor ?? null
-      );
-
-      expect(changedRead.items).toHaveLength(1);
-      expect(changedRead.items[0]?.item).toEqual({
-        id: "42",
-        title: "Changed",
-        views: "8",
-      });
     }).pipe(Effect.provide(testPlatformLayer))
   );
 });

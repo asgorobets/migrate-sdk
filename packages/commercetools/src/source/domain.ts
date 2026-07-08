@@ -55,18 +55,22 @@ export interface CommercetoolsEntitySourceBaseOptions {
   readonly whereVariables?: CommercetoolsSourceWhereVariables;
 }
 
-export interface CommercetoolsSourceProjection<Source, SourceInput, Resource> {
-  readonly schema: SourcePayloadSchema<Source, SourceInput>;
-  readonly select: (resource: Resource) => SourceInput;
+export interface CommercetoolsSourceProjection<
+  Payload,
+  EncodedPayload,
+  Resource,
+> {
+  readonly schema: SourcePayloadSchema<Payload, EncodedPayload>;
+  readonly select: (resource: Resource) => EncodedPayload;
 }
 
 export interface CommercetoolsProjectedEntitySourceOptions<
-  Source,
-  SourceInput,
+  Payload,
+  EncodedPayload,
   Resource,
 > extends CommercetoolsEntitySourceBaseOptions {
-  readonly select: (resource: Resource) => SourceInput;
-  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly select: (resource: Resource) => EncodedPayload;
+  readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
 }
 
 export interface CommercetoolsSourceQueryArgs {
@@ -132,12 +136,12 @@ export interface CommercetoolsEntitySourceDescriptor<
   ) => Effect.Effect<Page, CommercetoolsSdkError>;
 }
 
-export type ConfiguredCommercetoolsSource<Source, SourceInput> =
+export type ConfiguredCommercetoolsSource<Payload, EncodedPayload> =
   ConfiguredSource<
-    Source,
+    Payload,
     CommercetoolsSourceCursor,
     CommercetoolsSourceIdentityKey,
-    SourceInput,
+    EncodedPayload,
     never,
     CommercetoolsSdk
   >;

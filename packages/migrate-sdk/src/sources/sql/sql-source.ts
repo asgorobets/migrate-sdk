@@ -3,8 +3,6 @@ import { SqlClient, type Statement } from "effect/unstable/sql";
 import {
   type ConfiguredSource,
   Source,
-  type SourceImplementation,
-  type SourcePayloadSchema,
   type SourceReadResultInput,
 } from "../../domain/definition.ts";
 import { SourceError } from "../../domain/errors.ts";
@@ -28,7 +26,7 @@ import {
   encodeSourceIdentityKey,
   type SourceItemInput,
 } from "../../domain/source.ts";
-import type { AnySource } from "../../services/source.ts";
+import type { SourceRuntimeImplementation } from "../../services/source.ts";
 import {
   makeSqlSourceBatchSizeError,
   makeSqlSourceExecutionError,
@@ -155,45 +153,45 @@ type KnownStringKeyOf<T> = string extends keyof T
   ? never
   : Extract<keyof T, string>;
 
-type SqlIdentityForSourceInput<
-  SourceInput,
+type SqlIdentityForEncodedPayload<
+  EncodedPayload,
   Identity extends AnySqlIdentityDefinition,
 > =
   Identity extends SqlIdentityDefinition<infer _IdentityKey, infer Columns>
-    ? SqlIdentityColumnsCompatibleWithSourceInput<
-        SourceInput,
+    ? SqlIdentityColumnsCompatibleWithEncodedPayload<
+        EncodedPayload,
         Columns
       > extends true
       ? Identity
       : never
     : never;
 
-type SqlIdentityColumnCompatibleWithSourceInput<SourceInput, Column> =
+type SqlIdentityColumnCompatibleWithEncodedPayload<EncodedPayload, Column> =
   Column extends SqlIdentityColumn<
     infer Name,
     SourceIdentityScalar,
     infer Encoded
   >
-    ? Name extends KnownStringKeyOf<SourceInput>
-      ? SourceInput[Name] extends Encoded
+    ? Name extends KnownStringKeyOf<EncodedPayload>
+      ? EncodedPayload[Name] extends Encoded
         ? true
         : false
       : false
     : false;
 
-type SqlIdentityColumnsCompatibleWithSourceInput<
-  SourceInput,
+type SqlIdentityColumnsCompatibleWithEncodedPayload<
+  EncodedPayload,
   Columns extends readonly SqlIdentityColumn[],
 > = Columns extends readonly []
   ? true
   : Columns extends readonly [infer Column, ...infer RemainingColumns]
-    ? SqlIdentityColumnCompatibleWithSourceInput<
-        SourceInput,
+    ? SqlIdentityColumnCompatibleWithEncodedPayload<
+        EncodedPayload,
         Column
       > extends true
       ? RemainingColumns extends readonly SqlIdentityColumn[]
-        ? SqlIdentityColumnsCompatibleWithSourceInput<
-            SourceInput,
+        ? SqlIdentityColumnsCompatibleWithEncodedPayload<
+            EncodedPayload,
             RemainingColumns
           >
         : false
@@ -201,15 +199,15 @@ type SqlIdentityColumnsCompatibleWithSourceInput<
     : false;
 
 type SqlSourceOptionsForIdentity<
-  Source,
+  Payload,
   Cursor,
-  SourceInput,
+  EncodedPayload,
   Identity extends AnySqlIdentityDefinition,
   CountRow = unknown,
 > =
-  SqlIdentityForSourceInput<SourceInput, Identity> extends never
+  SqlIdentityForEncodedPayload<EncodedPayload, Identity> extends never
     ? never
-    : SqlSourceOptions<Source, Cursor, SourceInput, Identity, CountRow>;
+    : SqlSourceOptions<Payload, Cursor, EncodedPayload, Identity, CountRow>;
 
 const makeSqlIdentityColumn = <
   const Name extends string,
@@ -262,29 +260,29 @@ export const SqlIdentity = {
 } as const;
 
 interface SqlSourceBaseOptions<
-  Source,
+  Payload,
   Cursor,
-  SourceInput = unknown,
+  EncodedPayload = unknown,
   CountRow = unknown,
 > {
   readonly batchSize: number;
   readonly count?: SqlSourceCount<CountRow>;
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
-  readonly read: SqlSourceRead<SourceInput, Cursor>;
-  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly read: SqlSourceRead<EncodedPayload, Cursor>;
+  readonly sourceSchema: Schema.Codec<Payload, EncodedPayload, never, never>;
 }
 
 export interface SqlSourceOptions<
-  Source,
+  Payload,
   Cursor,
-  SourceInput = unknown,
+  EncodedPayload = unknown,
   Identity extends AnySqlIdentityDefinition = AnySqlIdentityDefinition,
   CountRow = unknown,
-> extends SqlSourceBaseOptions<Source, Cursor, SourceInput, CountRow> {
-  readonly getSourceMetadata: SqlSourceMetadata<SourceInput, Cursor>;
+> extends SqlSourceBaseOptions<Payload, Cursor, EncodedPayload, CountRow> {
+  readonly getSourceMetadata: SqlSourceMetadata<EncodedPayload, Cursor>;
   readonly identity: Identity;
   readonly lookup: SqlSourceLookup<
-    SourceInput,
+    EncodedPayload,
     SqlIdentityDefinitionKey<Identity>
   >;
   readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
@@ -362,15 +360,21 @@ const buildIdentityKey = <Identity extends AnySqlIdentityDefinition>(
   });
 
 const extractMetadata = <
-  Source,
+  Payload,
   Cursor,
-  SourceInput,
+  EncodedPayload,
   Identity extends AnySqlIdentityDefinition,
   CountRow = unknown,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity, CountRow>,
+  options: SqlSourceOptions<
+    Payload,
+    Cursor,
+    EncodedPayload,
+    Identity,
+    CountRow
+  >,
   operation: "read" | "readByIdentity",
-  row: SourceInput,
+  row: EncodedPayload,
   rowIndex: number
 ): Effect.Effect<SqlSourceMetadataResult<Cursor>, SourceError> =>
   Effect.try({
@@ -385,21 +389,27 @@ const extractMetadata = <
   });
 
 const sourceItemFromRow = <
-  Source,
+  Payload,
   Cursor,
-  SourceInput,
+  EncodedPayload,
   Identity extends AnySqlIdentityDefinition,
   CountRow = unknown,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity, CountRow>,
+  options: SqlSourceOptions<
+    Payload,
+    Cursor,
+    EncodedPayload,
+    Identity,
+    CountRow
+  >,
   identityDefinition: SourceIdentityDefinition<
     SqlIdentityDefinitionKey<Identity>
   >,
   operation: "read" | "readByIdentity",
-  row: SourceInput,
+  row: EncodedPayload,
   rowIndex: number
 ): Effect.Effect<
-  SourceItemInput<SourceInput, SqlIdentityDefinitionKey<Identity>>,
+  SourceItemInput<EncodedPayload, SqlIdentityDefinitionKey<Identity>>,
   SourceError
 > =>
   extractMetadata(options, operation, row, rowIndex).pipe(
@@ -432,13 +442,19 @@ const sourceItemFromRow = <
   );
 
 const readRows = <
-  Source,
+  Payload,
   Cursor,
-  SourceInput,
+  EncodedPayload,
   Identity extends AnySqlIdentityDefinition,
   CountRow = unknown,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity, CountRow>,
+  options: SqlSourceOptions<
+    Payload,
+    Cursor,
+    EncodedPayload,
+    Identity,
+    CountRow
+  >,
   identityDefinition: SourceIdentityDefinition<
     SqlIdentityDefinitionKey<Identity>
   >,
@@ -446,7 +462,7 @@ const readRows = <
   cursor: Cursor | null
 ): Effect.Effect<
   SourceReadResultInput<
-    SourceInput,
+    EncodedPayload,
     Cursor,
     SqlIdentityDefinitionKey<Identity>
   >,
@@ -462,7 +478,7 @@ const readRows = <
       options.read(sql, cursor, options.batchSize)
     );
     const items: SourceItemInput<
-      SourceInput,
+      EncodedPayload,
       SqlIdentityDefinitionKey<Identity>
     >[] = [];
     const sourceIdentityRows = new Map<string, number>();
@@ -572,22 +588,27 @@ const readSqlSourceCount = <CountRow>(
 };
 
 const makeImplementation = <
-  Source,
+  Payload,
   Cursor,
-  SourceInput,
+  EncodedPayload,
   Identity extends AnySqlIdentityDefinition,
   CountRow,
 >(
-  options: SqlSourceOptions<Source, Cursor, SourceInput, Identity, CountRow>,
+  options: SqlSourceOptions<
+    Payload,
+    Cursor,
+    EncodedPayload,
+    Identity,
+    CountRow
+  >,
   sql: SqlClient.SqlClient,
   identityDefinition: SourceIdentityDefinition<
     SqlIdentityDefinitionKey<Identity>
   >
-): SourceImplementation<
-  Source,
+): SourceRuntimeImplementation<
+  EncodedPayload,
   Cursor,
-  SqlIdentityDefinitionKey<Identity>,
-  SourceInput
+  SqlIdentityDefinitionKey<Identity>
 > => {
   const read = Effect.fn("SqlSource.read")((cursor: Cursor | null) =>
     readRows(options, identityDefinition, sql, cursor)
@@ -658,25 +679,25 @@ const makeImplementation = <
 };
 
 const make = <
-  Source,
+  Payload,
   Cursor,
-  SourceInput,
+  EncodedPayload,
   IdentityKey extends SourceIdentitySnapshotKey,
   Columns extends SqlIdentityColumns,
   CountRow = unknown,
 >(
   options: SqlSourceOptionsForIdentity<
-    Source,
+    Payload,
     Cursor,
-    SourceInput,
+    EncodedPayload,
     SqlIdentityDefinition<IdentityKey, Columns>,
     CountRow
   >
 ): ConfiguredSource<
-  Source,
+  Payload,
   Cursor,
   IdentityKey,
-  SourceInput,
+  EncodedPayload,
   never,
   SqlClient.SqlClient
 > => {
@@ -688,42 +709,31 @@ const make = <
     );
 
   return Source.fromLayer<
-    Source,
+    Payload,
     Cursor,
     IdentityKey,
-    SourceInput,
+    EncodedPayload,
     never,
     SqlClient.SqlClient
   >({
-    cursorSchema: options.cursorSchema,
-    layer: Layer.effect(
-      Source,
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const source = Source.make<Source, Cursor, IdentityKey, SourceInput>({
-          cursorSchema: options.cursorSchema,
-          identity: identityDefinition,
-          make: () =>
+    layer: (SourceRuntime) =>
+      Layer.effect(
+        SourceRuntime,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+
+          return SourceRuntime.of(
             makeImplementation<
-              Source,
+              Payload,
               Cursor,
-              SourceInput,
+              EncodedPayload,
               SqlIdentityDefinition<IdentityKey, Columns>,
               CountRow
-            >(options, sql, identityDefinition),
-          sourceIdentityContractFingerprint,
-          sourceSchema: options.sourceSchema,
-          ...(options.sourceVersionContractFingerprint === undefined
-            ? {}
-            : {
-                sourceVersionContractFingerprint:
-                  options.sourceVersionContractFingerprint,
-              }),
-        });
-
-        return yield* Source.pipe(Effect.provide(source.layer));
-      })
-    ),
+            >(options, sql, identityDefinition)
+          );
+        })
+      ),
+    cursorSchema: options.cursorSchema,
     identity: identityDefinition,
     sourceIdentityContractFingerprint,
     sourceSchema: options.sourceSchema,
@@ -736,27 +746,7 @@ const make = <
   });
 };
 
-const makeLayer = <
-  Source,
-  Cursor,
-  SourceInput,
-  IdentityKey extends SourceIdentitySnapshotKey,
-  Columns extends SqlIdentityColumns,
-  CountRow = unknown,
->(
-  options: SqlSourceOptionsForIdentity<
-    Source,
-    Cursor,
-    SourceInput,
-    SqlIdentityDefinition<IdentityKey, Columns>,
-    CountRow
-  >
-): Layer.Layer<AnySource, never, SqlClient.SqlClient> =>
-  make<Source, Cursor, SourceInput, IdentityKey, Columns, CountRow>(options)
-    .layer;
-
 export const SqlSource = {
   make,
-  layer: makeLayer,
   name: SqlSourceName,
 } as const;

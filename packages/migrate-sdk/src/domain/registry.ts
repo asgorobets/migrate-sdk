@@ -29,7 +29,7 @@ import type {
 } from "./rollback.ts";
 import type {
   AnyMigrationDefinition,
-  RunRequestSourceLayerError,
+  RunRequestSourceImplementationError,
   RunRequestSourceRequirements,
 } from "./run.ts";
 import type { RunModeInput } from "./run-mode.ts";
@@ -1639,7 +1639,7 @@ export class MigrationDefinitionRegistry<
   ): Effect.Effect<
     MigrationDefinitionRegistryStatusReport,
     | MigrationDefinitionRegistryStatusError
-    | RunRequestSourceLayerError<Definitions>,
+    | RunRequestSourceImplementationError<Definitions>,
     RunRequestSourceRequirements<Definitions>
   >;
   status(
@@ -1647,7 +1647,7 @@ export class MigrationDefinitionRegistry<
   ): Effect.Effect<
     MigrationDefinitionRegistryStatusReport,
     | MigrationDefinitionRegistryStatusError
-    | RunRequestSourceLayerError<Definitions>,
+    | RunRequestSourceImplementationError<Definitions>,
     RunRequestSourceRequirements<Definitions>
   >;
   status(

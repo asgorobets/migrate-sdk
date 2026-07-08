@@ -1,9 +1,5 @@
-import { Effect, type Layer, Schema } from "effect";
-import {
-  type ConfiguredSource,
-  Source,
-  type SourceImplementation,
-} from "../../domain/definition.ts";
+import { Effect, Schema } from "effect";
+import { type ConfiguredSource, Source } from "../../domain/definition.ts";
 import { SourceError } from "../../domain/errors.ts";
 import type {
   SourceIdentity,
@@ -17,7 +13,7 @@ import {
   type SourceItemInput,
   type SourceLookupStrategy,
 } from "../../domain/source.ts";
-import type { AnySource } from "../../services/source.ts";
+import type { SourceRuntimeImplementation } from "../../services/source.ts";
 
 export const InMemorySourceCursor = Schema.Struct({
   offset: Schema.Int,
@@ -26,24 +22,26 @@ export const InMemorySourceCursor = Schema.Struct({
 export type InMemorySourceCursor = typeof InMemorySourceCursor.Type;
 
 interface InMemorySourceBaseOptions<
-  A,
+  Payload,
+  EncodedPayload,
   IdentityKey extends SourceIdentitySnapshotKey,
 > {
   readonly batchSize?: number;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
-  readonly items: readonly SourceItemInput<A, IdentityKey>[];
+  readonly items: readonly SourceItemInput<EncodedPayload, IdentityKey>[];
   readonly lookupStrategy?: SourceLookupStrategy;
   readonly sourceIdentityContractFingerprint?: SourceIdentityContractFingerprint;
-  readonly sourceSchema: Schema.Codec<A, unknown, never, never>;
+  readonly sourceSchema: Schema.Codec<Payload, EncodedPayload, never, never>;
   readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
   readonly state?: InMemorySourceState;
   readonly transientFailures?: InMemorySourceTransientFailures;
 }
 
 export interface InMemorySourceOptions<
-  A,
+  Payload,
+  EncodedPayload = Payload,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-> extends InMemorySourceBaseOptions<A, IdentityKey> {}
+> extends InMemorySourceBaseOptions<Payload, EncodedPayload, IdentityKey> {}
 
 export interface InMemorySourceState {
   readAttempts: number;
@@ -71,10 +69,18 @@ const transientSourceError = (operation: string): SourceError =>
     message: `In-memory source ${operation} failed transiently`,
   });
 
-const makeImplementation = <A, IdentityKey extends SourceIdentitySnapshotKey>(
-  options: InMemorySourceBaseOptions<A, IdentityKey>,
+const makeImplementation = <
+  Payload,
+  EncodedPayload,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  options: InMemorySourceBaseOptions<Payload, EncodedPayload, IdentityKey>,
   identityDefinition: SourceIdentityDefinition<IdentityKey>
-): SourceImplementation<A, InMemorySourceCursor, IdentityKey, A> => {
+): SourceRuntimeImplementation<
+  EncodedPayload,
+  InMemorySourceCursor,
+  IdentityKey
+> => {
   const items = options.items;
   const batchSize = options.batchSize ?? items.length;
   const lookupStrategy = options.lookupStrategy ?? "direct";
@@ -155,10 +161,19 @@ const makeImplementation = <A, IdentityKey extends SourceIdentitySnapshotKey>(
   };
 };
 
-const make = <A, IdentityKey extends SourceIdentitySnapshotKey>(
-  options: InMemorySourceOptions<A, IdentityKey>
-): ConfiguredSource<A, InMemorySourceCursor, IdentityKey, unknown> => {
-  return Source.make({
+const make = <
+  Payload,
+  EncodedPayload = Payload,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+>(
+  options: InMemorySourceOptions<Payload, EncodedPayload, IdentityKey>
+): ConfiguredSource<
+  Payload,
+  InMemorySourceCursor,
+  IdentityKey,
+  EncodedPayload
+> =>
+  Source.make({
     cursorSchema: InMemorySourceCursor,
     identity: options.identity,
     make: () => makeImplementation(options, options.identity),
@@ -176,14 +191,8 @@ const make = <A, IdentityKey extends SourceIdentitySnapshotKey>(
             options.sourceVersionContractFingerprint,
         }),
   });
-};
-
-const makeLayer = <A, IdentityKey extends SourceIdentitySnapshotKey>(
-  options: InMemorySourceOptions<A, IdentityKey>
-): Layer.Layer<AnySource> => make(options).layer;
 
 export const InMemorySource = {
-  layer: makeLayer,
   make,
   makeState,
 } as const;

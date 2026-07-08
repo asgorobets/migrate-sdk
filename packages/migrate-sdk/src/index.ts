@@ -6,13 +6,18 @@ export type {
   MigrationDefinitionDependencies,
   MigrationDefinitionDependenciesInput,
   MigrationDefinitionInput,
-  SourcePayloadSchema,
   SourceFactoryInput,
-  SourceImplementation,
+  SourceLayerInput,
   SourceMakeInput,
+  SourcePayloadSchema,
   SourceReadResultInput,
   SourceRetryStrategy,
+  SourceRuntimeLayer,
 } from "./domain/definition.ts";
+export type {
+  SourceRuntime as SourceRuntimeService,
+  SourceRuntimeImplementation,
+} from "./services/source.ts";
 export {
   MigrationDefinition,
   Source,

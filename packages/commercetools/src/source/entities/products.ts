@@ -19,13 +19,13 @@ export interface CommercetoolsProductSourceOptions
 }
 
 export interface CommercetoolsProductSourceProjectionOptions<
-  Source,
-  SourceInput,
+  Payload,
+  EncodedPayload,
 > extends CommercetoolsEntitySourceBaseOptions {
   readonly entity: "products";
   readonly projection: CommercetoolsSourceProjection<
-    Source,
-    SourceInput,
+    Payload,
+    EncodedPayload,
     Product
   >;
 }
@@ -64,15 +64,17 @@ export function makeProductSource(
   options: CommercetoolsProductSourceOptions
 ): ConfiguredCommercetoolsSource<Product, Product>;
 
-export function makeProductSource<Source, SourceInput>(
-  options: CommercetoolsProductSourceProjectionOptions<Source, SourceInput>
-): ConfiguredCommercetoolsSource<Source, SourceInput>;
+export function makeProductSource<Payload, EncodedPayload>(
+  options: CommercetoolsProductSourceProjectionOptions<Payload, EncodedPayload>
+): ConfiguredCommercetoolsSource<Payload, EncodedPayload>;
 
-export function makeProductSource<Source, SourceInput>(
+export function makeProductSource<Payload, EncodedPayload>(
   options:
     | CommercetoolsProductSourceOptions
-    | CommercetoolsProductSourceProjectionOptions<Source, SourceInput>
-): ConfiguredCommercetoolsSource<Source | Product, SourceInput | Product> {
+    | CommercetoolsProductSourceProjectionOptions<Payload, EncodedPayload>
+):
+  | ConfiguredCommercetoolsSource<Product, Product>
+  | ConfiguredCommercetoolsSource<Payload, EncodedPayload> {
   const baseOptions: CommercetoolsEntitySourceBaseOptions =
     entitySourceBaseOptions(options);
 

@@ -47,30 +47,30 @@ import {
 import { decodeStoredItemStateForTrackingContract } from "./stored-item-state-decode.ts";
 
 export interface ProcessSourceItemOptions<
-  Source,
+  Payload,
   PipelineError,
   Cursor = unknown,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  SourceInput = unknown,
-  SourceLayerError = never,
+  EncodedPayload = unknown,
+  SourceImplementationError = never,
   SourceRequirements = never,
   TrackingContract extends TrackingRecordContract | undefined = undefined,
 > {
   readonly definition: MigrationDefinition<
-    Source,
+    Payload,
     PipelineError,
     Cursor,
     IdentityKey,
     unknown,
-    SourceInput,
-    SourceLayerError,
+    EncodedPayload,
+    SourceImplementationError,
     SourceRequirements,
     TrackingContract
   >;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
-  readonly sourceItem: SourceItem<SourceInput, IdentityKey>;
-  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceItem: SourceItem<EncodedPayload, IdentityKey>;
+  readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
 }
 
 export type ProcessSourceItemError = MigrationStoreError;
@@ -98,10 +98,10 @@ interface SourceVersionContractContext {
   readonly sourceVersionContractFingerprint: SourceVersionContractFingerprint;
 }
 
-const makeItemStateBase = <Source>(
+const makeItemStateBase = <Payload>(
   sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
-  sourceItem: SourceItem<Source>
+  sourceItem: SourceItem<Payload>
 ): MigrationItemStateBase & { readonly sourceVersion: SourceVersion } => ({
   definitionId: sourceVersionContractContext.definitionId,
   sourceIdentity: sourceItem.identity,
@@ -119,10 +119,10 @@ const previousTrackingRecord = (
     ? previousState.trackingRecord
     : undefined;
 
-const makeSkippedItemState = <Source>(
+const makeSkippedItemState = <Payload>(
   sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
-  sourceItem: SourceItem<Source>,
+  sourceItem: SourceItem<Payload>,
   reason: string,
   previousState: MigrationItemState | null = null,
   journal?: SkippedItemState["journal"]
@@ -139,10 +139,10 @@ const makeSkippedItemState = <Source>(
   };
 };
 
-const makeFailedItemState = <Source>(
+const makeFailedItemState = <Payload>(
   sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
-  sourceItem: SourceItem<Source>,
+  sourceItem: SourceItem<Payload>,
   error: MigrationItemError,
   previousState: MigrationItemState | null = null,
   journal?: FailedItemState["journal"]
@@ -159,24 +159,22 @@ const makeFailedItemState = <Source>(
   };
 };
 
-const makeMigratedItemState = <Source>(
+const makeMigratedItemState = <Payload>(
   sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
-  sourceItem: SourceItem<Source>,
+  sourceItem: SourceItem<Payload>,
   result: {
     readonly journal?: MigratedItemState["journal"];
     readonly trackingRecord?: MigratedItemState["trackingRecord"];
   }
-): MigratedItemState => {
-  return {
-    ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
-    status: "migrated",
-    ...(result.journal === undefined ? {} : { journal: result.journal }),
-    ...(result.trackingRecord === undefined
-      ? {}
-      : { trackingRecord: result.trackingRecord }),
-  };
-};
+): MigratedItemState => ({
+  ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
+  status: "migrated",
+  ...(result.journal === undefined ? {} : { journal: result.journal }),
+  ...(result.trackingRecord === undefined
+    ? {}
+    : { trackingRecord: result.trackingRecord }),
+});
 
 export const makeProcessJournal = (
   process: DestinationJournalSegment | null
@@ -223,7 +221,7 @@ export const validateStagedTrackingRecord = (
   );
 };
 
-const resolveProcessTrackingRecord = <Source>({
+const resolveProcessTrackingRecord = <Payload>({
   decodedSourceItem,
   definition,
   previousState,
@@ -233,7 +231,7 @@ const resolveProcessTrackingRecord = <Source>({
   store,
   tracking,
 }: {
-  readonly decodedSourceItem: SourceItem<Source>;
+  readonly decodedSourceItem: SourceItem<Payload>;
   readonly definition: {
     readonly tracking?: TrackingRecordContract | undefined;
   };
@@ -268,7 +266,7 @@ const resolveProcessTrackingRecord = <Source>({
     );
   });
 
-const persistProcessOutcome = <Source>({
+const persistProcessOutcome = <Payload>({
   decodedSourceItem,
   outcome,
   previousState,
@@ -277,7 +275,7 @@ const persistProcessOutcome = <Source>({
   sourceVersionContractContext,
   store,
 }: {
-  readonly decodedSourceItem: SourceItem<Source>;
+  readonly decodedSourceItem: SourceItem<Payload>;
   readonly outcome: ProcessOutcome;
   readonly previousState: MigrationItemState | null;
   readonly processJournal?: FailedItemState["journal"];
@@ -315,12 +313,12 @@ const persistProcessOutcome = <Source>({
 };
 
 const isUnchangedTerminalState = <
-  Source,
+  Payload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
   sourceVersionContractFingerprint: SourceVersionContractFingerprint,
   previousState: MigrationItemState | null,
-  sourceItem: SourceItem<Source, IdentityKey>
+  sourceItem: SourceItem<Payload, IdentityKey>
 ): boolean =>
   previousState?.status === "migrated" &&
   previousState.sourceVersionContractFingerprint ===
@@ -328,18 +326,18 @@ const isUnchangedTerminalState = <
   previousState.sourceVersion === sourceItem.version;
 
 const decodeSourceItem = <
-  Source,
-  SourceInput,
+  Payload,
+  EncodedPayload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >(
-  sourceSchema: SourcePayloadSchema<Source, SourceInput>,
-  sourceItem: SourceItem<SourceInput, IdentityKey>
+  sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>,
+  sourceItem: SourceItem<EncodedPayload, IdentityKey>
 ) =>
   Schema.decodeUnknownEffect(sourceSchema, { errors: "all" })(
     sourceItem.item
   ).pipe(
     Effect.map(
-      (item): SourceItem<Source, IdentityKey> => ({
+      (item): SourceItem<Payload, IdentityKey> => ({
         ...sourceItem,
         item,
       })
@@ -347,8 +345,8 @@ const decodeSourceItem = <
   );
 
 const decodeSourceItemOrPersistFailure = <
-  Source,
-  SourceInput,
+  Payload,
+  EncodedPayload,
   IdentityKey extends SourceIdentitySnapshotKey,
 >({
   previousState,
@@ -360,12 +358,12 @@ const decodeSourceItemOrPersistFailure = <
 }: {
   readonly previousState: MigrationItemState | null;
   readonly runId: MigrationRunId;
-  readonly sourceItem: SourceItem<SourceInput, IdentityKey>;
-  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceItem: SourceItem<EncodedPayload, IdentityKey>;
+  readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
   readonly sourceVersionContractContext: SourceVersionContractContext;
   readonly store: typeof MigrationStore.Service;
 }): Effect.Effect<
-  SourceItem<Source, IdentityKey> | null,
+  SourceItem<Payload, IdentityKey> | null,
   MigrationStoreError
 > =>
   decodeSourceItem(sourceSchema, sourceItem).pipe(
@@ -385,27 +383,27 @@ const decodeSourceItemOrPersistFailure = <
   );
 
 const runProcess = <
-  Source,
+  Payload,
   PipelineError,
   Cursor = unknown,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  SourceInput = Source,
-  SourceLayerError = never,
+  EncodedPayload = Payload,
+  SourceImplementationError = never,
   SourceRequirements = never,
   TrackingContract extends TrackingRecordContract | undefined = undefined,
 >(
   definition: MigrationDefinition<
-    Source,
+    Payload,
     PipelineError,
     Cursor,
     IdentityKey,
     unknown,
-    SourceInput,
-    SourceLayerError,
+    EncodedPayload,
+    SourceImplementationError,
     SourceRequirements,
     TrackingContract
   >,
-  sourceItem: SourceItem<Source, IdentityKey>,
+  sourceItem: SourceItem<Payload, IdentityKey>,
   context: ProcessContext<TrackingContract>
 ) =>
   Effect.try({
@@ -424,12 +422,12 @@ const runProcess = <
   );
 
 const processWithProcessPipeline = <
-  Source,
+  Payload,
   PipelineError,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract extends TrackingRecordContract | undefined,
 >({
@@ -441,15 +439,15 @@ const processWithProcessPipeline = <
   sourceVersionContractContext,
   store,
 }: {
-  readonly decodedSourceItem: SourceItem<Source, IdentityKey>;
+  readonly decodedSourceItem: SourceItem<Payload, IdentityKey>;
   readonly definition: MigrationDefinition<
-    Source,
+    Payload,
     PipelineError,
     Cursor,
     IdentityKey,
     unknown,
-    SourceInput,
-    SourceLayerError,
+    EncodedPayload,
+    SourceImplementationError,
     SourceRequirements,
     TrackingContract
   >;
@@ -537,12 +535,12 @@ const processWithProcessPipeline = <
   });
 
 export const processSourceItem = <
-  Source,
+  Payload,
   PipelineError,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract extends TrackingRecordContract | undefined,
 >({
@@ -552,12 +550,12 @@ export const processSourceItem = <
   sourceSchema,
   sourceItem,
 }: ProcessSourceItemOptions<
-  Source,
+  Payload,
   PipelineError,
   Cursor,
   IdentityKey,
-  SourceInput,
-  SourceLayerError,
+  EncodedPayload,
+  SourceImplementationError,
   SourceRequirements,
   TrackingContract
 >): Effect.Effect<

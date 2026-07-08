@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 import { SourceIdentity, SourceItemTotal } from "migrate-sdk";
-import { Source } from "../../services/source.ts";
+import { useConfiguredSource } from "../../testing/configured-source-runtime.ts";
 import { InMemorySource } from "./in-memory-source.ts";
 
 const ArticleSource = Schema.Struct({
@@ -37,17 +37,19 @@ describe("InMemorySource", () => {
           sourceSchema: ArticleSource,
           state,
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            if (sourceRuntime.countTotal === undefined) {
+              throw new Error("Expected in-memory source total count");
+            }
 
-        if (sourceService.countTotal === undefined) {
-          throw new Error("Expected in-memory source total count");
-        }
+            const total = yield* sourceRuntime.countTotal();
 
-        const total = yield* sourceService.countTotal();
-
-        expect(total).toEqual(SourceItemTotal.known(2));
-        expect(state.readAttempts).toBe(0);
-        expect(state.readByIdentityAttempts).toBe(0);
+            expect(total).toEqual(SourceItemTotal.known(2));
+            expect(state.readAttempts).toBe(0);
+            expect(state.readByIdentityAttempts).toBe(0);
+          })
+        );
       })
   );
 
@@ -58,15 +60,17 @@ describe("InMemorySource", () => {
         items: [],
         sourceSchema: ArticleSource,
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected in-memory source total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected in-memory source total count");
-      }
+          const total = yield* sourceRuntime.countTotal();
 
-      const total = yield* sourceService.countTotal();
-
-      expect(total).toEqual(SourceItemTotal.known(0));
+          expect(total).toEqual(SourceItemTotal.known(0));
+        })
+      );
     })
   );
 });

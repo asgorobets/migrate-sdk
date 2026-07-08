@@ -13,7 +13,6 @@ import {
   MigrationProgress,
   type MigrationProgressEvent,
   type MigrationRunSummary,
-  Source,
   SourceError,
   SourceIdentity,
   SourceItemTotal,
@@ -21,13 +20,14 @@ import {
   type SourceVersionInput,
   toEncodedSourceIdentity,
 } from "migrate-sdk";
-import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import {
   SqlIdentity,
   SqlSource,
   type SqlSourceCount,
 } from "migrate-sdk/sources/sql";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { expectTypeOf } from "vitest";
+import { useConfiguredSource } from "../../testing/configured-source-runtime.ts";
 import { runInlineDefinition } from "../../testing/inline-registry-execution.ts";
 
 const SqlArticleRow = Schema.Struct({
@@ -443,49 +443,52 @@ describe("SqlSource", () => {
       Effect.gen(function* () {
         const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([articleRows, [articleRows[1]]]);
-        const sourceService = yield* Source.pipe(
-          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-        );
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            const page = yield* sourceRuntime.read(null);
 
-        const page = yield* sourceService.read(null);
+            expect(
+              page.items.map((sourceItem) => ({
+                ...sourceItem,
+                identity: sourceItem.identity.encoded,
+              }))
+            ).toEqual([
+              {
+                identity: "article-1",
+                item: articleRows[0],
+                version: "2026-01-01T00:00:00.000Z",
+              },
+              {
+                identity: "article-2",
+                item: articleRows[1],
+                version: "2026-01-02T00:00:00.000Z",
+              },
+            ]);
+            expect(page.nextCursor).toEqual({
+              id: "article-2",
+              updated_at: "2026-01-02T00:00:00.000Z",
+            });
+            expect(fakeSql.calls[0]?.values).toEqual([2]);
 
-        expect(
-          page.items.map((sourceItem) => ({
-            ...sourceItem,
-            identity: sourceItem.identity.encoded,
-          }))
-        ).toEqual([
-          {
-            identity: "article-1",
-            item: articleRows[0],
-            version: "2026-01-01T00:00:00.000Z",
-          },
-          {
-            identity: "article-2",
-            item: articleRows[1],
-            version: "2026-01-02T00:00:00.000Z",
-          },
-        ]);
-        expect(page.nextCursor).toEqual({
-          id: "article-2",
-          updated_at: "2026-01-02T00:00:00.000Z",
-        });
-        expect(fakeSql.calls[0]?.values).toEqual([2]);
+            const item = yield* sourceRuntime.readByIdentity(
+              SourceIdentity.fromEncoded(
+                sourceRuntime.identity,
+                toEncodedSourceIdentity("article-2")
+              )
+            );
 
-        const item = yield* sourceService.readByIdentity(
-          SourceIdentity.fromEncoded(
-            sourceService.identity,
-            toEncodedSourceIdentity("article-2")
-          )
-        );
-
-        expect(item).toEqual({
-          identity: SourceIdentity.fromKey(sourceService.identity, "article-2"),
-          item: articleRows[1],
-          version: "2026-01-02T00:00:00.000Z",
-        });
-        expect(fakeSql.calls[1]?.values).toEqual(["article-2"]);
-        expect(fakeSql.transactionCount()).toBe(0);
+            expect(item).toEqual({
+              identity: SourceIdentity.fromKey(
+                sourceRuntime.identity,
+                "article-2"
+              ),
+              item: articleRows[1],
+              version: "2026-01-02T00:00:00.000Z",
+            });
+            expect(fakeSql.calls[1]?.values).toEqual(["article-2"]);
+            expect(fakeSql.transactionCount()).toBe(0);
+          })
+        ).pipe(Effect.provide(fakeSql.layer));
       })
   );
 
@@ -523,24 +526,24 @@ describe("SqlSource", () => {
           sourceSchema: SqlArticleRow,
         });
         const fakeSql = makeFakeSqlClient([[{ total: 2 }]]);
-        const sourceService = yield* Source.pipe(
-          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-        );
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            if (sourceRuntime.countTotal === undefined) {
+              throw new Error("Expected SQL source total count");
+            }
 
-        if (sourceService.countTotal === undefined) {
-          throw new Error("Expected SQL source total count");
-        }
+            const total = yield* sourceRuntime.countTotal();
 
-        const total = yield* sourceService.countTotal();
-
-        expect(total).toEqual(SourceItemTotal.known(2));
-        expect(readCalls).toBe(0);
-        expect(lookupCalls).toBe(0);
-        expect(fakeSql.calls).toHaveLength(1);
-        expect(normalizeSqlText(fakeSql.calls[0]?.strings ?? [])).toBe(
-          "select count(*) as total from articles where status = ?"
-        );
-        expect(fakeSql.calls[0]?.values).toEqual(["published"]);
+            expect(total).toEqual(SourceItemTotal.known(2));
+            expect(readCalls).toBe(0);
+            expect(lookupCalls).toBe(0);
+            expect(fakeSql.calls).toHaveLength(1);
+            expect(normalizeSqlText(fakeSql.calls[0]?.strings ?? [])).toBe(
+              "select count(*) as total from articles where status = ?"
+            );
+            expect(fakeSql.calls[0]?.values).toEqual(["published"]);
+          })
+        ).pipe(Effect.provide(fakeSql.layer));
       })
   );
 
@@ -553,18 +556,18 @@ describe("SqlSource", () => {
         },
       });
       const fakeSql = makeFakeSqlClient([]);
-      const sourceService = yield* Source.pipe(
-        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-      );
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected SQL source total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected SQL source total count");
-      }
+          const total = yield* sourceRuntime.countTotal();
 
-      const total = yield* sourceService.countTotal();
-
-      expect(total).toEqual(SourceItemTotal.known(0));
-      expect(fakeSql.calls).toHaveLength(0);
+          expect(total).toEqual(SourceItemTotal.known(0));
+          expect(fakeSql.calls).toHaveLength(0);
+        })
+      ).pipe(Effect.provide(fakeSql.layer));
     })
   );
 
@@ -581,16 +584,18 @@ describe("SqlSource", () => {
             }>`select count(*) as total from articles`,
         },
       }).provide(fakeSql.layer);
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected SQL source total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected SQL source total count");
-      }
+          const total = yield* sourceRuntime.countTotal();
 
-      const total = yield* sourceService.countTotal();
-
-      expect(total).toEqual(SourceItemTotal.known(2));
-      expect(fakeSql.calls).toHaveLength(1);
+          expect(total).toEqual(SourceItemTotal.known(2));
+          expect(fakeSql.calls).toHaveLength(1);
+        })
+      );
     })
   );
 
@@ -598,12 +603,12 @@ describe("SqlSource", () => {
     Effect.gen(function* () {
       const source = makeSqlArticleSource();
       const fakeSql = makeFakeSqlClient([]);
-      const sourceService = yield* Source.pipe(
-        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-      );
-
-      expect(sourceService.countTotal).toBeUndefined();
-      expect(fakeSql.calls).toHaveLength(0);
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.sync(() => {
+          expect(sourceRuntime.countTotal).toBeUndefined();
+          expect(fakeSql.calls).toHaveLength(0);
+        })
+      ).pipe(Effect.provide(fakeSql.layer));
     })
   );
 
@@ -732,22 +737,23 @@ describe("SqlSource", () => {
         >
       >();
       const fakeSql = makeFakeSqlClient([rows, [rows[1]]]);
-      const sourceService = yield* Source.pipe(
-        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-      );
 
-      const page = yield* sourceService.read(null);
-      const lookupItem = yield* sourceService.readByIdentity(
-        SourceIdentity.fromKey(sourceService.identity, 102)
-      );
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const page = yield* sourceRuntime.read(null);
+          const lookupItem = yield* sourceRuntime.readByIdentity(
+            SourceIdentity.fromKey(sourceRuntime.identity, 102)
+          );
 
-      expect(page.items.map((item) => item.identity.encoded)).toEqual([
-        "101",
-        "102",
-      ]);
-      expect(lookupItem?.identity.key).toBe(102);
-      expect(fakeSql.calls[0]?.values).toEqual([2]);
-      expect(fakeSql.calls[1]?.values).toEqual([102]);
+          expect(page.items.map((item) => item.identity.encoded)).toEqual([
+            "101",
+            "102",
+          ]);
+          expect(lookupItem?.identity.key).toBe(102);
+          expect(fakeSql.calls[0]?.values).toEqual([2]);
+          expect(fakeSql.calls[1]?.values).toEqual([102]);
+        })
+      ).pipe(Effect.provide(fakeSql.layer));
     })
   );
 
@@ -788,19 +794,20 @@ describe("SqlSource", () => {
         sourceSchema: StringEncodedNumericArticleRow,
       });
       const fakeSql = makeFakeSqlClient([rows, rows]);
-      const sourceService = yield* Source.pipe(
-        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-      );
 
-      const page = yield* sourceService.read(null);
-      const lookupItem = yield* sourceService.readByIdentity(
-        SourceIdentity.fromKey(sourceService.identity, 101)
-      );
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const page = yield* sourceRuntime.read(null);
+          const lookupItem = yield* sourceRuntime.readByIdentity(
+            SourceIdentity.fromKey(sourceRuntime.identity, 101)
+          );
 
-      expect(page.items[0]?.identity.key).toBe(101);
-      expect(page.items[0]?.identity.encoded).toBe("101");
-      expect(lookupItem?.identity.key).toBe(101);
-      expect(fakeSql.calls[1]?.values).toEqual(["101"]);
+          expect(page.items[0]?.identity.key).toBe(101);
+          expect(page.items[0]?.identity.encoded).toBe("101");
+          expect(lookupItem?.identity.key).toBe(101);
+          expect(fakeSql.calls[1]?.values).toEqual(["101"]);
+        })
+      ).pipe(Effect.provide(fakeSql.layer));
     })
   );
 
@@ -849,29 +856,33 @@ describe("SqlSource", () => {
         >
       >();
       const fakeSql = makeFakeSqlClient([rows, rows]);
-      const sourceService = yield* Source.pipe(
-        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-      );
 
-      const page = yield* sourceService.read(null);
-      const lookupItem = yield* sourceService.readByIdentity(
-        SourceIdentity.fromKey(sourceService.identity, [
-          "tenant-1",
-          "ada@example.com",
-        ])
-      );
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const page = yield* sourceRuntime.read(null);
+          const lookupItem = yield* sourceRuntime.readByIdentity(
+            SourceIdentity.fromKey(sourceRuntime.identity, [
+              "tenant-1",
+              "ada@example.com",
+            ])
+          );
 
-      expect(page.items.map((item) => item.identity.encoded)).toEqual([
-        '["tenant-1","ada@example.com"]',
-      ]);
-      expect(page.items[0]?.identity.key).toEqual([
-        "tenant-1",
-        "ada@example.com",
-      ]);
-      expect(lookupItem?.identity.encoded).toBe(
-        '["tenant-1","ada@example.com"]'
-      );
-      expect(fakeSql.calls[1]?.values).toEqual(["tenant-1", "ada@example.com"]);
+          expect(page.items.map((item) => item.identity.encoded)).toEqual([
+            '["tenant-1","ada@example.com"]',
+          ]);
+          expect(page.items[0]?.identity.key).toEqual([
+            "tenant-1",
+            "ada@example.com",
+          ]);
+          expect(lookupItem?.identity.encoded).toBe(
+            '["tenant-1","ada@example.com"]'
+          );
+          expect(fakeSql.calls[1]?.values).toEqual([
+            "tenant-1",
+            "ada@example.com",
+          ]);
+        })
+      ).pipe(Effect.provide(fakeSql.layer));
     })
   );
 
@@ -910,11 +921,9 @@ describe("SqlSource", () => {
     Effect.gen(function* () {
       const source = makeSqlArticleSource({ batchSize: 0 });
       const fakeSql = makeFakeSqlClient([articleRows]);
-      const sourceService = yield* Source.pipe(
-        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-      );
-
-      const error = yield* Effect.flip(sourceService.read(null));
+      const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.flip(sourceRuntime.read(null))
+      ).pipe(Effect.provide(fakeSql.layer));
 
       expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe(
@@ -936,11 +945,9 @@ describe("SqlSource", () => {
           }),
         });
         const fakeSql = makeFakeSqlClient([[articleRows[0]]]);
-        const sourceService = yield* Source.pipe(
-          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-        );
-
-        const error = yield* Effect.flip(sourceService.read(null));
+        const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.flip(sourceRuntime.read(null))
+        ).pipe(Effect.provide(fakeSql.layer));
 
         expect(error).toBeInstanceOf(SourceError);
         expect(error.message).toBe(
@@ -966,11 +973,9 @@ describe("SqlSource", () => {
             },
           ],
         ]);
-        const sourceService = yield* Source.pipe(
-          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-        );
-
-        const error = yield* Effect.flip(sourceService.read(null));
+        const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.flip(sourceRuntime.read(null))
+        ).pipe(Effect.provide(fakeSql.layer));
 
         expect(error).toBeInstanceOf(SourceError);
         expect(error.message).toBe(
@@ -990,18 +995,16 @@ describe("SqlSource", () => {
           },
         ],
       ]);
-      const sourceService = yield* Source.pipe(
-        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-      );
-
-      const error = yield* Effect.flip(
-        sourceService.readByIdentity(
-          SourceIdentity.fromEncoded(
-            sourceService.identity,
-            toEncodedSourceIdentity("article-1")
+      const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.flip(
+          sourceRuntime.readByIdentity(
+            SourceIdentity.fromEncoded(
+              sourceRuntime.identity,
+              toEncodedSourceIdentity("article-1")
+            )
           )
         )
-      );
+      ).pipe(Effect.provide(fakeSql.layer));
 
       expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe(
@@ -1021,11 +1024,9 @@ describe("SqlSource", () => {
       ] satisfies readonly SqlArticleRow[];
       const source = makeSqlArticleSource();
       const fakeSql = makeFakeSqlClient([duplicateRows]);
-      const sourceService = yield* Source.pipe(
-        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-      );
-
-      const error = yield* Effect.flip(sourceService.read(null));
+      const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.flip(sourceRuntime.read(null))
+      ).pipe(Effect.provide(fakeSql.layer));
 
       expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe(
@@ -1043,18 +1044,16 @@ describe("SqlSource", () => {
     Effect.gen(function* () {
       const source = makeSqlArticleSource();
       const fakeSql = makeFakeSqlClient([articleRows]);
-      const sourceService = yield* Source.pipe(
-        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-      );
-
-      const error = yield* Effect.flip(
-        sourceService.readByIdentity(
-          SourceIdentity.fromEncoded(
-            sourceService.identity,
-            toEncodedSourceIdentity("article-1")
+      const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.flip(
+          sourceRuntime.readByIdentity(
+            SourceIdentity.fromEncoded(
+              sourceRuntime.identity,
+              toEncodedSourceIdentity("article-1")
+            )
           )
         )
-      );
+      ).pipe(Effect.provide(fakeSql.layer));
 
       expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe(
@@ -1073,18 +1072,16 @@ describe("SqlSource", () => {
       Effect.gen(function* () {
         const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([[articleRows[1]]]);
-        const sourceService = yield* Source.pipe(
-          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-        );
-
-        const error = yield* Effect.flip(
-          sourceService.readByIdentity(
-            SourceIdentity.fromEncoded(
-              sourceService.identity,
-              toEncodedSourceIdentity("article-1")
+        const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.flip(
+            sourceRuntime.readByIdentity(
+              SourceIdentity.fromEncoded(
+                sourceRuntime.identity,
+                toEncodedSourceIdentity("article-1")
+              )
             )
           )
-        );
+        ).pipe(Effect.provide(fakeSql.layer));
 
         expect(error).toBeInstanceOf(SourceError);
         expect(error.message).toBe(
@@ -1105,15 +1102,13 @@ describe("SqlSource", () => {
       const crmSql = makeFakeSqlClient([crmRows]);
       const legacySource = makeSqlArticleSource().provide(legacySql.layer);
       const crmSource = makeSqlArticleSource().provide(crmSql.layer);
-      const legacySourceService = yield* Source.pipe(
-        Effect.provide(legacySource.layer)
+      const legacyPage = yield* useConfiguredSource(
+        legacySource,
+        (sourceRuntime) => sourceRuntime.read(null)
       );
-      const crmSourceService = yield* Source.pipe(
-        Effect.provide(crmSource.layer)
+      const crmPage = yield* useConfiguredSource(crmSource, (sourceRuntime) =>
+        sourceRuntime.read(null)
       );
-
-      const legacyPage = yield* legacySourceService.read(null);
-      const crmPage = yield* crmSourceService.read(null);
 
       expect(legacyPage.items[0]?.identity.encoded).toBe("legacy-article");
       expect(crmPage.items[0]?.identity.encoded).toBe("crm-article");
@@ -1128,17 +1123,21 @@ describe("SqlSource", () => {
       Effect.gen(function* () {
         const source = makeSqlArticleSource();
         const fakeSql = makeFakeSqlClient([[], []]);
-        const sourceService = yield* Source.pipe(
-          Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-        );
+        const { item, page } = yield* useConfiguredSource(
+          source,
+          (sourceRuntime) =>
+            Effect.gen(function* () {
+              const page = yield* sourceRuntime.read(null);
+              const item = yield* sourceRuntime.readByIdentity(
+                SourceIdentity.fromEncoded(
+                  sourceRuntime.identity,
+                  toEncodedSourceIdentity("missing")
+                )
+              );
 
-        const page = yield* sourceService.read(null);
-        const item = yield* sourceService.readByIdentity(
-          SourceIdentity.fromEncoded(
-            sourceService.identity,
-            toEncodedSourceIdentity("missing")
-          )
-        );
+              return { item, page };
+            })
+        ).pipe(Effect.provide(fakeSql.layer));
 
         expect(page).toEqual({ items: [] });
         expect(page.nextCursor).toBeUndefined();
@@ -1152,11 +1151,9 @@ describe("SqlSource", () => {
       const source = makeSqlArticleSource();
       const cause = new Error("database unavailable");
       const fakeSql = makeFakeSqlClient([sqlFailure(cause)]);
-      const sourceService = yield* Source.pipe(
-        Effect.provide(source.layer.pipe(Layer.provide(fakeSql.layer)))
-      );
-
-      const error = yield* Effect.flip(sourceService.read(null));
+      const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.flip(sourceRuntime.read(null))
+      ).pipe(Effect.provide(fakeSql.layer));
 
       expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe("SQL source read failed");
@@ -1280,11 +1277,12 @@ describe("SqlSource", () => {
         });
 
         const summary = yield* runInlineDefinition(definition);
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-        const lookupItem = yield* sourceService.readByIdentity(
-          SourceIdentity.fromEncoded(
-            sourceService.identity,
-            toEncodedSourceIdentity("article-b")
+        const lookupItem = yield* useConfiguredSource(source, (sourceRuntime) =>
+          sourceRuntime.readByIdentity(
+            SourceIdentity.fromEncoded(
+              sourceRuntime.identity,
+              toEncodedSourceIdentity("article-b")
+            )
           )
         );
         const sqlTexts = sqlite.calls.map((call) =>
@@ -1309,7 +1307,7 @@ describe("SqlSource", () => {
         expect(sqlTexts.every((text) => !text.includes("limit 1"))).toBe(true);
         expect(sqlTexts.some((text) => text.includes("where id ="))).toBe(true);
         expect(lookupItem).toEqual({
-          identity: SourceIdentity.fromKey(sourceService.identity, "article-b"),
+          identity: SourceIdentity.fromKey(source.identity, "article-b"),
           item: rows[1],
           version: "hash-2",
         });
@@ -1394,11 +1392,12 @@ describe("SqlSource", () => {
       });
 
       const summary = yield* runInlineDefinition(definition);
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const lookupItem = yield* sourceService.readByIdentity(
-        SourceIdentity.fromEncoded(
-          sourceService.identity,
-          toEncodedSourceIdentity("article-b")
+      const lookupItem = yield* useConfiguredSource(source, (sourceRuntime) =>
+        sourceRuntime.readByIdentity(
+          SourceIdentity.fromEncoded(
+            sourceRuntime.identity,
+            toEncodedSourceIdentity("article-b")
+          )
         )
       );
 
@@ -1410,7 +1409,7 @@ describe("SqlSource", () => {
         { sourceIdentity: "article-c", valueType: "number", views: 3 },
       ]);
       expect(lookupItem).toEqual({
-        identity: SourceIdentity.fromKey(sourceService.identity, "article-b"),
+        identity: SourceIdentity.fromKey(source.identity, "article-b"),
         item: {
           content_hash: "hash-2",
           id: "article-b",

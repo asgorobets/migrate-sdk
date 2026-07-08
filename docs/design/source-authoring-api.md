@@ -15,62 +15,61 @@ services.
 
 ## Configured Source
 
-`Source.make` turns a source implementation into a configured source. The
-configured source is layer-backed; migration authors consume that
-configured value rather than raw Effect services:
+`Source.make` turns source runtime methods into a configured source. The
+configured source is layer-backed; migration authors consume that configured
+value rather than raw Effect services:
 
 ```ts
 interface ConfiguredSource<
-  Source,
+  Payload,
   Cursor,
   IdentityKey,
-  SourceInput = Source,
+  EncodedPayload = Payload,
 > {
-  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
 }
 
 interface SourceMakeInput<
-  Source,
+  Payload,
   Cursor,
   IdentityKey,
-  SourceInput = Source,
+  EncodedPayload = Payload,
 > {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
-  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
   ) => Effect.Effect<
-    SourceReadResultInput<SourceInput, Cursor, IdentityKey>,
+    SourceReadResultInput<EncodedPayload, Cursor, IdentityKey>,
     SourceError
   >;
   readonly readByIdentity: (
     identity: SourceIdentityTarget<IdentityKey>
   ) => Effect.Effect<
-    SourceItemInput<SourceInput, IdentityKey> | null,
+    SourceItemInput<EncodedPayload, IdentityKey> | null,
     SourceError
   >;
 }
 
-interface SourceImplementation<
-  Source,
+interface SourceRuntimeImplementation<
+  EncodedPayload,
   Cursor,
   IdentityKey,
-  SourceInput = Source,
 > {
   readonly lookupStrategy: SourceLookupStrategy;
   readonly read: (
     cursor: Cursor | null
   ) => Effect.Effect<
-    SourceReadResultInput<SourceInput, Cursor, IdentityKey>,
+    SourceReadResultInput<EncodedPayload, Cursor, IdentityKey>,
     SourceError
   >;
   readonly readByIdentity: (
     identity: SourceIdentityTarget<IdentityKey>
   ) => Effect.Effect<
-    SourceItemInput<SourceInput, IdentityKey> | null,
+    SourceItemInput<EncodedPayload, IdentityKey> | null,
     SourceError
   >;
 }
@@ -86,10 +85,10 @@ interface SourceIdentityTarget<Key> {
   readonly encoded: EncodedSourceIdentity;
 }
 
-interface SourceItemInput<SourceInput, IdentityKey> {
+interface SourceItemInput<EncodedPayload, IdentityKey> {
   readonly identityKey: IdentityKey;
   readonly version: SourceVersionInput;
-  readonly item: SourceInput;
+  readonly item: EncodedPayload;
 }
 ```
 
@@ -107,19 +106,18 @@ mutable state or client instances:
 
 ```ts
 interface SourceFactoryInput<
-  Source,
+  Payload,
   Cursor,
   IdentityKey,
-  SourceInput = Source,
+  EncodedPayload = Payload,
 > {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
-  readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+  readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
-  readonly make: () => SourceImplementation<
-    Source,
+  readonly make: () => SourceRuntimeImplementation<
+    EncodedPayload,
     Cursor,
     IdentityKey,
-    SourceInput,
   >;
 }
 ```
@@ -127,15 +125,28 @@ interface SourceFactoryInput<
 The runner provides the configured source layer per migration definition. Do not
 register every source globally under the shared `Source` tag.
 
-When a source already has a complete `Layer<Source, E, R>`, adapt that
-layer with `Source.fromLayer` instead of adding another constructor name:
+When a source needs setup, dependencies, or scoped resources, use
+`Source.fromLayer`. The SDK provides the per-definition source runtime tag to
+the callback, and the source plugin returns a normal Effect layer for that tag:
 
 ```ts
 const source = Source.fromLayer({
   cursorSchema,
   identity,
   sourceSchema,
-  layer: SourceLive,
+  layer: (SourceRuntimeService) =>
+    Layer.effect(
+      SourceRuntimeService,
+      Effect.gen(function* () {
+        const api = yield* SourceApi;
+
+        return SourceRuntimeService.of({
+          lookupStrategy: "direct",
+          read: (cursor) => api.readPage(cursor),
+          readByIdentity: (identity) => api.readById(identity.key),
+        });
+      })
+    ),
 });
 
 const testSource = source.provide(SourceApi.testLayer(fixtures));
@@ -144,10 +155,10 @@ const liveSource = source.provide(SourceApi.liveLayer(config));
 
 ## Effect-Native API Sources
 
-`Source.make` is already Effect-native: source reads and identity lookups
-return `Effect` values, so source authors can compose services, layers, retries,
-HTTP clients, timeouts, and bounded concurrency inside the source without
-a second Effect-specific factory.
+Use `Source.fromLayer` when a source needs services, scoped resources, or setup.
+The source layer acquires those dependencies once and returns runtime methods
+with no remaining service requirements. Use `Source.make` when the runtime
+methods are dependency-free or already closed over their dependencies.
 
 The runnable `examples/api-source/` example is split by audience:
 
@@ -195,33 +206,65 @@ export const JsonPlaceholderPostSource = {
   make: (options?: JsonPlaceholderPostSourceOptions) => {
     const apiLayer = options?.apiLayer ?? JsonPlaceholderApi.live();
 
-    return Source.make({
+    const source = Source.fromLayer({
       cursorSchema: JsonPlaceholderPostCursor,
       sourceSchema: JsonPlaceholderPost,
       identity: SourceIdentity.make({
         id: "jsonplaceholder-post@v1",
         schema: SourceIdentity.key("postId", Schema.NonEmptyString),
       }),
-      lookupStrategy: "direct",
-      read: Effect.fn("JsonPlaceholderPostSource.read")((cursor) =>
-        withApiLayer(apiLayer, readPostPage(cursor))
-      ),
-      readByIdentity: Effect.fn("JsonPlaceholderPostSource.readByIdentity")(
-        (identity) => withApiLayer(apiLayer, readPostByIdentity(identity.key))
-      ),
+      layer: (SourceRuntimeService) =>
+        Layer.effect(
+          SourceRuntimeService,
+          Effect.gen(function* () {
+            const api = yield* JsonPlaceholderApi;
+
+            return SourceRuntimeService.of({
+              lookupStrategy: "direct",
+              read: Effect.fn("JsonPlaceholderPostSource.read")((cursor) =>
+                readPostPage(api, cursor)
+              ),
+              readByIdentity: Effect.fn(
+                "JsonPlaceholderPostSource.readByIdentity"
+              )((identity) => readPostByIdentity(api, identity.key)),
+            });
+          })
+        ),
     });
+
+    return source.provide(apiLayer);
   },
 };
 ```
 
-The JSONPlaceholder source keeps retry policy, timeout, page size, max post
-count, and detail concurrency as defaults inside the source. Its public
-options only expose the API layer override used by tests and live diagnostics.
+A dependency-backed source can still expose a simple migration-author factory:
+authors receive the configured source value, while source authors keep the API
+service and retry policy behind the factory boundary.
 
-`Source.make` accepts `SourceItemInput` values and normalizes source
-identity and source version into the runtime's branded values. It also normalizes
+`Source.make` accepts `SourceItemInput` values and normalizes source identity and
+source version into the runtime's branded values. It also normalizes
 `nextCursor: undefined` away before the runtime sees the read result. Cursor
 encoding and decoding still belongs to the configured `cursorSchema`.
+
+```ts
+export const StaticPostSource = {
+  make: (items: readonly SourceItemInput<JsonPlaceholderPost, string>[]) =>
+    Source.make({
+      cursorSchema: Schema.Null,
+      sourceSchema: JsonPlaceholderPost,
+      identity: SourceIdentity.make({
+        id: "jsonplaceholder-post@v1",
+        schema: SourceIdentity.key("postId", Schema.NonEmptyString),
+      }),
+      lookupStrategy: "direct",
+      read: () => Effect.succeed({ items }),
+      readByIdentity: (identity) =>
+        Effect.succeed(
+          items.find((item) => item.identityKey === identity.key) ?? null
+        ),
+    }),
+};
+```
 
 The configured `identity` contract supplies the source identity id, schema, and
 fingerprint. Each emitted `SourceItemInput.identityKey` value is the source
@@ -229,21 +272,21 @@ identity key for that item and must conform to `identity.schema`; the runtime
 attaches the contract id and encoded source identity when it constructs the
 pipeline-facing `SourceItem`.
 
-The source depends on a small `JsonPlaceholderApi` service with
+The API-backed source depends on a small `JsonPlaceholderApi` service with
 `listPostIds()` and `getPost(id)` methods. The live adapter calls the public
 JSONPlaceholder posts API through Effect's `HttpClient`, configures the base URL
 and JSON accept header once, then decodes endpoint responses with
 `HttpClientResponse.schemaBodyJson(...)` before returning decoded values. The API
 service keeps native `HttpClientError` and `SchemaError` failures; the source
-maps them once to `SourceError` at the SDK boundary. The scripted
-adapter simulates rate limits and slow responses so source authors can exercise
-retries, exponential backoff, request timeouts, and bounded detail-fetch
-concurrency without depending on a public service to fail.
+maps them once to `SourceError` at the SDK boundary. The scripted adapter
+simulates rate limits and slow responses so source authors can exercise retries,
+exponential backoff, request timeouts, and bounded detail-fetch concurrency
+without depending on a public service to fail.
 
-This helper does not make sources streamable. Source implementations may
-use bounded `Effect.forEach` or other Effect composition internally, but each
-runtime read still returns one cursor page. That keeps cursor commits, failed
-item reruns, and durable progress semantics unchanged.
+This helper does not make sources streamable. Source implementations may use
+bounded `Effect.forEach` or other Effect composition internally, but each runtime
+read still returns one cursor page. That keeps cursor commits, failed item
+reruns, and durable progress semantics unchanged.
 
 ## Source Error Channel
 
@@ -252,12 +295,12 @@ The current source contract normalizes source read and lookup failures to
 
 ```ts
 read(cursor): Effect.Effect<
-  SourceReadResultInput<SourceInput, Cursor, Key>,
+  SourceReadResultInput<EncodedPayload, Cursor, Key>,
   SourceError
 >
 readByIdentity(
   identity: SourceIdentityTarget<Key>
-): Effect.Effect<SourceItemInput<SourceInput, Key> | null, SourceError>
+): Effect.Effect<SourceItemInput<EncodedPayload, Key> | null, SourceError>
 ```
 
 This keeps the runtime boundary, CLI rendering, and durable item error records
@@ -272,13 +315,13 @@ source error type through `sourceCursorRetry` and `sourceLookupRetry`, then
 normalize to `SourceError` only when the runtime records or returns the
 framework-level failure.
 
-The core source schema type is `SourcePayloadSchema<Source, SourceInput>`, which
-can preserve both the decoded pipeline-facing value and the source-native input
-value emitted by the source. Source authors should preserve `SourceInput` when
-the source has a stable structured input shape that its helpers inspect, such as
-a SQL row. Sources may use `unknown` when the input side is intentionally opaque
-or fully owned by source-specific selectors, such as CSV row parsing, Document
-selection, or in-memory test items.
+The core source schema type is `SourcePayloadSchema<Payload, EncodedPayload>`,
+which can preserve both the decoded pipeline-facing value and the source-native
+encoded value emitted by the source. Source authors should preserve
+`EncodedPayload` when the source has a stable structured input shape that its
+helpers inspect, such as a SQL row. Sources may use `unknown` when the encoded
+side is intentionally opaque or fully owned by source-specific selectors, such
+as CSV row parsing, Document selection, or in-memory test items.
 
 ## Cursor Reads
 
@@ -347,7 +390,7 @@ item failures instead of run-level discovery failures.
 Every configured source must expose a Source Payload Schema:
 
 ```ts
-readonly sourceSchema: SourcePayloadSchema<Source, SourceInput>;
+readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
 ```
 
 This schema lives at the external-source boundary. It may decode source-native
@@ -367,11 +410,11 @@ execution. A valid source envelope with an invalid payload becomes a failed item
 state with source error details.
 
 When a source exposes a known source-native shape, use
-`SourcePayloadSchema<Source, SourceInput>` so source-owned helpers can reference
-the same input shape the runtime validates. For example, SQL uses the input side
-for metadata extraction and `SqlIdentity.columns(...)` validation. When a source
-does not expose a stable source-native item shape, `unknown` remains the right
-encoded side.
+`SourcePayloadSchema<Payload, EncodedPayload>` so source-owned helpers can
+reference the same encoded shape the runtime validates. For example, SQL uses
+the encoded side for metadata extraction and `SqlIdentity.columns(...)`
+validation. When a source does not expose a stable source-native item shape,
+`unknown` remains the right encoded side.
 
 Sources may decode through the schema before emitting items when that
 makes implementation code safer. The runtime validation still remains the
@@ -411,13 +454,13 @@ boundary forces a split.
 
 ```ts
 export const CsvSource = {
-  make: <Source, IdentityKey>(
-    options: CsvSourceOptions<Source, IdentityKey>
+  make: <Payload, IdentityKey>(
+    options: CsvSourceOptions<Payload, IdentityKey>
   ) =>
     Source.make({
       cursorSchema: CsvSourceCursor,
       identity: makeCsvIdentityDefinition(options.identity),
-      make: () => makeCsvSourceImplementation(options),
+      make: () => makeCsvSourceRuntime(options),
       sourceSchema: options.sourceSchema,
     }),
 };

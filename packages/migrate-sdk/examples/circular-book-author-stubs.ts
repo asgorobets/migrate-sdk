@@ -147,7 +147,7 @@ type BookMigration = MigrationDefinition<
   InMemorySourceCursor,
   SourceIdentityKey<typeof BookSourceIdentity>,
   ReferenceLookupProcessError,
-  unknown,
+  typeof BookSource.Type,
   never,
   never,
   typeof bookTracking
@@ -158,7 +158,7 @@ type AuthorMigration = MigrationDefinition<
   InMemorySourceCursor,
   SourceIdentityKey<typeof AuthorSourceIdentity>,
   ReferenceLookupProcessError,
-  unknown,
+  typeof AuthorSource.Type,
   never,
   never,
   typeof authorTracking

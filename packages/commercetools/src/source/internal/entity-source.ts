@@ -2,7 +2,7 @@ import { Effect, Layer } from "effect";
 import {
   Source,
   type SourceIdentityTarget,
-  type SourceImplementation,
+  type SourceRuntimeImplementation,
   SourceItemTotal,
 } from "migrate-sdk";
 import { CommercetoolsSdk } from "../../sdk.ts";
@@ -31,10 +31,10 @@ import {
 
 const filteredQueryTotalLimit = 10_000;
 
-const projectResource = <SourceInput, Resource>(
+const projectResource = <EncodedPayload, Resource>(
   label: string,
   getId: (resource: Resource) => string,
-  select: (resource: Resource) => SourceInput,
+  select: (resource: Resource) => EncodedPayload,
   resource: Resource
 ) =>
   Effect.try({
@@ -47,15 +47,15 @@ const projectResource = <SourceInput, Resource>(
   });
 
 const sourceItem = <
-  Source,
-  SourceInput,
+  Payload,
+  EncodedPayload,
   Resource,
   Page extends CommercetoolsPagedQueryResponse<Resource>,
 >(
   descriptor: CommercetoolsEntitySourceDescriptor<Resource, Page>,
   options: CommercetoolsProjectedEntitySourceOptions<
-    Source,
-    SourceInput,
+    Payload,
+    EncodedPayload,
     Resource
   >,
   resource: Resource
@@ -107,23 +107,22 @@ const countTotalFromPage = <
 };
 
 const makeImplementation = <
-  Source,
-  SourceInput,
+  Payload,
+  EncodedPayload,
   Resource,
   Page extends CommercetoolsPagedQueryResponse<Resource>,
 >(
   descriptor: CommercetoolsEntitySourceDescriptor<Resource, Page>,
   options: CommercetoolsProjectedEntitySourceOptions<
-    Source,
-    SourceInput,
+    Payload,
+    EncodedPayload,
     Resource
   >,
   sdk: typeof CommercetoolsSdk.Service
-): SourceImplementation<
-  Source,
+): SourceRuntimeImplementation<
+  EncodedPayload,
   CommercetoolsSourceCursor,
-  CommercetoolsSourceIdentityKey,
-  SourceInput
+  CommercetoolsSourceIdentityKey
 > => {
   const countTotal = Effect.fn(`${descriptor.label}.countTotal`)(function* () {
     const queryArgs = makeCountQueryArgs(options);
@@ -181,48 +180,39 @@ const makeImplementation = <
 };
 
 export const makeProjectedEntitySource = <
-  Source,
-  SourceInput,
+  Payload,
+  EncodedPayload,
   Resource,
   Page extends CommercetoolsPagedQueryResponse<Resource>,
 >(
   descriptor: CommercetoolsEntitySourceDescriptor<Resource, Page>,
   options: CommercetoolsProjectedEntitySourceOptions<
-    Source,
-    SourceInput,
+    Payload,
+    EncodedPayload,
     Resource
   >
-): ConfiguredCommercetoolsSource<Source, SourceInput> => {
+): ConfiguredCommercetoolsSource<Payload, EncodedPayload> => {
   const identity =
     descriptor.identity[options.identity ?? defaultSourceIdentity];
 
   return Source.fromLayer({
-    cursorSchema: CommercetoolsSourceCursor,
-    identity,
-    layer: Layer.effect(
-      Source,
-      Effect.gen(function* () {
-        const sdk = yield* CommercetoolsSdk;
-        const source = Source.make<
-          Source,
-          CommercetoolsSourceCursor,
-          CommercetoolsSourceIdentityKey,
-          SourceInput
-        >({
-          cursorSchema: CommercetoolsSourceCursor,
-          identity,
-          make: () =>
-            makeImplementation<Source, SourceInput, Resource, Page>(
+    layer: (SourceRuntime) =>
+      Layer.effect(
+        SourceRuntime,
+        Effect.gen(function* () {
+          const sdk = yield* CommercetoolsSdk;
+
+          return SourceRuntime.of(
+            makeImplementation<Payload, EncodedPayload, Resource, Page>(
               descriptor,
               options,
               sdk
-            ),
-          sourceSchema: options.sourceSchema,
-        });
-
-        return yield* Source.pipe(Effect.provide(source.layer));
-      })
-    ),
+            )
+          );
+        })
+      ),
+    cursorSchema: CommercetoolsSourceCursor,
+    identity,
     sourceSchema: options.sourceSchema,
   });
 };

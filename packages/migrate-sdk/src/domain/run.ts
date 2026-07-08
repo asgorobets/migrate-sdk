@@ -2,8 +2,8 @@ import { Schema } from "effect";
 import type {
   AnyMigrationDefinition as AnyMigrationDefinitionShape,
   MigrationDefinitionProcessError,
+  MigrationDefinitionSourceImplementationError,
   MigrationDefinitionSourceIdentityKey,
-  MigrationDefinitionSourceLayerError,
   MigrationDefinitionSourceRequirements,
   MigrationDefinitionTrackingContract,
 } from "./definition.ts";
@@ -25,8 +25,8 @@ import type { RunModeInput } from "./run-mode.ts";
 import type { TrackingRecordContract } from "./tracking.ts";
 
 export type {
+  MigrationDefinitionSourceImplementationError,
   MigrationDefinitionSourceIdentityKey,
-  MigrationDefinitionSourceLayerError,
   MigrationDefinitionSourceRequirements,
   MigrationDefinitionTrackingContract,
 } from "./definition.ts";
@@ -47,9 +47,9 @@ export type MigrationDefinitionTrackingRecord<
     ? Value
     : never;
 
-export type RunRequestSourceLayerError<
+export type RunRequestSourceImplementationError<
   Definitions extends readonly AnyMigrationDefinition[],
-> = MigrationDefinitionSourceLayerError<Definitions[number]>;
+> = MigrationDefinitionSourceImplementationError<Definitions[number]>;
 
 export type RunRequestSourceRequirements<
   Definitions extends readonly AnyMigrationDefinition[],

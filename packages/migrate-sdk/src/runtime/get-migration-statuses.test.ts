@@ -32,17 +32,18 @@ const ArticleSourceIdentity = SourceIdentity.make({
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 
-const failingSource = {
-  layer: Layer.sync(Source, () => {
-    throw new Error("durable-only status must not initialize sources");
-  }),
+const failingSource = Source.fromLayer({
+  layer: (SourceRuntime) =>
+    Layer.effect(
+      SourceRuntime,
+      Effect.die(
+        new Error("durable-only status must not build source implementations")
+      )
+    ),
+  cursorSchema: Schema.Unknown,
+  identity: ArticleSourceIdentity,
   sourceSchema: ArticleSource,
-} as unknown as ConfiguredSource<
-  typeof ArticleSource.Type,
-  unknown,
-  string,
-  unknown
->;
+});
 
 const makeStatusOnlyDefinition = (
   store: ReturnType<typeof InMemoryMigrationStore.layer>,
@@ -56,13 +57,13 @@ const makeStatusOnlyDefinition = (
   });
 
 const makeStatusScanDefinition = <
-  Source,
+  Payload,
   Cursor,
   IdentityKey extends SourceIdentitySnapshotKey,
-  SourceInput,
+  EncodedPayload,
 >(
   store: ReturnType<typeof InMemoryMigrationStore.layer>,
-  source: ConfiguredSource<Source, Cursor, IdentityKey, SourceInput>,
+  source: ConfiguredSource<Payload, Cursor, IdentityKey, EncodedPayload>,
   id = "articles"
 ) =>
   MigrationDefinition.make({

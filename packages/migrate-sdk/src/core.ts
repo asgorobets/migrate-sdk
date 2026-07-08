@@ -3,12 +3,17 @@
 
 export type {
   ConfiguredSource,
-  SourcePayloadSchema,
   SourceFactoryInput,
-  SourceImplementation,
+  SourceLayerInput,
   SourceMakeInput,
+  SourcePayloadSchema,
   SourceReadResultInput,
+  SourceRuntimeLayer,
 } from "./domain/definition.ts";
+export type {
+  SourceRuntime as SourceRuntimeService,
+  SourceRuntimeImplementation,
+} from "./services/source.ts";
 export {
   MigrationDefinition,
   Source,

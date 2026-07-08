@@ -12,7 +12,6 @@ import {
   SourceError,
   SourceItemTotal,
 } from "migrate-sdk";
-import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import {
   type DocumentFetcher,
   DocumentFetchers,
@@ -22,9 +21,10 @@ import {
   DocumentSource,
   type DocumentSourceDirectLookupResult,
 } from "migrate-sdk/sources/document";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { expectTypeOf } from "vitest";
 import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
-import { Source } from "../../services/source.ts";
+import { useConfiguredSource } from "../../testing/configured-source-runtime.ts";
 import { runInlineDefinition } from "../../testing/inline-registry-execution.ts";
 
 const CompanyContact = Schema.Struct({
@@ -276,28 +276,31 @@ describe("DocumentSource", () => {
             value: ({ item }) => item.title,
           },
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-        const read = yield* sourceService.read(null);
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            const read = yield* sourceRuntime.read(null);
 
-        expect(
-          read.items.map((item) => ({
-            ...item,
-            identity: item.identity.encoded,
-          }))
-        ).toEqual([
-          {
-            identity: "1",
-            item: { item: { body: "First body", id: 1, title: "First" } },
-            version: "First",
-          },
-          {
-            identity: "2",
-            item: { item: { body: "Second body", id: 2, title: "Second" } },
-            version: "Second",
-          },
-        ]);
-        expect(state.listCalls).toBe(1);
-        expect(state.detailCalls).toEqual([1, 2]);
+            expect(
+              read.items.map((item) => ({
+                ...item,
+                identity: item.identity.encoded,
+              }))
+            ).toEqual([
+              {
+                identity: "1",
+                item: { item: { body: "First body", id: 1, title: "First" } },
+                version: "First",
+              },
+              {
+                identity: "2",
+                item: { item: { body: "Second body", id: 2, title: "Second" } },
+                version: "Second",
+              },
+            ]);
+            expect(state.listCalls).toBe(1);
+            expect(state.detailCalls).toEqual([1, 2]);
+          })
+        );
       })
   );
 
@@ -331,28 +334,31 @@ describe("DocumentSource", () => {
           value: ({ item }) => item.status,
         },
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const read = yield* sourceService.read(null);
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const read = yield* sourceRuntime.read(null);
 
-      expect(
-        read.items.map((sourceItem) => sourceItem.identity.encoded)
-      ).toEqual(["BU-100", "BU-200"]);
-      expect(read.items[0]?.version).toBe("active");
-      expect(read.items[0]?.item).toEqual({
-        item: {
-          addresses: [
-            { city: "Austin", key: "ADDR-100-BILL" },
-            { city: "Round Rock", key: "ADDR-100-SHIP" },
-          ],
-          contacts: [
-            { email: "avery@example.com", key: "CONTACT-100-1" },
-            { email: "morgan@example.com", key: "CONTACT-100-2" },
-          ],
-          key: "BU-100",
-          name: "Orbit Labs",
-          status: "active",
-        },
-      });
+          expect(
+            read.items.map((sourceItem) => sourceItem.identity.encoded)
+          ).toEqual(["BU-100", "BU-200"]);
+          expect(read.items[0]?.version).toBe("active");
+          expect(read.items[0]?.item).toEqual({
+            item: {
+              addresses: [
+                { city: "Austin", key: "ADDR-100-BILL" },
+                { city: "Round Rock", key: "ADDR-100-SHIP" },
+              ],
+              contacts: [
+                { email: "avery@example.com", key: "CONTACT-100-1" },
+                { email: "morgan@example.com", key: "CONTACT-100-2" },
+              ],
+              key: "BU-100",
+              name: "Orbit Labs",
+              status: "active",
+            },
+          });
+        })
+      );
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
@@ -388,27 +394,32 @@ describe("DocumentSource", () => {
         lookup: { kind: "scan" },
         version: { kind: "content-hash" },
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const read = yield* sourceService.read(null);
-      const found = yield* sourceService.readByIdentity(
-        SourceIdentity.fromEncoded(
-          sourceService.identity,
-          toEncodedSourceIdentity(JSON.stringify(["BU-200", "CONTACT-200-1"]))
-        )
-      );
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const read = yield* sourceRuntime.read(null);
+          const found = yield* sourceRuntime.readByIdentity(
+            SourceIdentity.fromEncoded(
+              sourceRuntime.identity,
+              toEncodedSourceIdentity(
+                JSON.stringify(["BU-200", "CONTACT-200-1"])
+              )
+            )
+          );
 
-      expect(
-        read.items.map((sourceItem) => sourceItem.identity.encoded)
-      ).toEqual([
-        JSON.stringify(["BU-100", "CONTACT-100-1"]),
-        JSON.stringify(["BU-100", "CONTACT-100-2"]),
-        JSON.stringify(["BU-200", "CONTACT-200-1"]),
-      ]);
-      expect(read.items[0]?.version).toMatch(sha256HexPattern);
-      expect(read.items[0]?.item.parent.name).toBe("Orbit Labs");
-      expect(read.items[0]?.item.item.email).toBe("avery@example.com");
-      expect(found?.item.parent.name).toBe("River Market");
-      expect(found?.item.item.email).toBe("riley@example.com");
+          expect(
+            read.items.map((sourceItem) => sourceItem.identity.encoded)
+          ).toEqual([
+            JSON.stringify(["BU-100", "CONTACT-100-1"]),
+            JSON.stringify(["BU-100", "CONTACT-100-2"]),
+            JSON.stringify(["BU-200", "CONTACT-200-1"]),
+          ]);
+          expect(read.items[0]?.version).toMatch(sha256HexPattern);
+          expect(read.items[0]?.item.parent.name).toBe("Orbit Labs");
+          expect(read.items[0]?.item.item.email).toBe("avery@example.com");
+          expect(found?.item.parent.name).toBe("River Market");
+          expect(found?.item.item.email).toBe("riley@example.com");
+        })
+      );
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
@@ -448,16 +459,18 @@ describe("DocumentSource", () => {
             value: ({ item }) => item.status,
           },
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            if (sourceRuntime.countTotal === undefined) {
+              throw new Error("Expected document source total count");
+            }
 
-        if (sourceService.countTotal === undefined) {
-          throw new Error("Expected document source total count");
-        }
+            const total = yield* sourceRuntime.countTotal();
 
-        const total = yield* sourceService.countTotal();
-
-        expect(total).toEqual(SourceItemTotal.known(42));
-        expect(readCalls).toBe(0);
+            expect(total).toEqual(SourceItemTotal.known(42));
+            expect(readCalls).toBe(0);
+          })
+        );
       })
   );
 
@@ -512,15 +525,17 @@ describe("DocumentSource", () => {
             value: ({ item }) => item.status,
           },
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            if (sourceRuntime.countTotal === undefined) {
+              throw new Error("Expected document source total count");
+            }
 
-        if (sourceService.countTotal === undefined) {
-          throw new Error("Expected document source total count");
-        }
+            const total = yield* sourceRuntime.countTotal();
 
-        const total = yield* sourceService.countTotal();
-
-        expect(total).toEqual(SourceItemTotal.known(2));
+            expect(total).toEqual(SourceItemTotal.known(2));
+          })
+        );
       })
   );
 
@@ -554,15 +569,17 @@ describe("DocumentSource", () => {
           value: ({ item }) => item.status,
         },
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected document source total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected document source total count");
-      }
+          const total = yield* sourceRuntime.countTotal();
 
-      const total = yield* sourceService.countTotal();
-
-      expect(total).toEqual(SourceItemTotal.known(2));
+          expect(total).toEqual(SourceItemTotal.known(2));
+        })
+      );
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
@@ -593,15 +610,17 @@ describe("DocumentSource", () => {
         lookup: { kind: "scan" },
         version: { kind: "content-hash" },
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected document source total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected document source total count");
-      }
+          const total = yield* sourceRuntime.countTotal();
 
-      const total = yield* sourceService.countTotal();
-
-      expect(total).toEqual(SourceItemTotal.known(3));
+          expect(total).toEqual(SourceItemTotal.known(3));
+        })
+      );
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
@@ -649,10 +668,12 @@ describe("DocumentSource", () => {
             value: ({ item }) => item.version,
           },
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-
-        expect(sourceService.countTotal).toBeUndefined();
-        expect(readCalls).toBe(0);
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.sync(() => {
+            expect(sourceRuntime.countTotal).toBeUndefined();
+            expect(readCalls).toBe(0);
+          })
+        );
       })
   );
 
@@ -779,12 +800,15 @@ describe("DocumentSource", () => {
           lookup: { kind: "scan" },
           version: { kind: "content-hash" },
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-        const read = yield* sourceService.read(null);
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            const read = yield* sourceRuntime.read(null);
 
-        expect(read.items[0]?.identity.encoded).toBe("sku-1");
-        expect(read.items[0]?.item.item.inventory).toBe(42n);
-        expect(read.items[0]?.version).toMatch(sha256HexPattern);
+            expect(read.items[0]?.identity.encoded).toBe("sku-1");
+            expect(read.items[0]?.item.item.inventory).toBe(42n);
+            expect(read.items[0]?.version).toMatch(sha256HexPattern);
+          })
+        );
       }).pipe(Effect.provide(testPlatformLayer))
   );
 
@@ -852,11 +876,12 @@ describe("DocumentSource", () => {
             value: ({ item }) => item.version,
           },
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-        const found = yield* sourceService.readByIdentity(
-          SourceIdentity.fromEncoded(
-            sourceService.identity,
-            toEncodedSourceIdentity("item-1")
+        const found = yield* useConfiguredSource(source, (sourceRuntime) =>
+          sourceRuntime.readByIdentity(
+            SourceIdentity.fromEncoded(
+              sourceRuntime.identity,
+              toEncodedSourceIdentity("item-1")
+            )
           )
         );
 
@@ -921,18 +946,27 @@ describe("DocumentSource", () => {
             value: ({ item }) => item.email,
           },
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-        const found = yield* sourceService.readByIdentity(
-          SourceIdentity.fromEncoded(
-            sourceService.identity,
-            toEncodedSourceIdentity(JSON.stringify(["BU-200", "CONTACT-200-1"]))
-          )
-        );
-        const missing = yield* sourceService.readByIdentity(
-          SourceIdentity.fromEncoded(
-            sourceService.identity,
-            toEncodedSourceIdentity(JSON.stringify(["BU-200", "missing"]))
-          )
+        const { found, missing } = yield* useConfiguredSource(
+          source,
+          (sourceRuntime) =>
+            Effect.gen(function* () {
+              const found = yield* sourceRuntime.readByIdentity(
+                SourceIdentity.fromEncoded(
+                  sourceRuntime.identity,
+                  toEncodedSourceIdentity(
+                    JSON.stringify(["BU-200", "CONTACT-200-1"])
+                  )
+                )
+              );
+              const missing = yield* sourceRuntime.readByIdentity(
+                SourceIdentity.fromEncoded(
+                  sourceRuntime.identity,
+                  toEncodedSourceIdentity(JSON.stringify(["BU-200", "missing"]))
+                )
+              );
+
+              return { found, missing };
+            })
         );
 
         expect(found?.item.parent.name).toBe("River Market");
@@ -976,28 +1010,33 @@ describe("DocumentSource", () => {
             value: ({ item }) => item.email,
           },
         });
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-        const first = yield* sourceService.read(null);
-        const second = yield* sourceService.read(first.nextCursor ?? null);
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            const first = yield* sourceRuntime.read(null);
+            const second = yield* sourceRuntime.read(first.nextCursor ?? null);
 
-        expect(
-          first.items.map((sourceItem) => sourceItem.identity.encoded)
-        ).toEqual([
-          JSON.stringify(["BU-100", "CONTACT-100-1"]),
-          JSON.stringify(["BU-100", "CONTACT-100-2"]),
-        ]);
-        expect(first.nextCursor).toEqual(
-          expect.objectContaining({
-            fetcherCursor: null,
-            nextDocumentIndex: 0,
-            nextItemIndex: 2,
+            expect(
+              first.items.map((sourceItem) => sourceItem.identity.encoded)
+            ).toEqual([
+              JSON.stringify(["BU-100", "CONTACT-100-1"]),
+              JSON.stringify(["BU-100", "CONTACT-100-2"]),
+            ]);
+            expect(first.nextCursor).toEqual(
+              expect.objectContaining({
+                fetcherCursor: null,
+                nextDocumentIndex: 0,
+                nextItemIndex: 2,
+              })
+            );
+            expect(first.nextCursor?.resourceFingerprint).toMatch(
+              sha256HexPattern
+            );
+            expect(
+              second.items.map((sourceItem) => sourceItem.identity.encoded)
+            ).toEqual([JSON.stringify(["BU-200", "CONTACT-200-1"])]);
+            expect(second.nextCursor).toBeUndefined();
           })
         );
-        expect(first.nextCursor?.resourceFingerprint).toMatch(sha256HexPattern);
-        expect(
-          second.items.map((sourceItem) => sourceItem.identity.encoded)
-        ).toEqual([JSON.stringify(["BU-200", "CONTACT-200-1"])]);
-        expect(second.nextCursor).toBeUndefined();
       }).pipe(Effect.provide(testPlatformLayer))
   );
 
@@ -1048,20 +1087,25 @@ describe("DocumentSource", () => {
           value: ({ item }) => item.version,
         },
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const emptyPage = yield* sourceService.read(null);
-      const nextPage = yield* sourceService.read(emptyPage.nextCursor ?? null);
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const emptyPage = yield* sourceRuntime.read(null);
+          const nextPage = yield* sourceRuntime.read(
+            emptyPage.nextCursor ?? null
+          );
 
-      expect(emptyPage.items).toEqual([]);
-      expect(emptyPage.nextCursor).toEqual({
-        fetcherCursor: 1,
-        nextDocumentIndex: 0,
-        nextItemIndex: 0,
-      });
-      expect(nextPage.items.map((item) => item.identity.encoded)).toEqual([
-        "page-2-item",
-      ]);
-      expect(nextPage.nextCursor).toBeUndefined();
+          expect(emptyPage.items).toEqual([]);
+          expect(emptyPage.nextCursor).toEqual({
+            fetcherCursor: 1,
+            nextDocumentIndex: 0,
+            nextItemIndex: 0,
+          });
+          expect(nextPage.items.map((item) => item.identity.encoded)).toEqual([
+            "page-2-item",
+          ]);
+          expect(nextPage.nextCursor).toBeUndefined();
+        })
+      );
     })
   );
 
@@ -1110,15 +1154,22 @@ describe("DocumentSource", () => {
           value: ({ item }) => item.status,
         },
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const readExit = yield* Effect.exit(sourceService.read(null));
-      const lookupExit = yield* Effect.exit(
-        sourceService.readByIdentity(
-          SourceIdentity.fromEncoded(
-            sourceService.identity,
-            toEncodedSourceIdentity("BU-DUP")
-          )
-        )
+      const { lookupExit, readExit } = yield* useConfiguredSource(
+        source,
+        (sourceRuntime) =>
+          Effect.gen(function* () {
+            const readExit = yield* Effect.exit(sourceRuntime.read(null));
+            const lookupExit = yield* Effect.exit(
+              sourceRuntime.readByIdentity(
+                SourceIdentity.fromEncoded(
+                  sourceRuntime.identity,
+                  toEncodedSourceIdentity("BU-DUP")
+                )
+              )
+            );
+
+            return { lookupExit, readExit };
+          })
       );
 
       expect(readExit._tag).toBe("Failure");
@@ -1166,15 +1217,16 @@ describe("DocumentSource", () => {
           value: ({ item }) => item.status,
         },
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const error = yield* sourceService
-        .readByIdentity(
-          SourceIdentity.fromEncoded(
-            sourceService.identity,
-            toEncodedSourceIdentity("BU-100")
+      const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+        sourceRuntime
+          .readByIdentity(
+            SourceIdentity.fromEncoded(
+              sourceRuntime.identity,
+              toEncodedSourceIdentity("BU-100")
+            )
           )
-        )
-        .pipe(Effect.flip);
+          .pipe(Effect.flip)
+      );
 
       expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe("Unable to parse document source resource");
@@ -1220,15 +1272,16 @@ describe("DocumentSource", () => {
           value: ({ item }) => item.status,
         },
       });
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const error = yield* sourceService
-        .readByIdentity(
-          SourceIdentity.fromEncoded(
-            sourceService.identity,
-            toEncodedSourceIdentity("BU-100")
+      const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+        sourceRuntime
+          .readByIdentity(
+            SourceIdentity.fromEncoded(
+              sourceRuntime.identity,
+              toEncodedSourceIdentity("BU-100")
+            )
           )
-        )
-        .pipe(Effect.flip);
+          .pipe(Effect.flip)
+      );
 
       expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe("Direct lookup failed");

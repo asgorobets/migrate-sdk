@@ -168,11 +168,11 @@ The SQL row type should come from the encoded/input side of `sourceSchema`.
 Conceptually:
 
 ```ts
-interface SqlSourceOptions<Row, Source, Cursor> {
-  readonly sourceSchema: Schema.Codec<Source, Row, never, never>;
+interface SqlSourceOptions<EncodedPayload, Payload, Cursor> {
+  readonly sourceSchema: Schema.Codec<Payload, EncodedPayload, never, never>;
   readonly identity: SqlIdentityDefinition;
   readonly getSourceMetadata: (
-    row: Readonly<Row>,
+    row: Readonly<EncodedPayload>,
     context: SqlSourceMetadataContext
   ) => Result<SqlSourceMetadata<Cursor>, SqlSourceMetadataError>;
 }
@@ -191,16 +191,14 @@ interface SqlSourceMetadataError {
 Migration authors should not need a separate public row schema or manually
 duplicated row type when `sourceSchema` already describes the row entering the
 framework. If metadata columns should not be visible to the pipeline, the
-Source Payload Schema can decode from a wider SQL row into a narrower
+source payload schema can decode from a wider SQL row into a narrower
 pipeline-facing item.
 
-The core source contract can preserve the source payload input side as
-`SourceInput` through `SourcePayloadSchema<Source, SourceInput>`. Not every
-source needs to expose that input type: CSV, Document, and in-memory
-sources may choose `unknown` when identity is derived from source-owned row,
-selection, or in-memory item semantics. Raw SQL should preserve it because the
-SQL row returned by `read` and `lookup` is the same value that metadata
-extraction and identity columns inspect.
+The core source contract carries both sides of the source payload schema as
+`SourcePayloadSchema<Payload, EncodedPayload>`. Adapter-specific factories infer
+that input side from their raw read/lookup values. Raw SQL preserves
+`EncodedPayload` because the SQL row returned by `read` and `lookup` is the same
+value that metadata extraction and identity columns inspect.
 
 Read and lookup callbacks are declarative statement builders, not arbitrary
 Effect programs. `SqlSource` owns statement execution so it can preserve

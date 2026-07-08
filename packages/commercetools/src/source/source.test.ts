@@ -21,19 +21,28 @@ import {
   MigrationDefinition,
   MigrationProgress,
   type MigrationProgressEvent,
-  Source,
   SourceError,
   SourceIdentity,
   SourceItemTotal,
 } from "migrate-sdk";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
-import { runInlineDefinition } from "migrate-sdk/testing";
+import { runInlineDefinition, useConfiguredSource } from "migrate-sdk/testing";
 import { expectTypeOf } from "vitest";
 
 const CatalogProductSource = Schema.Struct({
   key: Schema.String,
   name: Schema.String,
 });
+
+const ProductMetricSource = Schema.Struct({
+  key: Schema.String,
+  viewCount: Schema.NumberFromString,
+});
+
+type ProductMetricSource = typeof ProductMetricSource.Type;
+type ProductMetricEncodedPayload = Schema.Codec.Encoded<
+  typeof ProductMetricSource
+>;
 
 const CustomerSource = Schema.Struct({
   email: Schema.String,
@@ -91,7 +100,7 @@ const stringQueryParam = (value: unknown): string | undefined => {
       : undefined;
   }
 
-  return undefined;
+  return;
 };
 
 const numberQueryParam = (value: unknown): number | undefined => {
@@ -105,7 +114,7 @@ const numberQueryParam = (value: unknown): number | undefined => {
     return Number.isNaN(parsed) ? undefined : parsed;
   }
 
-  return undefined;
+  return;
 };
 
 const productResponse = (draft: ProductDraft = productDraft): Product => {
@@ -353,6 +362,18 @@ describe("CommercetoolsSource", () => {
         },
       },
     });
+    const projectedProductMetricsSource = CommercetoolsSource.products<
+      ProductMetricSource,
+      ProductMetricEncodedPayload
+    >({
+      projection: {
+        schema: ProductMetricSource,
+        select: (product) => ({
+          key: product.key ?? product.id,
+          viewCount: String(product.version),
+        }),
+      },
+    });
     const projectedCustomerSource = CommercetoolsSource.customers({
       projection: {
         schema: CustomerSource,
@@ -393,11 +414,32 @@ describe("CommercetoolsSource", () => {
       typeof projectedProductSource.sourceSchema.Type
     >().toEqualTypeOf<typeof CatalogProductSource.Type>();
     expectTypeOf<
+      typeof projectedProductMetricsSource.sourceSchema.Type
+    >().toEqualTypeOf<ProductMetricSource>();
+    expectTypeOf<
       typeof projectedCustomerSource.sourceSchema.Type
     >().toEqualTypeOf<typeof CustomerSource.Type>();
     expectTypeOf<
       typeof projectedBusinessUnitSource.sourceSchema.Type
     >().toEqualTypeOf<typeof BusinessUnitSource.Type>();
+
+    const expectProjectionInputMismatchToFailTypeCheck = () => {
+      CommercetoolsSource.products<
+        ProductMetricSource,
+        ProductMetricEncodedPayload
+      >({
+        projection: {
+          schema: ProductMetricSource,
+          select: (product) => ({
+            key: product.key ?? product.id,
+            // @ts-expect-error projection select must return the schema input side.
+            viewCount: product.version,
+          }),
+        },
+      });
+    };
+
+    expect(expectProjectionInputMismatchToFailTypeCheck).toBeDefined();
   });
 
   it.effect(
@@ -416,17 +458,20 @@ describe("CommercetoolsSource", () => {
           },
         }).provide(recording.layer);
 
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-        const page = yield* sourceService.read(null);
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            const page = yield* sourceRuntime.read(null);
 
-        expect(sourceService.identity.id).toBe(
-          "commercetools-business-unit-key@v1"
-        );
-        expect(page.items[0]?.identity).toEqual(
-          SourceIdentity.fromKey(
-            sourceService.identity,
-            "example-business-unit"
-          )
+            expect(sourceRuntime.identity.id).toBe(
+              "commercetools-business-unit-key@v1"
+            );
+            expect(page.items[0]?.identity).toEqual(
+              SourceIdentity.fromKey(
+                sourceRuntime.identity,
+                "example-business-unit"
+              )
+            );
+          })
         );
         expect(recording.requests[0]).toMatchObject({
           operation: "businessUnits.source.read",
@@ -478,16 +523,18 @@ describe("CommercetoolsSource", () => {
         },
       }).provide(recording.layer);
 
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected Commercetools product total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected Commercetools product total count");
-      }
+          const total = yield* sourceRuntime.countTotal();
 
-      const total = yield* sourceService.countTotal();
-
-      expect(total).toEqual(SourceItemTotal.known(2));
-      expect(projectionCalls).toBe(0);
+          expect(total).toEqual(SourceItemTotal.known(2));
+          expect(projectionCalls).toBe(0);
+        })
+      );
       expect(recording.requests).toEqual([
         expect.objectContaining({
           operation: "products.source.count",
@@ -514,22 +561,30 @@ describe("CommercetoolsSource", () => {
       const businessUnitSource = CommercetoolsSource.businessUnits().provide(
         recording.layer
       );
-      const customerSourceService = yield* Source.pipe(
-        Effect.provide(customerSource.layer)
-      );
-      const businessUnitSourceService = yield* Source.pipe(
-        Effect.provide(businessUnitSource.layer)
-      );
+      const customerTotal = yield* useConfiguredSource(
+        customerSource,
+        (sourceRuntime) =>
+          Effect.gen(function* () {
+            if (sourceRuntime.countTotal === undefined) {
+              throw new Error("Expected Commercetools customer total count");
+            }
 
-      if (
-        customerSourceService.countTotal === undefined ||
-        businessUnitSourceService.countTotal === undefined
-      ) {
-        throw new Error("Expected Commercetools source total counts");
-      }
+            return yield* sourceRuntime.countTotal();
+          })
+      );
+      const businessUnitTotal = yield* useConfiguredSource(
+        businessUnitSource,
+        (sourceRuntime) =>
+          Effect.gen(function* () {
+            if (sourceRuntime.countTotal === undefined) {
+              throw new Error(
+                "Expected Commercetools business unit total count"
+              );
+            }
 
-      const customerTotal = yield* customerSourceService.countTotal();
-      const businessUnitTotal = yield* businessUnitSourceService.countTotal();
+            return yield* sourceRuntime.countTotal();
+          })
+      );
 
       expect(customerTotal).toEqual(SourceItemTotal.known(2));
       expect(businessUnitTotal).toEqual(SourceItemTotal.known(1));
@@ -544,15 +599,17 @@ describe("CommercetoolsSource", () => {
     Effect.gen(function* () {
       const recording = makeSourceSdk();
       const source = CommercetoolsSource.products().provide(recording.layer);
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected Commercetools product total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected Commercetools product total count");
-      }
+          const total = yield* sourceRuntime.countTotal();
 
-      const total = yield* sourceService.countTotal();
-
-      expect(total).toEqual(SourceItemTotal.known(0));
+          expect(total).toEqual(SourceItemTotal.known(0));
+        })
+      );
       expect(recording.requests.map((request) => request.operation)).toEqual([
         "products.source.count",
       ]);
@@ -576,19 +633,21 @@ describe("CommercetoolsSource", () => {
       const source = CommercetoolsSource.products({
         where: "masterData(current(masterVariant(sku is defined)))",
       }).provide(recording.layer);
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected Commercetools product total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected Commercetools product total count");
-      }
+          const total = yield* sourceRuntime.countTotal();
 
-      const total = yield* sourceService.countTotal();
-
-      expect(total).toEqual(
-        SourceItemTotal.lowerBound(10_000, {
-          message:
-            "Commercetools products source count is capped for filtered queries",
-          reason: "capped",
+          expect(total).toEqual(
+            SourceItemTotal.lowerBound(10_000, {
+              message:
+                "Commercetools products source count is capped for filtered queries",
+              reason: "capped",
+            })
+          );
         })
       );
       expect(recording.requests[0]).toMatchObject({
@@ -616,17 +675,19 @@ describe("CommercetoolsSource", () => {
         ],
       });
       const source = CommercetoolsSource.products().provide(recording.layer);
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          if (sourceRuntime.countTotal === undefined) {
+            throw new Error("Expected Commercetools product total count");
+          }
 
-      if (sourceService.countTotal === undefined) {
-        throw new Error("Expected Commercetools product total count");
-      }
+          const error = yield* Effect.flip(sourceRuntime.countTotal());
 
-      const error = yield* Effect.flip(sourceService.countTotal());
-
-      expect(error).toBeInstanceOf(SourceError);
-      expect(error.message).toBe(
-        "Commercetools products source count returned invalid total"
+          expect(error).toBeInstanceOf(SourceError);
+          expect(error.message).toBe(
+            "Commercetools products source count returned invalid total"
+          );
+        })
       );
     })
   );
@@ -712,45 +773,59 @@ describe("CommercetoolsSource", () => {
           batchSize: 1,
         }).provide(recording.layer);
 
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-        const firstPage = yield* sourceService.read(null);
-        const firstItem = firstPage.items[0];
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            const firstPage = yield* sourceRuntime.read(null);
+            const firstItem = firstPage.items[0];
 
-        expect(firstPage.items).toHaveLength(1);
-        expect(sourceService.identity.id).toBe("commercetools-product-id@v1");
-        expect(firstItem?.identity).toEqual(
-          SourceIdentity.fromKey(sourceService.identity, "recording-product-id")
+            expect(firstPage.items).toHaveLength(1);
+            expect(sourceRuntime.identity.id).toBe(
+              "commercetools-product-id@v1"
+            );
+            expect(firstItem?.identity).toEqual(
+              SourceIdentity.fromKey(
+                sourceRuntime.identity,
+                "recording-product-id"
+              )
+            );
+            expect(firstItem?.version).toBe("1");
+            expect(firstItem?.item).toMatchObject({
+              id: "recording-product-id",
+              key: "example-book",
+              version: 1,
+            });
+            expect(firstPage.nextCursor).toEqual({
+              lastId: "recording-product-id",
+            });
+
+            const secondPage = yield* sourceRuntime.read(
+              firstPage.nextCursor ?? null
+            );
+
+            expect(secondPage.items).toHaveLength(0);
+            expect(secondPage.nextCursor).toBeUndefined();
+
+            const lookedUp = yield* sourceRuntime.readByIdentity(
+              SourceIdentity.fromKey(
+                sourceRuntime.identity,
+                "recording-product-id"
+              )
+            );
+
+            expect(lookedUp?.identity).toEqual(
+              SourceIdentity.fromKey(
+                sourceRuntime.identity,
+                "recording-product-id"
+              )
+            );
+            expect(lookedUp?.item).toMatchObject({
+              id: "recording-product-id",
+              key: "example-book",
+              version: 1,
+            });
+            expect(lookedUp?.version).toBe("1");
+          })
         );
-        expect(firstItem?.version).toBe("1");
-        expect(firstItem?.item).toMatchObject({
-          id: "recording-product-id",
-          key: "example-book",
-          version: 1,
-        });
-        expect(firstPage.nextCursor).toEqual({
-          lastId: "recording-product-id",
-        });
-
-        const secondPage = yield* sourceService.read(
-          firstPage.nextCursor ?? null
-        );
-
-        expect(secondPage.items).toHaveLength(0);
-        expect(secondPage.nextCursor).toBeUndefined();
-
-        const lookedUp = yield* sourceService.readByIdentity(
-          SourceIdentity.fromKey(sourceService.identity, "recording-product-id")
-        );
-
-        expect(lookedUp?.identity).toEqual(
-          SourceIdentity.fromKey(sourceService.identity, "recording-product-id")
-        );
-        expect(lookedUp?.item).toMatchObject({
-          id: "recording-product-id",
-          key: "example-book",
-          version: 1,
-        });
-        expect(lookedUp?.version).toBe("1");
       })
   );
 
@@ -776,25 +851,28 @@ describe("CommercetoolsSource", () => {
           batchSize: 20,
         }).provide(recording.layer);
 
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-        const firstPage = yield* sourceService.read(null);
-        const secondPage = yield* sourceService.read(
-          firstPage.nextCursor ?? null
-        );
-        const thirdPage = yield* sourceService.read(
-          secondPage.nextCursor ?? null
-        );
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            const firstPage = yield* sourceRuntime.read(null);
+            const secondPage = yield* sourceRuntime.read(
+              firstPage.nextCursor ?? null
+            );
+            const thirdPage = yield* sourceRuntime.read(
+              secondPage.nextCursor ?? null
+            );
 
-        expect(firstPage.items).toHaveLength(20);
-        expect(firstPage.nextCursor).toEqual({
-          lastId: "recording-business-unit-20",
-        });
-        expect(secondPage.items).toHaveLength(4);
-        expect(secondPage.nextCursor).toEqual({
-          lastId: "recording-business-unit-24",
-        });
-        expect(thirdPage.items).toHaveLength(0);
-        expect(thirdPage.nextCursor).toBeUndefined();
+            expect(firstPage.items).toHaveLength(20);
+            expect(firstPage.nextCursor).toEqual({
+              lastId: "recording-business-unit-20",
+            });
+            expect(secondPage.items).toHaveLength(4);
+            expect(secondPage.nextCursor).toEqual({
+              lastId: "recording-business-unit-24",
+            });
+            expect(thirdPage.items).toHaveLength(0);
+            expect(thirdPage.nextCursor).toBeUndefined();
+          })
+        );
         expect(recording.requests).toMatchObject([
           {
             operation: "businessUnits.source.read",
@@ -832,10 +910,10 @@ describe("CommercetoolsSource", () => {
     Effect.gen(function* () {
       const recording = makeSourceSdk();
       const source = CommercetoolsSource.products().provide(recording.layer);
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-
-      const lookedUp = yield* sourceService.readByIdentity(
-        SourceIdentity.fromKey(sourceService.identity, "missing-product")
+      const lookedUp = yield* useConfiguredSource(source, (sourceRuntime) =>
+        sourceRuntime.readByIdentity(
+          SourceIdentity.fromKey(sourceRuntime.identity, "missing-product")
+        )
       );
 
       expect(lookedUp).toBeNull();
@@ -851,23 +929,28 @@ describe("CommercetoolsSource", () => {
         identity: "key",
       }).provide(recording.layer);
 
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const page = yield* sourceService.read(null);
-      const lookedUp = yield* sourceService.readByIdentity(
-        SourceIdentity.fromKey(sourceService.identity, "example-book")
-      );
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const page = yield* sourceRuntime.read(null);
+          const lookedUp = yield* sourceRuntime.readByIdentity(
+            SourceIdentity.fromKey(sourceRuntime.identity, "example-book")
+          );
 
-      expect(sourceService.identity.id).toBe("commercetools-product-key@v1");
-      expect(page.items[0]?.identity).toEqual(
-        SourceIdentity.fromKey(sourceService.identity, "example-book")
+          expect(sourceRuntime.identity.id).toBe(
+            "commercetools-product-key@v1"
+          );
+          expect(page.items[0]?.identity).toEqual(
+            SourceIdentity.fromKey(sourceRuntime.identity, "example-book")
+          );
+          expect(lookedUp?.identity).toEqual(
+            SourceIdentity.fromKey(sourceRuntime.identity, "example-book")
+          );
+          expect(lookedUp?.item).toMatchObject({
+            id: "recording-product-id",
+            key: "example-book",
+          });
+        })
       );
-      expect(lookedUp?.identity).toEqual(
-        SourceIdentity.fromKey(sourceService.identity, "example-book")
-      );
-      expect(lookedUp?.item).toMatchObject({
-        id: "recording-product-id",
-        key: "example-book",
-      });
     })
   );
 
@@ -885,8 +968,9 @@ describe("CommercetoolsSource", () => {
         },
       }).provide(recording.layer);
 
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const error = yield* Effect.flip(sourceService.read(null));
+      const error = yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.flip(sourceRuntime.read(null))
+      );
 
       expect(error).toBeInstanceOf(SourceError);
       expect(error.message).toBe(
@@ -913,8 +997,9 @@ describe("CommercetoolsSource", () => {
         },
       }).provide(recording.layer);
 
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const page = yield* sourceService.read(null);
+      const page = yield* useConfiguredSource(source, (sourceRuntime) =>
+        sourceRuntime.read(null)
+      );
 
       expect(page.items[0]?.item).toEqual({
         key: "example-book",
@@ -938,24 +1023,36 @@ describe("CommercetoolsSource", () => {
         },
       }).provide(recording.layer);
 
-      const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-      const page = yield* sourceService.read(null);
-      const lookedUp = yield* sourceService.readByIdentity(
-        SourceIdentity.fromKey(sourceService.identity, "recording-customer-id")
-      );
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const page = yield* sourceRuntime.read(null);
+          const lookedUp = yield* sourceRuntime.readByIdentity(
+            SourceIdentity.fromKey(
+              sourceRuntime.identity,
+              "recording-customer-id"
+            )
+          );
 
-      expect(page.items[0]?.identity).toEqual(
-        SourceIdentity.fromKey(sourceService.identity, "recording-customer-id")
-      );
-      expect(page.items[0]).toMatchObject({
-        item: {
-          email: "customer@example.com",
-          key: "example-customer",
-        },
-        version: "1",
-      });
-      expect(lookedUp?.identity).toEqual(
-        SourceIdentity.fromKey(sourceService.identity, "recording-customer-id")
+          expect(page.items[0]?.identity).toEqual(
+            SourceIdentity.fromKey(
+              sourceRuntime.identity,
+              "recording-customer-id"
+            )
+          );
+          expect(page.items[0]).toMatchObject({
+            item: {
+              email: "customer@example.com",
+              key: "example-customer",
+            },
+            version: "1",
+          });
+          expect(lookedUp?.identity).toEqual(
+            SourceIdentity.fromKey(
+              sourceRuntime.identity,
+              "recording-customer-id"
+            )
+          );
+        })
       );
     })
   );
@@ -977,33 +1074,36 @@ describe("CommercetoolsSource", () => {
           },
         }).provide(recording.layer);
 
-        const sourceService = yield* Source.pipe(Effect.provide(source.layer));
-        const page = yield* sourceService.read(null);
-        const lookedUp = yield* sourceService.readByIdentity(
-          SourceIdentity.fromKey(
-            sourceService.identity,
-            "recording-business-unit-id"
-          )
-        );
+        yield* useConfiguredSource(source, (sourceRuntime) =>
+          Effect.gen(function* () {
+            const page = yield* sourceRuntime.read(null);
+            const lookedUp = yield* sourceRuntime.readByIdentity(
+              SourceIdentity.fromKey(
+                sourceRuntime.identity,
+                "recording-business-unit-id"
+              )
+            );
 
-        expect(page.items[0]?.identity).toEqual(
-          SourceIdentity.fromKey(
-            sourceService.identity,
-            "recording-business-unit-id"
-          )
-        );
-        expect(page.items[0]).toMatchObject({
-          item: {
-            key: "example-business-unit",
-            name: "Example Business Unit",
-          },
-          version: "1",
-        });
-        expect(lookedUp?.identity).toEqual(
-          SourceIdentity.fromKey(
-            sourceService.identity,
-            "recording-business-unit-id"
-          )
+            expect(page.items[0]?.identity).toEqual(
+              SourceIdentity.fromKey(
+                sourceRuntime.identity,
+                "recording-business-unit-id"
+              )
+            );
+            expect(page.items[0]).toMatchObject({
+              item: {
+                key: "example-business-unit",
+                name: "Example Business Unit",
+              },
+              version: "1",
+            });
+            expect(lookedUp?.identity).toEqual(
+              SourceIdentity.fromKey(
+                sourceRuntime.identity,
+                "recording-business-unit-id"
+              )
+            );
+          })
         );
       })
   );

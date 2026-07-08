@@ -22,11 +22,11 @@ import {
 } from "./entities/products.ts";
 import type { CommercetoolsSourceCursor } from "./schemas.ts";
 
-type ConfiguredCommercetoolsSource<Source, SourceInput> = ConfiguredSource<
-  Source,
+type ConfiguredCommercetoolsSource<Payload, EncodedPayload> = ConfiguredSource<
+  Payload,
   CommercetoolsSourceCursor,
   string,
-  SourceInput,
+  EncodedPayload,
   never,
   CommercetoolsSdk
 >;
@@ -59,85 +59,85 @@ export type CommercetoolsBusinessUnitSourceFactoryOptions =
   WithoutEntity<CommercetoolsBusinessUnitSourceOptions>;
 
 export type CommercetoolsBusinessUnitSourceProjectionFactoryOptions<
-  Source,
-  SourceInput,
+  Payload,
+  EncodedPayload,
 > = WithoutEntity<
-  CommercetoolsBusinessUnitSourceProjectionOptions<Source, SourceInput>
+  CommercetoolsBusinessUnitSourceProjectionOptions<Payload, EncodedPayload>
 >;
 
 export type CommercetoolsCustomerSourceFactoryOptions =
   WithoutEntity<CommercetoolsCustomerSourceOptions>;
 
 export type CommercetoolsCustomerSourceProjectionFactoryOptions<
-  Source,
-  SourceInput,
+  Payload,
+  EncodedPayload,
 > = WithoutEntity<
-  CommercetoolsCustomerSourceProjectionOptions<Source, SourceInput>
+  CommercetoolsCustomerSourceProjectionOptions<Payload, EncodedPayload>
 >;
 
 export type CommercetoolsProductSourceFactoryOptions =
   WithoutEntity<CommercetoolsProductSourceOptions>;
 
 export type CommercetoolsProductSourceProjectionFactoryOptions<
-  Source,
-  SourceInput,
+  Payload,
+  EncodedPayload,
 > = WithoutEntity<
-  CommercetoolsProductSourceProjectionOptions<Source, SourceInput>
+  CommercetoolsProductSourceProjectionOptions<Payload, EncodedPayload>
 >;
 
 export interface CommercetoolsSourceFactory {
   readonly businessUnits: {
-    <Source, SourceInput>(
+    <Payload, EncodedPayload>(
       options: CommercetoolsBusinessUnitSourceProjectionFactoryOptions<
-        Source,
-        SourceInput
+        Payload,
+        EncodedPayload
       >
-    ): ConfiguredCommercetoolsSource<Source, SourceInput>;
+    ): ConfiguredCommercetoolsSource<Payload, EncodedPayload>;
     (
       options?: CommercetoolsBusinessUnitSourceFactoryOptions
     ): ConfiguredCommercetoolsSource<BusinessUnit, BusinessUnit>;
   };
   readonly customers: {
-    <Source, SourceInput>(
+    <Payload, EncodedPayload>(
       options: CommercetoolsCustomerSourceProjectionFactoryOptions<
-        Source,
-        SourceInput
+        Payload,
+        EncodedPayload
       >
-    ): ConfiguredCommercetoolsSource<Source, SourceInput>;
+    ): ConfiguredCommercetoolsSource<Payload, EncodedPayload>;
     (
       options?: CommercetoolsCustomerSourceFactoryOptions
     ): ConfiguredCommercetoolsSource<Customer, Customer>;
   };
   readonly products: {
-    <Source, SourceInput>(
+    <Payload, EncodedPayload>(
       options: CommercetoolsProductSourceProjectionFactoryOptions<
-        Source,
-        SourceInput
+        Payload,
+        EncodedPayload
       >
-    ): ConfiguredCommercetoolsSource<Source, SourceInput>;
+    ): ConfiguredCommercetoolsSource<Payload, EncodedPayload>;
     (
       options?: CommercetoolsProductSourceFactoryOptions
     ): ConfiguredCommercetoolsSource<Product, Product>;
   };
 }
 
-function businessUnits<Source, SourceInput>(
+function businessUnits<Payload, EncodedPayload>(
   options: CommercetoolsBusinessUnitSourceProjectionFactoryOptions<
-    Source,
-    SourceInput
+    Payload,
+    EncodedPayload
   >
-): ConfiguredCommercetoolsSource<Source, SourceInput>;
+): ConfiguredCommercetoolsSource<Payload, EncodedPayload>;
 
 function businessUnits(
   options?: CommercetoolsBusinessUnitSourceFactoryOptions
 ): ConfiguredCommercetoolsSource<BusinessUnit, BusinessUnit>;
 
-function businessUnits<Source, SourceInput>(
+function businessUnits<Payload, EncodedPayload>(
   options:
     | CommercetoolsBusinessUnitSourceFactoryOptions
     | CommercetoolsBusinessUnitSourceProjectionFactoryOptions<
-        Source,
-        SourceInput
+        Payload,
+        EncodedPayload
       > = {}
 ) {
   return makeBusinessUnitSource({
@@ -145,26 +145,29 @@ function businessUnits<Source, SourceInput>(
     entity: "businessUnits",
   } as
     | CommercetoolsBusinessUnitSourceOptions
-    | CommercetoolsBusinessUnitSourceProjectionOptions<Source, SourceInput>);
+    | CommercetoolsBusinessUnitSourceProjectionOptions<
+        Payload,
+        EncodedPayload
+      >);
 }
 
-function customers<Source, SourceInput>(
+function customers<Payload, EncodedPayload>(
   options: CommercetoolsCustomerSourceProjectionFactoryOptions<
-    Source,
-    SourceInput
+    Payload,
+    EncodedPayload
   >
-): ConfiguredCommercetoolsSource<Source, SourceInput>;
+): ConfiguredCommercetoolsSource<Payload, EncodedPayload>;
 
 function customers(
   options?: CommercetoolsCustomerSourceFactoryOptions
 ): ConfiguredCommercetoolsSource<Customer, Customer>;
 
-function customers<Source, SourceInput>(
+function customers<Payload, EncodedPayload>(
   options:
     | CommercetoolsCustomerSourceFactoryOptions
     | CommercetoolsCustomerSourceProjectionFactoryOptions<
-        Source,
-        SourceInput
+        Payload,
+        EncodedPayload
       > = {}
 ) {
   return makeCustomerSource({
@@ -172,26 +175,26 @@ function customers<Source, SourceInput>(
     entity: "customers",
   } as
     | CommercetoolsCustomerSourceOptions
-    | CommercetoolsCustomerSourceProjectionOptions<Source, SourceInput>);
+    | CommercetoolsCustomerSourceProjectionOptions<Payload, EncodedPayload>);
 }
 
-function products<Source, SourceInput>(
+function products<Payload, EncodedPayload>(
   options: CommercetoolsProductSourceProjectionFactoryOptions<
-    Source,
-    SourceInput
+    Payload,
+    EncodedPayload
   >
-): ConfiguredCommercetoolsSource<Source, SourceInput>;
+): ConfiguredCommercetoolsSource<Payload, EncodedPayload>;
 
 function products(
   options?: CommercetoolsProductSourceFactoryOptions
 ): ConfiguredCommercetoolsSource<Product, Product>;
 
-function products<Source, SourceInput>(
+function products<Payload, EncodedPayload>(
   options:
     | CommercetoolsProductSourceFactoryOptions
     | CommercetoolsProductSourceProjectionFactoryOptions<
-        Source,
-        SourceInput
+        Payload,
+        EncodedPayload
       > = {}
 ) {
   return makeProductSource({
@@ -199,7 +202,7 @@ function products<Source, SourceInput>(
     entity: "products",
   } as
     | CommercetoolsProductSourceOptions
-    | CommercetoolsProductSourceProjectionOptions<Source, SourceInput>);
+    | CommercetoolsProductSourceProjectionOptions<Payload, EncodedPayload>);
 }
 
 export const CommercetoolsSource: CommercetoolsSourceFactory = {

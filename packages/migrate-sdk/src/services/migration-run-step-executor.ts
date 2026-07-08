@@ -30,8 +30,8 @@ export interface MigrationRunStepExecutorService {
     PipelineError,
     Cursor,
     IdentityKey extends SourceIdentitySnapshotKey,
-    SourceInput,
-    SourceLayerError,
+    EncodedPayload,
+    SourceImplementationError,
     SourceRequirements,
     TrackingContract extends TrackingRecordContract | undefined,
   >(
@@ -41,8 +41,8 @@ export interface MigrationRunStepExecutorService {
       Cursor,
       IdentityKey,
       unknown,
-      SourceInput,
-      SourceLayerError,
+      EncodedPayload,
+      SourceImplementationError,
       SourceRequirements,
       TrackingContract
     >,
@@ -50,7 +50,7 @@ export interface MigrationRunStepExecutorService {
     processExecution?: PipelineExecutionOptions
   ) => Effect.Effect<
     MigrationRunCursorWindowResult,
-    RunMigrationError | SourceLayerError,
+    RunMigrationError | SourceImplementationError,
     SourceRequirements
   >;
 
@@ -87,8 +87,8 @@ export class MigrationRunStepExecutor extends Service<
     PipelineError,
     Cursor,
     IdentityKey extends SourceIdentitySnapshotKey,
-    SourceInput,
-    SourceLayerError,
+    EncodedPayload,
+    SourceImplementationError,
     SourceRequirements,
     TrackingContract extends TrackingRecordContract | undefined,
   >(
@@ -98,8 +98,8 @@ export class MigrationRunStepExecutor extends Service<
       Cursor,
       IdentityKey,
       unknown,
-      SourceInput,
-      SourceLayerError,
+      EncodedPayload,
+      SourceImplementationError,
       SourceRequirements,
       TrackingContract
     >,
@@ -107,7 +107,7 @@ export class MigrationRunStepExecutor extends Service<
     processExecution?: PipelineExecutionOptions
   ): Effect.Effect<
     MigrationRunCursorWindowResult,
-    RunMigrationError | SourceLayerError,
+    RunMigrationError | SourceImplementationError,
     SourceRequirements | MigrationRunStepExecutor
   > =>
     Effect.flatMap(MigrationRunStepExecutor, (executor) =>

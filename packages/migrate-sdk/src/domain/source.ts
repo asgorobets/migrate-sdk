@@ -11,27 +11,27 @@ import {
 } from "./ids.ts";
 
 export interface SourceItem<
-  A,
+  Payload,
   Key extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
 > {
   readonly identity: SourceIdentity<Key>;
-  readonly item: A;
+  readonly item: Payload;
   readonly version: SourceVersion;
 }
 
 export interface SourceItemInput<
-  A,
+  Payload,
   Key extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
 > {
   readonly identityKey: Key;
-  readonly item: A;
+  readonly item: Payload;
   readonly version: SourceVersionInput;
 }
 
-export const makeSourceItem = <A, Key extends SourceIdentitySnapshotKey>(
-  input: SourceItemInput<A, Key>,
+export const makeSourceItem = <Payload, Key extends SourceIdentitySnapshotKey>(
+  input: SourceItemInput<Payload, Key>,
   identity: SourceIdentityDefinition<Key>
-): SourceItem<A, Key> => ({
+): SourceItem<Payload, Key> => ({
   identity: SourceIdentity.fromKey(identity, input.identityKey),
   version: toSourceVersion(input.version),
   item: input.item,
@@ -50,10 +50,13 @@ export const encodeSourceIdentityKey = <Key extends SourceIdentitySnapshotKey>(
       }),
   });
 
-export const makeSourceItemEffect = <A, Key extends SourceIdentitySnapshotKey>(
-  input: SourceItemInput<A, Key>,
+export const makeSourceItemEffect = <
+  Payload,
+  Key extends SourceIdentitySnapshotKey,
+>(
+  input: SourceItemInput<Payload, Key>,
   identity: SourceIdentityDefinition<Key>
-): Effect.Effect<SourceItem<A, Key>, SourceError> =>
+): Effect.Effect<SourceItem<Payload, Key>, SourceError> =>
   Effect.try({
     try: () => makeSourceItem(input, identity),
     catch: (cause) =>
@@ -65,11 +68,11 @@ export const makeSourceItemEffect = <A, Key extends SourceIdentitySnapshotKey>(
   });
 
 export interface SourceReadResult<
-  A,
+  Payload,
   Cursor,
   Key extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
 > {
-  readonly items: readonly SourceItem<A, Key>[];
+  readonly items: readonly SourceItem<Payload, Key>[];
   readonly nextCursor?: Cursor;
 }
 
