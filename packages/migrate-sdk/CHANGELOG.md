@@ -1,5 +1,15 @@
 # migrate-sdk
 
+## 0.4.0
+
+### Minor Changes
+
+- e00802b: Introduce per-definition source runtimes and separate durable execution jobs from the public migration executable boundary. Update the Commercetools and Workflow adapters to the new authoring contracts.
+
+### Patch Changes
+
+- e00802b: Preserve typed tracking records through processing and rollback pipelines, use the Effect clock for persisted timestamps, and tighten runtime schema validation.
+
 ## 0.3.0
 
 ### Minor Changes
