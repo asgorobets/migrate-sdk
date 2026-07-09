@@ -1,5 +1,6 @@
 import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSystem";
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
+import { runMain } from "@effect/platform-node/NodeRuntime";
 import { Console, Effect, Layer } from "effect";
 import { formatApiSourceExampleResult } from "./api-source/format.ts";
 import { runApiSourceExampleWithInspection } from "./api-source/inspection.ts";
@@ -65,9 +66,4 @@ const makeProgram = (): Effect.Effect<string, unknown, never> => {
 
 const program = makeProgram();
 
-Effect.runPromise(program.pipe(Effect.flatMap(Console.log))).catch(
-  (error: unknown) => {
-    console.error(error);
-    process.exitCode = 1;
-  }
-);
+runMain(program.pipe(Effect.flatMap(Console.log)));

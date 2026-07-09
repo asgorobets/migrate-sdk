@@ -56,11 +56,10 @@ const migrateBaseCommand = Command.make("migrate").pipe(
   Command.withSharedFlags({ config })
 );
 
-const shouldUseColor = (): boolean =>
-  process.env.NO_COLOR === undefined &&
-  process.env.FORCE_COLOR !== "0" &&
-  (process.env.FORCE_COLOR !== undefined ||
-    (process.stdout.hasColors?.() ?? process.stdout.isTTY === true));
+const useColor = Effect.map(
+  MigrationCliRuntime,
+  (runtime) => runtime.useColor === true
+);
 
 const failConfigLoad = (
   error: MigrationCliConfigLoadError
@@ -130,7 +129,7 @@ const listCommand = Command.make("list", {}, () =>
     const registry = yield* loadConfiguredRegistry;
 
     yield* Console.log(
-      renderRegistryList(registry, { colors: shouldUseColor() })
+      renderRegistryList(registry, { colors: yield* useColor })
     );
   })
 ).pipe(Command.withDescription("List registered Migration Definitions"));
@@ -157,14 +156,16 @@ const graphCommand = Command.make(
 
         yield* Console.log(
           renderRegistryGraph(registry, definitionId, {
-            colors: shouldUseColor(),
+            colors: yield* useColor,
           })
         );
         return;
       }
 
       yield* Console.log(
-        renderRegistryGraph(registry, undefined, { colors: shouldUseColor() })
+        renderRegistryGraph(registry, undefined, {
+          colors: yield* useColor,
+        })
       );
     })
 ).pipe(Command.withDescription("Inspect Migration Definition dependencies"));
@@ -533,7 +534,7 @@ const statusCommand = Command.make(
       );
 
       yield* Console.log(
-        renderStatusReport(report, { colors: shouldUseColor() })
+        renderStatusReport(report, { colors: yield* useColor })
       );
     })
 ).pipe(Command.withDescription("Inspect Migration Definition status"));
@@ -670,7 +671,7 @@ const runCommand = Command.make(
 
         yield* Console.log(
           renderRunPlan(plan, {
-            colors: shouldUseColor(),
+            colors: yield* useColor,
             ...(mode === undefined ? {} : { mode }),
           })
         );
@@ -694,7 +695,7 @@ const runCommand = Command.make(
       );
 
       yield* Console.log(
-        renderRunStartResult(result, { colors: shouldUseColor() })
+        renderRunStartResult(result, { colors: yield* useColor })
       );
     })
 ).pipe(Command.withDescription("Plan or run Migration Definitions"));
@@ -757,7 +758,7 @@ const rollbackCommand = Command.make(
         );
 
         yield* Console.log(
-          renderRollbackPlan(plan, { colors: shouldUseColor() })
+          renderRollbackPlan(plan, { colors: yield* useColor })
         );
         return;
       }
@@ -777,7 +778,7 @@ const rollbackCommand = Command.make(
       );
 
       yield* Console.log(
-        renderRollbackStartResult(result, { colors: shouldUseColor() })
+        renderRollbackStartResult(result, { colors: yield* useColor })
       );
     })
 ).pipe(Command.withDescription("Plan or rollback Migration Definitions"));

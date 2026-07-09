@@ -29,8 +29,8 @@ const ArticleTag = Schema.Struct({
 });
 
 const ArticleMetrics = Schema.Struct({
-  readingTimeMinutes: Schema.Number,
-  views: Schema.Number,
+  readingTimeMinutes: Schema.Finite,
+  views: Schema.Finite,
 });
 
 const NestedArticle = Schema.Struct({
@@ -52,13 +52,13 @@ const NestedArticleIdentity = SourceIdentity.make({
 const ArticleEntryFields = Schema.Struct({
   authorDisplayName: Schema.String,
   locale: ArticleLocale,
-  readingTimeMinutes: Schema.Number,
+  readingTimeMinutes: Schema.Finite,
   seoDescription: Schema.optional(Schema.String),
   seoTitle: Schema.String,
   slug: Schema.String,
   tagLabels: Schema.Array(Schema.String),
   title: Schema.String,
-  views: Schema.Number,
+  views: Schema.Finite,
 });
 
 type ArticleEntryFields = typeof ArticleEntryFields.Type;

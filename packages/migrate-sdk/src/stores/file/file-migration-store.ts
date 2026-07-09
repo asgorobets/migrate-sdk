@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSystem";
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
-import { Effect, Layer, Schema } from "effect";
+import { DateTime, Effect, Layer, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import type { PlatformError } from "effect/PlatformError";
@@ -456,11 +456,11 @@ const makePaths = (path: Path, directory: string) => {
   };
 };
 
-const makeManifestRecord = (): ManifestRecord => ({
+const makeManifestRecord = (createdAt: Date): ManifestRecord => ({
   formatVersion,
   recordKind: "manifest",
   state: {
-    createdAt: new Date(),
+    createdAt,
     storeKind: "file",
   },
 });
@@ -470,19 +470,22 @@ const ensureManifest = (
   path: Path,
   filePath: string
 ): Effect.Effect<void, MigrationStoreError> =>
-  Effect.flatMap(
-    readRecordOptional(fs, filePath, ManifestRecord),
-    (manifest) =>
-      manifest === null
-        ? writeRecordAtomic(
-            fs,
-            path,
-            filePath,
-            ManifestRecord,
-            makeManifestRecord()
-          )
-        : Effect.void
-  );
+  Effect.gen(function* () {
+    const manifest = yield* readRecordOptional(fs, filePath, ManifestRecord);
+
+    if (manifest !== null) {
+      return;
+    }
+
+    const createdAt = yield* DateTime.nowAsDate;
+    yield* writeRecordAtomic(
+      fs,
+      path,
+      filePath,
+      ManifestRecord,
+      makeManifestRecord(createdAt)
+    );
+  });
 
 export type FileMigrationStorePlatform<E = never, R = never> = Layer.Layer<
   FileSystem | Path,
@@ -679,7 +682,7 @@ const makeLayerWithoutPlatform = (
             runId,
             definitionIds,
             status,
-            startedAt: current?.startedAt ?? new Date(),
+            startedAt: current?.startedAt ?? (yield* DateTime.nowAsDate),
           };
 
           for (const definitionId of definitionIds) {
@@ -743,13 +746,15 @@ const makeLayerWithoutPlatform = (
             return yield* storeError("Migration run was not found", runId);
           }
 
+          const finishedAt =
+            input.finish === true ? yield* DateTime.nowAsDate : undefined;
           const updated: MigrationRunState = {
             ...current.state,
             ...(input.status === undefined ? {} : { status: input.status }),
             ...(input.execution === undefined
               ? {}
               : { execution: input.execution }),
-            ...(input.finish === true ? { finishedAt: new Date() } : {}),
+            ...(finishedAt === undefined ? {} : { finishedAt }),
           };
 
           for (const definitionId of definitionIds) {
@@ -820,8 +825,9 @@ const makeLayerWithoutPlatform = (
         definitionId: MigrationDefinitionId,
         ownerRunId: MigrationRunId
       ) {
+        const createdAt = yield* DateTime.nowAsDate;
         const lock: MigrationDefinitionLock = {
-          createdAt: new Date(),
+          createdAt,
           definitionId,
           ownerRunId,
           token: toMigrationDefinitionLockToken(`lock-${randomUUID()}`),

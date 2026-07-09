@@ -62,7 +62,6 @@
     "example:product-catalog-store": "pnpm run build && tsx examples/product-catalog-store-migration.ts",
     "example:product-catalog-store:live": "pnpm run build && tsx examples/product-catalog-store-migration.live.ts",
     "example:products": "pnpm run build && tsx examples/product-destination.ts",
-    "prepare": "effect-language-service patch",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -74,11 +73,12 @@
     "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
     "@repo/typescript-config": "workspace:*",
-    "@types/node": "^22.15.3",
+    "@types/node": "^24.13.1",
     "effect": "catalog:",
     "migrate-sdk": "workspace:*",
     "tsx": "^4.22.4",
-    "typescript": "5.9.2",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
     "vitest": "^4.1.8"
   },
   "dependencies": {

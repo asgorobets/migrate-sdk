@@ -67,13 +67,14 @@ const hexFromBytes = (bytes: Uint8Array): string =>
 
 const sha256Hex = (bytes: Uint8Array): Effect.Effect<string, SourceError> =>
   Effect.tryPromise({
-    try: async () => {
+    try: () => {
       const webCrypto = globalThis.crypto;
 
       if (webCrypto?.subtle !== undefined) {
         const digestInput = new Uint8Array(bytes).buffer;
-        const digest = await webCrypto.subtle.digest("SHA-256", digestInput);
-        return hexFromBytes(new Uint8Array(digest));
+        return webCrypto.subtle
+          .digest("SHA-256", digestInput)
+          .then((digest) => hexFromBytes(new Uint8Array(digest)));
       }
 
       throw new Error("Web Crypto SHA-256 support is required");

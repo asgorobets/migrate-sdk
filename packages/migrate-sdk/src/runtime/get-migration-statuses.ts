@@ -51,7 +51,7 @@ const missingDefinitionError = (definitionId: MigrationDefinitionId) =>
   });
 
 const invalidStatusRequestError = (cause: unknown) =>
-  cause instanceof MigrationStatusRequestError
+  Schema.is(MigrationStatusRequestError)(cause)
     ? cause
     : new MigrationStatusRequestError({
         message: "Status request contains invalid input",

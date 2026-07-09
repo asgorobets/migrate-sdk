@@ -1,4 +1,4 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { SourceError } from "./errors.ts";
 import {
   type EncodedSourceIdentity,
@@ -162,7 +162,7 @@ export const normalizeSourceItemTotalCount = (
   Effect.try({
     try: () => SourceItemTotal.known(count).count,
     catch: (cause) =>
-      cause instanceof SourceError ? cause : sourceItemTotalCountError(count),
+      Schema.is(SourceError)(cause) ? cause : sourceItemTotalCountError(count),
   });
 
 export const sourceItemTotalFromCount = (

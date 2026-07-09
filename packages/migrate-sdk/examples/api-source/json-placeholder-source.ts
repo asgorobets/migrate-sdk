@@ -82,7 +82,7 @@ const makePostPageFetcher = (apiLayer: Layer.Layer<JsonPlaceholderApi>) =>
       Effect.gen(function* () {
         const api = yield* JsonPlaceholderApi;
         const offset = cursor?.offset ?? 0;
-        const postIds = (yield* resilient(api.listPostIds())).slice(
+        const postIds = (yield* resilient(api.listPostIds)).slice(
           0,
           defaultMaxPosts
         );
@@ -144,7 +144,7 @@ export const JsonPlaceholderPostSource = {
       },
       identity: {
         id: "jsonplaceholder-post@v1",
-        schema: SourceIdentity.key("postId", Schema.Number),
+        schema: SourceIdentity.key("postId", Schema.Finite),
         key: ({ item }) => item.id,
       },
       lookup: makePostDirectLookup(apiLayer),

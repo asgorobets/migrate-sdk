@@ -1,5 +1,5 @@
 {
-  "$schema": "./node_modules/@effect/language-service/schema.json",
+  "$schema": "https://raw.githubusercontent.com/Effect-TS/tsgo/refs/heads/main/schema.json",
   "extends": "@repo/typescript-config/base.json",
   "compilerOptions": {
     "composite": true,
@@ -14,7 +14,46 @@
     "verbatimModuleSyntax": true,
     "plugins": [
       {
-        "name": "@effect/language-service"
+        "name": "@effect/language-service",
+        "diagnosticSeverity": {
+          "asyncFunction": "warning",
+          "cryptoRandomUUID": "warning",
+          "cryptoRandomUUIDInEffect": "warning",
+          "extendsNativeError": "warning",
+          "globalConsole": "warning",
+          "globalConsoleInEffect": "warning",
+          "globalDate": "warning",
+          "globalDateInEffect": "warning",
+          "globalFetch": "warning",
+          "globalFetchInEffect": "warning",
+          "globalRandom": "warning",
+          "globalRandomInEffect": "warning",
+          "globalTimers": "warning",
+          "globalTimersInEffect": "warning",
+          "instanceOfSchema": "warning",
+          "newPromise": "warning",
+          "nodeBuiltinImport": "warning",
+          "preferSchemaOverJson": "warning",
+          "processEnv": "warning",
+          "processEnvInEffect": "warning",
+          "unsafeEffectTypeAssertion": "warning"
+        },
+        "overrides": [
+          {
+            "include": ["src/**/*.test.ts", "examples/**/*.test.ts"],
+            "options": {
+              "diagnosticSeverity": {
+                "globalDate": "off",
+                "globalDateInEffect": "off",
+                "lazyEffect": "off",
+                "nodeBuiltinImport": "off",
+                "preferSchemaOverJson": "off",
+                "schemaNumber": "off",
+                "unnecessaryTypeofType": "off"
+              }
+            }
+          }
+        ]
       }
     ]
   },

@@ -4,6 +4,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
+import { TestClock } from "effect/testing";
 import {
   InMemorySource,
   InMemorySourceCursor,
@@ -241,6 +242,24 @@ const makeArticlesMigration = (options: {
   });
 
 describe("FileMigrationStore", () => {
+  it.effect("uses the Effect Clock for the manifest timestamp", () =>
+    withTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const createdAt = new Date("2026-01-01T00:00:00.000Z");
+        yield* TestClock.setTime(createdAt.getTime());
+        yield* MigrationStore.pipe(Effect.provide(fileStoreLayer(directory)));
+
+        const fs = yield* FileSystem;
+        const path = yield* Path;
+        const manifest = yield* fs.readFileString(
+          path.join(directory, "manifest.json")
+        );
+
+        expect(manifest).toContain(createdAt.toISOString());
+      })
+    )
+  );
+
   it.effect("persists Migration Contract across fresh store instances", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {

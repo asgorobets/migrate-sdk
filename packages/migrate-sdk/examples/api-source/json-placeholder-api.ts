@@ -29,7 +29,7 @@ export class JsonPlaceholderApi extends Service<
     readonly getPost: (
       id: number
     ) => Effect.Effect<unknown | null, JsonPlaceholderApiError>;
-    readonly listPostIds: () => Effect.Effect<
+    readonly listPostIds: Effect.Effect<
       readonly number[],
       JsonPlaceholderApiError
     >;
@@ -76,23 +76,21 @@ const makeLiveJsonPlaceholderApi = (options?: {
           )
         );
       }),
-      listPostIds: Effect.fn("JsonPlaceholderApi.live.listPostIds")(
-        function* () {
-          const path = "/posts";
-          if (state !== undefined) {
-            state.listCalls += 1;
-          }
-
-          const posts = yield* client
-            .get(path)
-            .pipe(
-              Effect.flatMap(
-                HttpClientResponse.schemaBodyJson(JsonPlaceholderPosts)
-              )
-            );
-
-          return posts.map((post) => post.id);
+      listPostIds: Effect.gen(function* () {
+        const path = "/posts";
+        if (state !== undefined) {
+          state.listCalls += 1;
         }
-      ),
+
+        const posts = yield* client
+          .get(path)
+          .pipe(
+            Effect.flatMap(
+              HttpClientResponse.schemaBodyJson(JsonPlaceholderPosts)
+            )
+          );
+
+        return posts.map((post) => post.id);
+      }).pipe(Effect.withSpan("JsonPlaceholderApi.live.listPostIds")),
     });
   });

@@ -119,7 +119,6 @@
     "dev:document-source": "pnpm run build && tsx examples/dev.ts document-source",
     "dev:file-store": "pnpm run build && tsx examples/dev.ts file-store",
     "dev:nested-article": "pnpm run build && tsx examples/dev.ts nested-article",
-    "prepare": "effect-language-service patch",
     "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
     "check-types": "tsc --noEmit -p tsconfig.check.json",
     "test": "vitest run",
@@ -132,7 +131,8 @@
     "@repo/typescript-config": "workspace:*",
     "@types/node": "^24.13.1",
     "@types/papaparse": "^5.5.2",
-    "typescript": "5.9.2",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
     "vitest": "^4.1.8"
   },
   "dependencies": {

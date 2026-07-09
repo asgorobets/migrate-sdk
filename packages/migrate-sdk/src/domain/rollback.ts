@@ -158,7 +158,7 @@ export const makeRollbackMigrationOptions = <
   };
 };
 
-const RollbackSummaryCount = Schema.Number.check(Schema.isInt()).check(
+const RollbackSummaryCount = Schema.Finite.check(Schema.isInt()).check(
   Schema.isGreaterThanOrEqualTo(0)
 );
 

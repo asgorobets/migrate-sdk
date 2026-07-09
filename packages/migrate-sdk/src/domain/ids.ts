@@ -41,7 +41,7 @@ export type SourceIdentityContractFingerprint =
 
 export const SourceIdentityKeyScalar = Schema.Union([
   Schema.Boolean,
-  Schema.Number,
+  Schema.Finite,
   Schema.String,
 ]);
 export type SourceIdentityKeyScalar = typeof SourceIdentityKeyScalar.Type;

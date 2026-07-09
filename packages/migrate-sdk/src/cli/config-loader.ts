@@ -1,6 +1,4 @@
-import { dirname, extname, isAbsolute, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
-import { Effect, FileSystem, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Path, Schema } from "effect";
 import { register } from "tsx/esm/api";
 import type { MigrationDefinitionRegistry } from "../domain/registry.ts";
 import type { MigrationCliConfig } from "./config.ts";
@@ -60,14 +58,17 @@ const isMigrationCliConfig = (value: unknown): value is MigrationCliConfig => {
   );
 };
 
-const resolveExplicitConfigPath = (cwd: string, configPath: string): string =>
-  isAbsolute(configPath) ? configPath : resolve(cwd, configPath);
+const resolveExplicitConfigPath = (
+  path: Path.Path,
+  cwd: string,
+  configPath: string
+): string =>
+  path.isAbsolute(configPath) ? configPath : path.resolve(cwd, configPath);
 
 const safeExists = (
   fs: FileSystem.FileSystem,
   path: string
-): Effect.Effect<boolean> =>
-  Effect.catch(fs.exists(path), () => Effect.succeed(false));
+): Effect.Effect<boolean> => Effect.orElseSucceed(fs.exists(path), () => false);
 
 const configPathExists = (
   fs: FileSystem.FileSystem,
@@ -98,11 +99,12 @@ const hasPackageWorkspaces = (content: string): boolean => {
 
 const isPackageWorkspaceRoot = (
   fs: FileSystem.FileSystem,
+  path: Path.Path,
   directory: string
 ): Effect.Effect<boolean> => {
-  const packageJsonPath = join(directory, "package.json");
+  const packageJsonPath = path.join(directory, "package.json");
 
-  return Effect.catch(
+  return Effect.orElseSucceed(
     Effect.gen(function* () {
       const exists = yield* fs.exists(packageJsonPath);
 
@@ -114,29 +116,31 @@ const isPackageWorkspaceRoot = (
 
       return hasPackageWorkspaces(content);
     }),
-    () => Effect.succeed(false)
+    () => false
   );
 };
 
 const isWorkspaceRoot = (
   fs: FileSystem.FileSystem,
+  path: Path.Path,
   directory: string
 ): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const hasPnpmWorkspace = yield* safeExists(
       fs,
-      join(directory, "pnpm-workspace.yaml")
+      path.join(directory, "pnpm-workspace.yaml")
     );
 
     if (hasPnpmWorkspace) {
       return true;
     }
 
-    return yield* isPackageWorkspaceRoot(fs, directory);
+    return yield* isPackageWorkspaceRoot(fs, path, directory);
   });
 
 const discoverConfigPath = (
   fs: FileSystem.FileSystem,
+  path: Path.Path,
   cwd: string
 ): Effect.Effect<string, MigrationCliConfigLoadError> => {
   const find = (
@@ -144,7 +148,7 @@ const discoverConfigPath = (
   ): Effect.Effect<string, MigrationCliConfigLoadError> =>
     Effect.gen(function* () {
       for (const fileName of CONFIG_FILE_NAMES) {
-        const candidate = join(directory, fileName);
+        const candidate = path.join(directory, fileName);
         const exists = yield* configPathExists(fs, candidate);
 
         if (exists) {
@@ -152,10 +156,10 @@ const discoverConfigPath = (
         }
       }
 
-      const parentDirectory = dirname(directory);
+      const parentDirectory = path.dirname(directory);
       const isFileSystemRoot = parentDirectory === directory;
       const shouldStop =
-        isFileSystemRoot || (yield* isWorkspaceRoot(fs, directory));
+        isFileSystemRoot || (yield* isWorkspaceRoot(fs, path, directory));
 
       if (shouldStop) {
         return yield* new MigrationCliConfigLoadError({
@@ -168,30 +172,40 @@ const discoverConfigPath = (
       return yield* find(parentDirectory);
     });
 
-  return find(resolve(cwd));
+  return find(path.resolve(cwd));
 };
 
 const importConfigModule = (
+  path: Path.Path,
   configPath: string
 ): Effect.Effect<unknown, MigrationCliConfigLoadError> =>
-  Effect.tryPromise({
-    try: () => {
-      const configUrl = pathToFileURL(configPath).href;
-      const extension = extname(configPath);
-
-      if (extension === ".ts" || extension === ".mts") {
-        return tsxLoader.import(configUrl, configUrl);
-      }
-
-      return import(`${configUrl}?migrateSdkCli=${Date.now()}`);
-    },
-    catch: (cause) =>
+  Effect.gen(function* () {
+    const importFailed = (cause: unknown) =>
       new MigrationCliConfigLoadError({
         cause,
         configPath,
         kind: "ConfigImportFailed",
         message: "Failed to import Migration CLI config",
-      }),
+      });
+    const configUrl = yield* path.toFileUrl(configPath).pipe(
+      Effect.map((url) => url.href),
+      Effect.mapError(importFailed)
+    );
+    const extension = path.extname(configPath);
+    const importModule = (load: () => Promise<unknown>) =>
+      Effect.tryPromise({
+        try: load,
+        catch: importFailed,
+      });
+
+    if (extension === ".ts" || extension === ".mts") {
+      return yield* importModule(() => tsxLoader.import(configUrl, configUrl));
+    }
+
+    const now = yield* DateTime.now;
+    return yield* importModule(
+      () => import(`${configUrl}?migrateSdkCli=${DateTime.toEpochMillis(now)}`)
+    );
   });
 
 const readDefaultExport = (
@@ -245,14 +259,15 @@ export const loadMigrationCliConfig = ({
 }: LoadMigrationCliConfigInput): Effect.Effect<
   MigrationCliConfig,
   MigrationCliConfigLoadError,
-  FileSystem.FileSystem
+  FileSystem.FileSystem | Path.Path
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const resolvedConfigPath =
       configPath === undefined
-        ? yield* discoverConfigPath(fs, cwd)
-        : resolveExplicitConfigPath(cwd, configPath);
+        ? yield* discoverConfigPath(fs, path, cwd)
+        : resolveExplicitConfigPath(path, cwd, configPath);
     const exists = yield* configPathExists(fs, resolvedConfigPath);
 
     if (!exists) {
@@ -263,7 +278,7 @@ export const loadMigrationCliConfig = ({
       });
     }
 
-    const moduleValue = yield* importConfigModule(resolvedConfigPath);
+    const moduleValue = yield* importConfigModule(path, resolvedConfigPath);
 
     return yield* readDefaultExport(resolvedConfigPath, moduleValue);
   });

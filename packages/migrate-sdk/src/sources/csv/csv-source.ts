@@ -3,10 +3,7 @@ import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import type { ParseError } from "papaparse";
 import Papa from "papaparse";
-import {
-  type ConfiguredSource,
-  Source,
-} from "../../domain/definition.ts";
+import { type ConfiguredSource, Source } from "../../domain/definition.ts";
 import { SourceError } from "../../domain/errors.ts";
 import {
   SourceIdentity,
@@ -614,13 +611,14 @@ const hexFromBytes = (bytes: Uint8Array): string =>
 
 const sha256Hex = (bytes: Uint8Array): Effect.Effect<string, SourceError> =>
   Effect.tryPromise({
-    try: async () => {
+    try: () => {
       const webCrypto = globalThis.crypto;
 
       if (webCrypto?.subtle !== undefined) {
         const digestInput = new Uint8Array(bytes).buffer;
-        const digest = await webCrypto.subtle.digest("SHA-256", digestInput);
-        return hexFromBytes(new Uint8Array(digest));
+        return webCrypto.subtle
+          .digest("SHA-256", digestInput)
+          .then((digest) => hexFromBytes(new Uint8Array(digest)));
       }
 
       throw new Error("Web Crypto SHA-256 support is required");
@@ -661,8 +659,12 @@ const buildVersion = (
         return value;
       }
       case "row-hash": {
-        const material = JSON.stringify(
-          columns.map((column) => [column, item[column] ?? ""])
+        const material = yield* Schema.encodeEffect(
+          Schema.UnknownFromJsonString
+        )(columns.map((column) => [column, item[column] ?? ""])).pipe(
+          Effect.mapError((cause) =>
+            csvError("Unable to serialize CSV row for content hash", cause)
+          )
         );
         return yield* sha256Hex(textEncoder.encode(material));
       }
@@ -685,7 +687,7 @@ const parseDocument = <IdentityKey extends SourceIdentitySnapshotKey>(
     const records = yield* Effect.try({
       try: () => parseLogicalRecords(text, separator),
       catch: (cause) =>
-        cause instanceof SourceError
+        Schema.is(SourceError)(cause)
           ? cause
           : csvError("Unable to parse CSV source", cause),
     });

@@ -15,7 +15,7 @@ import type { AnyMigrationDefinition } from "./run.ts";
 import { MigrationRunState } from "./run.ts";
 import { MigrationItemErrorDetail, type MigrationItemState } from "./state.ts";
 
-const StatusCount = Schema.Number.check(Schema.isInt()).check(
+const StatusCount = Schema.Finite.check(Schema.isInt()).check(
   Schema.isGreaterThanOrEqualTo(0)
 );
 

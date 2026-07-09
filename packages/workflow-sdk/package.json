@@ -46,7 +46,6 @@
   "scripts": {
     "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
     "check-types": "tsc --noEmit -p tsconfig.check.json",
-    "prepare": "effect-language-service patch",
     "test": "vitest run",
     "test:workflow": "vitest run --config vitest.workflow.config.ts",
     "test:watch": "vitest"
@@ -64,7 +63,8 @@
     "@workflow/vitest": "4.0.11",
     "effect": "catalog:",
     "migrate-sdk": "workspace:*",
-    "typescript": "5.9.2",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
     "vitest": "^4.1.8"
   }
 }

@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { DateTime, Effect, Layer } from "effect";
 import { MigrationStoreError } from "../../domain/errors.ts";
 import type {
   EncodedSourceCursor,
@@ -203,7 +203,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       definitionIds: readonly MigrationDefinitionId[],
       status: MigrationRunState["status"]
     ) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         const current = definitionIds
           .map((definitionId) => state.latestRunStates.get(definitionId))
           .find((runState) => runState?.runId === runId);
@@ -212,7 +212,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
           runId,
           definitionIds,
           status,
-          startedAt: current?.startedAt ?? new Date(),
+          startedAt: current?.startedAt ?? (yield* DateTime.nowAsDate),
         };
 
         for (const definitionId of definitionIds) {
@@ -263,10 +263,11 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       definitionIds: readonly MigrationDefinitionId[]
     ) {
       const current = yield* readRunState(state, runId, definitionIds);
+      const finishedAt = yield* DateTime.nowAsDate;
       const failed: MigrationRunState = {
         ...current,
         status: "start-failed",
-        finishedAt: new Date(),
+        finishedAt,
       };
 
       for (const definitionId of definitionIds) {
@@ -282,10 +283,11 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         definitionIds: readonly MigrationDefinitionId[]
       ) {
         const current = yield* readRunState(state, runId, definitionIds);
+        const finishedAt = yield* DateTime.nowAsDate;
         const completed: MigrationRunState = {
           ...current,
           status: "succeeded",
-          finishedAt: new Date(),
+          finishedAt,
         };
 
         for (const definitionId of definitionIds) {
@@ -301,10 +303,11 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       definitionIds: readonly MigrationDefinitionId[]
     ) {
       const current = yield* readRunState(state, runId, definitionIds);
+      const finishedAt = yield* DateTime.nowAsDate;
       const failed: MigrationRunState = {
         ...current,
         status: "failed",
-        finishedAt: new Date(),
+        finishedAt,
       };
 
       for (const definitionId of definitionIds) {
@@ -329,8 +332,9 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         );
       }
 
+      const createdAt = yield* DateTime.nowAsDate;
       const lock: MigrationDefinitionLock = {
-        createdAt: new Date(),
+        createdAt,
         definitionId,
         ownerRunId,
         token: toMigrationDefinitionLockToken(`lock-${state.nextLockNumber}`),

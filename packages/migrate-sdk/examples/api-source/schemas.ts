@@ -6,9 +6,9 @@ export const JsonPlaceholderPostCursor = Schema.Struct({
 
 export const JsonPlaceholderPost = Schema.Struct({
   body: Schema.String,
-  id: Schema.Number,
+  id: Schema.Finite,
   title: Schema.String,
-  userId: Schema.Number,
+  userId: Schema.Finite,
 });
 
 export const JsonPlaceholderPosts = Schema.Array(JsonPlaceholderPost);

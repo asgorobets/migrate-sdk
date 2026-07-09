@@ -26,7 +26,7 @@ import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
 import { completedInlineExecution } from "./inline-execution.ts";
 
 const Money = Schema.Struct({
-  amount: Schema.Number,
+  amount: Schema.Finite,
   currency: Schema.Literal("USD"),
 });
 
@@ -36,7 +36,7 @@ const BookSource = Schema.Struct({
   format: Schema.Literals(["hardcover", "paperback", "ebook"]),
   isbn: Schema.String,
   listPrice: Money,
-  publicationYear: Schema.Number,
+  publicationYear: Schema.Finite,
   subtitle: Schema.optional(Schema.String),
   title: Schema.Trim,
 });
@@ -68,9 +68,9 @@ const BookEntryFields = Schema.Struct({
   format: Schema.String,
   isStub: Schema.optionalKey(Schema.Boolean),
   isbn: Schema.String,
-  listPriceAmount: Schema.Number,
+  listPriceAmount: Schema.Finite,
   listPriceCurrency: Schema.String,
-  publicationYear: Schema.Number,
+  publicationYear: Schema.Finite,
   subtitle: Schema.optionalKey(Schema.String),
   title: Schema.String,
 });

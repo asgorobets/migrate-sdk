@@ -1,8 +1,5 @@
 import { Effect, Schema, SchemaAST } from "effect";
-import {
-  type ConfiguredSource,
-  Source,
-} from "../../domain/definition.ts";
+import { type ConfiguredSource, Source } from "../../domain/definition.ts";
 import { SourceError } from "../../domain/errors.ts";
 import type {
   SourceIdentityContractIdInput,
@@ -306,7 +303,7 @@ const documentSourceError = (message: string, cause?: unknown): SourceError =>
   });
 
 const diagnosticFromCause = (cause: unknown): string => {
-  if (cause instanceof SourceError) {
+  if (Schema.is(SourceError)(cause)) {
     const nestedDiagnostic =
       typeof cause.cause === "object" &&
       cause.cause !== null &&
@@ -327,13 +324,14 @@ const hexFromBytes = (bytes: Uint8Array): string =>
 
 const sha256Hex = (bytes: Uint8Array): Effect.Effect<string, SourceError> =>
   Effect.tryPromise({
-    try: async () => {
+    try: () => {
       const webCrypto = globalThis.crypto;
 
       if (webCrypto?.subtle !== undefined) {
         const digestInput = new Uint8Array(bytes).buffer;
-        const digest = await webCrypto.subtle.digest("SHA-256", digestInput);
-        return hexFromBytes(new Uint8Array(digest));
+        return webCrypto.subtle
+          .digest("SHA-256", digestInput)
+          .then((digest) => hexFromBytes(new Uint8Array(digest)));
       }
 
       throw new Error("Web Crypto SHA-256 support is required");
@@ -719,7 +717,16 @@ const normalizeIdentityValue = (
         stringifyIdentityValue(entry, itemIndex, label)
       );
 
-      return JSON.stringify(values);
+      return yield* Schema.encodeEffect(Schema.UnknownFromJsonString)(
+        values
+      ).pipe(
+        Effect.mapError((cause) =>
+          documentSourceError(
+            `Unable to serialize document source ${label} value`,
+            { cause, itemIndex }
+          )
+        )
+      );
     }
 
     return yield* stringifyIdentityValue(value, itemIndex, label);
@@ -794,27 +801,19 @@ const encodeSourceItemJson = <Payload>(
       )
     );
 
-    return yield* Effect.try({
-      try: () => {
-        const material = JSON.stringify(encodedItem);
-
-        if (material === undefined) {
-          throw new TypeError(
-            "Schema-encoded document source item could not be serialized"
-          );
-        }
-
-        return material;
-      },
-      catch: (cause) =>
+    return yield* Schema.encodeEffect(Schema.UnknownFromJsonString)(
+      encodedItem
+    ).pipe(
+      Effect.mapError((cause) =>
         documentSourceError(
           "Unable to serialize document source item for content hash",
           {
             cause,
             itemIndex,
           }
-        ),
-    });
+        )
+      )
+    );
   });
 
 const buildVersion = <Payload>(

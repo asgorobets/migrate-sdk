@@ -1,4 +1,12 @@
-import { Deferred, Effect, Exit, Layer, Predicate, Schema } from "effect";
+import {
+  DateTime,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  Predicate,
+  Schema,
+} from "effect";
 import { Service } from "effect/Context";
 import type { MigrationDefinition } from "../domain/definition.ts";
 import {
@@ -562,7 +570,7 @@ const completeMigrationRunExecution = (
 
     return {
       definitions: input.definitions,
-      finishedAt: completedRun.finishedAt ?? new Date(),
+      finishedAt: completedRun.finishedAt ?? (yield* DateTime.nowAsDate),
       runId: completedRun.runId,
       startedAt: completedRun.startedAt,
       status,
@@ -845,7 +853,8 @@ const previousTrackingRecord = (
 
 const makeUpdateRunNeedsUpdateState = (
   itemState: MigratedItemState,
-  runId: MigrationRunId
+  runId: MigrationRunId,
+  updatedAt: Date
 ): NeedsUpdateItemState => ({
   definitionId: itemState.definitionId,
   sourceIdentity: itemState.sourceIdentity,
@@ -858,7 +867,7 @@ const makeUpdateRunNeedsUpdateState = (
   sourceVersion: itemState.sourceVersion,
   ...(itemState.journal === undefined ? {} : { journal: itemState.journal }),
   lastRunId: runId,
-  updatedAt: new Date(),
+  updatedAt,
   reason: updateRunScheduleReason,
   status: "needs-update",
   ...(itemState.trackingRecord === undefined
@@ -883,8 +892,9 @@ const prepareUpdateRunDefinition = ({
         continue;
       }
 
+      const updatedAt = yield* DateTime.nowAsDate;
       yield* store.upsertItemState(
-        makeUpdateRunNeedsUpdateState(itemState, runId)
+        makeUpdateRunNeedsUpdateState(itemState, runId, updatedAt)
       );
     }
 
@@ -961,6 +971,7 @@ const makeFailedStubReferenceState = ({
   previousState,
   runId,
   sourceIdentity,
+  updatedAt,
 }: {
   readonly definitionId: MigrationDefinitionId;
   readonly error: MigrationItemError;
@@ -968,6 +979,7 @@ const makeFailedStubReferenceState = ({
   readonly previousState: MigrationItemState | null;
   readonly runId: MigrationRunId;
   readonly sourceIdentity: SourceIdentityValue;
+  readonly updatedAt: Date;
 }): FailedItemState => {
   const preservedJournal = previousState?.journal ?? journal;
   const trackingRecord = previousTrackingRecord(previousState);
@@ -986,7 +998,7 @@ const makeFailedStubReferenceState = ({
       : { sourceVersion: previousState.sourceVersion }),
     ...(preservedJournal === undefined ? {} : { journal: preservedJournal }),
     lastRunId: runId,
-    updatedAt: new Date(),
+    updatedAt,
     status: "failed",
     error,
     ...(trackingRecord === undefined ? {} : { trackingRecord }),
@@ -1000,6 +1012,7 @@ const makeNeedsUpdateStubReferenceState = ({
   runId,
   sourceIdentity,
   trackingRecord,
+  updatedAt,
 }: {
   readonly definitionId: MigrationDefinitionId;
   readonly journal?: NeedsUpdateItemState["journal"];
@@ -1007,6 +1020,7 @@ const makeNeedsUpdateStubReferenceState = ({
   readonly runId: MigrationRunId;
   readonly sourceIdentity: SourceIdentityValue;
   readonly trackingRecord?: TrackingRecord;
+  readonly updatedAt: Date;
 }): NeedsUpdateItemState => {
   const resolvedTrackingRecord =
     trackingRecord ?? previousTrackingRecord(previousState);
@@ -1025,7 +1039,7 @@ const makeNeedsUpdateStubReferenceState = ({
       : { sourceVersion: previousState.sourceVersion }),
     ...(journal === undefined ? {} : { journal }),
     lastRunId: runId,
-    updatedAt: new Date(),
+    updatedAt,
     reason: "Migration Reference Stub requires update",
     status: "needs-update",
     ...(resolvedTrackingRecord === undefined
@@ -1148,7 +1162,8 @@ const makeSourceLookupFailedItemState = (
   definitionId: MigrationDefinitionId,
   runId: MigrationRunId,
   previousState: MigrationItemState,
-  error: unknown
+  error: unknown,
+  updatedAt: Date
 ): FailedItemState => {
   const trackingRecord = previousTrackingRecord(previousState);
 
@@ -1165,7 +1180,7 @@ const makeSourceLookupFailedItemState = (
       ? {}
       : { sourceVersion: previousState.sourceVersion }),
     lastRunId: runId,
-    updatedAt: new Date(),
+    updatedAt,
     status: "failed",
     error: normalizeItemError("source", error),
     ...(previousState.journal === undefined
@@ -1366,10 +1381,11 @@ const appendFailedRollbackAttempt = (
 ): Effect.Effect<MigrationItemState> =>
   Effect.gen(function* () {
     const rollbackJournal = yield* tracking.snapshot;
+    const failedAt = yield* DateTime.nowAsDate;
     const rollbackAttempt: DestinationRollbackAttemptJournalSegment = {
       entries: rollbackJournal?.entries ?? [],
       error,
-      failedAt: new Date(),
+      failedAt,
       runId,
     };
 
@@ -1586,12 +1602,14 @@ const processTargetedSourceIdentities = <
               return yield* lookup.error;
             }
 
+            const updatedAt = yield* DateTime.nowAsDate;
             yield* store.upsertItemState(
               makeSourceLookupFailedItemState(
                 definition.id,
                 runId,
                 previousState,
-                lookup.error
+                lookup.error,
+                updatedAt
               )
             );
             const outcome = "failed" as const;
@@ -1845,6 +1863,7 @@ const processStubSourceIdentity = ({
       sourceIdentity,
       previousState
     );
+    const updatedAt = yield* DateTime.nowAsDate;
 
     if (stubOutcome.kind === "failed") {
       yield* store.upsertItemState(
@@ -1857,6 +1876,7 @@ const processStubSourceIdentity = ({
           previousState,
           runId,
           sourceIdentity: sourceIdentitySnapshot,
+          updatedAt,
         })
       );
 
@@ -1872,6 +1892,7 @@ const processStubSourceIdentity = ({
       runId,
       sourceIdentity: sourceIdentitySnapshot,
       trackingRecord: stubOutcome.trackingRecord,
+      updatedAt,
     });
     yield* store.upsertItemState(state);
 
@@ -2899,7 +2920,7 @@ const executePlannedRollbackDefinitions = <
     return {
       kind: "rollback" as const,
       definitions: run.value,
-      finishedAt: run.completedRun.finishedAt ?? new Date(),
+      finishedAt: run.completedRun.finishedAt ?? (yield* DateTime.nowAsDate),
       runId: run.runState.runId,
       startedAt: run.runState.startedAt,
       status: rollbackStatusForDefinitions(run.value),
@@ -3000,7 +3021,7 @@ const executePlannedRunDefinitions = <
       runId: run.runState.runId,
       status: run.status,
       startedAt: run.runState.startedAt,
-      finishedAt: run.completedRun.finishedAt ?? new Date(),
+      finishedAt: run.completedRun.finishedAt ?? (yield* DateTime.nowAsDate),
       definitions: run.value,
     };
   });

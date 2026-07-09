@@ -9,7 +9,7 @@ import { completedInlineExecution } from "../inline-execution.ts";
 import { JsonPlaceholderPostSource } from "./json-placeholder-source.ts";
 
 export const PostEntryFields = Schema.Struct({
-  authorId: Schema.Number,
+  authorId: Schema.Finite,
   body: Schema.String,
   title: Schema.String,
 });

@@ -1,4 +1,4 @@
-import { Effect, Layer, Predicate, Schema } from "effect";
+import { DateTime, Effect, Layer, Predicate, Schema } from "effect";
 import type {
   MigrationDefinition,
   SourcePayloadSchema,
@@ -101,7 +101,8 @@ interface SourceVersionContractContext {
 const makeItemStateBase = <Payload>(
   sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
-  sourceItem: SourceItem<Payload>
+  sourceItem: SourceItem<Payload>,
+  updatedAt: Date
 ): MigrationItemStateBase & { readonly sourceVersion: SourceVersion } => ({
   definitionId: sourceVersionContractContext.definitionId,
   sourceIdentity: sourceItem.identity,
@@ -109,7 +110,7 @@ const makeItemStateBase = <Payload>(
     sourceVersionContractContext.sourceVersionContractFingerprint,
   sourceVersion: sourceItem.version,
   lastRunId: runId,
-  updatedAt: new Date(),
+  updatedAt,
 });
 
 const previousTrackingRecord = (
@@ -123,6 +124,7 @@ const makeSkippedItemState = <Payload>(
   sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Payload>,
+  updatedAt: Date,
   reason: string,
   previousState: MigrationItemState | null = null,
   journal?: SkippedItemState["journal"]
@@ -131,7 +133,12 @@ const makeSkippedItemState = <Payload>(
   const trackingRecord = previousTrackingRecord(previousState);
 
   return {
-    ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
+    ...makeItemStateBase(
+      sourceVersionContractContext,
+      runId,
+      sourceItem,
+      updatedAt
+    ),
     ...(preservedJournal === undefined ? {} : { journal: preservedJournal }),
     status: "skipped",
     skipReason: reason,
@@ -143,6 +150,7 @@ const makeFailedItemState = <Payload>(
   sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Payload>,
+  updatedAt: Date,
   error: MigrationItemError,
   previousState: MigrationItemState | null = null,
   journal?: FailedItemState["journal"]
@@ -151,7 +159,12 @@ const makeFailedItemState = <Payload>(
   const trackingRecord = previousTrackingRecord(previousState);
 
   return {
-    ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
+    ...makeItemStateBase(
+      sourceVersionContractContext,
+      runId,
+      sourceItem,
+      updatedAt
+    ),
     ...(preservedJournal === undefined ? {} : { journal: preservedJournal }),
     status: "failed",
     error,
@@ -163,12 +176,18 @@ const makeMigratedItemState = <Payload>(
   sourceVersionContractContext: SourceVersionContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Payload>,
+  updatedAt: Date,
   result: {
     readonly journal?: MigratedItemState["journal"];
     readonly trackingRecord?: MigratedItemState["trackingRecord"];
   }
 ): MigratedItemState => ({
-  ...makeItemStateBase(sourceVersionContractContext, runId, sourceItem),
+  ...makeItemStateBase(
+    sourceVersionContractContext,
+    runId,
+    sourceItem,
+    updatedAt
+  ),
   status: "migrated",
   ...(result.journal === undefined ? {} : { journal: result.journal }),
   ...(result.trackingRecord === undefined
@@ -250,18 +269,21 @@ const resolveProcessTrackingRecord = <Payload>({
       trackingRecords
     ).pipe(
       Effect.catch((error) =>
-        store
-          .upsertItemState(
+        Effect.gen(function* () {
+          const updatedAt = yield* DateTime.nowAsDate;
+          yield* store.upsertItemState(
             makeFailedItemState(
               sourceVersionContractContext,
               runId,
               decodedSourceItem,
+              updatedAt,
               error,
               previousState,
               processJournal
             )
-          )
-          .pipe(Effect.as(null))
+          );
+          return null;
+        })
       )
     );
   });
@@ -282,35 +304,38 @@ const persistProcessOutcome = <Payload>({
   readonly runId: MigrationRunId;
   readonly sourceVersionContractContext: SourceVersionContractContext;
   readonly store: typeof MigrationStore.Service;
-}) => {
-  if (outcome.kind === "skipped") {
-    return store
-      .upsertItemState(
+}) =>
+  Effect.gen(function* () {
+    const updatedAt = yield* DateTime.nowAsDate;
+
+    if (outcome.kind === "skipped") {
+      yield* store.upsertItemState(
         makeSkippedItemState(
           sourceVersionContractContext,
           runId,
           decodedSourceItem,
+          updatedAt,
           outcome.reason,
           previousState,
           processJournal
         )
-      )
-      .pipe(Effect.as("skipped" as const));
-  }
+      );
+      return "skipped" as const;
+    }
 
-  return store
-    .upsertItemState(
+    yield* store.upsertItemState(
       makeFailedItemState(
         sourceVersionContractContext,
         runId,
         decodedSourceItem,
+        updatedAt,
         outcome.error,
         previousState,
         processJournal
       )
-    )
-    .pipe(Effect.as("failed" as const));
-};
+    );
+    return "failed" as const;
+  });
 
 const isUnchangedTerminalState = <
   Payload,
@@ -368,17 +393,20 @@ const decodeSourceItemOrPersistFailure = <
 > =>
   decodeSourceItem(sourceSchema, sourceItem).pipe(
     Effect.catch((error) =>
-      store
-        .upsertItemState(
+      Effect.gen(function* () {
+        const updatedAt = yield* DateTime.nowAsDate;
+        yield* store.upsertItemState(
           makeFailedItemState(
             sourceVersionContractContext,
             runId,
             sourceItem,
+            updatedAt,
             normalizeSourcePayloadSchemaError(error),
             previousState
           )
-        )
-        .pipe(Effect.as(null))
+        );
+        return null;
+      })
     )
   );
 
@@ -519,11 +547,13 @@ const processWithProcessPipeline = <
       return "failed" as const;
     }
 
+    const updatedAt = yield* DateTime.nowAsDate;
     yield* store.upsertItemState(
       makeMigratedItemState(
         sourceVersionContractContext,
         runId,
         decodedSourceItem,
+        updatedAt,
         {
           ...(processJournal === undefined ? {} : { journal: processJournal }),
           ...(trackingRecord === undefined ? {} : { trackingRecord }),
@@ -606,17 +636,20 @@ export const processSourceItem = <
             definition.tracking
           ).pipe(
             Effect.catch((error) =>
-              store
-                .upsertItemState(
+              Effect.gen(function* () {
+                const updatedAt = yield* DateTime.nowAsDate;
+                yield* store.upsertItemState(
                   makeFailedItemState(
                     sourceVersionContractContext,
                     runId,
                     decodedSourceItem,
+                    updatedAt,
                     error,
                     previousState
                   )
-                )
-                .pipe(Effect.as(null))
+                );
+                return null;
+              })
             )
           );
 

@@ -10,6 +10,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "sourceMap": true,
+    "types": ["node"],
     "verbatimModuleSyntax": true,
     "rewriteRelativeImportExtensions": true,
     "plugins": [

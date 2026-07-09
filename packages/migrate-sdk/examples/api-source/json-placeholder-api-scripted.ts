@@ -134,12 +134,10 @@ export const scriptedJsonPlaceholderApiLayer = (
           Effect.sleep(delay).pipe(Effect.as(post))
         );
       }),
-      listPostIds: Effect.fn("JsonPlaceholderApi.scripted.listPostIds")(
-        function* () {
-          state.listCalls += 1;
+      listPostIds: Effect.gen(function* () {
+        state.listCalls += 1;
 
-          return defaultPosts.map((post) => post.id);
-        }
-      ),
+        return defaultPosts.map((post) => post.id);
+      }).pipe(Effect.withSpan("JsonPlaceholderApi.scripted.listPostIds")),
     };
   });

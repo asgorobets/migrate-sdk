@@ -626,6 +626,8 @@ describe("runInlineDefinition", () => {
 
   it.effect("runs one Source Item through in-memory runtime", () =>
     Effect.gen(function* () {
+      const updatedAt = new Date("2026-01-01T00:00:00.000Z");
+      yield* TestClock.setTime(updatedAt.getTime());
       const destination = InMemoryDestination.makeEntries({
         contentType: "article",
         fields: ArticleEntryFields,
@@ -675,6 +677,7 @@ describe("runInlineDefinition", () => {
           status: "migrated",
           sourceVersion: "source-version-1",
           lastRunId: summary.runId,
+          updatedAt,
           journal: {
             process: {
               entries: [
