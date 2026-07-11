@@ -668,9 +668,10 @@ describe("CommercetoolsDestination", () => {
           throw new Error("Expected store product selection assignment entry");
         }
 
-        const assignedEntry = yield* ct.stores.changes.productSelectionAssigned
-          .decode(rawAssignedEntry)
-          .pipe(Effect.map((entry) => entry.value));
+        const assignedEntry =
+          yield* ct.stores.changes.productSelectionAssigned.decode(
+            rawAssignedEntry
+          );
 
         expect(summary.status).toBe("succeeded");
         expect(sdk.requests.map((request) => request.operation)).toEqual([
@@ -1004,7 +1005,7 @@ describe("CommercetoolsDestination", () => {
           ct.productSelections.changes.created.id,
           ct.productSelections.changes.updated.id,
         ]);
-        expect(assignedEntry).toMatchObject({
+        expect(assignedEntry.value).toMatchObject({
           facts: {
             productSelectionKey: "product-selection-1",
           },
@@ -1014,8 +1015,8 @@ describe("CommercetoolsDestination", () => {
             key: "store-1",
             kind: "key",
           },
-          sourceIdentity: "source-1",
         });
+        expect(assignedEntry).not.toHaveProperty("sourceIdentity");
         expect(JSON.stringify(journalEntries)).not.toContain("masterData");
         expect(JSON.stringify(journalEntries)).not.toContain(
           "customer@example.com"
@@ -1148,7 +1149,6 @@ describe("CommercetoolsDestination", () => {
               operation: "productSelections.create",
               productSelectionKey: "source-1",
               resourceType: "product-selection",
-              sourceIdentity: "source-1",
               statusCode: 503,
             },
             kind: "diagnostic",
@@ -1216,7 +1216,6 @@ describe("CommercetoolsDestination", () => {
               customerKey: "customer-1",
               operation: "customers.create",
               resourceType: "customer",
-              sourceIdentity: "source-1",
               statusCode: 409,
             },
             kind: "diagnostic",

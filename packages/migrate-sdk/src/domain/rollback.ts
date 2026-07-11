@@ -20,7 +20,8 @@ import {
   MigrationRunId,
   toMigrationDefinitionId,
 } from "./ids.ts";
-import type { MigrationItemState } from "./state.ts";
+import type { MigrationItemState, MigrationItemStateFor } from "./state.ts";
+import type { TrackingRecordContract } from "./tracking.ts";
 
 export interface RollbackContext {
   readonly definitionId: MigrationDefinitionId;
@@ -39,6 +40,11 @@ export type RollbackPipeline<
   state: ItemState,
   context: RollbackContext
 ) => void | Effect.Effect<void, RollbackError, Tracking>;
+
+export type RollbackPipelineFor<
+  TrackingContract extends TrackingRecordContract,
+  RollbackError = never,
+> = RollbackPipeline<RollbackError, MigrationItemStateFor<TrackingContract>>;
 
 export type AnyRollbackMigrationDefinition = AnyMigrationDefinitionShape;
 

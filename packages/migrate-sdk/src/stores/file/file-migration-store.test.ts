@@ -12,6 +12,7 @@ import {
 import { FileMigrationStore } from "migrate-sdk/stores/file";
 import { makeSourceVersionContractFingerprint } from "../../domain/migration-contract.ts";
 import {
+  DestinationChangeDescriptorId,
   MigrationDefinition,
   MigrationStore,
   Source,
@@ -375,7 +376,19 @@ describe("FileMigrationStore", () => {
             definitionId,
             journal: {
               process: {
-                entries: [],
+                entries: [
+                  {
+                    descriptorId: DestinationChangeDescriptorId.make(
+                      "in-memory.entry.article.upserted"
+                    ),
+                    kind: "change" as const,
+                    sequence: 0,
+                    value: {
+                      contentType: "article",
+                      entryId: "entry:article:article-rollback-failed",
+                    },
+                  },
+                ],
                 runId: toMigrationRunId("run-process"),
               },
               rollbackAttempts: [

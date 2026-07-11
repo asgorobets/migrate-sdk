@@ -23,8 +23,6 @@ import {
   DestinationChangeDescriptor,
   type DestinationChangeDescriptorType,
   type DestinationError,
-  type EncodedSourceIdentity,
-  EncodedSourceIdentity as EncodedSourceIdentitySchema,
   Tracking,
 } from "migrate-sdk";
 import {
@@ -121,7 +119,6 @@ export interface CommercetoolsResourceChange {
   readonly resourceType: CommercetoolsResourceType;
   readonly resourceVersion: number;
   readonly selector: CommercetoolsChangeSelector | null;
-  readonly sourceIdentity: EncodedSourceIdentity;
   readonly [key: string]: Schema.Json;
 }
 
@@ -386,7 +383,6 @@ const CommercetoolsResourceChangeSchema = Schema.Struct({
   ]),
   resourceVersion: Schema.Number,
   selector: Schema.NullOr(ChangeSelectorSchema),
-  sourceIdentity: EncodedSourceIdentitySchema,
 });
 
 const descriptor = (id: string) =>
@@ -481,7 +477,6 @@ const requestFailureDetails = (
     readonly resourceType: CommercetoolsResourceType;
     readonly safeFacts?: Schema.JsonObject;
     readonly selector?: CommercetoolsResourceSelector | undefined;
-    readonly sourceIdentity: EncodedSourceIdentity;
   },
   cause: CommercetoolsSdkError
 ): Schema.JsonObject => ({
@@ -490,7 +485,6 @@ const requestFailureDetails = (
   ...selectorFacts(input.selector),
   ...diagnosticField("statusCode", statusCodeFromCause(cause.cause)),
   ...(input.safeFacts ?? {}),
-  sourceIdentity: input.sourceIdentity,
 });
 
 const runSdkRequest = <A>(input: {
@@ -500,7 +494,6 @@ const runSdkRequest = <A>(input: {
   readonly resourceType: CommercetoolsResourceType;
   readonly safeFacts?: Schema.JsonObject;
   readonly selector?: CommercetoolsResourceSelector | undefined;
-  readonly sourceIdentity: EncodedSourceIdentity;
 }): Effect.Effect<A, DestinationError | Schema.SchemaError, Tracking> =>
   input.request.pipe(
     Effect.catch((cause) =>
@@ -520,7 +513,6 @@ const resourceChange = (input: {
   readonly resourceType: CommercetoolsResourceType;
   readonly resourceVersion: number;
   readonly selector?: CommercetoolsResourceSelector | undefined;
-  readonly sourceIdentity: EncodedSourceIdentity;
 }): CommercetoolsResourceChange => ({
   facts: input.facts ?? {},
   operation: input.operation,
@@ -529,7 +521,6 @@ const resourceChange = (input: {
   resourceType: input.resourceType,
   resourceVersion: input.resourceVersion,
   selector: selectorValue(input.selector),
-  sourceIdentity: input.sourceIdentity,
 });
 
 const recordResourceChange = (
@@ -540,7 +531,6 @@ const recordResourceChange = (
 const createProduct = Effect.fn("CommercetoolsDestination.products.create")(
   function* (draft: ProductDraftInput) {
     const sdk = yield* CommercetoolsSdk;
-    const context = yield* Tracking.currentContext;
     const product = yield* runSdkRequest({
       message: "Commercetools product create failed",
       operation: "products.create",
@@ -556,7 +546,6 @@ const createProduct = Effect.fn("CommercetoolsDestination.products.create")(
       safeFacts: {
         productKey: draft.key ?? null,
       },
-      sourceIdentity: context.sourceIdentity,
     });
 
     yield* recordResourceChange(
@@ -570,7 +559,6 @@ const createProduct = Effect.fn("CommercetoolsDestination.products.create")(
         resourceKey: product.key ?? null,
         resourceType: "product",
         resourceVersion: product.version,
-        sourceIdentity: context.sourceIdentity,
       })
     );
 
@@ -585,7 +573,6 @@ const updateProduct = Effect.fn("CommercetoolsDestination.products.update")(
       { errors: "all" }
     )(input);
     const sdk = yield* CommercetoolsSdk;
-    const context = yield* Tracking.currentContext;
     const body: ProductUpdate = {
       actions: [...update.actions],
       version: update.version,
@@ -604,7 +591,6 @@ const updateProduct = Effect.fn("CommercetoolsDestination.products.update")(
       }),
       resourceType: "product",
       selector: update.selector,
-      sourceIdentity: context.sourceIdentity,
     });
 
     yield* recordResourceChange(
@@ -619,7 +605,6 @@ const updateProduct = Effect.fn("CommercetoolsDestination.products.update")(
         resourceType: "product",
         resourceVersion: product.version,
         selector: update.selector,
-        sourceIdentity: context.sourceIdentity,
       })
     );
 
@@ -631,7 +616,6 @@ const createInventoryEntry = Effect.fn(
   "CommercetoolsDestination.inventory.create"
 )(function* (draft: InventoryEntryDraft) {
   const sdk = yield* CommercetoolsSdk;
-  const context = yield* Tracking.currentContext;
   const inventoryEntry = yield* runSdkRequest({
     message: "Commercetools inventory entry create failed",
     operation: "inventory.create",
@@ -644,7 +628,6 @@ const createInventoryEntry = Effect.fn(
     safeFacts: {
       sku: draft.sku,
     },
-    sourceIdentity: context.sourceIdentity,
   });
 
   yield* recordResourceChange(
@@ -658,7 +641,6 @@ const createInventoryEntry = Effect.fn(
       resourceKey: inventoryEntry.key ?? null,
       resourceType: "inventory-entry",
       resourceVersion: inventoryEntry.version,
-      sourceIdentity: context.sourceIdentity,
     })
   );
 
@@ -675,7 +657,6 @@ const updateInventoryEntry = Effect.fn(
     { errors: "all" }
   )(input);
   const sdk = yield* CommercetoolsSdk;
-  const context = yield* Tracking.currentContext;
   const body: InventoryEntryUpdate = {
     actions: [...update.actions],
     version: update.version,
@@ -694,7 +675,6 @@ const updateInventoryEntry = Effect.fn(
     }),
     resourceType: "inventory-entry",
     selector: update.selector,
-    sourceIdentity: context.sourceIdentity,
   });
 
   yield* recordResourceChange(
@@ -709,7 +689,6 @@ const updateInventoryEntry = Effect.fn(
       resourceType: "inventory-entry",
       resourceVersion: inventoryEntry.version,
       selector: update.selector,
-      sourceIdentity: context.sourceIdentity,
     })
   );
 
@@ -719,7 +698,6 @@ const updateInventoryEntry = Effect.fn(
 const createCustomer = Effect.fn("CommercetoolsDestination.customers.create")(
   function* (draft: CustomerDraft) {
     const sdk = yield* CommercetoolsSdk;
-    const context = yield* Tracking.currentContext;
     const result = yield* runSdkRequest<CustomerSignInResult>({
       message: "Commercetools customer create failed",
       operation: "customers.create",
@@ -732,7 +710,6 @@ const createCustomer = Effect.fn("CommercetoolsDestination.customers.create")(
       safeFacts: {
         customerKey: draft.key ?? null,
       },
-      sourceIdentity: context.sourceIdentity,
     });
     const customer = result.customer;
 
@@ -747,7 +724,6 @@ const createCustomer = Effect.fn("CommercetoolsDestination.customers.create")(
         resourceKey: customer.key ?? null,
         resourceType: "customer",
         resourceVersion: customer.version,
-        sourceIdentity: context.sourceIdentity,
       })
     );
 
@@ -762,7 +738,6 @@ const updateCustomer = Effect.fn("CommercetoolsDestination.customers.update")(
       { errors: "all" }
     )(input);
     const sdk = yield* CommercetoolsSdk;
-    const context = yield* Tracking.currentContext;
     const body: CustomerUpdate = {
       actions: [...update.actions],
       version: update.version,
@@ -781,7 +756,6 @@ const updateCustomer = Effect.fn("CommercetoolsDestination.customers.update")(
       }),
       resourceType: "customer",
       selector: update.selector,
-      sourceIdentity: context.sourceIdentity,
     });
 
     yield* recordResourceChange(
@@ -796,7 +770,6 @@ const updateCustomer = Effect.fn("CommercetoolsDestination.customers.update")(
         resourceType: "customer",
         resourceVersion: customer.version,
         selector: update.selector,
-        sourceIdentity: context.sourceIdentity,
       })
     );
 
@@ -808,7 +781,6 @@ const createBusinessUnit = Effect.fn(
   "CommercetoolsDestination.businessUnits.create"
 )(function* (draft: BusinessUnitDraft) {
   const sdk = yield* CommercetoolsSdk;
-  const context = yield* Tracking.currentContext;
   const businessUnit = yield* runSdkRequest({
     message: "Commercetools business unit create failed",
     operation: "businessUnits.create",
@@ -822,7 +794,6 @@ const createBusinessUnit = Effect.fn(
       businessUnitKey: draft.key,
       unitType: draft.unitType,
     },
-    sourceIdentity: context.sourceIdentity,
   });
 
   yield* recordResourceChange(
@@ -836,7 +807,6 @@ const createBusinessUnit = Effect.fn(
       resourceKey: businessUnit.key,
       resourceType: "business-unit",
       resourceVersion: businessUnit.version,
-      sourceIdentity: context.sourceIdentity,
     })
   );
 
@@ -853,7 +823,6 @@ const updateBusinessUnit = Effect.fn(
     { errors: "all" }
   )(input);
   const sdk = yield* CommercetoolsSdk;
-  const context = yield* Tracking.currentContext;
   const body: BusinessUnitUpdate = {
     actions: [...update.actions],
     version: update.version,
@@ -872,7 +841,6 @@ const updateBusinessUnit = Effect.fn(
     }),
     resourceType: "business-unit",
     selector: update.selector,
-    sourceIdentity: context.sourceIdentity,
   });
 
   yield* recordResourceChange(
@@ -887,7 +855,6 @@ const updateBusinessUnit = Effect.fn(
       resourceType: "business-unit",
       resourceVersion: businessUnit.version,
       selector: update.selector,
-      sourceIdentity: context.sourceIdentity,
     })
   );
 
@@ -897,7 +864,6 @@ const updateBusinessUnit = Effect.fn(
 const createStore = Effect.fn("CommercetoolsDestination.stores.create")(
   function* (draft: StoreDraft) {
     const sdk = yield* CommercetoolsSdk;
-    const context = yield* Tracking.currentContext;
     const store = yield* runSdkRequest({
       message: "Commercetools store create failed",
       operation: "stores.create",
@@ -910,7 +876,6 @@ const createStore = Effect.fn("CommercetoolsDestination.stores.create")(
       safeFacts: {
         storeKey: draft.key,
       },
-      sourceIdentity: context.sourceIdentity,
     });
 
     yield* recordResourceChange(
@@ -924,7 +889,6 @@ const createStore = Effect.fn("CommercetoolsDestination.stores.create")(
         resourceKey: store.key,
         resourceType: "store",
         resourceVersion: store.version,
-        sourceIdentity: context.sourceIdentity,
       })
     );
 
@@ -943,7 +907,6 @@ const updateStoreWithActions = Effect.fn(
   readonly version: number;
 }) {
   const sdk = yield* CommercetoolsSdk;
-  const context = yield* Tracking.currentContext;
   const body: StoreUpdate = {
     actions: [...input.actions],
     version: input.version,
@@ -962,7 +925,6 @@ const updateStoreWithActions = Effect.fn(
     }),
     resourceType: "store",
     selector: input.selector,
-    sourceIdentity: context.sourceIdentity,
   });
 
   yield* recordResourceChange(
@@ -978,7 +940,6 @@ const updateStoreWithActions = Effect.fn(
       resourceType: "store",
       resourceVersion: store.version,
       selector: input.selector,
-      sourceIdentity: context.sourceIdentity,
     })
   );
 
@@ -1063,7 +1024,6 @@ const createProductSelection = Effect.fn(
   "CommercetoolsDestination.productSelections.create"
 )(function* (draft: ProductSelectionDraft) {
   const sdk = yield* CommercetoolsSdk;
-  const context = yield* Tracking.currentContext;
   const productSelection = yield* runSdkRequest({
     message: "Commercetools product selection create failed",
     operation: "productSelections.create",
@@ -1076,7 +1036,6 @@ const createProductSelection = Effect.fn(
     safeFacts: {
       productSelectionKey: draft.key ?? null,
     },
-    sourceIdentity: context.sourceIdentity,
   });
 
   yield* recordResourceChange(
@@ -1090,7 +1049,6 @@ const createProductSelection = Effect.fn(
       resourceKey: productSelection.key ?? null,
       resourceType: "product-selection",
       resourceVersion: productSelection.version,
-      sourceIdentity: context.sourceIdentity,
     })
   );
 
@@ -1107,7 +1065,6 @@ const updateProductSelection = Effect.fn(
     { errors: "all" }
   )(input);
   const sdk = yield* CommercetoolsSdk;
-  const context = yield* Tracking.currentContext;
   const body: ProductSelectionUpdate = {
     actions: [...update.actions],
     version: update.version,
@@ -1126,7 +1083,6 @@ const updateProductSelection = Effect.fn(
     }),
     resourceType: "product-selection",
     selector: update.selector,
-    sourceIdentity: context.sourceIdentity,
   });
 
   yield* recordResourceChange(
@@ -1141,7 +1097,6 @@ const updateProductSelection = Effect.fn(
       resourceType: "product-selection",
       resourceVersion: productSelection.version,
       selector: update.selector,
-      sourceIdentity: context.sourceIdentity,
     })
   );
 

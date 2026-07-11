@@ -5,19 +5,20 @@ import {
   MigrationDefinition,
   type MigrationDefinitionId,
   type MigrationItemState,
-  type MigrationItemStateWithTrackingRecord,
+  type MigrationItemStateFor,
   type MigrationRunId,
   type MigrationStore,
   type MigrationStoreError,
   type RollbackContext,
   type RollbackDefinitionRunSummary,
   type RollbackPipeline,
+  type RollbackPipelineFor,
   RollbackPreflightError,
   RollbackRequestError,
   RollbackRunSummary,
   type SourceIdentitySnapshotKey,
-  type TrackingRecord,
   TrackingRecordContract,
+  type TrackingRecordFor,
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "migrate-sdk";
@@ -37,7 +38,7 @@ const ArticleSource = Schema.Struct({
 type ArticleSource = typeof ArticleSource.Type;
 const ArticleTrackingRecord = Schema.Struct({
   entryId: Schema.String,
-  locale: Schema.String,
+  views: Schema.NumberFromString,
 });
 type ArticleTrackingRecord = typeof ArticleTrackingRecord.Type;
 
@@ -51,9 +52,8 @@ const articleTracking = TrackingRecordContract.make({
   id: "article-tracking",
   schema: ArticleTrackingRecord,
 });
-const articleRollbackPipeline: RollbackPipeline<
-  never,
-  MigrationItemStateWithTrackingRecord<ArticleTrackingRecord>
+const articleRollbackPipeline: RollbackPipelineFor<
+  typeof articleTracking
 > = () => Effect.void;
 
 describe("rollback public API", () => {
@@ -149,6 +149,15 @@ describe("rollback public API", () => {
     expect(definition.rollback).toBeDefined();
   });
 
+  it("derives reusable callback state from the tracking contract", () => {
+    expectTypeOf<
+      TrackingRecordFor<typeof articleTracking>
+    >().toEqualTypeOf<ArticleTrackingRecord>();
+    expectTypeOf<Parameters<typeof articleRollbackPipeline>[0]>().toEqualTypeOf<
+      MigrationItemStateFor<typeof articleTracking>
+    >();
+  });
+
   it.effect("schema-round-trips rollback summaries", () =>
     Effect.gen(function* () {
       const summary: RollbackRunSummary = {
@@ -214,10 +223,8 @@ expectTypeOf<Parameters<RollbackPipeline>[0]>().toEqualTypeOf<
 const effectVoidRollbackPipeline: RollbackPipeline = () => Effect.void;
 expectTypeOf(effectVoidRollbackPipeline).toEqualTypeOf<RollbackPipeline>();
 // @ts-expect-error RollbackPipeline item state parameters are intentionally strict.
-const genericRollbackPipeline: RollbackPipeline<
-  never,
-  MigrationItemStateWithTrackingRecord<TrackingRecord>
-> = articleRollbackPipeline;
+const _genericRollbackPipeline: RollbackPipeline<never> =
+  articleRollbackPipeline;
 expectTypeOf<RollbackContext>().toEqualTypeOf<{
   readonly definitionId: MigrationDefinitionId;
   readonly runId: MigrationRunId;

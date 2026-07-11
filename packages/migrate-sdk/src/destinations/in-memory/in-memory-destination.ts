@@ -1,12 +1,11 @@
 import { Effect, Schema } from "effect";
 import { DestinationError } from "../../domain/errors.ts";
 import type { EncodedSourceIdentity } from "../../domain/ids.ts";
-import { EncodedSourceIdentity as EncodedSourceIdentitySchema } from "../../domain/ids.ts";
 import {
   DestinationChangeDescriptor,
   type DestinationChangeDescriptor as DestinationChangeDescriptorType,
 } from "../../domain/tracking.ts";
-import { Tracking } from "../../services/tracking.ts";
+import { scopedSourceIdentity, Tracking } from "../../services/tracking.ts";
 
 export interface InMemoryDestinationTransientFailures {
   readonly execute?: number;
@@ -78,7 +77,6 @@ export interface InMemoryEntryUpsertedChange<
   readonly entryVersion: string;
   readonly fields: Fields;
   readonly published: boolean;
-  readonly sourceIdentity: EncodedSourceIdentity;
   readonly [key: string]: Schema.Json;
 }
 
@@ -218,14 +216,13 @@ const makeEntriesWithState = <
       entryVersion: Schema.String,
       fields: options.fields,
       published: Schema.Boolean,
-      sourceIdentity: EncodedSourceIdentitySchema,
     })
   );
 
   const upsert = Effect.fn("InMemoryDestination.entries.upsert")(function* (
     fields: Fields
   ) {
-    const context = yield* Tracking.currentContext;
+    const sourceIdentity = yield* scopedSourceIdentity;
     const decodedFields = yield* Schema.decodeUnknownEffect(options.fields, {
       errors: "all",
     })(fields);
@@ -240,13 +237,12 @@ const makeEntriesWithState = <
         details: {
           contentType: options.contentType,
           operation: "entries.upsert",
-          sourceIdentity: context.sourceIdentity,
         },
       });
       return yield* transientDestinationError();
     }
 
-    const key = inMemoryEntryKey(options.contentType, context.sourceIdentity);
+    const key = inMemoryEntryKey(options.contentType, sourceIdentity);
     const existing = state.entries.get(key);
     const entryId = existing?.entryId ?? `entry:${key}`;
     const entryVersion = nextEntryVersion(state);
@@ -256,7 +252,7 @@ const makeEntriesWithState = <
       entryVersion,
       fields: decodedFields,
       published: existing?.published ?? false,
-      sourceIdentity: context.sourceIdentity,
+      sourceIdentity,
     };
     const change: InMemoryEntryUpsertedChange<ContentType, Fields> = {
       contentType: options.contentType,
@@ -264,7 +260,6 @@ const makeEntriesWithState = <
       entryVersion,
       fields: decodedFields,
       published: entry.published,
-      sourceIdentity: context.sourceIdentity,
     };
 
     state.entries.set(key, entry);

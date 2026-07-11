@@ -387,7 +387,7 @@ interface MigrationDefinitionRollbackPlan {
   readonly includedDefinitionIds: readonly MigrationDefinitionId[];
   readonly executionDefinitionIds: readonly MigrationDefinitionId[];
   readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
-  readonly definitions: readonly AnyRollbackMigrationDefinition[];
+  readonly definitions: ReturnType<MigrationDefinitionRegistry["definitions"]>;
   readonly target?: MigrationDefinitionPlanTarget;
   readonly notices: readonly MigrationDefinitionPlanNotice[];
   readonly withDependencies: boolean;

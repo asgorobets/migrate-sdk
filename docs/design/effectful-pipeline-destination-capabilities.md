@@ -299,15 +299,15 @@ const itemProgram = Effect.gen(function* () {
     trackingState,
   })
 }).pipe(
-  Effect.provide(Tracking.layerProcessScope()),
+  Effect.provide(runtimeTrackingLayer),
   Effect.provide(MigrationItemContext.layer(sourceItem))
 )
 ```
 
 The exact implementation can differ, but the ownership boundary should hold:
-the user process executes effects; the runtime owns item state persistence and
-journal capture. Detailed tracking evaluation is delegated to the sibling
-tracking spec.
+the user process executes effects; the runtime owns construction of
+`runtimeTrackingLayer`, item state persistence, and journal capture. Detailed
+tracking evaluation is delegated to the sibling tracking spec.
 
 ## Open Questions
 

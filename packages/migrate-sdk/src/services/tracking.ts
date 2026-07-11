@@ -1,11 +1,6 @@
-import { Effect, Layer, Ref, Schema } from "effect";
+import { Effect, Ref, Schema } from "effect";
 import { Service } from "effect/Context";
-import type {
-  EncodedSourceIdentity,
-  MigrationDefinitionId,
-  MigrationRunId,
-  SourceVersion,
-} from "../domain/ids.ts";
+import type { EncodedSourceIdentity, MigrationRunId } from "../domain/ids.ts";
 import type {
   DestinationChangeDescriptor,
   DestinationChangeValue,
@@ -22,11 +17,9 @@ import {
   TrackingRecordContract,
 } from "../domain/tracking.ts";
 
-export interface TrackingProcessContext {
-  readonly definitionId: MigrationDefinitionId;
+interface TrackingProcessContext {
   readonly runId: MigrationRunId;
   readonly sourceIdentity: EncodedSourceIdentity;
-  readonly sourceVersion?: SourceVersion;
 }
 
 interface TrackingState {
@@ -58,8 +51,7 @@ const logDiagnosticEvent = (entry: DestinationJournalDiagnosticEntry) =>
     ...(entry.details === undefined ? [] : [entry.details])
   );
 
-export interface TrackingService {
-  readonly context: TrackingProcessContext;
+interface TrackingService {
   readonly logDiagnostic: (
     input: DestinationJournalDiagnosticInput
   ) => Effect.Effect<DestinationJournalDiagnosticEntry, Schema.SchemaError>;
@@ -70,21 +62,25 @@ export interface TrackingService {
     descriptor: DestinationChangeDescriptor<Value, Encoded>,
     value: Value
   ) => Effect.Effect<DestinationJournalChangeEntry<Value>, Schema.SchemaError>;
-  readonly records: Effect.Effect<readonly TrackingRecordValue[]>;
   readonly setRecord: <Value extends TrackingRecordValue>(
     value: Value
   ) => Effect.Effect<void>;
+}
+
+export interface TrackingProcessScope {
+  readonly records: Effect.Effect<readonly TrackingRecordValue[]>;
+  readonly service: TrackingService;
   readonly snapshot: Effect.Effect<DestinationJournalSegment | null>;
 }
+
+const scopedSourceIdentities = new WeakMap<
+  TrackingService,
+  EncodedSourceIdentity
+>();
 
 export class Tracking extends Service<Tracking, TrackingService>()(
   "@migrate-sdk/Tracking"
 ) {
-  static readonly currentContext = Effect.map(
-    Tracking,
-    (tracking) => tracking.context
-  );
-
   static readonly recordChange = <
     Value extends DestinationChangeValue,
     Encoded extends Schema.Json,
@@ -95,11 +91,6 @@ export class Tracking extends Service<Tracking, TrackingService>()(
     Effect.flatMap(Tracking, (tracking) =>
       tracking.recordChange(descriptor, value)
     );
-
-  static readonly snapshot = Effect.flatMap(
-    Tracking,
-    (tracking) => tracking.snapshot
-  );
 
   static readonly logDiagnostic = (input: DestinationJournalDiagnosticInput) =>
     Effect.flatMap(Tracking, (tracking) => tracking.logDiagnostic(input));
@@ -114,15 +105,11 @@ export class Tracking extends Service<Tracking, TrackingService>()(
   static readonly setRecord = <Value extends TrackingRecordValue>(
     value: Value
   ) => Effect.flatMap(Tracking, (tracking) => tracking.setRecord(value));
-
-  static readonly layerProcessScope = (
-    context: TrackingProcessContext
-  ): Layer.Layer<Tracking> => Layer.effect(Tracking, makeProcessScope(context));
 }
 
 export const makeProcessScope = (
   context: TrackingProcessContext
-): Effect.Effect<TrackingService> =>
+): Effect.Effect<TrackingProcessScope> =>
   Effect.gen(function* () {
     const stateRef = yield* Ref.make<TrackingState>({
       entries: [],
@@ -224,12 +211,29 @@ export const makeProcessScope = (
       )
     );
 
-    return {
-      context,
+    const service: TrackingService = {
       logDiagnostic,
       recordChange,
-      records,
       setRecord,
+    };
+
+    scopedSourceIdentities.set(service, context.sourceIdentity);
+
+    return {
+      records,
+      service,
       snapshot,
     };
   });
+
+export const scopedSourceIdentity = Effect.flatMap(Tracking, (tracking) => {
+  const sourceIdentity = scopedSourceIdentities.get(tracking);
+
+  return sourceIdentity === undefined
+    ? Effect.die(
+        new Error(
+          "Tracking source identity is only available inside a migration pipeline"
+        )
+      )
+    : Effect.succeed(sourceIdentity);
+});

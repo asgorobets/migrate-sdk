@@ -142,6 +142,9 @@ export type TrackingRecordForContract<
   ? Schema.Schema.Type<TrackingRecordSchema>
   : never;
 
+export type TrackingRecordFor<TrackingContract extends TrackingRecordContract> =
+  TrackingRecordForContract<TrackingContract>;
+
 export type MigrationItemStateWithTrackingRecord<
   Record extends TrackingRecordValue = TrackingRecord,
 > =
@@ -157,6 +160,10 @@ export type MigrationItemStateForTrackingContract<
       TrackingRecordForContract<TrackingContract>
     >
   : MigrationItemState;
+
+export type MigrationItemStateFor<
+  TrackingContract extends TrackingRecordContract,
+> = MigrationItemStateWithTrackingRecord<TrackingRecordFor<TrackingContract>>;
 
 export interface MigrationItemStateBase {
   readonly definitionId: MigrationDefinitionId;

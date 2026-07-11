@@ -8,7 +8,10 @@ import {
   Schema,
 } from "effect";
 import { Service } from "effect/Context";
-import type { MigrationDefinition } from "../domain/definition.ts";
+import type {
+  MigrationDefinition,
+  MigrationDefinitionTrackingContract,
+} from "../domain/definition.ts";
 import {
   MigrationReferenceLookupError,
   MigrationRuntimeError,
@@ -35,14 +38,15 @@ import type {
 import { SourceIdentity, toEncodedSourceCursor } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type {
-  ExecutableRollbackDefinition,
   MigrationDefinitionExecutableRollbackPlan,
   MigrationDefinitionExecutableRunPlan,
 } from "../domain/registry.ts";
 import type {
   AnyRollbackMigrationDefinition,
+  MigrationDefinitionRollbackPipelineError,
   RollbackContext,
   RollbackDefinitionRunSummary,
+  RollbackPipeline,
   RollbackRunSummary,
 } from "../domain/rollback.ts";
 import type {
@@ -62,6 +66,7 @@ import type {
   MigrationItemError,
   MigrationItemOutcome,
   MigrationItemState,
+  MigrationItemStateForTrackingContract,
   NeedsUpdateItemState,
 } from "../domain/state.ts";
 import type {
@@ -95,7 +100,7 @@ import type { SourceRuntime as SourceRuntimeContract } from "./source.ts";
 import {
   makeProcessScope,
   Tracking,
-  type TrackingService,
+  type TrackingProcessScope,
 } from "./tracking.ts";
 
 export type RunMigrationDefinitionError = SourceError | MigrationStoreError;
@@ -1063,8 +1068,7 @@ type TrackingStubOutcome =
 const executeTrackingStub = (
   definition: AnyMigrationDefinition,
   runId: MigrationRunId,
-  sourceIdentity: EncodedSourceIdentity,
-  previousState: MigrationItemState | null
+  sourceIdentity: EncodedSourceIdentity
 ): Effect.Effect<TrackingStubOutcome, MigrationReferenceLookupError> =>
   Effect.gen(function* () {
     const contract = definition.tracking as TrackingRecordContract | undefined;
@@ -1080,7 +1084,6 @@ const executeTrackingStub = (
     }
 
     const tracking = yield* makeProcessScope({
-      definitionId: definition.id,
       runId,
       sourceIdentity,
     });
@@ -1107,7 +1110,7 @@ const executeTrackingStub = (
           ? (voidOrEffect as Effect.Effect<void, unknown, Tracking>)
           : Effect.void
       ),
-      Effect.provide(Layer.succeed(Tracking, tracking)),
+      Effect.provide(Layer.succeed(Tracking, tracking.service)),
       Effect.as({ kind: "succeeded" as const }),
       Effect.catchIf(isSkipItem, (error) =>
         Effect.succeed({
@@ -1376,7 +1379,7 @@ const emptyProcessJournalSegment = (
 const appendFailedRollbackAttempt = (
   itemState: MigrationItemState,
   runId: MigrationRunId,
-  tracking: TrackingService,
+  tracking: TrackingProcessScope,
   error: MigrationItemError
 ): Effect.Effect<MigrationItemState> =>
   Effect.gen(function* () {
@@ -1402,15 +1405,13 @@ const appendFailedRollbackAttempt = (
     };
   });
 
-const rollbackItemState = ({
+const rollbackItemState = <Definition extends AnyRollbackMigrationDefinition>({
   definition,
-  executable,
   itemState,
   runId,
   store,
 }: {
-  readonly definition: AnyRollbackMigrationDefinition;
-  readonly executable: ExecutableRollbackDefinition;
+  readonly definition: Definition;
   readonly itemState: MigrationItemState;
   readonly runId: MigrationRunId;
   readonly store: typeof MigrationStore.Service;
@@ -1419,43 +1420,50 @@ const rollbackItemState = ({
   MigrationStoreError | RollbackPreflightError
 > =>
   Effect.gen(function* () {
-    if (executable.rollback === undefined) {
+    type TrackingContract = MigrationDefinitionTrackingContract<Definition>;
+    const rollback = definition.rollback as
+      | RollbackPipeline<
+          MigrationDefinitionRollbackPipelineError<Definition>,
+          MigrationItemStateForTrackingContract<TrackingContract>
+        >
+      | undefined;
+
+    if (rollback === undefined) {
       return yield* missingRollbackPipelineError(definition.id);
     }
 
     const tracking = yield* makeProcessScope({
-      definitionId: definition.id,
       runId,
       sourceIdentity: itemState.sourceIdentity.encoded,
-      ...(itemState.sourceVersion === undefined
-        ? {}
-        : { sourceVersion: itemState.sourceVersion }),
     });
 
-    const typedItemState = yield* decodeStoredItemStateForTrackingContract(
-      itemState,
-      executable.tracking
-    ).pipe(
-      Effect.catch((error) =>
-        appendFailedRollbackAttempt(itemState, runId, tracking, error).pipe(
-          Effect.flatMap((updatedState) => store.upsertItemState(updatedState)),
-          Effect.as(null)
+    const typedItemState =
+      yield* decodeStoredItemStateForTrackingContract<TrackingContract>(
+        itemState,
+        definition.tracking
+      ).pipe(
+        Effect.catch((error) =>
+          appendFailedRollbackAttempt(itemState, runId, tracking, error).pipe(
+            Effect.flatMap((updatedState) =>
+              store.upsertItemState(updatedState)
+            ),
+            Effect.as(null)
+          )
         )
-      )
-    );
+      );
 
     if (typedItemState === null) {
       return "failed" as const;
     }
 
     const rollbackOutcome = yield* runRollbackPipeline(
-      (context) => executable.rollback?.(typedItemState, context),
+      (context) => rollback(typedItemState, context),
       {
         definitionId: definition.id,
         runId,
       }
     ).pipe(
-      Effect.provide(Layer.succeed(Tracking, tracking)),
+      Effect.provide(Layer.succeed(Tracking, tracking.service)),
       Effect.as({ kind: "succeeded" as const }),
       Effect.catch((error) =>
         Effect.succeed({
@@ -1860,8 +1868,7 @@ const processStubSourceIdentity = ({
     const stubOutcome = yield* executeTrackingStub(
       definition,
       runId,
-      sourceIdentity,
-      previousState
+      sourceIdentity
     );
     const updatedAt = yield* DateTime.nowAsDate;
 
@@ -2531,14 +2538,13 @@ const executeMigrationRunDefinitionCursorWindow = <
   }).pipe(Effect.provide(definition.store));
 
 const runRollbackMigrationDefinition = (
-  executable: ExecutableRollbackDefinition,
+  definition: AnyRollbackMigrationDefinition,
   runId: MigrationRunId,
   options: MigrationRollbackExecutionOptions
 ): Effect.Effect<
   RollbackDefinitionRunSummary,
   RollbackMigrationDefinitionError | RollbackPreflightError
 > => {
-  const definition = executable.definition;
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
     const counts = { ...emptyRollbackCounts };
@@ -2561,7 +2567,6 @@ const runRollbackMigrationDefinition = (
           Effect.gen(function* () {
             const outcome = yield* rollbackItemState({
               definition,
-              executable,
               itemState,
               runId,
               store,
@@ -2598,7 +2603,6 @@ const runRollbackMigrationDefinition = (
 
             const outcome = yield* rollbackItemState({
               definition,
-              executable,
               itemState,
               runId,
               store,
@@ -2664,12 +2668,11 @@ const hasSelectedItemState = (
 
 const validateRollbackPipelinePreflight = (
   store: typeof MigrationStore.Service,
-  executable: ExecutableRollbackDefinition,
+  definition: AnyRollbackMigrationDefinition,
   options: MigrationRollbackExecutionOptions
 ): Effect.Effect<void, MigrationStoreError | RollbackPreflightError> =>
-  executable.rollback === undefined
+  definition.rollback === undefined
     ? Effect.gen(function* () {
-        const definition = executable.definition;
         const hasItemState = yield* hasSelectedItemState(
           store,
           definition,
@@ -2782,7 +2785,7 @@ const validateRollbackDependencyPreflight = (
   });
 
 const executePlannedRollbackDefinitions = <
-  Definitions extends readonly ExecutableRollbackDefinition[],
+  Definitions extends readonly AnyRollbackMigrationDefinition[],
 >(
   input: {
     readonly definitions: Definitions;
@@ -2848,7 +2851,7 @@ const executePlannedRollbackDefinitions = <
     (definition) => definition.id
   );
   const progressDefinitionIds = input.definitions.map(
-    (executable) => executable.definition.id
+    (definition) => definition.id
   );
 
   const program = Effect.gen(function* () {
@@ -2862,9 +2865,9 @@ const executePlannedRollbackDefinitions = <
         });
         const summaries: RollbackDefinitionRunSummary[] = [];
 
-        for (const executable of input.definitions) {
+        for (const definition of input.definitions) {
           const summary = yield* runRollbackMigrationDefinition(
-            executable,
+            definition,
             runId,
             options
           );
@@ -2902,8 +2905,8 @@ const executePlannedRollbackDefinitions = <
           Effect.andThen(
             Effect.forEach(
               input.definitions,
-              (executable) =>
-                validateRollbackPipelinePreflight(store, executable, options),
+              (definition) =>
+                validateRollbackPipelinePreflight(store, definition, options),
               { discard: true }
             )
           )
@@ -3084,9 +3087,7 @@ export const executeMigrationRollbackPlanInline = (
   plan: MigrationDefinitionExecutableRollbackPlan,
   options: MigrationRuntimeExecutionOptions = {}
 ): Effect.Effect<RollbackRunSummary, RollbackMigrationError> => {
-  const selectedDefinitionsInRunOrder = [...plan.definitions]
-    .reverse()
-    .map((executable) => executable.definition);
+  const selectedDefinitionsInRunOrder = [...plan.definitions].reverse();
 
   return executePlannedRollbackDefinitions(
     {

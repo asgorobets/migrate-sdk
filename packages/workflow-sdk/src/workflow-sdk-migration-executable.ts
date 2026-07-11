@@ -374,9 +374,7 @@ export const WorkflowSdkMigrationExecutable = {
       },
       startRollback: (plan: MigrationDefinitionExecutableRollbackPlan) => {
         return Effect.flatMap(
-          validateSharedStore(
-            plan.definitions.map(({ definition }) => definition)
-          ),
+          validateSharedStore(plan.definitions),
           (storeLayer) =>
             startDurablePlan<RollbackRunSummary>({
               input,

@@ -66,9 +66,10 @@ succeeds. Descriptor ids are stable and module-prefixed, for example:
 - `commercetools.product-selection.updated`
 
 Descriptor values carry stable resource facts: resource type, id, key when
-available, version, source identity, selector context for updates, and small
-resource facts such as SKU or product selection key. They do not include full
-provider response objects.
+available, version, selector context for updates, and small resource facts such
+as SKU or product selection key. The owning Migration Item State carries source
+identity, so journal entries and destination payload schemas do not duplicate
+it. Descriptor values do not include full provider response objects.
 
 Rollback code can narrow journal entries with the descriptor catalog:
 
@@ -90,9 +91,9 @@ diagnostics or changes the rollback process recorded before failing.
 
 Failed SDK requests are mapped to `DestinationError` and record a safe
 Destination Journal diagnostic. Diagnostics include stable operation names,
-resource type, source identity, selector context, and safe status code when
-available. They must not include raw SDK responses, headers, tokens, or
-credentials.
+resource type, selector context, and safe status code when available. The
+owning Migration Item State carries the source identity. Diagnostics must not
+include raw SDK responses, headers, tokens, or credentials.
 
 ## Tracking Records
 

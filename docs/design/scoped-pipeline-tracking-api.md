@@ -934,6 +934,12 @@ process-facing tracking service backed by a destination journal and a staged
 tracking record slot.
 
 When a destination helper succeeds, it records its native change in the journal.
+The owning Migration Item State remains the source of truth for source identity;
+journal entries and destination-specific descriptor values do not duplicate it.
+SDK-owned helpers may use private runtime scope metadata when identity is
+required for destination behavior, but that metadata is not part of the public
+Tracking service. Separately packaged helpers receive required identity through
+explicit process, stub, or rollback inputs.
 When a destination helper fails, it may record a diagnostic but must not record
 a success change for that helper unless it knows the destination effect
 completed.

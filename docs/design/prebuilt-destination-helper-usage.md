@@ -28,6 +28,12 @@ const articles = MigrationDefinition.make({
 ```
 
 Helpers that write destination-side state should record typed changes through
-their module-owned descriptors. Process code may also stage a tracking record
-with `Tracking.setRecord(...)` when the migration definition declares a
-tracking contract.
+their module-owned descriptors. Journal entries inherit source identity from
+their owning Migration Item State instead of duplicating it in every entry or
+descriptor value. SDK-owned helpers, such as the in-memory destination, may use
+private runtime item-scope metadata when identity is required for destination
+behavior. Separately packaged or customer-authored helpers receive identity
+explicitly from `source.identity`, the stub input, or rollback state rather than
+through `Tracking`. Process code may also stage a tracking record with
+`Tracking.setRecord(...)` when the migration definition declares a tracking
+contract.

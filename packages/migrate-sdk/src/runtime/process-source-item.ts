@@ -35,7 +35,7 @@ import { MigrationStore } from "../services/migration-store.ts";
 import {
   makeProcessScope,
   Tracking,
-  type TrackingService,
+  type TrackingProcessScope,
 } from "../services/tracking.ts";
 import {
   normalizeItemError,
@@ -259,7 +259,7 @@ const resolveProcessTrackingRecord = <Payload>({
   readonly runId: MigrationRunId;
   readonly sourceVersionContractContext: SourceVersionContractContext;
   readonly store: typeof MigrationStore.Service;
-  readonly tracking: TrackingService;
+  readonly tracking: TrackingProcessScope;
 }) =>
   Effect.gen(function* () {
     const trackingRecords = yield* tracking.records;
@@ -491,17 +491,15 @@ const processWithProcessPipeline = <
 > =>
   Effect.gen(function* () {
     const tracking = yield* makeProcessScope({
-      definitionId: definition.id,
       runId,
       sourceIdentity: decodedSourceItem.identity.encoded,
-      sourceVersion: decodedSourceItem.version,
     });
     const processOutcome = yield* runProcess(
       definition,
       decodedSourceItem,
       processContext
     ).pipe(
-      Effect.provide(Layer.succeed(Tracking, tracking)),
+      Effect.provide(Layer.succeed(Tracking, tracking.service)),
       Effect.as({ kind: "migrated" as const }),
       Effect.catchIf(isSkipItem, (skip) =>
         Effect.succeed({

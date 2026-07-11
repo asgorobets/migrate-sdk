@@ -40,6 +40,63 @@ const articles = MigrationDefinition.make({
 })
 ```
 
+Inline callbacks infer their state from the Migration Definition. An extracted
+process callback can derive its source item and identity types from the source,
+while keeping prior state typed by the Tracking Record Contract:
+
+```ts
+import type { DestinationError, ProcessPipelineFor } from "migrate-sdk"
+
+const processArticles: ProcessPipelineFor<
+  typeof source,
+  DestinationError,
+  typeof ArticleTracking
+> = Effect.fn("articles.process")(function* (source, context) {
+  const previousRecord = context.previousState?.trackingRecord
+  const entry = previousRecord
+    ? yield* updateArticle(previousRecord.entryId, source.item)
+    : yield* createArticle(source.item)
+
+  yield* Tracking.setRecord({
+    entryId: entry.entryId,
+  })
+})
+```
+
+`previousState` is `undefined` for a newly discovered item. During update,
+retry, or backlog processing it contains the prior Migration Item State, with
+`trackingRecord` decoded through `ArticleTracking` before the callback runs.
+
+An extracted rollback callback can derive its state from the same contract:
+
+```ts
+import type { RollbackPipelineFor } from "migrate-sdk"
+
+const rollbackArticles: RollbackPipelineFor<typeof ArticleTracking> = (state) =>
+  Effect.gen(function* () {
+    if (state.trackingRecord) {
+      yield* deleteArticleEntry(state.trackingRecord.entryId)
+    }
+  })
+
+const articles = MigrationDefinition.make({
+  id: "articles",
+  source,
+  store,
+  tracking: ArticleTracking,
+  process: processArticles,
+  rollback: rollbackArticles,
+})
+```
+
+`TrackingRecordFor<typeof ArticleTracking>` names the record itself, and
+`MigrationItemStateFor<typeof ArticleTracking>` names the prior state when a
+shared process helper needs either narrower type.
+
+Destination stubs can be extracted with `DestinationStubPipeline<Error>`. The
+callback receives the same typed source identity and definition/run context as
+an inline `stub` callback.
+
 The runtime provides scoped tracking services around each source item. A
 successful item persists source identity, source version, status, and any
 journal segment or tracking record produced by the process. A failed item keeps
@@ -261,7 +318,7 @@ export type MigrationDefinitionExecutableRunPlan =
 
 export type MigrationDefinitionExecutableRollbackPlan =
   MigrationDefinitionRollbackPlan & {
-    readonly registryDefinitions: readonly AnyRollbackMigrationDefinition[]
+    readonly registryDefinitions: MigrationDefinitionRollbackPlan["definitions"]
     readonly [executablePlanTypeId]: "rollback"
   }
 ```
@@ -270,6 +327,10 @@ Executable rollback plans retain the registry definitions so rollback preflight
 can still detect dependent item state outside the selected rollback scope. That
 context is for in-process execution only, not for plan serialization or operator
 rendering.
+
+Their `definitions` field remains the ordinary selected Migration Definitions,
+matching executable run plans. Tracking-aware rollback decoding stays inside the
+rollback executor rather than introducing a public executable-definition wrapper.
 
 This is valid:
 

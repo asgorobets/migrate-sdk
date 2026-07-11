@@ -1651,11 +1651,10 @@ describe("MigrationDefinitionRegistry", () => {
             executionDefinitionIds: [toMigrationDefinitionId("articles")],
           })
         );
-        expect(
-          executablePlan.definitions.map((definition) => definition.definition)
-        ).toEqual([articles]);
+        expect(executablePlan.definitions).toEqual([articles]);
+        expect(executablePlan.definitions[0]).toBe(articles);
         expect(executablePlan.definitions[0]?.rollback).toEqual(
-          expect.any(Function)
+          articles.rollback
         );
         expectTypeOf(
           executablePlan

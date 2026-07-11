@@ -3,8 +3,8 @@ import type { MigrationReferenceLookup } from "../services/migration-reference-l
 import type { MigrationStore } from "../services/migration-store.ts";
 import {
   makeSourceRuntime,
-  type SourceRuntime as SourceRuntimeService,
   type SourceRuntimeImplementation,
+  type SourceRuntime as SourceRuntimeService,
 } from "../services/source.ts";
 import type { Tracking } from "../services/tracking.ts";
 import type { MigrationStoreError, SkipItem, SourceError } from "./errors.ts";
@@ -498,6 +498,17 @@ export type ProcessPipeline<
   MigrationReferenceLookup | Tracking
 >;
 
+export type ProcessPipelineFor<
+  SourceDefinition extends AnyConfiguredSource,
+  ProcessError = never,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
+> = ProcessPipeline<
+  ConfiguredSourcePayload<SourceDefinition>,
+  ProcessError,
+  ConfiguredSourceIdentityKey<SourceDefinition>,
+  TrackingContract
+>;
+
 export interface DestinationStubInput {
   readonly sourceIdentity: EncodedSourceIdentity;
 }
@@ -506,6 +517,11 @@ export interface DestinationStubContext {
   readonly definitionId: MigrationDefinitionId;
   readonly runId: MigrationRunId;
 }
+
+export type DestinationStubPipeline<PipelineError = never> = (
+  input: DestinationStubInput,
+  context: DestinationStubContext
+) => void | Effect.Effect<void, PipelineError | SkipItem, Tracking>;
 
 interface MigrationDefinitionBase<
   Payload,
@@ -542,10 +558,7 @@ interface MigrationDefinitionBase<
   readonly sourceCursorRetry?: SourceRetryStrategy;
   readonly sourceLookupRetry?: SourceRetryStrategy;
   readonly store: Layer.Layer<MigrationStore, MigrationStoreError>;
-  readonly stub?: (
-    input: DestinationStubInput,
-    context: DestinationStubContext
-  ) => void | Effect.Effect<void, PipelineError | SkipItem, Tracking>;
+  readonly stub?: DestinationStubPipeline<PipelineError>;
   readonly [migrationDefinitionTypeId]: {
     readonly processError: PipelineError;
     readonly rollbackError: RollbackPipelineError;

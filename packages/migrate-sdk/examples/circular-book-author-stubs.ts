@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import {
   type DestinationError,
+  type EncodedSourceIdentity,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecution,
@@ -127,11 +128,11 @@ type AuthorEntryFieldsValue = typeof AuthorEntryFields.Type;
 type BookUpsertChange = InMemoryEntryUpsertedChange<
   "book",
   BookEntryFieldsValue
->;
+> & { readonly sourceIdentity: EncodedSourceIdentity };
 type AuthorUpsertChange = InMemoryEntryUpsertedChange<
   "author",
   AuthorEntryFieldsValue
->;
+> & { readonly sourceIdentity: EncodedSourceIdentity };
 type BookstoreUpsertChange = BookUpsertChange | AuthorUpsertChange;
 type SourceIdentityKey<Definition> =
   Definition extends SourceIdentityDefinition<infer Key> ? Key : never;
@@ -238,24 +239,34 @@ const collectUpsertChanges = (
   Effect.gen(function* () {
     const changes: BookstoreUpsertChange[] = [];
 
-    for (const entry of itemStates.flatMap(processJournalEntries)) {
-      if (destinationFixture.bookDestination.changes.entryUpserted.is(entry)) {
-        const decoded =
-          yield* destinationFixture.bookDestination.changes.entryUpserted.decode(
-            entry
-          );
-        changes.push(decoded.value);
-        continue;
-      }
+    for (const itemState of itemStates) {
+      for (const entry of processJournalEntries(itemState)) {
+        if (
+          destinationFixture.bookDestination.changes.entryUpserted.is(entry)
+        ) {
+          const decoded =
+            yield* destinationFixture.bookDestination.changes.entryUpserted.decode(
+              entry
+            );
+          changes.push({
+            ...decoded.value,
+            sourceIdentity: itemState.sourceIdentity.encoded,
+          });
+          continue;
+        }
 
-      if (
-        destinationFixture.authorDestination.changes.entryUpserted.is(entry)
-      ) {
-        const decoded =
-          yield* destinationFixture.authorDestination.changes.entryUpserted.decode(
-            entry
-          );
-        changes.push(decoded.value);
+        if (
+          destinationFixture.authorDestination.changes.entryUpserted.is(entry)
+        ) {
+          const decoded =
+            yield* destinationFixture.authorDestination.changes.entryUpserted.decode(
+              entry
+            );
+          changes.push({
+            ...decoded.value,
+            sourceIdentity: itemState.sourceIdentity.encoded,
+          });
+        }
       }
     }
 
@@ -450,8 +461,8 @@ export const runCircularBookAuthorStubsExample = Effect.fn(
 
 export const formatCircularBookAuthorStubsExampleResult = (
   result: CircularBookAuthorStubsExampleResult
-): string => {
-  return [
+): string =>
+  [
     "Circular Book and Author Stub Example",
     formatMigrationRunSummary(result.summary),
     "",
@@ -485,4 +496,3 @@ export const formatCircularBookAuthorStubsExampleResult = (
     `future book stub status: ${result.bookStubState?.status ?? "missing"}`,
     `author final status: ${result.authorState?.status ?? "missing"}`,
   ].join("\n");
-};

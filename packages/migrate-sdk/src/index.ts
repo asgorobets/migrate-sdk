@@ -3,9 +3,13 @@
 
 export type {
   ConfiguredSource,
+  DestinationStubContext,
+  DestinationStubInput,
+  DestinationStubPipeline,
   MigrationDefinitionDependencies,
   MigrationDefinitionDependenciesInput,
   MigrationDefinitionInput,
+  ProcessPipelineFor,
   SourceFactoryInput,
   SourceLayerInput,
   SourceMakeInput,
@@ -195,7 +199,6 @@ export type {
   MigrationDefinitionRollbackPlan,
   MigrationDefinitionRunPlan,
   MigrationRuntimeRequirement,
-  ExecutableRollbackDefinition,
 } from "./domain/registry.ts";
 
 export {
@@ -204,9 +207,8 @@ export {
   RollbackRunSummary,
 } from "./domain/rollback.ts";
 export type {
-  AnyRollbackMigrationDefinition,
-  MigrationDefinitionRollbackPipelineError,
   RollbackPipeline,
+  RollbackPipelineFor,
 } from "./domain/rollback.ts";
 
 export type { RunModeInput } from "./domain/run-mode.ts";
@@ -232,10 +234,10 @@ export {
   SkippedItemState,
 } from "./domain/state.ts";
 export type {
+  MigrationItemStateFor,
   MigrationItemOutcome,
   MigrationItemStateBase,
-  MigrationItemStateForTrackingContract,
-  MigrationItemStateWithTrackingRecord,
+  TrackingRecordFor,
 } from "./domain/state.ts";
 
 export {
@@ -313,7 +315,3 @@ export { MigrationStore } from "./services/migration-store.ts";
 export { MigrationProgress } from "./services/migration-progress.ts";
 export { RollbackProgress } from "./services/rollback-progress.ts";
 export { Tracking } from "./services/tracking.ts";
-export type {
-  TrackingProcessContext,
-  TrackingService,
-} from "./services/tracking.ts";

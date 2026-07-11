@@ -1,7 +1,5 @@
 import { Effect, Option, Schema } from "effect";
 import { getMigrationStatuses } from "../runtime/get-migration-statuses.ts";
-import type { Tracking } from "../services/tracking.ts";
-import type { MigrationDefinitionTrackingContract } from "./definition.ts";
 import type {
   MigrationExecutionOptions,
   PipelineExecutionConcurrency,
@@ -21,12 +19,7 @@ import {
   toMigrationDefinitionId,
   toMigrationDefinitionRegistryId,
 } from "./ids.ts";
-import type {
-  AnyRollbackMigrationDefinition,
-  MigrationDefinitionRollbackPipelineError,
-  RollbackContext,
-  RollbackPipeline,
-} from "./rollback.ts";
+import type { AnyRollbackMigrationDefinition } from "./rollback.ts";
 import type {
   AnyMigrationDefinition,
   RunRequestSourceImplementationError,
@@ -34,14 +27,9 @@ import type {
 } from "./run.ts";
 import type { RunModeInput } from "./run-mode.ts";
 import type {
-  MigrationItemState,
-  MigrationItemStateForTrackingContract,
-} from "./state.ts";
-import type {
   GetMigrationStatusesError,
   MigrationStatusReport,
 } from "./status.ts";
-import type { TrackingRecordContract } from "./tracking.ts";
 
 type AnyRollbackMigrationDefinitions =
   readonly AnyRollbackMigrationDefinition[];
@@ -228,15 +216,6 @@ export interface MigrationDefinitionExecutableRunPlan<
   readonly [executableRunPlanTypeId]: "run";
 }
 
-export interface ExecutableRollbackDefinition {
-  readonly definition: AnyRollbackMigrationDefinition;
-  readonly rollback?: (
-    itemState: MigrationItemState,
-    context: RollbackContext
-  ) => void | Effect.Effect<void, unknown, Tracking>;
-  readonly tracking?: TrackingRecordContract | undefined;
-}
-
 export interface MigrationDefinitionRollbackPlan {
   readonly definitions: readonly AnyRollbackMigrationDefinition[];
   readonly execution?: MigrationExecutionOptions;
@@ -253,22 +232,10 @@ export interface MigrationDefinitionRollbackPlan {
   readonly withDependencies: boolean;
 }
 
-export interface MigrationDefinitionExecutableRollbackPlan {
-  readonly definitions: readonly ExecutableRollbackDefinition[];
-  readonly execution?: MigrationExecutionOptions;
-  readonly executionDefinitionIds: readonly MigrationDefinitionId[];
-  readonly executionPolicy: readonly MigrationDefinitionExecutionPolicy[];
-  readonly force?: boolean;
-  readonly includedDefinitionIds: readonly MigrationDefinitionId[];
-  readonly kind: "rollback";
-  readonly notices: readonly MigrationDefinitionPlanNotice[];
-  readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
+export interface MigrationDefinitionExecutableRollbackPlan
+  extends MigrationDefinitionRollbackPlan {
   readonly registryDefinitions: readonly AnyRollbackMigrationDefinition[];
-  readonly registryId?: MigrationDefinitionRegistryId;
-  readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
   readonly request: MigrationDefinitionRegistryRollbackInput;
-  readonly target?: MigrationDefinitionPlanTarget;
-  readonly withDependencies: boolean;
   readonly [executableRollbackPlanTypeId]: "rollback";
 }
 
@@ -1299,40 +1266,6 @@ const hasRollbackPipeline = (definition: {
   readonly rollback?: unknown;
 }): boolean => typeof definition.rollback === "function";
 
-const makeExecutableRollbackDefinition = <
-  Definition extends AnyRollbackMigrationDefinition,
->(
-  definition: Definition
-): ExecutableRollbackDefinition => {
-  const rollback = definition.rollback;
-  type TrackingContract = MigrationDefinitionTrackingContract<Definition>;
-  const tracking = definition.tracking as TrackingRecordContract | undefined;
-
-  return Object.freeze({
-    definition,
-    ...(typeof rollback === "function"
-      ? {
-          rollback: (itemState: MigrationItemState, context: RollbackContext) =>
-            (
-              rollback as RollbackPipeline<
-                MigrationDefinitionRollbackPipelineError<Definition>,
-                MigrationItemStateForTrackingContract<TrackingContract>
-              >
-            )(
-              itemState as MigrationItemStateForTrackingContract<TrackingContract>,
-              context
-            ),
-        }
-      : {}),
-    ...(tracking === undefined ? {} : { tracking }),
-  });
-};
-
-const makeExecutableRollbackDefinitions = (
-  definitions: readonly AnyRollbackMigrationDefinition[]
-): readonly ExecutableRollbackDefinition[] =>
-  Object.freeze(definitions.map(makeExecutableRollbackDefinition));
-
 const makeExecutableRunPlan = <
   Definitions extends readonly AnyMigrationDefinition[],
 >(
@@ -1366,7 +1299,6 @@ const makeExecutableRollbackPlan = (
 ): MigrationDefinitionExecutableRollbackPlan => {
   const executablePlan: MigrationDefinitionExecutableRollbackPlan = {
     ...plan,
-    definitions: makeExecutableRollbackDefinitions(plan.definitions),
     registryDefinitions: Object.freeze([...registryDefinitions]),
     request,
     [executableRollbackPlanTypeId]: "rollback",

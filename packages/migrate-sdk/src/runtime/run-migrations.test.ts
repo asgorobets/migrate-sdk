@@ -58,8 +58,8 @@ import {
   SourceIdentity,
   type SourceIdentityDefinition,
   type SourceItemInput,
-  type SourceRuntimeImplementation,
   SourceItemTotal,
+  type SourceRuntimeImplementation,
   skipItem,
   Tracking,
   type TrackingRecordContractType,
@@ -70,13 +70,13 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "../index.ts";
+import { useConfiguredSource } from "../testing/configured-source-runtime.ts";
 import {
   rollbackInlineDefinition,
   rollbackInlineRegistry,
   runInlineDefinition,
   runInlineRegistry,
 } from "../testing/inline-registry-execution.ts";
-import { useConfiguredSource } from "../testing/configured-source-runtime.ts";
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -689,7 +689,6 @@ describe("runInlineDefinition", () => {
                     fields: {
                       title: "Hello, migration",
                     },
-                    sourceIdentity: "article-1",
                   }),
                 }),
               ],
@@ -1367,6 +1366,7 @@ describe("runInlineDefinition", () => {
           yield* destination.changes.entryUpserted.decode(entry);
 
         expect(decodedEntry.sequence).toBe(0);
+        expect(decodedEntry).not.toHaveProperty("sourceIdentity");
         expectTypeOf(decodedEntry.value).toEqualTypeOf<
           InMemoryEntryUpsertedChange<"article", ArticleEntryFields>
         >();
@@ -1378,7 +1378,6 @@ describe("runInlineDefinition", () => {
             title: "Journaled article",
           },
           published: false,
-          sourceIdentity: "article-1",
         });
       })
   );
@@ -1819,7 +1818,6 @@ describe("runInlineDefinition", () => {
             details: {
               contentType: "article",
               operation: "entries.upsert",
-              sourceIdentity: "article-1",
             },
           },
         ]);
@@ -1893,7 +1891,6 @@ describe("runInlineDefinition", () => {
           details: {
             contentType: "article",
             operation: "entries.upsert",
-            sourceIdentity: "article-1",
           },
         });
 

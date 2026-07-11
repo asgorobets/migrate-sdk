@@ -34,6 +34,26 @@ const articles = MigrationDefinition.make({
 })
 ```
 
+Reusable rollback callbacks derive their stored state directly from the
+Tracking Record Contract:
+
+```ts
+import type { RollbackPipelineFor } from "migrate-sdk"
+
+const rollbackArticles: RollbackPipelineFor<typeof ArticleTracking> =
+  Effect.fn("articles.rollback")(function* (state, context) {
+    if (state.trackingRecord) {
+      yield* rawApi.deleteEntry(state.trackingRecord.entryId)
+    }
+
+    yield* Tracking.logDiagnostic({
+      severity: "info",
+      message: "Rollback completed",
+      details: { definitionId: context.definitionId },
+    })
+  })
+```
+
 If a rollback process fails, the runtime leaves the item state in place and
 appends a failed rollback attempt segment. The segment contains rollback-scope
 journal entries and normalized failure metadata. If the rollback process

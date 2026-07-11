@@ -1,15 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-import { DestinationJournal, toMigrationRunId, Tracking } from "migrate-sdk";
-
-type AmbientTrackingContext =
-  typeof Tracking.currentContext extends Effect.Effect<
-    infer Context,
-    infer _E,
-    infer _R
-  >
-    ? Context
-    : never;
+import { DestinationJournal, toMigrationRunId } from "migrate-sdk";
 
 describe("destination journal public API", () => {
   it.effect("decodes rollback attempt timestamps as runtime Dates", () =>
@@ -41,14 +32,4 @@ describe("destination journal public API", () => {
       expect(decoded.rollbackAttempts[0]?.failedAt).toBeInstanceOf(Date);
     })
   );
-});
-
-describe("Tracking", () => {
-  it("keeps previous state out of the ambient tracking context", () => {
-    const context = {} as AmbientTrackingContext;
-    // @ts-expect-error previous state is only available on process and rollback arguments.
-    const previousState = context.previousState;
-
-    expect(previousState).toBeUndefined();
-  });
 });
