@@ -147,7 +147,8 @@ const productsPipeline = Effect.fn("products.process")(function* (source) {
 ```
 
 Run-level provision can also work if the returned migration definition preserves
-process requirements in its type:
+process requirements in its type and the provided scope remains open through
+the attached run's terminal signal:
 
 ```ts
 const registry = MigrationDefinitionRegistry.make({
@@ -155,7 +156,23 @@ const registry = MigrationDefinitionRegistry.make({
 })
 const execution = MigrationExecution.make({ registry })
 
-execution.run({ all: true }).pipe(Effect.provide(CommercetoolsLive.layer))
+const summary = yield* Effect.gen(function* () {
+  const start = yield* execution.run({ all: true })
+
+  if (start.kind === "completed") {
+    return start.summary
+  }
+
+  if (start.handle === undefined) {
+    return yield* Effect.die("Expected attached inline execution")
+  }
+
+  const terminal = yield* start.handle.wait
+
+  return terminal.kind === "finished"
+    ? terminal.summary
+    : yield* Effect.die(`Inline execution ended as ${terminal.kind}`)
+}).pipe(Effect.provide(CommercetoolsLive.layer))
 ```
 
 The framework still provides framework-owned services around each item

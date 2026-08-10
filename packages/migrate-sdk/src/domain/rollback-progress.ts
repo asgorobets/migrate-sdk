@@ -38,6 +38,11 @@ export type RollbackProgressEvent =
     }
   | {
       readonly definitionIds: readonly MigrationDefinitionId[];
+      readonly kind: "rollback-cancelled";
+      readonly runId: MigrationRunId;
+    }
+  | {
+      readonly definitionIds: readonly MigrationDefinitionId[];
       readonly error: unknown;
       readonly kind: "rollback-failed";
       readonly runId: MigrationRunId;
@@ -47,7 +52,8 @@ export type RollbackProgressRunStatus =
   | "idle"
   | "running"
   | "succeeded"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export type RollbackProgressDefinitionStatus =
   | "pending"
@@ -190,6 +196,13 @@ export const reduceRollbackProgressState = (
         definitionIds: event.definitionIds,
         runId: event.runId,
         status: event.status,
+      });
+    case "rollback-cancelled":
+      return clearActiveDefinition({
+        ...state,
+        definitionIds: event.definitionIds,
+        runId: event.runId,
+        status: "cancelled",
       });
     case "rollback-failed":
       return clearActiveDefinition({

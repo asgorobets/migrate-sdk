@@ -996,6 +996,16 @@ const result = yield* execution.run({
 if (result.kind === "completed") {
   return result.summary
 }
+
+if (result.handle === undefined) {
+  return yield* Effect.die("Expected attached inline execution")
+}
+
+const terminal = yield* result.handle.wait
+
+return terminal.kind === "finished"
+  ? terminal.summary
+  : yield* Effect.die(`Inline execution ended as ${terminal.kind}`)
 ```
 
 The `migrate-sdk/runtime` subpath remains for lower-level cursor-window, run

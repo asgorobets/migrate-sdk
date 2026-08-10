@@ -89,6 +89,11 @@ export class MigrationStore extends Service<
       definitionIds: readonly MigrationDefinitionId[]
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
+    readonly markRunCancelled: (
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[]
+    ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
+
     readonly completeRun: (
       runId: MigrationRunId,
       definitionIds: readonly MigrationDefinitionId[]

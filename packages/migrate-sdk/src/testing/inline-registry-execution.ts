@@ -66,14 +66,28 @@ const sourceIdentityKeyToText = (key: SourceIdentitySnapshotKey): string =>
     ? key.map((part) => encodeURIComponent(String(part))).join(":")
     : String(key);
 
-const completed = <Summary, Error, Requirements>(
+const awaitInlineExecutionSummary = <Summary, Error, Requirements>(
   effect: Effect.Effect<ExecutionStartResult<Summary>, Error, Requirements>
 ): Effect.Effect<Summary, Error, Requirements> =>
-  Effect.flatMap(effect, (result) =>
-    result.kind === "completed"
-      ? Effect.succeed(result.summary)
-      : Effect.die("Inline registry execution unexpectedly started")
-  );
+  Effect.flatMap(effect, (start) => {
+    if (start.kind === "completed") {
+      return Effect.succeed(start.summary);
+    }
+
+    if (start.handle === undefined) {
+      return Effect.die("Inline registry execution unexpectedly detached");
+    }
+
+    return Effect.flatMap(start.handle.wait, (result) => {
+      if (result.kind === "finished") {
+        return Effect.succeed(result.summary);
+      }
+
+      return result.kind === "execution-failed"
+        ? Effect.fail(result.cause as Error)
+        : Effect.die("Inline registry execution was cancelled");
+    });
+  });
 
 const selectionInput = (
   input: InlineRegistrySelectionInput,
@@ -174,11 +188,10 @@ export const runInlineRegistry = <
         }),
       catch: (cause) => cause as MigrationDefinitionRegistryConstructionError,
     }),
-    (registry) => {
-      const execution = MigrationExecution.make({ registry });
-
-      return completed(execution.run(runRequestInput(input)));
-    }
+    (registry) =>
+      awaitInlineExecutionSummary(
+        MigrationExecution.make({ registry }).run(runRequestInput(input))
+      )
   );
 
 export const runInlineDefinition = <
@@ -205,11 +218,12 @@ export const rollbackInlineRegistry = <
         }),
       catch: (cause) => cause as MigrationDefinitionRegistryConstructionError,
     }),
-    (registry) => {
-      const execution = MigrationExecution.make({ registry });
-
-      return completed(execution.rollback(rollbackRequestInput(input)));
-    }
+    (registry) =>
+      awaitInlineExecutionSummary(
+        MigrationExecution.make({ registry }).rollback(
+          rollbackRequestInput(input)
+        )
+      )
   );
 
 export const rollbackInlineDefinition = <

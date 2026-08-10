@@ -139,7 +139,11 @@ export type {
   ExecutionStartResult,
   MigrationExecutionHandle,
   MigrationDefinitionRunSummary,
+  MigrationRunHandle,
+  MigrationRunHandleState,
   MigrationRunSummary,
+  MigrationRunTerminalResult,
+  MigrationRunTerminalState,
 } from "./domain/run.ts";
 
 export {

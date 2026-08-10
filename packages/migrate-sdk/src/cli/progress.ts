@@ -182,6 +182,8 @@ const renderProgressLogLine = (
       return `[progress] Definition completed definition=${event.definitionId} status=${event.status} ${formatCounts(event.counts)}`;
     case "run-completed":
       return `[progress] Run completed status=${event.status} definitions=${event.definitionIds.join(",")}`;
+    case "run-cancelled":
+      return `[progress] Run cancelled definitions=${event.definitionIds.join(",")}`;
     case "run-failed":
       return `[progress] Run failed definitions=${event.definitionIds.join(",")}`;
     default:
@@ -203,6 +205,8 @@ const renderRollbackProgressLogLine = (
       return `[progress] Rollback Definition completed definition=${event.definitionId} status=${event.status} ${formatRollbackCounts(event.counts)}`;
     case "rollback-completed":
       return `[progress] Rollback completed status=${event.status} definitions=${event.definitionIds.join(",")}`;
+    case "rollback-cancelled":
+      return `[progress] Rollback cancelled definitions=${event.definitionIds.join(",")}`;
     case "rollback-failed":
       return `[progress] Rollback failed definitions=${event.definitionIds.join(",")}`;
     default:
@@ -253,7 +257,11 @@ const renderInteractiveProgress = (
   event: MigrationProgressEvent,
   state: MigrationProgressState
 ): InteractiveProgressRender | null => {
-  if (event.kind === "run-completed" || event.kind === "run-failed") {
+  if (
+    event.kind === "run-completed" ||
+    event.kind === "run-cancelled" ||
+    event.kind === "run-failed"
+  ) {
     return { kind: "cleanup" };
   }
 
@@ -266,7 +274,11 @@ const renderInteractiveRollbackProgress = (
   event: RollbackProgressEvent,
   state: RollbackProgressState
 ): InteractiveProgressRender | null => {
-  if (event.kind === "rollback-completed" || event.kind === "rollback-failed") {
+  if (
+    event.kind === "rollback-completed" ||
+    event.kind === "rollback-cancelled" ||
+    event.kind === "rollback-failed"
+  ) {
     return { kind: "cleanup" };
   }
 

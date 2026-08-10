@@ -70,6 +70,7 @@ const PersistedMigrationRunState = Schema.Struct({
   status: Schema.Literals([
     "queued",
     "running",
+    "cancelled",
     "succeeded",
     "failed",
     "start-failed",
@@ -796,6 +797,17 @@ const makeLayerWithoutPlatform = (
           })
       );
 
+      const markRunCancelled = Effect.fn("FileMigrationStore.markRunCancelled")(
+        (
+          runId: MigrationRunId,
+          definitionIds: readonly MigrationDefinitionId[]
+        ) =>
+          updateLatestRunState(runId, definitionIds, {
+            finish: true,
+            status: "cancelled",
+          })
+      );
+
       const attachRunExecution = Effect.fn(
         "FileMigrationStore.attachRunExecution"
       )(
@@ -943,6 +955,7 @@ const makeLayerWithoutPlatform = (
         queueRun,
         attachRunExecution,
         markRunStartFailed,
+        markRunCancelled,
         completeRun,
         failRun,
         acquireDefinitionLock,

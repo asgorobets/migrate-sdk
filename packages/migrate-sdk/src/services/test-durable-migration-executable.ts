@@ -1,6 +1,6 @@
 import { Effect, Exit, Layer, Schema } from "effect";
 import {
-  MigrationRuntimeError,
+  type MigrationRuntimeError,
   MigrationStoreError,
 } from "../domain/errors.ts";
 import {
@@ -180,12 +180,12 @@ const rejectStart = (
 
 const attachError = (
   runId: MigrationRunIdType,
-  execution: MigrationExecutionHandle,
+  execution: typeof TestDurableExecutionHandle.Type,
   cause?: unknown
 ): TestDurableMigrationExecutableAttachError =>
   new TestDurableMigrationExecutableAttachError({
     runId,
-    execution: execution as typeof TestDurableExecutionHandle.Type,
+    execution,
     message: "Test durable provider execution identity attachment failed",
     ...(cause === undefined ? {} : { cause }),
   });
@@ -194,7 +194,7 @@ const startProvider = (
   state: TestDurableMigrationExecutableState,
   envelope: MigrationExecutionEnvelope
 ): Effect.Effect<
-  MigrationExecutionHandle,
+  typeof TestDurableExecutionHandle.Type,
   TestDurableMigrationExecutableStartRejectedError
 > =>
   state.rejectStart

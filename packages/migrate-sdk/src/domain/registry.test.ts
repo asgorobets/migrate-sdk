@@ -31,12 +31,8 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
-import {
-  InMemorySource,
-} from "migrate-sdk/sources/in-memory";
-import {
-  InMemoryMigrationStore,
-} from "migrate-sdk/stores/in-memory";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { expectTypeOf } from "vitest";
 
 const ArticleSource = Schema.Struct({
@@ -61,6 +57,22 @@ const source = InMemorySource.make({
   items: [],
 });
 const store = {} as Layer.Layer<MigrationStore, MigrationStoreError>;
+
+const awaitRunSummary = <Summary>(start: ExecutionStartResult<Summary>) => {
+  if (start.kind === "completed") {
+    return Effect.succeed(start.summary);
+  }
+
+  if (start.handle === undefined) {
+    return Effect.die("Expected attached inline execution");
+  }
+
+  return Effect.flatMap(start.handle.wait, (result) =>
+    result.kind === "finished"
+      ? Effect.succeed(result.summary)
+      : Effect.die(`Inline execution ended as ${result.kind}`)
+  );
+};
 
 const seedMigrationContract = (
   storeState: ReturnType<typeof InMemoryMigrationStore.makeState>,
@@ -461,48 +473,46 @@ describe("MigrationDefinitionRegistry", () => {
       })
   );
 
-  it.effect(
-    "expands rollback dependencies through required dependents",
-    () =>
-      Effect.gen(function* () {
-        const authors = makeDefinition({ id: "authors" });
-        const articles = makeDefinition({
-          id: "articles",
-          dependencies: {
-            required: ["authors"],
-            optional: ["tags"],
-          },
-        });
-        const tags = makeDefinition({ id: "tags" });
-        const registry = MigrationDefinitionRegistry.make({
-          definitions: [tags, articles, authors] as const,
-        });
+  it.effect("expands rollback dependencies through required dependents", () =>
+    Effect.gen(function* () {
+      const authors = makeDefinition({ id: "authors" });
+      const articles = makeDefinition({
+        id: "articles",
+        dependencies: {
+          required: ["authors"],
+          optional: ["tags"],
+        },
+      });
+      const tags = makeDefinition({ id: "tags" });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [tags, articles, authors] as const,
+      });
 
-        const leafPlan = yield* registry.planRollback({
-          definitionIds: ["articles"],
-          withDependencies: true,
-        });
-        const parentPlan = yield* registry.planRollback({
-          definitionIds: ["authors"],
-          withDependencies: true,
-        });
+      const leafPlan = yield* registry.planRollback({
+        definitionIds: ["articles"],
+        withDependencies: true,
+      });
+      const parentPlan = yield* registry.planRollback({
+        definitionIds: ["authors"],
+        withDependencies: true,
+      });
 
-        expect(leafPlan.includedDefinitionIds).toEqual([
-          toMigrationDefinitionId("articles"),
-        ]);
-        expect(leafPlan.executionDefinitionIds).toEqual([
-          toMigrationDefinitionId("articles"),
-        ]);
-        expect(parentPlan.includedDefinitionIds).toEqual([
-          toMigrationDefinitionId("articles"),
-          toMigrationDefinitionId("authors"),
-        ]);
-        expect(parentPlan.executionDefinitionIds).toEqual([
-          toMigrationDefinitionId("articles"),
-          toMigrationDefinitionId("authors"),
-        ]);
-        expect(parentPlan.definitions).toEqual([articles, authors]);
-      })
+      expect(leafPlan.includedDefinitionIds).toEqual([
+        toMigrationDefinitionId("articles"),
+      ]);
+      expect(leafPlan.executionDefinitionIds).toEqual([
+        toMigrationDefinitionId("articles"),
+      ]);
+      expect(parentPlan.includedDefinitionIds).toEqual([
+        toMigrationDefinitionId("articles"),
+        toMigrationDefinitionId("authors"),
+      ]);
+      expect(parentPlan.executionDefinitionIds).toEqual([
+        toMigrationDefinitionId("articles"),
+        toMigrationDefinitionId("authors"),
+      ]);
+      expect(parentPlan.definitions).toEqual([articles, authors]);
+    })
   );
 
   it.effect("preserves update intent in run plans", () =>
@@ -1441,9 +1451,7 @@ describe("MigrationDefinitionRegistry", () => {
         executablePlan
       ).toMatchTypeOf<MigrationDefinitionExecutableRunPlan>();
       expect(executablePlan.registryDefinitions).toEqual([articles]);
-      expect(Object.keys(executablePlan)).not.toContain(
-        "registryDefinitions"
-      );
+      expect(Object.keys(executablePlan)).not.toContain("registryDefinitions");
       // @ts-expect-error Ordinary registry plans are not accepted by startRun.
       const rejectedOrdinaryPlanStartInput: Parameters<
         typeof MigrationExecutable.startRun
@@ -1519,40 +1527,39 @@ describe("MigrationDefinitionRegistry", () => {
         definitionIds: ["articles"],
       });
 
-      const result = yield* MigrationExecutable.startRun(plan).pipe(
+      const start = yield* MigrationExecutable.startRun(plan).pipe(
         Effect.provide(MigrationExecutable.inlineDefault)
       );
 
-      expectTypeOf(result).toMatchTypeOf<
+      expectTypeOf(start).toMatchTypeOf<
         ExecutionStartResult<MigrationRunSummary>
       >();
-      expect(result.kind).toBe("completed");
+      expect(start.kind).toBe("started");
+      const summary = yield* awaitRunSummary(start);
 
-      if (result.kind === "completed") {
-        expect(result.runId).toBe(result.summary.runId);
-        expect(result.summary.status).toBe("succeeded");
-        expect(result.summary.definitions).toEqual([
-          {
-            definitionId: toMigrationDefinitionId("articles"),
-            status: "succeeded",
-            counts: {
-              migrated: 1,
-              skipped: 0,
-              failed: 0,
-              unchanged: 0,
-              needsUpdate: 0,
-            },
+      expect(start.runId).toBe(summary.runId);
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions).toEqual([
+        {
+          definitionId: toMigrationDefinitionId("articles"),
+          status: "succeeded",
+          counts: {
+            migrated: 1,
+            skipped: 0,
+            failed: 0,
+            unchanged: 0,
+            needsUpdate: 0,
           },
-        ]);
-        expect(
-          storeState.latestRunStates.get(toMigrationDefinitionId("articles"))
-        ).toEqual(
-          expect.objectContaining({
-            runId: result.runId,
-            status: "succeeded",
-          })
-        );
-      }
+        },
+      ]);
+      expect(
+        storeState.latestRunStates.get(toMigrationDefinitionId("articles"))
+      ).toEqual(
+        expect.objectContaining({
+          runId: start.runId,
+          status: "succeeded",
+        })
+      );
 
       expect(storeState.definitionLocks.size).toBe(0);
     })
@@ -1596,31 +1603,30 @@ describe("MigrationDefinitionRegistry", () => {
           sourceIdentities: ["article-1"],
         });
 
-        const result = yield* MigrationExecutable.startRun(plan).pipe(
+        const start = yield* MigrationExecutable.startRun(plan).pipe(
           Effect.provide(MigrationExecutable.inlineDefault)
         );
 
-        expect(result.kind).toBe("completed");
+        expect(start.kind).toBe("started");
+        const summary = yield* awaitRunSummary(start);
 
-        if (result.kind === "completed") {
-          expect(result.summary.definitions[0]?.counts).toEqual({
-            migrated: 1,
-            skipped: 0,
-            failed: 0,
-            unchanged: 0,
-            needsUpdate: 0,
-          });
-          expect(
-            storeState.itemStates.has(
-              InMemoryMigrationStore.itemStateKey("articles", "article-1")
-            )
-          ).toBe(true);
-          expect(
-            storeState.itemStates.has(
-              InMemoryMigrationStore.itemStateKey("articles", "article-2")
-            )
-          ).toBe(false);
-        }
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(
+          storeState.itemStates.has(
+            InMemoryMigrationStore.itemStateKey("articles", "article-1")
+          )
+        ).toBe(true);
+        expect(
+          storeState.itemStates.has(
+            InMemoryMigrationStore.itemStateKey("articles", "article-2")
+          )
+        ).toBe(false);
 
         expect(storeState.definitionLocks.size).toBe(0);
       })
@@ -1708,45 +1714,44 @@ describe("MigrationDefinitionRegistry", () => {
         const seedRun = yield* MigrationExecution.make({ registry }).run({
           definitionIds: ["articles"],
         });
-        expect(seedRun.kind).toBe("completed");
+        yield* awaitRunSummary(seedRun);
         expect(storeState.itemStates.has(itemStateKey)).toBe(true);
 
         const plan = yield* registry.executable().planRollback({
           definitionIds: ["articles"],
         });
-        const result = yield* MigrationExecutable.startRollback(plan).pipe(
+        const start = yield* MigrationExecutable.startRollback(plan).pipe(
           Effect.provide(MigrationExecutable.inlineDefault)
         );
 
-        expectTypeOf(result).toMatchTypeOf<
+        expectTypeOf(start).toMatchTypeOf<
           ExecutionStartResult<RollbackRunSummary>
         >();
-        expect(result.kind).toBe("completed");
+        expect(start.kind).toBe("started");
+        const summary = yield* awaitRunSummary(start);
 
-        if (result.kind === "completed") {
-          expect(result.runId).toBe(result.summary.runId);
-          expect(result.summary.kind).toBe("rollback");
-          expect(result.summary.status).toBe("succeeded");
-          expect(result.summary.definitions).toEqual([
-            {
-              definitionId,
-              status: "succeeded",
-              counts: {
-                rolledBack: 1,
-                failed: 0,
-                skipped: 0,
-              },
+        expect(start.runId).toBe(summary.runId);
+        expect(summary.kind).toBe("rollback");
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions).toEqual([
+          {
+            definitionId,
+            status: "succeeded",
+            counts: {
+              rolledBack: 1,
+              failed: 0,
+              skipped: 0,
             },
-          ]);
-          expect(
-            storeState.latestRunStates.get(toMigrationDefinitionId("articles"))
-          ).toEqual(
-            expect.objectContaining({
-              runId: result.runId,
-              status: "succeeded",
-            })
-          );
-        }
+          },
+        ]);
+        expect(
+          storeState.latestRunStates.get(toMigrationDefinitionId("articles"))
+        ).toEqual(
+          expect.objectContaining({
+            runId: start.runId,
+            status: "succeeded",
+          })
+        );
 
         expect(storeState.itemStates.has(itemStateKey)).toBe(false);
         expect(storeState.definitionLocks.size).toBe(0);
@@ -1823,16 +1828,12 @@ describe("MigrationDefinitionRegistry", () => {
         definitions: [articles] as const,
       });
 
-      const result = yield* MigrationExecution.make({ registry }).run({
+      const start = yield* MigrationExecution.make({ registry }).run({
         definitionIds: ["articles"],
       });
 
-      expect(result.kind).toBe("completed");
-      if (result.kind !== "completed") {
-        return;
-      }
-
-      const { summary } = result;
+      expect(start.kind).toBe("started");
+      const summary = yield* awaitRunSummary(start);
 
       expect(summary.status).toBe("succeeded");
       expect(summary.definitions).toEqual([
@@ -1912,17 +1913,13 @@ describe("MigrationDefinitionRegistry", () => {
           }
         );
 
-        const result = yield* MigrationExecution.make({ registry }).run({
+        const start = yield* MigrationExecution.make({ registry }).run({
           definitionIds: ["articles"],
           update: true,
         });
 
-        expect(result.kind).toBe("completed");
-        if (result.kind !== "completed") {
-          return;
-        }
-
-        const { summary } = result;
+        expect(start.kind).toBe("started");
+        const summary = yield* awaitRunSummary(start);
 
         expect(summary.definitions[0]?.counts).toEqual({
           migrated: 2,
@@ -1982,19 +1979,15 @@ describe("MigrationDefinitionRegistry", () => {
         const seedRun = yield* MigrationExecution.make({ registry }).run({
           definitionIds: ["articles"],
         });
-        expect(seedRun.kind).toBe("completed");
+        yield* awaitRunSummary(seedRun);
         expect(storeState.itemStates.has(itemStateKey)).toBe(true);
 
-        const result = yield* MigrationExecution.make({ registry }).rollback({
+        const start = yield* MigrationExecution.make({ registry }).rollback({
           definitionIds: ["articles"],
         });
 
-        expect(result.kind).toBe("completed");
-        if (result.kind !== "completed") {
-          return;
-        }
-
-        const { summary } = result;
+        expect(start.kind).toBe("started");
+        const summary = yield* awaitRunSummary(start);
 
         expect(summary.kind).toBe("rollback");
         expect(summary.status).toBe("succeeded");
@@ -2177,16 +2170,12 @@ describe("MigrationDefinitionRegistry", () => {
           definitions: [authors, articles] as const,
         });
 
-        const result = yield* MigrationExecution.make({ registry }).rollback({
+        const start = yield* MigrationExecution.make({ registry }).rollback({
           all: true,
         });
 
-        expect(result.kind).toBe("completed");
-        if (result.kind !== "completed") {
-          return;
-        }
-
-        const { summary } = result;
+        expect(start.kind).toBe("started");
+        const summary = yield* awaitRunSummary(start);
 
         expect(
           summary.definitions.map((definition) => definition.definitionId)

@@ -745,6 +745,35 @@ describe("FileMigrationStore", () => {
     )
   );
 
+  it.effect("persists cancelled run state", () =>
+    withTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("articles");
+        const runId = toMigrationRunId("run-cancelled-file");
+
+        yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+          yield* store.beginRun(runId, [definitionId]);
+          const cancelled = yield* store.markRunCancelled(runId, [
+            definitionId,
+          ]);
+
+          expect(cancelled).toEqual(
+            expect.objectContaining({ runId, status: "cancelled" })
+          );
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        const persisted = yield* Effect.flatMap(MigrationStore, (store) =>
+          store.getLatestRunState(definitionId)
+        ).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        expect(persisted).toEqual(
+          expect.objectContaining({ runId, status: "cancelled" })
+        );
+      })
+    )
+  );
+
   it.effect("uses persisted skipped item state in skipped mode", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {

@@ -130,9 +130,16 @@ describe("Rollback Progress state", () => {
       kind: "rollback-failed",
       runId,
     });
+    const cancelledState = reduceRollbackProgressState(completedState, {
+      definitionIds: [articles],
+      kind: "rollback-cancelled",
+      runId,
+    });
 
     expect(completedState.activeDefinitionId).toBeUndefined();
     expect(terminalState.activeDefinitionId).toBeUndefined();
     expect(failedState.activeDefinitionId).toBeUndefined();
+    expect(cancelledState.activeDefinitionId).toBeUndefined();
+    expect(cancelledState.status).toBe("cancelled");
   });
 });

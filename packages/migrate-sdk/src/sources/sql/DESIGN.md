@@ -115,8 +115,19 @@ const registry = MigrationDefinitionRegistry.make({
   definitions: [definition],
 });
 const execution = MigrationExecution.make({ registry });
+const start = yield* execution.run({ all: true });
 
-yield* execution.run({ all: true });
+if (start.kind !== "completed") {
+  if (start.handle === undefined) {
+    return yield* Effect.die("Expected attached inline execution");
+  }
+
+  const terminal = yield* start.handle.wait;
+
+  if (terminal.kind !== "finished") {
+    return yield* Effect.die(`Inline execution ended as ${terminal.kind}`);
+  }
+}
 ```
 
 If a migration config should own more than one SQL connection, close each source

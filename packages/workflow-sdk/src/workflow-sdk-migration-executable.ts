@@ -6,7 +6,6 @@ import {
   type MigrationDefinitionId,
   type MigrationDefinitionLock,
   MigrationExecutable,
-  type MigrationExecutionHandle,
   type MigrationRunId,
   MigrationRunId as MigrationRunIdSchema,
   type MigrationRunSummary,
@@ -16,7 +15,7 @@ import {
   type RollbackRunSummary,
 } from "migrate-sdk";
 import {
-  MigrationExecutionEnvelopeMissingRegistryIdError,
+  type MigrationExecutionEnvelopeMissingRegistryIdError,
   type MigrationExecutionEnvelopeType,
   makeMigrationRollbackExecutionEnvelope,
   makeMigrationRunExecutionEnvelope,
@@ -239,13 +238,13 @@ const makeStartError = (
 
 const makeAttachError = (
   runId: MigrationRunId,
-  execution: MigrationExecutionHandle,
+  execution: typeof WorkflowSdkExecutionHandle.Type,
   cause: unknown
 ): WorkflowSdkMigrationExecutableAttachError =>
   new WorkflowSdkMigrationExecutableAttachError({
     cause,
     runId,
-    execution: execution as typeof WorkflowSdkExecutionHandle.Type,
+    execution,
     message: "Workflow SDK execution identity attachment failed",
   });
 
@@ -272,7 +271,7 @@ const startWorkflow = (
   envelope: MigrationExecutionEnvelope,
   input: WorkflowSdkMigrationExecutableLayerOptions
 ): Effect.Effect<
-  MigrationExecutionHandle,
+  typeof WorkflowSdkExecutionHandle.Type,
   WorkflowSdkMigrationExecutableStartError
 > =>
   Effect.tryPromise({
@@ -355,8 +354,8 @@ const startDurablePlan = <Summary>({
 export const WorkflowSdkMigrationExecutable = {
   layer: (input: WorkflowSdkMigrationExecutableLayerOptions) =>
     Layer.succeed(MigrationExecutable, {
-      startRun: (plan: MigrationDefinitionExecutableRunPlan) => {
-        return validateMigrationRunDependencyPreflight(plan).pipe(
+      startRun: (plan: MigrationDefinitionExecutableRunPlan) =>
+        validateMigrationRunDependencyPreflight(plan).pipe(
           Effect.andThen(
             Effect.flatMap(
               validateSharedStore(plan.definitions),
@@ -370,20 +369,16 @@ export const WorkflowSdkMigrationExecutable = {
                 })
             )
           )
-        );
-      },
-      startRollback: (plan: MigrationDefinitionExecutableRollbackPlan) => {
-        return Effect.flatMap(
-          validateSharedStore(plan.definitions),
-          (storeLayer) =>
-            startDurablePlan<RollbackRunSummary>({
-              input,
-              makeEnvelope: (runId, locks) =>
-                makeMigrationRollbackExecutionEnvelope(plan, { locks, runId }),
-              scopeDefinitionIds: plan.includedDefinitionIds,
-              storeLayer,
-            })
-        );
-      },
+        ),
+      startRollback: (plan: MigrationDefinitionExecutableRollbackPlan) =>
+        Effect.flatMap(validateSharedStore(plan.definitions), (storeLayer) =>
+          startDurablePlan<RollbackRunSummary>({
+            input,
+            makeEnvelope: (runId, locks) =>
+              makeMigrationRollbackExecutionEnvelope(plan, { locks, runId }),
+            scopeDefinitionIds: plan.includedDefinitionIds,
+            storeLayer,
+          })
+        ),
     }),
 } as const;

@@ -53,6 +53,11 @@ export type MigrationProgressEvent =
     }
   | {
       readonly definitionIds: readonly MigrationDefinitionId[];
+      readonly kind: "run-cancelled";
+      readonly runId: MigrationRunId;
+    }
+  | {
+      readonly definitionIds: readonly MigrationDefinitionId[];
       readonly error: unknown;
       readonly kind: "run-failed";
       readonly runId: MigrationRunId;
@@ -62,7 +67,8 @@ export type MigrationProgressRunStatus =
   | "idle"
   | "running"
   | "succeeded"
-  | "failed";
+  | "failed"
+  | "cancelled";
 
 export type MigrationProgressDefinitionStatus =
   | "pending"
@@ -278,6 +284,13 @@ export const reduceMigrationProgressState = (
         definitionIds: event.definitionIds,
         runId: event.runId,
         status: event.status,
+      });
+    case "run-cancelled":
+      return clearActiveDefinition({
+        ...state,
+        definitionIds: event.definitionIds,
+        runId: event.runId,
+        status: "cancelled",
       });
     case "run-failed":
       return clearActiveDefinition({

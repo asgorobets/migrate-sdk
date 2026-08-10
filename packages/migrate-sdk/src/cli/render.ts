@@ -500,10 +500,12 @@ export const renderRollbackPlan = (
 
 const styleCompletionStatus = (
   value: string,
-  status: "failed" | "skipped" | "succeeded",
+  status: "cancelled" | "failed" | "skipped" | "succeeded",
   options: RenderOptions
 ): string => {
   switch (status) {
+    case "cancelled":
+      return yellow(value, options);
     case "failed":
       return red(value, options);
     case "skipped":

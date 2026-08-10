@@ -82,6 +82,7 @@ const PersistedMigrationRunState = Schema.Struct({
   status: Schema.Literals([
     "queued",
     "running",
+    "cancelled",
     "succeeded",
     "failed",
     "start-failed",
@@ -98,6 +99,7 @@ const LatestRunStateRecord = Schema.Struct({
     status: Schema.Literals([
       "queued",
       "running",
+      "cancelled",
       "succeeded",
       "failed",
       "start-failed",
@@ -1479,6 +1481,15 @@ const makeService = (
       })
   );
 
+  const markRunCancelled = Effect.fn(
+    "CommercetoolsMigrationStore.markRunCancelled"
+  )((runId: MigrationRunId, definitionIds: readonly MigrationDefinitionId[]) =>
+    updateLatestRunState(sdk, options, runId, definitionIds, {
+      finish: true,
+      status: "cancelled",
+    })
+  );
+
   const attachRunExecution = Effect.fn(
     "CommercetoolsMigrationStore.attachRunExecution"
   )(
@@ -1656,6 +1667,7 @@ const makeService = (
     failRun,
     attachRunExecution,
     markRunStartFailed,
+    markRunCancelled,
     acquireDefinitionLock,
     getDefinitionLock,
     assertDefinitionLocks,

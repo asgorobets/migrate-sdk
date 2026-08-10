@@ -145,10 +145,17 @@ describe("Migration Progress state", () => {
       kind: "run-failed",
       runId,
     });
+    const cancelledState = reduceMigrationProgressState(completedState, {
+      definitionIds: [articles],
+      kind: "run-cancelled",
+      runId,
+    });
 
     expect(completedState.activeDefinitionId).toBeUndefined();
     expect(terminalState.activeDefinitionId).toBeUndefined();
     expect(failedState.activeDefinitionId).toBeUndefined();
+    expect(cancelledState.activeDefinitionId).toBeUndefined();
+    expect(cancelledState.status).toBe("cancelled");
   });
 
   it("stores known and unknown Source Item totals per active Migration Definition", () => {

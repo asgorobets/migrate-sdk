@@ -1799,6 +1799,12 @@ describe("CommercetoolsMigrationStore", () => {
       const rerun = toMigrationRunId("run-latest-state-retry");
       const retryRunning = yield* store.beginRun(rerun, definitionIds);
       const failed = yield* store.failRun(rerun, definitionIds);
+      const cancelledRunId = toMigrationRunId("run-latest-state-cancelled");
+      yield* store.beginRun(cancelledRunId, definitionIds);
+      const cancelled = yield* store.markRunCancelled(
+        cancelledRunId,
+        definitionIds
+      );
 
       expect(running).toMatchObject({
         definitionIds,
@@ -1822,6 +1828,12 @@ describe("CommercetoolsMigrationStore", () => {
         status: "failed",
       });
       expect(failed.finishedAt).toBeInstanceOf(Date);
+      expect(cancelled).toMatchObject({
+        definitionIds,
+        runId: cancelledRunId,
+        status: "cancelled",
+      });
+      expect(cancelled.finishedAt).toBeInstanceOf(Date);
 
       const expectedKeys = definitionIds.map(latestRunStateKey);
       const upserts = recording.requests.filter(
@@ -1831,8 +1843,8 @@ describe("CommercetoolsMigrationStore", () => {
         (request) => request.method === "GET"
       );
 
-      expect(upserts).toHaveLength(8);
-      expect(lookups).toHaveLength(6);
+      expect(upserts).toHaveLength(12);
+      expect(lookups).toHaveLength(9);
       expect(
         upserts.every((request) =>
           expectedKeys.includes(customObjectKey(request) ?? "")

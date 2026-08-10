@@ -17,12 +17,12 @@ import {
   toSourceVersion,
 } from "migrate-sdk";
 import {
-  makeMigrationRollbackExecutionEnvelope,
-  makeMigrationRunExecutionEnvelope,
   MigrationDefinitionRegistryCatalog,
   MigrationExecutionJob,
   MigrationRollbackExecutor,
   MigrationRunExecutor,
+  makeMigrationRollbackExecutionEnvelope,
+  makeMigrationRunExecutionEnvelope,
 } from "migrate-sdk/core";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
@@ -153,50 +153,52 @@ describe("MigrationExecutionJob", () => {
     })
   );
 
-  it.effect("executes run jobs with the envelope run id after re-planning", () =>
-    Effect.gen(function* () {
-      const storeState = InMemoryMigrationStore.makeState();
-      const articles = MigrationDefinition.make({
-        id: "articles",
-        source: makeArticlesSource(),
-        store: InMemoryMigrationStore.layer(storeState),
-        process: () => Effect.void,
-      });
-      const registry = MigrationDefinitionRegistry.make({
-        id: "catalog",
-        definitions: [articles] as const,
-      });
-      const plan = yield* registry.executable().planRun({
-        definitionIds: ["articles"],
-      });
-      const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
-        runId: "run-envelope",
-      });
+  it.effect(
+    "executes run jobs with the envelope run id after re-planning",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const articles = MigrationDefinition.make({
+          id: "articles",
+          source: makeArticlesSource(),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () => Effect.void,
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          id: "catalog",
+          definitions: [articles] as const,
+        });
+        const plan = yield* registry.executable().planRun({
+          definitionIds: ["articles"],
+        });
+        const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
+          runId: "run-envelope",
+        });
 
-      const job = yield* MigrationExecutionJob.fromEnvelope({
-        ...envelope,
-        executionDefinitionIds: [],
-      }).pipe(Effect.provide(provideExecutionJobRuntime(registry)));
-      expect(job.kind).toBe("run");
-      expect(job.options.runId).toBe(toMigrationRunId("run-envelope"));
-      expect(job.plan.executionDefinitionIds).toEqual([
-        toMigrationDefinitionId("articles"),
-      ]);
+        const job = yield* MigrationExecutionJob.fromEnvelope({
+          ...envelope,
+          executionDefinitionIds: [],
+        }).pipe(Effect.provide(provideExecutionJobRuntime(registry)));
+        expect(job.kind).toBe("run");
+        expect(job.options.runId).toBe(toMigrationRunId("run-envelope"));
+        expect(job.plan.executionDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+        ]);
 
-      const summary = yield* MigrationExecutionJob.execute(job).pipe(
-        Effect.provide(provideExecutionJobRuntime(registry))
-      );
+        const summary = yield* MigrationExecutionJob.execute(job).pipe(
+          Effect.provide(provideExecutionJobRuntime(registry))
+        );
 
-      expect(summary.runId).toBe(toMigrationRunId("run-envelope"));
-      expect(
-        storeState.latestRunStates.get(toMigrationDefinitionId("articles"))
-      ).toEqual(
-        expect.objectContaining({
-          runId: toMigrationRunId("run-envelope"),
-          status: "succeeded",
-        })
-      );
-    })
+        expect(summary.runId).toBe(toMigrationRunId("run-envelope"));
+        expect(
+          storeState.latestRunStates.get(toMigrationDefinitionId("articles"))
+        ).toEqual(
+          expect.objectContaining({
+            runId: toMigrationRunId("run-envelope"),
+            status: "succeeded",
+          })
+        );
+      })
   );
 
   it.effect("executes run jobs with workflow-owned locks", () =>
@@ -269,7 +271,12 @@ describe("MigrationExecutionJob", () => {
         const run = yield* MigrationExecution.make({ registry }).run({
           definitionIds: ["articles"],
         });
-        expect(run.kind).toBe("completed");
+        expect(run.kind).toBe("started");
+        if (run.kind !== "started" || run.handle === undefined) {
+          return yield* Effect.die("Expected attached inline execution");
+        }
+        const terminal = yield* run.handle.wait;
+        expect(terminal.kind).toBe("finished");
         const migratedState = storeState.itemStates.get(
           InMemoryMigrationStore.itemStateKey("articles", "article-1")
         );

@@ -16,6 +16,11 @@ import type {
   MigrationDefinitionRegistryStatusError,
   MigrationDefinitionRegistryStatusInput,
 } from "../domain/registry.ts";
+import type {
+  ExecutionStartResult,
+  MigrationRunHandle,
+  MigrationRunTerminalResult,
+} from "../domain/run.ts";
 import { MigrationExecutable } from "../services/migration-executable.ts";
 import {
   MigrationExecution,
@@ -28,6 +33,7 @@ import {
   loadMigrationCliConfig,
   type MigrationCliConfigLoadError,
 } from "./config-loader.ts";
+import type { ActiveMigrationCliInterrupts } from "./interrupts.ts";
 import {
   type CliProgressMode,
   makeCliProgressLayer,
@@ -40,8 +46,10 @@ import {
   renderRegistryList,
   renderRollbackPlan,
   renderRollbackStartResult,
+  renderRollbackSummary,
   renderRunPlan,
   renderRunStartResult,
+  renderRunSummary,
   renderRuntimeError,
   renderStatusReport,
 } from "./render.ts";
@@ -60,6 +68,148 @@ const useColor = Effect.map(
   MigrationCliRuntime,
   (runtime) => runtime.useColor === true
 );
+
+const waitForCancelledRun = <Summary>(
+  handle: MigrationRunHandle<Summary>,
+  interrupts: ActiveMigrationCliInterrupts,
+  label: "migration" | "rollback"
+): Effect.Effect<MigrationRunTerminalResult<Summary>> =>
+  Effect.suspend(() =>
+    Effect.raceFirst(
+      handle.wait.pipe(
+        Effect.map((result) => ({ kind: "terminal" as const, result }))
+      ),
+      interrupts.wait.pipe(Effect.as({ kind: "interrupt" as const }))
+    ).pipe(
+      Effect.flatMap((event) => {
+        if (event.kind === "terminal") {
+          return Effect.succeed(event.result);
+        }
+
+        return Effect.raceFirst(
+          handle.wait.pipe(
+            Effect.map((result) => ({ kind: "terminal" as const, result }))
+          ),
+          interrupts.confirmUnsafeExit.pipe(
+            Effect.map((confirmed) => ({
+              confirmed,
+              kind: "confirmed" as const,
+            }))
+          )
+        ).pipe(
+          Effect.flatMap((confirmation) => {
+            if (confirmation.kind === "terminal") {
+              return Effect.succeed(confirmation.result);
+            }
+
+            if (!confirmation.confirmed) {
+              return Console.error(
+                `Unsafe shutdown declined; continuing to drain active ${label} work.`
+              ).pipe(
+                Effect.andThen(waitForCancelledRun(handle, interrupts, label))
+              );
+            }
+
+            return Console.error(
+              "Unsafe shutdown confirmed. Destination changes may not have matching migration state; forcing exit."
+            ).pipe(Effect.andThen(interrupts.forceExit));
+          })
+        );
+      })
+    )
+  );
+
+const waitForRunWithInterrupts = <Summary>(
+  handle: MigrationRunHandle<Summary>,
+  interrupts: ActiveMigrationCliInterrupts,
+  label: "migration" | "rollback"
+): Effect.Effect<MigrationRunTerminalResult<Summary>> =>
+  Effect.gen(function* () {
+    const first = yield* Effect.raceFirst(
+      handle.wait.pipe(
+        Effect.map((result) => ({ kind: "terminal" as const, result }))
+      ),
+      interrupts.wait.pipe(Effect.as({ kind: "interrupt" as const }))
+    );
+
+    if (first.kind === "terminal") {
+      return first.result;
+    }
+
+    yield* Console.error(
+      `Cancellation requested; draining active ${label} work. Press Ctrl+C again to review unsafe shutdown consequences.`
+    );
+    yield* handle.cancel;
+
+    return yield* waitForCancelledRun(handle, interrupts, label);
+  });
+
+export const waitForRun = <Summary>(
+  handle: MigrationRunHandle<Summary>,
+  runtime: typeof MigrationCliRuntime.Service,
+  label: "migration" | "rollback"
+): Effect.Effect<MigrationRunTerminalResult<Summary>> =>
+  runtime.interrupts === undefined
+    ? handle.wait
+    : runtime.interrupts.withInterrupts((interrupts) =>
+        waitForRunWithInterrupts(handle, interrupts, label)
+      );
+
+export const startAndWaitForRun = <Summary, Error, Requirements>(
+  start: Effect.Effect<ExecutionStartResult<Summary>, Error, Requirements>,
+  runtime: typeof MigrationCliRuntime.Service,
+  label: "migration" | "rollback"
+): Effect.Effect<
+  ExecutionStartResult<Summary> | MigrationRunTerminalResult<Summary>,
+  Error,
+  Requirements
+> =>
+  Effect.flatMap(
+    start,
+    (
+      result
+    ): Effect.Effect<
+      ExecutionStartResult<Summary> | MigrationRunTerminalResult<Summary>
+    > =>
+      result.kind === "started" && result.handle !== undefined
+        ? waitForRun(result.handle, runtime, label)
+        : Effect.succeed(result)
+  );
+
+const renderTerminalState = (
+  result: MigrationRunTerminalResult<unknown>,
+  label: "Rollback" | "Run"
+): string => `${label} ${result.state.status}\nRun id ${result.state.runId}`;
+
+const renderStoredFailure = (failure: unknown): string => {
+  if (
+    typeof failure === "object" &&
+    failure !== null &&
+    "_tag" in failure &&
+    typeof failure._tag === "string"
+  ) {
+    return renderRuntimeError(
+      failure as { readonly _tag: string; readonly message?: string }
+    );
+  }
+
+  if (failure instanceof Error) {
+    return `${failure.name}: ${failure.message}`;
+  }
+
+  if (
+    typeof failure === "object" &&
+    failure !== null &&
+    "message" in failure &&
+    typeof failure.message === "string"
+  ) {
+    return "name" in failure && typeof failure.name === "string"
+      ? `${failure.name}: ${failure.message}`
+      : failure.message;
+  }
+
+  return String(failure ?? "Migration run failed");
+};
 
 const failConfigLoad = (
   error: MigrationCliConfigLoadError
@@ -86,6 +236,49 @@ const failReportedCliMessage = (
       )
     )
   );
+
+export const failCancelledCliMessage = (
+  message: string
+): Effect.Effect<never, CliError.UserError> =>
+  Console.log(message).pipe(
+    Effect.andThen(
+      Effect.fail(
+        Object.assign(new CliError.UserError({ cause: message }), {
+          [Runtime.errorExitCode]: 130,
+          [Runtime.errorReported]: false,
+        })
+      )
+    )
+  );
+
+interface ExecutionOutcomeRenderer<Summary> {
+  readonly label: "Rollback" | "Run";
+  readonly renderStart: (result: ExecutionStartResult<Summary>) => string;
+  readonly renderSummary: (summary: Summary) => string;
+}
+
+const reportExecutionOutcome = <Summary>(
+  result: ExecutionStartResult<Summary> | MigrationRunTerminalResult<Summary>,
+  renderer: ExecutionOutcomeRenderer<Summary>
+): Effect.Effect<void, CliError.UserError> => {
+  switch (result.kind) {
+    case "completed":
+    case "started":
+      return Console.log(renderer.renderStart(result));
+    case "execution-failed":
+      return failReportedCliMessage(renderStoredFailure(result.cause));
+    case "cancelled":
+      return failCancelledCliMessage(
+        renderTerminalState(result, renderer.label)
+      );
+    case "finished":
+      return Console.log(renderer.renderSummary(result.summary));
+    default: {
+      const unhandledResult: never = result;
+      return unhandledResult;
+    }
+  }
+};
 
 const loadConfiguredConfig = Effect.gen(function* () {
   const root = yield* migrateBaseCommand;
@@ -680,7 +873,11 @@ const runCommand = Command.make(
 
       const runtime = yield* MigrationCliRuntime;
       const configuredExecution = yield* makeConfiguredExecution(loadedConfig);
-      const result = yield* configuredExecution.run(runInput).pipe(
+      const result = yield* startAndWaitForRun(
+        configuredExecution.run(runInput),
+        runtime,
+        "migration"
+      ).pipe(
         Effect.provide(makeCliProgressLayer(input.progress, runtime)),
         Effect.catch((error) =>
           failReportedCliMessage(
@@ -694,9 +891,12 @@ const runCommand = Command.make(
         )
       );
 
-      yield* Console.log(
-        renderRunStartResult(result, { colors: yield* useColor })
-      );
+      const colors = yield* useColor;
+      yield* reportExecutionOutcome(result, {
+        label: "Run",
+        renderStart: (start) => renderRunStartResult(start, { colors }),
+        renderSummary: (summary) => renderRunSummary(summary, { colors }),
+      });
     })
 ).pipe(Command.withDescription("Plan or run Migration Definitions"));
 
@@ -765,7 +965,11 @@ const rollbackCommand = Command.make(
 
       const runtime = yield* MigrationCliRuntime;
       const configuredExecution = yield* makeConfiguredExecution(loadedConfig);
-      const result = yield* configuredExecution.rollback(rollbackInput).pipe(
+      const result = yield* startAndWaitForRun(
+        configuredExecution.rollback(rollbackInput),
+        runtime,
+        "rollback"
+      ).pipe(
         Effect.provide(makeCliRollbackProgressLayer(input.progress, runtime)),
         Effect.catch((error) =>
           failReportedCliMessage(
@@ -777,9 +981,12 @@ const rollbackCommand = Command.make(
         )
       );
 
-      yield* Console.log(
-        renderRollbackStartResult(result, { colors: yield* useColor })
-      );
+      const colors = yield* useColor;
+      yield* reportExecutionOutcome(result, {
+        label: "Rollback",
+        renderStart: (start) => renderRollbackStartResult(start, { colors }),
+        renderSummary: (summary) => renderRollbackSummary(summary, { colors }),
+      });
     })
 ).pipe(Command.withDescription("Plan or rollback Migration Definitions"));
 

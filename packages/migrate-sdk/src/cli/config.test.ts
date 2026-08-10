@@ -21,13 +21,13 @@ describe("defineMigrationCliConfig", () => {
     const executableLayer = Layer.succeed(MigrationExecutable, {
       startRun: () =>
         Effect.succeed({
-          execution: { adapter: "test" },
+          execution: { adapter: "test", executionId: "run-test" },
           kind: "started",
           runId: toMigrationRunId("run-test"),
         }),
       startRollback: () =>
         Effect.succeed({
-          execution: { adapter: "test" },
+          execution: { adapter: "test", executionId: "rollback-test" },
           kind: "started",
           runId: toMigrationRunId("rollback-test"),
         }),

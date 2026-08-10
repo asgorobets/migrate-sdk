@@ -110,7 +110,9 @@ A typed planning error raised when runtime metadata says a selected migration de
 An Effect service that executes planned migration runs and rollback runs.
 
 **Migration Execution**:
-An Effect service for observing and controlling migration execution after it has started.
+An Effect service that resolves or binds a Migration Definition Registry, plans
+a run or rollback request, and delegates the executable plan to a Migration
+Executable.
 
 **Migration Definition Lock**:
 A durable ownership record that prevents multiple runners from executing the same migration definition concurrently.
@@ -126,6 +128,14 @@ One execution attempt of one or more migration definitions.
 
 **Migration Run State**:
 The durable state for one migration run.
+
+**Migration Run Handle**:
+A run-scoped capability for observing and cooperatively cancelling work owned by
+the current execution host.
+
+**Migration Run Handle State**:
+The current host's in-memory view of an attached migration run. It may be
+`cancelling` before terminal cancellation is persisted as Migration Run State.
 
 **Migration Run Summary**:
 The structured result returned after a migration run completes or fails.
@@ -347,7 +357,9 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Migration Executable** executes planned runs and rollback runs; it does not select migration definitions from a registry.
 - A **Migration Executable** is provided through an Effect layer selected by the SDK host, CLI host, or application.
 - A **Migration Execution** is separate from a **Migration Executable**.
-- A **Migration Execution** observes and controls started execution by **Migration Run** id.
+- A **Migration Execution** selects and plans registry-bound work; a **Migration Executable** starts it.
+- An attached **Migration Run Handle** observes and cooperatively cancels work owned by the current host.
+- Detached execution is observed through the execution provider's identity and native observability surface.
 - Existing function-style run and rollback entrypoints may delegate to the default inline **Migration Executable** for compatibility.
 - A **Migration Executable** allocates the **Migration Run** id when starting execution.
 - A durable **Migration Executable** creates **Migration Run State** before returning a started **Execution Start Result**.

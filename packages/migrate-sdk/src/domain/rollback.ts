@@ -194,7 +194,7 @@ export interface RollbackRunSummary {
   readonly kind: "rollback";
   readonly runId: MigrationRunId;
   readonly startedAt: Date;
-  readonly status: "succeeded" | "failed";
+  readonly status: "succeeded" | "failed" | "cancelled";
 }
 
 export const RollbackRunSummary = Schema.Struct({
@@ -203,5 +203,5 @@ export const RollbackRunSummary = Schema.Struct({
   finishedAt: Schema.Date,
   runId: MigrationRunId,
   startedAt: Schema.Date,
-  status: Schema.Literals(["succeeded", "failed"]),
+  status: Schema.Literals(["succeeded", "failed", "cancelled"]),
 });

@@ -4,9 +4,8 @@ import { Command } from "effect/unstable/cli";
 import { migrateCommand } from "./command.ts";
 import { MigrationCliRuntime } from "./runtime.ts";
 
-const runtimeLayer = Layer.mergeAll(
-  nodeServicesLayer,
-  MigrationCliRuntime.live
+const runtimeLayer = MigrationCliRuntime.live.pipe(
+  Layer.provideMerge(nodeServicesLayer)
 );
 
 export const run = Command.run(migrateCommand, {

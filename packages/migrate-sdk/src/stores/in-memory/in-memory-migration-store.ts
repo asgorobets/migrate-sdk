@@ -317,6 +317,27 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       return failed;
     });
 
+    const markRunCancelled = Effect.fn(
+      "InMemoryMigrationStore.markRunCancelled"
+    )(function* (
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[]
+    ) {
+      const current = yield* readRunState(state, runId, definitionIds);
+      const finishedAt = yield* DateTime.nowAsDate;
+      const cancelled: MigrationRunState = {
+        ...current,
+        status: "cancelled",
+        finishedAt,
+      };
+
+      for (const definitionId of definitionIds) {
+        state.latestRunStates.set(definitionId, cancelled);
+      }
+
+      return cancelled;
+    });
+
     const acquireDefinitionLock = Effect.fn(
       "InMemoryMigrationStore.acquireDefinitionLock"
     )(function* (
@@ -428,6 +449,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       queueRun,
       attachRunExecution,
       markRunStartFailed,
+      markRunCancelled,
       completeRun,
       failRun,
       acquireDefinitionLock,

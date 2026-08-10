@@ -247,11 +247,21 @@ export const runProductCatalogStoreMigration: (
     definitions: [products] as const,
   });
   const execution = MigrationExecution.make({ registry });
-  const result = yield* execution.run({ all: true });
-  const summary =
-    result.kind === "completed"
-      ? result.summary
-      : yield* Effect.die("Inline example execution unexpectedly started");
+  const start = yield* execution.run({ all: true });
+  let summary: MigrationRunSummary;
+
+  if (start.kind === "completed") {
+    summary = start.summary;
+  } else if (start.handle === undefined) {
+    return yield* Effect.die("Inline example execution detached unexpectedly");
+  } else {
+    summary = yield* Effect.flatMap(start.handle.wait, (result) =>
+      result.kind === "finished"
+        ? Effect.succeed(result.summary)
+        : Effect.die(`Inline example execution ended as ${result.kind}`)
+    );
+  }
+
   const itemStates = yield* listProductItemStates(options.storeLayer);
 
   return {
