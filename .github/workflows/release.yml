@@ -41,6 +41,9 @@ jobs:
       - name: Validate packages
         run: pnpm run validate-packages
 
+      - name: Smoke test SQL providers
+        run: pnpm run test:sql:smoke
+
   release:
     name: Release
     needs: validate

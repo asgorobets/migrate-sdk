@@ -1,0 +1,56 @@
+name: migrate-sdk-sql-smoke
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: migrate_sdk
+      POSTGRES_PASSWORD: migrate_sdk
+      POSTGRES_USER: migrate_sdk
+    ports:
+      - "127.0.0.1:55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U migrate_sdk -d migrate_sdk"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: migrate_sdk
+      MYSQL_INITDB_SKIP_TZINFO: "1"
+      MYSQL_PASSWORD: migrate_sdk
+      MYSQL_ROOT_PASSWORD: migrate_sdk_root
+      MYSQL_USER: migrate_sdk
+    ports:
+      - "127.0.0.1:53306:3306"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h 127.0.0.1 -u migrate_sdk -pmigrate_sdk --silent",
+        ]
+      interval: 2s
+      timeout: 5s
+      retries: 45
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: "MigrateSdk!2026"
+    ports:
+      - "127.0.0.1:51433:1433"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -Q \"SELECT 1\" -C -b -o /dev/null",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 60
+      start_period: 20s

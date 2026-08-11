@@ -128,10 +128,14 @@
     "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
     "check-types": "tsc --noEmit -p tsconfig.check.json",
     "test": "vitest run",
+    "test:sql:smoke": "vitest run --config vitest.sql.config.ts",
     "test:watch": "vitest"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",
+    "@effect/sql-mssql": "catalog:",
+    "@effect/sql-mysql2": "catalog:",
+    "@effect/sql-pg": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@repo/typescript-config": "workspace:*",

@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { configDefaults, defineConfig } from "vitest/config";
+import { defineConfig } from "vitest/config";
 
 const sourcePath = (path: string) =>
   fileURLToPath(new URL(`./src/${path}`, import.meta.url));
@@ -12,6 +12,7 @@ export default defineConfig({
     ],
   },
   test: {
-    exclude: [...configDefaults.exclude, "src/**/*.integration.test.ts"],
+    include: ["src/stores/sql/**/*.integration.test.ts"],
+    testTimeout: 30_000,
   },
 });
