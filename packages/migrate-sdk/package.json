@@ -100,6 +100,12 @@
       "source": "./src/stores/in-memory/index.ts",
       "import": "./dist/stores/in-memory/index.js"
     },
+    "./stores/sql": {
+      "types": "./dist/stores/sql/index.d.ts",
+      "bun": "./src/stores/sql/index.ts",
+      "source": "./src/stores/sql/index.ts",
+      "import": "./dist/stores/sql/index.js"
+    },
     "./testing": {
       "types": "./dist/testing.d.ts",
       "bun": "./src/testing.ts",

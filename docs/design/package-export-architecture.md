@@ -36,6 +36,7 @@ First-party sources live under feature folders inside that package:
 packages/migrate-sdk/src/sources/csv/
 packages/migrate-sdk/src/destinations/in-memory/
 packages/migrate-sdk/src/stores/file/
+packages/migrate-sdk/src/stores/sql/
 ```
 
 Each public feature folder owns an `index.ts` entrypoint. Private implementation
@@ -70,6 +71,7 @@ isolation:
 import { MigrationDefinition, Source } from "migrate-sdk/core";
 import { CsvSource } from "migrate-sdk/sources/csv";
 import { FileMigrationStore } from "migrate-sdk/stores/file";
+import { SqlMigrationStore } from "migrate-sdk/stores/sql";
 ```
 
 The `core` subpath carries domain definitions, service tags, and authoring
@@ -116,6 +118,7 @@ import { TestDurableMigrationExecutable } from "migrate-sdk/testing";
     "./runtime": "./src/runtime/index.ts",
     "./stores/file": "./src/stores/file/index.ts",
     "./stores/in-memory": "./src/stores/in-memory/index.ts",
+    "./stores/sql": "./src/stores/sql/index.ts",
     "./testing": "./src/testing.ts",
     "./*/internal/*": null
   }
