@@ -29,5 +29,9 @@
     "rootDir": "."
   },
   "exclude": ["node_modules", "dist"],
-  "include": ["examples/**/*.ts", "src"]
+  "include": [
+    "examples/**/*.ts",
+    "src",
+    "test-fixtures/sql-smoke/migrate.config.ts"
+  ]
 }

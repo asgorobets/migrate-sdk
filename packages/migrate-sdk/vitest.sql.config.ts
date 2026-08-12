@@ -12,7 +12,10 @@ export default defineConfig({
     ],
   },
   test: {
-    include: ["src/stores/sql/**/*.integration.test.ts"],
+    include: [
+      "src/cli/sql-cli.integration.test.ts",
+      "src/stores/sql/sql-migration-store.integration.test.ts",
+    ],
     testTimeout: 30_000,
   },
 });
