@@ -1,5 +1,23 @@
 # migrate-sdk
 
+## 0.6.0
+
+### Minor Changes
+
+- f3bffe2: Add an Effect SQL-backed Migration Store for PostgreSQL, SQLite, MySQL, and SQL
+  Server with queryable relational state, dialect-native upserts, observable run
+  lifecycle, and cross-process definition locks.
+- cbad8e5: Let each migration definition declare one optional group, and select the
+  aggregated group through the SDK or `run`, `rollback`, and `status` CLI commands
+  with `--group`.
+- 6406913: Add attached inline run handles with signal-driven observation and cooperative
+  cancellation. The CLI now drains active migration work after Ctrl+C, protects
+  partial cursor windows, and requires explicit confirmation before an unsafe
+  second interrupt. Once drained, a cancelled CLI command exits with code 130.
+  Terminal state is persisted before definition locks are released, including
+  unexpected execution defects. Detached executors continue to return provider
+  execution identity without SDK polling.
+
 ## 0.5.0
 
 ### Minor Changes
