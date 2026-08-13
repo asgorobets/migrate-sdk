@@ -15,11 +15,14 @@ import type {
 import { normalizeMigrationExecutionOptions } from "./execution.ts";
 import {
   type EncodedSourceIdentity,
+  type MigrationDefinitionGroupId,
+  type MigrationDefinitionGroupIdInput,
   type MigrationDefinitionId,
   type MigrationDefinitionIdInput,
   type MigrationRunId,
   type SourceIdentityDefinition,
   type SourceIdentitySnapshotKey,
+  toMigrationDefinitionGroupId,
   toMigrationDefinitionId,
 } from "./ids.ts";
 import {
@@ -536,6 +539,7 @@ interface MigrationDefinitionBase<
 > {
   readonly dependencies?: MigrationDefinitionDependencies;
   readonly execution?: NormalizedMigrationExecutionOptions;
+  readonly group?: MigrationDefinitionGroupId;
   readonly id: MigrationDefinitionId;
   readonly process: ProcessPipeline<
     Payload,
@@ -714,11 +718,16 @@ export type MigrationDefinitionInput<
     SourceRequirements,
     TrackingContract
   >,
-  "dependencies" | "execution" | "id" | typeof migrationDefinitionTypeId
+  | "dependencies"
+  | "execution"
+  | "group"
+  | "id"
+  | typeof migrationDefinitionTypeId
 > &
   MigrationDefinitionTrackingInput<TrackingContract> & {
     readonly dependencies?: MigrationDefinitionDependenciesInput;
     readonly execution?: MigrationExecutionOptions;
+    readonly group?: MigrationDefinitionGroupIdInput;
     readonly id: MigrationDefinitionIdInput;
   };
 
@@ -851,6 +860,7 @@ function makeMigrationDefinition<
   const {
     dependencies,
     execution: executionInput,
+    group,
     id,
     tracking,
     ...rest
@@ -873,6 +883,9 @@ function makeMigrationDefinition<
     [migrationDefinitionTypeId]: undefined as never,
     ...rest,
     ...(execution === undefined ? {} : { execution }),
+    ...(group === undefined
+      ? {}
+      : { group: toMigrationDefinitionGroupId(group) }),
     id: toMigrationDefinitionId(id),
     ...(tracking === undefined ? {} : { tracking }),
     ...(hasDependencies

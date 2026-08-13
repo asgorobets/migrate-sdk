@@ -5,9 +5,9 @@ import {
   SourceIdentity,
   toMigrationDefinitionId,
 } from "migrate-sdk";
+import { defineMigrationCliConfig } from "migrate-sdk/cli";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
-import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
 const EntrySource = Schema.Struct({ title: Schema.String });
 const EntrySourceIdentity = SourceIdentity.make({
@@ -25,6 +25,7 @@ globalThis.__migrateSdkCliExecutionProbe = probe;
 
 const definition = (id, title, input = {}) =>
   MigrationDefinition.make({
+    group: "articles",
     id: toMigrationDefinitionId(id),
     source: InMemorySource.make({
       identity: EntrySourceIdentity,

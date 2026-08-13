@@ -13,6 +13,7 @@ import type {
   MigrationDefinitionRegistryPlanningError,
   MigrationDefinitionRegistryRollbackInput,
   MigrationDefinitionRegistryRunInput,
+  MigrationDefinitionRegistrySelectionInput,
   MigrationDefinitionRegistryStatusError,
   MigrationDefinitionRegistryStatusInput,
 } from "../domain/registry.ts";
@@ -376,6 +377,11 @@ const all = Flag.boolean("all").pipe(
   Flag.withDescription("Select every registered Migration Definition")
 );
 
+const group = Flag.string("group").pipe(
+  Flag.optional,
+  Flag.withDescription("Select a Migration Definition group")
+);
+
 const withDependencies = Flag.boolean("with-dependencies").pipe(
   Flag.withDescription("Expand required Migration Definition dependencies")
 );
@@ -467,160 +473,94 @@ const parsePipelineExecutionConcurrency = (
       );
 };
 
-const makeRunPlanInput = (input: {
+interface CliRegistrySelectionInput {
   readonly all: boolean;
   readonly definitionIds: readonly string[];
-  readonly execution?: MigrationExecutionOptions;
-  readonly force: boolean;
-  readonly mode?: "failed" | "skipped";
-  readonly sourceIdentities?: readonly string[];
-  readonly update: boolean;
+  readonly group?: string;
   readonly withDependencies: boolean;
-}): MigrationDefinitionRegistryRunInput => {
-  const updateInput: { readonly update?: true } = input.update
-    ? { update: true }
-    : {};
-  const forceInput: { readonly force?: true } = input.force
-    ? { force: true }
-    : {};
+}
+
+const makeRegistrySelectionInput = (
+  input: CliRegistrySelectionInput
+): MigrationDefinitionRegistrySelectionInput => {
+  if (input.group !== undefined) {
+    return {
+      group: input.group,
+      ...(input.all ? { all: true } : {}),
+      ...(input.definitionIds.length === 0
+        ? {}
+        : { definitionIds: input.definitionIds }),
+      withDependencies: input.withDependencies,
+    } as unknown as MigrationDefinitionRegistrySelectionInput;
+  }
 
   if (input.all) {
-    return input.definitionIds.length === 0
-      ? {
-          all: true,
-          ...forceInput,
-          ...updateInput,
-          ...(input.sourceIdentities === undefined
-            ? {}
-            : { sourceIdentities: input.sourceIdentities }),
-          ...(input.execution === undefined
-            ? {}
-            : { execution: input.execution }),
-          ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
-          withDependencies: input.withDependencies,
-        }
-      : ({
-          all: true,
-          definitionIds: input.definitionIds,
-          ...forceInput,
-          ...updateInput,
-          ...(input.sourceIdentities === undefined
-            ? {}
-            : { sourceIdentities: input.sourceIdentities }),
-          ...(input.execution === undefined
-            ? {}
-            : { execution: input.execution }),
-          ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
-          withDependencies: input.withDependencies,
-        } as unknown as MigrationDefinitionRegistryRunInput);
+    return {
+      all: true,
+      ...(input.definitionIds.length === 0
+        ? {}
+        : { definitionIds: input.definitionIds }),
+      withDependencies: input.withDependencies,
+    } as MigrationDefinitionRegistrySelectionInput;
   }
 
   return input.definitionIds.length === 0
-    ? ({} as MigrationDefinitionRegistryRunInput)
+    ? ({} as MigrationDefinitionRegistrySelectionInput)
     : {
         definitionIds: input.definitionIds as [string, ...string[]],
-        ...forceInput,
-        ...updateInput,
-        ...(input.sourceIdentities === undefined
-          ? {}
-          : { sourceIdentities: input.sourceIdentities }),
-        ...(input.execution === undefined
-          ? {}
-          : { execution: input.execution }),
-        ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
         withDependencies: input.withDependencies,
       };
 };
 
-const makeRollbackPlanInput = (input: {
-  readonly all: boolean;
-  readonly definitionIds: readonly string[];
-  readonly execution?: MigrationExecutionOptions;
-  readonly force: boolean;
-  readonly sourceIdentities?: readonly string[];
-  readonly withDependencies: boolean;
-}): MigrationDefinitionRegistryRollbackInput => {
-  const forceInput: { readonly force?: true } = input.force
-    ? { force: true }
-    : {};
-
-  if (input.all) {
-    return input.definitionIds.length === 0
-      ? {
-          all: true,
-          ...forceInput,
-          ...(input.sourceIdentities === undefined
-            ? {}
-            : { sourceIdentities: input.sourceIdentities }),
-          ...(input.execution === undefined
-            ? {}
-            : { execution: input.execution }),
-          withDependencies: input.withDependencies,
-        }
-      : ({
-          all: true,
-          definitionIds: input.definitionIds,
-          ...forceInput,
-          ...(input.sourceIdentities === undefined
-            ? {}
-            : { sourceIdentities: input.sourceIdentities }),
-          ...(input.execution === undefined
-            ? {}
-            : { execution: input.execution }),
-          withDependencies: input.withDependencies,
-        } as MigrationDefinitionRegistryRollbackInput);
+const makeRunPlanInput = (
+  input: CliRegistrySelectionInput & {
+    readonly execution?: MigrationExecutionOptions;
+    readonly force: boolean;
+    readonly mode?: "failed" | "skipped";
+    readonly sourceIdentities?: readonly string[];
+    readonly update: boolean;
   }
+): MigrationDefinitionRegistryRunInput =>
+  ({
+    ...makeRegistrySelectionInput(input),
+    ...(input.execution === undefined ? {} : { execution: input.execution }),
+    ...(input.force ? { force: true as const } : {}),
+    ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
+    ...(input.sourceIdentities === undefined
+      ? {}
+      : { sourceIdentities: input.sourceIdentities }),
+    ...(input.update ? { update: true as const } : {}),
+  }) as MigrationDefinitionRegistryRunInput;
 
-  return input.definitionIds.length === 0
-    ? ({} as MigrationDefinitionRegistryRollbackInput)
-    : {
-        definitionIds: input.definitionIds as [string, ...string[]],
-        ...forceInput,
-        ...(input.sourceIdentities === undefined
-          ? {}
-          : { sourceIdentities: input.sourceIdentities }),
-        ...(input.execution === undefined
-          ? {}
-          : { execution: input.execution }),
-        withDependencies: input.withDependencies,
-      };
-};
+const makeRollbackPlanInput = (
+  input: CliRegistrySelectionInput & {
+    readonly execution?: MigrationExecutionOptions;
+    readonly force: boolean;
+    readonly sourceIdentities?: readonly string[];
+  }
+): MigrationDefinitionRegistryRollbackInput =>
+  ({
+    ...makeRegistrySelectionInput(input),
+    ...(input.execution === undefined ? {} : { execution: input.execution }),
+    ...(input.force ? { force: true as const } : {}),
+    ...(input.sourceIdentities === undefined
+      ? {}
+      : { sourceIdentities: input.sourceIdentities }),
+  }) as MigrationDefinitionRegistryRollbackInput;
 
-const makeStatusInput = (input: {
-  readonly all: boolean;
-  readonly concurrency?: number;
-  readonly definitionIds: readonly string[];
-  readonly scanSource: boolean;
-  readonly withDependencies: boolean;
-}): MigrationDefinitionRegistryStatusInput => {
-  const statusOptions = {
+const makeStatusInput = (
+  input: CliRegistrySelectionInput & {
+    readonly concurrency?: number;
+    readonly scanSource: boolean;
+  }
+): MigrationDefinitionRegistryStatusInput =>
+  ({
+    ...makeRegistrySelectionInput(input),
     ...(input.concurrency === undefined
       ? {}
       : { concurrency: input.concurrency }),
     scanSource: input.scanSource,
-    withDependencies: input.withDependencies,
-  };
-
-  if (input.all) {
-    return input.definitionIds.length === 0
-      ? {
-          all: true,
-          ...statusOptions,
-        }
-      : ({
-          all: true,
-          definitionIds: input.definitionIds,
-          ...statusOptions,
-        } as MigrationDefinitionRegistryStatusInput);
-  }
-
-  return input.definitionIds.length === 0
-    ? ({} as MigrationDefinitionRegistryStatusInput)
-    : {
-        definitionIds: input.definitionIds as [string, ...string[]],
-        ...statusOptions,
-      };
-};
+  }) as MigrationDefinitionRegistryStatusInput;
 
 const isPlanningError = (
   error:
@@ -632,6 +572,7 @@ const isPlanningError = (
     case "MigrationDefinitionRegistryInvalidSelectionError":
     case "MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError":
     case "MigrationDefinitionRegistryUnknownDefinitionError":
+    case "MigrationDefinitionRegistryUnknownGroupError":
       return true;
     default:
       return false;
@@ -642,6 +583,7 @@ const renderRunCommandError = (
   error: MigrationExecutionRunError,
   input: {
     readonly definitionIds: readonly string[];
+    readonly group?: string;
     readonly hasTarget: boolean;
     readonly mode?: "failed" | "skipped";
     readonly update: boolean;
@@ -651,6 +593,7 @@ const renderRunCommandError = (
     ? renderPlanningError(error, {
         command: "run",
         definitionIds: input.definitionIds,
+        ...(input.group === undefined ? {} : { group: input.group }),
         hasTarget: input.hasTarget,
         ...(input.mode === undefined ? {} : { mode: input.mode }),
         update: input.update,
@@ -661,6 +604,7 @@ const renderRollbackCommandError = (
   error: MigrationExecutionRollbackError,
   input: {
     readonly definitionIds: readonly string[];
+    readonly group?: string;
     readonly hasTarget: boolean;
   }
 ): string =>
@@ -668,6 +612,7 @@ const renderRollbackCommandError = (
     ? renderPlanningError(error, {
         command: "rollback",
         definitionIds: input.definitionIds,
+        ...(input.group === undefined ? {} : { group: input.group }),
         hasTarget: input.hasTarget,
       })
     : renderRuntimeError(error);
@@ -676,12 +621,14 @@ const renderStatusCommandError = (
   error: MigrationDefinitionRegistryStatusError,
   input: {
     readonly definitionIds: readonly string[];
+    readonly group?: string;
   }
 ): string => {
   if (isPlanningError(error)) {
     return renderPlanningError(error, {
       command: "status",
       definitionIds: input.definitionIds,
+      ...(input.group === undefined ? {} : { group: input.group }),
       hasTarget: false,
     });
   }
@@ -699,6 +646,7 @@ const statusCommand = Command.make(
     all,
     concurrency: statusConcurrency,
     definitions: runDefinitions,
+    group,
     scanSource,
     withDependencies,
   },
@@ -707,12 +655,14 @@ const statusCommand = Command.make(
       const loadedConfig = yield* loadConfiguredConfig;
       const registry = loadedConfig.registry;
       const concurrencyInput = Option.getOrUndefined(input.concurrency);
+      const groupInput = Option.getOrUndefined(input.group);
       const statusInput = makeStatusInput({
         all: input.all,
         ...(concurrencyInput === undefined
           ? {}
           : { concurrency: concurrencyInput }),
         definitionIds: input.definitions,
+        ...(groupInput === undefined ? {} : { group: groupInput }),
         scanSource: input.scanSource,
         withDependencies: input.withDependencies,
       });
@@ -721,6 +671,7 @@ const statusCommand = Command.make(
           failReportedCliMessage(
             renderStatusCommandError(error, {
               definitionIds: input.definitions,
+              ...(groupInput === undefined ? {} : { group: groupInput }),
             })
           )
         )
@@ -791,6 +742,7 @@ const runCommand = Command.make(
     all,
     definitions: runDefinitions,
     failed,
+    group,
     id,
     force,
     plan,
@@ -810,6 +762,7 @@ const runCommand = Command.make(
 
       const loadedConfig = yield* loadConfiguredConfig;
       const registry = loadedConfig.registry;
+      const groupInput = Option.getOrUndefined(input.group);
       const idsInput = Option.getOrUndefined(input.id);
       const sourceIdentities =
         idsInput === undefined || idsInput.length === 0
@@ -841,6 +794,7 @@ const runCommand = Command.make(
           ? {}
           : { execution: executionOptions }),
         force: input.force,
+        ...(groupInput === undefined ? {} : { group: groupInput }),
         ...(mode === undefined ? {} : { mode }),
         ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
         update: input.update,
@@ -854,6 +808,7 @@ const runCommand = Command.make(
               renderPlanningError(error, {
                 command: "run",
                 definitionIds: input.definitions,
+                ...(groupInput === undefined ? {} : { group: groupInput }),
                 hasTarget: sourceIdentities !== undefined,
                 ...(mode === undefined ? {} : { mode }),
                 update: input.update,
@@ -883,6 +838,7 @@ const runCommand = Command.make(
           failReportedCliMessage(
             renderRunCommandError(error, {
               definitionIds: input.definitions,
+              ...(groupInput === undefined ? {} : { group: groupInput }),
               hasTarget: sourceIdentities !== undefined,
               ...(mode === undefined ? {} : { mode }),
               update: input.update,
@@ -905,6 +861,7 @@ const rollbackCommand = Command.make(
   {
     all,
     definitions: runDefinitions,
+    group,
     id,
     force,
     plan,
@@ -916,6 +873,7 @@ const rollbackCommand = Command.make(
     Effect.gen(function* () {
       const loadedConfig = yield* loadConfiguredConfig;
       const registry = loadedConfig.registry;
+      const groupInput = Option.getOrUndefined(input.group);
       const idsInput = Option.getOrUndefined(input.id);
       const sourceIdentities =
         idsInput === undefined || idsInput.length === 0
@@ -940,6 +898,7 @@ const rollbackCommand = Command.make(
           ? {}
           : { execution: executionOptions }),
         force: input.force,
+        ...(groupInput === undefined ? {} : { group: groupInput }),
         ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
         withDependencies: input.withDependencies,
       });
@@ -951,6 +910,7 @@ const rollbackCommand = Command.make(
               renderPlanningError(error, {
                 command: "rollback",
                 definitionIds: input.definitions,
+                ...(groupInput === undefined ? {} : { group: groupInput }),
                 hasTarget: sourceIdentities !== undefined,
               })
             )
@@ -975,6 +935,7 @@ const rollbackCommand = Command.make(
           failReportedCliMessage(
             renderRollbackCommandError(error, {
               definitionIds: input.definitions,
+              ...(groupInput === undefined ? {} : { group: groupInput }),
               hasTarget: sourceIdentities !== undefined,
             })
           )

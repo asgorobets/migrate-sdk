@@ -30,6 +30,8 @@ Registry construction is lazy and synchronous. It may perform pure catalog valid
 
 Registry-backed SDK and CLI operations require explicit selection. Running or rolling back every registered definition uses an explicit all selection rather than omitting definition ids. CLI commands must not silently expand required dependency scope; callers include required definitions explicitly or pass `--with-dependencies`. `--with-dependencies` expands only required dependencies; optional dependencies affect ordering only when already included by explicit selection or by all-registry execution.
 
+A migration definition may declare one `group`. The registry aggregates these declarations into named **Migration Definition Groups**. A group is an exclusive operational selection bundle, not a reusable tag or an ordering relationship: definitions that are shared by different workloads remain separate and are connected through required dependencies. Group selection expands to the definitions that declare that group and then follows the same planning, dependency preflight, execution, status, and rollback paths as explicit definition selection. `--group` is mutually exclusive with `--all` and positional definition ids; `--with-dependencies` may explicitly expand required dependencies outside the selected group.
+
 The registry exposes catalog lookup, CLI-oriented listing, and command-specific planning. Planning methods return structured plans and typed planning errors so CLI renderers can explain dependency policy failures without embedding CLI copy in the SDK. The CLI exposes planning through `run --plan` and `rollback --plan`, not through separate top-level plan or validation commands. `--plan` uses the same planning path as execution and only skips runtime execution after a valid plan is produced.
 
 Registry-bound execution through `MigrationExecution` is the public execution path. Inline callers can construct a `MigrationDefinitionRegistry` in code and call `MigrationExecution.make({ registry }).run(...)` or `.rollback(...)` without a catalog. Durable hosts can provide a `MigrationDefinitionRegistryCatalog` layer and use `MigrationExecution.run({ registryId, ... })`. The `migrate-sdk/runtime` subpath remains for lower-level cursor-window, run lifecycle handoff, and status primitives, not for raw definition run/rollback helpers.
@@ -37,6 +39,7 @@ Registry-bound execution through `MigrationExecution` is the public execution pa
 ## Consequences
 
 - CLI behavior stays deterministic because command scope comes from one explicit registry value instead of import-time global mutation.
+- Group membership stays local to each migration definition while the registry provides the aggregate selection index.
 - Future discovery or low-code flows can still compile and validate definitions before initializing a static registry.
 - Duplicate ids, missing required dependency edges, and required dependency cycles are rejected at the registry boundary for registry-backed calls.
 - Optional dependency cycles and Migration Reference Lookup relationships do not invalidate a registry because they do not promise strict execution ordering.

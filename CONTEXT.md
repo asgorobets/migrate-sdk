@@ -85,6 +85,12 @@ The stored compatibility agreement for the identity, version, and optional track
 **Migration Definition Dependency**:
 An ordering relationship declared by a migration definition.
 
+**Migration Definition Group**:
+A named, exclusive operational bundle declared by its migration definitions and aggregated by a migration definition registry for selection.
+
+**Migration Definition Group Id**:
+The stable identity shared by every migration definition in one migration definition group.
+
 **Required Migration Definition Dependency**:
 A migration definition dependency that must run before the dependent migration definition.
 
@@ -317,11 +323,15 @@ A schema-backed warning or error record that explains migration status, item fai
 - A legacy **Destination Plugin** does not decide whether destination tracking is persisted.
 - A legacy **Destination Plugin** exposes or uses a **Destination Command Schema**.
 - A **Migration Definition** declares the source, process, migration store, optional tracking record contract, and dependencies for a migration workflow.
+- A **Migration Definition** may belong to one **Migration Definition Group**.
+- A **Migration Definition Group** selects a workload; **Migration Definition Dependencies** connect and order workloads.
+- Reuse across **Migration Definition Groups** is modeled as a dependency, not multiple group membership.
 - A **Migration Definition** is executable and may contain layers and effects.
 - A **Required Migration Definition Dependency** is a hard ordering prerequisite.
 - An **Optional Migration Definition Dependency** is an ordering preference when both **Migration Definitions** participate in a run.
 - A **Migration Reference Lookup** relationship is not a **Migration Definition Dependency** unless the migration definition also declares it as one.
 - A **Migration Definition Registry** catalogs executable **Migration Definitions**.
+- A **Migration Definition Registry** aggregates group membership from its **Migration Definitions**.
 - A **Migration Definition Registry** has a **Migration Definition Registry Id** when it is used for executable planning.
 - A **Migration Definition Registry Catalog** resolves **Migration Definition Registries** for workflow execution contexts.
 - A **Migration Definition Registry Catalog** rejects duplicate **Migration Definition Registry Ids** at construction.

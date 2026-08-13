@@ -1,4 +1,7 @@
-import type { MigrationDefinitionId } from "../domain/ids.ts";
+import type {
+  MigrationDefinitionGroupId,
+  MigrationDefinitionId,
+} from "../domain/ids.ts";
 import type {
   MigrationDefinitionPlanNotice,
   MigrationDefinitionRegistry,
@@ -168,6 +171,10 @@ export const renderRegistryList = (
             entry.hasRollback
               ? green(value, renderOptions)
               : dim(value, renderOptions),
+        },
+        {
+          header: "Group",
+          render: (entry) => entry.group ?? "-",
         },
         {
           header: "Required",
@@ -417,6 +424,7 @@ const renderPlanScope = (
     readonly force?: boolean;
     readonly includedDefinitionIds: readonly MigrationDefinitionId[];
     readonly mode?: "failed" | "skipped";
+    readonly requestedGroup?: MigrationDefinitionGroupId;
     readonly requestedDefinitionIds:
       | MigrationDefinitionRunPlan["requestedDefinitionIds"]
       | MigrationDefinitionRollbackPlan["requestedDefinitionIds"];
@@ -426,6 +434,9 @@ const renderPlanScope = (
   options: RenderOptions
 ): readonly string[] => [
   bold("Scope", options),
+  ...(input.requestedGroup === undefined
+    ? []
+    : [`Group      ${input.requestedGroup}`]),
   `Requested  ${renderRequestedDefinitionIdsInline(input.requestedDefinitionIds)}`,
   `Included   ${renderDefinitionIdInlineList(input.includedDefinitionIds)}`,
   ...(input.force === true ? ["Force      yes"] : []),
@@ -450,6 +461,9 @@ export const renderRunPlan = (
       {
         ...(plan.force === undefined ? {} : { force: plan.force }),
         includedDefinitionIds: plan.includedDefinitionIds,
+        ...(plan.requestedGroup === undefined
+          ? {}
+          : { requestedGroup: plan.requestedGroup }),
         ...(options.mode === undefined ? {} : { mode: options.mode }),
         requestedDefinitionIds: plan.requestedDefinitionIds,
         ...(plan.target === undefined
@@ -482,6 +496,9 @@ export const renderRollbackPlan = (
       {
         ...(plan.force === undefined ? {} : { force: plan.force }),
         includedDefinitionIds: plan.includedDefinitionIds,
+        ...(plan.requestedGroup === undefined
+          ? {}
+          : { requestedGroup: plan.requestedGroup }),
         requestedDefinitionIds: plan.requestedDefinitionIds,
         ...(plan.target === undefined
           ? {}
@@ -951,6 +968,9 @@ const renderStatusScope = (
 
   return [
     bold("Scope", options),
+    ...(report.requestedGroup === undefined
+      ? []
+      : [`Group      ${report.requestedGroup}`]),
     `Requested  ${renderRequestedDefinitionIdsInline(report.requestedDefinitionIds)}`,
     `Included   ${renderDefinitionIdInlineList(report.includedDefinitionIds)}`,
     `Scan       ${scanLine}`,
@@ -1045,6 +1065,7 @@ export const renderPlanningError = (
   input: {
     readonly command: "rollback" | "run" | "status";
     readonly definitionIds: readonly string[];
+    readonly group?: string;
     readonly hasTarget: boolean;
     readonly mode?: "failed" | "skipped";
     readonly update?: boolean;
@@ -1055,6 +1076,8 @@ export const renderPlanningError = (
       return error.message;
     case "MigrationDefinitionRegistryUnknownDefinitionError":
       return `${error.message}: ${error.definitionId}`;
+    case "MigrationDefinitionRegistryUnknownGroupError":
+      return `${error.message}: ${error.group}`;
     case "MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError": {
       const definitionIdsWithMissingDependencies = dedupeStrings([
         ...error.missingDependencyIds,
@@ -1066,6 +1089,8 @@ export const renderPlanningError = (
         input.command === "run" && input.update === true
           ? ["--update", ...modeFlags]
           : modeFlags;
+      const selectionFlags =
+        input.group === undefined ? [] : ["--group", input.group];
       const message = [
         error.message,
         `${error.definitionId} is missing required dependencies: ${error.missingDependencyIds.join(
@@ -1083,14 +1108,21 @@ export const renderPlanningError = (
         "Try:",
         formatPlanCommand(
           input.command,
-          missingDependencyExpansionFlags(input.command, runOptionFlags),
+          [
+            ...missingDependencyExpansionFlags(input.command, runOptionFlags),
+            ...selectionFlags,
+          ],
           input.definitionIds
         ),
-        formatPlanCommand(
-          input.command,
-          missingDependencyExplicitFlags(input.command, runOptionFlags),
-          definitionIdsWithMissingDependencies
-        ),
+        ...(input.group === undefined
+          ? [
+              formatPlanCommand(
+                input.command,
+                missingDependencyExplicitFlags(input.command, runOptionFlags),
+                definitionIdsWithMissingDependencies
+              ),
+            ]
+          : []),
       ].join("\n");
     }
     default: {

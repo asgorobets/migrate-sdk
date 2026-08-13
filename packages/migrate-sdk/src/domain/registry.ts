@@ -7,6 +7,8 @@ import type {
 import { resolvePipelineExecutionOptions } from "./execution.ts";
 import type {
   EncodedSourceIdentity,
+  MigrationDefinitionGroupId,
+  MigrationDefinitionGroupIdInput,
   MigrationDefinitionId,
   MigrationDefinitionIdInput,
   MigrationDefinitionRegistryId,
@@ -14,8 +16,10 @@ import type {
 } from "./ids.ts";
 import {
   EncodedSourceIdentity as EncodedSourceIdentitySchema,
+  MigrationDefinitionGroupId as MigrationDefinitionGroupIdSchema,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
   SourceIdentity,
+  toMigrationDefinitionGroupId,
   toMigrationDefinitionId,
   toMigrationDefinitionRegistryId,
 } from "./ids.ts";
@@ -58,8 +62,14 @@ export interface MigrationDefinitionRegistryEntry {
     readonly optional: readonly MigrationDefinitionId[];
     readonly required: readonly MigrationDefinitionId[];
   };
+  readonly group?: MigrationDefinitionGroupId;
   readonly hasRollback: boolean;
   readonly id: MigrationDefinitionId;
+}
+
+export interface MigrationDefinitionRegistryGroup {
+  readonly definitionIds: readonly MigrationDefinitionId[];
+  readonly id: MigrationDefinitionGroupId;
 }
 
 export type MigrationDefinitionRegistrySelectionInput =
@@ -72,6 +82,10 @@ export type MigrationDefinitionRegistrySelectionInput =
         MigrationDefinitionIdInput,
         ...MigrationDefinitionIdInput[],
       ];
+      readonly withDependencies?: boolean;
+    }
+  | {
+      readonly group: MigrationDefinitionGroupIdInput;
       readonly withDependencies?: boolean;
     };
 
@@ -193,8 +207,9 @@ export interface MigrationDefinitionRunPlan<
   readonly notices: readonly MigrationDefinitionPlanNotice[];
   readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
   readonly registryId?: MigrationDefinitionRegistryId;
-  readonly requiredDependencyPreflight?: readonly MigrationDefinitionRequiredDependencyPreflight[];
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
+  readonly requestedGroup?: MigrationDefinitionGroupId;
+  readonly requiredDependencyPreflight?: readonly MigrationDefinitionRequiredDependencyPreflight[];
   readonly target?: MigrationDefinitionPlanTarget;
   readonly update?: boolean;
   readonly withDependencies: boolean;
@@ -228,6 +243,7 @@ export interface MigrationDefinitionRollbackPlan {
   readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
   readonly registryId?: MigrationDefinitionRegistryId;
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
+  readonly requestedGroup?: MigrationDefinitionGroupId;
   readonly target?: MigrationDefinitionPlanTarget;
   readonly withDependencies: boolean;
 }
@@ -244,6 +260,7 @@ export interface MigrationDefinitionRegistryStatusReport
   readonly includedDefinitionIds: readonly MigrationDefinitionId[];
   readonly notices: readonly MigrationDefinitionPlanNotice[];
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
+  readonly requestedGroup?: MigrationDefinitionGroupId;
 }
 
 export type MigrationDefinitionRegistryStatusError =
@@ -304,6 +321,14 @@ export class MigrationDefinitionRegistryUnknownDefinitionError extends Schema.Ta
   }
 ) {}
 
+export class MigrationDefinitionRegistryUnknownGroupError extends Schema.TaggedErrorClass<MigrationDefinitionRegistryUnknownGroupError>()(
+  "MigrationDefinitionRegistryUnknownGroupError",
+  {
+    group: MigrationDefinitionGroupIdSchema,
+    message: Schema.String,
+  }
+) {}
+
 export class MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError extends Schema.TaggedErrorClass<MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError>()(
   "MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError",
   {
@@ -345,6 +370,7 @@ export class MigrationDefinitionRegistryExecutableError extends Schema.TaggedErr
 
 export type MigrationDefinitionRegistryPlanningError =
   | MigrationDefinitionRegistryUnknownDefinitionError
+  | MigrationDefinitionRegistryUnknownGroupError
   | MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError
   | MigrationDefinitionRegistryInvalidSelectionError;
 
@@ -472,6 +498,7 @@ const normalizeTargetSourceIdentities = (
 interface ResolvedRegistrySelection {
   readonly notices: MigrationDefinitionPlanNotice[];
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
+  readonly requestedGroup?: MigrationDefinitionGroupId;
   readonly selectsAll: boolean;
   readonly uniqueRequestedDefinitionIds: readonly MigrationDefinitionId[];
   readonly withDependencies: boolean;
@@ -597,6 +624,10 @@ const findOptionalDependencyCycle = (
 const resolveSelectionInput = (
   definitions: readonly AnyMigrationDefinition[],
   definitionsById: ReadonlyMap<MigrationDefinitionId, AnyMigrationDefinition>,
+  groupsById: ReadonlyMap<
+    MigrationDefinitionGroupId,
+    MigrationDefinitionRegistryGroup
+  >,
   input: MigrationDefinitionRegistrySelectionInput
 ): Effect.Effect<
   ResolvedRegistrySelection,
@@ -605,39 +636,73 @@ const resolveSelectionInput = (
   const selectsAll = "all" in input && input.all === true;
   const inputDefinitionIds =
     "definitionIds" in input ? input.definitionIds : undefined;
+  const inputGroup = "group" in input ? input.group : undefined;
+  const selectedScopeCount = [
+    selectsAll,
+    inputDefinitionIds !== undefined,
+    inputGroup !== undefined,
+  ].filter(Boolean).length;
 
-  if (selectsAll && inputDefinitionIds !== undefined) {
+  if (selectedScopeCount > 1) {
     return Effect.fail(
       new MigrationDefinitionRegistryInvalidSelectionError({
         message:
-          "Registry planning cannot combine all: true with Migration Definition ids",
+          "Registry planning accepts only one selection form: all: true, Migration Definition ids, or a Migration Definition group",
       })
     );
   }
 
   if (
     !selectsAll &&
+    inputGroup === undefined &&
     (inputDefinitionIds === undefined || inputDefinitionIds.length === 0)
   ) {
     return Effect.fail(
       new MigrationDefinitionRegistryInvalidSelectionError({
         message:
-          "Registry planning requires all: true or at least one Migration Definition id",
+          "Registry planning requires all: true, a Migration Definition group, or at least one Migration Definition id",
       })
     );
   }
 
   return Effect.gen(function* () {
     const notices: MigrationDefinitionPlanNotice[] = [];
-    const requestedDefinitionIds = selectsAll
-      ? "all"
-      : yield* Effect.try({
-          try: () => (inputDefinitionIds ?? []).map(toMigrationDefinitionId),
-          catch: () =>
-            new MigrationDefinitionRegistryInvalidSelectionError({
-              message: "Migration Definition id selection is invalid",
-            }),
-        });
+    const requestedGroup =
+      inputGroup === undefined
+        ? undefined
+        : yield* Effect.try({
+            try: () => toMigrationDefinitionGroupId(inputGroup),
+            catch: () =>
+              new MigrationDefinitionRegistryInvalidSelectionError({
+                message: "Migration Definition group selection is invalid",
+              }),
+          });
+    const selectedGroup =
+      requestedGroup === undefined ? undefined : groupsById.get(requestedGroup);
+
+    if (requestedGroup !== undefined && selectedGroup === undefined) {
+      return yield* new MigrationDefinitionRegistryUnknownGroupError({
+        group: requestedGroup,
+        message: "Migration Definition group was not found in the registry",
+      });
+    }
+
+    let requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
+
+    if (selectsAll) {
+      requestedDefinitionIds = "all";
+    } else if (selectedGroup === undefined) {
+      requestedDefinitionIds = yield* Effect.try({
+        try: () => (inputDefinitionIds ?? []).map(toMigrationDefinitionId),
+        catch: () =>
+          new MigrationDefinitionRegistryInvalidSelectionError({
+            message: "Migration Definition id selection is invalid",
+          }),
+      });
+    } else {
+      requestedDefinitionIds = selectedGroup.definitionIds;
+    }
+
     const uniqueRequestedDefinitionIds =
       requestedDefinitionIds === "all"
         ? definitions.map((definition) => definition.id)
@@ -654,6 +719,7 @@ const resolveSelectionInput = (
 
     return {
       notices,
+      ...(requestedGroup === undefined ? {} : { requestedGroup }),
       requestedDefinitionIds,
       selectsAll,
       uniqueRequestedDefinitionIds,
@@ -939,6 +1005,7 @@ const normalizeRunTarget = (
 
   if (
     selection.selectsAll ||
+    selection.requestedGroup !== undefined ||
     selection.uniqueRequestedDefinitionIds.length !== 1
   ) {
     return Effect.fail(
@@ -1069,6 +1136,7 @@ const normalizeRollbackTarget = (
 
   if (
     selection.selectsAll ||
+    selection.requestedGroup !== undefined ||
     selection.uniqueRequestedDefinitionIds.length !== 1
   ) {
     return Effect.fail(
@@ -1262,6 +1330,36 @@ const freezeEntry = (
     }),
   });
 
+const collectGroups = (
+  definitions: readonly AnyMigrationDefinition[]
+): readonly MigrationDefinitionRegistryGroup[] => {
+  const definitionIdsByGroup = new Map<
+    MigrationDefinitionGroupId,
+    MigrationDefinitionId[]
+  >();
+
+  for (const definition of definitions) {
+    if (definition.group === undefined) {
+      continue;
+    }
+
+    const definitionIds = definitionIdsByGroup.get(definition.group);
+
+    if (definitionIds === undefined) {
+      definitionIdsByGroup.set(definition.group, [definition.id]);
+    } else {
+      definitionIds.push(definition.id);
+    }
+  }
+
+  return [...definitionIdsByGroup].map(([id, definitionIds]) =>
+    Object.freeze({
+      definitionIds: Object.freeze([...definitionIds]),
+      id,
+    })
+  );
+};
+
 const hasRollbackPipeline = (definition: {
   readonly rollback?: unknown;
 }): boolean => typeof definition.rollback === "function";
@@ -1352,6 +1450,11 @@ export class MigrationDefinitionRegistry<
     AnyMigrationDefinition
   >;
   readonly #entries: readonly MigrationDefinitionRegistryEntry[];
+  readonly #groups: readonly MigrationDefinitionRegistryGroup[];
+  readonly #groupsById: ReadonlyMap<
+    MigrationDefinitionGroupId,
+    MigrationDefinitionRegistryGroup
+  >;
   readonly #id: MigrationDefinitionRegistryId | undefined;
   readonly #missingRequirements:
     | MigrationDefinitionMissingRequirements
@@ -1380,10 +1483,15 @@ export class MigrationDefinitionRegistry<
             optional: definitionOptionalDependencies(definition),
             required: definitionRequiredDependencies(definition),
           },
+          ...(definition.group === undefined
+            ? {}
+            : { group: definition.group }),
           hasRollback: hasRollbackPipeline(definition),
         })
       )
     );
+    this.#groups = Object.freeze(collectGroups(this.#definitions));
+    this.#groupsById = new Map(this.#groups.map((group) => [group.id, group]));
   }
 
   static make<const Definitions extends readonly AnyMigrationDefinition[]>(
@@ -1414,6 +1522,10 @@ export class MigrationDefinitionRegistry<
     return this.#entries;
   }
 
+  groups(): readonly MigrationDefinitionRegistryGroup[] {
+    return this.#groups;
+  }
+
   id(): Option.Option<MigrationDefinitionRegistryId> {
     return Option.fromUndefinedOr(this.#id);
   }
@@ -1433,12 +1545,14 @@ export class MigrationDefinitionRegistry<
   > {
     const definitions = this.#definitions;
     const definitionsById = this.#definitionsById;
+    const groupsById = this.#groupsById;
     const registryId = this.#id;
 
     return Effect.gen(function* () {
       const selection = yield* resolveSelectionInput(
         definitions,
         definitionsById,
+        groupsById,
         input
       );
       yield* validateUpdateRunInput(input);
@@ -1472,6 +1586,9 @@ export class MigrationDefinitionRegistry<
 
       return {
         kind: "run",
+        ...(selection.requestedGroup === undefined
+          ? {}
+          : { requestedGroup: selection.requestedGroup }),
         requestedDefinitionIds: selection.requestedDefinitionIds,
         includedDefinitionIds: planDetails.includedDefinitionIdsInRegistryOrder,
         executionDefinitionIds: planDetails.executionDefinitionIds,
@@ -1503,12 +1620,14 @@ export class MigrationDefinitionRegistry<
   > {
     const definitions = this.#definitions;
     const definitionsById = this.#definitionsById;
+    const groupsById = this.#groupsById;
     const registryId = this.#id;
 
     return Effect.gen(function* () {
       const selection = yield* resolveSelectionInput(
         definitions,
         definitionsById,
+        groupsById,
         input
       );
       const targetOption = yield* normalizeRollbackTarget(
@@ -1540,6 +1659,9 @@ export class MigrationDefinitionRegistry<
 
       return {
         kind: "rollback",
+        ...(selection.requestedGroup === undefined
+          ? {}
+          : { requestedGroup: selection.requestedGroup }),
         requestedDefinitionIds: selection.requestedDefinitionIds,
         includedDefinitionIds: planDetails.includedDefinitionIdsInRegistryOrder,
         executionDefinitionIds,
@@ -1590,11 +1712,13 @@ export class MigrationDefinitionRegistry<
   ): MigrationDefinitionRegistryStatusImplementationEffect {
     const definitions = this.#definitions;
     const definitionsById = this.#definitionsById;
+    const groupsById = this.#groupsById;
 
     return Effect.gen(function* () {
       const selection = yield* resolveSelectionInput(
         definitions,
         definitionsById,
+        groupsById,
         input
       );
       yield* validateExplicitRequiredDependencies(definitionsById, selection);
@@ -1628,6 +1752,9 @@ export class MigrationDefinitionRegistry<
         ...report,
         includedDefinitionIds: planDetails.includedDefinitionIdsInRegistryOrder,
         notices: selection.notices,
+        ...(selection.requestedGroup === undefined
+          ? {}
+          : { requestedGroup: selection.requestedGroup }),
         requestedDefinitionIds: selection.requestedDefinitionIds,
       };
     }) as MigrationDefinitionRegistryStatusImplementationEffect;

@@ -167,6 +167,7 @@ const tsDefinitionFixtureSource = (
       readonly required?: readonly string[];
       readonly optional?: readonly string[];
     };
+    readonly group?: string;
     readonly rollback?: () => undefined;
   }
 
@@ -314,17 +315,21 @@ const planConfigSource = (): string => `
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
   import { Schema } from "effect";
 
-  ${tsDefinitionFixtureSource("() => { throw new Error(\"definition executed\"); }")}
+  ${tsDefinitionFixtureSource('() => { throw new Error("definition executed"); }')}
 
-  const authors = definition("authors");
+  const authors = definition("authors", {
+    group: "articles"
+  });
   const articles = definition("articles", {
     dependencies: {
       required: ["authors"],
       optional: ["tags"]
     },
+    group: "articles",
     rollback: () => undefined
   });
   const tags = definition("tags", {
+    group: "articles",
     rollback: () => undefined
   });
 
@@ -508,6 +513,7 @@ describe("migrate CLI", () => {
               required: ["authors"],
               optional: ["images"]
             },
+            group: "content",
             rollback: () => undefined
           });
 
@@ -529,6 +535,7 @@ describe("migrate CLI", () => {
         expect(result.exitCode).toBe(0);
         expect(result.stdout).toContain("Migration ID");
         expect(result.stdout).toContain("Rollback");
+        expect(result.stdout).toContain("Group");
         expect(result.stdout).toContain("Required");
         expect(result.stdout).toContain("Optional");
         expect(result.stdout).toContain("authors");
@@ -536,6 +543,7 @@ describe("migrate CLI", () => {
         expect(result.stdout).toContain("yes");
         expect(result.stdout).toContain("authors");
         expect(result.stdout).toContain("images (unresolved)");
+        expect(result.stdout).toContain("content");
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -729,7 +737,7 @@ describe("migrate CLI", () => {
 
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain(
-        "Registry planning requires all: true or at least one Migration Definition id"
+        "Registry planning requires all: true, a Migration Definition group, or at least one Migration Definition id"
       );
       expect(result.stdout).toBe("");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
@@ -756,6 +764,30 @@ describe("migrate CLI", () => {
       expect(result.stdout).toContain("Requested  all");
       expect(result.stdout).toContain("Included   articles");
       expect(result.stdout).toContain("succeeded");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders status for a Migration Definition group", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const result = yield* runCli(
+        ["status", "--config", "migrate.config.ts", "--group", "articles"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Group      articles");
+      expect(result.stdout).toContain("Requested  tags, articles, authors");
+      expect(result.stdout).toContain("Included   tags, articles, authors");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -1172,6 +1204,117 @@ describe("migrate CLI", () => {
         expect(result.stdout).toMatch(tagsAuthorsArticlesOrderPattern);
         expect(result.stdout).not.toContain("executed");
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("plans a complete Migration Definition group", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--group",
+          "articles",
+        ],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Group      articles");
+      expect(result.stdout).toContain("Requested  tags, articles, authors");
+      expect(result.stdout).toContain("Included   tags, articles, authors");
+      expect(result.stdout).toMatch(tagsAuthorsArticlesOrderPattern);
+      expect(result.stdout).not.toContain("executed");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "plans a Migration Definition group rollback in reverse order",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          planConfigSource()
+        );
+
+        const result = yield* runCli(
+          [
+            "rollback",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "--group",
+            "articles",
+          ],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Group      articles");
+        expect(result.stdout).toContain("Requested  tags, articles, authors");
+        expect(result.stdout).toMatch(articlesAuthorsTagsOrderPattern);
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects unknown groups and mixed selection forms", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const unknown = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--group",
+          "missing",
+        ],
+        project
+      );
+      const mixed = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--group",
+          "articles",
+          "tags",
+        ],
+        project
+      );
+
+      expect(unknown.exitCode).toBe(1);
+      expect(unknown.stderr).toContain(
+        "Migration Definition group was not found in the registry: missing"
+      );
+      expect(mixed.exitCode).toBe(1);
+      expect(mixed.stderr).toContain(
+        "Registry planning accepts only one selection form: all: true, Migration Definition ids, or a Migration Definition group"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
   it.effect("renders update intent in run plans without executing", () =>
@@ -2148,11 +2291,11 @@ describe("migrate CLI", () => {
       expect(rollbackAllResult.stdout).toMatch(articlesAuthorsTagsOrderPattern);
       expect(runOmittedScopeResult.exitCode).toBe(1);
       expect(runOmittedScopeResult.stderr).toContain(
-        "Registry planning requires all: true or at least one Migration Definition id"
+        "Registry planning requires all: true, a Migration Definition group, or at least one Migration Definition id"
       );
       expect(rollbackOmittedScopeResult.exitCode).toBe(1);
       expect(rollbackOmittedScopeResult.stderr).toContain(
-        "Registry planning requires all: true or at least one Migration Definition id"
+        "Registry planning requires all: true, a Migration Definition group, or at least one Migration Definition id"
       );
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
@@ -2231,6 +2374,34 @@ describe("migrate CLI", () => {
       expect(result.stdout).toMatch(selectedRunSummaryPattern);
       expect(result.stdout).not.toContain("tags          succeeded");
       expect(getExecutionProbe().executions).toEqual(["authors", "articles"]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("executes a selected Migration Definition group", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        yield* readCliFixture("execution.config.ts")
+      );
+
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--group", "articles"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run Completed succeeded");
+      expect(getExecutionProbe().executions).toEqual([
+        "tags",
+        "authors",
+        "articles",
+      ]);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 

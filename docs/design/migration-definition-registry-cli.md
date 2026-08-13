@@ -46,6 +46,38 @@ class AppMigrations extends MigrationDefinitionRegistry.make({
 Do not use an ambient global registry as the primary API. Discovery or low-code
 flows can collect definitions elsewhere and then initialize this static registry.
 
+## Definition Group Shape
+
+A migration definition may declare one group as an exclusive operational
+bundle:
+
+```ts
+const taxonomy = MigrationDefinition.make({
+  id: "taxonomy",
+  group: "articles",
+  // source, store, process...
+});
+
+const articleImages = MigrationDefinition.make({
+  id: "article-images",
+  group: "articles",
+  dependencies: { required: ["taxonomy"] },
+  // source, store, process...
+});
+
+const articles = MigrationDefinition.make({
+  id: "articles",
+  group: "articles",
+  dependencies: { required: ["article-images"] },
+  // source, store, process...
+});
+```
+
+Groups select workloads; dependencies order and connect workloads. A definition
+does not accept multiple groups. When taxonomy is shared by article and product
+migrations, keep taxonomy in its own group and declare it as a required
+dependency from the consuming definitions.
+
 ## Definition Dependency Shape
 
 Migration definitions declare ordering dependencies through the `dependencies`
@@ -162,6 +194,7 @@ class MigrationDefinitionRegistry<
   ): MigrationDefinitionRegistry<Definitions>;
 
   list(): readonly MigrationDefinitionRegistryEntry[];
+  groups(): readonly MigrationDefinitionRegistryGroup[];
   definitions(): Definitions;
 
   get(
@@ -206,11 +239,17 @@ missing `definitionId`.
 ```ts
 interface MigrationDefinitionRegistryEntry {
   readonly id: MigrationDefinitionId;
+  readonly group?: MigrationDefinitionGroupId;
   readonly dependencies: {
     readonly required: readonly MigrationDefinitionId[];
     readonly optional: readonly MigrationDefinitionId[];
   };
   readonly hasRollback: boolean;
+}
+
+interface MigrationDefinitionRegistryGroup {
+  readonly id: MigrationDefinitionGroupId;
+  readonly definitionIds: readonly MigrationDefinitionId[];
 }
 ```
 
@@ -224,7 +263,7 @@ scope.
 ## Selection Input
 
 Registry-backed execution requires explicit scope. Use `all: true` for full
-registry execution, or provide at least one definition id.
+registry execution, provide one group, or provide at least one definition id.
 
 ```ts
 type MigrationDefinitionRegistrySelectionInput =
@@ -238,8 +277,18 @@ type MigrationDefinitionRegistrySelectionInput =
         ...MigrationDefinitionIdInput[],
       ];
       readonly withDependencies?: boolean;
+    }
+  | {
+      readonly group: MigrationDefinitionGroupIdInput;
+      readonly withDependencies?: boolean;
     };
 ```
+
+The three selection forms are mutually exclusive. Group selection expands to
+the definitions that declare the group in registry order. The resulting
+definitions use the existing dependency planner; rollback reverses the planned
+execution order. `withDependencies` may add required dependencies outside the
+group.
 
 `withDependencies` defaults to `false`. When `all: true` is used,
 `withDependencies` is accepted but redundant.
@@ -618,6 +667,7 @@ interface MigrationDefinitionRegistryLookupError {
 
 type MigrationDefinitionRegistryPlanningError =
   | MigrationDefinitionRegistryUnknownDefinitionError
+  | MigrationDefinitionRegistryUnknownGroupError
   | MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError
   | MigrationDefinitionRegistryInvalidSelectionError;
 ```
@@ -966,6 +1016,9 @@ Run commands:
 ```sh
 migrate run articles
 migrate run articles --plan
+migrate run --group articles
+migrate run --group articles --plan
+migrate run --group articles --with-dependencies
 migrate run authors articles
 migrate run articles --with-dependencies
 migrate run articles --with-dependencies --plan
@@ -983,6 +1036,8 @@ Rollback commands:
 ```sh
 migrate rollback articles
 migrate rollback articles --plan
+migrate rollback --group articles
+migrate rollback --group articles --plan
 migrate rollback authors articles
 migrate rollback articles --with-dependencies
 migrate rollback --all
@@ -1186,7 +1241,7 @@ command-scoped service provisioning. It does not provide a full
 The CLI should use Effect CLI primitives for:
 
 - `--config` as a global file/path flag
-- `--with-dependencies`, `--all`, `--failed`, `--skipped`, `--id`, and
+- `--with-dependencies`, `--all`, `--group`, `--failed`, `--skipped`, `--id`, and
   `--plan` flags
 - `--scan-source` and `--concurrency` flags for status
 - variadic definition id arguments

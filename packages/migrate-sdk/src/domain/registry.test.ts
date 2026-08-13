@@ -7,6 +7,7 @@ import {
   type MigrationDefinitionDependenciesInput,
   type MigrationDefinitionExecutableRollbackPlan,
   type MigrationDefinitionExecutableRunPlan,
+  type MigrationDefinitionGroupIdInput,
   type MigrationDefinitionIdInput,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryConstructionError,
@@ -15,6 +16,7 @@ import {
   MigrationDefinitionRegistryLookupError,
   MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
   MigrationDefinitionRegistryUnknownDefinitionError,
+  MigrationDefinitionRegistryUnknownGroupError,
   MigrationExecutable,
   MigrationExecution,
   type MigrationExecutionOptions,
@@ -27,6 +29,7 @@ import {
   SourceIdentity,
   toEncodedSourceCursor,
   toEncodedSourceIdentity,
+  toMigrationDefinitionGroupId,
   toMigrationDefinitionId,
   toMigrationRunId,
   toSourceVersion,
@@ -47,6 +50,7 @@ const ArticleSourceIdentity = SourceIdentity.make({
 interface TestDefinitionInput {
   readonly dependencies?: MigrationDefinitionDependenciesInput;
   readonly execution?: MigrationExecutionOptions;
+  readonly group?: MigrationDefinitionGroupIdInput;
   readonly id: MigrationDefinitionIdInput;
   readonly rollback?: RollbackPipeline;
 }
@@ -92,6 +96,7 @@ const makeDefinition = (input: TestDefinitionInput) =>
       ? {}
       : { dependencies: input.dependencies }),
     ...(input.execution === undefined ? {} : { execution: input.execution }),
+    ...(input.group === undefined ? {} : { group: input.group }),
     source,
     store,
     process: () => Effect.void,
@@ -108,6 +113,7 @@ const makeStatusDefinition = (
     ...(input.dependencies === undefined
       ? {}
       : { dependencies: input.dependencies }),
+    ...(input.group === undefined ? {} : { group: input.group }),
     source,
     store: input.store,
     process: () => Effect.void,
@@ -234,6 +240,129 @@ describe("MigrationDefinitionRegistry", () => {
     expect(Option.getOrNull(registry.get("articles"))).toBe(articles);
     expect(Option.isNone(registry.get("unknown"))).toBe(true);
   });
+
+  it.effect(
+    "aggregates definition groups and plans their definitions through the existing dependency graph",
+    () =>
+      Effect.gen(function* () {
+        const taxonomy = makeDefinition({
+          group: "articles",
+          id: "taxonomy",
+          rollback: () => Effect.void,
+        });
+        const articleImages = makeDefinition({
+          dependencies: { required: ["taxonomy"] },
+          group: "articles",
+          id: "article-images",
+          rollback: () => Effect.void,
+        });
+        const articles = makeDefinition({
+          dependencies: { required: ["article-images", "taxonomy"] },
+          group: "articles",
+          id: "articles",
+          rollback: () => Effect.void,
+        });
+        const products = makeDefinition({ group: "products", id: "products" });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles, products, taxonomy, articleImages] as const,
+        });
+
+        expect(registry.groups()).toEqual([
+          {
+            definitionIds: [
+              toMigrationDefinitionId("articles"),
+              toMigrationDefinitionId("taxonomy"),
+              toMigrationDefinitionId("article-images"),
+            ],
+            id: toMigrationDefinitionGroupId("articles"),
+          },
+          {
+            definitionIds: [toMigrationDefinitionId("products")],
+            id: toMigrationDefinitionGroupId("products"),
+          },
+        ]);
+
+        const runPlan = yield* registry.planRun({ group: "articles" });
+        const rollbackPlan = yield* registry.planRollback({
+          group: "articles",
+        });
+
+        expect(runPlan.requestedGroup).toBe(
+          toMigrationDefinitionGroupId("articles")
+        );
+        expect(runPlan.requestedDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+          toMigrationDefinitionId("taxonomy"),
+          toMigrationDefinitionId("article-images"),
+        ]);
+        expect(runPlan.executionDefinitionIds).toEqual([
+          toMigrationDefinitionId("taxonomy"),
+          toMigrationDefinitionId("article-images"),
+          toMigrationDefinitionId("articles"),
+        ]);
+        expect(rollbackPlan.executionDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+          toMigrationDefinitionId("article-images"),
+          toMigrationDefinitionId("taxonomy"),
+        ]);
+      })
+  );
+
+  it.effect("rejects unknown groups with a typed planning error", () =>
+    Effect.gen(function* () {
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [makeDefinition({ group: "articles", id: "articles" })],
+      });
+      const error = yield* Effect.flip(registry.planRun({ group: "missing" }));
+
+      expect(error).toEqual(
+        new MigrationDefinitionRegistryUnknownGroupError({
+          group: toMigrationDefinitionGroupId("missing"),
+          message: "Migration Definition group was not found in the registry",
+        })
+      );
+    })
+  );
+
+  it.effect(
+    "expands required dependencies outside a selected group only when requested",
+    () =>
+      Effect.gen(function* () {
+        const taxonomy = makeDefinition({ group: "shared", id: "taxonomy" });
+        const articles = makeDefinition({
+          dependencies: { required: ["taxonomy"] },
+          group: "articles",
+          id: "articles",
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles, taxonomy] as const,
+        });
+
+        const groupOnly = yield* registry.planRun({ group: "articles" });
+        const expanded = yield* registry.planRun({
+          group: "articles",
+          withDependencies: true,
+        });
+
+        expect(groupOnly.includedDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+        ]);
+        expect(groupOnly.requiredDependencyPreflight).toEqual([
+          {
+            fromDefinitionId: toMigrationDefinitionId("articles"),
+            toDefinitionId: toMigrationDefinitionId("taxonomy"),
+          },
+        ]);
+        expect(expanded.includedDefinitionIds).toEqual([
+          toMigrationDefinitionId("articles"),
+          toMigrationDefinitionId("taxonomy"),
+        ]);
+        expect(expanded.executionDefinitionIds).toEqual([
+          toMigrationDefinitionId("taxonomy"),
+          toMigrationDefinitionId("articles"),
+        ]);
+      })
+  );
 
   it("aggregates hard catalog issues into a schema-backed construction error", () => {
     const articles = makeDefinition({
@@ -736,7 +865,7 @@ describe("MigrationDefinitionRegistry", () => {
       expect(error).toEqual(
         new MigrationDefinitionRegistryInvalidSelectionError({
           message:
-            "Registry planning requires all: true or at least one Migration Definition id",
+            "Registry planning requires all: true, a Migration Definition group, or at least one Migration Definition id",
         })
       );
     })
@@ -822,7 +951,7 @@ describe("MigrationDefinitionRegistry", () => {
       expect(error).toEqual(
         new MigrationDefinitionRegistryInvalidSelectionError({
           message:
-            "Registry planning requires all: true or at least one Migration Definition id",
+            "Registry planning requires all: true, a Migration Definition group, or at least one Migration Definition id",
         })
       );
     })
@@ -843,7 +972,7 @@ describe("MigrationDefinitionRegistry", () => {
       expect(runError).toEqual(
         new MigrationDefinitionRegistryInvalidSelectionError({
           message:
-            "Registry planning cannot combine all: true with Migration Definition ids",
+            "Registry planning accepts only one selection form: all: true, Migration Definition ids, or a Migration Definition group",
         })
       );
 
@@ -856,7 +985,7 @@ describe("MigrationDefinitionRegistry", () => {
       expect(rollbackError).toEqual(
         new MigrationDefinitionRegistryInvalidSelectionError({
           message:
-            "Registry planning cannot combine all: true with Migration Definition ids",
+            "Registry planning accepts only one selection form: all: true, Migration Definition ids, or a Migration Definition group",
         })
       );
     })
