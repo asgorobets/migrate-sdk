@@ -113,6 +113,9 @@ export const beginMigrationRunExecutionEnvelope = (
     const runState = yield* MigrationRunStepExecutor.begin({
       definitions: job.plan.definitions,
       lease,
+      ...(job.plan.rollbackOrphans === undefined
+        ? {}
+        : { rollbackOrphans: job.plan.rollbackOrphans }),
       ...(job.plan.rescan === undefined ? {} : { rescan: job.plan.rescan }),
     });
 

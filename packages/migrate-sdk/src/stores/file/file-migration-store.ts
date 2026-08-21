@@ -28,7 +28,10 @@ import type {
 } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { summarizeMigrationItemStates } from "../../domain/status.ts";
-import { MigrationStore } from "../../services/migration-store.ts";
+import {
+  MigrationStore,
+  makeUnimplementedOrphanStoreMethods,
+} from "../../services/migration-store.ts";
 import { PersistedMigrationItemState } from "../internal/persisted-state.ts";
 
 export interface FileMigrationStoreOptions {
@@ -412,6 +415,8 @@ const makeLayerWithoutPlatform = (
   Layer.effect(
     MigrationStore,
     Effect.gen(function* () {
+      const orphanStoreMethods =
+        makeUnimplementedOrphanStoreMethods("FileMigrationStore");
       const fs = yield* FileSystem;
       const path = yield* Path;
       const paths = makePaths(path, options.directory);
@@ -847,6 +852,7 @@ const makeLayerWithoutPlatform = (
       });
 
       return {
+        ...orphanStoreMethods,
         getSourceCursor,
         setSourceCursor,
         deleteSourceCursor,

@@ -279,6 +279,8 @@ describe("getMigrationStatuses", () => {
           })
         );
       const store = Layer.succeed(MigrationStore, {
+        listOrphanItemStates: () => fail("listOrphanItemStates"),
+        observeItemState: () => fail("observeItemState"),
         getLatestRunState: (id) =>
           Effect.sync(() => {
             calls.push(`getLatestRunState:${id}`);
@@ -454,6 +456,8 @@ describe("getMigrationStatuses", () => {
           })
         );
       const store = Layer.succeed(MigrationStore, {
+        listOrphanItemStates: () => fail("listOrphanItemStates"),
+        observeItemState: () => fail("observeItemState"),
         getLatestRunState: (id) =>
           Effect.sync(() => {
             calls.push(`getLatestRunState:${id}`);

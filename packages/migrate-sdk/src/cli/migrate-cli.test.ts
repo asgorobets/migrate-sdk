@@ -416,6 +416,8 @@ const lockedStoreConfigSource = (): string => `
   };
 
   const store = Layer.succeed(MigrationStore, {
+    listOrphanItemStates: () => Effect.die("not implemented"),
+    observeItemState: () => Effect.die("not implemented"),
     getDefinitionLock: (definitionId) =>
       Effect.sync(() => storeState.definitionLocks.get(definitionId) ?? null),
     breakDefinitionLock: (definitionId) =>

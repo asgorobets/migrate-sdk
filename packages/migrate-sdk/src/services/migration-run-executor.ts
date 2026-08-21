@@ -167,6 +167,10 @@ const conflictingRescanUpdateError = new MigrationRuntimeError({
   message: "Rescan run cannot combine with update intent",
 });
 
+const rollbackOrphansExecutionPendingError = new MigrationRuntimeError({
+  message: "Rollback orphan execution is not implemented yet",
+});
+
 const unsafeDependentRollbackError = (
   definitionId: MigrationDefinitionId,
   dependentDefinitionId: MigrationDefinitionId
@@ -535,6 +539,7 @@ export interface MigrationRunBeginInput {
   readonly definitions: readonly AnyMigrationDefinition[];
   readonly lease: MigrationRunExecutionLease;
   readonly rescan?: boolean;
+  readonly rollbackOrphans?: boolean;
 }
 
 export interface MigrationRunDefinitionCursorWindowInput
@@ -581,6 +586,9 @@ const beginMigrationRunExecution = (
       input.lease,
       definitionIds
     );
+    if (input.rollbackOrphans === true) {
+      return yield* rollbackOrphansExecutionPendingError;
+    }
     yield* validateMigrationContracts(store, input.definitions);
     const runState = yield* store.beginRun(input.lease.runId, definitionIds);
 
@@ -890,6 +898,33 @@ const validateRescanRunRequest = (request: {
   const mode = request.mode ?? normalRunMode;
 
   return mode.kind === "normal" ? null : invalidRescanRunModeError(mode);
+};
+
+const validateRollbackOrphansRunRequest = (request: {
+  readonly mode?: RunMode;
+  readonly rollbackOrphans?: boolean;
+  readonly update?: boolean;
+}): MigrationRuntimeError | null => {
+  if (request.rollbackOrphans !== true) {
+    return null;
+  }
+
+  if (request.update === true) {
+    return new MigrationRuntimeError({
+      message: "Rollback orphans cannot combine with update execution",
+    });
+  }
+
+  const mode = request.mode ?? normalRunMode;
+
+  return mode.kind === "normal"
+    ? null
+    : new MigrationRuntimeError({
+        message:
+          mode.kind === "item"
+            ? "Rollback orphans cannot target source identities"
+            : `Rollback orphans cannot combine with ${mode.kind} mode`,
+      });
 };
 
 const runDependencyPreflightFailure = (input: {
@@ -3279,6 +3314,7 @@ interface PlannedRunDefinitionsInput<
   readonly registryDefinitions: readonly AnyMigrationDefinition[];
   readonly requiredDependencyPreflight?: MigrationDefinitionExecutableRunPlan["requiredDependencyPreflight"];
   readonly rescan?: boolean;
+  readonly rollbackOrphans?: boolean;
   readonly update?: boolean;
 }
 
@@ -3315,6 +3351,17 @@ const preparePlannedRunDefinitions = <
 
   if (rescanRunRequestError !== null) {
     return Effect.fail(rescanRunRequestError);
+  }
+
+  const rollbackOrphansRunRequestError =
+    validateRollbackOrphansRunRequest(input);
+
+  if (rollbackOrphansRunRequestError !== null) {
+    return Effect.fail(rollbackOrphansRunRequestError);
+  }
+
+  if (input.rollbackOrphans === true) {
+    return Effect.fail(rollbackOrphansExecutionPendingError);
   }
 
   const sharedStoreError = validateSharedStore(input.definitions);
@@ -3450,6 +3497,9 @@ const migrationRunPlanInput = <
           encodedSourceIdentity: plan.target.sourceIdentities[0],
         },
   registryDefinitions: plan.registryDefinitions,
+  ...(plan.rollbackOrphans === undefined
+    ? {}
+    : { rollbackOrphans: plan.rollbackOrphans }),
   ...(plan.rescan === undefined ? {} : { rescan: plan.rescan }),
   ...(plan.requiredDependencyPreflight === undefined
     ? {}

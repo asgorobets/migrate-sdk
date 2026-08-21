@@ -21,6 +21,7 @@ import {
   MigrationExecution,
   type MigrationExecutionOptions,
   type MigrationRunSummary,
+  MigrationRuntimeError,
   type MigrationStore,
   type MigrationStoreError,
   type RollbackPipeline,
@@ -680,6 +681,130 @@ describe("MigrationDefinitionRegistry", () => {
         toMigrationDefinitionId("articles"),
       ]);
     })
+  );
+
+  it.effect("plans rollback orphans as an authoritative full scan", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({
+        id: "articles",
+        rollback: () => undefined,
+      });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+
+      const plan = yield* registry.planRun({
+        definitionIds: ["articles"],
+        rollbackOrphans: true,
+        rescan: false,
+      });
+
+      expect(plan.rollbackOrphans).toBe(true);
+      expect(plan.rescan).toBe(true);
+    })
+  );
+
+  it.effect("rejects incomplete rollback-orphans run scopes", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({
+        id: "articles",
+        rollback: () => undefined,
+      });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+      const invalidInputs = [
+        {
+          definitionIds: ["articles"] as const,
+          mode: { kind: "failed" as const },
+          rollbackOrphans: true,
+        },
+        {
+          definitionIds: ["articles"] as const,
+          mode: { kind: "skipped" as const },
+          rollbackOrphans: true,
+        },
+        {
+          definitionIds: ["articles"] as const,
+          sourceIdentities: ["article-1"],
+          rollbackOrphans: true,
+        },
+        {
+          definitionIds: ["articles"] as const,
+          update: true,
+          rollbackOrphans: true,
+        },
+      ];
+
+      for (const input of invalidInputs) {
+        const error = yield* Effect.flip(registry.planRun(input));
+        expect(error).toBeInstanceOf(
+          MigrationDefinitionRegistryInvalidSelectionError
+        );
+      }
+    })
+  );
+
+  it.effect("requires a Rollback Pipeline for rollback-orphans planning", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({ id: "articles" });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+
+      const error = yield* Effect.flip(
+        registry.planRun({
+          definitionIds: ["articles"],
+          rollbackOrphans: true,
+        })
+      );
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationDefinitionRegistryInvalidSelectionError",
+          message:
+            "Rolling back orphans requires Migration Definition articles to define a Rollback Pipeline",
+        })
+      );
+    })
+  );
+
+  it.effect(
+    "does not begin rollback-orphans execution before runtime implementation",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const processCalls: string[] = [];
+        const articles = MigrationDefinition.make({
+          id: "articles",
+          source,
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () =>
+            Effect.sync(() => {
+              processCalls.push("processed");
+            }),
+          rollback: () => undefined,
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [articles] as const,
+        });
+
+        const error = yield* Effect.flip(
+          MigrationExecution.make({ registry }).run({
+            definitionIds: ["articles"],
+            rollbackOrphans: true,
+          })
+        );
+
+        expect(error).toEqual(
+          new MigrationRuntimeError({
+            message: "Rollback orphan execution is not implemented yet",
+          })
+        );
+        expect(processCalls).toEqual([]);
+        expect(storeState.latestRunStates.size).toBe(0);
+        expect(storeState.sourceCursorCommits).toEqual([]);
+      })
   );
 
   it.effect(

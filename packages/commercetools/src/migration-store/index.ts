@@ -1297,6 +1297,15 @@ const makeService = (
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions
 ): (typeof MigrationStore)["Service"] => {
+  const orphanMethodNotImplemented = (method: string) =>
+    Effect.fail(
+      new MigrationStoreError({
+        message: `CommercetoolsMigrationStore.${method} is not implemented`,
+      })
+    );
+  const listOrphanItemStates = () =>
+    orphanMethodNotImplemented("listOrphanItemStates");
+  const observeItemState = () => orphanMethodNotImplemented("observeItemState");
   const getSourceCursor = Effect.fn(
     "CommercetoolsMigrationStore.getSourceCursor"
   )((definitionId: MigrationDefinitionId) => {
@@ -1648,6 +1657,8 @@ const makeService = (
   });
 
   return {
+    listOrphanItemStates,
+    observeItemState,
     getSourceCursor,
     setSourceCursor,
     deleteSourceCursor,

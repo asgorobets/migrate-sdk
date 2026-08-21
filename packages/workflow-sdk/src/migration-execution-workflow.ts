@@ -18,6 +18,9 @@ export interface WorkflowSdkMigrationDefinitionRunCounts {
   readonly failed: number;
   readonly migrated: number;
   readonly needsUpdate: number;
+  readonly orphaned?: number;
+  readonly rollbackFailed?: number;
+  readonly rolledBack?: number;
   readonly skipped: number;
   readonly unchanged: number;
 }

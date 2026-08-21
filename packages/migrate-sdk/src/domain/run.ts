@@ -66,6 +66,7 @@ export interface RunRequest<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
   readonly rescan?: boolean;
+  readonly rollbackOrphans?: boolean;
   readonly update?: boolean;
 }
 
@@ -80,6 +81,7 @@ export interface RunRequestInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
   readonly rescan?: boolean;
+  readonly rollbackOrphans?: boolean;
   readonly update?: boolean;
 }
 
@@ -87,18 +89,25 @@ export const makeRunRequest = <
   Definitions extends readonly AnyMigrationDefinition[],
 >(
   input: RunRequestInput<Definitions>
-): RunRequest<Definitions> => ({
-  definitions: input.definitions,
-  ...(input.execution === undefined
-    ? {}
-    : { execution: normalizeMigrationExecutionOptions(input.execution) }),
-  ...(input.mode === undefined ? {} : { mode: input.mode }),
-  ...(input.rescan === undefined ? {} : { rescan: input.rescan }),
-  ...(input.update === undefined ? {} : { update: input.update }),
-  ...(input.definitionIds === undefined
-    ? {}
-    : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
-});
+): RunRequest<Definitions> => {
+  const rescan = input.rollbackOrphans === true ? true : input.rescan;
+
+  return {
+    definitions: input.definitions,
+    ...(input.execution === undefined
+      ? {}
+      : { execution: normalizeMigrationExecutionOptions(input.execution) }),
+    ...(input.mode === undefined ? {} : { mode: input.mode }),
+    ...(input.rollbackOrphans === undefined
+      ? {}
+      : { rollbackOrphans: input.rollbackOrphans }),
+    ...(rescan === undefined ? {} : { rescan }),
+    ...(input.update === undefined ? {} : { update: input.update }),
+    ...(input.definitionIds === undefined
+      ? {}
+      : { definitionIds: input.definitionIds.map(toMigrationDefinitionId) }),
+  };
+};
 
 export const MigrationRunState = Schema.Struct({
   definitionIds: Schema.Array(MigrationDefinitionIdSchema),
@@ -156,6 +165,9 @@ export interface MigrationDefinitionRunSummary {
     readonly failed: number;
     readonly unchanged: number;
     readonly needsUpdate: number;
+    readonly orphaned?: number;
+    readonly rolledBack?: number;
+    readonly rollbackFailed?: number;
   };
   readonly definitionId: MigrationDefinitionId;
   readonly status: "succeeded" | "failed" | "skipped";

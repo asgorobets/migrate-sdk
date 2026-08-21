@@ -52,6 +52,12 @@ An opt-in Source Discovery behavior that retains the Source Cursor after a compl
 **Source Inventory Scan**:
 A read-only traversal of a migration definition's current source items for inspection.
 
+**Orphaned Migration Item State**:
+Migration Item State whose Source Identity was not observed by the current Migration Run's completed authoritative source scan.
+
+**Rollback Orphans**:
+A Migration Run intent that performs an authoritative source scan and then passes Orphaned Migration Item State through the migration definition's Rollback Pipeline.
+
 **Source Rescan**:
 A migration run intent that restarts source discovery at the beginning while preserving item eligibility from existing migration item state and source versions.
 

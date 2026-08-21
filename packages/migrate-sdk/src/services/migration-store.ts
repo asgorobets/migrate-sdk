@@ -1,6 +1,6 @@
-import type { Effect } from "effect";
+import { Effect } from "effect";
 import { Service } from "effect/Context";
-import type { MigrationStoreError } from "../domain/errors.ts";
+import { MigrationStoreError } from "../domain/errors.ts";
 import type {
   EncodedSourceCursor,
   EncodedSourceIdentity,
@@ -16,9 +16,61 @@ import type {
 import type { MigrationItemState } from "../domain/state.ts";
 import type { MigrationItemStateSummary } from "../domain/status.ts";
 
+export interface OrphanItemStatePage {
+  readonly items: readonly MigrationItemState[];
+  readonly nextAfterIdentity?: EncodedSourceIdentity;
+}
+
+export interface OrphanItemStatePageInput {
+  readonly afterIdentity?: EncodedSourceIdentity;
+  readonly limit: number;
+}
+
+interface MigrationStoreOrphanMethods {
+  /**
+   * Lists states not observed by `sourceInventoryRunId` in stable Encoded
+   * Source Identity order. `afterIdentity` is an exclusive keyset cursor.
+   */
+  readonly listOrphanItemStates: (
+    definitionId: MigrationDefinitionId,
+    sourceInventoryRunId: MigrationRunId,
+    page: OrphanItemStatePageInput
+  ) => Effect.Effect<OrphanItemStatePage, MigrationStoreError>;
+
+  /**
+   * Marks an existing state as observed. Returns false without inserting an
+   * item state when the identity has no durable migration outcome.
+   */
+  readonly observeItemState: (
+    definitionId: MigrationDefinitionId,
+    identity: EncodedSourceIdentity,
+    sourceInventoryRunId: MigrationRunId
+  ) => Effect.Effect<void, MigrationStoreError>;
+}
+
+export const makeUnimplementedOrphanStoreMethods = (
+  storeName: string
+): MigrationStoreOrphanMethods => {
+  const notImplemented = (method: string) =>
+    Effect.fail(
+      new MigrationStoreError({
+        message: `${storeName}.${method} is not implemented`,
+      })
+    );
+
+  return {
+    listOrphanItemStates: () => notImplemented("listOrphanItemStates"),
+    observeItemState: () => notImplemented("observeItemState"),
+  };
+};
+
 export class MigrationStore extends Service<
   MigrationStore,
   {
+    readonly listOrphanItemStates: MigrationStoreOrphanMethods["listOrphanItemStates"];
+
+    readonly observeItemState: MigrationStoreOrphanMethods["observeItemState"];
+
     readonly getSourceCursor: (
       definitionId: MigrationDefinitionId
     ) => Effect.Effect<EncodedSourceCursor | null, MigrationStoreError>;

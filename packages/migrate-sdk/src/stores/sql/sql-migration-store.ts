@@ -27,7 +27,10 @@ import type {
 } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { emptyMigrationItemStateSummary } from "../../domain/status.ts";
-import { MigrationStore } from "../../services/migration-store.ts";
+import {
+  MigrationStore,
+  makeUnimplementedOrphanStoreMethods,
+} from "../../services/migration-store.ts";
 import { PersistedMigrationItemState } from "../internal/persisted-state.ts";
 import {
   makeSqlMigrationStoreDialect,
@@ -190,6 +193,8 @@ const makeLayer = (
   Layer.effect(
     MigrationStore,
     Effect.gen(function* () {
+      const orphanStoreMethods =
+        makeUnimplementedOrphanStoreMethods("SqlMigrationStore");
       const sql = (yield* SqlClient.SqlClient).withoutTransforms();
       const prefix = options.tablePrefix ?? defaultTablePrefix;
 
@@ -977,6 +982,7 @@ const makeLayer = (
       });
 
       return {
+        ...orphanStoreMethods,
         getSourceCursor,
         setSourceCursor,
         deleteSourceCursor,

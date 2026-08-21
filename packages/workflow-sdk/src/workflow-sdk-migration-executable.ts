@@ -363,7 +363,10 @@ export const WorkflowSdkMigrationExecutable = {
                 startDurablePlan<MigrationRunSummary>({
                   input,
                   makeEnvelope: (runId, locks) =>
-                    makeMigrationRunExecutionEnvelope(plan, { locks, runId }),
+                    makeMigrationRunExecutionEnvelope(plan, {
+                      locks,
+                      runId,
+                    }),
                   scopeDefinitionIds: plan.includedDefinitionIds,
                   storeLayer,
                 })

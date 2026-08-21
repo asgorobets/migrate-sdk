@@ -16,6 +16,7 @@ import {
 const MigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionId,
   lastRunId: MigrationRunId,
+  lastSourceInventoryRunId: Schema.optional(MigrationRunId),
   sourceIdentity: SourceIdentitySnapshot,
   updatedAt: Schema.Date,
 } as const;
@@ -168,6 +169,7 @@ export type MigrationItemStateFor<
 export interface MigrationItemStateBase {
   readonly definitionId: MigrationDefinitionId;
   readonly lastRunId: MigrationRunId;
+  readonly lastSourceInventoryRunId?: MigrationRunId;
   readonly sourceIdentity: SourceIdentitySnapshot;
   readonly sourceVersion?: SourceVersion;
   readonly sourceVersionContractFingerprint?: SourceVersionContractFingerprint;
