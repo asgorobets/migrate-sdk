@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import {
   type MigrationDefinitionId,
-  MigrationDefinitionRegistryCatalog,
+  type MigrationDefinitionRegistryCatalog,
   type MigrationDefinitionRegistryCatalogLookupError,
   MigrationDefinitionRegistryExecutableError,
   type MigrationDefinitionRegistryPlanningError,
@@ -63,7 +63,7 @@ const unsupportedRunPlanError = (envelope: MigrationRunExecutionEnvelopeType) =>
   new MigrationDefinitionRegistryExecutableError({
     definitionId: firstScopeDefinitionId(envelope),
     message:
-      "Workflow SDK cursor-window execution currently supports only normal run plans without source identity targets",
+      "Workflow SDK cursor-window execution currently supports only normal run plans without update or source identity targets",
     missingRequirements: [
       {
         key: "workflow-sdk-normal-cursor-run",
@@ -113,6 +113,7 @@ export const beginMigrationRunExecutionEnvelope = (
     const runState = yield* MigrationRunStepExecutor.begin({
       definitions: job.plan.definitions,
       lease,
+      ...(job.plan.rescan === undefined ? {} : { rescan: job.plan.rescan }),
     });
 
     return runState.runId;

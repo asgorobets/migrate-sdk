@@ -3,6 +3,7 @@
 
 export type {
   ConfiguredSource,
+  SourceDiscovery,
   SourceFactoryInput,
   SourceLayerInput,
   SourceMakeInput,
@@ -15,6 +16,7 @@ export type {
   SourceRuntimeImplementation,
 } from "./services/source.ts";
 export {
+  defaultSourceDiscovery,
   MigrationDefinition,
   Source,
 } from "./domain/definition.ts";

@@ -48,6 +48,7 @@ import {
   renderRollbackPlan,
   renderRollbackStartResult,
   renderRollbackSummary,
+  renderRunDiscoveryWarnings,
   renderRunPlan,
   renderRunStartResult,
   renderRunSummary,
@@ -420,6 +421,10 @@ const skipped = Flag.boolean("skipped").pipe(
   Flag.withDescription("Plan a rerun of skipped items")
 );
 
+const rescan = Flag.boolean("rescan").pipe(
+  Flag.withDescription("Reset the Source Cursor and scan from the beginning")
+);
+
 const update = Flag.boolean("update").pipe(
   Flag.withDescription("Plan an update run")
 );
@@ -517,6 +522,7 @@ const makeRunPlanInput = (
     readonly execution?: MigrationExecutionOptions;
     readonly force: boolean;
     readonly mode?: "failed" | "skipped";
+    readonly rescan: boolean;
     readonly sourceIdentities?: readonly string[];
     readonly update: boolean;
   }
@@ -526,6 +532,7 @@ const makeRunPlanInput = (
     ...(input.execution === undefined ? {} : { execution: input.execution }),
     ...(input.force ? { force: true as const } : {}),
     ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
+    ...(input.rescan ? { rescan: true as const } : {}),
     ...(input.sourceIdentities === undefined
       ? {}
       : { sourceIdentities: input.sourceIdentities }),
@@ -586,6 +593,7 @@ const renderRunCommandError = (
     readonly group?: string;
     readonly hasTarget: boolean;
     readonly mode?: "failed" | "skipped";
+    readonly rescan: boolean;
     readonly update: boolean;
   }
 ): string =>
@@ -596,6 +604,7 @@ const renderRunCommandError = (
         ...(input.group === undefined ? {} : { group: input.group }),
         hasTarget: input.hasTarget,
         ...(input.mode === undefined ? {} : { mode: input.mode }),
+        rescan: input.rescan,
         update: input.update,
       })
     : renderRuntimeError(error);
@@ -748,6 +757,7 @@ const runCommand = Command.make(
     plan,
     progress,
     concurrency: processConcurrency,
+    rescan,
     skipped,
     update,
     withDependencies,
@@ -796,6 +806,7 @@ const runCommand = Command.make(
         force: input.force,
         ...(groupInput === undefined ? {} : { group: groupInput }),
         ...(mode === undefined ? {} : { mode }),
+        rescan: input.rescan,
         ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
         update: input.update,
         withDependencies: input.withDependencies,
@@ -811,6 +822,7 @@ const runCommand = Command.make(
                 ...(groupInput === undefined ? {} : { group: groupInput }),
                 hasTarget: sourceIdentities !== undefined,
                 ...(mode === undefined ? {} : { mode }),
+                rescan: input.rescan,
                 update: input.update,
               })
             )
@@ -824,6 +836,29 @@ const runCommand = Command.make(
           })
         );
         return;
+      }
+
+      const runPlan = yield* registry.planRun(runInput).pipe(
+        Effect.catch((error) =>
+          failReportedCliMessage(
+            renderRunCommandError(error, {
+              definitionIds: input.definitions,
+              ...(groupInput === undefined ? {} : { group: groupInput }),
+              hasTarget: sourceIdentities !== undefined,
+              ...(mode === undefined ? {} : { mode }),
+              rescan: input.rescan,
+              update: input.update,
+            })
+          )
+        )
+      );
+      const colors = yield* useColor;
+      const discoveryWarnings = renderRunDiscoveryWarnings(runPlan, {
+        colors,
+      });
+
+      if (discoveryWarnings !== "") {
+        yield* Console.log(discoveryWarnings);
       }
 
       const runtime = yield* MigrationCliRuntime;
@@ -841,13 +876,13 @@ const runCommand = Command.make(
               ...(groupInput === undefined ? {} : { group: groupInput }),
               hasTarget: sourceIdentities !== undefined,
               ...(mode === undefined ? {} : { mode }),
+              rescan: input.rescan,
               update: input.update,
             })
           )
         )
       );
 
-      const colors = yield* useColor;
       yield* reportExecutionOutcome(result, {
         label: "Run",
         renderStart: (start) => renderRunStartResult(start, { colors }),

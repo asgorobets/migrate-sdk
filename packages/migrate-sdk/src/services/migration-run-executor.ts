@@ -155,6 +155,18 @@ const invalidUpdateRunModeError = (mode: RunMode) =>
         : `Update run cannot combine with ${mode.kind} mode`,
   });
 
+const invalidRescanRunModeError = (mode: RunMode) =>
+  new MigrationRuntimeError({
+    message:
+      mode.kind === "item"
+        ? "Rescan run cannot target source identities"
+        : `Rescan run cannot combine with ${mode.kind} mode`,
+  });
+
+const conflictingRescanUpdateError = new MigrationRuntimeError({
+  message: "Rescan run cannot combine with update intent",
+});
+
 const unsafeDependentRollbackError = (
   definitionId: MigrationDefinitionId,
   dependentDefinitionId: MigrationDefinitionId
@@ -522,6 +534,7 @@ export interface MigrationRunCursorWindowInput {
 export interface MigrationRunBeginInput {
   readonly definitions: readonly AnyMigrationDefinition[];
   readonly lease: MigrationRunExecutionLease;
+  readonly rescan?: boolean;
 }
 
 export interface MigrationRunDefinitionCursorWindowInput
@@ -570,6 +583,15 @@ const beginMigrationRunExecution = (
     );
     yield* validateMigrationContracts(store, input.definitions);
     const runState = yield* store.beginRun(input.lease.runId, definitionIds);
+
+    if (input.rescan === true) {
+      yield* Effect.forEach(
+        definitionIds,
+        (definitionId) => store.deleteSourceCursor(definitionId),
+        { discard: true }
+      );
+    }
+
     yield* MigrationProgress.emit({
       definitionIds,
       kind: "run-started",
@@ -850,6 +872,24 @@ const validateUpdateRunRequest = (request: {
   const mode = request.mode ?? normalRunMode;
 
   return mode.kind === "normal" ? null : invalidUpdateRunModeError(mode);
+};
+
+const validateRescanRunRequest = (request: {
+  readonly mode?: RunMode;
+  readonly rescan?: boolean;
+  readonly update?: boolean;
+}): MigrationRuntimeError | null => {
+  if (request.rescan !== true) {
+    return null;
+  }
+
+  if (request.update === true) {
+    return conflictingRescanUpdateError;
+  }
+
+  const mode = request.mode ?? normalRunMode;
+
+  return mode.kind === "normal" ? null : invalidRescanRunModeError(mode);
 };
 
 const runDependencyPreflightFailure = (input: {
@@ -1980,6 +2020,15 @@ const processCursorDiscovery = <
     return { committedCursor, completed: true };
   });
 
+function finalizeCompletedSourceDiscovery(
+  definition: AnyMigrationDefinition,
+  store: typeof MigrationStore.Service
+): Effect.Effect<void, MigrationStoreError> {
+  return definition.source.discovery === "full"
+    ? store.deleteSourceCursor(definition.id)
+    : Effect.void;
+}
+
 const processStubSourceIdentity = ({
   definition,
   runId,
@@ -2363,7 +2412,10 @@ const runMigrationDefinition = <
   >,
   runId: MigrationRunId,
   mode: RunMode,
-  update: boolean,
+  runOptions: {
+    readonly rescan: boolean;
+    readonly update: boolean;
+  },
   createStubReference: CreateMigrationReferenceStub,
   processExecution?: PipelineExecutionOptions
 ): Effect.Effect<
@@ -2397,7 +2449,11 @@ const runMigrationDefinition = <
       source,
     });
 
-    if (update) {
+    if (runOptions.rescan) {
+      yield* store.deleteSourceCursor(definition.id);
+    }
+
+    if (runOptions.update) {
       yield* prepareUpdateRunDefinition({
         definitionId: definition.id,
         itemStates,
@@ -2419,6 +2475,8 @@ const runMigrationDefinition = <
       if (!discovery.completed) {
         return null;
       }
+
+      yield* finalizeCompletedSourceDiscovery(definition, store);
 
       const summary = {
         definitionId: definition.id,
@@ -2485,6 +2543,8 @@ const runMigrationDefinition = <
     if (!discovery.completed) {
       return null;
     }
+
+    yield* finalizeCompletedSourceDiscovery(definition, store);
 
     const summary = {
       definitionId: definition.id,
@@ -2633,6 +2693,8 @@ const runMigrationDefinitionCursorWindow = <
         state,
       };
     }
+
+    yield* finalizeCompletedSourceDiscovery(definition, store);
 
     const summary = {
       counts: state.counts,
@@ -3216,6 +3278,7 @@ interface PlannedRunDefinitionsInput<
   readonly mode: RunMode;
   readonly registryDefinitions: readonly AnyMigrationDefinition[];
   readonly requiredDependencyPreflight?: MigrationDefinitionExecutableRunPlan["requiredDependencyPreflight"];
+  readonly rescan?: boolean;
   readonly update?: boolean;
 }
 
@@ -3246,6 +3309,12 @@ const preparePlannedRunDefinitions = <
 
   if (updateRunRequestError !== null) {
     return Effect.fail(updateRunRequestError);
+  }
+
+  const rescanRunRequestError = validateRescanRunRequest(input);
+
+  if (rescanRunRequestError !== null) {
+    return Effect.fail(rescanRunRequestError);
   }
 
   const sharedStoreError = validateSharedStore(input.definitions);
@@ -3308,7 +3377,10 @@ const executePreparedRunDefinitions = <
                   definition,
                   runId,
                   input.mode,
-                  input.update === true,
+                  {
+                    rescan: input.rescan === true,
+                    update: input.update === true,
+                  },
                   stubRunScope.createStubReference,
                   input.execution?.process
                 );
@@ -3378,6 +3450,7 @@ const migrationRunPlanInput = <
           encodedSourceIdentity: plan.target.sourceIdentities[0],
         },
   registryDefinitions: plan.registryDefinitions,
+  ...(plan.rescan === undefined ? {} : { rescan: plan.rescan }),
   ...(plan.requiredDependencyPreflight === undefined
     ? {}
     : { requiredDependencyPreflight: plan.requiredDependencyPreflight }),

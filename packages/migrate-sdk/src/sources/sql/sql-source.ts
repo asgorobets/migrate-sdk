@@ -3,6 +3,7 @@ import { SqlClient, type Statement } from "effect/unstable/sql";
 import {
   type ConfiguredSource,
   Source,
+  type SourceDiscovery,
   type SourceReadResultInput,
 } from "../../domain/definition.ts";
 import { SourceError } from "../../domain/errors.ts";
@@ -268,6 +269,11 @@ interface SqlSourceBaseOptions<
   readonly batchSize: number;
   readonly count?: SqlSourceCount<CountRow>;
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
+  /**
+   * Controls cursor retention after completed runs. Defaults to `"full"`.
+   * Use `"incremental"` only when changed rows always follow the saved cursor.
+   */
+  readonly discovery?: SourceDiscovery;
   readonly read: SqlSourceRead<EncodedPayload, Cursor>;
   readonly sourceSchema: Schema.Codec<Payload, EncodedPayload, never, never>;
 }
@@ -734,6 +740,9 @@ const make = <
         })
       ),
     cursorSchema: options.cursorSchema,
+    ...(options.discovery === undefined
+      ? {}
+      : { discovery: options.discovery }),
     identity: identityDefinition,
     sourceIdentityContractFingerprint,
     sourceSchema: options.sourceSchema,

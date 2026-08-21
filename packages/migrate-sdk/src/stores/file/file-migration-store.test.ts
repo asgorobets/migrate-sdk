@@ -529,6 +529,7 @@ describe("FileMigrationStore", () => {
         const definition = MigrationDefinition.make({
           id: "articles",
           source: InMemorySource.make({
+            discovery: "incremental",
             identity: TestSourceIdentity,
             sourceSchema: ArticleSource,
             batchSize: 1,

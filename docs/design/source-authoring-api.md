@@ -8,10 +8,10 @@ This document uses the new source identity contract shape:
 `SourceIdentityDefinition`, structured identity keys, and decoded
 `SourceIdentityTarget` lookup input.
 
-Sources emit source items by cursor and by identity. They own source
-cursor semantics, source payload validation, and the declared lookup cost model.
-Migration authors consume configured source values rather than raw Effect
-services.
+Sources emit source items by cursor and by identity. They own source cursor
+semantics, the discovery policy, source payload validation, and the declared
+lookup cost model. Migration authors consume configured source values rather
+than raw Effect services.
 
 ## Configured Source
 
@@ -26,6 +26,7 @@ interface ConfiguredSource<
   IdentityKey,
   EncodedPayload = Payload,
 > {
+  readonly discovery: SourceDiscovery;
   readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
 }
@@ -37,6 +38,7 @@ interface SourceMakeInput<
   EncodedPayload = Payload,
 > {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
+  readonly discovery?: "full" | "incremental";
   readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly lookupStrategy: SourceLookupStrategy;
@@ -112,6 +114,7 @@ interface SourceFactoryInput<
   EncodedPayload = Payload,
 > {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
+  readonly discovery?: "full" | "incremental";
   readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly make: () => SourceRuntimeImplementation<
@@ -124,6 +127,11 @@ interface SourceFactoryInput<
 
 The runner provides the configured source layer per migration definition. Do not
 register every source globally under the shared `Source` tag.
+
+`Source.make` and `Source.fromLayer` are the low-level source-author surface.
+Migration authors normally use a higher-level factory such as `SqlSource.make`,
+`CsvSource.make`, or `CommercetoolsSource.products`. Those factories can expose
+`discovery` when the migration author needs to opt into a high-water source.
 
 When a source needs setup, dependencies, or scoped resources, use
 `Source.fromLayer`. The SDK provides the per-definition source runtime tag to
@@ -328,6 +336,26 @@ as CSV row parsing, Document selection, or in-memory test items.
 `read(cursor)` reads one source cursor window and returns the next cursor when
 more source items may be available.
 
+Sources default to `discovery: "full"`. The runner commits cursors while the
+traversal is in progress so an interrupted run can resume, then deletes the
+cursor after the traversal completes. The next run therefore starts at
+`read(null)` and can discover changes anywhere in the source while Source
+Version comparison keeps unchanged items out of the Process Pipeline.
+
+Use `discovery: "incremental"` only when the cursor is a valid high-water mark:
+new or changed items must always sort after the saved cursor. Incremental
+discovery retains the completed cursor for the next run. The source author owns
+that ordering guarantee and should use a deterministic tie-breaker when the
+high-water field is not unique.
+
+The CLI shows the resolved policy in `migrate run --plan` and `migrate status`.
+Normal cursor-discovery runs warn when a selected source uses incremental
+discovery and point operators to `--rescan` when they need to ignore the saved
+high-water cursor. Targeted failed, skipped, and item retries do not warn because
+they use source identity lookup instead of cursor discovery. Update and rescan
+runs explain that they start from the beginning and retain the new high-water
+cursor.
+
 ```ts
 const SqlArticleCursor = Schema.Struct({
   id: Schema.String,
@@ -367,7 +395,8 @@ failures for cursor discovery errors.
 
 The next cursor is committed after a cursor window is processed, even when some
 items in that window fail. Failed items are retried later from item state using
-`readByIdentity`.
+`readByIdentity`. A full-discovery cursor is still retained when discovery is
+cancelled or fails before the terminal window.
 
 ## Identity Lookup
 

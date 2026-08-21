@@ -2,6 +2,7 @@ import type { Effect } from "effect";
 import { Schema } from "effect";
 import {
   type ConfiguredSource,
+  type SourceDiscovery,
   SourceIdentity,
   type SourceIdentityDefinition,
   type SourcePayloadSchema,
@@ -49,6 +50,11 @@ export type CommercetoolsSourceWhereVariables = Readonly<
 
 export interface CommercetoolsEntitySourceBaseOptions {
   readonly batchSize?: number;
+  /**
+   * Controls cursor retention after completed runs. Defaults to `"full"`.
+   * Incremental mode uses `(lastModifiedAt, id)` as its high-water cursor.
+   */
+  readonly discovery?: SourceDiscovery;
   readonly expand?: string | readonly string[];
   readonly identity?: CommercetoolsSourceIdentity;
   readonly where?: string | readonly string[];
@@ -76,8 +82,9 @@ export interface CommercetoolsProjectedEntitySourceOptions<
 export interface CommercetoolsSourceQueryArgs {
   readonly expand?: string | string[];
   readonly limit: number;
-  readonly sort: string;
+  readonly sort: string | string[];
   readonly "var.lastId"?: string;
+  readonly "var.lastModifiedAt"?: string;
   readonly where?: string | string[];
   readonly withTotal: false;
   readonly [key: string]:
@@ -119,6 +126,7 @@ export interface CommercetoolsEntitySourceDescriptor<
   ) => Effect.Effect<Page, CommercetoolsSdkError>;
   readonly getId: (resource: Resource) => string;
   readonly getKey: (resource: Resource) => string | undefined;
+  readonly getLastModifiedAt: (resource: Resource) => string;
   readonly getVersion: (resource: Resource) => number;
   readonly identity: CommercetoolsEntitySourceIdentityDefinitions;
   readonly label: string;

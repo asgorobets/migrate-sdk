@@ -59,6 +59,18 @@ export type Source<
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
 > = SourceRuntimeService<Payload, Cursor, EncodedPayload, IdentityKey>;
 
+/**
+ * Controls whether a completed source traversal discards or retains its cursor.
+ *
+ * `"full"` starts the next completed run from the beginning. `"incremental"`
+ * retains the cursor as a high-water mark and requires changed items to sort
+ * after that cursor.
+ */
+export type SourceDiscovery = "full" | "incremental";
+
+/** The discovery policy used when a source does not declare one. */
+export const defaultSourceDiscovery: SourceDiscovery = "full";
+
 export type SourceRuntimeLayer<
   Payload,
   Cursor,
@@ -109,6 +121,8 @@ export interface ConfiguredSource<
   SourceImplementationError = never,
   SourceRequirements = never,
 > {
+  /** The resolved discovery policy for this source. */
+  readonly discovery: SourceDiscovery;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly provide: <
     ProvidedRequirements,
@@ -217,6 +231,11 @@ export interface SourceMakeInput<
   EncodedPayload = Payload,
 > extends SourceRuntimeImplementation<EncodedPayload, Cursor, IdentityKey> {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
+  /**
+   * Controls cursor retention after a completed traversal. Defaults to
+   * `"full"`. Use `"incremental"` only for a valid high-water cursor.
+   */
+  readonly discovery?: SourceDiscovery;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly sourceIdentityContractFingerprint?: SourceIdentityDefinition<IdentityKey>["fingerprint"];
   readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
@@ -230,6 +249,11 @@ export interface SourceFactoryInput<
   EncodedPayload = Payload,
 > {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
+  /**
+   * Controls cursor retention after a completed traversal. Defaults to
+   * `"full"`. Use `"incremental"` only for a valid high-water cursor.
+   */
+  readonly discovery?: SourceDiscovery;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly make: () => SourceRuntimeImplementation<
     EncodedPayload,
@@ -250,6 +274,11 @@ export interface SourceLayerInput<
   SourceRequirements = never,
 > {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
+  /**
+   * Controls cursor retention after a completed traversal. Defaults to
+   * `"full"`. Use `"incremental"` only for a valid high-water cursor.
+   */
+  readonly discovery?: SourceDiscovery;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly layer: SourceRuntimeLayer<
     NoInfer<Payload>,
@@ -273,6 +302,7 @@ interface ConfiguredSourceUseInput<
   SourceRequirements = never,
 > {
   readonly cursorSchema: Schema.Codec<Cursor, unknown, never, never>;
+  readonly discovery?: SourceDiscovery;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly sourceIdentityContractFingerprint?: SourceIdentityDefinition<IdentityKey>["fingerprint"];
   readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
@@ -320,8 +350,11 @@ const makeConfiguredSource = <
   SourceImplementationError,
   SourceRequirements
 > => {
+  const discovery = input.discovery ?? defaultSourceDiscovery;
+
   return {
     [configuredSourceTypeId]: undefined as never,
+    discovery,
     identity: input.identity,
     provide: <ProvidedRequirements, ProvidedError, RemainingRequirements>(
       layer: Layer.Layer<
@@ -340,6 +373,7 @@ const makeConfiguredSource = <
         | Exclude<SourceRequirements, ProvidedRequirements>
       >({
         cursorSchema: input.cursorSchema,
+        discovery,
         identity: input.identity,
         sourceSchema: input.sourceSchema,
         toLayer: (service) => input.toLayer(service).pipe(Layer.provide(layer)),
@@ -399,6 +433,7 @@ const makeSource = <
         })
       ),
     cursorSchema: input.cursorSchema,
+    ...(input.discovery === undefined ? {} : { discovery: input.discovery }),
     identity: input.identity,
     sourceSchema: input.sourceSchema,
     ...(input.sourceIdentityContractFingerprint === undefined
@@ -442,6 +477,7 @@ const sourceFromLayer = <
 > =>
   makeConfiguredSource({
     cursorSchema: input.cursorSchema,
+    ...(input.discovery === undefined ? {} : { discovery: input.discovery }),
     identity: input.identity,
     sourceSchema: input.sourceSchema,
     toLayer: (service) => {

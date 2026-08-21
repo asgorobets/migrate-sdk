@@ -663,6 +663,25 @@ describe("MigrationDefinitionRegistry", () => {
     })
   );
 
+  it.effect("preserves rescan intent in run plans", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({ id: "articles" });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+
+      const plan = yield* registry.planRun({
+        definitionIds: ["articles"],
+        rescan: true,
+      });
+
+      expect(plan.rescan).toBe(true);
+      expect(plan.executionDefinitionIds).toEqual([
+        toMigrationDefinitionId("articles"),
+      ]);
+    })
+  );
+
   it.effect(
     "plans effective execution policy from request overrides and definition defaults",
     () =>

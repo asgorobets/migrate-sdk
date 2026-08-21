@@ -189,17 +189,37 @@ const businessUnitResponse = (
   version: 1,
 });
 
-const pageResults = <Resource extends { readonly id: string }>(
+const pageResults = <
+  Resource extends { readonly id: string; readonly lastModifiedAt: string },
+>(
   request: ScriptedCommercetoolsSdkRequest,
   resources: readonly Resource[]
 ): { readonly limit: number; readonly results: readonly Resource[] } => {
   const lastId = stringQueryParam(request.queryParams?.["var.lastId"]);
+  const lastModifiedAt = stringQueryParam(
+    request.queryParams?.["var.lastModifiedAt"]
+  );
   const limit = numberQueryParam(request.queryParams?.limit) ?? 20;
 
   return {
     limit,
-    results: resources
-      .filter((resource) => lastId === undefined || resource.id > lastId)
+    results: [...resources]
+      .sort(
+        (left, right) =>
+          left.lastModifiedAt.localeCompare(right.lastModifiedAt) ||
+          left.id.localeCompare(right.id)
+      )
+      .filter((resource) => {
+        if (lastModifiedAt === undefined) {
+          return lastId === undefined || resource.id > lastId;
+        }
+
+        return (
+          resource.lastModifiedAt > lastModifiedAt ||
+          (resource.lastModifiedAt === lastModifiedAt &&
+            (lastId === undefined || resource.id > lastId))
+        );
+      })
       .slice(0, limit),
   };
 };
@@ -477,7 +497,7 @@ describe("CommercetoolsSource", () => {
           operation: "businessUnits.source.read",
           queryParams: {
             limit: 10,
-            sort: "id asc",
+            sort: ["lastModifiedAt asc", "id asc"],
             "var.businessUnitKey": "example-business-unit",
             where: "key = :businessUnitKey",
             withTotal: false,
@@ -795,6 +815,7 @@ describe("CommercetoolsSource", () => {
               version: 1,
             });
             expect(firstPage.nextCursor).toEqual({
+              lastModifiedAt: "2026-01-01T00:00:00.000Z",
               lastId: "recording-product-id",
             });
 
@@ -826,6 +847,63 @@ describe("CommercetoolsSource", () => {
             expect(lookedUp?.version).toBe("1");
           })
         );
+      })
+  );
+
+  it.effect(
+    "discovers newly created and updated products after an earlier UUID cursor",
+    () =>
+      Effect.gen(function* () {
+        const products: Product[] = [
+          {
+            ...productResponse(),
+            id: "f0000000-0000-4000-8000-000000000000",
+          },
+        ];
+        const recording = makeSourceSdk({ products });
+        const storeState = InMemoryMigrationStore.makeState();
+        const processCalls: string[] = [];
+        const definition = MigrationDefinition.make({
+          id: "commercetools-products",
+          source: CommercetoolsSource.products({
+            batchSize: 1,
+            discovery: "incremental",
+          }).provide(recording.layer),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (source) =>
+            Effect.sync(() => {
+              processCalls.push(`${source.item.id}@${source.item.version}`);
+            }),
+        });
+
+        expect(definition.source.discovery).toBe("incremental");
+
+        yield* runInlineDefinition(definition);
+        expect(storeState.sourceCursors.has(definition.id)).toBe(true);
+
+        products.push({
+          ...productResponse(),
+          id: "20000000-0000-4000-8000-000000000000",
+          key: "newer-product-with-lower-uuid",
+          lastModifiedAt: "2026-01-01T00:01:00.000Z",
+        });
+
+        yield* runInlineDefinition(definition);
+
+        products[0] = {
+          ...productResponse(),
+          id: "f0000000-0000-4000-8000-000000000000",
+          lastModifiedAt: "2026-01-01T00:02:00.000Z",
+          version: 2,
+        };
+
+        yield* runInlineDefinition(definition);
+
+        expect(processCalls).toEqual([
+          "f0000000-0000-4000-8000-000000000000@1",
+          "20000000-0000-4000-8000-000000000000@1",
+          "f0000000-0000-4000-8000-000000000000@2",
+        ]);
       })
   );
 
@@ -863,10 +941,12 @@ describe("CommercetoolsSource", () => {
 
             expect(firstPage.items).toHaveLength(20);
             expect(firstPage.nextCursor).toEqual({
+              lastModifiedAt: "2026-01-01T00:00:00.000Z",
               lastId: "recording-business-unit-20",
             });
             expect(secondPage.items).toHaveLength(4);
             expect(secondPage.nextCursor).toEqual({
+              lastModifiedAt: "2026-01-01T00:00:00.000Z",
               lastId: "recording-business-unit-24",
             });
             expect(thirdPage.items).toHaveLength(0);
@@ -878,7 +958,7 @@ describe("CommercetoolsSource", () => {
             operation: "businessUnits.source.read",
             queryParams: {
               limit: 20,
-              sort: "id asc",
+              sort: ["lastModifiedAt asc", "id asc"],
               withTotal: false,
             },
           },
@@ -886,9 +966,11 @@ describe("CommercetoolsSource", () => {
             operation: "businessUnits.source.read",
             queryParams: {
               limit: 20,
-              sort: "id asc",
+              sort: ["lastModifiedAt asc", "id asc"],
               "var.lastId": "recording-business-unit-20",
-              where: "id > :lastId",
+              "var.lastModifiedAt": "2026-01-01T00:00:00.000Z",
+              where:
+                "lastModifiedAt > :lastModifiedAt or (lastModifiedAt = :lastModifiedAt and id > :lastId)",
               withTotal: false,
             },
           },
@@ -896,9 +978,11 @@ describe("CommercetoolsSource", () => {
             operation: "businessUnits.source.read",
             queryParams: {
               limit: 20,
-              sort: "id asc",
+              sort: ["lastModifiedAt asc", "id asc"],
               "var.lastId": "recording-business-unit-24",
-              where: "id > :lastId",
+              "var.lastModifiedAt": "2026-01-01T00:00:00.000Z",
+              where:
+                "lastModifiedAt > :lastModifiedAt or (lastModifiedAt = :lastModifiedAt and id > :lastId)",
               withTotal: false,
             },
           },

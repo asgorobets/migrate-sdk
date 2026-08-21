@@ -7,6 +7,7 @@ import { Schema } from "effect";
 
 export const CommercetoolsSourceCursor = Schema.Struct({
   lastId: Schema.String,
+  lastModifiedAt: Schema.String,
 });
 
 export type CommercetoolsSourceCursor = typeof CommercetoolsSourceCursor.Type;

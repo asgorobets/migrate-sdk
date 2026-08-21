@@ -65,6 +65,7 @@ export interface RunRequest<
   readonly mode?: RunModeInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
+  readonly rescan?: boolean;
   readonly update?: boolean;
 }
 
@@ -78,6 +79,7 @@ export interface RunRequestInput<
   readonly mode?: RunModeInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
+  readonly rescan?: boolean;
   readonly update?: boolean;
 }
 
@@ -91,6 +93,7 @@ export const makeRunRequest = <
     ? {}
     : { execution: normalizeMigrationExecutionOptions(input.execution) }),
   ...(input.mode === undefined ? {} : { mode: input.mode }),
+  ...(input.rescan === undefined ? {} : { rescan: input.rescan }),
   ...(input.update === undefined ? {} : { update: input.update }),
   ...(input.definitionIds === undefined
     ? {}

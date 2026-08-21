@@ -220,6 +220,7 @@ describe("getMigrationStatuses", () => {
         definitions: [
           {
             definitionId,
+            discovery: "full",
             durable: {
               failed: 1,
               migrated: 1,
@@ -410,6 +411,7 @@ describe("getMigrationStatuses", () => {
           definitions: [
             {
               definitionId,
+              discovery: "full",
               durable: {
                 failed: 0,
                 migrated: 1,

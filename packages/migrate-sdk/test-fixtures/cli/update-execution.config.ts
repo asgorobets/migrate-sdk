@@ -9,9 +9,9 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
+import { defineMigrationCliConfig } from "migrate-sdk/cli";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
-import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
 const EntrySource = Schema.Struct({ title: Schema.String });
 const EntrySourceIdentity = SourceIdentity.make({
@@ -38,7 +38,7 @@ storeState.migrationContracts.set(definitionId, {
 });
 storeState.sourceCursors.set(
   definitionId,
-  toEncodedSourceCursor('{"offset":1}')
+  toEncodedSourceCursor('{"offset":2}')
 );
 storeState.itemStates.set(
   InMemoryMigrationStore.itemStateKey(definitionId, "article-migrated"),

@@ -94,6 +94,7 @@ export type MigrationDefinitionRegistryRunInput =
     readonly execution?: MigrationExecutionOptions;
     readonly force?: boolean;
     readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
+    readonly rescan?: boolean;
     readonly sourceIdentities?: readonly string[];
     readonly update?: boolean;
   };
@@ -210,6 +211,7 @@ export interface MigrationDefinitionRunPlan<
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
   readonly requestedGroup?: MigrationDefinitionGroupId;
   readonly requiredDependencyPreflight?: readonly MigrationDefinitionRequiredDependencyPreflight[];
+  readonly rescan?: boolean;
   readonly target?: MigrationDefinitionPlanTarget;
   readonly update?: boolean;
   readonly withDependencies: boolean;
@@ -1122,6 +1124,48 @@ const validateUpdateRunInput = (
   return Effect.void;
 };
 
+const validateRescanRunInput = (
+  input: MigrationDefinitionRegistryRunInput
+): Effect.Effect<void, MigrationDefinitionRegistryInvalidSelectionError> => {
+  if (input.rescan !== true) {
+    return Effect.void;
+  }
+
+  if (input.update === true) {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Rescan run planning cannot combine with update intent",
+      })
+    );
+  }
+
+  if (input.mode?.kind === "failed") {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Rescan run planning cannot combine with failed mode",
+      })
+    );
+  }
+
+  if (input.mode?.kind === "skipped") {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Rescan run planning cannot combine with skipped mode",
+      })
+    );
+  }
+
+  if (input.sourceIdentities !== undefined) {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Rescan run planning cannot target source identities",
+      })
+    );
+  }
+
+  return Effect.void;
+};
+
 const normalizeRollbackTarget = (
   input: MigrationDefinitionRegistryRollbackInput,
   selection: ResolvedRegistrySelection,
@@ -1556,6 +1600,7 @@ export class MigrationDefinitionRegistry<
         input
       );
       yield* validateUpdateRunInput(input);
+      yield* validateRescanRunInput(input);
       const targetOption = yield* normalizeRunTarget(
         input,
         selection,
@@ -1603,6 +1648,7 @@ export class MigrationDefinitionRegistry<
           ? {}
           : { execution: input.execution }),
         ...(input.mode === undefined ? {} : { mode: input.mode }),
+        ...(input.rescan === undefined ? {} : { rescan: input.rescan }),
         ...(requiredDependencyPreflight.length === 0
           ? {}
           : { requiredDependencyPreflight }),

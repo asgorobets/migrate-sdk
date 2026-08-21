@@ -31,6 +31,15 @@ describe("RunRequest", () => {
       update: true,
     });
   });
+
+  it("preserves rescan intent for raw run requests", () => {
+    const definitions = [] as const;
+
+    expect(makeRunRequest({ definitions, rescan: true })).toEqual({
+      definitions,
+      rescan: true,
+    });
+  });
 });
 
 describe("ExecutionStartResult", () => {

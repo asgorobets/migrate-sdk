@@ -298,6 +298,7 @@ const getDurableDefinitionStatus = (
 
     return {
       definitionId: definition.id,
+      discovery: definition.source.discovery,
       durable,
       lastRun,
       lock,
@@ -324,6 +325,7 @@ const getScannedDefinitionStatus = <Definition extends AnyMigrationDefinition>(
 
     return {
       definitionId: definition.id,
+      discovery: definition.source.discovery,
       durable,
       lastRun,
       lock,

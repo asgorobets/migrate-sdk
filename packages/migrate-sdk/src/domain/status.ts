@@ -73,6 +73,7 @@ export type MigrationStatusWarning = typeof MigrationStatusWarning.Type;
 
 export const MigrationDefinitionStatus = Schema.Struct({
   definitionId: MigrationDefinitionIdSchema,
+  discovery: Schema.Literals(["full", "incremental"]),
   durable: MigrationItemStateSummary,
   lastRun: Schema.NullOr(MigrationRunState),
   lock: Schema.NullOr(MigrationDefinitionLock),

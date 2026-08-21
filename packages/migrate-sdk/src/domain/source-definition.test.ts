@@ -234,6 +234,8 @@ describe("Source", () => {
           }),
       });
 
+      expect(source.discovery).toBe("full");
+
       yield* useConfiguredSource(source, (sourceRuntime) =>
         Effect.gen(function* () {
           const page = yield* sourceRuntime.read(null);
@@ -359,9 +361,12 @@ describe("Source", () => {
             })
           ),
         cursorSchema: RemoteArticleCursor,
+        discovery: "incremental",
         identity: RemoteArticleIdentity,
         sourceSchema: RemoteArticle,
       }).provide(makeScopedSourceDependencyLayer(state));
+
+      expect(source.discovery).toBe("incremental");
 
       const page = yield* useConfiguredSource(source, (sourceRuntime) =>
         sourceRuntime.read(null)

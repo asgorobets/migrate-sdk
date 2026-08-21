@@ -11,6 +11,7 @@ export type {
   MigrationDefinitionInput,
   ProcessPipelineFor,
   SourceFactoryInput,
+  SourceDiscovery,
   SourceLayerInput,
   SourceMakeInput,
   SourcePayloadSchema,
@@ -23,6 +24,7 @@ export type {
   SourceRuntimeImplementation,
 } from "./services/source.ts";
 export {
+  defaultSourceDiscovery,
   MigrationDefinition,
   Source,
 } from "./domain/definition.ts";
