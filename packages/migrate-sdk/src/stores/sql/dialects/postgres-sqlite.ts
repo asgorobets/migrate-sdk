@@ -116,50 +116,8 @@ const initializePostgresOrSqlite = (
     `,
   ]);
 
-  const upgradeItemStates = sql.onDialectOrElse({
-    pg: () =>
-      runStatements([
-        sql`
-          ALTER TABLE ${itemStates}
-          ADD COLUMN IF NOT EXISTS last_source_inventory_run_key CHAR(64) NULL
-        `,
-        sql`
-          ALTER TABLE ${itemStates}
-          ADD COLUMN IF NOT EXISTS last_source_inventory_run_id TEXT NULL
-        `,
-      ]),
-    sqlite: () =>
-      Effect.gen(function* () {
-        interface SqliteTableInfoRow {
-          readonly name: string;
-        }
-
-        const columns = yield* sql<SqliteTableInfoRow>`
-          PRAGMA table_info(${sql.literal(names.itemStates)})
-        `;
-        const columnNames = new Set(columns.map((column) => column.name));
-
-        if (!columnNames.has("last_source_inventory_run_key")) {
-          yield* sql`
-            ALTER TABLE ${itemStates}
-            ADD COLUMN last_source_inventory_run_key CHAR(64) NULL
-          `;
-        }
-
-        if (!columnNames.has("last_source_inventory_run_id")) {
-          yield* sql`
-            ALTER TABLE ${itemStates}
-            ADD COLUMN last_source_inventory_run_id TEXT NULL
-          `;
-        }
-      }),
-    orElse: () =>
-      Effect.die("Expected PostgreSQL or SQLite Migration Store dialect"),
-  });
-
   return Effect.gen(function* () {
     yield* createTables;
-    yield* upgradeItemStates;
     yield* runStatements(indexes);
   });
 };

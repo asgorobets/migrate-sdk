@@ -17,14 +17,6 @@ interface SqlTokenRow {
   readonly token: string;
 }
 
-interface MysqlColumnRow {
-  readonly column_name: string;
-}
-
-interface MysqlIndexRow {
-  readonly index_name: string;
-}
-
 const initializeMysql = (
   sql: SqlClient.SqlClient,
   names: SqlMigrationStoreTableNames,
@@ -124,50 +116,7 @@ const initializeMysql = (
     `,
   ]);
 
-  return Effect.gen(function* () {
-    yield* createTables;
-
-    const columns = yield* sql<MysqlColumnRow>`
-      SELECT COLUMN_NAME AS column_name
-      FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = ${names.itemStates}
-    `;
-    const columnNames = new Set(columns.map((column) => column.column_name));
-
-    if (!columnNames.has("last_source_inventory_run_key")) {
-      yield* sql`
-        ALTER TABLE ${itemStates}
-        ADD COLUMN last_source_inventory_run_key CHAR(64) NULL
-      `;
-    }
-
-    if (!columnNames.has("last_source_inventory_run_id")) {
-      yield* sql`
-        ALTER TABLE ${itemStates}
-        ADD COLUMN last_source_inventory_run_id TEXT NULL
-      `;
-    }
-
-    const indexes = yield* sql<MysqlIndexRow>`
-      SELECT INDEX_NAME AS index_name
-      FROM INFORMATION_SCHEMA.STATISTICS
-      WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = ${names.itemStates}
-        AND INDEX_NAME = ${orphanIndexName}
-    `;
-
-    if (indexes.length === 0) {
-      yield* sql`
-        ALTER TABLE ${itemStates}
-        ADD INDEX ${sql(orphanIndexName)} (
-          definition_key,
-          source_identity_key,
-          last_source_inventory_run_key
-        )
-      `;
-    }
-  });
+  return createTables;
 };
 
 const makeMysqlUpsert =

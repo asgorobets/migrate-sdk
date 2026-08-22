@@ -143,16 +143,6 @@ const initializeMssql = (
         )
       `
     ),
-    sql`
-      IF COL_LENGTH(${names.itemStates}, 'last_source_inventory_run_key') IS NULL
-      ALTER TABLE ${itemStates}
-      ADD last_source_inventory_run_key CHAR(64) NULL
-    `,
-    sql`
-      IF COL_LENGTH(${names.itemStates}, 'last_source_inventory_run_id') IS NULL
-      ALTER TABLE ${itemStates}
-      ADD last_source_inventory_run_id NVARCHAR(MAX) NULL
-    `,
     ...[
       ...indexDefinitions(names, prefix),
       {

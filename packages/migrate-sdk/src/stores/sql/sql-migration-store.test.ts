@@ -52,6 +52,10 @@ interface SqliteIndexRow {
   readonly name: string;
 }
 
+interface SqliteColumnRow {
+  readonly name: string;
+}
+
 describe("SqlMigrationStore", () => {
   it.effect(
     "rolls back SQL-backed orphaned state through the public TypeScript runner",
@@ -228,79 +232,6 @@ describe("SqlMigrationStore", () => {
       }).pipe(Effect.provide(sqlStoreLayer))
   );
 
-  it.effect(
-    "upgrades existing item-state storage without losing durable state",
-    () =>
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        const definitionId = toMigrationDefinitionId("legacy-articles");
-        const sourceInventoryRunId = toMigrationRunId(
-          "run-legacy-inventory-sql"
-        );
-        const itemState = {
-          definitionId,
-          lastRunId: toMigrationRunId("run-legacy-migrate-sql"),
-          sourceIdentity: SourceIdentity.fromKey(
-            TestSourceIdentity,
-            "legacy-article"
-          ),
-          sourceVersion: toSourceVersion("source-version-1"),
-          status: "migrated" as const,
-          updatedAt: new Date("2026-08-10T12:00:00.000Z"),
-        };
-        const makeLegacyStoreLayer = () =>
-          SqlMigrationStore.layer({ tablePrefix: "legacy_migrate_sdk" });
-
-        yield* Effect.gen(function* () {
-          const store = yield* MigrationStore;
-          yield* store.upsertItemState(itemState);
-        }).pipe(Effect.provide(makeLegacyStoreLayer()));
-
-        yield* sql`
-          DROP INDEX legacy_migrate_sdk_item_states_orphan_idx
-        `;
-        yield* sql`
-          ALTER TABLE legacy_migrate_sdk_item_states
-          DROP COLUMN last_source_inventory_run_id
-        `;
-        yield* sql`
-          ALTER TABLE legacy_migrate_sdk_item_states
-          DROP COLUMN last_source_inventory_run_key
-        `;
-
-        const observed = yield* Effect.gen(function* () {
-          const store = yield* MigrationStore;
-          yield* store.observeItemState(
-            definitionId,
-            itemState.sourceIdentity.encoded,
-            sourceInventoryRunId
-          );
-
-          return yield* store.getItemState(
-            definitionId,
-            itemState.sourceIdentity.encoded
-          );
-        }).pipe(Effect.provide(makeLegacyStoreLayer()));
-
-        yield* MigrationStore.pipe(Effect.provide(makeLegacyStoreLayer()));
-
-        const indexes = yield* sql<SqliteIndexRow>`
-          SELECT name
-          FROM sqlite_master
-          WHERE type = 'index'
-            AND name = 'legacy_migrate_sdk_item_states_orphan_idx'
-        `;
-
-        expect(observed).toEqual({
-          ...itemState,
-          lastSourceInventoryRunId: sourceInventoryRunId,
-        });
-        expect(indexes).toEqual([
-          { name: "legacy_migrate_sdk_item_states_orphan_idx" },
-        ]);
-      }).pipe(Effect.provide(sqliteClientLayer))
-  );
-
   it.effect("stores migration progress and reports item-state summaries", () =>
     Effect.gen(function* () {
       const store = yield* MigrationStore;
@@ -366,6 +297,15 @@ describe("SqlMigrationStore", () => {
           AND name LIKE 'migrate_sdk_%'
         ORDER BY name
       `;
+      const itemStateColumns = yield* sql<SqliteColumnRow>`
+        PRAGMA table_info(migrate_sdk_item_states)
+      `;
+      const orphanIndexes = yield* sql<SqliteIndexRow>`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'index'
+          AND name = 'migrate_sdk_item_states_orphan_idx'
+      `;
       const itemStateRows = yield* sql<SqliteItemStateProjection>`
         SELECT
           error_tag,
@@ -386,6 +326,15 @@ describe("SqlMigrationStore", () => {
         "migrate_sdk_locks",
         "migrate_sdk_run_definitions",
         "migrate_sdk_runs",
+      ]);
+      expect(itemStateColumns.map(({ name }) => name)).toEqual(
+        expect.arrayContaining([
+          "last_source_inventory_run_id",
+          "last_source_inventory_run_key",
+        ])
+      );
+      expect(orphanIndexes).toEqual([
+        { name: "migrate_sdk_item_states_orphan_idx" },
       ]);
       expect(itemStateRows).toEqual([
         {

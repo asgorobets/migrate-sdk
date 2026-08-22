@@ -135,26 +135,17 @@ describe("SqlMigrationStoreDialect", () => {
 
       expect(pgSql).toContain("create table if not exists");
       expect(pgSql).toContain("create index if not exists");
-      expect(pgSql).toContain(
-        "add column if not exists last_source_inventory_run_key"
-      );
-      expect(sqliteSql).toContain("pragma table_info");
-      expect(sqliteSql).toContain("add column last_source_inventory_run_key");
       expect(mysqlSql).toContain("create table if not exists");
       expect(mysqlSql).toContain("index test_item_states_status_idx");
-      expect(mysqlSql).toContain("from information_schema.columns");
-      expect(mysqlSql).toContain("add column last_source_inventory_run_key");
       expect(mysqlSql).not.toContain("create index if not exists");
       expect(mssqlSql).toContain("if object_id");
       expect(mssqlSql).toContain("nvarchar(max)");
-      expect(mssqlSql).toContain(
-        "if col_length(test_item_states, 'last_source_inventory_run_key') is null"
-      );
       expect(mssqlSql).toContain("from sys.indexes");
-      expect(pgSql).toContain("test_item_states_orphan_idx");
-      expect(sqliteSql).toContain("test_item_states_orphan_idx");
-      expect(mysqlSql).toContain("test_item_states_orphan_idx");
-      expect(mssqlSql).toContain("test_item_states_orphan_idx");
+      for (const statement of [pgSql, sqliteSql, mysqlSql, mssqlSql]) {
+        expect(statement).toContain("last_source_inventory_run_key");
+        expect(statement).toContain("last_source_inventory_run_id");
+        expect(statement).toContain("test_item_states_orphan_idx");
+      }
     })
   );
 
