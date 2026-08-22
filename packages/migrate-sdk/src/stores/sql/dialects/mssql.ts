@@ -77,6 +77,8 @@ const initializeMssql = (
           status VARCHAR(32) NOT NULL,
           last_run_key CHAR(64) NOT NULL,
           last_run_id NVARCHAR(MAX) NOT NULL,
+          last_source_inventory_run_key CHAR(64) NULL,
+          last_source_inventory_run_id NVARCHAR(MAX) NULL,
           updated_at VARCHAR(33) NOT NULL,
           source_version NVARCHAR(MAX) NULL,
           source_version_contract_fingerprint NVARCHAR(MAX) NULL,
@@ -141,7 +143,25 @@ const initializeMssql = (
         )
       `
     ),
-    ...indexDefinitions(names, prefix).map(
+    sql`
+      IF COL_LENGTH(${names.itemStates}, 'last_source_inventory_run_key') IS NULL
+      ALTER TABLE ${itemStates}
+      ADD last_source_inventory_run_key CHAR(64) NULL
+    `,
+    sql`
+      IF COL_LENGTH(${names.itemStates}, 'last_source_inventory_run_id') IS NULL
+      ALTER TABLE ${itemStates}
+      ADD last_source_inventory_run_id NVARCHAR(MAX) NULL
+    `,
+    ...[
+      ...indexDefinitions(names, prefix),
+      {
+        columns:
+          "definition_key, source_identity_key, last_source_inventory_run_key",
+        name: `${prefix}_item_states_orphan_idx`,
+        table: names.itemStates,
+      },
+    ].map(
       ({ columns, name, table }) =>
         sql`
         IF NOT EXISTS (
@@ -180,10 +200,33 @@ export const makeMssqlDialect = (
   prefix: string
 ): SqlMigrationStoreDialect => {
   const locks = sql(names.locks);
+  const itemStates = sql(names.itemStates);
   const upsert = makeMssqlUpsert(sql);
 
   return {
     initialize: initializeMssql(sql, names, prefix),
+    listOrphanItemStateRows: (query) => {
+      const whereAfterIdentity =
+        query.afterIdentityKey === null
+          ? sql``
+          : sql`AND source_identity_key > ${query.afterIdentityKey}`;
+
+      return sql`
+        SELECT payload_json
+        FROM ${itemStates}
+        WHERE definition_key = ${query.definitionKey}
+          AND definition_id = ${query.definitionId}
+          AND (
+            last_source_inventory_run_key IS NULL
+            OR last_source_inventory_run_key <> ${query.sourceInventoryRunKey}
+            OR last_source_inventory_run_id IS NULL
+            OR last_source_inventory_run_id <> ${query.sourceInventoryRunId}
+          )
+          ${whereAfterIdentity}
+        ORDER BY source_identity_key
+        OFFSET 0 ROWS FETCH NEXT ${query.limit} ROWS ONLY
+      `;
+    },
     upsertCursor: (row) =>
       upsert(names.cursors, cursorRecord(row), ["definition_key"]),
     upsertContract: (row) =>

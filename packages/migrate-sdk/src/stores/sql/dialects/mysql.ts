@@ -17,6 +17,14 @@ interface SqlTokenRow {
   readonly token: string;
 }
 
+interface MysqlColumnRow {
+  readonly column_name: string;
+}
+
+interface MysqlIndexRow {
+  readonly index_name: string;
+}
+
 const initializeMysql = (
   sql: SqlClient.SqlClient,
   names: SqlMigrationStoreTableNames,
@@ -30,7 +38,8 @@ const initializeMysql = (
   const runDefinitions = sql(names.runDefinitions);
   const runs = sql(names.runs);
 
-  return runStatements([
+  const orphanIndexName = `${prefix}_item_states_orphan_idx`;
+  const createTables = runStatements([
     sql`
       CREATE TABLE IF NOT EXISTS ${cursors} (
         definition_key CHAR(64) PRIMARY KEY,
@@ -57,12 +66,15 @@ const initializeMysql = (
         status VARCHAR(32) NOT NULL,
         last_run_key CHAR(64) NOT NULL,
         last_run_id TEXT NOT NULL,
+        last_source_inventory_run_key CHAR(64) NULL,
+        last_source_inventory_run_id TEXT NULL,
         updated_at VARCHAR(33) NOT NULL,
         source_version TEXT NULL,
         source_version_contract_fingerprint TEXT NULL,
         error_tag TEXT NULL,
         payload_json LONGTEXT NOT NULL,
         PRIMARY KEY (definition_key, source_identity_key),
+        INDEX ${sql(orphanIndexName)} (definition_key, source_identity_key, last_source_inventory_run_key),
         INDEX ${sql(`${prefix}_item_states_status_idx`)} (definition_key, status),
         INDEX ${sql(`${prefix}_item_states_run_idx`)} (last_run_key, definition_key)
       )
@@ -111,6 +123,51 @@ const initializeMysql = (
       )
     `,
   ]);
+
+  return Effect.gen(function* () {
+    yield* createTables;
+
+    const columns = yield* sql<MysqlColumnRow>`
+      SELECT COLUMN_NAME AS column_name
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ${names.itemStates}
+    `;
+    const columnNames = new Set(columns.map((column) => column.column_name));
+
+    if (!columnNames.has("last_source_inventory_run_key")) {
+      yield* sql`
+        ALTER TABLE ${itemStates}
+        ADD COLUMN last_source_inventory_run_key CHAR(64) NULL
+      `;
+    }
+
+    if (!columnNames.has("last_source_inventory_run_id")) {
+      yield* sql`
+        ALTER TABLE ${itemStates}
+        ADD COLUMN last_source_inventory_run_id TEXT NULL
+      `;
+    }
+
+    const indexes = yield* sql<MysqlIndexRow>`
+      SELECT INDEX_NAME AS index_name
+      FROM INFORMATION_SCHEMA.STATISTICS
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = ${names.itemStates}
+        AND INDEX_NAME = ${orphanIndexName}
+    `;
+
+    if (indexes.length === 0) {
+      yield* sql`
+        ALTER TABLE ${itemStates}
+        ADD INDEX ${sql(orphanIndexName)} (
+          definition_key,
+          source_identity_key,
+          last_source_inventory_run_key
+        )
+      `;
+    }
+  });
 };
 
 const makeMysqlUpsert =
@@ -127,10 +184,34 @@ export const makeMysqlDialect = (
   prefix: string
 ): SqlMigrationStoreDialect => {
   const locks = sql(names.locks);
+  const itemStates = sql(names.itemStates);
   const upsert = makeMysqlUpsert(sql);
 
   return {
     initialize: initializeMysql(sql, names, prefix),
+    listOrphanItemStateRows: (query) => {
+      const limit = sql.literal(String(query.limit));
+      const whereAfterIdentity =
+        query.afterIdentityKey === null
+          ? sql``
+          : sql`AND source_identity_key > ${query.afterIdentityKey}`;
+
+      return sql`
+        SELECT payload_json
+        FROM ${itemStates}
+        WHERE definition_key = ${query.definitionKey}
+          AND definition_id = ${query.definitionId}
+          AND (
+            last_source_inventory_run_key IS NULL
+            OR last_source_inventory_run_key <> ${query.sourceInventoryRunKey}
+            OR last_source_inventory_run_id IS NULL
+            OR last_source_inventory_run_id <> ${query.sourceInventoryRunId}
+          )
+          ${whereAfterIdentity}
+        ORDER BY source_identity_key
+        LIMIT ${limit}
+      `;
+    },
     upsertCursor: (row) =>
       upsert(names.cursors, cursorRecord(row), ["definition_key"]),
     upsertContract: (row) =>

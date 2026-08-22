@@ -115,28 +115,81 @@ describe("SqlMigrationStoreDialect", () => {
   it.effect("uses each vendor's schema initialization syntax", () =>
     Effect.gen(function* () {
       const pg = makeFakeSqlClient("pg");
+      const sqlite = makeFakeSqlClient("sqlite");
       const mysql = makeFakeSqlClient("mysql");
       const mssql = makeFakeSqlClient("mssql");
       const pgDialect = getDialect("pg", pg.client);
+      const sqliteDialect = getDialect("sqlite", sqlite.client);
       const mysqlDialect = getDialect("mysql", mysql.client);
       const mssqlDialect = getDialect("mssql", mssql.client);
 
       yield* pgDialect.initialize;
+      yield* sqliteDialect.initialize;
       yield* mysqlDialect.initialize;
       yield* mssqlDialect.initialize;
 
       const pgSql = pg.calls.map(normalizeSql).join(" ");
+      const sqliteSql = sqlite.calls.map(normalizeSql).join(" ");
       const mysqlSql = mysql.calls.map(normalizeSql).join(" ");
       const mssqlSql = mssql.calls.map(normalizeSql).join(" ");
 
       expect(pgSql).toContain("create table if not exists");
       expect(pgSql).toContain("create index if not exists");
+      expect(pgSql).toContain(
+        "add column if not exists last_source_inventory_run_key"
+      );
+      expect(sqliteSql).toContain("pragma table_info");
+      expect(sqliteSql).toContain("add column last_source_inventory_run_key");
       expect(mysqlSql).toContain("create table if not exists");
       expect(mysqlSql).toContain("index test_item_states_status_idx");
+      expect(mysqlSql).toContain("from information_schema.columns");
+      expect(mysqlSql).toContain("add column last_source_inventory_run_key");
       expect(mysqlSql).not.toContain("create index if not exists");
       expect(mssqlSql).toContain("if object_id");
       expect(mssqlSql).toContain("nvarchar(max)");
+      expect(mssqlSql).toContain(
+        "if col_length(test_item_states, 'last_source_inventory_run_key') is null"
+      );
       expect(mssqlSql).toContain("from sys.indexes");
+      expect(pgSql).toContain("test_item_states_orphan_idx");
+      expect(sqliteSql).toContain("test_item_states_orphan_idx");
+      expect(mysqlSql).toContain("test_item_states_orphan_idx");
+      expect(mssqlSql).toContain("test_item_states_orphan_idx");
+    })
+  );
+
+  it.effect("uses bounded vendor-specific orphan keyset queries", () =>
+    Effect.gen(function* () {
+      const query = {
+        afterIdentityKey: "identity-key",
+        definitionId: "articles",
+        definitionKey: "definition-key",
+        limit: 101,
+        sourceInventoryRunId: "run-inventory",
+        sourceInventoryRunKey: "inventory-key",
+      };
+
+      for (const name of ["pg", "sqlite", "mysql", "mssql"] as const) {
+        const fake = makeFakeSqlClient(name);
+        const dialect = getDialect(name, fake.client);
+
+        fake.reset();
+        yield* dialect.listOrphanItemStateRows(query);
+
+        const statement = fake.calls.map(normalizeSql).join(" ");
+        expect(statement).toContain("select payload_json");
+        expect(statement).toContain("source_identity_key > identity-key");
+        expect(statement).toContain("order by source_identity_key");
+        expect(statement).toContain(
+          "last_source_inventory_run_key <> inventory-key"
+        );
+
+        if (name === "mssql") {
+          expect(statement).toContain("offset 0 rows fetch next ? rows only");
+        } else {
+          expect(statement).toContain("limit");
+        }
+      }
     })
   );
 

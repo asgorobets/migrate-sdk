@@ -1,6 +1,6 @@
-import { Effect } from "effect";
+import type { Effect } from "effect";
 import { Service } from "effect/Context";
-import { MigrationStoreError } from "../domain/errors.ts";
+import type { MigrationStoreError } from "../domain/errors.ts";
 import type {
   EncodedSourceCursor,
   EncodedSourceIdentity,
@@ -28,8 +28,9 @@ export interface OrphanItemStatePageInput {
 
 interface MigrationStoreOrphanMethods {
   /**
-   * Lists states not observed by `sourceInventoryRunId` in stable Encoded
-   * Source Identity order. `afterIdentity` is an exclusive keyset cursor.
+   * Lists states not observed by `sourceInventoryRunId` in a stable order
+   * derived from Encoded Source Identity. `afterIdentity` is an exclusive
+   * keyset cursor.
    */
   readonly listOrphanItemStates: (
     definitionId: MigrationDefinitionId,
@@ -44,22 +45,6 @@ interface MigrationStoreOrphanMethods {
     sourceInventoryRunId: MigrationRunId
   ) => Effect.Effect<void, MigrationStoreError>;
 }
-
-export const makeUnimplementedOrphanStoreMethods = (
-  storeName: string
-): MigrationStoreOrphanMethods => {
-  const notImplemented = (method: string) =>
-    Effect.fail(
-      new MigrationStoreError({
-        message: `${storeName}.${method} is not implemented`,
-      })
-    );
-
-  return {
-    listOrphanItemStates: () => notImplemented("listOrphanItemStates"),
-    observeItemState: () => notImplemented("observeItemState"),
-  };
-};
 
 export class MigrationStore extends Service<
   MigrationStore,

@@ -32,6 +32,8 @@ export interface SqlItemStateWriteRow {
   readonly errorTag: string | null;
   readonly lastRunId: string;
   readonly lastRunKey: string;
+  readonly lastSourceInventoryRunId: string | null;
+  readonly lastSourceInventoryRunKey: string | null;
   readonly payloadJson: string;
   readonly sourceIdentity: string;
   readonly sourceIdentityKey: string;
@@ -39,6 +41,15 @@ export interface SqlItemStateWriteRow {
   readonly sourceVersionContractFingerprint: string | null;
   readonly status: string;
   readonly updatedAt: string;
+}
+
+export interface SqlOrphanItemStatePageQuery {
+  readonly afterIdentityKey: string | null;
+  readonly definitionId: string;
+  readonly definitionKey: string;
+  readonly limit: number;
+  readonly sourceInventoryRunId: string;
+  readonly sourceInventoryRunKey: string;
 }
 
 export interface SqlRunWriteRow {
@@ -80,6 +91,9 @@ export interface SqlMigrationStoreDialect {
     row: SqlOwnedLockRow
   ) => Effect.Effect<boolean, SqlError.SqlError>;
   readonly initialize: Effect.Effect<void, SqlError.SqlError>;
+  readonly listOrphanItemStateRows: (
+    query: SqlOrphanItemStatePageQuery
+  ) => Effect.Effect<readonly unknown[], SqlError.SqlError>;
   readonly tryAcquireLock: (
     row: SqlLockWriteRow
   ) => Effect.Effect<boolean, SqlError.SqlError>;
@@ -179,6 +193,8 @@ export const itemStateRecord = (row: SqlItemStateWriteRow): SqlWriteRecord => ({
   error_tag: row.errorTag,
   last_run_id: row.lastRunId,
   last_run_key: row.lastRunKey,
+  last_source_inventory_run_id: row.lastSourceInventoryRunId,
+  last_source_inventory_run_key: row.lastSourceInventoryRunKey,
   payload_json: row.payloadJson,
   source_identity: row.sourceIdentity,
   source_identity_key: row.sourceIdentityKey,

@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import {
+  MigrationDefinition,
   MigrationStore,
   makeSourceVersionContractFingerprint,
   SourceIdentity,
@@ -12,7 +13,9 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
+import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { SqlMigrationStore } from "migrate-sdk/stores/sql";
+import { runInlineRegistry } from "../../testing/inline-registry-execution.ts";
 
 const TestSourceIdentity = SourceIdentity.make({
   id: "sql-store-test@v1",
@@ -36,11 +39,268 @@ interface SqliteItemStateProjection {
   readonly status: string;
 }
 
+interface SqliteInventoryProjection {
+  readonly last_source_inventory_run_id: string | null;
+  readonly source_identity: string;
+}
+
 interface SqliteTableRow {
   readonly name: string;
 }
 
+interface SqliteIndexRow {
+  readonly name: string;
+}
+
 describe("SqlMigrationStore", () => {
+  it.effect(
+    "rolls back SQL-backed orphaned state through the public TypeScript runner",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const sharedStoreLayer = Layer.succeed(MigrationStore, store);
+        const rollbackCalls: string[] = [];
+        const makeArticlesMigration = (
+          items: readonly {
+            readonly identityKey: string;
+            readonly item: { readonly title: string };
+            readonly version: string;
+          }[]
+        ) =>
+          MigrationDefinition.make({
+            id: "runner-articles",
+            process: () => Effect.void,
+            rollback: (state) =>
+              Effect.sync(() => {
+                rollbackCalls.push(state.sourceIdentity.encoded);
+              }),
+            source: InMemorySource.make({
+              identity: TestSourceIdentity,
+              items,
+              sourceSchema: Schema.Struct({ title: Schema.String }),
+            }),
+            store: sharedStoreLayer,
+          });
+        const currentArticle = {
+          identityKey: "article-current",
+          item: { title: "Current article" },
+          version: "source-version-1",
+        };
+
+        yield* runInlineRegistry({
+          definitions: [
+            makeArticlesMigration([
+              currentArticle,
+              {
+                identityKey: "article-orphan",
+                item: { title: "Orphaned article" },
+                version: "source-version-1",
+              },
+            ]),
+          ],
+        });
+
+        const summary = yield* runInlineRegistry({
+          definitions: [makeArticlesMigration([currentArticle])],
+          rollbackOrphans: true,
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          failed: 0,
+          migrated: 0,
+          needsUpdate: 0,
+          orphaned: 1,
+          rollbackFailed: 0,
+          rolledBack: 1,
+          skipped: 0,
+          unchanged: 1,
+        });
+        expect(rollbackCalls).toEqual(["article-orphan"]);
+        expect(
+          yield* store.listItemStates(
+            toMigrationDefinitionId("runner-articles")
+          )
+        ).toEqual([
+          expect.objectContaining({
+            lastSourceInventoryRunId: summary.runId,
+            sourceIdentity: expect.objectContaining({
+              encoded: "article-current",
+            }),
+          }),
+        ]);
+      }).pipe(Effect.provide(sqlStoreLayer))
+  );
+
+  it.effect(
+    "observes existing state and pages orphaned state after successful deletion",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const sql = yield* SqlClient.SqlClient;
+        const definitionId = toMigrationDefinitionId("orphan-articles");
+        const sourceInventoryRunId = toMigrationRunId("run-inventory-sql");
+        const articleAIdentity = SourceIdentity.fromKey(
+          TestSourceIdentity,
+          "article-a"
+        ).encoded;
+        const makeItemState = (identity: string) => ({
+          definitionId,
+          lastRunId: toMigrationRunId("run-migrate-sql"),
+          sourceIdentity: SourceIdentity.fromKey(TestSourceIdentity, identity),
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "migrated" as const,
+          updatedAt: new Date("2026-08-10T12:00:00.000Z"),
+        });
+
+        yield* store.upsertItemState(makeItemState("article-c"));
+        yield* store.upsertItemState(makeItemState("article-a"));
+        yield* store.upsertItemState(makeItemState("article-b"));
+        yield* store.observeItemState(
+          definitionId,
+          SourceIdentity.fromKey(TestSourceIdentity, "article-b").encoded,
+          sourceInventoryRunId
+        );
+        yield* store.observeItemState(
+          definitionId,
+          SourceIdentity.fromKey(TestSourceIdentity, "article-missing").encoded,
+          sourceInventoryRunId
+        );
+        const projections = yield* sql<SqliteInventoryProjection>`
+          SELECT source_identity, last_source_inventory_run_id
+          FROM migrate_sdk_item_states
+          WHERE definition_id = ${definitionId}
+          ORDER BY source_identity
+        `;
+
+        const firstPage = yield* store.listOrphanItemStates(
+          definitionId,
+          sourceInventoryRunId,
+          { limit: 1 }
+        );
+
+        expect(firstPage.items).toHaveLength(1);
+        expect(firstPage.nextAfterIdentity).toBe(
+          firstPage.items[0]?.sourceIdentity.encoded
+        );
+
+        const firstIdentity = firstPage.items[0]?.sourceIdentity.encoded;
+
+        if (firstIdentity === undefined) {
+          return yield* Effect.die(
+            "Expected the first orphan page to be nonempty"
+          );
+        }
+
+        yield* store.deleteItemState(definitionId, firstIdentity);
+
+        const secondPage = yield* store.listOrphanItemStates(
+          definitionId,
+          sourceInventoryRunId,
+          {
+            afterIdentity: firstIdentity,
+            limit: 1,
+          }
+        );
+
+        expect(secondPage.items).toHaveLength(1);
+        expect(
+          new Set([
+            firstIdentity,
+            ...secondPage.items.map((state) => state.sourceIdentity.encoded),
+          ])
+        ).toEqual(new Set([articleAIdentity, "article-c"]));
+        expect(secondPage.nextAfterIdentity).toBeUndefined();
+        expect(projections).toEqual([
+          {
+            last_source_inventory_run_id: null,
+            source_identity: "article-a",
+          },
+          {
+            last_source_inventory_run_id: sourceInventoryRunId,
+            source_identity: "article-b",
+          },
+          {
+            last_source_inventory_run_id: null,
+            source_identity: "article-c",
+          },
+        ]);
+      }).pipe(Effect.provide(sqlStoreLayer))
+  );
+
+  it.effect(
+    "upgrades existing item-state storage without losing durable state",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const definitionId = toMigrationDefinitionId("legacy-articles");
+        const sourceInventoryRunId = toMigrationRunId(
+          "run-legacy-inventory-sql"
+        );
+        const itemState = {
+          definitionId,
+          lastRunId: toMigrationRunId("run-legacy-migrate-sql"),
+          sourceIdentity: SourceIdentity.fromKey(
+            TestSourceIdentity,
+            "legacy-article"
+          ),
+          sourceVersion: toSourceVersion("source-version-1"),
+          status: "migrated" as const,
+          updatedAt: new Date("2026-08-10T12:00:00.000Z"),
+        };
+        const makeLegacyStoreLayer = () =>
+          SqlMigrationStore.layer({ tablePrefix: "legacy_migrate_sdk" });
+
+        yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+          yield* store.upsertItemState(itemState);
+        }).pipe(Effect.provide(makeLegacyStoreLayer()));
+
+        yield* sql`
+          DROP INDEX legacy_migrate_sdk_item_states_orphan_idx
+        `;
+        yield* sql`
+          ALTER TABLE legacy_migrate_sdk_item_states
+          DROP COLUMN last_source_inventory_run_id
+        `;
+        yield* sql`
+          ALTER TABLE legacy_migrate_sdk_item_states
+          DROP COLUMN last_source_inventory_run_key
+        `;
+
+        const observed = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+          yield* store.observeItemState(
+            definitionId,
+            itemState.sourceIdentity.encoded,
+            sourceInventoryRunId
+          );
+
+          return yield* store.getItemState(
+            definitionId,
+            itemState.sourceIdentity.encoded
+          );
+        }).pipe(Effect.provide(makeLegacyStoreLayer()));
+
+        yield* MigrationStore.pipe(Effect.provide(makeLegacyStoreLayer()));
+
+        const indexes = yield* sql<SqliteIndexRow>`
+          SELECT name
+          FROM sqlite_master
+          WHERE type = 'index'
+            AND name = 'legacy_migrate_sdk_item_states_orphan_idx'
+        `;
+
+        expect(observed).toEqual({
+          ...itemState,
+          lastSourceInventoryRunId: sourceInventoryRunId,
+        });
+        expect(indexes).toEqual([
+          { name: "legacy_migrate_sdk_item_states_orphan_idx" },
+        ]);
+      }).pipe(Effect.provide(sqliteClientLayer))
+  );
+
   it.effect("stores migration progress and reports item-state summaries", () =>
     Effect.gen(function* () {
       const store = yield* MigrationStore;

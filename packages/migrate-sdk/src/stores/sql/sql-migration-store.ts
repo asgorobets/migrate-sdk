@@ -27,10 +27,7 @@ import type {
 } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { emptyMigrationItemStateSummary } from "../../domain/status.ts";
-import {
-  MigrationStore,
-  makeUnimplementedOrphanStoreMethods,
-} from "../../services/migration-store.ts";
+import { MigrationStore } from "../../services/migration-store.ts";
 import { PersistedMigrationItemState } from "../internal/persisted-state.ts";
 import {
   makeSqlMigrationStoreDialect,
@@ -193,8 +190,6 @@ const makeLayer = (
   Layer.effect(
     MigrationStore,
     Effect.gen(function* () {
-      const orphanStoreMethods =
-        makeUnimplementedOrphanStoreMethods("SqlMigrationStore");
       const sql = (yield* SqlClient.SqlClient).withoutTransforms();
       const prefix = options.tablePrefix ?? defaultTablePrefix;
 
@@ -538,6 +533,11 @@ const makeLayer = (
               errorTag,
               lastRunId: state.lastRunId,
               lastRunKey: sqlKey(state.lastRunId),
+              lastSourceInventoryRunId: state.lastSourceInventoryRunId ?? null,
+              lastSourceInventoryRunKey:
+                state.lastSourceInventoryRunId === undefined
+                  ? null
+                  : sqlKey(state.lastSourceInventoryRunId),
               payloadJson,
               sourceIdentity: state.sourceIdentity.encoded,
               sourceIdentityKey: sqlKey(state.sourceIdentity.encoded),
@@ -550,6 +550,66 @@ const makeLayer = (
           );
         }
       );
+
+      const observeItemState: (typeof MigrationStore)["Service"]["observeItemState"] =
+        Effect.fn("SqlMigrationStore.observeItemState")(
+          function* (definitionId, identity, sourceInventoryRunId) {
+            const itemState = yield* getItemState(definitionId, identity);
+
+            if (
+              itemState === null ||
+              itemState.lastSourceInventoryRunId === sourceInventoryRunId
+            ) {
+              return;
+            }
+
+            yield* upsertItemState({
+              ...itemState,
+              lastSourceInventoryRunId: sourceInventoryRunId,
+            });
+          }
+        );
+
+      const listOrphanItemStates: (typeof MigrationStore)["Service"]["listOrphanItemStates"] =
+        Effect.fn("SqlMigrationStore.listOrphanItemStates")(
+          function* (definitionId, sourceInventoryRunId, page) {
+            const limit = Math.max(0, Math.floor(page.limit));
+
+            if (limit === 0) {
+              return { items: [] };
+            }
+
+            const rows = yield* runSql(
+              "list orphaned Migration Item States",
+              dialect.listOrphanItemStateRows({
+                afterIdentityKey:
+                  page.afterIdentity === undefined
+                    ? null
+                    : sqlKey(page.afterIdentity),
+                definitionId,
+                definitionKey: sqlKey(definitionId),
+                limit: limit + 1,
+                sourceInventoryRunId,
+                sourceInventoryRunKey: sqlKey(sourceInventoryRunId),
+              })
+            );
+            const candidates = yield* Effect.forEach(rows, (row) =>
+              decodeItemStateRow(
+                row,
+                `Orphaned Migration Item State for ${definitionId}`
+              )
+            );
+            const items = candidates.slice(0, limit);
+            const lastItem = items.at(-1);
+
+            return {
+              items,
+              ...(lastItem !== undefined && candidates.length > items.length
+                ? { nextAfterIdentity: lastItem.sourceIdentity.encoded }
+                : {}),
+            };
+          }
+        );
 
       const createRunId = Effect.sync(() =>
         MigrationRunId.make(`run-${randomUUID()}`)
@@ -982,7 +1042,8 @@ const makeLayer = (
       });
 
       return {
-        ...orphanStoreMethods,
+        listOrphanItemStates,
+        observeItemState,
         getSourceCursor,
         setSourceCursor,
         deleteSourceCursor,
