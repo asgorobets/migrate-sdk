@@ -176,7 +176,7 @@ describe("SqlMigrationStoreDialect", () => {
         );
 
         if (name === "mssql") {
-          expect(statement).toContain("offset 0 rows fetch next ? rows only");
+          expect(statement).toContain("offset 0 rows fetch next 101 rows only");
         } else {
           expect(statement).toContain("limit");
         }

@@ -562,7 +562,7 @@ export type DestinationStubPipeline<PipelineError = never> = (
   context: DestinationStubContext
 ) => void | Effect.Effect<void, PipelineError | SkipItem, Tracking>;
 
-interface MigrationDefinitionBase<
+export interface MigrationDefinitionBase<
   Payload,
   PipelineError = never,
   Cursor = unknown,
@@ -649,7 +649,7 @@ export type MigrationDefinition<
 > &
   MigrationDefinitionTracking<TrackingContract>;
 
-export type AnyMigrationDefinition = Omit<
+type AnyMigrationDefinitionWithSourceRequirements<SourceRequirements> = Omit<
   MigrationDefinitionBase<
     // biome-ignore lint/suspicious/noExplicitAny: Payload is existential across heterogeneous definition collections.
     any,
@@ -665,8 +665,7 @@ export type AnyMigrationDefinition = Omit<
     any,
     // biome-ignore lint/suspicious/noExplicitAny: Source implementation error is recovered through the definition source.
     any,
-    // biome-ignore lint/suspicious/noExplicitAny: Source requirements are recovered through the definition source.
-    any,
+    SourceRequirements,
     // biome-ignore lint/suspicious/noExplicitAny: Tracking contract is recovered through MigrationDefinitionTrackingContract.
     any
   >,
@@ -676,6 +675,13 @@ export type AnyMigrationDefinition = Omit<
   readonly rollback?: RollbackPipeline<any, any>;
   readonly tracking?: TrackingRecordContract | undefined;
 };
+
+export type AnyMigrationDefinition =
+  // biome-ignore lint/suspicious/noExplicitAny: Source requirements are recovered through the definition source.
+  AnyMigrationDefinitionWithSourceRequirements<any>;
+
+export type AnySelfContainedMigrationDefinition =
+  AnyMigrationDefinitionWithSourceRequirements<never>;
 
 export type MigrationDefinitionSource<
   Definition extends AnyMigrationDefinition,

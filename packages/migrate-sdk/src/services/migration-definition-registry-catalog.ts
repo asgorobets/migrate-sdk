@@ -28,7 +28,7 @@ export const MigrationDefinitionRegistryCatalogConstructionIssue = Schema.Union(
 export type MigrationDefinitionRegistryCatalogConstructionIssue =
   typeof MigrationDefinitionRegistryCatalogConstructionIssue.Type;
 
-export class MigrationDefinitionRegistryCatalogConstructionError extends Schema.TaggedErrorClass<MigrationDefinitionRegistryCatalogConstructionError>()(
+export class MigrationDefinitionRegistryCatalogConstructionError extends Schema.TaggedError<MigrationDefinitionRegistryCatalogConstructionError>()(
   "MigrationDefinitionRegistryCatalogConstructionError",
   {
     issues: Schema.NonEmptyArray(
@@ -38,7 +38,7 @@ export class MigrationDefinitionRegistryCatalogConstructionError extends Schema.
   }
 ) {}
 
-export class MigrationDefinitionRegistryCatalogLookupError extends Schema.TaggedErrorClass<MigrationDefinitionRegistryCatalogLookupError>()(
+export class MigrationDefinitionRegistryCatalogLookupError extends Schema.TaggedError<MigrationDefinitionRegistryCatalogLookupError>()(
   "MigrationDefinitionRegistryCatalogLookupError",
   {
     message: Schema.String,

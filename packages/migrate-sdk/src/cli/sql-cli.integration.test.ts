@@ -241,7 +241,8 @@ const providers = [
       database: "master",
       password: Redacted.make("MigrateSdk!2026"),
       port: 51_433,
-      server: "127.0.0.1",
+      server: "localhost",
+      trustServer: true,
       username: "sa",
     })
   ),

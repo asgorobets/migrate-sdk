@@ -25,7 +25,7 @@ const defaultMaxPosts = 5;
 const defaultPageSize = 2;
 const defaultRequestTimeout = "2 seconds";
 const defaultRetrySchedule = Schedule.exponential("50 millis").pipe(
-  Schedule.both(Schedule.recurs(2))
+  Schedule.upTo({ times: 2 })
 );
 const transientHttpStatuses = [408, 429, 500, 502, 503, 504];
 

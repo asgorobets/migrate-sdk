@@ -301,7 +301,7 @@ export const MigrationDefinitionRegistryConstructionIssue = Schema.Union([
 export type MigrationDefinitionRegistryConstructionIssue =
   typeof MigrationDefinitionRegistryConstructionIssue.Type;
 
-export class MigrationDefinitionRegistryConstructionError extends Schema.TaggedErrorClass<MigrationDefinitionRegistryConstructionError>()(
+export class MigrationDefinitionRegistryConstructionError extends Schema.TaggedError<MigrationDefinitionRegistryConstructionError>()(
   "MigrationDefinitionRegistryConstructionError",
   {
     issues: Schema.NonEmptyArray(MigrationDefinitionRegistryConstructionIssue),
@@ -309,7 +309,7 @@ export class MigrationDefinitionRegistryConstructionError extends Schema.TaggedE
   }
 ) {}
 
-export class MigrationDefinitionRegistryLookupError extends Schema.TaggedErrorClass<MigrationDefinitionRegistryLookupError>()(
+export class MigrationDefinitionRegistryLookupError extends Schema.TaggedError<MigrationDefinitionRegistryLookupError>()(
   "MigrationDefinitionRegistryLookupError",
   {
     definitionId: MigrationDefinitionIdSchema,
@@ -317,7 +317,7 @@ export class MigrationDefinitionRegistryLookupError extends Schema.TaggedErrorCl
   }
 ) {}
 
-export class MigrationDefinitionRegistryUnknownDefinitionError extends Schema.TaggedErrorClass<MigrationDefinitionRegistryUnknownDefinitionError>()(
+export class MigrationDefinitionRegistryUnknownDefinitionError extends Schema.TaggedError<MigrationDefinitionRegistryUnknownDefinitionError>()(
   "MigrationDefinitionRegistryUnknownDefinitionError",
   {
     definitionId: MigrationDefinitionIdSchema,
@@ -325,7 +325,7 @@ export class MigrationDefinitionRegistryUnknownDefinitionError extends Schema.Ta
   }
 ) {}
 
-export class MigrationDefinitionRegistryUnknownGroupError extends Schema.TaggedErrorClass<MigrationDefinitionRegistryUnknownGroupError>()(
+export class MigrationDefinitionRegistryUnknownGroupError extends Schema.TaggedError<MigrationDefinitionRegistryUnknownGroupError>()(
   "MigrationDefinitionRegistryUnknownGroupError",
   {
     group: MigrationDefinitionGroupIdSchema,
@@ -333,7 +333,7 @@ export class MigrationDefinitionRegistryUnknownGroupError extends Schema.TaggedE
   }
 ) {}
 
-export class MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError extends Schema.TaggedErrorClass<MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError>()(
+export class MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError extends Schema.TaggedError<MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError>()(
   "MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError",
   {
     definitionId: MigrationDefinitionIdSchema,
@@ -342,7 +342,7 @@ export class MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError
   }
 ) {}
 
-export class MigrationDefinitionRegistryInvalidSelectionError extends Schema.TaggedErrorClass<MigrationDefinitionRegistryInvalidSelectionError>()(
+export class MigrationDefinitionRegistryInvalidSelectionError extends Schema.TaggedError<MigrationDefinitionRegistryInvalidSelectionError>()(
   "MigrationDefinitionRegistryInvalidSelectionError",
   {
     message: Schema.String,
@@ -361,7 +361,7 @@ const MigrationRuntimeRequirementSchema = Schema.Struct({
   ]),
 });
 
-export class MigrationDefinitionRegistryExecutableError extends Schema.TaggedErrorClass<MigrationDefinitionRegistryExecutableError>()(
+export class MigrationDefinitionRegistryExecutableError extends Schema.TaggedError<MigrationDefinitionRegistryExecutableError>()(
   "MigrationDefinitionRegistryExecutableError",
   {
     definitionId: MigrationDefinitionIdSchema,

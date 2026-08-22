@@ -64,7 +64,7 @@ export const MigrationExecutionEnvelope = Schema.Union([
   MigrationRollbackExecutionEnvelope,
 ]);
 
-export class MigrationExecutionEnvelopeMissingRegistryIdError extends Schema.TaggedErrorClass<MigrationExecutionEnvelopeMissingRegistryIdError>()(
+export class MigrationExecutionEnvelopeMissingRegistryIdError extends Schema.TaggedError<MigrationExecutionEnvelopeMissingRegistryIdError>()(
   "MigrationExecutionEnvelopeMissingRegistryIdError",
   {
     kind: Schema.Literals(["run", "rollback"]),

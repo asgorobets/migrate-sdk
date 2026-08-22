@@ -196,6 +196,7 @@ export const makeMssqlDialect = (
   return {
     initialize: initializeMssql(sql, names, prefix),
     listOrphanItemStateRows: (query) => {
+      const limit = sql.literal(String(query.limit));
       const whereAfterIdentity =
         query.afterIdentityKey === null
           ? sql``
@@ -214,7 +215,7 @@ export const makeMssqlDialect = (
           )
           ${whereAfterIdentity}
         ORDER BY source_identity_key
-        OFFSET 0 ROWS FETCH NEXT ${query.limit} ROWS ONLY
+        OFFSET 0 ROWS FETCH NEXT ${limit} ROWS ONLY
       `;
     },
     upsertCursor: (row) =>

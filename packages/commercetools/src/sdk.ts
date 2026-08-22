@@ -26,7 +26,7 @@ export interface CommercetoolsSdkLayerOptions {
   readonly projectKey: string;
 }
 
-export class CommercetoolsSdkError extends Schema.TaggedErrorClass<CommercetoolsSdkError>()(
+export class CommercetoolsSdkError extends Schema.TaggedError<CommercetoolsSdkError>()(
   "CommercetoolsSdkError",
   {
     cause: Schema.Defect(),

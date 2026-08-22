@@ -27,6 +27,7 @@ import {
 import type { SourceRuntimeImplementation } from "../../services/source.ts";
 
 const textEncoder = new TextEncoder();
+const UnknownJsonString = Schema.fromJsonString(Schema.Unknown);
 
 export type CsvDialect =
   | {
@@ -668,9 +669,9 @@ const buildVersion = (
         return value;
       }
       case "row-hash": {
-        const material = yield* Schema.encodeEffect(
-          Schema.UnknownFromJsonString
-        )(columns.map((column) => [column, item[column] ?? ""])).pipe(
+        const material = yield* Schema.encodeEffect(UnknownJsonString)(
+          columns.map((column) => [column, item[column] ?? ""])
+        ).pipe(
           Effect.mapError((cause) =>
             csvError("Unable to serialize CSV row for content hash", cause)
           )

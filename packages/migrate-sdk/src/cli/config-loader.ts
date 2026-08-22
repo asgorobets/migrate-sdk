@@ -3,7 +3,7 @@ import { register } from "tsx/esm/api";
 import type { MigrationDefinitionRegistry } from "../domain/registry.ts";
 import type { MigrationCliConfig } from "./config.ts";
 
-const tsxLoader = register({ namespace: "migrate-sdk-cli" });
+register();
 
 const CONFIG_FILE_NAMES = [
   "migrate.config.ts",
@@ -22,7 +22,7 @@ const MigrationCliConfigLoadErrorKind = Schema.Literals([
   "UnsupportedAsyncConfig",
 ]);
 
-export class MigrationCliConfigLoadError extends Schema.TaggedErrorClass<MigrationCliConfigLoadError>()(
+export class MigrationCliConfigLoadError extends Schema.TaggedError<MigrationCliConfigLoadError>()(
   "MigrationCliConfigLoadError",
   {
     cause: Schema.optional(Schema.Unknown),
@@ -191,16 +191,11 @@ const importConfigModule = (
       Effect.map((url) => url.href),
       Effect.mapError(importFailed)
     );
-    const extension = path.extname(configPath);
     const importModule = (load: () => Promise<unknown>) =>
       Effect.tryPromise({
         try: load,
         catch: importFailed,
       });
-
-    if (extension === ".ts" || extension === ".mts") {
-      return yield* importModule(() => tsxLoader.import(configUrl, configUrl));
-    }
 
     const now = yield* DateTime.now;
     return yield* importModule(

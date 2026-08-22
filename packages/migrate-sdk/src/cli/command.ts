@@ -1,5 +1,6 @@
 import { Console, Effect, Option, Runtime } from "effect";
 import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
+import type { AnySelfContainedMigrationDefinition } from "../domain/definition.ts";
 import type {
   MigrationExecutionOptions,
   PipelineExecutionConcurrency,
@@ -302,17 +303,28 @@ const loadConfiguredRegistry = Effect.map(
   (loadedConfig) => loadedConfig.registry
 );
 
-const makeConfiguredExecution = (config: MigrationCliConfig) =>
-  config.executableLayer === undefined
-    ? Effect.succeed(MigrationExecution.make({ registry: config.registry }))
+type CliExecutableRegistry = MigrationDefinitionRegistry<
+  readonly AnySelfContainedMigrationDefinition[]
+>;
+
+const toCliExecutableRegistry = (
+  registry: MigrationDefinitionRegistry
+): CliExecutableRegistry => registry as CliExecutableRegistry;
+
+const makeConfiguredExecution = (config: MigrationCliConfig) => {
+  const registry = toCliExecutableRegistry(config.registry);
+
+  return config.executableLayer === undefined
+    ? Effect.succeed(MigrationExecution.make({ registry }))
     : Effect.gen(function* () {
         const executable = yield* MigrationExecutable;
 
         return MigrationExecution.make({
-          registry: config.registry,
+          registry,
           executable,
         });
       }).pipe(Effect.provide(config.executableLayer));
+};
 
 const hasRegisteredDefinition = (
   registry: MigrationDefinitionRegistry,
@@ -366,6 +378,7 @@ const graphCommand = Command.make(
 ).pipe(Command.withDescription("Inspect Migration Definition dependencies"));
 
 const plan = Flag.boolean("plan").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Print the execution plan without running migrations")
 );
 
@@ -375,6 +388,7 @@ const progress = Flag.choice("progress", ["auto", "log", "none"] as const).pipe(
 );
 
 const all = Flag.boolean("all").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Select every registered Migration Definition")
 );
 
@@ -384,10 +398,12 @@ const group = Flag.string("group").pipe(
 );
 
 const withDependencies = Flag.boolean("with-dependencies").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Expand required Migration Definition dependencies")
 );
 
 const scanSource = Flag.boolean("scan-source").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Scan source inventory while reading status")
 );
 
@@ -414,28 +430,34 @@ const rollbackConcurrency = Flag.string("concurrency").pipe(
 );
 
 const failed = Flag.boolean("failed").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Plan a rerun of failed items")
 );
 
 const skipped = Flag.boolean("skipped").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Plan a rerun of skipped items")
 );
 
 const rescan = Flag.boolean("rescan").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Reset the Source Cursor and scan from the beginning")
 );
 
 const rollbackOrphans = Flag.boolean("rollback-orphans").pipe(
+  Flag.withDefault(false),
   Flag.withDescription(
     "Rollback Migration Item States absent from a completed source scan"
   )
 );
 
 const update = Flag.boolean("update").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Plan an update run")
 );
 
 const force = Flag.boolean("force").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Bypass Migration Definition dependency preflight")
 );
 
@@ -672,7 +694,7 @@ const statusCommand = Command.make(
   (input) =>
     Effect.gen(function* () {
       const loadedConfig = yield* loadConfiguredConfig;
-      const registry = loadedConfig.registry;
+      const registry = toCliExecutableRegistry(loadedConfig.registry);
       const concurrencyInput = Option.getOrUndefined(input.concurrency);
       const groupInput = Option.getOrUndefined(input.group);
       const statusInput = makeStatusInput({

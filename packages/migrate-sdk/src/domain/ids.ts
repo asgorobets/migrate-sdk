@@ -1,4 +1,5 @@
-import { Schema, SchemaAST, SchemaRepresentation } from "effect";
+import { Schema, SchemaAST } from "effect";
+import { makeEffectSchemaContractFingerprint } from "./schema-contract-fingerprint.ts";
 
 export const MigrationDefinitionId = Schema.NonEmptyString.pipe(
   Schema.brand("MigrationDefinitionId")
@@ -170,9 +171,8 @@ const sourceIdentitySchemaMetadata = new WeakMap<
   SourceIdentitySchemaMetadata
 >();
 
-const makeEffectSchemaFingerprint = <Value>(
-  schema: Schema.Codec<Value, unknown, never, never>
-): string => JSON.stringify(SchemaRepresentation.fromAST(schema.ast));
+const isObjectReference = (value: unknown): value is object =>
+  (typeof value === "object" && value !== null) || typeof value === "function";
 
 const isSupportedSourceIdentityScalarTypeAst = (
   ast: SchemaAST.AST
@@ -257,7 +257,7 @@ const sourceIdentitySchemaError = (): Error =>
 const getSourceIdentitySchemaMetadata = (
   schema: unknown
 ): SourceIdentitySchemaMetadata => {
-  if (typeof schema !== "object" || schema === null) {
+  if (!isObjectReference(schema)) {
     throw sourceIdentitySchemaError();
   }
 
@@ -279,7 +279,7 @@ const isSourceIdentityPart = (
   SourceIdentityScalar,
   SourceIdentityKeyScalar
 > => {
-  if (typeof part !== "object" || part === null) {
+  if (!isObjectReference(part)) {
     return false;
   }
 
@@ -475,7 +475,7 @@ const makeSourceIdentityFingerprint = (
         name: part.name,
         schema: part.fingerprint,
       })),
-      schema: makeEffectSchemaFingerprint(schema),
+      schema: makeEffectSchemaContractFingerprint(schema),
     })
   );
 
@@ -566,7 +566,7 @@ const makeSourceIdentityPart = <
   );
 
   sourceIdentityPartMetadata.set(part, {
-    fingerprint: makeEffectSchemaFingerprint(part),
+    fingerprint: makeEffectSchemaContractFingerprint(part),
     name,
     schema: part,
   });

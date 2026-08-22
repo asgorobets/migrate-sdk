@@ -4,10 +4,10 @@ packages:
 
 catalog:
   "@effect/language-service": ^0.86.2
-  "@effect/platform-node": 4.0.0-beta.85
-  "@effect/sql-mssql": 4.0.0-beta.85
-  "@effect/sql-mysql2": 4.0.0-beta.85
-  "@effect/sql-pg": 4.0.0-beta.85
-  "@effect/sql-sqlite-node": 4.0.0-beta.85
-  "@effect/vitest": 4.0.0-beta.85
-  effect: 4.0.0-beta.85
+  "@effect/platform-node": 4.0.0-rc.111
+  "@effect/sql-mssql": 4.0.0-rc.111
+  "@effect/sql-mysql2": 4.0.0-rc.111
+  "@effect/sql-pg": 4.0.0-rc.111
+  "@effect/sql-sqlite-node": 4.0.0-rc.111
+  "@effect/vitest": 4.0.0-rc.111
+  effect: 4.0.0-rc.111

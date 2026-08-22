@@ -52,7 +52,8 @@ const sqlLayer = (() => {
         database: "master",
         password: Redacted.make("MigrateSdk!2026"),
         port: 51_433,
-        server: "127.0.0.1",
+        server: "localhost",
+        trustServer: true,
         username: "sa",
       });
     default:
@@ -90,19 +91,21 @@ const readArticles: SqlSourceRead<EncodedSqlArticle, SqlArticleCursor> = (
   limit
 ) => {
   if (provider === "sqlserver") {
+    const limitFragment = sql.literal(String(limit));
+
     return cursor === null
       ? sql`
           SELECT id, title, source_version
           FROM sql_cli_source_articles
           ORDER BY id
-          OFFSET 0 ROWS FETCH NEXT ${limit} ROWS ONLY
+          OFFSET 0 ROWS FETCH NEXT ${limitFragment} ROWS ONLY
         `
       : sql`
           SELECT id, title, source_version
           FROM sql_cli_source_articles
           WHERE id > ${cursor.id}
           ORDER BY id
-          OFFSET 0 ROWS FETCH NEXT ${limit} ROWS ONLY
+          OFFSET 0 ROWS FETCH NEXT ${limitFragment} ROWS ONLY
         `;
   }
 

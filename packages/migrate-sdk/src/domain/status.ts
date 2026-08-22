@@ -127,7 +127,7 @@ export interface MigrationStatusRequest<
   readonly scanSource: boolean;
 }
 
-export class MigrationStatusRequestError extends Schema.TaggedErrorClass<MigrationStatusRequestError>()(
+export class MigrationStatusRequestError extends Schema.TaggedError<MigrationStatusRequestError>()(
   "MigrationStatusRequestError",
   {
     message: Schema.String,

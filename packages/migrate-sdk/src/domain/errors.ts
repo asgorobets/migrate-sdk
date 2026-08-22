@@ -5,42 +5,42 @@ const ErrorFields = {
   cause: Schema.optional(Schema.Defect()),
 };
 
-export class SourceError extends Schema.TaggedErrorClass<SourceError>()(
+export class SourceError extends Schema.TaggedError<SourceError>()(
   "SourceError",
   ErrorFields
 ) {}
 
-export class DestinationError extends Schema.TaggedErrorClass<DestinationError>()(
+export class DestinationError extends Schema.TaggedError<DestinationError>()(
   "DestinationError",
   ErrorFields
 ) {}
 
-export class MigrationStoreError extends Schema.TaggedErrorClass<MigrationStoreError>()(
+export class MigrationStoreError extends Schema.TaggedError<MigrationStoreError>()(
   "MigrationStoreError",
   ErrorFields
 ) {}
 
-export class MigrationReferenceLookupError extends Schema.TaggedErrorClass<MigrationReferenceLookupError>()(
+export class MigrationReferenceLookupError extends Schema.TaggedError<MigrationReferenceLookupError>()(
   "MigrationReferenceLookupError",
   ErrorFields
 ) {}
 
-export class MigrationRuntimeError extends Schema.TaggedErrorClass<MigrationRuntimeError>()(
+export class MigrationRuntimeError extends Schema.TaggedError<MigrationRuntimeError>()(
   "MigrationRuntimeError",
   ErrorFields
 ) {}
 
-export class RollbackRequestError extends Schema.TaggedErrorClass<RollbackRequestError>()(
+export class RollbackRequestError extends Schema.TaggedError<RollbackRequestError>()(
   "RollbackRequestError",
   ErrorFields
 ) {}
 
-export class RollbackPreflightError extends Schema.TaggedErrorClass<RollbackPreflightError>()(
+export class RollbackPreflightError extends Schema.TaggedError<RollbackPreflightError>()(
   "RollbackPreflightError",
   ErrorFields
 ) {}
 
-export class SkipItem extends Schema.TaggedErrorClass<SkipItem>()("SkipItem", {
+export class SkipItem extends Schema.TaggedError<SkipItem>()("SkipItem", {
   reason: Schema.String,
 }) {}
 

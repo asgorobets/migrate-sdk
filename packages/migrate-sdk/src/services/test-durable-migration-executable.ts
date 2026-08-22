@@ -35,7 +35,7 @@ const TestDurableExecutionHandle = Schema.Struct({
   executionId: Schema.String,
 });
 
-export class TestDurableMigrationExecutableStartRejectedError extends Schema.TaggedErrorClass<TestDurableMigrationExecutableStartRejectedError>()(
+export class TestDurableMigrationExecutableStartRejectedError extends Schema.TaggedError<TestDurableMigrationExecutableStartRejectedError>()(
   "TestDurableMigrationExecutableStartRejectedError",
   {
     message: Schema.String,
@@ -43,7 +43,7 @@ export class TestDurableMigrationExecutableStartRejectedError extends Schema.Tag
   }
 ) {}
 
-export class TestDurableMigrationExecutableAttachError extends Schema.TaggedErrorClass<TestDurableMigrationExecutableAttachError>()(
+export class TestDurableMigrationExecutableAttachError extends Schema.TaggedError<TestDurableMigrationExecutableAttachError>()(
   "TestDurableMigrationExecutableAttachError",
   {
     cause: Schema.optional(Schema.Defect()),

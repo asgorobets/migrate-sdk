@@ -75,7 +75,7 @@ const WorkflowSdkExecutionHandle = Schema.Struct({
   executionId: Schema.String,
 });
 
-export class WorkflowSdkMigrationExecutableStartError extends Schema.TaggedErrorClass<WorkflowSdkMigrationExecutableStartError>()(
+export class WorkflowSdkMigrationExecutableStartError extends Schema.TaggedError<WorkflowSdkMigrationExecutableStartError>()(
   "WorkflowSdkMigrationExecutableStartError",
   {
     cause: Schema.Defect(),
@@ -84,7 +84,7 @@ export class WorkflowSdkMigrationExecutableStartError extends Schema.TaggedError
   }
 ) {}
 
-export class WorkflowSdkMigrationExecutableAttachError extends Schema.TaggedErrorClass<WorkflowSdkMigrationExecutableAttachError>()(
+export class WorkflowSdkMigrationExecutableAttachError extends Schema.TaggedError<WorkflowSdkMigrationExecutableAttachError>()(
   "WorkflowSdkMigrationExecutableAttachError",
   {
     cause: Schema.Defect(),

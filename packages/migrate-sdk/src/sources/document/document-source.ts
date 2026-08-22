@@ -31,6 +31,8 @@ import type {
 } from "./document-fetcher.ts";
 import type { DocumentParser } from "./document-parser.ts";
 
+const UnknownJsonString = Schema.fromJsonString(Schema.Unknown);
+
 export type DocumentSourceSchema<Decoded = unknown> = Schema.Codec<
   Decoded,
   unknown,
@@ -726,9 +728,7 @@ const normalizeIdentityValue = (
         stringifyIdentityValue(entry, itemIndex, label)
       );
 
-      return yield* Schema.encodeEffect(Schema.UnknownFromJsonString)(
-        values
-      ).pipe(
+      return yield* Schema.encodeEffect(UnknownJsonString)(values).pipe(
         Effect.mapError((cause) =>
           documentSourceError(
             `Unable to serialize document source ${label} value`,
@@ -810,9 +810,7 @@ const encodeSourceItemJson = <Payload>(
       )
     );
 
-    return yield* Schema.encodeEffect(Schema.UnknownFromJsonString)(
-      encodedItem
-    ).pipe(
+    return yield* Schema.encodeEffect(UnknownJsonString)(encodedItem).pipe(
       Effect.mapError((cause) =>
         documentSourceError(
           "Unable to serialize document source item for content hash",
