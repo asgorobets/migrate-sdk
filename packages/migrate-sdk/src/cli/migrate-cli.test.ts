@@ -45,6 +45,8 @@ const interactiveDefinitionPattern = /definition=([^\s]+)/;
 const tagsProcessConcurrencyPattern = /tags\s+full\s+4/;
 const authorsProcessConcurrencyPattern = /authors\s+full\s+4/;
 const tagsRollbackConcurrencyPattern = /tags\s+unbounded/;
+const rollbackOrphansSummaryPattern =
+  /articles\s+succeeded\s+0\s+1\s+0\s+0\s+0\s+1\s+1\s+0/;
 
 interface CliRuntimeTestOptions {
   readonly stdoutColumns?: number;
@@ -469,6 +471,32 @@ const getExecutionProbe = (): CliExecutionProbe => {
   }
 
   return probe as CliExecutionProbe;
+};
+
+interface CliFileRollbackOrphansProbe {
+  readonly rollbackCalls: string[];
+  readonly sourceItems: unknown[];
+}
+
+const fileRollbackOrphansProbeGlobal =
+  "__migrateSdkCliFileRollbackOrphansProbe";
+
+const resetFileRollbackOrphansProbe = () => {
+  delete (globalThis as Record<string, unknown>)[
+    fileRollbackOrphansProbeGlobal
+  ];
+};
+
+const getFileRollbackOrphansProbe = (): CliFileRollbackOrphansProbe => {
+  const probe = (globalThis as Record<string, unknown>)[
+    fileRollbackOrphansProbeGlobal
+  ];
+
+  if (typeof probe !== "object" || probe === null) {
+    throw new Error("CLI File Rollback Orphans probe was not initialized");
+  }
+
+  return probe as CliFileRollbackOrphansProbe;
 };
 
 interface CliTotalCountProbe {
@@ -3348,6 +3376,64 @@ describe("migrate CLI", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Run Completed succeeded");
       expect(getExecutionProbe().executions).toEqual(["article-new"]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rolls back File Migration Store orphans through the CLI", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetFileRollbackOrphansProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        yield* readCliFixture("file-rollback-orphans.config.ts")
+      );
+
+      const initialResult = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "articles"],
+        project
+      );
+
+      expect(initialResult.stderr).toBe("");
+      expect(initialResult.cause).toBe("");
+      expect(initialResult.exitCode).toBe(0);
+
+      getFileRollbackOrphansProbe().sourceItems.pop();
+      const rollbackOrphansResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--rollback-orphans",
+          "articles",
+        ],
+        project
+      );
+
+      expect(rollbackOrphansResult.stderr).toBe("");
+      expect(rollbackOrphansResult.cause).toBe("");
+      expect(rollbackOrphansResult.exitCode).toBe(0);
+      expect(rollbackOrphansResult.stdout).toContain("Run Completed succeeded");
+      expect(rollbackOrphansResult.stdout).toContain("Orphaned");
+      expect(rollbackOrphansResult.stdout).toContain("Rolled Back");
+      expect(rollbackOrphansResult.stdout).toContain("Rollback Failed");
+      expect(rollbackOrphansResult.stdout).toMatch(
+        rollbackOrphansSummaryPattern
+      );
+      expect(getFileRollbackOrphansProbe().rollbackCalls).toEqual([
+        "article-2",
+      ]);
+      expect(
+        yield* fs.exists(
+          `${project}/.migration-state/definitions/articles/items/article-1.json`
+        )
+      ).toBe(true);
+      expect(
+        yield* fs.exists(
+          `${project}/.migration-state/definitions/articles/items/article-2.json`
+        )
+      ).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 

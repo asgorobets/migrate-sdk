@@ -5,3 +5,4 @@ export {
   FileMigrationStore,
   FileMigrationStorePlatform,
 } from "./file-migration-store.ts";
+export { FileMigrationStoreDirectoryEntries } from "./file-migration-store-directory-entries.ts";

@@ -1,7 +1,6 @@
-import { randomUUID } from "node:crypto";
 import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSystem";
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
-import { DateTime, Effect, Layer, Schema } from "effect";
+import { DateTime, Effect, Layer, Random, Schema, Stream } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import type { PlatformError } from "effect/PlatformError";
@@ -27,12 +26,14 @@ import type {
   MigrationRunState,
 } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
-import { summarizeMigrationItemStates } from "../../domain/status.ts";
 import {
-  MigrationStore,
-  makeUnimplementedOrphanStoreMethods,
-} from "../../services/migration-store.ts";
+  addMigrationItemStateToSummary,
+  emptyMigrationItemStateSummary,
+} from "../../domain/status.ts";
+import { MigrationStore } from "../../services/migration-store.ts";
 import { PersistedMigrationItemState } from "../internal/persisted-state.ts";
+import { FileMigrationStoreDirectoryEntries } from "./file-migration-store-directory-entries.ts";
+import { nodeFileMigrationStoreDirectoryEntriesLayer } from "./node-file-migration-store-directory-entries.ts";
 
 export interface FileMigrationStoreOptions {
   readonly directory: string;
@@ -112,6 +113,16 @@ const MigrationDefinitionLockRecord = Schema.Struct({
 
 const textEncoder = new TextEncoder();
 const safePathSegmentCharacter = /^[A-Za-z0-9._:-]$/u;
+const randomIdentifier = Effect.all([
+  Random.nextInt,
+  Random.nextInt,
+  Random.nextInt,
+  Random.nextInt,
+]).pipe(
+  Effect.map((parts) =>
+    parts.map((part) => Math.abs(part).toString(36)).join("-")
+  )
+);
 
 const storeError = (message: string, cause?: unknown): MigrationStoreError =>
   new MigrationStoreError({
@@ -239,9 +250,10 @@ const writeFileStringAtomic = (
 ): Effect.Effect<void, MigrationStoreError> =>
   Effect.gen(function* () {
     const parentDirectory = path.dirname(filePath);
+    const temporaryId = yield* randomIdentifier;
     const temporaryPath = path.join(
       parentDirectory,
-      `.${path.basename(filePath)}.${randomUUID()}.tmp`
+      `.${path.basename(filePath)}.${temporaryId}.tmp`
     );
 
     yield* fs
@@ -400,23 +412,33 @@ const ensureManifest = (
   });
 
 export type FileMigrationStorePlatform<E = never, R = never> = Layer.Layer<
-  FileSystem | Path,
+  FileMigrationStoreDirectoryEntries | FileSystem | Path,
   E,
   R
 >;
 
 export const FileMigrationStorePlatform = {
-  node: Layer.mergeAll(nodeFileSystemLayer, nodePathLayer),
-} as const satisfies Record<string, FileMigrationStorePlatform>;
+  directoryEntries: {
+    node: nodeFileMigrationStoreDirectoryEntriesLayer,
+  },
+  node: Layer.mergeAll(
+    nodeFileSystemLayer,
+    nodePathLayer,
+    nodeFileMigrationStoreDirectoryEntriesLayer
+  ),
+} as const;
 
 const makeLayerWithoutPlatform = (
   options: Pick<FileMigrationStoreOptions, "directory">
-): Layer.Layer<MigrationStore, MigrationStoreError, FileSystem | Path> =>
+): Layer.Layer<
+  MigrationStore,
+  MigrationStoreError,
+  FileMigrationStoreDirectoryEntries | FileSystem | Path
+> =>
   Layer.effect(
     MigrationStore,
     Effect.gen(function* () {
-      const orphanStoreMethods =
-        makeUnimplementedOrphanStoreMethods("FileMigrationStore");
+      const directoryEntries = yield* FileMigrationStoreDirectoryEntries;
       const fs = yield* FileSystem;
       const path = yield* Path;
       const paths = makePaths(path, options.directory);
@@ -530,9 +552,28 @@ const makeLayerWithoutPlatform = (
       const getItemStateSummary = Effect.fn(
         "FileMigrationStore.getItemStateSummary"
       )(function* (definitionId: MigrationDefinitionId) {
-        const itemStates = yield* listItemStates(definitionId);
+        let summary = emptyMigrationItemStateSummary();
+        const itemStateDirectory = paths.itemStatesDirectory(definitionId);
 
-        return summarizeMigrationItemStates(itemStates);
+        yield* directoryEntries.stream(itemStateDirectory).pipe(
+          Stream.runForEach((itemStateFile) =>
+            Effect.gen(function* () {
+              if (!itemStateFile.endsWith(".json")) {
+                return;
+              }
+
+              const record = yield* readRecord(
+                fs,
+                path.join(itemStateDirectory, itemStateFile),
+                MigrationItemStateRecord
+              );
+
+              summary = addMigrationItemStateToSummary(summary, record.state);
+            })
+          )
+        );
+
+        return summary;
       });
 
       const deleteItemState = Effect.fn("FileMigrationStore.deleteItemState")(
@@ -557,8 +598,95 @@ const makeLayerWithoutPlatform = (
           )
       );
 
-      const createRunId = Effect.sync(() =>
-        MigrationRunIdSchema.make(`run-${randomUUID()}`)
+      const observeItemState: (typeof MigrationStore)["Service"]["observeItemState"] =
+        Effect.fn("FileMigrationStore.observeItemState")(function* (
+          definitionId: MigrationDefinitionId,
+          identity: EncodedSourceIdentity,
+          sourceInventoryRunId: MigrationRunId
+        ) {
+          const itemState = yield* getItemState(definitionId, identity);
+
+          if (
+            itemState === null ||
+            itemState.lastSourceInventoryRunId === sourceInventoryRunId
+          ) {
+            return;
+          }
+
+          yield* upsertItemState({
+            ...itemState,
+            lastSourceInventoryRunId: sourceInventoryRunId,
+          });
+        });
+
+      const listOrphanItemStates: (typeof MigrationStore)["Service"]["listOrphanItemStates"] =
+        Effect.fn("FileMigrationStore.listOrphanItemStates")(
+          function* (definitionId, sourceInventoryRunId, page) {
+            const limit = Math.max(0, Math.floor(page.limit));
+
+            if (limit === 0) {
+              return { items: [] };
+            }
+
+            const itemStateDirectory = paths.itemStatesDirectory(definitionId);
+            const candidates: MigrationItemState[] = [];
+
+            yield* directoryEntries.stream(itemStateDirectory).pipe(
+              Stream.runForEach((itemStateFile) =>
+                Effect.gen(function* () {
+                  if (!itemStateFile.endsWith(".json")) {
+                    return;
+                  }
+
+                  const record = yield* readRecord(
+                    fs,
+                    path.join(itemStateDirectory, itemStateFile),
+                    MigrationItemStateRecord
+                  );
+                  const itemState = record.state;
+
+                  if (
+                    itemState.lastSourceInventoryRunId ===
+                      sourceInventoryRunId ||
+                    (page.afterIdentity !== undefined &&
+                      itemState.sourceIdentity.encoded <= page.afterIdentity)
+                  ) {
+                    return;
+                  }
+
+                  const insertionIndex = candidates.findIndex(
+                    (candidate) =>
+                      candidate.sourceIdentity.encoded >
+                      itemState.sourceIdentity.encoded
+                  );
+
+                  if (insertionIndex === -1) {
+                    candidates.push(itemState);
+                  } else {
+                    candidates.splice(insertionIndex, 0, itemState);
+                  }
+
+                  if (candidates.length > limit + 1) {
+                    candidates.pop();
+                  }
+                })
+              )
+            );
+
+            const items = candidates.slice(0, limit);
+            const lastItem = items.at(-1);
+
+            return {
+              items,
+              ...(lastItem !== undefined && candidates.length > items.length
+                ? { nextAfterIdentity: lastItem.sourceIdentity.encoded }
+                : {}),
+            };
+          }
+        );
+
+      const createRunId = randomIdentifier.pipe(
+        Effect.map((id) => MigrationRunIdSchema.make(`run-${id}`))
       );
 
       const getLatestRunState = Effect.fn(
@@ -751,11 +879,12 @@ const makeLayerWithoutPlatform = (
         ownerRunId: MigrationRunId
       ) {
         const createdAt = yield* DateTime.nowAsDate;
+        const lockId = yield* randomIdentifier;
         const lock: MigrationDefinitionLock = {
           createdAt,
           definitionId,
           ownerRunId,
-          token: toMigrationDefinitionLockToken(`lock-${randomUUID()}`),
+          token: toMigrationDefinitionLockToken(`lock-${lockId}`),
         };
         const lockPath = paths.lock(definitionId);
         const encodedLock = yield* encodeRecord(
@@ -852,7 +981,8 @@ const makeLayerWithoutPlatform = (
       });
 
       return {
-        ...orphanStoreMethods,
+        listOrphanItemStates,
+        observeItemState,
         getSourceCursor,
         setSourceCursor,
         deleteSourceCursor,

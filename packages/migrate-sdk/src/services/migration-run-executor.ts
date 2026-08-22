@@ -2638,7 +2638,6 @@ const runMigrationDefinition = <
     ).concurrency;
 
     const counts = { ...emptyCounts };
-    const itemStates = yield* store.listItemStates(definition.id);
     yield* MigrationProgress.emit({
       definitionId: definition.id,
       kind: "definition-started",
@@ -2656,6 +2655,7 @@ const runMigrationDefinition = <
     }
 
     if (runOptions.update) {
+      const itemStates = yield* store.listItemStates(definition.id);
       yield* prepareUpdateRunDefinition({
         definitionId: definition.id,
         itemStates,
@@ -2703,7 +2703,7 @@ const runMigrationDefinition = <
       : yield* processTargetedSourceIdentities({
           counts,
           definition,
-          itemStates,
+          itemStates: yield* store.listItemStates(definition.id),
           mode,
           processConcurrency,
           runId,
@@ -2827,7 +2827,6 @@ const runMigrationDefinitionCursorWindow = <
     let excludedSourceIdentities = input.state.excludedSourceIdentities;
 
     if (isFirstWindow) {
-      const itemStates = yield* store.listItemStates(definition.id);
       yield* MigrationProgress.emit({
         definitionId: definition.id,
         kind: "definition-started",
@@ -2843,7 +2842,7 @@ const runMigrationDefinitionCursorWindow = <
         : yield* processTargetedSourceIdentities({
             counts,
             definition,
-            itemStates,
+            itemStates: yield* store.listItemStates(definition.id),
             mode: normalRunMode,
             processConcurrency,
             runId: input.runId,
