@@ -353,6 +353,8 @@ getItemState          -> GET item object, decode value
 upsertItemState       -> POST item object
 deleteItemState       -> GET item object, DELETE by version
 listItemStates        -> query item records by namespace and definition id
+observeItemState      -> GET item object, POST current state with inventory run id
+listOrphanItemStates  -> query item records not observed by the inventory run
 createRunId           -> local UUID
 beginRun              -> POST latest run-state records
 completeRun           -> POST latest run-state records
@@ -457,20 +459,59 @@ list locks:
     and recordKind = "migration-definition-lock")
 ```
 
-The internal Custom Object client should expose a streaming or callback-oriented
-`queryAll` helper so scan behavior is implemented once:
+### Rollback Orphans
 
-```ts
-interface CommercetoolsCustomObjectClient {
-  readonly queryAll: <A>(
-    query: CustomObjectScanQuery,
-    schema: Schema.Codec<A, unknown>
-  ) => Stream.Stream<A, MigrationStoreError>;
-}
+Source Inventory observation is stored only in the canonical Migration Item
+State as the optional `lastSourceInventoryRunId` field. It is not duplicated in
+the record `index` object.
+
+`observeItemState` reads the existing Custom Object by its deterministic key.
+Missing item state is a no-op. Existing state is rewritten with the current
+Source Inventory run identifier using the Custom Object's current version so a
+concurrent modification fails the scan before Source Cursor advancement.
+
+`listOrphanItemStates` keeps responses bounded and deletion-safe with
+`sort=key asc`, an exclusive `key > :lastKey` continuation, and
+`withTotal=false`. The orphan condition queries state directly so both stale
+observations and legacy states without the field are candidates:
+
+```txt
+value(namespace = :namespace)
+and value(recordKind = :recordKind)
+and value(index(definitionId = :definitionId))
+and value(state(
+  lastSourceInventoryRunId is not defined
+  or lastSourceInventoryRunId != :sourceInventoryRunId
+))
 ```
 
-Core store methods can collect that stream when the current public API requires
-an array. Future maintenance APIs can return the stream directly.
+The runtime enters orphan rollback only after completing the authoritative
+Source Inventory Scan. A missing or stale observation is not independently
+proof that a Source Item is absent.
+
+Item-state queries share a private page reader so the Commercetools request,
+record decoding, metadata validation, and provider continuation key stay local
+to one module:
+
+```ts
+interface ItemStateQueryPage {
+  readonly exhausted: boolean;
+  readonly lastKey?: string;
+  readonly states: readonly MigrationItemState[];
+}
+
+queryItemStatePage(
+  definitionId,
+  predicate,
+  limit
+): Effect.Effect<ItemStateQueryPage, MigrationStoreError>;
+```
+
+Callers supply their completed predicate and retain their own traversal policy.
+`listItemStates` scans its ordinary definition predicate to exhaustion, while
+`listOrphanItemStates` uses the Source Inventory predicate and stops after its
+bounded candidate page. The page reader does not combine or reinterpret those
+different filters.
 
 All query builders should avoid raw string interpolation for user-provided
 values. Prefer Commercetools predicate variables if the TypeScript SDK supports
