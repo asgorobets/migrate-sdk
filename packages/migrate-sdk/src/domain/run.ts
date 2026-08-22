@@ -173,6 +173,33 @@ export interface MigrationDefinitionRunSummary {
   readonly status: "succeeded" | "failed" | "skipped";
 }
 
+export interface RollbackOrphansCounts {
+  readonly orphaned: number;
+  readonly rollbackFailed: number;
+  readonly rolledBack: number;
+}
+
+export const mergeRollbackOrphansCounts = <
+  Summary extends {
+    readonly counts: object;
+    readonly status: "succeeded" | "failed" | "skipped";
+  },
+>(
+  summary: Summary,
+  counts: RollbackOrphansCounts
+): Summary & {
+  readonly counts: Summary["counts"] & RollbackOrphansCounts;
+} => ({
+  ...summary,
+  counts: {
+    ...summary.counts,
+    orphaned: counts.orphaned,
+    rollbackFailed: counts.rollbackFailed,
+    rolledBack: counts.rolledBack,
+  },
+  status: counts.rollbackFailed > 0 ? "failed" : summary.status,
+});
+
 export interface MigrationExecutionHandle {
   readonly adapter: string;
   /** Identifies the execution within its adapter when the caller is detached. */

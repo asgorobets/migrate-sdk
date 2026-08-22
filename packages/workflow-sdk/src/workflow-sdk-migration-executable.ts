@@ -12,6 +12,7 @@ import {
   MigrationRuntimeError,
   MigrationStore,
   MigrationStoreError,
+  type RollbackPreflightError,
   type RollbackRunSummary,
 } from "migrate-sdk";
 import {
@@ -20,6 +21,7 @@ import {
   makeMigrationRollbackExecutionEnvelope,
   makeMigrationRunExecutionEnvelope,
   validateMigrationRunDependencyPreflight,
+  validateMigrationRunRollbackOrphansDependencyPreflight,
 } from "migrate-sdk/core";
 import type { Run, StartOptions } from "workflow/api";
 
@@ -97,7 +99,8 @@ type WorkflowSdkMigrationExecutableError =
   | WorkflowSdkMigrationExecutableAttachError
   | MigrationExecutionEnvelopeMissingRegistryIdError
   | MigrationRuntimeError
-  | MigrationStoreError;
+  | MigrationStoreError
+  | RollbackPreflightError;
 
 const emptyPlanError = new MigrationRuntimeError({
   message:
@@ -287,6 +290,7 @@ const startWorkflow = (
 const startDurablePlan = <Summary>({
   input,
   makeEnvelope,
+  preflight,
   scopeDefinitionIds,
   storeLayer,
 }: {
@@ -298,6 +302,9 @@ const startDurablePlan = <Summary>({
     MigrationExecutionEnvelope,
     MigrationExecutionEnvelopeMissingRegistryIdError
   >;
+  readonly preflight?: (
+    store: typeof MigrationStore.Service
+  ) => Effect.Effect<void, MigrationStoreError | RollbackPreflightError>;
   readonly scopeDefinitionIds: readonly MigrationDefinitionId[];
   readonly storeLayer: Layer.Layer<MigrationStore, MigrationStoreError>;
 }): Effect.Effect<
@@ -308,6 +315,15 @@ const startDurablePlan = <Summary>({
     const store = yield* MigrationStore;
     const runId = yield* store.createRunId;
     const locks = yield* acquireLocks(store, runId, scopeDefinitionIds);
+    if (preflight !== undefined) {
+      yield* preflight(store).pipe(
+        Effect.catch((error) =>
+          releaseLocks(store, locks, error).pipe(
+            Effect.andThen(Effect.fail(error))
+          )
+        )
+      );
+    }
     const envelope = yield* makeEnvelope(runId, locks).pipe(
       Effect.catch((error) =>
         releaseLocks(store, locks, error).pipe(
@@ -367,6 +383,10 @@ export const WorkflowSdkMigrationExecutable = {
                       locks,
                       runId,
                     }),
+                  preflight: (store) =>
+                    validateMigrationRunRollbackOrphansDependencyPreflight(
+                      plan
+                    ).pipe(Effect.provideService(MigrationStore, store)),
                   scopeDefinitionIds: plan.includedDefinitionIds,
                   storeLayer,
                 })

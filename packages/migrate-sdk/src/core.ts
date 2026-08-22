@@ -46,7 +46,12 @@ export {
 } from "./domain/registry.ts";
 export type { MigrationDefinitionRegistryPlanningError } from "./domain/registry.ts";
 
-export type { MigrationRunSummary } from "./domain/run.ts";
+export type {
+  MigrationDefinitionRunSummary,
+  MigrationRunSummary,
+  RollbackOrphansCounts,
+} from "./domain/run.ts";
+export { mergeRollbackOrphansCounts } from "./domain/run.ts";
 export type { RollbackRunSummary } from "./domain/rollback.ts";
 
 export { MigrationExecutable } from "./services/migration-executable.ts";
@@ -79,7 +84,9 @@ export type { MigrationDefinitionRegistryCatalogLookupError } from "./services/m
 export {
   MigrationRollbackExecutor,
   MigrationRunExecutor,
+  isRollbackMigrationDefinition,
   validateMigrationRunDependencyPreflight,
+  validateMigrationRunRollbackOrphansDependencyPreflight,
 } from "./services/migration-run-executor.ts";
 export type {
   MigrationRollbackExecutorService,
@@ -94,4 +101,7 @@ export type {
   MigrationRunCursorWindowState,
   MigrationRunExecutionLease,
   MigrationRunFailureInput,
+  MigrationRunRollbackOrphansPageInput,
+  MigrationRunRollbackOrphansPageResult,
+  MigrationRunRollbackOrphansState,
 } from "./runtime/run-migrations.ts";

@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import {
+  isRollbackMigrationDefinition,
   type MigrationDefinitionId,
   type MigrationDefinitionRegistryCatalog,
   type MigrationDefinitionRegistryCatalogLookupError,
@@ -16,6 +17,8 @@ import {
   type MigrationRunCursorWindowState,
   type MigrationRunExecutionEnvelopeType,
   type MigrationRunExecutionLease,
+  type MigrationRunRollbackOrphansPageResult,
+  type MigrationRunRollbackOrphansState,
   MigrationRunStepExecutor,
   type MigrationRunSummary,
   type RollbackRunSummary,
@@ -104,13 +107,13 @@ const resolveRunJob = (envelope: MigrationRunExecutionEnvelopeType) =>
 export const beginMigrationRunExecutionEnvelope = (
   envelope: MigrationRunExecutionEnvelopeType
 ): Effect.Effect<
-  MigrationRunExecutionEnvelopeType["runId"],
+  { readonly rollbackOrphans: boolean },
   WorkflowSdkMigrationRunStepError,
   WorkflowSdkMigrationRunStepRequirements
 > =>
   Effect.gen(function* () {
     const { job, lease } = yield* resolveRunJob(envelope);
-    const runState = yield* MigrationRunStepExecutor.begin({
+    yield* MigrationRunStepExecutor.begin({
       definitions: job.plan.definitions,
       lease,
       ...(job.plan.rollbackOrphans === undefined
@@ -119,7 +122,7 @@ export const beginMigrationRunExecutionEnvelope = (
       ...(job.plan.rescan === undefined ? {} : { rescan: job.plan.rescan }),
     });
 
-    return runState.runId;
+    return { rollbackOrphans: job.plan.rollbackOrphans === true };
   });
 
 export const executeMigrationRunCursorWindow = (input: {
@@ -156,9 +159,66 @@ export const executeMigrationRunCursorWindow = (input: {
       definitionId: input.definitionId,
       definitionIds: job.plan.executionDefinitionIds,
       lease,
+      ...(job.plan.rollbackOrphans === true ? { rollbackOrphans: true } : {}),
       runId: input.runId,
       state: input.state,
     });
+  });
+
+export const executeMigrationRunRollbackOrphansPage = (input: {
+  readonly definitionId: MigrationDefinitionId;
+  readonly envelope: MigrationRunExecutionEnvelopeType;
+  readonly runId: MigrationRunExecutionEnvelopeType["runId"];
+  readonly state: MigrationRunRollbackOrphansState;
+}): Effect.Effect<
+  MigrationRunRollbackOrphansPageResult,
+  WorkflowSdkMigrationRunStepError,
+  WorkflowSdkMigrationRunStepRequirements
+> =>
+  Effect.gen(function* () {
+    const { job, lease } = yield* resolveRunJob(input.envelope);
+    const definition = job.plan.definitions.find(
+      (candidate) => candidate.id === input.definitionId
+    );
+
+    if (definition === undefined) {
+      return yield* new MigrationDefinitionRegistryExecutableError({
+        definitionId: input.definitionId,
+        message: "Migration Definition was not found in the Workflow SDK plan",
+        missingRequirements: [
+          {
+            key: "workflow-sdk-planned-definition",
+            label: "Planned Migration Definition",
+            owner: "definition",
+          },
+        ],
+      });
+    }
+
+    if (!isRollbackMigrationDefinition(definition)) {
+      return yield* new MigrationDefinitionRegistryExecutableError({
+        definitionId: input.definitionId,
+        message: "Rollback Orphans requires a Rollback Pipeline",
+        missingRequirements: [
+          {
+            key: "rollback-pipeline",
+            label: "Rollback Pipeline",
+            owner: "definition",
+          },
+        ],
+      });
+    }
+
+    return yield* MigrationRunStepExecutor.executeRollbackOrphansPage(
+      definition,
+      {
+        definitionIds: job.plan.executionDefinitionIds,
+        lease,
+        runId: input.runId,
+        state: input.state,
+      },
+      job.plan.execution?.rollback
+    );
   });
 
 export const completeMigrationRunExecutionEnvelope = (input: {

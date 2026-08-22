@@ -5705,6 +5705,7 @@ describe("runInlineDefinition", () => {
                 needsUpdate: 0,
               },
               excludedSourceIdentities: [],
+              phase: "scan",
             },
           }
         );

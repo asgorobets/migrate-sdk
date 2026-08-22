@@ -425,6 +425,12 @@ const rescan = Flag.boolean("rescan").pipe(
   Flag.withDescription("Reset the Source Cursor and scan from the beginning")
 );
 
+const rollbackOrphans = Flag.boolean("rollback-orphans").pipe(
+  Flag.withDescription(
+    "Rollback Migration Item States absent from a completed source scan"
+  )
+);
+
 const update = Flag.boolean("update").pipe(
   Flag.withDescription("Plan an update run")
 );
@@ -523,6 +529,7 @@ const makeRunPlanInput = (
     readonly force: boolean;
     readonly mode?: "failed" | "skipped";
     readonly rescan: boolean;
+    readonly rollbackOrphans: boolean;
     readonly sourceIdentities?: readonly string[];
     readonly update: boolean;
   }
@@ -533,6 +540,7 @@ const makeRunPlanInput = (
     ...(input.force ? { force: true as const } : {}),
     ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
     ...(input.rescan ? { rescan: true as const } : {}),
+    ...(input.rollbackOrphans ? { rollbackOrphans: true as const } : {}),
     ...(input.sourceIdentities === undefined
       ? {}
       : { sourceIdentities: input.sourceIdentities }),
@@ -594,6 +602,7 @@ const renderRunCommandError = (
     readonly hasTarget: boolean;
     readonly mode?: "failed" | "skipped";
     readonly rescan: boolean;
+    readonly rollbackOrphans: boolean;
     readonly update: boolean;
   }
 ): string =>
@@ -605,6 +614,7 @@ const renderRunCommandError = (
         hasTarget: input.hasTarget,
         ...(input.mode === undefined ? {} : { mode: input.mode }),
         rescan: input.rescan,
+        rollbackOrphans: input.rollbackOrphans,
         update: input.update,
       })
     : renderRuntimeError(error);
@@ -758,6 +768,7 @@ const runCommand = Command.make(
     progress,
     concurrency: processConcurrency,
     rescan,
+    rollbackOrphans,
     skipped,
     update,
     withDependencies,
@@ -796,6 +807,16 @@ const runCommand = Command.make(
                   "--concurrency"
                 ),
               },
+              ...(input.rollbackOrphans
+                ? {
+                    rollback: {
+                      concurrency: yield* parsePipelineExecutionConcurrency(
+                        concurrencyInput,
+                        "--concurrency"
+                      ),
+                    },
+                  }
+                : {}),
             };
       const runInput = makeRunPlanInput({
         all: input.all,
@@ -807,6 +828,7 @@ const runCommand = Command.make(
         ...(groupInput === undefined ? {} : { group: groupInput }),
         ...(mode === undefined ? {} : { mode }),
         rescan: input.rescan,
+        rollbackOrphans: input.rollbackOrphans,
         ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
         update: input.update,
         withDependencies: input.withDependencies,
@@ -823,6 +845,7 @@ const runCommand = Command.make(
                 hasTarget: sourceIdentities !== undefined,
                 ...(mode === undefined ? {} : { mode }),
                 rescan: input.rescan,
+                rollbackOrphans: input.rollbackOrphans,
                 update: input.update,
               })
             )
@@ -847,6 +870,7 @@ const runCommand = Command.make(
               hasTarget: sourceIdentities !== undefined,
               ...(mode === undefined ? {} : { mode }),
               rescan: input.rescan,
+              rollbackOrphans: input.rollbackOrphans,
               update: input.update,
             })
           )
@@ -877,6 +901,7 @@ const runCommand = Command.make(
               hasTarget: sourceIdentities !== undefined,
               ...(mode === undefined ? {} : { mode }),
               rescan: input.rescan,
+              rollbackOrphans: input.rollbackOrphans,
               update: input.update,
             })
           )

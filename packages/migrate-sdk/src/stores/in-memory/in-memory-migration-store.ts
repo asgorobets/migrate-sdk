@@ -22,10 +22,7 @@ import type {
 } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { summarizeMigrationItemStates } from "../../domain/status.ts";
-import {
-  MigrationStore,
-  makeUnimplementedOrphanStoreMethods,
-} from "../../services/migration-store.ts";
+import { MigrationStore } from "../../services/migration-store.ts";
 
 export interface InMemoryMigrationStoreState {
   readonly definitionLocks: Map<MigrationDefinitionId, MigrationDefinitionLock>;
@@ -108,9 +105,51 @@ const readRunState = (
 
 const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
   Layer.sync(MigrationStore, () => {
-    const orphanStoreMethods = makeUnimplementedOrphanStoreMethods(
-      "InMemoryMigrationStore"
-    );
+    const listOrphanItemStates: (typeof MigrationStore)["Service"]["listOrphanItemStates"] =
+      (definitionId, sourceInventoryRunId, page) =>
+        Effect.sync(() => {
+          const candidates = Array.from(state.itemStates.values())
+            .filter(
+              (itemState) =>
+                itemState.definitionId === definitionId &&
+                itemState.lastSourceInventoryRunId !== sourceInventoryRunId &&
+                (page.afterIdentity === undefined ||
+                  itemState.sourceIdentity.encoded > page.afterIdentity)
+            )
+            .sort((left, right) => {
+              if (left.sourceIdentity.encoded < right.sourceIdentity.encoded) {
+                return -1;
+              }
+              if (left.sourceIdentity.encoded > right.sourceIdentity.encoded) {
+                return 1;
+              }
+              return 0;
+            });
+          const items = candidates.slice(0, Math.max(0, page.limit));
+          const lastItem = items.at(-1);
+
+          return {
+            items,
+            ...(lastItem !== undefined && candidates.length > items.length
+              ? { nextAfterIdentity: lastItem.sourceIdentity.encoded }
+              : {}),
+          };
+        });
+
+    const observeItemState: (typeof MigrationStore)["Service"]["observeItemState"] =
+      (definitionId, identity, sourceInventoryRunId) =>
+        Effect.sync(() => {
+          const key = itemStateKey(definitionId, identity);
+          const itemState = state.itemStates.get(key);
+
+          if (itemState !== undefined) {
+            state.itemStates.set(key, {
+              ...itemState,
+              lastSourceInventoryRunId: sourceInventoryRunId,
+            });
+          }
+        });
+
     const getSourceCursor = Effect.fn("InMemoryMigrationStore.getSourceCursor")(
       (definitionId: MigrationDefinitionId) =>
         Effect.sync(() => state.sourceCursors.get(definitionId) ?? null)
@@ -439,7 +478,8 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
     });
 
     return {
-      ...orphanStoreMethods,
+      listOrphanItemStates,
+      observeItemState,
       getSourceCursor,
       setSourceCursor,
       deleteSourceCursor,

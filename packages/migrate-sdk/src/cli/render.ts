@@ -494,6 +494,7 @@ const renderPlanScope = (
       | MigrationDefinitionRunPlan["requestedDefinitionIds"]
       | MigrationDefinitionRollbackPlan["requestedDefinitionIds"];
     readonly rescan?: boolean;
+    readonly rollbackOrphans?: boolean;
     readonly sourceIdentities?: readonly string[];
     readonly update?: boolean;
   },
@@ -508,6 +509,7 @@ const renderPlanScope = (
   ...(input.force === true ? ["Force      yes"] : []),
   ...(input.mode === undefined ? [] : [`Mode       ${input.mode}`]),
   ...(input.rescan === true ? ["Rescan     yes"] : []),
+  ...(input.rollbackOrphans === true ? ["Rollback orphans  yes"] : []),
   ...(input.update === true ? ["Update     yes"] : []),
   ...(input.sourceIdentities === undefined
     ? []
@@ -534,6 +536,9 @@ export const renderRunPlan = (
         ...(options.mode === undefined ? {} : { mode: options.mode }),
         requestedDefinitionIds: plan.requestedDefinitionIds,
         ...(plan.rescan === undefined ? {} : { rescan: plan.rescan }),
+        ...(plan.rollbackOrphans === undefined
+          ? {}
+          : { rollbackOrphans: plan.rollbackOrphans }),
         ...(plan.target === undefined
           ? {}
           : { sourceIdentities: plan.target.sourceIdentities }),
@@ -670,6 +675,38 @@ const renderRunSummaryTable = (
           yellow
         ),
       },
+      ...(summary.definitions.some(
+        (definition) => definition.counts.orphaned !== undefined
+      )
+        ? [
+            {
+              align: "right" as const,
+              header: "Orphaned",
+              render: (
+                definition: MigrationRunSummary["definitions"][number]
+              ) => String(definition.counts.orphaned ?? 0),
+            },
+            {
+              align: "right" as const,
+              header: "Rolled Back",
+              render: (
+                definition: MigrationRunSummary["definitions"][number]
+              ) => String(definition.counts.rolledBack ?? 0),
+            },
+            {
+              align: "right" as const,
+              header: "Rollback Failed",
+              render: (
+                definition: MigrationRunSummary["definitions"][number]
+              ) => String(definition.counts.rollbackFailed ?? 0),
+              style: stylePositiveCount(
+                (definition: MigrationRunSummary["definitions"][number]) =>
+                  definition.counts.rollbackFailed ?? 0,
+                red
+              ),
+            },
+          ]
+        : []),
     ],
     summary.definitions,
     options
@@ -1142,6 +1179,7 @@ export const renderPlanningError = (
     readonly hasTarget: boolean;
     readonly mode?: "failed" | "skipped";
     readonly rescan?: boolean;
+    readonly rollbackOrphans?: boolean;
     readonly update?: boolean;
   }
 ): string => {
@@ -1163,6 +1201,7 @@ export const renderPlanningError = (
         input.command === "run"
           ? [
               ...(input.rescan === true ? ["--rescan"] : []),
+              ...(input.rollbackOrphans === true ? ["--rollback-orphans"] : []),
               ...(input.update === true ? ["--update"] : []),
               ...modeFlags,
             ]

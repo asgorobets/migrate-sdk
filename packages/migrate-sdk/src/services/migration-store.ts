@@ -37,10 +37,7 @@ interface MigrationStoreOrphanMethods {
     page: OrphanItemStatePageInput
   ) => Effect.Effect<OrphanItemStatePage, MigrationStoreError>;
 
-  /**
-   * Marks an existing state as observed. Returns false without inserting an
-   * item state when the identity has no durable migration outcome.
-   */
+  /** Marks an existing state as observed without inserting a missing state. */
   readonly observeItemState: (
     definitionId: MigrationDefinitionId,
     identity: EncodedSourceIdentity,

@@ -3,6 +3,7 @@ import { Service } from "effect/Context";
 import type { MigrationDefinition } from "../domain/definition.ts";
 import type { PipelineExecutionOptions } from "../domain/execution.ts";
 import type { SourceIdentitySnapshotKey } from "../domain/ids.ts";
+import type { AnyRollbackMigrationDefinition } from "../domain/rollback.ts";
 import type { MigrationRunState, MigrationRunSummary } from "../domain/run.ts";
 import type { TrackingRecordContract } from "../domain/tracking.ts";
 import {
@@ -13,6 +14,8 @@ import {
   MigrationRunExecutor,
   type MigrationRunExecutorService,
   type MigrationRunFailureInput,
+  type MigrationRunRollbackOrphansPageInput,
+  type MigrationRunRollbackOrphansPageResult,
   type RunMigrationError,
 } from "./migration-run-executor.ts";
 
@@ -54,6 +57,16 @@ export interface MigrationRunStepExecutorService {
     SourceRequirements
   >;
 
+  readonly executeRollbackOrphansPage: (
+    definition: AnyRollbackMigrationDefinition & {
+      readonly rollback: NonNullable<
+        AnyRollbackMigrationDefinition["rollback"]
+      >;
+    },
+    input: MigrationRunRollbackOrphansPageInput,
+    rollbackExecution?: PipelineExecutionOptions
+  ) => Effect.Effect<MigrationRunRollbackOrphansPageResult, RunMigrationError>;
+
   readonly fail: (
     input: MigrationRunFailureInput
   ) => Effect.Effect<void, RunMigrationError>;
@@ -65,6 +78,7 @@ const makeMigrationRunStepExecutor = (
   begin: executor.begin,
   complete: executor.complete,
   executeCursorWindow: executor.executeCursorWindow,
+  executeRollbackOrphansPage: executor.executeRollbackOrphansPage,
   fail: executor.fail,
 });
 
@@ -117,6 +131,19 @@ export class MigrationRunStepExecutor extends Service<
   static readonly fail = (input: MigrationRunFailureInput) =>
     Effect.flatMap(MigrationRunStepExecutor, (executor) =>
       executor.fail(input)
+    );
+
+  static readonly executeRollbackOrphansPage = (
+    definition: AnyRollbackMigrationDefinition & {
+      readonly rollback: NonNullable<
+        AnyRollbackMigrationDefinition["rollback"]
+      >;
+    },
+    input: MigrationRunRollbackOrphansPageInput,
+    rollbackExecution?: PipelineExecutionOptions
+  ) =>
+    Effect.flatMap(MigrationRunStepExecutor, (executor) =>
+      executor.executeRollbackOrphansPage(definition, input, rollbackExecution)
     );
 
   static readonly layer = Layer.effect(

@@ -69,6 +69,7 @@ export interface ProcessSourceItemOptions<
   >;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
+  readonly sourceInventoryRunId?: MigrationRunId;
   readonly sourceItem: SourceItem<EncodedPayload, IdentityKey>;
   readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
 }
@@ -93,18 +94,25 @@ const isSkipItem = (error: unknown): error is SkipItem =>
 const isMigrationStoreError = (error: unknown): error is MigrationStoreError =>
   Predicate.isTagged(error, "MigrationStoreError");
 
-interface SourceVersionContractContext {
+interface ItemStateContractContext {
   readonly definitionId: MigrationDefinitionId;
+  readonly lastSourceInventoryRunId?: MigrationRunId;
   readonly sourceVersionContractFingerprint: SourceVersionContractFingerprint;
 }
 
 const makeItemStateBase = <Payload>(
-  sourceVersionContractContext: SourceVersionContractContext,
+  sourceVersionContractContext: ItemStateContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Payload>,
   updatedAt: Date
 ): MigrationItemStateBase & { readonly sourceVersion: SourceVersion } => ({
   definitionId: sourceVersionContractContext.definitionId,
+  ...(sourceVersionContractContext.lastSourceInventoryRunId === undefined
+    ? {}
+    : {
+        lastSourceInventoryRunId:
+          sourceVersionContractContext.lastSourceInventoryRunId,
+      }),
   sourceIdentity: sourceItem.identity,
   sourceVersionContractFingerprint:
     sourceVersionContractContext.sourceVersionContractFingerprint,
@@ -121,7 +129,7 @@ const previousTrackingRecord = (
     : undefined;
 
 const makeSkippedItemState = <Payload>(
-  sourceVersionContractContext: SourceVersionContractContext,
+  sourceVersionContractContext: ItemStateContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Payload>,
   updatedAt: Date,
@@ -147,7 +155,7 @@ const makeSkippedItemState = <Payload>(
 };
 
 const makeFailedItemState = <Payload>(
-  sourceVersionContractContext: SourceVersionContractContext,
+  sourceVersionContractContext: ItemStateContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Payload>,
   updatedAt: Date,
@@ -173,7 +181,7 @@ const makeFailedItemState = <Payload>(
 };
 
 const makeMigratedItemState = <Payload>(
-  sourceVersionContractContext: SourceVersionContractContext,
+  sourceVersionContractContext: ItemStateContractContext,
   runId: MigrationRunId,
   sourceItem: SourceItem<Payload>,
   updatedAt: Date,
@@ -257,7 +265,7 @@ const resolveProcessTrackingRecord = <Payload>({
   readonly previousState: MigrationItemState | null;
   readonly processJournal?: FailedItemState["journal"];
   readonly runId: MigrationRunId;
-  readonly sourceVersionContractContext: SourceVersionContractContext;
+  readonly sourceVersionContractContext: ItemStateContractContext;
   readonly store: typeof MigrationStore.Service;
   readonly tracking: TrackingProcessScope;
 }) =>
@@ -302,7 +310,7 @@ const persistProcessOutcome = <Payload>({
   readonly previousState: MigrationItemState | null;
   readonly processJournal?: FailedItemState["journal"];
   readonly runId: MigrationRunId;
-  readonly sourceVersionContractContext: SourceVersionContractContext;
+  readonly sourceVersionContractContext: ItemStateContractContext;
   readonly store: typeof MigrationStore.Service;
 }) =>
   Effect.gen(function* () {
@@ -385,7 +393,7 @@ const decodeSourceItemOrPersistFailure = <
   readonly runId: MigrationRunId;
   readonly sourceItem: SourceItem<EncodedPayload, IdentityKey>;
   readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
-  readonly sourceVersionContractContext: SourceVersionContractContext;
+  readonly sourceVersionContractContext: ItemStateContractContext;
   readonly store: typeof MigrationStore.Service;
 }): Effect.Effect<
   SourceItem<Payload, IdentityKey> | null,
@@ -482,7 +490,7 @@ const processWithProcessPipeline = <
   readonly processContext: ProcessContext<TrackingContract>;
   readonly previousState: MigrationItemState | null;
   readonly runId: MigrationRunId;
-  readonly sourceVersionContractContext: SourceVersionContractContext;
+  readonly sourceVersionContractContext: ItemStateContractContext;
   readonly store: typeof MigrationStore.Service;
 }): Effect.Effect<
   MigrationItemOutcome,
@@ -575,6 +583,7 @@ export const processSourceItem = <
   definition,
   reprocessUnchangedTerminal = false,
   runId,
+  sourceInventoryRunId,
   sourceSchema,
   sourceItem,
 }: ProcessSourceItemOptions<
@@ -593,15 +602,20 @@ export const processSourceItem = <
 > =>
   Effect.gen(function* () {
     const store = yield* MigrationStore;
-    const sourceVersionContractContext = {
-      definitionId: definition.id,
-      sourceVersionContractFingerprint:
-        definition.source.sourceVersionContractFingerprint,
-    };
     const previousState = yield* store.getItemState(
       definition.id,
       sourceItem.identity.encoded
     );
+    const lastSourceInventoryRunId =
+      sourceInventoryRunId ?? previousState?.lastSourceInventoryRunId;
+    const sourceVersionContractContext = {
+      definitionId: definition.id,
+      ...(lastSourceInventoryRunId === undefined
+        ? {}
+        : { lastSourceInventoryRunId }),
+      sourceVersionContractFingerprint:
+        definition.source.sourceVersionContractFingerprint,
+    };
     const decodedSourceItem = yield* decodeSourceItemOrPersistFailure({
       previousState,
       runId,

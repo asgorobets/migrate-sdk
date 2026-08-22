@@ -7,9 +7,11 @@ import {
   MigrationRuntimeError,
   MigrationStore,
   MigrationStoreError,
+  RollbackPreflightError,
   SourceIdentity,
   toMigrationDefinitionId,
   toMigrationRunId,
+  toSourceVersion,
 } from "migrate-sdk";
 import type { MigrationExecutionEnvelopeType } from "migrate-sdk/core";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
@@ -385,6 +387,102 @@ describe("WorkflowSdkMigrationExecutable", () => {
         expect(calls).toHaveLength(0);
         expect(authorsStoreState.definitionLocks.size).toBe(0);
         expect(articlesStoreState.definitionLocks.size).toBe(0);
+      })
+  );
+
+  it.effect(
+    "rejects rollback-orphan runs when an unselected dependent has durable state",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const authorsId = toMigrationDefinitionId("authors");
+        const articlesId = toMigrationDefinitionId("articles");
+        const baseStore = InMemoryMigrationStore.layer(storeState);
+        let preflightObservedSelectedLock = false;
+        const store = Layer.effect(
+          MigrationStore,
+          Effect.gen(function* () {
+            const base = yield* MigrationStore;
+
+            return {
+              ...base,
+              listItemStates: (definitionId: typeof articlesId) =>
+                Effect.sync(() => {
+                  preflightObservedSelectedLock =
+                    storeState.definitionLocks.has(authorsId);
+                }).pipe(Effect.andThen(base.listItemStates(definitionId))),
+            };
+          })
+        ).pipe(Layer.provide(baseStore));
+        const authors = MigrationDefinition.make({
+          id: authorsId,
+          source: makeArticlesSource(),
+          store,
+          process: () => Effect.void,
+          rollback: () => undefined,
+        });
+        const articles = MigrationDefinition.make({
+          id: articlesId,
+          dependencies: { required: [authorsId] },
+          source: makeArticlesSource(),
+          store,
+          process: () => Effect.void,
+          rollback: () => undefined,
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          id: "catalog",
+          definitions: [authors, articles] as const,
+        });
+        const previousRunId = toMigrationRunId("run-previous");
+        const articleIdentity = SourceIdentity.fromKey(
+          ArticleSourceIdentity,
+          "article-1"
+        );
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey(
+            articlesId,
+            articleIdentity.encoded
+          ),
+          {
+            definitionId: articlesId,
+            lastRunId: previousRunId,
+            sourceIdentity: articleIdentity,
+            sourceVersion: toSourceVersion("source-version-1"),
+            status: "migrated",
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          }
+        );
+        const calls: WorkflowSdkStartCall[] = [];
+        const start: WorkflowSdkStart = (...args) => {
+          calls.push(args);
+          return Promise.resolve(makeWorkflowRun("wrun_1"));
+        };
+        const plan = yield* registry.executable().planRun({
+          definitionIds: ["authors"],
+          rollbackOrphans: true,
+        });
+
+        const error = yield* Effect.flip(
+          MigrationExecutable.startRun(plan).pipe(
+            Effect.provide(
+              WorkflowSdkMigrationExecutable.layer({
+                start,
+                workflow: migrationExecutionWorkflow,
+              })
+            )
+          )
+        );
+
+        expect(error).toBeInstanceOf(RollbackPreflightError);
+        expect(error).toEqual(
+          expect.objectContaining({
+            message:
+              "Rollback would leave dependent Migration Definition item state\nauthors cannot be rolled back while dependent articles still has item state.\nRollback articles first, rerun with --with-dependencies, or use --force.",
+          })
+        );
+        expect(calls).toHaveLength(0);
+        expect(preflightObservedSelectedLock).toBe(true);
+        expect(storeState.definitionLocks.size).toBe(0);
       })
   );
 

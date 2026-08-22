@@ -16,6 +16,7 @@ export async function inMemoryRollbackTestWorkflow(
     readonly itemStateCount: number;
     readonly latestRunStatus: string | undefined;
     readonly migratedItemStateCount: number;
+    readonly rollbackCallCount: number;
     readonly sourceCursorCommitCount: number;
   };
   readonly summary: WorkflowSdkMigrationRollbackSummary;
