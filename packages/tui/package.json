@@ -1,0 +1,78 @@
+{
+  "name": "@migrate-sdk/tui",
+  "version": "0.0.0",
+  "description": "Interactive terminal UI for Migrate SDK",
+  "type": "module",
+  "sideEffects": [],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/asgorobets/migrate-sdk",
+    "directory": "packages/tui"
+  },
+  "bin": {
+    "migrate-tui": "./bin/migrate-tui.js"
+  },
+  "files": [
+    "bin",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "!dist/binary/**",
+    "README.md"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "source": "./src/index.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
+    "build:binary": "bun scripts/build-binary.ts",
+    "check-types": "tsc --noEmit -p tsconfig.check.json",
+    "demo": "bun src/bin.tsx --config examples/migrate.config.ts",
+    "dev": "bun src/bin.tsx",
+    "prepack": "node scripts/verify-package.mjs",
+    "test": "vitest run --passWithNoTests",
+    "test:binary": "bash test/binary-smoke.sh",
+    "test:package": "node test/package-smoke.mjs",
+    "test:renderer": "bun test src/app.test.tsx",
+    "test:pilotty": "pnpm run build && pnpm run test:renderer && bash test/pilotty-layout.sh"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@opentui/core": "0.5.6",
+    "@opentui/react": "0.5.6",
+    "@tuiparts/react": ">=0.0.1 <0.1.0",
+    "bun": "1.3.14",
+    "react": "^19.2.0"
+  },
+  "peerDependencies": {
+    "effect": "catalog:",
+    "migrate-sdk": "workspace:^"
+  },
+  "devDependencies": {
+    "@effect/language-service": "catalog:",
+    "@repo/typescript-config": "workspace:*",
+    "@types/bun": "^1.3.14",
+    "@types/node": "^24.13.1",
+    "@types/react": "^19.2.0",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "effect": "catalog:",
+    "migrate-sdk": "workspace:*",
+    "pilotty": "0.0.11",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "vitest": "^4.1.8"
+  }
+}

@@ -6,3 +6,10 @@ export type {
   MigrationCliSqlStoreConfig,
 } from "./config.ts";
 export { defineMigrationCliConfig } from "./config.ts";
+export {
+  type LoadedMigrationCliConfig,
+  type LoadMigrationCliConfigInput,
+  loadMigrationCliConfig,
+  loadMigrationCliConfigWithPath,
+  MigrationCliConfigLoadError,
+} from "./config-loader.ts";

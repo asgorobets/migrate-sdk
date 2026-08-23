@@ -1160,7 +1160,7 @@ const sourceIdentitiesForMode = (
   backlogStates: readonly MigrationItemState[]
 ): readonly EncodedSourceIdentity[] =>
   mode.kind === "item"
-    ? [mode.encodedSourceIdentity]
+    ? mode.encodedSourceIdentities
     : backlogStates.map((itemState) => itemState.sourceIdentity.encoded);
 
 const stubNotConfiguredError = (definitionId: MigrationDefinitionId) =>
@@ -2645,7 +2645,9 @@ const runMigrationDefinition = <
     });
     yield* countDefinitionSourceItemTotal({
       definitionId: definition.id,
-      ...(mode.kind === "item" ? { itemLimit: 1 } : {}),
+      ...(mode.kind === "item"
+        ? { itemLimit: mode.encodedSourceIdentities.length }
+        : {}),
       runId,
       source,
     });
@@ -3535,6 +3537,7 @@ interface PlannedRunDefinitionsInput<
   readonly requiredDependencyPreflight?: MigrationDefinitionExecutableRunPlan["requiredDependencyPreflight"];
   readonly rescan?: boolean;
   readonly rollbackOrphans?: boolean;
+  readonly target?: MigrationDefinitionExecutableRunPlan["target"];
   readonly update?: boolean;
 }
 
@@ -3700,10 +3703,17 @@ const executePreparedRunDefinitions = <
                   break;
                 }
 
+                const mode: RunMode =
+                  input.target?.definitionId === definition.id
+                    ? {
+                        encodedSourceIdentities: input.target.sourceIdentities,
+                        kind: "item",
+                      }
+                    : input.mode;
                 const summary = yield* runMigrationDefinition(
                   definition,
                   runId,
-                  input.mode,
+                  mode,
                   {
                     rescan: input.rescan === true,
                     rollbackOrphans: input.rollbackOrphans === true,
@@ -3781,13 +3791,7 @@ const migrationRunPlanInput = <
     ? {}
     : { execution: normalizeMigrationExecutionOptions(plan.execution) }),
   ...(plan.force === undefined ? {} : { force: plan.force }),
-  mode:
-    plan.target === undefined
-      ? (plan.mode ?? normalRunMode)
-      : {
-          kind: "item" as const,
-          encodedSourceIdentity: plan.target.sourceIdentities[0],
-        },
+  mode: plan.mode ?? normalRunMode,
   registryDefinitions: plan.registryDefinitions,
   ...(plan.rollbackOrphans === undefined
     ? {}
@@ -3796,6 +3800,7 @@ const migrationRunPlanInput = <
   ...(plan.requiredDependencyPreflight === undefined
     ? {}
     : { requiredDependencyPreflight: plan.requiredDependencyPreflight }),
+  ...(plan.target === undefined ? {} : { target: plan.target }),
   ...(plan.update === undefined ? {} : { update: plan.update }),
 });
 

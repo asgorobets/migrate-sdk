@@ -19,6 +19,11 @@
       "dependsOn": ["build"],
       "outputs": []
     },
+    "test:package": {
+      "cache": false,
+      "dependsOn": ["build"],
+      "outputs": []
+    },
     "dev": {
       "cache": false,
       "persistent": true

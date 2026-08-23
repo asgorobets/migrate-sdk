@@ -1020,15 +1020,6 @@ const normalizeRunTarget = (
     );
   }
 
-  if (selection.withDependencies) {
-    return Effect.fail(
-      new MigrationDefinitionRegistryInvalidSelectionError({
-        message:
-          "Run source identity targeting cannot expand required dependencies",
-      })
-    );
-  }
-
   if (input.mode !== undefined && input.mode.kind !== "normal") {
     return Effect.fail(
       new MigrationDefinitionRegistryInvalidSelectionError({
@@ -1070,14 +1061,11 @@ const normalizeRunTarget = (
       const [firstSourceIdentity, ...remainingSourceIdentities] =
         sourceIdentities;
 
-      if (
-        firstSourceIdentity === undefined ||
-        remainingSourceIdentities.length > 0
-      ) {
+      if (firstSourceIdentity === undefined) {
         return Effect.fail(
           new MigrationDefinitionRegistryInvalidSelectionError({
             message:
-              "Run source identity targeting requires exactly one source identity",
+              "Run source identity targeting requires at least one source identity",
           })
         );
       }
@@ -1085,7 +1073,7 @@ const normalizeRunTarget = (
       return Effect.succeed(
         Option.some({
           definitionId,
-          sourceIdentities: [firstSourceIdentity],
+          sourceIdentities: [firstSourceIdentity, ...remainingSourceIdentities],
         })
       );
     }

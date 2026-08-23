@@ -11,7 +11,10 @@ export type RunMode =
   | { readonly kind: "skipped" }
   | {
       readonly kind: "item";
-      readonly encodedSourceIdentity: EncodedSourceIdentity;
+      readonly encodedSourceIdentities: readonly [
+        EncodedSourceIdentity,
+        ...EncodedSourceIdentity[],
+      ];
     };
 
 export type RunModeInput<
@@ -34,10 +37,9 @@ export const makeRunMode = <IdentityKey extends SourceIdentitySnapshotKey>(
   if (mode.kind === "item") {
     return {
       kind: "item",
-      encodedSourceIdentity: SourceIdentity.fromKey(
-        identity,
-        mode.sourceIdentityKey
-      ).encoded,
+      encodedSourceIdentities: [
+        SourceIdentity.fromKey(identity, mode.sourceIdentityKey).encoded,
+      ],
     };
   }
 

@@ -2,6 +2,7 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public package entrypoint intentionally re-exports the SDK surface.
 
 export type {
+  AnySelfContainedMigrationDefinition,
   ConfiguredSource,
   DestinationStubContext,
   DestinationStubInput,

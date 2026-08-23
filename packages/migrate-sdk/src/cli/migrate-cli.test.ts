@@ -2414,120 +2414,122 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
-  it.effect("rejects incompatible run item targeting combinations", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const project = yield* makeProject;
+  it.effect(
+    "accepts repeated run targets and rejects incompatible targeting combinations",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
 
-      yield* fs.writeFileString(
-        `${project}/migrate.config.ts`,
-        planConfigSource()
-      );
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          planConfigSource()
+        );
 
-      const multipleIdsResult = yield* runCli(
-        [
-          "run",
-          "--config",
-          "migrate.config.ts",
-          "--plan",
-          "--id",
-          "article-1",
-          "--id",
-          "article-2",
-          "tags",
-        ],
-        project
-      );
-      const allResult = yield* runCli(
-        [
-          "run",
-          "--config",
-          "migrate.config.ts",
-          "--plan",
-          "--all",
-          "--id",
-          "article-1",
-        ],
-        project
-      );
-      const multipleDefinitionsResult = yield* runCli(
-        [
-          "run",
-          "--config",
-          "migrate.config.ts",
-          "--plan",
-          "--id",
-          "article-1",
-          "tags",
-          "authors",
-        ],
-        project
-      );
-      const expandedResult = yield* runCli(
-        [
-          "run",
-          "--config",
-          "migrate.config.ts",
-          "--plan",
-          "--with-dependencies",
-          "--id",
-          "article-1",
-          "tags",
-        ],
-        project
-      );
-      const failedResult = yield* runCli(
-        [
-          "run",
-          "--config",
-          "migrate.config.ts",
-          "--plan",
-          "--failed",
-          "--id",
-          "article-1",
-          "tags",
-        ],
-        project
-      );
-      const skippedResult = yield* runCli(
-        [
-          "run",
-          "--config",
-          "migrate.config.ts",
-          "--plan",
-          "--skipped",
-          "--id",
-          "article-1",
-          "tags",
-        ],
-        project
-      );
+        const multipleIdsResult = yield* runCli(
+          [
+            "run",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "--id",
+            "article-1",
+            "--id",
+            "article-2",
+            "tags",
+          ],
+          project
+        );
+        const allResult = yield* runCli(
+          [
+            "run",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "--all",
+            "--id",
+            "article-1",
+          ],
+          project
+        );
+        const multipleDefinitionsResult = yield* runCli(
+          [
+            "run",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "--id",
+            "article-1",
+            "tags",
+            "authors",
+          ],
+          project
+        );
+        const expandedResult = yield* runCli(
+          [
+            "run",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "--with-dependencies",
+            "--id",
+            "article-1",
+            "tags",
+          ],
+          project
+        );
+        const failedResult = yield* runCli(
+          [
+            "run",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "--failed",
+            "--id",
+            "article-1",
+            "tags",
+          ],
+          project
+        );
+        const skippedResult = yield* runCli(
+          [
+            "run",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "--skipped",
+            "--id",
+            "article-1",
+            "tags",
+          ],
+          project
+        );
 
-      expect(multipleIdsResult.exitCode).toBe(1);
-      expect(multipleIdsResult.stderr).toContain(
-        "Run source identity targeting requires exactly one source identity"
-      );
-      expect(allResult.exitCode).toBe(1);
-      expect(allResult.stderr).toContain(
-        "Run source identity targeting requires exactly one explicit Migration Definition id"
-      );
-      expect(multipleDefinitionsResult.exitCode).toBe(1);
-      expect(multipleDefinitionsResult.stderr).toContain(
-        "Run source identity targeting requires exactly one explicit Migration Definition id"
-      );
-      expect(expandedResult.exitCode).toBe(1);
-      expect(expandedResult.stderr).toContain(
-        "Run source identity targeting cannot expand required dependencies"
-      );
-      expect(failedResult.exitCode).toBe(1);
-      expect(failedResult.stderr).toContain(
-        "Run source identity targeting cannot combine with another run mode"
-      );
-      expect(skippedResult.exitCode).toBe(1);
-      expect(skippedResult.stderr).toContain(
-        "Run source identity targeting cannot combine with another run mode"
-      );
-    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+        expect(multipleIdsResult.exitCode).toBe(0);
+        expect(multipleIdsResult.stdout).toContain(
+          "Target source identities article-1, article-2"
+        );
+        expect(allResult.exitCode).toBe(1);
+        expect(allResult.stderr).toContain(
+          "Run source identity targeting requires exactly one explicit Migration Definition id"
+        );
+        expect(multipleDefinitionsResult.exitCode).toBe(1);
+        expect(multipleDefinitionsResult.stderr).toContain(
+          "Run source identity targeting requires exactly one explicit Migration Definition id"
+        );
+        expect(expandedResult.exitCode).toBe(0);
+        expect(expandedResult.stdout).toContain(
+          "Target source identities article-1"
+        );
+        expect(failedResult.exitCode).toBe(1);
+        expect(failedResult.stderr).toContain(
+          "Run source identity targeting cannot combine with another run mode"
+        );
+        expect(skippedResult.exitCode).toBe(1);
+        expect(skippedResult.stderr).toContain(
+          "Run source identity targeting cannot combine with another run mode"
+        );
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
   it.effect("rejects incompatible rollback targeting combinations", () =>
@@ -4325,7 +4327,7 @@ describe("migrate CLI", () => {
 
         expect(result.exitCode).toBe(ChildProcessSpawner.ExitCode(1));
         expect(output).toContain(
-          "Migration CLI config must be created with defineMigrationCliConfig({ registry, executableLayer?, sqlStore? })"
+          "Migration config must be created with defineMigrationCliConfig({ registry, executableLayer?, sqlStore? })"
         );
         expect(output).not.toContain("CliError/UserError");
         expect(output).not.toContain("at failConfigLoad");
@@ -4348,7 +4350,7 @@ describe("migrate CLI", () => {
         const output = `${result.stdout}\n${result.stderr}`;
 
         expect(result.exitCode).toBe(ChildProcessSpawner.ExitCode(1));
-        expect(output).toContain("Failed to import Migration CLI config");
+        expect(output).toContain("Failed to import migration config");
         expect(output).toContain("Error: config exploded");
         expect(output).toContain("migrate.config.ts");
         expect(output).not.toContain("CliError/UserError");
@@ -4410,9 +4412,7 @@ describe("migrate CLI", () => {
 
         expect(result.exitCode).toBe(1);
         expect(result.stderr).toContain(`Failed to load ${configPath}`);
-        expect(result.stderr).toContain(
-          "Failed to import Migration CLI config"
-        );
+        expect(result.stderr).toContain("Failed to import migration config");
         expect(result.stderr).toContain("missing-migrate-sdk-test-package");
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
@@ -4499,7 +4499,7 @@ describe("migrate CLI", () => {
 
       expect(result.exitCode).toBe(1);
       expect(result.stderr).toContain(
-        "Migration CLI config must be exported as the default export"
+        "Migration config must be exported as the default export"
       );
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
@@ -4624,7 +4624,7 @@ describe("migrate CLI", () => {
       const result = yield* runCli(["list"], cwd);
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("No Migration CLI config was found");
+      expect(result.stderr).toContain("No migration config was found");
       expect(result.stdout).not.toContain("outside-workspace");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
@@ -4648,7 +4648,7 @@ describe("migrate CLI", () => {
       const result = yield* runCli(["list"], project);
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("No Migration CLI config was found");
+      expect(result.stderr).toContain("No migration config was found");
       expect(result.stdout).not.toContain("child-package");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
@@ -4676,9 +4676,7 @@ describe("migrate CLI", () => {
       );
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain(
-        "Migration CLI config must be synchronous"
-      );
+      expect(result.stderr).toContain("Migration config must be synchronous");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 

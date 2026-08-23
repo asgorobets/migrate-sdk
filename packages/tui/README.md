@@ -1,0 +1,85 @@
+# Migrate TUI
+
+Explore and operate migrations without memorizing CLI flags. The TUI loads the
+same `migrate.config.ts` as the CLI and provides status, item counts, messages,
+dependency-aware execution plans, and contextual actions for every registered
+migration.
+
+Install it in the migration project alongside the SDK:
+
+```sh
+pnpm add migrate-sdk effect
+pnpm add --save-dev @migrate-sdk/tui
+pnpm exec migrate-tui
+```
+
+The published command is a small Node launcher. It runs the JavaScript TUI with
+the pinned Bun runtime supplied by the package, so users do not need a global
+Bun installation. `migrate-sdk` and `effect` remain peer dependencies: both the
+TUI and `migrate.config.ts` load the migration project's compatible versions.
+`@migrate-sdk/tui` and `migrate-sdk` are published with matching versions.
+
+For workspace development:
+
+```sh
+pnpm --filter @migrate-sdk/tui demo
+```
+
+Use an explicit project config:
+
+```sh
+pnpm --filter @migrate-sdk/tui dev -- --config ./migrate.config.ts
+```
+
+The npm package uses the Node launcher and packaged Bun runtime. A compiled UI
+binary remains available for testing direct-download or Homebrew distribution:
+
+```sh
+pnpm --filter @migrate-sdk/tui build:binary
+(cd packages/tui && ./dist/binary/migrate-tui --version)
+```
+
+That binary embeds OpenTUI, but deliberately leaves `migrate-sdk` and `effect`
+external. Run it from the migration project so the UI and its config use that
+project's compatible SDK installation rather than a second embedded copy. It
+also autoloads the consumer project's `tsconfig.json` and `package.json` for
+external TypeScript configs. Cross-compilation requires the matching OpenTUI
+native package for every target. The npm packaging decision, direct-binary
+release matrix, signing gates, and OpenCode references are documented
+in [`docs/research/tui-binary-distribution.md`](../../docs/research/tui-binary-distribution.md).
+
+Keyboard shortcuts are always visible in the footer. Press `g` to switch
+between migration and group tabs, `Enter` for the contextual action menu
+(including rescan and update), `m` for errors and messages, `r` to run the
+selected migration or group, `e` to run selected source identities, `f` to
+retry failed items, `b` to rollback, `s` to scan the source, `R` to reload
+status, and `q` to quit.
+
+Runs start directly when their dependencies are ready. If required dependencies
+have not succeeded, the TUI asks whether to include them or force the selected
+run. Rollback always shows the affected migrations in execution order and asks
+for confirmation. `q`, Ctrl+C, SIGINT, SIGTERM, and SIGHUP cancel active local
+work and wait for it to finish before closing. Runs already handed to a
+background executor continue after the TUI closes.
+
+## Terminal regression test
+
+[Pilotty](https://github.com/msmps/pilotty) is pinned as a development
+dependency. Exercise the real PTY interaction and responsive-layout path with:
+
+```sh
+pnpm --filter @migrate-sdk/tui test:pilotty
+```
+
+The harness verifies planned retry and rollback scopes, view transitions,
+cooperative cancellation and draining, the 72×34 compact dashboard, and the
+120×36 confirmation views. It prints the directory that contains its text
+snapshots for further inspection.
+
+The compiled-binary smoke check builds and relocates the host executable, loads
+the external TypeScript example config, performs a migration with the workspace
+SDK, and verifies a clean terminal exit:
+
+```sh
+pnpm --filter @migrate-sdk/tui test:binary
+```

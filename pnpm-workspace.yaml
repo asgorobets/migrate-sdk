@@ -1,6 +1,8 @@
 packages:
   - "apps/*"
   - "packages/*"
+allowBuilds:
+  bun: true
 
 catalog:
   "@effect/language-service": ^0.86.2

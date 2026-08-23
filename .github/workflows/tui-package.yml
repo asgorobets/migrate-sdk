@@ -1,0 +1,78 @@
+name: TUI Package
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/tui-package.yml"
+      - ".changeset/config.json"
+      - "packages/migrate-sdk/**"
+      - "packages/tui/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "turbo.json"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/tui-package.yml"
+      - ".changeset/config.json"
+      - "packages/migrate-sdk/**"
+      - "packages/tui/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "turbo.json"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x64
+            runner: ubuntu-24.04
+            pilotty: true
+          - name: Linux arm64
+            runner: ubuntu-24.04-arm
+            pilotty: true
+          - name: macOS arm64
+            runner: macos-15
+            pilotty: true
+          - name: macOS x64
+            runner: macos-15-intel
+            pilotty: true
+          - name: Windows x64
+            runner: windows-2025
+            pilotty: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24.x
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build TUI and workspace dependencies
+        run: pnpm turbo run build --filter=@migrate-sdk/tui...
+
+      - name: Test launcher and packed installation
+        run: pnpm turbo run test test:package --filter=@migrate-sdk/tui
+
+      - name: Test real terminal interactions
+        if: matrix.pilotty
+        run: pnpm --filter @migrate-sdk/tui test:pilotty
