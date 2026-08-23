@@ -2,8 +2,12 @@
 
 # Dependencies
 node_modules
+.pnpm-store/
 .pnp
 .pnp.js
+
+# Local repositories
+.repos/
 
 # Local env files
 .env

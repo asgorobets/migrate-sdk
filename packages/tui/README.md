@@ -48,12 +48,16 @@ native package for every target. The npm packaging decision, direct-binary
 release matrix, signing gates, and OpenCode references are documented
 in [`docs/research/tui-binary-distribution.md`](../../docs/research/tui-binary-distribution.md).
 
-Keyboard shortcuts are always visible in the footer. Press `g` to switch
-between migration and group tabs, `Enter` for the contextual action menu
-(including rescan and update), `m` for errors and messages, `r` to run the
-selected migration or group, `e` to run selected source identities, `f` to
-retry failed items, `b` to rollback, `s` to scan the source, `R` to reload
-status, and `q` to quit.
+The footer keeps primary and contextual shortcuts visible for the current
+selection. Press `Enter` to open All actions, which includes the complete action
+set such as rescan and update. Press `g` to switch between migration and group
+tabs, `m` for errors and messages, `r` to run the selected migration or group,
+`e` to run selected source identities, `f` to retry failed items, `b` to
+rollback, `s` to scan source status for the current selection and its required
+dependencies, `R` to reload status, and `q` to quit. When applicable, `t`
+retries skipped items and `u` opens the guarded break-lock confirmation. Use
+Page Up and Page Down to scroll the overview while the arrow keys continue to
+select migrations.
 
 Runs start directly when their dependencies are ready. If required dependencies
 have not succeeded, the TUI asks whether to include them or force the selected

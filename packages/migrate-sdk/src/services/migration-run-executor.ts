@@ -3534,11 +3534,13 @@ interface PlannedRunDefinitionsInput<
   readonly force?: boolean;
   readonly mode: RunMode;
   readonly registryDefinitions: readonly AnyMigrationDefinition[];
+  readonly requestedDefinitionIds: MigrationDefinitionExecutableRunPlan["requestedDefinitionIds"];
   readonly requiredDependencyPreflight?: MigrationDefinitionExecutableRunPlan["requiredDependencyPreflight"];
   readonly rescan?: boolean;
   readonly rollbackOrphans?: boolean;
   readonly target?: MigrationDefinitionExecutableRunPlan["target"];
   readonly update?: boolean;
+  readonly withDependencies: boolean;
 }
 
 interface PreparedPlannedRunDefinitions<
@@ -3549,6 +3551,28 @@ interface PreparedPlannedRunDefinitions<
     store: typeof MigrationStore.Service
   ) => Effect.Effect<void, RunMigrationError>;
 }
+
+const runModeForDefinition = (
+  input: PlannedRunDefinitionsInput<readonly AnyMigrationDefinition[]>,
+  definitionId: MigrationDefinitionId
+): RunMode => {
+  if (input.target?.definitionId === definitionId) {
+    return {
+      encodedSourceIdentities: input.target.sourceIdentities,
+      kind: "item",
+    };
+  }
+
+  if (
+    input.withDependencies &&
+    input.requestedDefinitionIds !== "all" &&
+    !input.requestedDefinitionIds.includes(definitionId)
+  ) {
+    return normalRunMode;
+  }
+
+  return input.mode;
+};
 
 const preparePlannedRunDefinitions = <
   Definitions extends readonly AnyMigrationDefinition[],
@@ -3703,13 +3727,7 @@ const executePreparedRunDefinitions = <
                   break;
                 }
 
-                const mode: RunMode =
-                  input.target?.definitionId === definition.id
-                    ? {
-                        encodedSourceIdentities: input.target.sourceIdentities,
-                        kind: "item",
-                      }
-                    : input.mode;
+                const mode = runModeForDefinition(input, definition.id);
                 const summary = yield* runMigrationDefinition(
                   definition,
                   runId,
@@ -3793,6 +3811,7 @@ const migrationRunPlanInput = <
   ...(plan.force === undefined ? {} : { force: plan.force }),
   mode: plan.mode ?? normalRunMode,
   registryDefinitions: plan.registryDefinitions,
+  requestedDefinitionIds: plan.requestedDefinitionIds,
   ...(plan.rollbackOrphans === undefined
     ? {}
     : { rollbackOrphans: plan.rollbackOrphans }),
@@ -3802,6 +3821,7 @@ const migrationRunPlanInput = <
     : { requiredDependencyPreflight: plan.requiredDependencyPreflight }),
   ...(plan.target === undefined ? {} : { target: plan.target }),
   ...(plan.update === undefined ? {} : { update: plan.update }),
+  withDependencies: plan.withDependencies,
 });
 
 const executeMigrationRunPlan = <

@@ -16,6 +16,8 @@ FORCE_SESSION="migrate-tui-force"
 HIERARCHY_SESSION="migrate-tui-hierarchy"
 LARGE_HIERARCHY_SESSION="migrate-tui-large-hierarchy"
 SELECTIVE_SESSION="migrate-tui-selective"
+SOURCE_STATUS_SESSION="migrate-tui-source-status"
+LOCK_SESSION="migrate-tui-lock"
 
 mkdir -p "${ARTIFACT_DIR}"
 PILOTTY_SOCKET_DIR="/tmp/migrate-tui-pilotty-socket-$$"
@@ -35,6 +37,9 @@ cleanup() {
   "${PILOTTY_BIN}" key -s "${LARGE_HIERARCHY_SESSION}" q >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" Escape >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" q >/dev/null 2>&1 || true
+  "${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" q >/dev/null 2>&1 || true
+  "${PILOTTY_BIN}" key -s "${LOCK_SESSION}" Escape >/dev/null 2>&1 || true
+  "${PILOTTY_BIN}" key -s "${LOCK_SESSION}" q >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" stop >/dev/null 2>&1 || true
 }
 
@@ -62,6 +67,33 @@ trap cleanup EXIT
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/short-dashboard.txt"
+"${PILOTTY_BIN}" resize -s "${SESSION}" 120 24 >/dev/null
+"${PILOTTY_BIN}" key -s "${SESSION}" m >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "Message 1 of 3" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/messages-populated.txt"
+"${PILOTTY_BIN}" key -s "${SESSION}" Enter >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "↵ Close" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/message-expanded.txt"
+"${PILOTTY_BIN}" key -s "${SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" key -s "${SESSION}" j >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "Message 2 of 3" >/dev/null
+"${PILOTTY_BIN}" key -s "${SESSION}" PageDown >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "Message 3 of 3" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/messages-scrolled.txt"
+"${PILOTTY_BIN}" key -s "${SESSION}" Escape >/dev/null
 "${PILOTTY_BIN}" resize -s "${SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SESSION}" \
   --settle 150 \
@@ -90,7 +122,8 @@ trap cleanup EXIT
 "${PILOTTY_BIN}" key -s "${SESSION}" Down >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" Down >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" Enter >/dev/null
-"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 "Actions · assets" >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "All actions · assets" >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" Escape >/dev/null
 "${PILOTTY_BIN}" resize -s "${SESSION}" 72 34 >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SESSION}" \
@@ -109,7 +142,7 @@ trap cleanup EXIT
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/button-dashboard.txt"
-"${PILOTTY_BIN}" click -s "${BUTTON_SESSION}" 29 54 >/dev/null
+"${PILOTTY_BIN}" click -s "${BUTTON_SESSION}" 27 50 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${BUTTON_SESSION}" -t 5000 \
   "2 migrated" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${BUTTON_SESSION}" \
@@ -139,6 +172,22 @@ trap cleanup EXIT
   --settle 150 \
   --strict \
   --format full >"${ARTIFACT_DIR}/group-dashboard.json"
+"${PILOTTY_BIN}" key -s "${GROUP_SESSION}" m >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 5000 \
+  "articles · Source identity article-" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${GROUP_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/group-messages.txt"
+"${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Enter >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 5000 \
+  "All actions · content" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${GROUP_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/group-all-actions.txt"
+"${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Escape >/dev/null
 "${PILOTTY_BIN}" key -s "${GROUP_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 5000 \
   "GROUP   SUCCEEDED" >/dev/null
@@ -276,6 +325,56 @@ done
   --format text >"${ARTIFACT_DIR}/selective-run-completed.txt"
 
 "${PILOTTY_BIN}" spawn \
+  --name "${SOURCE_STATUS_SESSION}" \
+  --cwd "${PACKAGE_DIR}" \
+  node bin/migrate-tui.js --config examples/source-status.config.ts >/dev/null
+"${PILOTTY_BIN}" resize -s "${SOURCE_STATUS_SESSION}" 120 30 >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SOURCE_STATUS_SESSION}" -t 30000 \
+  "Status reloaded" >/dev/null
+"${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" s >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SOURCE_STATUS_SESSION}" -t 5000 \
+  "Source scan complete" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SOURCE_STATUS_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/source-status.txt"
+"${PILOTTY_BIN}" resize -s "${SOURCE_STATUS_SESSION}" 72 28 >/dev/null
+"${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" PageDown >/dev/null
+"${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" PageDown >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SOURCE_STATUS_SESSION}" -t 5000 \
+  "Capabilities" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SOURCE_STATUS_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
+
+"${PILOTTY_BIN}" spawn \
+  --name "${LOCK_SESSION}" \
+  --cwd "${PACKAGE_DIR}" \
+  node bin/migrate-tui.js --config examples/locked.config.ts >/dev/null
+"${PILOTTY_BIN}" resize -s "${LOCK_SESSION}" 120 30 >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LOCK_SESSION}" -t 30000 \
+  "Status reloaded" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LOCK_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/locked-dashboard.txt"
+"${PILOTTY_BIN}" key -s "${LOCK_SESSION}" u >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LOCK_SESSION}" -t 5000 \
+  "Break migration lock" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LOCK_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/break-lock-confirmation.txt"
+"${PILOTTY_BIN}" key -s "${LOCK_SESSION}" y >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LOCK_SESSION}" -t 5000 \
+  "Lock cleared for locked-migration" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LOCK_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/lock-cleared.txt"
+
+"${PILOTTY_BIN}" spawn \
   --name "${CANCELLATION_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   node bin/migrate-tui.js --config examples/cancellation.config.ts >/dev/null
@@ -352,7 +451,7 @@ assert_line_excludes \
   "short wide action footer does not overlap diagnostic text"
 assert_contains \
   "${ARTIFACT_DIR}/compact.txt" \
-  "m messages · s scan · R reload status · q quit" \
+  "m messages · s scan · R reload · q quit" \
   "compact shortcut footer remains readable"
 assert_contains \
   "${ARTIFACT_DIR}/compact.txt" \
@@ -360,8 +459,12 @@ assert_contains \
   "compact details display the Run action"
 assert_contains \
   "${ARTIFACT_DIR}/compact.txt" \
-  "↵ Actions" \
-  "compact details display the Actions menu"
+  "t retry skipped" \
+  "compact footer advertises retrying skipped items when available"
+assert_contains \
+  "${ARTIFACT_DIR}/compact.txt" \
+  "↵ More" \
+  "compact details display the All actions menu"
 assert_contains \
   "${ARTIFACT_DIR}/compact.txt" \
   "Status reloaded" \
@@ -372,12 +475,12 @@ assert_contains \
   "rollback confirmation remains readable"
 assert_contains \
   "${ARTIFACT_DIR}/rollback-confirmation.txt" \
-  "authors · Affected migrations will roll back in this order." \
-  "rollback confirmation explains the ordered dependent scope"
+  "authors · Step numbers show rollback execution order." \
+  "rollback confirmation explains how to read execution order"
 assert_contains \
   "${ARTIFACT_DIR}/rollback-confirmation.txt" \
-  "Rollback order" \
-  "rollback confirmation labels the hierarchy"
+  "Affected migration hierarchy" \
+  "rollback confirmation distinguishes hierarchy from execution order"
 assert_contains \
   "${ARTIFACT_DIR}/rollback-confirmation.txt" \
   "articles" \
@@ -422,6 +525,30 @@ assert_contains \
   "${ARTIFACT_DIR}/group-dashboard.txt" \
   "3 migrations · dependencies outside this group are not included" \
   "group details disclose execution scope"
+assert_contains \
+  "${ARTIFACT_DIR}/group-dashboard.txt" \
+  "f Retry failed" \
+  "group details prioritize failed items in the retry slot"
+assert_not_contains \
+  "${ARTIFACT_DIR}/group-dashboard.txt" \
+  "t Retry skipped" \
+  "group details keep the secondary retry out of the primary row"
+assert_contains \
+  "${ARTIFACT_DIR}/group-dashboard.txt" \
+  "↵ All actions" \
+  "group details expose the complete contextual action menu"
+assert_contains \
+  "${ARTIFACT_DIR}/group-messages.txt" \
+  "articles · Source identity article-" \
+  "group messages identify both the migration and source identity"
+assert_contains \
+  "${ARTIFACT_DIR}/group-all-actions.txt" \
+  "Retry failed  [f]" \
+  "All actions includes the failed-item retry"
+assert_contains \
+  "${ARTIFACT_DIR}/group-all-actions.txt" \
+  "Retry skipped  [t]" \
+  "All actions includes the skipped-item retry"
 assert_contains \
   "${ARTIFACT_DIR}/group-dashboard-after-run.txt" \
   "5 migrated" \
@@ -476,15 +603,15 @@ assert_contains \
   "force resolution executes only the selected migration"
 assert_contains \
   "${ARTIFACT_DIR}/transitive-rollback-hierarchy.txt" \
-  "authors #3" \
+  "authors step 3" \
   "rollback hierarchy labels the selected migration with its execution step"
 assert_contains \
   "${ARTIFACT_DIR}/transitive-rollback-hierarchy.txt" \
-  "└─ ○ articles #2" \
+  "└─ ○ articles step 2" \
   "rollback hierarchy nests a direct dependent under the selected migration"
 assert_contains \
   "${ARTIFACT_DIR}/transitive-rollback-hierarchy.txt" \
-  "   └─ ○ pages #1" \
+  "   └─ ○ pages step 1" \
   "rollback hierarchy preserves transitive dependency depth"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy.txt" \
@@ -492,7 +619,7 @@ assert_contains \
   "large rollback hierarchy keeps its controls visible"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy-scrolled.txt" \
-  "migration-02 #17" \
+  "migration-02 step 17" \
   "large rollback hierarchy scrolls to its final entry"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy-scrolled.txt" \
@@ -515,9 +642,97 @@ assert_contains \
   "2 migrated" \
   "selective Run preserves its queue when reopened and executes every identity"
 assert_contains \
+  "${ARTIFACT_DIR}/source-status.txt" \
+  "3 total · 2 unprocessed · 0 invalid · 1 duplicate · 0 orphaned" \
+  "source scan displays inventory counts"
+assert_contains \
+  "${ARTIFACT_DIR}/source-status.txt" \
+  "Duplicate product-duplicate · 2 occurrences" \
+  "source scan displays identity-specific warnings"
+assert_contains \
+  "${ARTIFACT_DIR}/source-status-compact-scrolled.txt" \
+  "Capabilities" \
+  "compact overview paging reaches details below source inventory"
+assert_contains \
+  "${ARTIFACT_DIR}/source-status-compact-scrolled.txt" \
+  "PgUp/PgDn details" \
+  "compact footer advertises overview paging"
+assert_contains \
+  "${ARTIFACT_DIR}/locked-dashboard.txt" \
+  "Owner run  run-stuck" \
+  "locked migration displays the owning run"
+assert_contains \
+  "${ARTIFACT_DIR}/locked-dashboard.txt" \
+  "u Break lock" \
+  "locked migration exposes the guarded lock action"
+assert_contains \
+  "${ARTIFACT_DIR}/break-lock-confirmation.txt" \
+  "Only break this lock after confirming its owner is no longer" \
+  "lock confirmation explains the operator precondition"
+assert_contains \
+  "${ARTIFACT_DIR}/break-lock-confirmation.txt" \
+  "y break lock · n/esc cancel" \
+  "lock confirmation keeps its controls visible"
+assert_contains \
+  "${ARTIFACT_DIR}/lock-cleared.txt" \
+  "Lock cleared for locked-migration" \
+  "confirmed lock break reloads status and reports completion"
+assert_not_contains \
+  "${ARTIFACT_DIR}/lock-cleared.txt" \
+  "u Break lock" \
+  "cleared migration no longer exposes the lock action"
+assert_contains \
   "${ARTIFACT_DIR}/messages-tab.txt" \
   "No messages." \
   "messages open inside the migration detail panel"
+assert_contains \
+  "${ARTIFACT_DIR}/messages-populated.txt" \
+  "Message 1 of 3" \
+  "message navigation displays the current and total position"
+assert_contains \
+  "${ARTIFACT_DIR}/messages-populated.txt" \
+  "Source identity article-welcome · message" \
+  "message rows identify the source item"
+assert_contains \
+  "${ARTIFACT_DIR}/messages-populated.txt" \
+  "Published article route" \
+  "message rows display the durable message"
+assert_contains \
+  "${ARTIFACT_DIR}/messages-populated.txt" \
+  "↵ expand" \
+  "selected messages advertise the complete expansion view"
+assert_contains \
+  "${ARTIFACT_DIR}/message-expanded.txt" \
+  "Details" \
+  "expanded messages display structured details"
+assert_contains \
+  "${ARTIFACT_DIR}/message-expanded.txt" \
+  "↑↓/jk scroll · PgUp/PgDn jump · Home/End" \
+  "expanded message scrolling controls remain fixed"
+assert_contains \
+  "${ARTIFACT_DIR}/message-expanded.txt" \
+  "↵ Close" \
+  "expanded messages expose an explicit close action"
+assert_contains \
+  "${ARTIFACT_DIR}/messages-scrolled.txt" \
+  "› 3/3" \
+  "message navigation preserves position after scrolling"
+assert_contains \
+  "${ARTIFACT_DIR}/messages-scrolled.txt" \
+  "↵ expand · esc back" \
+  "message navigation keeps expansion controls fixed"
+assert_contains \
+  "${ARTIFACT_DIR}/messages-scrolled.txt" \
+  "↑↓/jk move · PgUp/PgDn jump · Home/End" \
+  "message navigation keeps its controls fixed while scrolling"
+assert_contains \
+  "${ARTIFACT_DIR}/messages-scrolled.txt" \
+  "Source identity article-effect · message" \
+  "scrolled messages retain their source identity"
+assert_contains \
+  "${ARTIFACT_DIR}/messages-scrolled.txt" \
+  "Author lookup returned no result" \
+  "scrolled messages retain their message text"
 assert_contains \
   "${ARTIFACT_DIR}/wide-dashboard.txt" \
   "Capabilities" \

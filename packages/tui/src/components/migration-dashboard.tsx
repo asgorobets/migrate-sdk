@@ -1,12 +1,19 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
-import type { MigrationDefinitionRegistryGroup } from "migrate-sdk";
+import { useKeyboard } from "@opentui/react";
+import type {
+  MigrationDefinitionRegistryGroup,
+  MigrationDefinitionSourceStatus,
+  MigrationStatusWarning,
+} from "migrate-sdk";
 import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
-import type {
-  MigrationTuiAction,
-  MigrationTuiMessage,
-  MigrationTuiRow,
-} from "../runtime.ts";
+import type { MigrationTuiMessage, MigrationTuiRow } from "../runtime.ts";
+import {
+  type MigrationTuiAvailableAction,
+  migrationTuiPrimaryActions,
+  migrationTuiUtilityActions,
+} from "./migration-actions.ts";
+import { MigrationMessages } from "./migration-messages.tsx";
 import { Badge, type BadgeIntent } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import { Checkbox } from "./ui/checkbox.tsx";
@@ -33,6 +40,11 @@ interface DurableCounts {
   readonly migrated: number;
   readonly needsUpdate: number;
   readonly skipped: number;
+}
+
+interface SourceInventory {
+  readonly counts: MigrationDefinitionSourceStatus;
+  readonly warnings: readonly MigrationStatusWarning[];
 }
 
 const countLabel = (count: number, singular: string): string =>
@@ -140,6 +152,51 @@ const aggregateCounts = (rows: readonly MigrationTuiRow[]): DurableCounts =>
     { failed: 0, migrated: 0, needsUpdate: 0, skipped: 0 }
   );
 
+const sourceInventory = (
+  rows: readonly MigrationTuiRow[]
+): SourceInventory | undefined => {
+  const scannedRows = rows.filter((row) => row.status?.source !== undefined);
+
+  if (scannedRows.length === 0) {
+    return;
+  }
+
+  return {
+    counts: scannedRows.reduce<MigrationDefinitionSourceStatus>(
+      (total, row) => {
+        const source = row.status?.source;
+
+        if (source === undefined) {
+          return total;
+        }
+
+        return {
+          duplicate: total.duplicate + source.duplicate,
+          invalid: total.invalid + source.invalid,
+          orphaned: total.orphaned + source.orphaned,
+          total: total.total + source.total,
+          unprocessed: total.unprocessed + source.unprocessed,
+        };
+      },
+      { duplicate: 0, invalid: 0, orphaned: 0, total: 0, unprocessed: 0 }
+    ),
+    warnings: scannedRows.flatMap((row) => row.status?.warnings ?? []),
+  };
+};
+
+const sourceWarningLabel = (warning: MigrationStatusWarning): string => {
+  switch (warning._tag) {
+    case "DuplicateSourceIdentityStatusWarning":
+      return `Duplicate ${warning.sourceIdentity} · ${countLabel(warning.count + 1, "occurrence")}`;
+    case "InvalidSourceItemStatusWarning":
+      return `Invalid ${warning.sourceIdentity} · ${warning.message}`;
+    default: {
+      const unhandled: never = warning;
+      return unhandled;
+    }
+  }
+};
+
 const groupStatusLabel = (rows: readonly MigrationTuiRow[]): string => {
   const labels = rows.map(statusLabel);
 
@@ -224,23 +281,6 @@ const messageMarker = (severity: MigrationTuiMessage["severity"]): string => {
 
 const messageSourceLabel = (source: MigrationTuiMessage["source"]): string =>
   source === "diagnostic" ? "message" : source;
-
-const MessageLine = ({
-  message,
-}: {
-  readonly message: MigrationTuiMessage;
-}) => (
-  <box style={{ flexDirection: "column", marginBottom: 1 }}>
-    <text fg={statusColor(message.severity)}>
-      {messageMarker(message.severity)} {message.identity} ·{" "}
-      {messageSourceLabel(message.source)}
-    </text>
-    <text fg={migrationColors.foreground}>{message.message}</text>
-    {message.details === undefined ? null : (
-      <text fg={migrationColors.dim}>{message.details}</text>
-    )}
-  </box>
-);
 
 const ProgressBar = ({ counts }: { readonly counts: DurableCounts }) => {
   const segments = [
@@ -523,6 +563,122 @@ const CountsRow = ({ counts }: { readonly counts: DurableCounts }) => (
   </box>
 );
 
+const SourceInventorySummary = ({
+  compact,
+  rows,
+}: {
+  readonly compact: boolean;
+  readonly rows: readonly MigrationTuiRow[];
+}) => {
+  const inventory = sourceInventory(rows);
+
+  if (inventory === undefined) {
+    return (
+      <box style={{ flexShrink: 0, height: 1 }}>
+        <text fg={migrationColors.dim}>Not scanned · press s to scan</text>
+      </box>
+    );
+  }
+
+  const visibleWarnings = inventory.warnings.slice(0, compact ? 1 : 3);
+  const hiddenWarningCount = inventory.warnings.length - visibleWarnings.length;
+
+  return (
+    <box
+      style={{
+        flexDirection: "column",
+        flexShrink: 0,
+        height: 1 + visibleWarnings.length + (hiddenWarningCount > 0 ? 1 : 0),
+      }}
+    >
+      <text
+        content={`${inventory.counts.total} total · ${inventory.counts.unprocessed} unprocessed · ${inventory.counts.invalid} invalid · ${inventory.counts.duplicate} duplicate · ${inventory.counts.orphaned} orphaned`}
+        fg={migrationColors.dim}
+        wrapMode="none"
+      />
+      {visibleWarnings.map((warning, index) => (
+        <text
+          content={`! ${index + 1}/${inventory.warnings.length} ${sourceWarningLabel(warning)}`}
+          fg={migrationColors.warning}
+          key={`${warning._tag}-${warning.definitionId}-${warning.sourceIdentity}`}
+          wrapMode="none"
+        />
+      ))}
+      {hiddenWarningCount > 0 ? (
+        <text fg={migrationColors.dim}>
+          {countLabel(hiddenWarningCount, "additional warning")}
+        </text>
+      ) : null}
+    </box>
+  );
+};
+
+const LockDetails = ({ row }: { readonly row: MigrationTuiRow }) => {
+  const lock = row.status?.lock;
+
+  if (lock === null || lock === undefined) {
+    return null;
+  }
+
+  return (
+    <box style={{ flexDirection: "column", flexShrink: 0, height: 4 }}>
+      <text fg={migrationColors.foreground}>Lock</text>
+      <text
+        content={`Owner run  ${lock.ownerRunId}`}
+        fg={migrationColors.info}
+        wrapMode="none"
+      />
+      <text
+        content={`Created    ${formatDate(lock.createdAt)}`}
+        fg={migrationColors.dim}
+        wrapMode="none"
+      />
+      <text
+        content={`Token      ${lock.token}`}
+        fg={migrationColors.dim}
+        wrapMode="none"
+      />
+    </box>
+  );
+};
+
+const GroupLocks = ({
+  rows,
+}: {
+  readonly rows: readonly MigrationTuiRow[];
+}) => {
+  const lockedRows = rows.filter(
+    (row) => row.status?.lock !== null && row.status?.lock !== undefined
+  );
+
+  if (lockedRows.length === 0) {
+    return null;
+  }
+
+  return (
+    <box
+      style={{
+        flexDirection: "column",
+        flexShrink: 0,
+        height: lockedRows.length + 2,
+      }}
+    >
+      <text fg={migrationColors.foreground}>Locks</text>
+      {lockedRows.map((row) => (
+        <text
+          content={`${row.entry.id} · owner run ${row.status?.lock?.ownerRunId}`}
+          fg={migrationColors.info}
+          key={row.entry.id}
+          wrapMode="none"
+        />
+      ))}
+      <text fg={migrationColors.dim}>
+        Select a migration to inspect or break its lock.
+      </text>
+    </box>
+  );
+};
+
 const Capabilities = ({ row }: { readonly row: MigrationTuiRow }) => (
   <box style={{ flexDirection: "row", flexShrink: 0, gap: 3, height: 1 }}>
     <Checkbox
@@ -620,10 +776,12 @@ const LatestDiagnostic = ({
   compact,
   loading,
   messages,
+  showDefinitionId = false,
 }: {
   readonly compact: boolean;
   readonly loading: boolean;
   readonly messages: readonly MigrationTuiMessage[];
+  readonly showDefinitionId?: boolean;
 }) => {
   const latest = messages[0];
 
@@ -646,7 +804,7 @@ const LatestDiagnostic = ({
     return (
       <box key="diagnostic-compact" style={{ flexShrink: 0, height: 1 }}>
         <text
-          content={`${messageMarker(latest.severity)} ${latest.identity} · ${latest.message}`}
+          content={`${messageMarker(latest.severity)} ${showDefinitionId ? `${latest.definitionId} · ` : ""}${latest.identity} · ${latest.message}`}
           fg={statusColor(latest.severity)}
           wrapMode="none"
         />
@@ -660,40 +818,91 @@ const LatestDiagnostic = ({
       style={{ flexDirection: "column", flexShrink: 0, height: 2 }}
     >
       <text fg={statusColor(latest.severity)}>
-        {messageMarker(latest.severity)} {latest.identity} ·{" "}
-        {messageSourceLabel(latest.source)}
+        {messageMarker(latest.severity)}{" "}
+        {showDefinitionId ? `${latest.definitionId} · ` : ""}
+        {latest.identity} · {messageSourceLabel(latest.source)}
       </text>
       <text fg={migrationColors.foreground}>{latest.message}</text>
     </box>
   );
 };
 
+const OverviewViewport = ({
+  active,
+  children,
+}: {
+  readonly active: boolean;
+  readonly children: ReactNode;
+}) => {
+  const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
+  useKeyboard((key) => {
+    if (!activeRef.current) {
+      return;
+    }
+
+    if (key.name === "pageup") {
+      key.preventDefault();
+      key.stopPropagation();
+      scrollboxRef.current?.scrollBy(-1, "viewport");
+    } else if (key.name === "pagedown") {
+      key.preventDefault();
+      key.stopPropagation();
+      scrollboxRef.current?.scrollBy(1, "viewport");
+    } else if (key.name === "home") {
+      key.preventDefault();
+      key.stopPropagation();
+      scrollboxRef.current?.scrollTo(0);
+    } else if (key.name === "end") {
+      key.preventDefault();
+      key.stopPropagation();
+      scrollboxRef.current?.scrollTo(Number.MAX_SAFE_INTEGER);
+    }
+  });
+
+  return (
+    <scrollbox
+      focused={false}
+      ref={scrollboxRef}
+      scrollX={false}
+      scrollY
+      style={{ flexGrow: 1, flexShrink: 1, minHeight: 0 }}
+      verticalScrollbarOptions={{ visible: false }}
+      viewportCulling
+    >
+      {children}
+    </scrollbox>
+  );
+};
+
 const Overview = ({
+  active,
   compact,
   messages,
   messagesLoading,
   row,
   rows,
 }: {
+  readonly active: boolean;
   readonly compact: boolean;
   readonly messages: readonly MigrationTuiMessage[];
   readonly messagesLoading: boolean;
   readonly row: MigrationTuiRow;
   readonly rows: readonly MigrationTuiRow[];
 }) => (
-  <scrollbox
-    focused={false}
-    scrollX={false}
-    scrollY
-    style={{ flexGrow: 1, flexShrink: 1, minHeight: 0 }}
-    verticalScrollbarOptions={{ visible: false }}
-    viewportCulling
-  >
+  <OverviewViewport active={active}>
     <box style={{ flexShrink: 0, height: 1 }}>
       <text fg={migrationColors.foreground}>Items</text>
     </box>
     <ProgressBar counts={durableCounts(row)} />
     <CountsRow counts={durableCounts(row)} />
+    <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
+      <text fg={migrationColors.foreground}>Source inventory</text>
+    </box>
+    <SourceInventorySummary compact={compact} rows={[row]} />
+    <LockDetails row={row} />
     <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
       <text fg={migrationColors.foreground}>Capabilities</text>
     </box>
@@ -712,50 +921,17 @@ const Overview = ({
       loading={messagesLoading}
       messages={messages}
     />
-  </scrollbox>
-);
-
-const Messages = ({
-  loading,
-  messages,
-  onBack,
-}: {
-  readonly loading: boolean;
-  readonly messages: readonly MigrationTuiMessage[];
-  readonly onBack: () => void;
-}) => (
-  // biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI scrollboxes own scrolling keys.
-  <scrollbox
-    focused
-    onKeyDown={(key) => {
-      if (key.name === "escape") {
-        onBack();
-      }
-    }}
-    style={{ flexGrow: 1, marginTop: 1 }}
-    verticalScrollbarOptions={{ visible: false }}
-  >
-    {loading ? <text fg={migrationColors.dim}>Loading messages…</text> : null}
-    {!loading && messages.length === 0 ? (
-      <text fg={migrationColors.dim}>No messages.</text>
-    ) : null}
-    {loading || messages.length === 0
-      ? null
-      : messages.map((message) => (
-          <MessageLine
-            key={`${message.identity}-${message.source}-${message.updatedAt.toISOString()}-${message.message}`}
-            message={message}
-          />
-        ))}
-  </scrollbox>
+  </OverviewViewport>
 );
 
 const GroupOverview = ({
+  active,
   compact,
   messages,
   messagesLoading,
   rows,
 }: {
+  readonly active: boolean;
   readonly compact: boolean;
   readonly messages: readonly MigrationTuiMessage[];
   readonly messagesLoading: boolean;
@@ -764,19 +940,17 @@ const GroupOverview = ({
   const counts = aggregateCounts(rows);
 
   return (
-    <scrollbox
-      focused={false}
-      scrollX={false}
-      scrollY
-      style={{ flexGrow: 1, flexShrink: 1, minHeight: 0 }}
-      verticalScrollbarOptions={{ visible: false }}
-      viewportCulling
-    >
+    <OverviewViewport active={active}>
       <box style={{ flexShrink: 0, height: 1 }}>
         <text fg={migrationColors.foreground}>Items</text>
       </box>
       <ProgressBar counts={counts} />
       <CountsRow counts={counts} />
+      <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
+        <text fg={migrationColors.foreground}>Source inventory</text>
+      </box>
+      <SourceInventorySummary compact={compact} rows={rows} />
+      <GroupLocks rows={rows} />
       <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
         <text fg={migrationColors.foreground}>Migrations</text>
       </box>
@@ -828,40 +1002,71 @@ const GroupOverview = ({
         compact={compact}
         loading={messagesLoading}
         messages={messages}
+        showDefinitionId
       />
-    </scrollbox>
+    </OverviewViewport>
   );
 };
 
+const PrimaryActionButtons = ({
+  actions,
+  compact,
+  disabled,
+  onSelectAction,
+}: {
+  readonly actions: readonly MigrationTuiAvailableAction[];
+  readonly compact: boolean;
+  readonly disabled: boolean;
+  readonly onSelectAction: (action: MigrationTuiAvailableAction) => void;
+}) =>
+  migrationTuiPrimaryActions(actions).map((action) => {
+    const primary = action.primary;
+
+    if (primary === undefined) {
+      return null;
+    }
+
+    return (
+      <Button
+        disabled={disabled}
+        intent={primary.intent}
+        key={action.id}
+        label={compact ? primary.compactLabel : primary.label}
+        onPress={() => onSelectAction(action)}
+      />
+    );
+  });
+
 const GroupDetailPane = ({
   activeTab,
+  actions,
   compact,
   disabled,
   group,
+  messageIndex,
   messages,
   messagesLoading,
-  onAction,
-  onBackToOverview,
+  onMessageIndexChange,
   onOpenActions,
+  onSelectAction,
   onTabChange,
   rows,
 }: {
   readonly activeTab: MigrationDetailTab;
+  readonly actions: readonly MigrationTuiAvailableAction[];
   readonly compact: boolean;
   readonly disabled: boolean;
   readonly group: MigrationDefinitionRegistryGroup;
   readonly messages: readonly MigrationTuiMessage[];
+  readonly messageIndex: number;
   readonly messagesLoading: boolean;
-  readonly onAction: (action: MigrationTuiAction) => void;
-  readonly onBackToOverview: () => void;
+  readonly onMessageIndexChange: (index: number) => void;
   readonly onOpenActions: () => void;
+  readonly onSelectAction: (action: MigrationTuiAvailableAction) => void;
   readonly onTabChange: (tab: MigrationDetailTab) => void;
   readonly rows: readonly MigrationTuiRow[];
 }) => {
   const label = groupStatusLabel(rows);
-  const failed = aggregateCounts(rows).failed;
-  const canRollback =
-    rows.length > 0 && rows.every((row) => row.entry.hasRollback);
 
   return (
     <box
@@ -911,7 +1116,9 @@ const GroupDetailPane = ({
           value="overview"
         >
           <GroupOverview
+            active={activeTab === "overview"}
             compact={compact}
+            key={`group-overview-${group.id}`}
             messages={messages}
             messagesLoading={messagesLoading}
             rows={rows}
@@ -925,10 +1132,16 @@ const GroupDetailPane = ({
           overflow="hidden"
           value="messages"
         >
-          <Messages
+          <MigrationMessages
+            colors={migrationColors}
+            compact={compact}
+            key={`group-messages-${group.id}`}
             loading={messagesLoading}
             messages={messages}
-            onBack={onBackToOverview}
+            onSelectedIndexChange={onMessageIndexChange}
+            selectedIndex={messageIndex}
+            severityColor={statusColor}
+            showDefinitionId
           />
         </TabsContent>
       </Tabs>
@@ -941,31 +1154,16 @@ const GroupDetailPane = ({
           marginTop: compact ? 0 : 1,
         }}
       >
-        <Button
+        <PrimaryActionButtons
+          actions={actions}
+          compact={compact}
           disabled={disabled}
-          label={compact ? "r Run" : "r Run group"}
-          onPress={() => onAction("run")}
+          onSelectAction={onSelectAction}
         />
-        {failed > 0 ? (
-          <Button
-            disabled={disabled}
-            intent="warning"
-            label={compact ? "f Retry" : "f Retry failed"}
-            onPress={() => onAction("retry-failed")}
-          />
-        ) : null}
-        {canRollback ? (
-          <Button
-            disabled={disabled}
-            intent="neutral"
-            label={compact ? "b Rollback" : "b Rollback group"}
-            onPress={() => onAction("rollback")}
-          />
-        ) : null}
         <Button
           disabled={disabled}
           intent="neutral"
-          label="↵ Actions"
+          label={compact ? "↵ More" : "↵ All actions"}
           onPress={onOpenActions}
         />
       </box>
@@ -975,25 +1173,29 @@ const GroupDetailPane = ({
 
 const DetailPane = ({
   activeTab,
+  actions,
   compact,
   disabled,
   messages,
+  messageIndex,
   messagesLoading,
-  onAction,
-  onBackToOverview,
+  onMessageIndexChange,
   onOpenActions,
+  onSelectAction,
   onTabChange,
   row,
   rows,
 }: {
   readonly activeTab: MigrationDetailTab;
+  readonly actions: readonly MigrationTuiAvailableAction[];
   readonly compact: boolean;
   readonly disabled: boolean;
   readonly messages: readonly MigrationTuiMessage[];
+  readonly messageIndex: number;
   readonly messagesLoading: boolean;
-  readonly onAction: (action: MigrationTuiAction) => void;
-  readonly onBackToOverview: () => void;
+  readonly onMessageIndexChange: (index: number) => void;
   readonly onOpenActions: () => void;
+  readonly onSelectAction: (action: MigrationTuiAvailableAction) => void;
   readonly onTabChange: (tab: MigrationDetailTab) => void;
   readonly row: MigrationTuiRow;
   readonly rows: readonly MigrationTuiRow[];
@@ -1048,7 +1250,9 @@ const DetailPane = ({
           value="overview"
         >
           <Overview
+            active={activeTab === "overview"}
             compact={compact}
+            key={`migration-overview-${row.entry.id}`}
             messages={messages}
             messagesLoading={messagesLoading}
             row={row}
@@ -1063,10 +1267,15 @@ const DetailPane = ({
           overflow="hidden"
           value="messages"
         >
-          <Messages
+          <MigrationMessages
+            colors={migrationColors}
+            compact={compact}
+            key={`migration-messages-${row.entry.id}`}
             loading={messagesLoading}
             messages={messages}
-            onBack={onBackToOverview}
+            onSelectedIndexChange={onMessageIndexChange}
+            selectedIndex={messageIndex}
+            severityColor={statusColor}
           />
         </TabsContent>
       </Tabs>
@@ -1079,31 +1288,16 @@ const DetailPane = ({
           marginTop: compact ? 0 : 1,
         }}
       >
-        <Button
+        <PrimaryActionButtons
+          actions={actions}
+          compact={compact}
           disabled={disabled}
-          label="r Run"
-          onPress={() => onAction("run")}
+          onSelectAction={onSelectAction}
         />
-        {(row.status?.durable.failed ?? 0) > 0 ? (
-          <Button
-            disabled={disabled}
-            intent="warning"
-            label={compact ? "f Retry" : "f Retry failed"}
-            onPress={() => onAction("retry-failed")}
-          />
-        ) : null}
-        {row.entry.hasRollback ? (
-          <Button
-            disabled={disabled}
-            intent="neutral"
-            label="b Rollback"
-            onPress={() => onAction("rollback")}
-          />
-        ) : null}
         <Button
           disabled={disabled}
           intent="neutral"
-          label="↵ Actions"
+          label={compact ? "↵ More" : "↵ All actions"}
           onPress={onOpenActions}
         />
       </box>
@@ -1113,15 +1307,17 @@ const DetailPane = ({
 
 export const MigrationDashboard = ({
   activeTab,
+  actions,
   busy,
   groups,
   listTab,
   messages,
+  messageIndex,
   messagesLoading,
-  onAction,
-  onBackToOverview,
   onListTabChange,
+  onMessageIndexChange,
   onOpenActions,
+  onSelectAction,
   onSelectedIndexChange,
   onSelectCurrent,
   onTabChange,
@@ -1130,15 +1326,17 @@ export const MigrationDashboard = ({
   terminalWidth,
 }: {
   readonly activeTab: MigrationDetailTab;
+  readonly actions: readonly MigrationTuiAvailableAction[];
   readonly busy: string;
   readonly groups: readonly MigrationDefinitionRegistryGroup[];
   readonly listTab: MigrationListTab;
   readonly messages: readonly MigrationTuiMessage[];
+  readonly messageIndex: number;
   readonly messagesLoading: boolean;
-  readonly onAction: (action: MigrationTuiAction) => void;
-  readonly onBackToOverview: () => void;
   readonly onListTabChange: (tab: MigrationListTab) => void;
+  readonly onMessageIndexChange: (index: number) => void;
   readonly onOpenActions: () => void;
+  readonly onSelectAction: (action: MigrationTuiAvailableAction) => void;
   readonly onSelectedIndexChange: (index: number) => void;
   readonly onSelectCurrent: () => void;
   readonly onTabChange: (tab: MigrationDetailTab) => void;
@@ -1154,6 +1352,14 @@ export const MigrationDashboard = ({
   const listHeight = wide
     ? "100%"
     : Math.min(10, Math.max(8, visibleCount * migrationRowHeight + 3));
+  const primaryShortcuts = migrationTuiPrimaryActions(actions).flatMap(
+    (action) =>
+      action.shortcutLabel === undefined ? [] : [action.shortcutLabel]
+  );
+  const utilityShortcuts = migrationTuiUtilityActions(actions).flatMap(
+    (action) =>
+      action.shortcutLabel === undefined ? [] : [action.shortcutLabel]
+  );
 
   if (
     (listTab === "migrations" && row === undefined) ||
@@ -1167,15 +1373,17 @@ export const MigrationDashboard = ({
   if (listTab === "groups" && group !== undefined) {
     detailPane = (
       <GroupDetailPane
+        actions={actions}
         activeTab={activeTab}
         compact={!wide}
         disabled={busy !== ""}
         group={group}
+        messageIndex={messageIndex}
         messages={messages}
         messagesLoading={messagesLoading}
-        onAction={onAction}
-        onBackToOverview={onBackToOverview}
+        onMessageIndexChange={onMessageIndexChange}
         onOpenActions={onOpenActions}
+        onSelectAction={onSelectAction}
         onTabChange={onTabChange}
         rows={groupRows}
       />
@@ -1183,14 +1391,16 @@ export const MigrationDashboard = ({
   } else if (row !== undefined) {
     detailPane = (
       <DetailPane
+        actions={actions}
         activeTab={activeTab}
         compact={!wide}
         disabled={busy !== ""}
+        messageIndex={messageIndex}
         messages={messages}
         messagesLoading={messagesLoading}
-        onAction={onAction}
-        onBackToOverview={onBackToOverview}
+        onMessageIndexChange={onMessageIndexChange}
         onOpenActions={onOpenActions}
+        onSelectAction={onSelectAction}
         onTabChange={onTabChange}
         row={row}
         rows={rows}
@@ -1278,50 +1488,35 @@ export const MigrationDashboard = ({
         </box>
         {detailPane}
       </box>
-      {wide ? (
-        <box
-          key="wide-shortcuts"
-          style={{
-            flexDirection: "row",
-            flexShrink: 0,
-            gap: 1,
-            height: 1,
-            marginTop: 1,
-          }}
-        >
-          <text fg={migrationColors.info}>↑↓ select</text>
-          <text fg={migrationColors.dim}>g migrations/groups</text>
-          <text fg={migrationColors.dim}>↵ actions</text>
-          <text fg={migrationColors.dim}>r run</text>
-          <text fg={migrationColors.dim}>e entries</text>
-          <text fg={migrationColors.dim}>f retry failed</text>
-          <text fg={migrationColors.dim}>b rollback</text>
-          <text fg={migrationColors.dim}>m messages</text>
-          <text fg={migrationColors.dim}>s scan</text>
-          <text fg={migrationColors.dim}>R reload status</text>
-          <text fg={migrationColors.dim}>
-            {busy === "" ? "q quit" : "q cancel + quit"}
-          </text>
-        </box>
-      ) : (
-        <box
-          key="compact-shortcuts"
-          style={{
-            flexDirection: "column",
-            flexShrink: 0,
-            height: 2,
-            marginTop: 1,
-          }}
-        >
-          <text fg={migrationColors.info}>
-            ↑↓ select · g migrations/groups · ↵ actions · r run · e entries
-          </text>
-          <text fg={migrationColors.dim}>
-            f retry · m messages · s scan · R reload status ·{" "}
-            {busy === "" ? "q quit" : "q cancel + quit"}
-          </text>
-        </box>
-      )}
+      <box
+        key={wide ? "wide-shortcuts" : "compact-shortcuts"}
+        style={{
+          flexDirection: "column",
+          flexShrink: 0,
+          height: 3,
+          marginTop: 1,
+        }}
+      >
+        <text
+          content={
+            activeTab === "overview"
+              ? `↑↓ select · g ${wide ? "migrations/groups" : "view"} · ↵ ${wide ? "all actions" : "more"} · PgUp/PgDn details`
+              : `↑↓ select · g ${wide ? "migrations/groups" : "view"} · ↵ ${wide ? "all actions" : "more"}`
+          }
+          fg={migrationColors.info}
+          wrapMode="none"
+        />
+        <text
+          content={primaryShortcuts.join(" · ")}
+          fg={migrationColors.dim}
+          wrapMode="none"
+        />
+        <text
+          content={`${utilityShortcuts.join(" · ")} · R ${wide ? "reload status" : "reload"} · ${busy === "" ? "q quit" : "q cancel + quit"}`}
+          fg={migrationColors.dim}
+          wrapMode="none"
+        />
+      </box>
     </>
   );
 };

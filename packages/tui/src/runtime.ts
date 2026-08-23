@@ -6,6 +6,7 @@ import {
   type MigrationDefinitionExecutableRunPlan,
   type MigrationDefinitionGroupId,
   type MigrationDefinitionId,
+  type MigrationDefinitionLock,
   type MigrationDefinitionRegistryEntry,
   type MigrationDefinitionRegistryGroup,
   type MigrationDefinitionRegistryStatusReport,
@@ -37,6 +38,7 @@ type MigrationTuiConfig = MigrationCliConfig<
 export type MigrationTuiAction =
   | "rescan"
   | "retry-failed"
+  | "retry-skipped"
   | "rollback"
   | "run"
   | "update";
@@ -94,6 +96,7 @@ export interface MigrationTuiSourceIdentityHistoryEntry {
 }
 
 export interface MigrationTuiMessage {
+  readonly definitionId: MigrationDefinitionId;
   readonly details?: string;
   readonly identity: string;
   readonly message: string;
@@ -112,7 +115,15 @@ export interface MigrationTuiSnapshot {
   readonly scannedSource: boolean;
 }
 
+export interface MigrationTuiBreakLockResult {
+  readonly definitionId: MigrationDefinitionId;
+  readonly kind: "already-clear" | "cleared";
+}
+
 export interface MigrationTuiRuntime {
+  readonly breakLock: (
+    lock: MigrationDefinitionLock
+  ) => Promise<MigrationTuiBreakLockResult>;
   readonly cancelActiveExecution: () => Promise<MigrationTuiCancellationResult>;
   readonly configPath: string;
   readonly execute: (
@@ -135,8 +146,11 @@ export interface MigrationTuiRuntime {
     action: MigrationTuiAction,
     options?: MigrationTuiPrepareOptions
   ) => Promise<MigrationTuiPreparedOperation>;
-  readonly refresh: (scanSource?: boolean) => Promise<MigrationTuiSnapshot>;
+  readonly refresh: () => Promise<MigrationTuiSnapshot>;
   readonly rows: readonly MigrationTuiRow[];
+  readonly scanSource: (
+    target: MigrationTuiTarget
+  ) => Promise<MigrationTuiSnapshot>;
 }
 
 export interface LoadMigrationTuiInput {
@@ -220,6 +234,7 @@ const itemMessages = (
 
   if (state.status === "failed") {
     messages.push({
+      definitionId: state.definitionId,
       ...(state.error.details === undefined
         ? {}
         : { details: formatDetails(state.error.details) }),
@@ -231,6 +246,7 @@ const itemMessages = (
     });
   } else if (state.status === "skipped") {
     messages.push({
+      definitionId: state.definitionId,
       identity,
       message: state.skipReason,
       severity: "info",
@@ -239,6 +255,7 @@ const itemMessages = (
     });
   } else if (state.status === "needs-update") {
     messages.push({
+      definitionId: state.definitionId,
       identity,
       message: state.reason,
       severity: "warning",
@@ -253,6 +270,7 @@ const itemMessages = (
     }
 
     messages.push({
+      definitionId: state.definitionId,
       ...(entry.details === undefined
         ? {}
         : { details: JSON.stringify(entry.details, null, 2) }),
@@ -266,6 +284,7 @@ const itemMessages = (
 
   for (const attempt of state.journal?.rollbackAttempts ?? []) {
     messages.push({
+      definitionId: state.definitionId,
       ...(attempt.error.details === undefined
         ? {}
         : { details: formatDetails(attempt.error.details) }),
@@ -282,6 +301,7 @@ const itemMessages = (
       }
 
       messages.push({
+        definitionId: state.definitionId,
         ...(entry.details === undefined
           ? {}
           : { details: JSON.stringify(entry.details, null, 2) }),
@@ -393,19 +413,59 @@ export const makeMigrationTuiRuntime = async (
       );
   };
 
-  const readRows = async (
-    scanSource: boolean
-  ): Promise<readonly MigrationTuiRow[]> => {
-    const report: MigrationDefinitionRegistryStatusReport = scanSource
-      ? await Effect.runPromise(
-          config.registry.status({ all: true, scanSource: true })
-        )
-      : await Effect.runPromise(
-          config.registry.status({ all: true, scanSource: false })
+  const breakLock = async (
+    expectedLock: MigrationDefinitionLock
+  ): Promise<MigrationTuiBreakLockResult> => {
+    const definition = getDefinition(expectedLock.definitionId);
+    const kind = await Effect.runPromise(
+      Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const currentLock = yield* store.getDefinitionLock(
+          expectedLock.definitionId
         );
-    const statuses = new Map(
-      report.definitions.map((status) => [status.definitionId, status])
+
+        if (currentLock === null) {
+          return "already-clear" as const;
+        }
+
+        yield* store.releaseDefinitionLock(expectedLock);
+        return "cleared" as const;
+      }).pipe(Effect.provide(definition.store))
     );
+
+    return { definitionId: expectedLock.definitionId, kind };
+  };
+
+  const readRows = async (
+    scanTarget?: MigrationTuiTarget
+  ): Promise<readonly MigrationTuiRow[]> => {
+    const durableReport = await Effect.runPromise(
+      config.registry.status({ all: true, scanSource: false })
+    );
+    const statuses = new Map(
+      durableReport.definitions.map((status) => [status.definitionId, status])
+    );
+
+    if (scanTarget !== undefined) {
+      const scannedReport: MigrationDefinitionRegistryStatusReport =
+        await Effect.runPromise(
+          scanTarget.kind === "group"
+            ? config.registry.status({
+                group: scanTarget.groupId,
+                scanSource: true,
+                withDependencies: true,
+              })
+            : config.registry.status({
+                definitionIds: [scanTarget.definitionId],
+                scanSource: true,
+                withDependencies: true,
+              })
+        );
+
+      for (const status of scannedReport.definitions) {
+        statuses.set(status.definitionId, status);
+      }
+    }
 
     return entries.map((entry) => {
       const status = statuses.get(entry.id);
@@ -417,17 +477,22 @@ export const makeMigrationTuiRuntime = async (
     });
   };
 
-  const refresh = async (
-    scanSource = false
+  const refresh = async (): Promise<MigrationTuiSnapshot> => ({
+    rows: await readRows(),
+    scannedSource: false,
+  });
+
+  const scanSource = async (
+    target: MigrationTuiTarget
   ): Promise<MigrationTuiSnapshot> => ({
-    rows: await readRows(scanSource),
-    scannedSource: scanSource,
+    rows: await readRows(target),
+    scannedSource: true,
   });
 
   const readPlanRows = async (
     definitionIds: readonly MigrationDefinitionId[]
   ) => {
-    const statusRows = await readRows(false);
+    const statusRows = await readRows();
     const rowsById = new Map(statusRows.map((row) => [row.entry.id, row]));
     const planRows = definitionIds.flatMap((definitionId) => {
       const row = rowsById.get(definitionId);
@@ -491,6 +556,9 @@ export const makeMigrationTuiRuntime = async (
       ...(action === "retry-failed"
         ? { mode: { kind: "failed" as const } }
         : {}),
+      ...(action === "retry-skipped"
+        ? { mode: { kind: "skipped" as const } }
+        : {}),
       ...(action === "rescan" ? { rescan: true } : {}),
       ...(action === "update" ? { update: true } : {}),
       ...(options.sourceIdentities === undefined
@@ -508,7 +576,7 @@ export const makeMigrationTuiRuntime = async (
         : config.registry.executable().planRun({
             definitionIds: [target.definitionId],
             ...(options.force === undefined ? {} : { force: options.force }),
-            withDependencies: options.withDependencies ?? action !== "run",
+            withDependencies: options.withDependencies ?? false,
             ...runOptions,
           })
     );
@@ -616,6 +684,7 @@ export const makeMigrationTuiRuntime = async (
   };
 
   return {
+    breakLock,
     cancelActiveExecution: executionController.cancelActiveExecution,
     configPath: loaded.configPath,
     execute,
@@ -626,5 +695,6 @@ export const makeMigrationTuiRuntime = async (
     prepare,
     refresh,
     rows,
+    scanSource,
   };
 };

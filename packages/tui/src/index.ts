@@ -9,6 +9,7 @@ export type {
 export type {
   LoadMigrationTuiInput,
   MigrationTuiAction,
+  MigrationTuiBreakLockResult,
   MigrationTuiMessage,
   MigrationTuiPreparedOperation,
   MigrationTuiPrepareOptions,

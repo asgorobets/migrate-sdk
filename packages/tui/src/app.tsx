@@ -6,6 +6,13 @@ import {
   useTerminalDimensions,
 } from "@opentui/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { BreakLockDialog } from "./components/break-lock-dialog.tsx";
+import { MessageDetailDialog } from "./components/message-detail-dialog.tsx";
+import {
+  type MigrationTuiAvailableAction,
+  migrationTuiActionForKey,
+  migrationTuiAvailableActions,
+} from "./components/migration-actions.ts";
 import {
   migrationColors as colors,
   MigrationDashboard,
@@ -41,15 +48,13 @@ import {
   registerMigrationTuiSignalHandlers,
 } from "./shutdown-controller.ts";
 
-type View = "actions" | "confirm" | "dashboard" | "selective-run";
-
-interface ActionOption {
-  readonly action?: MigrationTuiAction;
-  readonly description: string;
-  readonly key: string;
-  readonly label: string;
-  readonly view?: "messages" | "scan" | "selective-run";
-}
+type View =
+  | "actions"
+  | "break-lock"
+  | "confirm"
+  | "dashboard"
+  | "message-detail"
+  | "selective-run";
 
 const errorMessage = (cause: unknown): string => {
   if (cause instanceof Error) {
@@ -62,128 +67,50 @@ const errorMessage = (cause: unknown): string => {
 const targetLabel = (target: MigrationTuiTarget): string =>
   target.kind === "group" ? target.groupId : target.definitionId;
 
-const actionOptions = (
-  target: MigrationTuiTarget,
-  rows: readonly MigrationTuiRow[]
-): readonly ActionOption[] => {
-  const isGroup = target.kind === "group";
-  const noun = isGroup ? "group" : "migration";
-  const options: ActionOption[] = [
-    {
-      action: "run",
-      description: isGroup
-        ? "Run every migration in this group"
-        : "Run this migration",
-      key: "r",
-      label: isGroup ? "Run group" : "Run",
-    },
-  ];
-
-  if (!isGroup) {
-    options.push({
-      description:
-        "Run specific source identities, including identities from history",
-      key: "e",
-      label: "Run selected entries",
-      view: "selective-run",
-    });
+const actionCopy = {
+  rescan: {
+    button: "rescan",
+    preparing: "Preparing to rescan",
+    progress: "Rescanning",
+  },
+  "retry-failed": {
+    button: "retry",
+    preparing: "Preparing to retry failed items for",
+    progress: "Retrying failed items for",
+  },
+  "retry-skipped": {
+    button: "retry",
+    preparing: "Preparing to retry skipped items for",
+    progress: "Retrying skipped items for",
+  },
+  rollback: {
+    button: "rollback",
+    preparing: "Preparing to roll back",
+    progress: "Rolling back",
+  },
+  run: {
+    button: "run",
+    preparing: "Preparing to run",
+    progress: "Running",
+  },
+  update: {
+    button: "update",
+    preparing: "Preparing to update",
+    progress: "Updating",
+  },
+} as const satisfies Record<
+  MigrationTuiAction,
+  {
+    readonly button: string;
+    readonly preparing: string;
+    readonly progress: string;
   }
+>;
 
-  if (rows.some((row) => (row.status?.durable.failed ?? 0) > 0)) {
-    options.push({
-      action: "retry-failed",
-      description: `Retry only failed items in this ${noun}`,
-      key: "f",
-      label: "Retry failed",
-    });
-  }
-
-  options.push(
-    {
-      action: "rescan",
-      description: `Scan this ${noun} from the beginning and skip unchanged items`,
-      key: "",
-      label: "Rescan source",
-    },
-    {
-      action: "update",
-      description: `Scan this ${noun} from the beginning and reprocess migrated items`,
-      key: "",
-      label: "Update",
-    }
-  );
-
-  if (rows.length > 0 && rows.every((row) => row.entry.hasRollback)) {
-    options.push({
-      action: "rollback",
-      description: isGroup
-        ? "Rollback every migration in this group"
-        : "Rollback this migration and affected dependents in safe order",
-      key: "b",
-      label: isGroup ? "Rollback group" : "Rollback",
-    });
-  }
-
-  options.push(
-    {
-      description: `View ${noun} errors, warnings, and messages`,
-      key: "m",
-      label: "Messages",
-      view: "messages",
-    },
-    {
-      description: "Scan the source and reload status",
-      key: "s",
-      label: "Scan source status",
-      view: "scan",
-    }
-  );
-
-  return options;
-};
-
-const actionProgressLabel = (action: MigrationTuiAction): string => {
-  switch (action) {
-    case "rescan":
-      return "Rescanning";
-    case "retry-failed":
-      return "Retrying failed items for";
-    case "rollback":
-      return "Rolling back";
-    case "run":
-      return "Running";
-    case "update":
-      return "Updating";
-    default: {
-      const unhandled: never = action;
-      return unhandled;
-    }
-  }
-};
-
-const actionPreparationLabel = (action: MigrationTuiAction): string => {
-  switch (action) {
-    case "rescan":
-      return "Preparing to rescan";
-    case "retry-failed":
-      return "Preparing to retry failed items for";
-    case "rollback":
-      return "Preparing to roll back";
-    case "run":
-      return "Preparing to run";
-    case "update":
-      return "Preparing to update";
-    default: {
-      const unhandled: never = action;
-      return unhandled;
-    }
-  }
-};
-
-const runNeedsDependencyDecision = (
+const operationNeedsDependencyDecision = (
   operation: MigrationTuiPreparedOperation
 ): boolean =>
-  operation.action === "run" &&
+  operation.action !== "rollback" &&
   operation.plan.force !== true &&
   operation.dependencyChecks.some((dependency) => !dependency.satisfied);
 
@@ -385,7 +312,7 @@ const PlanHierarchy = ({
             </text>
             <text fg={colors.foreground}>{item.id}</text>
             {item.executionStep === undefined ? null : (
-              <text fg={colors.dim}> #{item.executionStep}</text>
+              <text fg={colors.dim}> step {item.executionStep}</text>
             )}
             <box style={{ flexGrow: 1 }} />
             {item.relation === undefined ? null : (
@@ -495,14 +422,14 @@ const SafetyDialog = ({
         <DialogDescription
           content={
             rollback
-              ? `${targetLabel(operation.target)} · Affected migrations will roll back in this order.`
+              ? `${targetLabel(operation.target)} · Step numbers show rollback execution order.`
               : `${targetLabel(operation.target)} · Some required dependencies have not succeeded.`
           }
           wrapMode="none"
         />
         <box style={{ flexShrink: 0, height: 1, marginTop: 1 }}>
           <text fg={colors.foreground}>
-            {rollback ? "Rollback order" : "Run order"}
+            {rollback ? "Affected migration hierarchy" : "Run order"}
           </text>
         </box>
         <scrollbox
@@ -538,7 +465,11 @@ const SafetyDialog = ({
                 label="i Include dependencies"
                 onPress={onIncludeDependencies}
               />
-              <Button intent="warning" label="f Force run" onPress={onForce} />
+              <Button
+                intent="warning"
+                label={`f Force ${actionCopy[operation.action].button}`}
+                onPress={onForce}
+              />
             </>
           )}
           <Button intent="neutral" label="n Cancel" onPress={onCancel} />
@@ -578,8 +509,12 @@ export const MigrationTuiApp = ({
   const [view, setView] = useState<View>("dashboard");
   const [pendingOperation, setPendingOperation] =
     useState<MigrationTuiPreparedOperation | null>(null);
+  const [pendingLockRow, setPendingLockRow] = useState<MigrationTuiRow | null>(
+    null
+  );
   const [detailTab, setDetailTab] = useState<MigrationDetailTab>("overview");
   const [messages, setMessages] = useState<readonly MigrationTuiMessage[]>([]);
+  const [messageIndex, setMessageIndex] = useState(0);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [busy, setBusy] = useState("Loading status…");
   const [notice, setNotice] = useState<string | null>(null);
@@ -644,9 +579,17 @@ export const MigrationTuiApp = ({
     [selectiveEntriesByDefinition, selectiveTarget]
   );
   const dashboardStateRef = useRef({ busy, selectedRows, selectedTarget });
+  const messageStateRef = useRef({
+    count: messages.length,
+    selectedIndex: messageIndex,
+  });
   const executingRef = useRef(false);
   const selectiveHistoryRequestRef = useRef(0);
   dashboardStateRef.current = { busy, selectedRows, selectedTarget };
+  messageStateRef.current = {
+    count: messages.length,
+    selectedIndex: messageIndex,
+  };
   const shutdown = useMemo(
     () =>
       makeMigrationTuiShutdownController({
@@ -656,17 +599,36 @@ export const MigrationTuiApp = ({
     [renderer, runtime]
   );
 
-  const refresh = useCallback(
-    async (scanSource = false) => {
-      setBusy(scanSource ? "Scanning source…" : "Reloading status…");
+  const refresh = useCallback(async () => {
+    setBusy("Reloading status…");
+    setError(null);
+
+    try {
+      const snapshot = await runtime.refresh();
+      setRows(snapshot.rows);
+      setNotice("Status reloaded");
+    } catch (cause) {
+      setError(errorMessage(cause));
+    } finally {
+      setBusy("");
+    }
+  }, [runtime]);
+
+  const scanSelectedSource = useCallback(
+    async (targetOverride?: MigrationTuiTarget) => {
+      const target = targetOverride ?? dashboardStateRef.current.selectedTarget;
+
+      if (target === undefined) {
+        return;
+      }
+
+      setBusy(`Scanning source for ${targetLabel(target)}…`);
       setError(null);
 
       try {
-        const snapshot = await runtime.refresh(scanSource);
+        const snapshot = await runtime.scanSource(target);
         setRows(snapshot.rows);
-        setNotice(
-          snapshot.scannedSource ? "Source scan complete" : "Status reloaded"
-        );
+        setNotice(`Source scan complete for ${targetLabel(target)}`);
       } catch (cause) {
         setError(errorMessage(cause));
       } finally {
@@ -677,8 +639,21 @@ export const MigrationTuiApp = ({
   );
 
   const openMessages = useCallback(() => {
+    setMessageIndex(0);
     setView("dashboard");
     setDetailTab("messages");
+  }, []);
+
+  const openBreakLock = useCallback((rowOverride?: MigrationTuiRow) => {
+    const row = rowOverride ?? dashboardStateRef.current.selectedRows[0];
+
+    if (row?.status?.lock == null) {
+      return;
+    }
+
+    setError(null);
+    setPendingLockRow(row);
+    setView("break-lock");
   }, []);
 
   const startTask = useCallback((task: Promise<unknown>) => {
@@ -695,7 +670,7 @@ export const MigrationTuiApp = ({
       setView("dashboard");
       setPendingOperation(null);
       setBusy(
-        `${actionProgressLabel(operation.action)} ${targetLabel(operation.target)}…`
+        `${actionCopy[operation.action].progress} ${targetLabel(operation.target)}…`
       );
       setError(null);
 
@@ -709,7 +684,7 @@ export const MigrationTuiApp = ({
         }
 
         setNotice(result);
-        await refresh(false);
+        await refresh();
       } catch (cause) {
         if (shutdown.isExitRequested()) {
           return;
@@ -739,7 +714,7 @@ export const MigrationTuiApp = ({
 
       setPendingOperation(null);
       setView("dashboard");
-      setBusy(`${actionPreparationLabel(action)} ${targetLabel(target)}…`);
+      setBusy(`${actionCopy[action].preparing} ${targetLabel(target)}…`);
       setError(null);
 
       try {
@@ -751,7 +726,7 @@ export const MigrationTuiApp = ({
 
         if (
           operation.action === "rollback" ||
-          runNeedsDependencyDecision(operation)
+          operationNeedsDependencyDecision(operation)
         ) {
           setBusy("");
           setPendingOperation(operation);
@@ -992,7 +967,7 @@ export const MigrationTuiApp = ({
   );
 
   const chooseOption = useCallback(
-    (option: ActionOption | undefined) => {
+    (option: MigrationTuiAvailableAction | undefined) => {
       if (option === undefined) {
         return;
       }
@@ -1004,7 +979,7 @@ export const MigrationTuiApp = ({
 
       if (option.view === "scan") {
         setView("dashboard");
-        startTask(refresh(true));
+        startTask(scanSelectedSource());
         return;
       }
 
@@ -1013,23 +988,35 @@ export const MigrationTuiApp = ({
         return;
       }
 
+      if (option.view === "break-lock") {
+        openBreakLock();
+        return;
+      }
+
       if (option.action !== undefined) {
         startTask(prepareOperation(option.action));
       }
     },
-    [openMessages, openSelectiveRun, prepareOperation, refresh, startTask]
+    [
+      openBreakLock,
+      openMessages,
+      openSelectiveRun,
+      prepareOperation,
+      scanSelectedSource,
+      startTask,
+    ]
   );
 
   const selectedActions = useMemo(
     () =>
       selectedTarget === undefined
         ? []
-        : actionOptions(selectedTarget, selectedRows),
+        : migrationTuiAvailableActions(selectedTarget, selectedRows),
     [selectedRows, selectedTarget]
   );
 
   useEffect(() => {
-    startTask(refresh(false));
+    startTask(refresh());
   }, [refresh, startTask]);
 
   useEffect(() => {
@@ -1042,6 +1029,8 @@ export const MigrationTuiApp = ({
   }, [view]);
 
   useEffect(() => {
+    setMessageIndex(0);
+
     if (selectedTarget === undefined) {
       setMessages([]);
       setMessagesLoading(false);
@@ -1080,6 +1069,59 @@ export const MigrationTuiApp = ({
     setView("dashboard");
   }, []);
 
+  const cancelBreakLock = useCallback(() => {
+    setPendingLockRow(null);
+    setView("dashboard");
+  }, []);
+
+  const executeBreakLock = useCallback(async () => {
+    const row = pendingLockRow;
+
+    if (row === null) {
+      return;
+    }
+
+    setPendingLockRow(null);
+    setView("dashboard");
+    setBusy(`Breaking lock for ${row.entry.id}…`);
+    setError(null);
+
+    try {
+      const lock = row.status?.lock;
+
+      if (lock == null) {
+        setNotice(`${row.entry.id} no longer has an active lock`);
+        setBusy("");
+        return;
+      }
+
+      const result = await runtime.breakLock(lock);
+      await refresh();
+      setNotice(
+        result.kind === "already-clear"
+          ? `${row.entry.id} no longer has an active lock`
+          : `Lock cleared for ${row.entry.id}`
+      );
+    } catch (cause) {
+      setError(errorMessage(cause));
+      setBusy("");
+    }
+  }, [pendingLockRow, refresh, runtime]);
+
+  const handleBreakLockKey = useCallback(
+    (key: KeyEvent) => {
+      key.preventDefault();
+      key.stopPropagation();
+
+      if (key.name === "n" || key.name === "escape") {
+        cancelBreakLock();
+      } else if (key.name === "y") {
+        startTask(executeBreakLock());
+      }
+    },
+    [cancelBreakLock, executeBreakLock, startTask]
+  );
+
   const handleConfirmationKey = useCallback(
     (key: KeyEvent) => {
       const operation = pendingOperation;
@@ -1091,10 +1133,14 @@ export const MigrationTuiApp = ({
         cancelConfirmation();
       } else if (operation?.action === "rollback" && key.name === "y") {
         startTask(executeOperation(operation));
-      } else if (operation?.action === "run" && key.name === "i") {
+      } else if (
+        operation !== null &&
+        operation.action !== "rollback" &&
+        key.name === "i"
+      ) {
         startTask(
           prepareOperation(
-            "run",
+            operation.action,
             {
               ...(operation.sourceIdentities === undefined
                 ? {}
@@ -1104,10 +1150,14 @@ export const MigrationTuiApp = ({
             operation.target
           )
         );
-      } else if (operation?.action === "run" && key.name === "f") {
+      } else if (
+        operation !== null &&
+        operation.action !== "rollback" &&
+        key.name === "f"
+      ) {
         startTask(
           prepareOperation(
-            "run",
+            operation.action,
             {
               force: true,
               ...(operation.sourceIdentities === undefined
@@ -1136,9 +1186,7 @@ export const MigrationTuiApp = ({
         key.stopPropagation();
         setView("dashboard");
       } else {
-        const option = selectedActions.find(
-          (candidate) => candidate.key === key.name
-        );
+        const option = migrationTuiActionForKey(selectedActions, key.name);
 
         if (option !== undefined) {
           key.preventDefault();
@@ -1160,47 +1208,22 @@ export const MigrationTuiApp = ({
       }
 
       if (key.name === "r" && key.shift) {
-        startTask(refresh(false));
+        startTask(refresh());
         return;
       }
 
-      switch (key.name) {
-        case "r":
-          startTask(prepareOperation("run"));
-          break;
-        case "e":
-          if (target.kind === "migration") {
-            openSelectiveRun(target);
-          }
-          break;
-        case "f":
-          if (
-            state.selectedRows.some(
-              (row) => (row.status?.durable.failed ?? 0) > 0
-            )
-          ) {
-            startTask(prepareOperation("retry-failed"));
-          }
-          break;
-        case "b":
-          if (
-            state.selectedRows.length > 0 &&
-            state.selectedRows.every((row) => row.entry.hasRollback)
-          ) {
-            startTask(prepareOperation("rollback"));
-          }
-          break;
-        case "m":
-          openMessages();
-          break;
-        case "s":
-          startTask(refresh(true));
-          break;
-        default:
-          break;
+      const option = migrationTuiActionForKey(
+        migrationTuiAvailableActions(target, state.selectedRows),
+        key.name
+      );
+
+      if (option !== undefined) {
+        key.preventDefault();
+        key.stopPropagation();
+        chooseOption(option);
       }
     },
-    [openMessages, openSelectiveRun, prepareOperation, refresh, startTask]
+    [chooseOption, refresh, startTask]
   );
 
   const requestExit = useCallback(async () => {
@@ -1278,8 +1301,56 @@ export const MigrationTuiApp = ({
     ]
   );
 
+  const handleMessageKey = useCallback((key: KeyEvent): boolean => {
+    if (key.name === "escape") {
+      key.preventDefault();
+      key.stopPropagation();
+      setDetailTab("overview");
+      return true;
+    }
+
+    const state = messageStateRef.current;
+    if ((key.name === "return" || key.name === "linefeed") && state.count > 0) {
+      key.preventDefault();
+      key.stopPropagation();
+      setView("message-detail");
+      return true;
+    }
+
+    let nextIndex: number | undefined;
+    if (key.name === "up" || key.name === "k") {
+      nextIndex = state.selectedIndex - 1;
+    } else if (key.name === "down" || key.name === "j") {
+      nextIndex = state.selectedIndex + 1;
+    } else if (key.name === "pageup") {
+      nextIndex = state.selectedIndex - 10;
+    } else if (key.name === "pagedown") {
+      nextIndex = state.selectedIndex + 10;
+    } else if (key.name === "home") {
+      nextIndex = 0;
+    } else if (key.name === "end") {
+      nextIndex = state.count - 1;
+    }
+
+    if (nextIndex === undefined) {
+      return false;
+    }
+
+    key.preventDefault();
+    key.stopPropagation();
+    setMessageIndex(
+      Math.min(Math.max(0, nextIndex), Math.max(0, state.count - 1))
+    );
+    return true;
+  }, []);
+
   useKeyboard((key) => {
     if (
+      view === "break-lock" &&
+      (key.name === "y" || key.name === "n" || key.name === "escape")
+    ) {
+      handleBreakLockKey(key);
+    } else if (
       view === "confirm" &&
       (key.name === "f" ||
         key.name === "i" ||
@@ -1291,9 +1362,9 @@ export const MigrationTuiApp = ({
     } else if (
       view === "dashboard" &&
       detailTab === "messages" &&
-      key.name === "escape"
+      handleMessageKey(key)
     ) {
-      setDetailTab("overview");
+      return;
     } else if (key.ctrl && key.name === "c") {
       process.exitCode = 130;
       startTask(requestExit());
@@ -1332,7 +1403,7 @@ export const MigrationTuiApp = ({
         }}
       >
         <text fg={colors.foreground}>
-          Actions ·{" "}
+          All actions ·{" "}
           {selectedTarget === undefined ? "" : targetLabel(selectedTarget)}
         </text>
         <box
@@ -1395,19 +1466,21 @@ export const MigrationTuiApp = ({
         <text fg={colors.dim}>{basename(runtime.configPath)}</text>
       </box>
       <MigrationDashboard
+        actions={selectedActions}
         activeTab={detailTab}
         busy={busy}
         groups={runtime.groups}
         listTab={listTab}
+        messageIndex={messageIndex}
         messages={messages}
         messagesLoading={messagesLoading}
-        onAction={(action) => startTask(prepareOperation(action))}
-        onBackToOverview={() => setDetailTab("overview")}
         onListTabChange={changeListTab}
+        onMessageIndexChange={setMessageIndex}
         onOpenActions={() => {
           setActionIndex(0);
           setView("actions");
         }}
+        onSelectAction={chooseOption}
         onSelectCurrent={() => {
           if (dashboardStateRef.current.busy === "") {
             setActionIndex(0);
@@ -1439,10 +1512,10 @@ export const MigrationTuiApp = ({
             }
           }}
           onForce={() => {
-            if (pendingOperation.action === "run") {
+            if (pendingOperation.action !== "rollback") {
               startTask(
                 prepareOperation(
-                  "run",
+                  pendingOperation.action,
                   {
                     force: true,
                     ...(pendingOperation.sourceIdentities === undefined
@@ -1458,10 +1531,10 @@ export const MigrationTuiApp = ({
             }
           }}
           onIncludeDependencies={() => {
-            if (pendingOperation.action === "run") {
+            if (pendingOperation.action !== "rollback") {
               startTask(
                 prepareOperation(
-                  "run",
+                  pendingOperation.action,
                   {
                     ...(pendingOperation.sourceIdentities === undefined
                       ? {}
@@ -1477,6 +1550,27 @@ export const MigrationTuiApp = ({
           }}
           onKeyDown={handleConfirmationKey}
           operation={pendingOperation}
+          width={dimensions.width}
+        />
+      ) : null}
+      {view === "break-lock" && pendingLockRow?.status?.lock != null ? (
+        <BreakLockDialog
+          height={dimensions.height}
+          lock={pendingLockRow.status.lock}
+          onCancel={cancelBreakLock}
+          onConfirm={() => startTask(executeBreakLock())}
+          onKeyDown={handleBreakLockKey}
+          width={dimensions.width}
+        />
+      ) : null}
+      {view === "message-detail" && messages[messageIndex] !== undefined ? (
+        <MessageDetailDialog
+          height={dimensions.height}
+          index={messageIndex}
+          message={messages[messageIndex]}
+          onClose={() => setView("dashboard")}
+          showDefinitionId={selectedTarget?.kind === "group"}
+          total={messages.length}
           width={dimensions.width}
         />
       ) : null}

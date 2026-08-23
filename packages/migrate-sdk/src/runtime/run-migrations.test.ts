@@ -7300,6 +7300,86 @@ describe("runInlineDefinition", () => {
   );
 
   it.effect(
+    "runs included dependencies normally when retrying failed items",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const executionOrder: string[] = [];
+
+        const authors = MigrationDefinition.make({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          store,
+          process: (source) =>
+            Effect.sync(() => {
+              executionOrder.push(`authors:${source.identity.encoded}`);
+            }),
+        });
+        const articles = MigrationDefinition.make({
+          id: "articles",
+          dependencies: { required: ["authors"] },
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: { title: "Recovered article" },
+              },
+            ],
+          }),
+          store,
+          process: (source) =>
+            Effect.sync(() => {
+              executionOrder.push(`articles:${source.identity.encoded}`);
+            }),
+        });
+
+        seedArticleMigrationContract(storeState);
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: articleSourceIdentity("article-1"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            lastRunId: toMigrationRunId("run-previous"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "failed",
+            error: {
+              kind: "destination",
+              errorTag: "DestinationError",
+              message: "destination effect failed",
+            },
+          }
+        );
+
+        const summary = yield* runInlineRegistry({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+          mode: { kind: "failed" },
+          withDependencies: true,
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(
+          summary.definitions.map((definition) => definition.definitionId)
+        ).toEqual(["authors", "articles"]);
+        expect(executionOrder).toEqual([
+          "authors:author-1",
+          "articles:article-1",
+        ]);
+      })
+  );
+
+  it.effect(
     "validates omitted run dependencies from durable state without executing them",
     () =>
       Effect.gen(function* () {
