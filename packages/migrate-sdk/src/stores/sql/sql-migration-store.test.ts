@@ -326,6 +326,7 @@ describe("SqlMigrationStore", () => {
         "migrate_sdk_locks",
         "migrate_sdk_run_definitions",
         "migrate_sdk_runs",
+        "migrate_sdk_schema_migrations",
       ]);
       expect(itemStateColumns.map(({ name }) => name)).toEqual(
         expect.arrayContaining([

@@ -9,12 +9,16 @@ import {
 } from "effect";
 import { Service } from "effect/Context";
 import { Prompt } from "effect/unstable/cli";
+import type { SqlMigrationStoreSchemaPlan } from "../stores/sql/sql-migration-store-schema.ts";
 import {
   type MigrationCliInterruptController,
   makeMigrationCliInterruptController,
 } from "./interrupts.ts";
 
 export interface MigrationCliRuntimeShape {
+  readonly confirmSchemaUpgrade?: (
+    plan: SqlMigrationStoreSchemaPlan
+  ) => Effect.Effect<boolean>;
   readonly cwd: string;
   readonly interrupts?: MigrationCliInterruptController;
   readonly stdoutColumns?: number;
@@ -40,6 +44,16 @@ export class MigrationCliRuntime extends Service<
       const stdoutColumns = process.stdout.columns;
 
       return {
+        confirmSchemaUpgrade: (plan) =>
+          Prompt.confirm({
+            initial: false,
+            message: `Upgrade SQL Migration Store schema from ${plan.currentVersion === null ? "not installed" : `version ${plan.currentVersion}`} to version ${plan.targetVersion}?`,
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(Terminal.Terminal, terminal),
+            Effect.orElseSucceed(() => false)
+          ),
         cwd: process.cwd(),
         interrupts: makeMigrationCliInterruptController({
           confirmUnsafeExit: Prompt.confirm({

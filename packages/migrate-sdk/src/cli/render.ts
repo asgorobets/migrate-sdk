@@ -18,6 +18,7 @@ import type {
   MigrationExecutionHandle,
   MigrationRunSummary,
 } from "../domain/run.ts";
+import type { SqlMigrationStoreSchemaPlan } from "../stores/sql/sql-migration-store-schema.ts";
 
 interface RenderOptions {
   readonly colors?: boolean;
@@ -1131,6 +1132,76 @@ export const renderStatusReport = (
     ...renderStatusTable(report, options),
     ...renderNoticeSection(report.notices),
     ...renderWarningSection([...discoveryWarnings, ...statusWarnings], options),
+  ].join("\n");
+};
+
+const renderSchemaStatus = (
+  plan: SqlMigrationStoreSchemaPlan,
+  options: RenderOptions
+): string => {
+  switch (plan.status) {
+    case "current":
+      return green(plan.status, options);
+    case "not-installed":
+    case "upgrade-required":
+      return yellow(plan.status, options);
+    case "divergent":
+    case "future":
+    case "partial":
+    case "untracked":
+      return red(plan.status, options);
+    default: {
+      const exhaustive: never = plan.status;
+      return exhaustive;
+    }
+  }
+};
+
+export const renderSqlMigrationStoreSchemaPlan = (
+  plan: SqlMigrationStoreSchemaPlan,
+  options: RenderOptions = {}
+): string => {
+  const applied =
+    plan.applied.length === 0
+      ? ["- none"]
+      : plan.applied.map((migration) => `- ${migration.id} ${migration.name}`);
+  const pending =
+    plan.pending.length === 0
+      ? ["- none"]
+      : plan.pending.map(
+          (migration) =>
+            `- ${migration.id} ${migration.name}: ${migration.description}`
+        );
+
+  return [
+    bold("SQL Migration Store Schema", options),
+    "",
+    `Status           ${renderSchemaStatus(plan, options)}`,
+    `Database         ${plan.database}`,
+    `Table prefix     ${plan.tablePrefix}`,
+    `Current version  ${plan.currentVersion ?? "not installed"}`,
+    `Target version   ${plan.targetVersion}`,
+    `Plan ID          ${plan.planId}`,
+    "",
+    bold("Applied migrations", options),
+    ...applied,
+    "",
+    bold("Pending migrations", options),
+    ...pending,
+    ...(plan.issues.length === 0
+      ? []
+      : [
+          "",
+          bold("Issues", options),
+          ...plan.issues.map((issue) => `- ${issue}`),
+        ]),
+    ...(plan.warnings.length === 0
+      ? []
+      : [
+          "",
+          bold("Warnings", options),
+          ...plan.warnings.map((warning) => `- ${warning}`),
+        ]),
   ].join("\n");
 };
 

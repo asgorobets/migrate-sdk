@@ -1,3 +1,4 @@
+import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 import { Service } from "effect/Context";
@@ -91,5 +92,22 @@ describe("defineMigrationCliConfig", () => {
     const config = defineMigrationCliConfig({ executableLayer, registry });
 
     expect(config.executableLayer).toBe(executableLayer);
+  });
+
+  it("accepts an explicit SQL Migration Store target", () => {
+    const registry = MigrationDefinitionRegistry.make({ definitions: [] });
+    const clientLayer = SqliteClient.layer({
+      disableWAL: true,
+      filename: ":memory:",
+    });
+    const config = defineMigrationCliConfig({
+      registry,
+      sqlStore: { clientLayer, tablePrefix: "customer_migrations" },
+    });
+
+    expect(config.sqlStore).toEqual({
+      clientLayer,
+      tablePrefix: "customer_migrations",
+    });
   });
 });

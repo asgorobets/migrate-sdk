@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { layer as nodeServicesLayer } from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Stdio, Stream } from "effect";
+import { Effect, FileSystem, Layer, Schema, Stdio, Stream } from "effect";
 import { pretty as prettyCause } from "effect/Cause";
 import { isFailure, isSuccess } from "effect/Exit";
 import { TestConsole } from "effect/testing";
@@ -16,6 +16,7 @@ import {
 } from "migrate-sdk";
 import { MigrationCliRuntime, migrateCommand } from "migrate-sdk/cli/testing";
 import { renderStatusReport } from "./render.ts";
+import type { MigrationCliRuntimeShape } from "./runtime.ts";
 
 const packageRoot = fileURLToPath(new URL("../..", import.meta.url));
 const binPath = fileURLToPath(
@@ -33,6 +34,8 @@ const articlesAuthorsTagsOrderPattern =
 const selectedRunSummaryPattern =
   /1\s+authors\s+succeeded\s+1\s+0\s+0\s+0\s+0[\s\S]*2\s+articles\s+succeeded\s+1\s+0\s+0\s+0\s+0/;
 const articleRunSummaryPattern = /1\s+articles\s+succeeded\s+1\s+0\s+0\s+0\s+0/;
+const successfulArticleStatusRowPattern =
+  /ok\s+articles\s+full\s+succeeded\s+clear\s+1\s+0\s+0\s+0/;
 const progressArticleRunSummaryPattern =
   /1\s+articles\s+succeeded\s+3\s+0\s+0\s+0\s+0/;
 const activeLockedStatusRowPattern =
@@ -47,8 +50,12 @@ const authorsProcessConcurrencyPattern = /authors\s+full\s+4/;
 const tagsRollbackConcurrencyPattern = /tags\s+unbounded/;
 const rollbackOrphansSummaryPattern =
   /articles\s+succeeded\s+0\s+1\s+0\s+0\s+0\s+1\s+1\s+0/;
+const JsonString = Schema.fromJsonString(Schema.String);
 
 interface CliRuntimeTestOptions {
+  readonly confirmSchemaUpgrade?: NonNullable<
+    MigrationCliRuntimeShape["confirmSchemaUpgrade"]
+  >;
   readonly stdoutColumns?: number;
   readonly stdoutIsTTY?: boolean;
   readonly writeProgress?: (chunk: string) => Effect.Effect<void>;
@@ -69,11 +76,19 @@ const runCliWithRuntime = (
   runtimeOptions: CliRuntimeTestOptions = {}
 ) =>
   Effect.gen(function* () {
+    const stdoutOffset = (yield* TestConsole.logLines).length;
+    const stderrOffset = (yield* TestConsole.errorLines).length;
     const exit = yield* Effect.exit(
       Command.runWith(migrateCommand, { version: "0.0.0" })(args)
     );
-    const stdout = (yield* TestConsole.logLines).map(String).join("\n");
-    const stderr = (yield* TestConsole.errorLines).map(String).join("\n");
+    const stdout = (yield* TestConsole.logLines)
+      .slice(stdoutOffset)
+      .map(String)
+      .join("\n");
+    const stderr = (yield* TestConsole.errorLines)
+      .slice(stderrOffset)
+      .map(String)
+      .join("\n");
 
     return {
       cause: isFailure(exit) ? prettyCause(exit.cause) : "",
@@ -236,6 +251,74 @@ const configSource = (
     })
   });
 `;
+
+const sqlStoreSchemaConfigSource = (
+  filename: string,
+  tablePrefix = "cli_schema"
+): string => `
+  import { SqliteClient } from "@effect/sql-sqlite-node";
+  import {
+    MigrationDefinition,
+    MigrationDefinitionRegistry,
+    SourceIdentity,
+  } from "migrate-sdk";
+  import { defineMigrationCliConfig } from "migrate-sdk/cli";
+  import { InMemorySource } from "migrate-sdk/sources/in-memory";
+  import { SqlMigrationStore } from "migrate-sdk/stores/sql";
+  import { Schema } from "effect";
+
+  const tablePrefix = ${Schema.encodeSync(JsonString)(tablePrefix)};
+  const clientLayer = SqliteClient.layer({
+    disableWAL: true,
+    filename: ${Schema.encodeSync(JsonString)(filename)}
+  });
+  const identity = SourceIdentity.make({
+    id: "cli-schema-smoke@v1",
+    schema: SourceIdentity.key("id", Schema.NonEmptyString)
+  });
+  const source = InMemorySource.make({
+    identity,
+    items: [{
+      identityKey: "article-1",
+      item: { title: "Schema smoke article" },
+      version: "source-version-1"
+    }],
+    sourceSchema: Schema.Struct({ title: Schema.String })
+  });
+  const store = SqlMigrationStore.layerFromClient(clientLayer, {
+    initialize: false,
+    tablePrefix
+  });
+  const articles = MigrationDefinition.make({
+    id: "articles",
+    process: () => undefined,
+    source,
+    store
+  });
+
+  export default defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({ definitions: [articles] }),
+    sqlStore: {
+      clientLayer,
+      tablePrefix
+    }
+  });
+`;
+
+const CliSchemaPlan = Schema.Struct({
+  currentVersion: Schema.NullOr(Schema.Number),
+  planId: Schema.String,
+  status: Schema.String,
+  tablePrefix: Schema.String,
+  targetVersion: Schema.Number,
+});
+
+const decodeCliSchemaPlan = (output: string) => {
+  const lines = output.trim().split("\n");
+  const lastLine = lines.at(-1) ?? "";
+
+  return Schema.decodeUnknownSync(CliSchemaPlan)(JSON.parse(lastLine));
+};
 
 const jsConfigSource = (definitionId: string): string => `
   import {
@@ -3923,6 +4006,275 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
+  it.effect("reports and explicitly upgrades SQL Migration Store schemas", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      const configPath = `${project}/migrate.config.ts`;
+      const databasePath = `${project}/migration-state.sqlite`;
+
+      yield* fs.writeFileString(
+        configPath,
+        sqlStoreSchemaConfigSource(databasePath)
+      );
+
+      const firstStatus = yield* runCli(
+        [
+          "store",
+          "schema",
+          "status",
+          "--config",
+          "migrate.config.ts",
+          "--json",
+        ],
+        project
+      );
+      expect(firstStatus).toEqual(
+        expect.objectContaining({ exitCode: 0, stderr: "" })
+      );
+      const initialPlan = decodeCliSchemaPlan(firstStatus.stdout);
+      const repeatedStatus = yield* runCli(
+        [
+          "store",
+          "schema",
+          "status",
+          "--config",
+          "migrate.config.ts",
+          "--json",
+        ],
+        project
+      );
+      const repeatedPlan = decodeCliSchemaPlan(repeatedStatus.stdout);
+
+      expect(initialPlan).toEqual(
+        expect.objectContaining({
+          currentVersion: null,
+          status: "not-installed",
+          tablePrefix: "cli_schema",
+          targetVersion: 1,
+        })
+      );
+      expect(repeatedPlan).toEqual(initialPlan);
+
+      const unapproved = yield* runCli(
+        ["store", "schema", "upgrade", "--config", "migrate.config.ts"],
+        project
+      );
+      expect(unapproved.exitCode).toBe(1);
+      expect(unapproved.stderr).toContain(
+        `Schema upgrade requires --accept-plan ${initialPlan.planId} in non-interactive mode`
+      );
+
+      const upgraded = yield* runCli(
+        [
+          "store",
+          "schema",
+          "upgrade",
+          "--config",
+          "migrate.config.ts",
+          "--accept-plan",
+          initialPlan.planId,
+          "--json",
+        ],
+        project
+      );
+      const currentPlan = decodeCliSchemaPlan(upgraded.stdout);
+
+      expect(upgraded.exitCode).toBe(0);
+      expect(upgraded.stderr).toBe("");
+      expect(currentPlan).toEqual(
+        expect.objectContaining({
+          currentVersion: 1,
+          status: "current",
+          tablePrefix: "cli_schema",
+          targetVersion: 1,
+        })
+      );
+
+      const repeatedUpgrade = yield* runCli(
+        [
+          "store",
+          "schema",
+          "upgrade",
+          "--config",
+          "migrate.config.ts",
+          "--accept-plan",
+          initialPlan.planId,
+          "--json",
+        ],
+        project
+      );
+
+      expect(repeatedUpgrade).toEqual(
+        expect.objectContaining({ exitCode: 0, stderr: "" })
+      );
+      expect(decodeCliSchemaPlan(repeatedUpgrade.stdout)).toEqual(currentPlan);
+
+      const finalStatus = yield* runCli(
+        [
+          "store",
+          "schema",
+          "status",
+          "--config",
+          "migrate.config.ts",
+          "--json",
+        ],
+        project
+      );
+      expect(decodeCliSchemaPlan(finalStatus.stdout)).toEqual(currentPlan);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("defaults interactive schema upgrade confirmation to no", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      const confirmations: string[] = [];
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        sqlStoreSchemaConfigSource(`${project}/declined.sqlite`)
+      );
+
+      const result = yield* runCliWithRuntime(
+        ["store", "schema", "upgrade", "--config", "migrate.config.ts"],
+        project,
+        {
+          confirmSchemaUpgrade: (plan) =>
+            Effect.sync(() => {
+              confirmations.push(plan.planId);
+              return false;
+            }),
+          stdoutIsTTY: true,
+        }
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("Schema upgrade cancelled.");
+      expect(confirmations).toHaveLength(1);
+
+      const status = yield* runCli(
+        [
+          "store",
+          "schema",
+          "status",
+          "--config",
+          "migrate.config.ts",
+          "--json",
+        ],
+        project
+      );
+      expect(status).toEqual(
+        expect.objectContaining({ exitCode: 0, stderr: "" })
+      );
+      expect(decodeCliSchemaPlan(status.stdout)).toEqual(
+        expect.objectContaining({ status: "not-installed" })
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "runs a migration after explicitly installing the SQLite store schema",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          sqlStoreSchemaConfigSource(`${project}/migration-state.sqlite`)
+        );
+
+        const statusBefore = yield* runCli(
+          [
+            "store",
+            "schema",
+            "status",
+            "--config",
+            "migrate.config.ts",
+            "--json",
+          ],
+          project
+        );
+        const initialPlan = decodeCliSchemaPlan(statusBefore.stdout);
+        const upgrade = yield* runCli(
+          [
+            "store",
+            "schema",
+            "upgrade",
+            "--config",
+            "migrate.config.ts",
+            "--accept-plan",
+            initialPlan.planId,
+            "--json",
+          ],
+          project
+        );
+
+        expect(decodeCliSchemaPlan(upgrade.stdout)).toEqual(
+          expect.objectContaining({ currentVersion: 1, status: "current" })
+        );
+
+        const run = yield* runCli(
+          ["run", "--config", "migrate.config.ts", "articles"],
+          project
+        );
+        const migrationStatus = yield* runCli(
+          ["status", "--config", "migrate.config.ts", "articles"],
+          project
+        );
+
+        expect(run).toEqual(
+          expect.objectContaining({ exitCode: 0, stderr: "" })
+        );
+        expect(run.stdout).toMatch(articleRunSummaryPattern);
+        expect(migrationStatus).toEqual(
+          expect.objectContaining({ exitCode: 0, stderr: "" })
+        );
+        expect(migrationStatus.stdout).toMatch(
+          successfulArticleStatusRowPattern
+        );
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("requires an explicit SQL store target for schema commands", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        configSource("articles")
+      );
+
+      const result = yield* runCli(
+        ["store", "schema", "status", "--config", "migrate.config.ts"],
+        project
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        "SQL Migration Store schema commands require sqlStore in defineMigrationCliConfig"
+      );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders the store schema command hierarchy in help", () =>
+    Effect.gen(function* () {
+      const project = yield* makeProject;
+      const result = yield* runCli(["store", "schema", "--help"], project);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain(
+        "USAGE\n  migrate store schema <subcommand> [flags]"
+      );
+      expect(result.stdout).toContain("status");
+      expect(result.stdout).toContain("upgrade");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
   it.effect("renders migrate as the command name in help", () =>
     Effect.gen(function* () {
       const project = yield* makeProject;
@@ -3973,7 +4325,7 @@ describe("migrate CLI", () => {
 
         expect(result.exitCode).toBe(ChildProcessSpawner.ExitCode(1));
         expect(output).toContain(
-          "Migration CLI config must be created with defineMigrationCliConfig({ registry, executableLayer? })"
+          "Migration CLI config must be created with defineMigrationCliConfig({ registry, executableLayer?, sqlStore? })"
         );
         expect(output).not.toContain("CliError/UserError");
         expect(output).not.toContain("at failConfigLoad");

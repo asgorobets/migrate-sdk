@@ -1,5 +1,6 @@
-import { Console, Effect, Option, Runtime } from "effect";
+import { Console, Effect, Option, Runtime, Schema } from "effect";
 import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
+import type { SqlClient } from "effect/unstable/sql";
 import type { AnySelfContainedMigrationDefinition } from "../domain/definition.ts";
 import type {
   MigrationExecutionOptions,
@@ -30,6 +31,8 @@ import {
   type MigrationExecutionRunError,
 } from "../services/migration-execution.ts";
 import { MigrationStore } from "../services/migration-store.ts";
+import { SqlMigrationStore } from "../stores/sql/sql-migration-store.ts";
+import type { SqlMigrationStoreSchemaPlan } from "../stores/sql/sql-migration-store-schema.ts";
 import type { MigrationCliConfig } from "./config.ts";
 import {
   loadMigrationCliConfig,
@@ -54,6 +57,7 @@ import {
   renderRunStartResult,
   renderRunSummary,
   renderRuntimeError,
+  renderSqlMigrationStoreSchemaPlan,
   renderStatusReport,
 } from "./render.ts";
 import { MigrationCliRuntime } from "./runtime.ts";
@@ -301,6 +305,155 @@ const loadConfiguredConfig = Effect.gen(function* () {
 const loadConfiguredRegistry = Effect.map(
   loadConfiguredConfig,
   (loadedConfig) => loadedConfig.registry
+);
+
+const requireConfiguredSqlStore = (config: MigrationCliConfig) =>
+  config.sqlStore === undefined
+    ? failReportedCliMessage(
+        "SQL Migration Store schema commands require sqlStore in defineMigrationCliConfig"
+      )
+    : Effect.succeed(config.sqlStore);
+
+const withConfiguredSqlStore = <A, Error>(
+  config: MigrationCliConfig,
+  use: (options: {
+    readonly tablePrefix?: string;
+  }) => Effect.Effect<A, Error, MigrationCliRuntime | SqlClient.SqlClient>
+): Effect.Effect<A, CliError.CliError, MigrationCliRuntime> =>
+  Effect.gen(function* () {
+    const target = yield* requireConfiguredSqlStore(config);
+
+    return yield* use({
+      ...(target.tablePrefix === undefined
+        ? {}
+        : { tablePrefix: target.tablePrefix }),
+    }).pipe(
+      Effect.provide(target.clientLayer),
+      Effect.catch((error) =>
+        CliError.isCliError(error)
+          ? Effect.fail(error)
+          : failReportedCliMessage(renderStoredFailure(error))
+      )
+    );
+  });
+
+const schemaJson = Flag.boolean("json").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription("Print the schema plan as JSON")
+);
+
+const acceptSchemaPlan = Flag.string("accept-plan").pipe(
+  Flag.optional,
+  Flag.withDescription(
+    "Apply only when the current schema plan has this exact plan ID"
+  )
+);
+
+const UnknownJsonString = Schema.fromJsonString(Schema.Unknown);
+
+const printSchemaPlan = (
+  plan: SqlMigrationStoreSchemaPlan,
+  json: boolean
+): Effect.Effect<void, never, MigrationCliRuntime> =>
+  Effect.gen(function* () {
+    yield* Console.log(
+      json
+        ? yield* Schema.encodeEffect(UnknownJsonString)(plan).pipe(Effect.orDie)
+        : renderSqlMigrationStoreSchemaPlan(plan, {
+            colors: yield* useColor,
+          })
+    );
+  });
+
+const schemaStatusCommand = Command.make(
+  "status",
+  { json: schemaJson },
+  ({ json }) =>
+    Effect.gen(function* () {
+      const config = yield* loadConfiguredConfig;
+
+      yield* withConfiguredSqlStore(config, (options) =>
+        Effect.gen(function* () {
+          const plan = yield* SqlMigrationStore.planSchema(options);
+          yield* printSchemaPlan(plan, json);
+        })
+      );
+    })
+).pipe(Command.withDescription("Inspect SQL Migration Store schema status"));
+
+const schemaUpgradeCommand = Command.make(
+  "upgrade",
+  { acceptPlan: acceptSchemaPlan, json: schemaJson },
+  (input) =>
+    Effect.gen(function* () {
+      const config = yield* loadConfiguredConfig;
+
+      yield* withConfiguredSqlStore(config, (options) =>
+        Effect.gen(function* () {
+          const plan = yield* SqlMigrationStore.planSchema(options);
+          const acceptedPlanId = Option.getOrUndefined(input.acceptPlan);
+
+          if (plan.status === "current") {
+            yield* printSchemaPlan(plan, input.json);
+            return;
+          }
+
+          if (acceptedPlanId !== undefined && acceptedPlanId !== plan.planId) {
+            yield* printSchemaPlan(plan, input.json);
+            return yield* failReportedCliMessage(
+              `--accept-plan does not match the current plan ID ${plan.planId}`
+            );
+          }
+
+          if (
+            plan.status !== "not-installed" &&
+            plan.status !== "upgrade-required"
+          ) {
+            yield* printSchemaPlan(plan, input.json);
+            return yield* failReportedCliMessage(
+              `SQL Migration Store schema cannot be upgraded from ${plan.status}`
+            );
+          }
+
+          if (acceptedPlanId === undefined) {
+            yield* printSchemaPlan(plan, input.json);
+            const runtime = yield* MigrationCliRuntime;
+
+            if (
+              input.json ||
+              runtime.stdoutIsTTY !== true ||
+              runtime.confirmSchemaUpgrade === undefined
+            ) {
+              return yield* failReportedCliMessage(
+                `Schema upgrade requires --accept-plan ${plan.planId} in non-interactive mode`
+              );
+            }
+
+            const confirmed = yield* runtime.confirmSchemaUpgrade(plan);
+
+            if (!confirmed) {
+              yield* Console.log("Schema upgrade cancelled.");
+              return;
+            }
+          }
+
+          const completedPlan = yield* SqlMigrationStore.applySchemaPlan(plan);
+          yield* printSchemaPlan(completedPlan, input.json);
+        })
+      );
+    })
+).pipe(
+  Command.withDescription("Apply an approved SQL Migration Store schema plan")
+);
+
+const schemaCommand = Command.make("schema").pipe(
+  Command.withDescription("Manage SQL Migration Store schema versions"),
+  Command.withSubcommands([schemaStatusCommand, schemaUpgradeCommand])
+);
+
+const storeCommand = Command.make("store").pipe(
+  Command.withDescription("Manage Migration Store infrastructure"),
+  Command.withSubcommands([schemaCommand])
 );
 
 type CliExecutableRegistry = MigrationDefinitionRegistry<
@@ -1039,6 +1192,7 @@ export const migrateCommand = migrateBaseCommand.pipe(
     listCommand,
     graphCommand,
     statusCommand,
+    storeCommand,
     unlockCommand,
     runCommand,
     rollbackCommand,

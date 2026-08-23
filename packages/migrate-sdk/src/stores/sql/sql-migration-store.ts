@@ -30,19 +30,17 @@ import { emptyMigrationItemStateSummary } from "../../domain/status.ts";
 import { MigrationStore } from "../../services/migration-store.ts";
 import { PersistedMigrationItemState } from "../internal/persisted-state.ts";
 import {
-  makeSqlMigrationStoreDialect,
-  type SqlMigrationStoreTableNames,
-} from "./sql-migration-store-dialect.ts";
+  applySqlMigrationStoreSchemaPlan,
+  planSqlMigrationStoreSchema,
+  prepareSqlMigrationStore,
+} from "./sql-migration-store-schema.ts";
 
 export interface SqlMigrationStoreOptions {
-  /** Creates the SDK-owned tables and indexes when the layer is built. */
+  /** Creates a brand-new schema through bundled migrations. Defaults to true. */
   readonly initialize?: boolean;
   /** Prefix for SDK-owned tables. Defaults to `migrate_sdk`. */
   readonly tablePrefix?: string;
 }
-
-const defaultTablePrefix = "migrate_sdk";
-const tablePrefixPattern = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 const SqlCursorRow = Schema.Struct({
   cursor_value: EncodedSourceCursor,
@@ -118,16 +116,6 @@ const lockNotFoundError = (
     token: lock.token,
   });
 
-const tableNames = (prefix: string): SqlMigrationStoreTableNames => ({
-  contracts: `${prefix}_contracts`,
-  cursors: `${prefix}_cursors`,
-  itemStates: `${prefix}_item_states`,
-  latestRuns: `${prefix}_latest_runs`,
-  locks: `${prefix}_locks`,
-  runDefinitions: `${prefix}_run_definitions`,
-  runs: `${prefix}_runs`,
-});
-
 const sqlKey = (value: string): string =>
   createHash("sha256").update(value).digest("hex");
 
@@ -190,45 +178,7 @@ const makeLayer = (
   Layer.effect(
     MigrationStore,
     Effect.gen(function* () {
-      const sql = (yield* SqlClient.SqlClient).withoutTransforms();
-      const prefix = options.tablePrefix ?? defaultTablePrefix;
-
-      if (!tablePrefixPattern.test(prefix)) {
-        return yield* storeError(
-          "SQL migration store table prefix must be a SQL identifier",
-          prefix
-        );
-      }
-      const names = tableNames(prefix);
-      const dialect = makeSqlMigrationStoreDialect(sql, names, prefix);
-
-      if (dialect === null) {
-        return yield* storeError(
-          "SQL Migration Store does not support the configured SQL dialect"
-        );
-      }
-
-      yield* sql.withTransaction(Effect.void).pipe(
-        Effect.mapError((cause) =>
-          storeError("SQL migration store requires transaction support", cause)
-        ),
-        Effect.catchDefect((cause) =>
-          Effect.fail(
-            storeError(
-              "SQL migration store requires transaction support",
-              cause
-            )
-          )
-        )
-      );
-
-      if (options.initialize !== false) {
-        yield* dialect.initialize.pipe(
-          Effect.mapError((cause) =>
-            storeError("Unable to initialize SQL migration store", cause)
-          )
-        );
-      }
+      const { dialect, names, sql } = yield* prepareSqlMigrationStore(options);
 
       const contracts = sql(names.contracts);
       const cursors = sql(names.cursors);
@@ -1089,6 +1039,8 @@ const makeLayerFromClient = <ClientError, Requirements>(
 };
 
 export const SqlMigrationStore = {
+  applySchemaPlan: applySqlMigrationStoreSchemaPlan,
   layer: makeLayer,
   layerFromClient: makeLayerFromClient,
+  planSchema: planSqlMigrationStoreSchema,
 } as const;

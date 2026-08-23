@@ -1,4 +1,4 @@
-import { DateTime, Effect, FileSystem, Path, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { register } from "tsx/esm/api";
 import type { MigrationDefinitionRegistry } from "../domain/registry.ts";
 import type { MigrationCliConfig } from "./config.ts";
@@ -50,11 +50,30 @@ const isMigrationCliConfig = (value: unknown): value is MigrationCliConfig => {
 
   const registry = (value as { readonly registry: unknown }).registry;
 
-  return (
+  const hasRegistry =
     typeof registry === "object" &&
     registry !== null &&
     "list" in registry &&
-    typeof (registry as MigrationDefinitionRegistry).list === "function"
+    typeof (registry as MigrationDefinitionRegistry).list === "function";
+
+  if (!hasRegistry) {
+    return false;
+  }
+
+  if (!("sqlStore" in value) || value.sqlStore === undefined) {
+    return true;
+  }
+
+  const sqlStore = value.sqlStore;
+
+  return (
+    typeof sqlStore === "object" &&
+    sqlStore !== null &&
+    "clientLayer" in sqlStore &&
+    Layer.isLayer(sqlStore.clientLayer) &&
+    (!("tablePrefix" in sqlStore) ||
+      sqlStore.tablePrefix === undefined ||
+      typeof sqlStore.tablePrefix === "string")
   );
 };
 
@@ -240,7 +259,7 @@ const readDefaultExport = (
         configPath,
         kind: "InvalidConfig",
         message:
-          "Migration CLI config must be created with defineMigrationCliConfig({ registry, executableLayer? })",
+          "Migration CLI config must be created with defineMigrationCliConfig({ registry, executableLayer?, sqlStore? })",
       })
     );
   }
