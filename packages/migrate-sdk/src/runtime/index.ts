@@ -1,5 +1,7 @@
 // biome-ignore-all lint/performance/noBarrelFile: Runtime entrypoint for lower-level execution primitives.
 
+export type { GetMigrationMessagesInput } from "./get-migration-messages.ts";
+export { getMigrationMessages } from "./get-migration-messages.ts";
 export { getMigrationStatuses } from "./get-migration-statuses.ts";
 export type {
   MigrationRunBeginInput,

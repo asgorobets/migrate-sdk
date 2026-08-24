@@ -109,6 +109,12 @@ export {
 
 export { MigrationDefinitionLock } from "./domain/lock.ts";
 
+export {
+  MigrationMessage,
+  MigrationMessageKind,
+  MigrationMessageSeverity,
+} from "./domain/message.ts";
+
 export type { ProcessContext } from "./domain/pipeline.ts";
 
 export type {
@@ -199,8 +205,12 @@ export type {
   MigrationDefinitionRegistryEntry,
   MigrationDefinitionRegistryGroup,
   MigrationDefinitionRegistryInput,
+  MigrationDefinitionRegistryMessagesError,
+  MigrationDefinitionRegistryMessagesInput,
+  MigrationDefinitionRegistryMessagesReport,
   MigrationDefinitionRegistryPlanningError,
   MigrationDefinitionRegistryRollbackInput,
+  MigrationDefinitionRegistrySelectionReport,
   MigrationDefinitionRegistryDurableStatusInput,
   MigrationDefinitionRegistryRunInput,
   MigrationDefinitionRegistrySelectionInput,

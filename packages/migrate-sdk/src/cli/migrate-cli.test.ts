@@ -9,6 +9,7 @@ import { CliOutput, Command } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import {
   DuplicateSourceIdentityStatusWarning,
+  MigrationMessage,
   toEncodedSourceIdentity,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
@@ -51,6 +52,9 @@ const tagsRollbackConcurrencyPattern = /tags\s+unbounded/;
 const rollbackOrphansSummaryPattern =
   /articles\s+succeeded\s+0\s+1\s+0\s+0\s+0\s+1\s+1\s+0/;
 const JsonString = Schema.fromJsonString(Schema.String);
+const MigrationMessagesFromJson = Schema.fromJsonString(
+  Schema.Array(MigrationMessage)
+);
 
 interface CliRuntimeTestOptions {
   readonly confirmSchemaUpgrade?: NonNullable<
@@ -939,6 +943,88 @@ describe("migrate CLI", () => {
       expect(result.stdout).toContain("Group      articles");
       expect(result.stdout).toContain("Requested  tags, articles, authors");
       expect(result.stdout).toContain("Included   tags, articles, authors");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders durable messages for one Migration Definition", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        yield* readCliFixture("messages.config.ts")
+      );
+
+      const result = yield* runCli(
+        ["messages", "--config", "migrate.config.ts", "articles"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Migration Messages");
+      expect(result.stdout).toContain("Requested  articles");
+      expect(result.stdout).toContain("Included   articles");
+      expect(result.stdout).toContain(
+        "Migration Definition articles · Source identity article-effect"
+      );
+      expect(result.stdout).toContain(
+        "MissingAuthor: Could not resolve the article author"
+      );
+      expect(result.stdout).toContain("Author lookup returned no result");
+      expect(result.stdout).toContain('"authorId": "author-missing"');
+      expect(result.stdout).not.toContain("author-ada");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("prints grouped durable messages as schema-valid JSON", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        yield* readCliFixture("messages.config.ts")
+      );
+
+      const result = yield* runCli(
+        [
+          "messages",
+          "--config",
+          "migrate.config.ts",
+          "--group",
+          "content",
+          "--json",
+        ],
+        project
+      );
+      const messages = yield* Schema.decodeUnknownEffect(
+        MigrationMessagesFromJson
+      )(result.stdout);
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(messages).toHaveLength(3);
+      expect(messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            definitionId: toMigrationDefinitionId("articles"),
+            details: { authorId: "author-missing" },
+            kind: "process-diagnostic",
+            sourceIdentity: "article-effect",
+          }),
+          expect.objectContaining({
+            definitionId: toMigrationDefinitionId("authors"),
+            kind: "skip-reason",
+            message: "Author already exists at the destination",
+            sourceIdentity: "author-ada",
+          }),
+        ])
+      );
+      expect(messages[0]?.updatedAt).toBeInstanceOf(Date);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 

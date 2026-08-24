@@ -1,6 +1,10 @@
 import { createTestRenderer } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
-import { toMigrationDefinitionId } from "migrate-sdk";
+import {
+  toEncodedSourceIdentity,
+  toMigrationDefinitionId,
+  toMigrationRunId,
+} from "migrate-sdk";
 import { act } from "react";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { MigrationTuiApp } from "./app.tsx";
@@ -18,6 +22,7 @@ const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
 const processConcurrencyValuePattern = /│ 3\s+│/;
 const rollbackConcurrencyValuePattern = /│ 5\s+│/;
 const sourceInventoryScanConcurrencyValuePattern = /│ 2\s+│/;
+const messageRunId = toMigrationRunId("run-messages");
 
 const settle = async (
   renderOnce: () => Promise<void>,
@@ -102,7 +107,7 @@ describe("MigrationTuiApp", () => {
   );
 
   itWithOpenTui(
-    "keeps position and source identity visible while navigating many messages",
+    "renders and follows a bounded message list while navigating many messages",
     async () => {
       const baseRuntime = await makeMigrationTuiRuntime({
         configPath: "examples/migrate.config.ts",
@@ -110,23 +115,34 @@ describe("MigrationTuiApp", () => {
       });
       const messages: readonly MigrationTuiMessage[] = Array.from(
         { length: 40 },
-        (_, index) => ({
-          definitionId: toMigrationDefinitionId("authors"),
-          identity: `source-${String(index + 1).padStart(3, "0")}`,
-          message: `Message ${index + 1}`,
-          severity: index % 3 === 0 ? "warning" : "info",
-          source: "item",
-          updatedAt: new Date(
-            `2026-08-23T09:${String(index).padStart(2, "0")}:00.000Z`
-          ),
-        })
+        (_, index) => {
+          const message = {
+            definitionId: toMigrationDefinitionId("authors"),
+            message: `Message ${index + 1}`,
+            runId: messageRunId,
+            sourceIdentity: toEncodedSourceIdentity(
+              `source-${String(index + 1).padStart(3, "0")}`
+            ),
+            updatedAt: new Date(
+              `2026-08-23T09:${String(index).padStart(2, "0")}:00.000Z`
+            ),
+          };
+
+          return index % 3 === 0
+            ? ({
+                ...message,
+                kind: "update-reason",
+                severity: "warning",
+              } as const)
+            : ({ ...message, kind: "skip-reason", severity: "info" } as const);
+        }
       );
       const runtime: MigrationTuiRuntime = {
         ...baseRuntime,
         listMessages: async () => messages,
       };
       const setup = await createTestRenderer({
-        height: 24,
+        height: 36,
         kittyKeyboard: true,
         width: 120,
       });
@@ -151,8 +167,11 @@ describe("MigrationTuiApp", () => {
             const frame = setup.captureCharFrame();
             return (
               frame.includes("Message 1 of 40") &&
+              frame.includes("› 1/40") &&
               frame.includes("Source identity source-001 · item") &&
-              frame.includes("Message 1")
+              frame.includes("Message 1") &&
+              frame.includes("Source identity source-002 · item") &&
+              frame.includes("Message 2")
             );
           })
         ).toBe(true);
@@ -167,8 +186,11 @@ describe("MigrationTuiApp", () => {
             const frame = setup.captureCharFrame();
             return (
               frame.includes("Message 40 of 40") &&
+              frame.includes("› 40/40") &&
               frame.includes("Source identity source-040 · item") &&
-              frame.includes("Message 40")
+              frame.includes("Message 40") &&
+              frame.includes("Source identity source-039 · item") &&
+              frame.includes("Message 39")
             );
           })
         ).toBe(true);
@@ -202,11 +224,15 @@ describe("MigrationTuiApp", () => {
         listMessages: async () => [
           {
             definitionId: toMigrationDefinitionId("articles"),
-            details: `DETAILS-START ${"structured migration detail ".repeat(100)} DETAILS-END`,
-            identity: "source-long-message",
+            details: {
+              context: `DETAILS-START ${"structured migration detail ".repeat(100)} DETAILS-END`,
+            },
+            kind: "process-diagnostic",
             message: `MESSAGE-START ${"long migration message ".repeat(100)} MESSAGE-END`,
+            runId: messageRunId,
+            sequence: 0,
             severity: "warning",
-            source: "diagnostic",
+            sourceIdentity: toEncodedSourceIdentity("source-long-message"),
             updatedAt: new Date("2026-08-23T09:00:00.000Z"),
           },
         ],
@@ -241,6 +267,7 @@ describe("MigrationTuiApp", () => {
             const frame = setup.captureCharFrame();
             return (
               frame.includes("Message 1 of 1") &&
+              frame.includes(`Migration Run ${messageRunId}`) &&
               frame.includes("MESSAGE-START") &&
               frame.includes("↵ Close")
             );

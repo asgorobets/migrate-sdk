@@ -13,6 +13,10 @@ import {
   migrationTuiPrimaryActions,
   migrationTuiUtilityActions,
 } from "./migration-actions.ts";
+import {
+  migrationMessageKindLabel,
+  migrationMessageMarker,
+} from "./migration-message.ts";
 import { MigrationMessages } from "./migration-messages.tsx";
 import { Badge, type BadgeIntent } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
@@ -267,20 +271,6 @@ const lastRunLabel = (row: MigrationTuiRow): string => {
 
   return `${lastRun.status} · ${formatDate(lastRun.finishedAt ?? lastRun.startedAt)}`;
 };
-
-const messageMarker = (severity: MigrationTuiMessage["severity"]): string => {
-  if (severity === "error") {
-    return "✗";
-  }
-  if (severity === "warning") {
-    return "!";
-  }
-
-  return "•";
-};
-
-const messageSourceLabel = (source: MigrationTuiMessage["source"]): string =>
-  source === "diagnostic" ? "message" : source;
 
 const ProgressBar = ({ counts }: { readonly counts: DurableCounts }) => {
   const segments = [
@@ -772,7 +762,7 @@ const Dependencies = ({
   );
 };
 
-const LatestDiagnostic = ({
+const LatestMessage = ({
   compact,
   loading,
   messages,
@@ -802,9 +792,9 @@ const LatestDiagnostic = ({
 
   if (compact) {
     return (
-      <box key="diagnostic-compact" style={{ flexShrink: 0, height: 1 }}>
+      <box key="message-compact" style={{ flexShrink: 0, height: 1 }}>
         <text
-          content={`${messageMarker(latest.severity)} ${showDefinitionId ? `${latest.definitionId} · ` : ""}${latest.identity} · ${latest.message}`}
+          content={`${migrationMessageMarker(latest.severity)} ${showDefinitionId ? `${latest.definitionId} · ` : ""}${latest.sourceIdentity} · ${latest.message}`}
           fg={statusColor(latest.severity)}
           wrapMode="none"
         />
@@ -814,13 +804,13 @@ const LatestDiagnostic = ({
 
   return (
     <box
-      key="diagnostic-wide"
+      key="message-wide"
       style={{ flexDirection: "column", flexShrink: 0, height: 2 }}
     >
       <text fg={statusColor(latest.severity)}>
-        {messageMarker(latest.severity)}{" "}
+        {migrationMessageMarker(latest.severity)}{" "}
         {showDefinitionId ? `${latest.definitionId} · ` : ""}
-        {latest.identity} · {messageSourceLabel(latest.source)}
+        {latest.sourceIdentity} · {migrationMessageKindLabel(latest.kind)}
       </text>
       <text fg={migrationColors.foreground}>{latest.message}</text>
     </box>
@@ -916,7 +906,7 @@ const Overview = ({
         <text fg={migrationColors.foreground}>Latest message</text>
       </box>
     )}
-    <LatestDiagnostic
+    <LatestMessage
       compact={compact}
       loading={messagesLoading}
       messages={messages}
@@ -998,7 +988,7 @@ const GroupOverview = ({
           <text fg={migrationColors.foreground}>Latest message</text>
         </box>
       )}
-      <LatestDiagnostic
+      <LatestMessage
         compact={compact}
         loading={messagesLoading}
         messages={messages}

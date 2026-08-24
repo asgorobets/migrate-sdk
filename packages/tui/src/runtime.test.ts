@@ -302,13 +302,13 @@ describe("Migration TUI runtime", () => {
       expect.arrayContaining([
         expect.objectContaining({
           definitionId: articlesId,
-          identity: "article-welcome",
           message: "Published article route",
+          sourceIdentity: "article-welcome",
         }),
         expect.objectContaining({
           definitionId: assetsId,
-          identity: "asset-logo",
           message: "Asset already exists at the destination",
+          sourceIdentity: "asset-logo",
         }),
       ])
     );

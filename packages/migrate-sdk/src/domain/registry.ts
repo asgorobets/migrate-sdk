@@ -1,5 +1,7 @@
 import { Effect, Option, Schema } from "effect";
+import { getMigrationMessages } from "../runtime/get-migration-messages.ts";
 import { getMigrationStatuses } from "../runtime/get-migration-statuses.ts";
+import type { MigrationStoreError } from "./errors.ts";
 import type {
   MigrationExecutionOptions,
   PipelineExecutionConcurrency,
@@ -23,6 +25,7 @@ import {
   toMigrationDefinitionId,
   toMigrationDefinitionRegistryId,
 } from "./ids.ts";
+import type { MigrationMessage } from "./message.ts";
 import type { AnyRollbackMigrationDefinition } from "./rollback.ts";
 import type {
   AnyMigrationDefinition,
@@ -112,6 +115,9 @@ export type MigrationDefinitionRegistryStatusInput =
     readonly concurrency?: number;
     readonly scanSource?: boolean;
   };
+
+export type MigrationDefinitionRegistryMessagesInput =
+  MigrationDefinitionRegistrySelectionInput;
 
 export type MigrationDefinitionRegistryDurableStatusInput =
   MigrationDefinitionRegistrySelectionInput & {
@@ -259,13 +265,24 @@ export interface MigrationDefinitionExecutableRollbackPlan
   readonly [executableRollbackPlanTypeId]: "rollback";
 }
 
-export interface MigrationDefinitionRegistryStatusReport
-  extends MigrationStatusReport {
+export interface MigrationDefinitionRegistrySelectionReport {
   readonly includedDefinitionIds: readonly MigrationDefinitionId[];
   readonly notices: readonly MigrationDefinitionPlanNotice[];
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
   readonly requestedGroup?: MigrationDefinitionGroupId;
 }
+
+export type MigrationDefinitionRegistryStatusReport = MigrationStatusReport &
+  MigrationDefinitionRegistrySelectionReport;
+
+export interface MigrationDefinitionRegistryMessagesReport
+  extends MigrationDefinitionRegistrySelectionReport {
+  readonly messages: readonly MigrationMessage[];
+}
+
+export type MigrationDefinitionRegistryMessagesError =
+  | MigrationDefinitionRegistryPlanningError
+  | MigrationStoreError;
 
 export type MigrationDefinitionRegistryStatusError =
   | MigrationDefinitionRegistryPlanningError
@@ -1776,6 +1793,55 @@ export class MigrationDefinitionRegistry<
           ? {}
           : { execution: input.execution }),
         withDependencies: selection.withDependencies,
+      };
+    });
+  }
+
+  messages(
+    input: MigrationDefinitionRegistryMessagesInput
+  ): Effect.Effect<
+    MigrationDefinitionRegistryMessagesReport,
+    MigrationDefinitionRegistryMessagesError
+  > {
+    const definitions = this.#definitions;
+    const definitionsById = this.#definitionsById;
+    const groupsById = this.#groupsById;
+
+    return Effect.gen(function* () {
+      const selection = yield* resolveSelectionInput(
+        definitions,
+        definitionsById,
+        groupsById,
+        input
+      );
+      const includedDefinitionIds = resolveIncludedDefinitionIds(
+        definitionsById,
+        selection
+      );
+      const planDetails = resolveDefinitionPlanDetails(
+        definitions,
+        definitionsById,
+        includedDefinitionIds,
+        selection.notices
+      );
+      const includedDefinitionIdSet = new Set(
+        planDetails.includedDefinitionIdsInRegistryOrder
+      );
+      const messageDefinitions = definitions.filter((definition) =>
+        includedDefinitionIdSet.has(definition.id)
+      );
+      const messages = yield* getMigrationMessages({
+        definitions: messageDefinitions,
+      });
+
+      return {
+        includedDefinitionIds: planDetails.includedDefinitionIdsInRegistryOrder,
+        messages,
+        notices: selection.notices,
+        ...(selection.requestedGroup === undefined
+          ? {}
+          : { requestedGroup: selection.requestedGroup }),
+        requestedDefinitionIds: selection.requestedDefinitionIds,
       };
     });
   }

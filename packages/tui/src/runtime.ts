@@ -15,6 +15,7 @@ import {
   type MigrationExecutableProgressCheckpoint,
   type MigrationExecutionOptions,
   type MigrationItemState,
+  type MigrationMessage,
   MigrationProgress,
   type MigrationRunId,
   type MigrationRunState,
@@ -116,15 +117,7 @@ export interface MigrationTuiSourceIdentityHistoryEntry {
   readonly updatedAt: Date;
 }
 
-export interface MigrationTuiMessage {
-  readonly definitionId: MigrationDefinitionId;
-  readonly details?: string;
-  readonly identity: string;
-  readonly message: string;
-  readonly severity: "error" | "info" | "warning";
-  readonly source: "diagnostic" | "item" | "rollback";
-  readonly updatedAt: Date;
-}
+export type MigrationTuiMessage = MigrationMessage;
 
 export interface MigrationTuiRow {
   readonly entry: MigrationDefinitionRegistryEntry;
@@ -244,111 +237,6 @@ const sourceIdentityKeyText = (key: SourceIdentitySnapshotKey): string =>
   Array.isArray(key)
     ? key.map(sourceIdentityPartText).join(":")
     : sourceIdentityPartText(key as string | number | boolean);
-
-const formatDetails = (
-  details: readonly {
-    readonly message: string;
-    readonly path?: string | undefined;
-  }[]
-): string =>
-  details
-    .map((detail) =>
-      detail.path === undefined
-        ? detail.message
-        : `${detail.path}: ${detail.message}`
-    )
-    .join("\n");
-
-const itemMessages = (
-  state: MigrationItemState
-): readonly MigrationTuiMessage[] => {
-  const messages: MigrationTuiMessage[] = [];
-  const identity = state.sourceIdentity.encoded;
-
-  if (state.status === "failed") {
-    messages.push({
-      definitionId: state.definitionId,
-      ...(state.error.details === undefined
-        ? {}
-        : { details: formatDetails(state.error.details) }),
-      identity,
-      message: `${state.error.errorTag}: ${state.error.message}`,
-      severity: "error",
-      source: "item",
-      updatedAt: state.updatedAt,
-    });
-  } else if (state.status === "skipped") {
-    messages.push({
-      definitionId: state.definitionId,
-      identity,
-      message: state.skipReason,
-      severity: "info",
-      source: "item",
-      updatedAt: state.updatedAt,
-    });
-  } else if (state.status === "needs-update") {
-    messages.push({
-      definitionId: state.definitionId,
-      identity,
-      message: state.reason,
-      severity: "warning",
-      source: "item",
-      updatedAt: state.updatedAt,
-    });
-  }
-
-  for (const entry of state.journal?.process.entries ?? []) {
-    if (entry.kind !== "diagnostic") {
-      continue;
-    }
-
-    messages.push({
-      definitionId: state.definitionId,
-      ...(entry.details === undefined
-        ? {}
-        : { details: JSON.stringify(entry.details, null, 2) }),
-      identity,
-      message: entry.message,
-      severity: entry.severity,
-      source: "diagnostic",
-      updatedAt: state.updatedAt,
-    });
-  }
-
-  for (const attempt of state.journal?.rollbackAttempts ?? []) {
-    messages.push({
-      definitionId: state.definitionId,
-      ...(attempt.error.details === undefined
-        ? {}
-        : { details: formatDetails(attempt.error.details) }),
-      identity,
-      message: `${attempt.error.errorTag}: ${attempt.error.message}`,
-      severity: "error",
-      source: "rollback",
-      updatedAt: attempt.failedAt,
-    });
-
-    for (const entry of attempt.entries) {
-      if (entry.kind !== "diagnostic") {
-        continue;
-      }
-
-      messages.push({
-        definitionId: state.definitionId,
-        ...(entry.details === undefined
-          ? {}
-          : { details: JSON.stringify(entry.details, null, 2) }),
-        identity,
-        message: entry.message,
-        severity: entry.severity,
-        source: "rollback",
-        updatedAt: attempt.failedAt,
-      });
-    }
-  }
-
-  return messages;
-};
 
 export const makeMigrationTuiRuntime = async (
   input: LoadMigrationTuiInput
@@ -886,34 +774,15 @@ export const makeMigrationTuiRuntime = async (
   const listMessages = async (
     target: MigrationTuiTarget
   ): Promise<readonly MigrationTuiMessage[]> => {
-    const definitionIds =
-      target.kind === "migration"
-        ? [target.definitionId]
-        : (groups.find((group) => group.id === target.groupId)?.definitionIds ??
-          []);
-
-    if (definitionIds.length === 0) {
-      return Promise.reject(
-        new Error(
-          target.kind === "group"
-            ? `Migration group was not found: ${target.groupId}`
-            : `Migration was not found: ${target.definitionId}`
-        )
-      );
-    }
-    const states = (
-      await Promise.all(
-        definitionIds.map((definitionId) =>
-          readItemStates(config, definitionId)
-        )
+    const report = await Effect.runPromise(
+      config.registry.messages(
+        target.kind === "migration"
+          ? { definitionIds: [target.definitionId] }
+          : { group: target.groupId }
       )
-    ).flat();
+    );
 
-    return states
-      .flatMap(itemMessages)
-      .sort(
-        (left, right) => right.updatedAt.getTime() - left.updatedAt.getTime()
-      );
+    return report.messages;
   };
 
   return {

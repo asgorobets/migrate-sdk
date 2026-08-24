@@ -61,7 +61,11 @@ rollback, `s` to run a Source Inventory Scan for the current selection and its
 required dependencies, `R` to reload status, and `q` to quit. When applicable, `t`
 retries skipped items and `u` opens the guarded break-lock confirmation. Use
 Page Up and Page Down to scroll the overview while the arrow keys continue to
-select migrations.
+select migrations. The Messages tab displays a bounded list with the current
+message highlighted; use the arrow keys to move through it and `Enter` to open
+the complete message and structured details. For non-interactive inspection or
+export, use `migrate messages <migration>` or
+`migrate messages --all --json` from the same project.
 
 Runs start directly when their dependencies are ready. A group concurrency
 override controls item processing within each migration; migration definitions

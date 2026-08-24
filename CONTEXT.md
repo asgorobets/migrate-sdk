@@ -290,6 +290,9 @@ Durable structured detail for inspecting a migration item error after the run ha
 **Migration Diagnostic**:
 A schema-backed warning or error record that explains migration status, item failure, run failure, or another operational condition.
 
+**Migration Message**:
+An operator-facing durable read model for a Migration Item Error, state reason, or Destination Journal Diagnostic, scoped to one Migration Definition and Source Identity.
+
 ## Relationships
 
 - A **Source Item** has exactly one **Migration Item State** for a given migration definition.
@@ -461,6 +464,7 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Destination Journal Diagnostic** is not a **Destination Change**.
 - A **Process Pipeline** may record a **Destination Journal Diagnostic** when failure context would otherwise exist only in logs.
 - Ordinary logs are not **Destination Journal Diagnostics**.
+- A **Migration Message** is projected from durable **Migration Item State** evidence; it is not live CLI output or an ordinary log.
 - A **Destination Journal Diagnostic** is created from explicitly marked diagnostic logging.
 - A **Destination Journal Diagnostic** uses one generic message shape; migration authors and destination helpers map their own errors or domain context into that shape.
 - A **Destination Journal Diagnostic** has severity `info`, `warning`, or `error`.

@@ -7,7 +7,9 @@ import type {
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryConstructionIssue,
   MigrationDefinitionRegistryEntry,
+  MigrationDefinitionRegistryMessagesReport,
   MigrationDefinitionRegistryPlanningError,
+  MigrationDefinitionRegistrySelectionReport,
   MigrationDefinitionRegistryStatusReport,
   MigrationDefinitionRollbackPlan,
   MigrationDefinitionRunPlan,
@@ -1061,6 +1063,18 @@ const renderStatusTable = (
         options
       );
 
+const renderRegistrySelectionScope = (
+  report: MigrationDefinitionRegistrySelectionReport,
+  options: RenderOptions
+): readonly string[] => [
+  bold("Scope", options),
+  ...(report.requestedGroup === undefined
+    ? []
+    : [`Group      ${report.requestedGroup}`]),
+  `Requested  ${renderRequestedDefinitionIdsInline(report.requestedDefinitionIds)}`,
+  `Included   ${renderDefinitionIdInlineList(report.includedDefinitionIds)}`,
+];
+
 const renderStatusScope = (
   report: MigrationDefinitionRegistryStatusReport,
   options: RenderOptions
@@ -1078,12 +1092,7 @@ const renderStatusScope = (
       ];
 
   return [
-    bold("Scope", options),
-    ...(report.requestedGroup === undefined
-      ? []
-      : [`Group      ${report.requestedGroup}`]),
-    `Requested  ${renderRequestedDefinitionIdsInline(report.requestedDefinitionIds)}`,
-    `Included   ${renderDefinitionIdInlineList(report.includedDefinitionIds)}`,
+    ...renderRegistrySelectionScope(report, options),
     `Scan       ${scanLine}`,
     ...hintLine,
   ];
@@ -1132,6 +1141,61 @@ export const renderStatusReport = (
     ...renderStatusTable(report, options),
     ...renderNoticeSection(report.notices),
     ...renderWarningSection([...discoveryWarnings, ...statusWarnings], options),
+  ].join("\n");
+};
+
+const renderMessageSeverity = (
+  severity: MigrationDefinitionRegistryMessagesReport["messages"][number]["severity"],
+  options: RenderOptions
+): string => {
+  const label = severity.toUpperCase();
+
+  switch (severity) {
+    case "error":
+      return red(label, options);
+    case "warning":
+      return yellow(label, options);
+    case "info":
+      return cyan(label, options);
+    default: {
+      const exhaustive: never = severity;
+      return exhaustive;
+    }
+  }
+};
+
+const renderMessageDetails = (
+  details: Exclude<
+    MigrationDefinitionRegistryMessagesReport["messages"][number]["details"],
+    undefined
+  >
+): readonly string[] => {
+  const json = JSON.stringify(details, null, 2) ?? String(details);
+
+  return ["Details", ...json.split("\n").map((line) => `  ${line}`)];
+};
+
+export const renderMessagesReport = (
+  report: MigrationDefinitionRegistryMessagesReport,
+  options: RenderOptions = {}
+): string => {
+  const messageLines = report.messages.flatMap((message, index) => [
+    `${index + 1}. ${renderMessageSeverity(message.severity, options)}  Migration Definition ${message.definitionId} · Source identity ${message.sourceIdentity}`,
+    `   ${message.kind.replaceAll("-", " ")} · run ${message.runId} · ${message.updatedAt.toISOString()}`,
+    `   ${message.message}`,
+    ...(message.details === undefined
+      ? []
+      : renderMessageDetails(message.details).map((line) => `   ${line}`)),
+    ...(index === report.messages.length - 1 ? [] : [""]),
+  ]);
+
+  return [
+    bold("Migration Messages", options),
+    "",
+    ...renderRegistrySelectionScope(report, options),
+    "",
+    ...(report.messages.length === 0 ? ["No messages."] : messageLines),
+    ...renderNoticeSection(report.notices),
   ].join("\n");
 };
 
@@ -1206,7 +1270,7 @@ export const renderSqlMigrationStoreSchemaPlan = (
 };
 
 const formatPlanCommand = (
-  command: "rollback" | "run" | "status",
+  command: "messages" | "rollback" | "run" | "status",
   flags: readonly string[],
   definitionIds: readonly string[]
 ): string =>
@@ -1229,7 +1293,7 @@ const dedupeStrings = (values: readonly string[]): readonly string[] => {
 };
 
 const missingDependencyExpansionFlags = (
-  command: "rollback" | "run" | "status",
+  command: "messages" | "rollback" | "run" | "status",
   modeFlags: readonly string[]
 ): readonly string[] =>
   command === "status"
@@ -1237,14 +1301,17 @@ const missingDependencyExpansionFlags = (
     : ["--plan", ...modeFlags, "--with-dependencies"];
 
 const missingDependencyExplicitFlags = (
-  command: "rollback" | "run" | "status",
+  command: "messages" | "rollback" | "run" | "status",
   modeFlags: readonly string[]
-): readonly string[] => (command === "status" ? [] : ["--plan", ...modeFlags]);
+): readonly string[] =>
+  command === "messages" || command === "status"
+    ? []
+    : ["--plan", ...modeFlags];
 
 export const renderPlanningError = (
   error: MigrationDefinitionRegistryPlanningError,
   input: {
-    readonly command: "rollback" | "run" | "status";
+    readonly command: "messages" | "rollback" | "run" | "status";
     readonly definitionIds: readonly string[];
     readonly group?: string;
     readonly hasTarget: boolean;

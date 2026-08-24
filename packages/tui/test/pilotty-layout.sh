@@ -69,7 +69,7 @@ trap cleanup EXIT
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/short-dashboard.txt"
-"${PILOTTY_BIN}" resize -s "${SESSION}" 120 24 >/dev/null
+"${PILOTTY_BIN}" resize -s "${SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" m >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
   "Message 1 of 3" >/dev/null
@@ -85,6 +85,7 @@ trap cleanup EXIT
   --strict \
   --format text >"${ARTIFACT_DIR}/message-expanded.txt"
 "${PILOTTY_BIN}" key -s "${SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" resize -s "${SESSION}" 120 24 >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" j >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
   "Message 2 of 3" >/dev/null
@@ -782,6 +783,14 @@ assert_contains \
   "${ARTIFACT_DIR}/messages-populated.txt" \
   "Published article route" \
   "message rows display the durable message"
+assert_contains \
+  "${ARTIFACT_DIR}/messages-populated.txt" \
+  "Source identity article-effect · item" \
+  "message lists display more than the selected row"
+assert_contains \
+  "${ARTIFACT_DIR}/messages-populated.txt" \
+  "Could not resolve the article author" \
+  "message lists keep neighboring message content visible"
 assert_contains \
   "${ARTIFACT_DIR}/messages-populated.txt" \
   "↵ expand" \

@@ -10,8 +10,10 @@ import {
   type MigrationDefinitionId,
   toMigrationDefinitionId,
 } from "../domain/ids.ts";
+import { MigrationMessage } from "../domain/message.ts";
 import type {
   MigrationDefinitionRegistry,
+  MigrationDefinitionRegistryMessagesError,
   MigrationDefinitionRegistryPlanningError,
   MigrationDefinitionRegistryRollbackInput,
   MigrationDefinitionRegistryRunInput,
@@ -46,6 +48,7 @@ import {
 } from "./progress.ts";
 import {
   renderConfigLoadError,
+  renderMessagesReport,
   renderPlanningError,
   renderRegistryGraph,
   renderRegistryList,
@@ -342,6 +345,11 @@ const schemaJson = Flag.boolean("json").pipe(
   Flag.withDescription("Print the schema plan as JSON")
 );
 
+const messagesJson = Flag.boolean("json").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription("Print Migration Messages as JSON")
+);
+
 const acceptSchemaPlan = Flag.string("accept-plan").pipe(
   Flag.optional,
   Flag.withDescription(
@@ -350,6 +358,9 @@ const acceptSchemaPlan = Flag.string("accept-plan").pipe(
 );
 
 const UnknownJsonString = Schema.fromJsonString(Schema.Unknown);
+const MigrationMessagesFromJson = Schema.fromJsonString(
+  Schema.Array(MigrationMessage)
+);
 
 const printSchemaPlan = (
   plan: SqlMigrationStoreSchemaPlan,
@@ -754,6 +765,7 @@ const makeStatusInput = (
 
 const isPlanningError = (
   error:
+    | MigrationDefinitionRegistryMessagesError
     | MigrationExecutionRollbackError
     | MigrationExecutionRunError
     | MigrationDefinitionRegistryStatusError
@@ -834,6 +846,22 @@ const renderStatusCommandError = (
   return renderRuntimeError(error);
 };
 
+const renderMessagesCommandError = (
+  error: MigrationDefinitionRegistryMessagesError,
+  input: {
+    readonly definitionIds: readonly string[];
+    readonly group?: string;
+  }
+): string =>
+  isPlanningError(error)
+    ? renderPlanningError(error, {
+        command: "messages",
+        definitionIds: input.definitionIds,
+        ...(input.group === undefined ? {} : { group: input.group }),
+        hasTarget: false,
+      })
+    : renderRuntimeError(error);
+
 const statusCommand = Command.make(
   "status",
   {
@@ -876,6 +904,54 @@ const statusCommand = Command.make(
       );
     })
 ).pipe(Command.withDescription("Inspect Migration Definition status"));
+
+const messagesCommand = Command.make(
+  "messages",
+  {
+    all,
+    definitions: runDefinitions,
+    group,
+    json: messagesJson,
+    withDependencies,
+  },
+  (input) =>
+    Effect.gen(function* () {
+      const loadedConfig = yield* loadConfiguredConfig;
+      const registry = loadedConfig.registry;
+      const groupInput = Option.getOrUndefined(input.group);
+      const report = yield* registry
+        .messages(
+          makeRegistrySelectionInput({
+            all: input.all,
+            definitionIds: input.definitions,
+            ...(groupInput === undefined ? {} : { group: groupInput }),
+            withDependencies: input.withDependencies,
+          })
+        )
+        .pipe(
+          Effect.catch((error) =>
+            failReportedCliMessage(
+              renderMessagesCommandError(error, {
+                definitionIds: input.definitions,
+                ...(groupInput === undefined ? {} : { group: groupInput }),
+              })
+            )
+          )
+        );
+
+      if (input.json) {
+        const json = yield* Schema.encodeEffect(MigrationMessagesFromJson)(
+          report.messages
+        ).pipe(Effect.orDie);
+        yield* Console.log(json);
+        return;
+      }
+
+      yield* Console.log(
+        renderMessagesReport(report, { colors: yield* useColor })
+      );
+    })
+).pipe(Command.withDescription("Inspect durable Migration Messages"));
 
 const unlockDefinition = Argument.string("definition").pipe(
   Argument.withDescription(
@@ -1192,6 +1268,7 @@ export const migrateCommand = migrateBaseCommand.pipe(
     listCommand,
     graphCommand,
     statusCommand,
+    messagesCommand,
     storeCommand,
     unlockCommand,
     runCommand,

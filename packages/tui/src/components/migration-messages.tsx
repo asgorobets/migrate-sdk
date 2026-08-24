@@ -1,30 +1,24 @@
-import { useEffect } from "react";
+import type { ScrollBoxRenderable } from "@opentui/core";
+import { useEffect, useRef } from "react";
 import type { MigrationTuiMessage } from "../runtime.ts";
+import {
+  migrationMessageKindLabel,
+  migrationMessageMarker,
+  migrationMessageRowKey,
+} from "./migration-message.ts";
 
 interface MigrationMessageColors {
   readonly dim: string;
   readonly foreground: string;
+  readonly selected: string;
   readonly surface: string;
 }
-
-const messageMarker = (severity: MigrationTuiMessage["severity"]): string => {
-  if (severity === "error") {
-    return "✗";
-  }
-  if (severity === "warning") {
-    return "!";
-  }
-
-  return "•";
-};
-
-const messageSourceLabel = (source: MigrationTuiMessage["source"]): string =>
-  source === "diagnostic" ? "message" : source;
 
 const MessageLine = ({
   colors,
   index,
   message,
+  selected,
   severityColor,
   showDefinitionId,
   total,
@@ -32,6 +26,7 @@ const MessageLine = ({
   readonly colors: MigrationMessageColors;
   readonly index: number;
   readonly message: MigrationTuiMessage;
+  readonly selected: boolean;
   readonly severityColor: (severity: MigrationTuiMessage["severity"]) => string;
   readonly showDefinitionId: boolean;
   readonly total: number;
@@ -41,7 +36,7 @@ const MessageLine = ({
 
   return (
     <box
-      backgroundColor={colors.surface}
+      backgroundColor={selected ? colors.selected : colors.surface}
       id={`message-row-${index}`}
       style={{
         flexDirection: "column",
@@ -52,7 +47,7 @@ const MessageLine = ({
       }}
     >
       <text
-        content={`› ${index + 1}/${total} ${messageMarker(message.severity)} ${definitionLabel}Source identity ${message.identity} · ${messageSourceLabel(message.source)}${hasDetails ? " · details" : ""}`}
+        content={`${selected ? "›" : " "} ${index + 1}/${total} ${migrationMessageMarker(message.severity)} ${definitionLabel}Source identity ${message.sourceIdentity} · ${migrationMessageKindLabel(message.kind)}${hasDetails ? " · details" : ""}`}
         fg={severityColor(message.severity)}
         wrapMode="none"
       />
@@ -80,13 +75,47 @@ export const MigrationMessages = ({
   readonly severityColor: (severity: MigrationTuiMessage["severity"]) => string;
   readonly showDefinitionId?: boolean;
 }) => {
-  const selectedMessage = messages[selectedIndex];
+  const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
 
   useEffect(() => {
     if (selectedIndex >= messages.length) {
       onSelectedIndexChange(Math.max(0, messages.length - 1));
     }
   }, [messages.length, onSelectedIndexChange, selectedIndex]);
+
+  useEffect(() => {
+    if (messages.length === 0) {
+      return;
+    }
+
+    const revealSelectedMessage = () => {
+      const scrollbox = scrollboxRef.current;
+      if (scrollbox === null || scrollbox.viewport.height === 0) {
+        return;
+      }
+
+      const rowTop = selectedIndex * 2;
+      const rowBottom = rowTop + 2;
+      const viewportTop = scrollbox.scrollTop;
+      const viewportBottom = viewportTop + scrollbox.viewport.height;
+
+      if (rowTop < viewportTop) {
+        scrollbox.scrollTo(rowTop);
+      } else if (rowBottom > viewportBottom) {
+        scrollbox.scrollTo(Math.max(0, rowBottom - scrollbox.viewport.height));
+      }
+    };
+    revealSelectedMessage();
+    const timeouts = [0, 16, 50].map((delay) =>
+      setTimeout(revealSelectedMessage, delay)
+    );
+
+    return () => {
+      for (const timeout of timeouts) {
+        clearTimeout(timeout);
+      }
+    };
+  }, [messages.length, selectedIndex]);
 
   return (
     <box
@@ -98,30 +127,34 @@ export const MigrationMessages = ({
         marginTop: 1,
       }}
     >
-      <box
-        style={{
-          flexDirection: "column",
-          flexGrow: 1,
-          flexShrink: 1,
-          minHeight: 0,
-        }}
+      <scrollbox
+        focused={false}
+        ref={scrollboxRef}
+        scrollX={false}
+        scrollY
+        style={{ flexGrow: 1, flexShrink: 1, minHeight: 0 }}
+        verticalScrollbarOptions={{ visible: false }}
+        viewportCulling
       >
         {loading ? <text fg={colors.dim}>Loading messages…</text> : null}
         {!loading && messages.length === 0 ? (
           <text fg={colors.dim}>No messages.</text>
         ) : null}
-        {loading || selectedMessage === undefined ? null : (
-          <MessageLine
-            colors={colors}
-            index={selectedIndex}
-            key={`${selectedMessage.identity}-${selectedMessage.source}-${selectedMessage.updatedAt.toISOString()}-${selectedMessage.message}`}
-            message={selectedMessage}
-            severityColor={severityColor}
-            showDefinitionId={showDefinitionId}
-            total={messages.length}
-          />
-        )}
-      </box>
+        {loading
+          ? null
+          : messages.map((message, index) => (
+              <MessageLine
+                colors={colors}
+                index={index}
+                key={migrationMessageRowKey(message)}
+                message={message}
+                selected={index === selectedIndex}
+                severityColor={severityColor}
+                showDefinitionId={showDefinitionId}
+                total={messages.length}
+              />
+            ))}
+      </scrollbox>
       {loading || messages.length === 0 ? null : (
         <box
           style={{

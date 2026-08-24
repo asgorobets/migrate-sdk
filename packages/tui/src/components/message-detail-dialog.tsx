@@ -5,6 +5,10 @@ import {
   migrationColors as colors,
   migrationStatusColor,
 } from "./migration-dashboard.tsx";
+import {
+  migrationMessageDetailsText,
+  migrationMessageKindLabel,
+} from "./migration-message.ts";
 import { Badge, type BadgeIntent } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import {
@@ -26,9 +30,6 @@ const severityIntent = (
 
   return "neutral";
 };
-
-const messageSourceLabel = (source: MigrationTuiMessage["source"]): string =>
-  source === "diagnostic" ? "message" : source;
 
 export const MessageDetailDialog = ({
   height,
@@ -142,7 +143,7 @@ export const MessageDetailDialog = ({
           />
         </box>
         <DialogDescription
-          content={`${showDefinitionId ? `${message.definitionId} · ` : ""}Source identity ${message.identity} · ${messageSourceLabel(message.source)} · ${message.updatedAt.toLocaleString()}`}
+          content={`${showDefinitionId ? `${message.definitionId} · ` : ""}Source identity ${message.sourceIdentity} · Migration Run ${message.runId} · ${migrationMessageKindLabel(message.kind)} · ${message.updatedAt.toLocaleString()}`}
           wrapMode="word"
         />
         <scrollbox
@@ -170,7 +171,11 @@ export const MessageDetailDialog = ({
               <box style={{ flexShrink: 0, height: 1, marginTop: 1 }}>
                 <text fg={colors.dim}>Details</text>
               </box>
-              <text content={message.details} fg={colors.dim} wrapMode="word" />
+              <text
+                content={migrationMessageDetailsText(message.details)}
+                fg={colors.dim}
+                wrapMode="word"
+              />
             </>
           )}
         </scrollbox>
