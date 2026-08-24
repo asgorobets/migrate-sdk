@@ -17,17 +17,29 @@ import {
 import type { MigrationDefinitionLock } from "../../domain/lock.ts";
 import type { MigrationContract } from "../../domain/migration-contract.ts";
 import type {
+  MigrationDefinitionRunOutcome,
+  MigrationDefinitionRunStatus,
   MigrationExecutionHandle,
   MigrationRunState,
 } from "../../domain/run.ts";
+import { makeMigrationDefinitionRunState } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { summarizeMigrationItemStates } from "../../domain/status.ts";
-import { MigrationStore } from "../../services/migration-store.ts";
+import {
+  MigrationStore,
+  migrationDefinitionRunStatus,
+  validateMigrationDefinitionRunOutcomes,
+} from "../../services/migration-store.ts";
 
 export interface InMemoryMigrationStoreState {
   readonly definitionLocks: Map<MigrationDefinitionId, MigrationDefinitionLock>;
   readonly itemStates: Map<string, MigrationItemState>;
-  readonly latestRunStates: Map<MigrationDefinitionId, MigrationRunState>;
+  readonly latestRunStates: Map<
+    MigrationDefinitionId,
+    MigrationRunState & {
+      readonly definitionStatus?: MigrationDefinitionRunStatus;
+    }
+  >;
   readonly migrationContracts: Map<MigrationDefinitionId, MigrationContract>;
   nextLockNumber: number;
   nextRunNumber: number;
@@ -100,7 +112,9 @@ const readRunState = (
       return yield* storeError("Migration run was not found", runId);
     }
 
-    return current;
+    const { definitionStatus: _definitionStatus, ...runState } = current;
+
+    return runState;
   });
 
 const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
@@ -240,7 +254,22 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
     const getLatestRunState = Effect.fn(
       "InMemoryMigrationStore.getLatestRunState"
     )((definitionId: MigrationDefinitionId) =>
-      Effect.sync(() => state.latestRunStates.get(definitionId) ?? null)
+      Effect.sync(() => {
+        const stored = state.latestRunStates.get(definitionId);
+
+        if (stored === undefined) {
+          return null;
+        }
+
+        const { definitionStatus: storedDefinitionStatus, ...runState } =
+          stored;
+
+        return makeMigrationDefinitionRunState(
+          definitionId,
+          runState,
+          storedDefinitionStatus ?? runState.status
+        );
+      })
     );
 
     const writeRunState = (
@@ -325,8 +354,14 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
     const completeRun = Effect.fn("InMemoryMigrationStore.completeRun")(
       function* (
         runId: MigrationRunId,
-        definitionIds: readonly MigrationDefinitionId[]
+        definitionIds: readonly MigrationDefinitionId[],
+        definitionOutcomes: readonly MigrationDefinitionRunOutcome[]
       ) {
+        const outcomeByDefinitionId =
+          yield* validateMigrationDefinitionRunOutcomes(
+            definitionIds,
+            definitionOutcomes
+          );
         const current = yield* readRunState(state, runId, definitionIds);
         const finishedAt = yield* DateTime.nowAsDate;
         const completed: MigrationRunState = {
@@ -336,7 +371,14 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         };
 
         for (const definitionId of definitionIds) {
-          state.latestRunStates.set(definitionId, completed);
+          state.latestRunStates.set(definitionId, {
+            ...completed,
+            definitionStatus: migrationDefinitionRunStatus(
+              definitionId,
+              completed.status,
+              outcomeByDefinitionId
+            ),
+          });
         }
 
         return completed;
@@ -345,8 +387,14 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
 
     const failRun = Effect.fn("InMemoryMigrationStore.failRun")(function* (
       runId: MigrationRunId,
-      definitionIds: readonly MigrationDefinitionId[]
+      definitionIds: readonly MigrationDefinitionId[],
+      definitionOutcomes: readonly MigrationDefinitionRunOutcome[]
     ) {
+      const outcomeByDefinitionId =
+        yield* validateMigrationDefinitionRunOutcomes(
+          definitionIds,
+          definitionOutcomes
+        );
       const current = yield* readRunState(state, runId, definitionIds);
       const finishedAt = yield* DateTime.nowAsDate;
       const failed: MigrationRunState = {
@@ -356,7 +404,14 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       };
 
       for (const definitionId of definitionIds) {
-        state.latestRunStates.set(definitionId, failed);
+        state.latestRunStates.set(definitionId, {
+          ...failed,
+          definitionStatus: migrationDefinitionRunStatus(
+            definitionId,
+            failed.status,
+            outcomeByDefinitionId
+          ),
+        });
       }
 
       return failed;

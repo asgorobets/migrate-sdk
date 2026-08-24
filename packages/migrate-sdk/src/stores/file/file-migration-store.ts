@@ -22,15 +22,25 @@ import {
   type MigrationContract as MigrationContractType,
 } from "../../domain/migration-contract.ts";
 import type {
+  MigrationDefinitionRunOutcome,
   MigrationExecutionHandle,
   MigrationRunState,
+} from "../../domain/run.ts";
+import {
+  MigrationDefinitionRunStatus,
+  makeMigrationDefinitionRunState,
 } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import {
   addMigrationItemStateToSummary,
   emptyMigrationItemStateSummary,
 } from "../../domain/status.ts";
-import { MigrationStore } from "../../services/migration-store.ts";
+import {
+  type MigrationDefinitionRunOutcomeMap,
+  MigrationStore,
+  migrationDefinitionRunStatus,
+  validateMigrationDefinitionRunOutcomes,
+} from "../../services/migration-store.ts";
 import { PersistedMigrationItemState } from "../internal/persisted-state.ts";
 import { FileMigrationStoreDirectoryEntries } from "./file-migration-store-directory-entries.ts";
 import { nodeFileMigrationStoreDirectoryEntriesLayer } from "./node-file-migration-store-directory-entries.ts";
@@ -54,6 +64,7 @@ type ManifestRecord = typeof ManifestRecord.Type;
 
 const PersistedMigrationRunState = Schema.Struct({
   definitionIds: Schema.Array(MigrationDefinitionIdSchema),
+  definitionStatus: Schema.optional(MigrationDefinitionRunStatus),
   execution: Schema.optional(
     Schema.Struct({
       adapter: Schema.String,
@@ -698,7 +709,18 @@ const makeLayerWithoutPlatform = (
           LatestRunStateRecord
         );
 
-        return record?.state ?? null;
+        if (record === null) {
+          return null;
+        }
+
+        const { definitionStatus: storedDefinitionStatus, ...runState } =
+          record.state;
+
+        return makeMigrationDefinitionRunState(
+          definitionId,
+          runState,
+          storedDefinitionStatus ?? runState.status
+        );
       });
 
       const writeRunState = (
@@ -719,12 +741,18 @@ const makeLayerWithoutPlatform = (
                     record?.state.runId === runId ? record.state : undefined
                   )
                 );
+          const currentRunState =
+            current === undefined
+              ? undefined
+              : (({ definitionStatus: _definitionStatus, ...runState }) =>
+                  runState)(current);
           const runState: MigrationRunState = {
-            ...(current ?? {}),
+            ...(currentRunState ?? {}),
             runId,
             definitionIds,
             status,
-            startedAt: current?.startedAt ?? (yield* DateTime.nowAsDate),
+            startedAt:
+              currentRunState?.startedAt ?? (yield* DateTime.nowAsDate),
           };
 
           for (const definitionId of definitionIds) {
@@ -736,7 +764,10 @@ const makeLayerWithoutPlatform = (
               {
                 formatVersion,
                 recordKind: "latest-run-state",
-                state: runState,
+                state: {
+                  ...runState,
+                  definitionStatus: status,
+                },
               }
             );
           }
@@ -763,6 +794,7 @@ const makeLayerWithoutPlatform = (
         definitionIds: readonly MigrationDefinitionId[],
         input: {
           readonly execution?: MigrationExecutionHandle;
+          readonly definitionOutcomes?: MigrationDefinitionRunOutcomeMap;
           readonly finish?: boolean;
           readonly status?: MigrationRunState["status"];
         }
@@ -790,8 +822,10 @@ const makeLayerWithoutPlatform = (
 
           const finishedAt =
             input.finish === true ? yield* DateTime.nowAsDate : undefined;
+          const { definitionStatus: _definitionStatus, ...currentRunState } =
+            current.state;
           const updated: MigrationRunState = {
-            ...current.state,
+            ...currentRunState,
             ...(input.status === undefined ? {} : { status: input.status }),
             ...(input.execution === undefined
               ? {}
@@ -808,7 +842,14 @@ const makeLayerWithoutPlatform = (
               {
                 formatVersion,
                 recordKind: "latest-run-state",
-                state: updated,
+                state: {
+                  ...updated,
+                  definitionStatus: migrationDefinitionRunStatus(
+                    definitionId,
+                    updated.status,
+                    input.definitionOutcomes
+                  ),
+                },
               }
             );
           }
@@ -817,26 +858,42 @@ const makeLayerWithoutPlatform = (
         });
 
       const completeRun = Effect.fn("FileMigrationStore.completeRun")(
-        (
+        function* (
           runId: MigrationRunId,
-          definitionIds: readonly MigrationDefinitionId[]
-        ) =>
-          updateLatestRunState(runId, definitionIds, {
+          definitionIds: readonly MigrationDefinitionId[],
+          definitionOutcomes: readonly MigrationDefinitionRunOutcome[]
+        ) {
+          const outcomeByDefinitionId =
+            yield* validateMigrationDefinitionRunOutcomes(
+              definitionIds,
+              definitionOutcomes
+            );
+
+          return yield* updateLatestRunState(runId, definitionIds, {
+            definitionOutcomes: outcomeByDefinitionId,
             finish: true,
             status: "succeeded",
-          })
+          });
+        }
       );
 
-      const failRun = Effect.fn("FileMigrationStore.failRun")(
-        (
-          runId: MigrationRunId,
-          definitionIds: readonly MigrationDefinitionId[]
-        ) =>
-          updateLatestRunState(runId, definitionIds, {
-            finish: true,
-            status: "failed",
-          })
-      );
+      const failRun = Effect.fn("FileMigrationStore.failRun")(function* (
+        runId: MigrationRunId,
+        definitionIds: readonly MigrationDefinitionId[],
+        definitionOutcomes: readonly MigrationDefinitionRunOutcome[]
+      ) {
+        const outcomeByDefinitionId =
+          yield* validateMigrationDefinitionRunOutcomes(
+            definitionIds,
+            definitionOutcomes
+          );
+
+        return yield* updateLatestRunState(runId, definitionIds, {
+          definitionOutcomes: outcomeByDefinitionId,
+          finish: true,
+          status: "failed",
+        });
+      });
 
       const markRunCancelled = Effect.fn("FileMigrationStore.markRunCancelled")(
         (

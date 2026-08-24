@@ -6,11 +6,13 @@ import {
   toMigrationRunId,
 } from "migrate-sdk";
 import { act } from "react";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { MigrationTuiApp } from "./app.tsx";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { MigrationTuiApp as MigrationTuiAppView } from "./app.tsx";
+import { MigrationTuiRenderErrorBoundary } from "./render-session.tsx";
 import {
   type MigrationTuiMessage,
   type MigrationTuiRuntime,
+  type MigrationTuiSnapshot,
   type MigrationTuiSourceIdentityHistoryEntry,
   makeMigrationTuiRuntime,
 } from "./runtime.ts";
@@ -23,6 +25,21 @@ const processConcurrencyValuePattern = /│ 3\s+│/;
 const rollbackConcurrencyValuePattern = /│ 5\s+│/;
 const sourceInventoryScanConcurrencyValuePattern = /│ 2\s+│/;
 const messageRunId = toMigrationRunId("run-messages");
+
+const MigrationTuiApp = ({
+  runtime,
+}: {
+  readonly runtime: MigrationTuiRuntime;
+}) => (
+  <MigrationTuiAppView
+    lifecycle={{
+      executionSettled: () => false,
+      isExitRequested: () => false,
+      requestExit: runtime.cancelActiveExecution,
+    }}
+    runtime={runtime}
+  />
+);
 
 const settle = async (
   renderOnce: () => Promise<void>,
@@ -53,6 +70,255 @@ afterAll(() => {
 
 describe("MigrationTuiApp", () => {
   const itWithOpenTui = process.versions.bun === undefined ? it.skip : it;
+
+  itWithOpenTui(
+    "reports an unexpected React failure to the lifecycle supervisor",
+    async () => {
+      const setup = await createTestRenderer({ height: 12, width: 80 });
+      const root = createRoot(setup.renderer);
+      const renderError = Promise.withResolvers<unknown>();
+      const consoleError = vi
+        .spyOn(console, "error")
+        .mockImplementation(() => undefined);
+      const CrashingView = () => {
+        throw new Error("unexpected render failure");
+      };
+
+      act(() =>
+        root.render(
+          <MigrationTuiRenderErrorBoundary onError={renderError.resolve}>
+            <CrashingView />
+          </MigrationTuiRenderErrorBoundary>
+        )
+      );
+
+      try {
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).toContain(
+          "The UI renderer failed. Recovering…"
+        );
+        await expect(renderError.promise).resolves.toMatchObject({
+          message: "unexpected render failure",
+        });
+      } finally {
+        consoleError.mockRestore();
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "refreshes durable state after mounting the recovery snapshot",
+    async () => {
+      const runtime = await makeMigrationTuiRuntime({
+        configPath: "examples/migrate.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const refresh = vi.fn(runtime.refresh);
+      const recoveredRuntime: MigrationTuiRuntime = { ...runtime, refresh };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() =>
+        root.render(
+          <MigrationTuiAppView
+            initialRows={runtime.rows}
+            lifecycle={{
+              executionSettled: () => false,
+              isExitRequested: () => false,
+              requestExit: runtime.cancelActiveExecution,
+            }}
+            recoveryNotice="UI recovered from a renderer error; migration state was reloaded."
+            runtime={recoveredRuntime}
+          />
+        )
+      );
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup
+              .captureCharFrame()
+              .includes(
+                "UI recovered from a renderer error; migration state was reloaded."
+              )
+          )
+        ).toBe(true);
+        expect(refresh).toHaveBeenCalledOnce();
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "reattaches to supervisor-owned execution state after a renderer restart",
+    async () => {
+      const runtime = await makeMigrationTuiRuntime({
+        configPath: "examples/migrate.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      let executionState: ReturnType<MigrationTuiRuntime["getExecutionState"]> =
+        {
+          adapter: "inline",
+          definitionId: toMigrationDefinitionId("authors"),
+          kind: "running" as const,
+          runId: toMigrationRunId("run-recovered"),
+        };
+      const executionListeners = new Set<
+        Parameters<MigrationTuiRuntime["subscribeExecution"]>[0]
+      >();
+      const refresh = vi.fn(runtime.refresh);
+      const recoveredRuntime: MigrationTuiRuntime = {
+        ...runtime,
+        getExecutionState: () => executionState,
+        refresh,
+        subscribeExecution: (listener) => {
+          executionListeners.add(listener);
+          return () => executionListeners.delete(listener);
+        },
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() =>
+        root.render(
+          <MigrationTuiAppView
+            initialRows={runtime.rows}
+            lifecycle={{
+              executionSettled: () => false,
+              isExitRequested: () => false,
+              requestExit: runtime.cancelActiveExecution,
+            }}
+            recoveryNotice="UI recovered"
+            runtime={recoveredRuntime}
+          />
+        )
+      );
+
+      try {
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).toContain(
+          "Run run-recovered is running…"
+        );
+        expect(
+          await settle(setup.renderOnce, () => refresh.mock.calls.length === 1)
+        ).toBe(true);
+
+        executionState = undefined;
+        act(() => {
+          for (const listener of executionListeners) {
+            listener(undefined);
+          }
+        });
+
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("UI recovered")
+          )
+        ).toBe(true);
+        expect(refresh).toHaveBeenCalledTimes(2);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "keeps the completion refresh when the recovery refresh settles later",
+    async () => {
+      const runtime = await makeMigrationTuiRuntime({
+        configPath: "examples/migrate.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      let executionState: ReturnType<MigrationTuiRuntime["getExecutionState"]> =
+        {
+          adapter: "inline",
+          definitionId: toMigrationDefinitionId("authors"),
+          kind: "running" as const,
+          runId: toMigrationRunId("run-refresh-race"),
+        };
+      const executionListeners = new Set<
+        Parameters<MigrationTuiRuntime["subscribeExecution"]>[0]
+      >();
+      const recoveryRefresh = Promise.withResolvers<MigrationTuiSnapshot>();
+      const completionRefresh = Promise.withResolvers<MigrationTuiSnapshot>();
+      const refresh = vi
+        .fn<MigrationTuiRuntime["refresh"]>()
+        .mockReturnValueOnce(recoveryRefresh.promise)
+        .mockReturnValueOnce(completionRefresh.promise);
+      const recoveredRuntime: MigrationTuiRuntime = {
+        ...runtime,
+        getExecutionState: () => executionState,
+        refresh,
+        subscribeExecution: (listener) => {
+          executionListeners.add(listener);
+          return () => executionListeners.delete(listener);
+        },
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() =>
+        root.render(
+          <MigrationTuiAppView
+            initialRows={runtime.rows}
+            lifecycle={{
+              executionSettled: () => false,
+              isExitRequested: () => false,
+              requestExit: runtime.cancelActiveExecution,
+            }}
+            recoveryNotice="UI recovered"
+            runtime={recoveredRuntime}
+          />
+        )
+      );
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () => refresh.mock.calls.length === 1)
+        ).toBe(true);
+
+        executionState = undefined;
+        act(() => {
+          for (const listener of executionListeners) {
+            listener(undefined);
+          }
+        });
+        expect(
+          await settle(setup.renderOnce, () => refresh.mock.calls.length === 2)
+        ).toBe(true);
+
+        completionRefresh.resolve({ rows: [], scannedSource: false });
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup
+              .captureCharFrame()
+              .includes("No migrations found in this config.")
+          )
+        ).toBe(true);
+
+        recoveryRefresh.resolve({
+          rows: runtime.rows,
+          scannedSource: false,
+        });
+        await act(async () => {
+          await setup.renderOnce();
+          await Promise.resolve();
+        });
+
+        expect(setup.captureCharFrame()).toContain(
+          "No migrations found in this config."
+        );
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
 
   itWithOpenTui(
     "updates durable item counts while an inline run is still active",
@@ -389,6 +655,57 @@ describe("MigrationTuiApp", () => {
           definitionId: toMigrationDefinitionId("products"),
           kind: "migration",
         });
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "reloads status after a source inventory scan without crashing the renderer",
+    async () => {
+      const runtime = await makeMigrationTuiRuntime({
+        configPath: "examples/source-status.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Not scanned · press s to scan")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("s"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup
+              .captureCharFrame()
+              .includes(
+                "3 total · 2 unprocessed · 0 invalid · 1 duplicate · 0 orphaned"
+              )
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("r", { shift: true }));
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("Not scanned · press s to scan") ||
+              frame.includes("TypeError:")
+            );
+          })
+        ).toBe(true);
+
+        const frame = setup.captureCharFrame();
+        expect(frame).not.toContain("TypeError:");
+        expect(frame).toContain("Not scanned · press s to scan");
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();

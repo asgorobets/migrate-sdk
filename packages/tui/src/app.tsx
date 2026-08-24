@@ -1,15 +1,18 @@
 import { basename } from "node:path";
 import { type KeyEvent, RGBA } from "@opentui/core";
-import {
-  useKeyboard,
-  useRenderer,
-  useTerminalDimensions,
-} from "@opentui/react";
+import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type {
   MigrationExecutionOptions,
   PipelineExecutionConcurrency,
 } from "migrate-sdk";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { BreakLockDialog } from "./components/break-lock-dialog.tsx";
 import {
   ExecutionSettingsDialog,
@@ -50,11 +53,7 @@ import type {
   MigrationTuiSourceIdentityHistoryEntry,
   MigrationTuiTarget,
 } from "./runtime.ts";
-import {
-  type MigrationTuiSignalSource,
-  makeMigrationTuiShutdownController,
-  registerMigrationTuiSignalHandlers,
-} from "./shutdown-controller.ts";
+import type { MigrationTuiShutdownController } from "./shutdown-controller.ts";
 
 type View =
   | "actions"
@@ -535,13 +534,23 @@ const SafetyDialog = ({
 };
 
 export const MigrationTuiApp = ({
+  initialRows,
+  lifecycle,
+  recoveryNotice,
   runtime,
 }: {
+  readonly initialRows?: readonly MigrationTuiRow[];
+  readonly lifecycle: MigrationTuiShutdownController;
+  readonly recoveryNotice?: string;
   readonly runtime: MigrationTuiRuntime;
 }) => {
-  const renderer = useRenderer();
   const dimensions = useTerminalDimensions();
-  const [rows, setRows] = useState(runtime.rows);
+  const executionState = useSyncExternalStore(
+    runtime.subscribeExecution,
+    runtime.getExecutionState,
+    runtime.getExecutionState
+  );
+  const [rows, setRows] = useState(initialRows ?? runtime.rows);
   const [listTab, setListTab] = useState<MigrationListTab>("migrations");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [actionIndex, setActionIndex] = useState(0);
@@ -555,8 +564,10 @@ export const MigrationTuiApp = ({
   const [messages, setMessages] = useState<readonly MigrationTuiMessage[]>([]);
   const [messageIndex, setMessageIndex] = useState(0);
   const [messagesLoading, setMessagesLoading] = useState(false);
-  const [busy, setBusy] = useState("Loading status…");
-  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState(
+    initialRows === undefined ? "Loading status…" : ""
+  );
+  const [notice, setNotice] = useState<string | null>(recoveryNotice ?? null);
   const [error, setError] = useState<string | null>(null);
   const [selectiveTarget, setSelectiveTarget] = useState<Extract<
     MigrationTuiTarget,
@@ -629,41 +640,61 @@ export const MigrationTuiApp = ({
           []),
     [selectiveEntriesByDefinition, selectiveTarget]
   );
-  const dashboardStateRef = useRef({ busy, selectedRows, selectedTarget });
+  const effectiveBusy =
+    executionState === undefined ? busy : executionStateLabel(executionState);
+  const dashboardStateRef = useRef({
+    busy: effectiveBusy,
+    selectedRows,
+    selectedTarget,
+  });
   const messageStateRef = useRef({
     count: messages.length,
     selectedIndex: messageIndex,
   });
   const executingRef = useRef(false);
+  const refreshRequestRef = useRef(0);
   const selectiveHistoryRequestRef = useRef(0);
-  dashboardStateRef.current = { busy, selectedRows, selectedTarget };
+  dashboardStateRef.current = {
+    busy: effectiveBusy,
+    selectedRows,
+    selectedTarget,
+  };
   messageStateRef.current = {
     count: messages.length,
     selectedIndex: messageIndex,
   };
-  const shutdown = useMemo(
-    () =>
-      makeMigrationTuiShutdownController({
-        cancelActiveExecution: runtime.cancelActiveExecution,
-        destroy: () => renderer.destroy(),
-      }),
-    [renderer, runtime]
+  const reattachedExecutionRef = useRef(
+    initialRows !== undefined && executionState !== undefined
   );
 
-  const refresh = useCallback(async () => {
-    setBusy("Reloading status…");
-    setError(null);
+  const refresh = useCallback(
+    async (nextNotice = "Status reloaded") => {
+      const requestId = refreshRequestRef.current + 1;
+      refreshRequestRef.current = requestId;
+      setBusy("Reloading status…");
+      setError(null);
 
-    try {
-      const snapshot = await runtime.refresh();
-      setRows(snapshot.rows);
-      setNotice("Status reloaded");
-    } catch (cause) {
-      setError(errorMessage(cause));
-    } finally {
-      setBusy("");
-    }
-  }, [runtime]);
+      try {
+        const snapshot = await runtime.refresh();
+
+        if (requestId !== refreshRequestRef.current) {
+          return;
+        }
+
+        setRows(snapshot.rows);
+        setNotice(nextNotice);
+      } catch (cause) {
+        if (requestId === refreshRequestRef.current) {
+          setError(errorMessage(cause));
+        }
+      } finally {
+        if (requestId === refreshRequestRef.current) {
+          setBusy("");
+        }
+      }
+    },
+    [runtime]
+  );
 
   const scanSelectedSource = useCallback(
     async (targetOverride?: MigrationTuiTarget) => {
@@ -764,17 +795,16 @@ export const MigrationTuiApp = ({
             setError(`Unable to refresh live status: ${errorMessage(cause)}`);
           },
           onObservationWarning: setNotice,
-          onStateChange: (state) => setBusy(executionStateLabel(state)),
         });
 
-        if (shutdown.isExitRequested()) {
+        if (lifecycle.isExitRequested()) {
           return;
         }
 
         setNotice(result);
         await refresh();
       } catch (cause) {
-        if (shutdown.isExitRequested()) {
+        if (lifecycle.isExitRequested()) {
           return;
         }
 
@@ -782,10 +812,10 @@ export const MigrationTuiApp = ({
         setBusy("");
       } finally {
         executingRef.current = false;
-        shutdown.executionSettled();
+        lifecycle.executionSettled();
       }
     },
-    [refresh, runtime, shutdown]
+    [lifecycle, refresh, runtime]
   );
 
   const prepareOperation = useCallback(
@@ -796,7 +826,7 @@ export const MigrationTuiApp = ({
     ) => {
       const target = targetOverride ?? dashboardStateRef.current.selectedTarget;
 
-      if (target === undefined || shutdown.isExitRequested()) {
+      if (target === undefined || lifecycle.isExitRequested()) {
         return;
       }
 
@@ -812,7 +842,7 @@ export const MigrationTuiApp = ({
           ...(execution === undefined ? {} : { execution }),
         });
 
-        if (shutdown.isExitRequested()) {
+        if (lifecycle.isExitRequested()) {
           return;
         }
 
@@ -832,7 +862,7 @@ export const MigrationTuiApp = ({
         setBusy("");
       }
     },
-    [executeOperation, executionSettings, runtime, shutdown]
+    [executeOperation, executionSettings, lifecycle, runtime]
   );
 
   const openSelectiveRun = useCallback(
@@ -1177,8 +1207,19 @@ export const MigrationTuiApp = ({
   );
 
   useEffect(() => {
-    startTask(refresh());
-  }, [refresh, startTask]);
+    startTask(refresh(recoveryNotice ?? "Status reloaded"));
+  }, [recoveryNotice, refresh, startTask]);
+
+  useEffect(() => {
+    if (
+      reattachedExecutionRef.current &&
+      executionState === undefined &&
+      !lifecycle.isExitRequested()
+    ) {
+      reattachedExecutionRef.current = false;
+      startTask(refresh(recoveryNotice));
+    }
+  }, [executionState, lifecycle, recoveryNotice, refresh, startTask]);
 
   useEffect(() => {
     if (view !== "selective-run") {
@@ -1398,7 +1439,7 @@ export const MigrationTuiApp = ({
 
   const requestExit = useCallback(async () => {
     try {
-      const cancellation = await shutdown.requestExit();
+      const cancellation = await lifecycle.requestExit();
 
       if (cancellation.kind !== "idle") {
         setBusy(cancellation.message);
@@ -1407,19 +1448,7 @@ export const MigrationTuiApp = ({
       setError(errorMessage(cause));
       setBusy("");
     }
-  }, [shutdown]);
-
-  useEffect(
-    () =>
-      registerMigrationTuiSignalHandlers({
-        onSignal: (_signal, exitCode) => {
-          process.exitCode = exitCode;
-          startTask(requestExit());
-        },
-        source: process as unknown as MigrationTuiSignalSource,
-      }),
-    [requestExit, startTask]
-  );
+  }, [lifecycle]);
 
   const changeListTab = useCallback(
     (nextTab: MigrationListTab) => {
@@ -1535,9 +1564,6 @@ export const MigrationTuiApp = ({
       handleMessageKey(key)
     ) {
       return;
-    } else if (key.ctrl && key.name === "c") {
-      process.exitCode = 130;
-      startTask(requestExit());
     } else if (view === "execution-settings") {
       handleExecutionSettingsKey(key);
     } else if (view === "selective-run") {
@@ -1640,7 +1666,7 @@ export const MigrationTuiApp = ({
       <MigrationDashboard
         actions={selectedActions}
         activeTab={detailTab}
-        busy={busy}
+        busy={effectiveBusy}
         groups={runtime.groups}
         listTab={listTab}
         messageIndex={messageIndex}
@@ -1666,11 +1692,13 @@ export const MigrationTuiApp = ({
         terminalWidth={dimensions.width}
       />
       <box style={{ flexShrink: 0, height: 1 }}>
-        {busy === "" ? null : <text fg={colors.info}>{busy}</text>}
-        {busy !== "" || error === null ? null : (
+        {effectiveBusy === "" ? null : (
+          <text fg={colors.info}>{effectiveBusy}</text>
+        )}
+        {effectiveBusy !== "" || error === null ? null : (
           <text fg={colors.danger}>{error}</text>
         )}
-        {busy !== "" || error !== null || notice === null ? null : (
+        {effectiveBusy !== "" || error !== null || notice === null ? null : (
           <text fg={colors.success}>{notice}</text>
         )}
       </box>

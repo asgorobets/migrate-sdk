@@ -9,7 +9,7 @@ import { Data, Effect, type Layer, Redacted } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import {
   type MigrationItemStateSummary,
-  type MigrationRunState,
+  type MigrationDefinitionRunStatus,
   MigrationStore,
   toMigrationDefinitionId,
 } from "migrate-sdk";
@@ -42,7 +42,7 @@ interface ExpectedDestinationArticleRow {
 }
 
 interface ObservedMigrationState {
-  readonly lastRunStatus: MigrationRunState["status"] | undefined;
+  readonly lastRunStatus: MigrationDefinitionRunStatus | undefined;
   readonly summary: MigrationItemStateSummary;
 }
 

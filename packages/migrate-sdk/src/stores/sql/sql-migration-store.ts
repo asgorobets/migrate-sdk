@@ -22,12 +22,22 @@ import {
   TrackingRecordContractId,
 } from "../../domain/migration-contract.ts";
 import type {
+  MigrationDefinitionRunOutcome,
   MigrationExecutionHandle,
   MigrationRunState,
 } from "../../domain/run.ts";
+import {
+  MigrationDefinitionRunStatus,
+  makeMigrationDefinitionRunState,
+} from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { emptyMigrationItemStateSummary } from "../../domain/status.ts";
-import { MigrationStore } from "../../services/migration-store.ts";
+import {
+  type MigrationDefinitionRunOutcomeMap,
+  MigrationStore,
+  migrationDefinitionRunStatus,
+  validateMigrationDefinitionRunOutcomes,
+} from "../../services/migration-store.ts";
 import { PersistedMigrationItemState } from "../internal/persisted-state.ts";
 import {
   applySqlMigrationStoreSchemaPlan,
@@ -61,6 +71,7 @@ const SqlItemStateRow = Schema.Struct({
 });
 
 const SqlRunRow = Schema.Struct({
+  definition_status: Schema.NullOr(MigrationDefinitionRunStatus),
   execution_adapter: Schema.NullOr(Schema.String),
   execution_id: Schema.NullOr(Schema.String),
   finished_at: Schema.NullOr(Schema.DateFromString),
@@ -568,7 +579,13 @@ const makeLayer = (
       const decodeRunRows = (
         rows: readonly unknown[],
         description: string
-      ): Effect.Effect<MigrationRunState | null, MigrationStoreError> =>
+      ): Effect.Effect<
+        {
+          readonly definitionStatus: MigrationDefinitionRunStatus | null;
+          readonly runState: MigrationRunState;
+        } | null,
+        MigrationStoreError
+      > =>
         Effect.gen(function* () {
           if (rows.length === 0) {
             return null;
@@ -595,30 +612,39 @@ const makeLayer = (
           );
 
           return {
-            definitionIds,
-            runId: first.run_id,
-            startedAt: first.started_at,
-            status: first.status,
-            ...(first.finished_at === null
-              ? {}
-              : { finishedAt: first.finished_at }),
-            ...(first.execution_adapter === null
-              ? {}
-              : {
-                  execution: {
-                    adapter: first.execution_adapter,
-                    ...(first.execution_id === null
-                      ? {}
-                      : { executionId: first.execution_id }),
-                  },
-                }),
+            definitionStatus: first.definition_status,
+            runState: {
+              definitionIds,
+              runId: first.run_id,
+              startedAt: first.started_at,
+              status: first.status,
+              ...(first.finished_at === null
+                ? {}
+                : { finishedAt: first.finished_at }),
+              ...(first.execution_adapter === null
+                ? {}
+                : {
+                    execution: {
+                      adapter: first.execution_adapter,
+                      ...(first.execution_id === null
+                        ? {}
+                        : { executionId: first.execution_id }),
+                    },
+                  }),
+            },
           };
         });
 
       const readRunState = (
         where: "latest-definition" | "run-id",
         id: MigrationDefinitionIdType | MigrationRunIdType
-      ): Effect.Effect<MigrationRunState | null, MigrationStoreError> => {
+      ): Effect.Effect<
+        {
+          readonly definitionStatus: MigrationDefinitionRunStatus | null;
+          readonly runState: MigrationRunState;
+        } | null,
+        MigrationStoreError
+      > => {
         const key = sqlKey(id);
         const query =
           where === "latest-definition"
@@ -630,9 +656,14 @@ const makeLayer = (
                   r.finished_at,
                   r.execution_adapter,
                   r.execution_id,
+                  selected_rd.definition_status,
                   rd.definition_id AS run_definition_id
                 FROM ${latestRuns} lr
                 INNER JOIN ${runs} r ON r.run_key = lr.run_key
+                INNER JOIN ${runDefinitions} selected_rd
+                  ON selected_rd.run_key = r.run_key
+                  AND selected_rd.definition_key = lr.definition_key
+                  AND selected_rd.definition_id = lr.definition_id
                 LEFT JOIN ${runDefinitions} rd ON rd.run_key = r.run_key
                 WHERE lr.definition_key = ${key}
                   AND lr.definition_id = ${id}
@@ -646,6 +677,7 @@ const makeLayer = (
                   r.finished_at,
                   r.execution_adapter,
                   r.execution_id,
+                  NULL AS definition_status,
                   rd.definition_id AS run_definition_id
                 FROM ${runs} r
                 LEFT JOIN ${runDefinitions} rd ON rd.run_key = r.run_key
@@ -663,9 +695,17 @@ const makeLayer = (
 
       const getLatestRunState = Effect.fn(
         "SqlMigrationStore.getLatestRunState"
-      )((definitionId: MigrationDefinitionIdType) =>
-        readRunState("latest-definition", definitionId)
-      );
+      )(function* (definitionId: MigrationDefinitionIdType) {
+        const decoded = yield* readRunState("latest-definition", definitionId);
+
+        return decoded === null
+          ? null
+          : makeMigrationDefinitionRunState(
+              definitionId,
+              decoded.runState,
+              decoded.definitionStatus ?? decoded.runState.status
+            );
+      });
 
       const upsertRunRecord = (
         state: MigrationRunState
@@ -691,7 +731,7 @@ const makeLayer = (
         withTransaction(
           "write Migration Run State",
           Effect.gen(function* () {
-            const current = yield* readRunState("run-id", runId);
+            const current = (yield* readRunState("run-id", runId))?.runState;
             const runState: MigrationRunState = {
               ...(current ?? {}),
               definitionIds,
@@ -728,13 +768,15 @@ const makeLayer = (
                     run_id,
                     definition_key,
                     definition_id,
-                    position
+                    position,
+                    definition_status
                   ) VALUES (
                     ${sqlKey(runId)},
                     ${runId},
                     ${sqlKey(definitionId)},
                     ${definitionId},
-                    ${position}
+                    ${position},
+                    ${status}
                   )
                 `
               );
@@ -771,6 +813,7 @@ const makeLayer = (
         definitionIds: readonly MigrationDefinitionIdType[],
         input: {
           readonly execution?: MigrationExecutionHandle;
+          readonly definitionOutcomes?: MigrationDefinitionRunOutcomeMap;
           readonly finish?: boolean;
           readonly status?: MigrationRunState["status"];
         }
@@ -782,11 +825,10 @@ const makeLayer = (
               definitionIds,
               getLatestRunState
             );
-            const current = states[0];
+            const current = (yield* readRunState("run-id", runId))?.runState;
 
             if (
               current === undefined ||
-              current === null ||
               states.some((state) => state?.runId !== runId)
             ) {
               return yield* storeError("Migration run was not found", runId);
@@ -804,6 +846,26 @@ const makeLayer = (
             };
 
             yield* upsertRunRecord(updated);
+
+            if (input.status !== undefined) {
+              for (const definitionId of definitionIds) {
+                yield* runSql(
+                  "update Migration Definition Run Status",
+                  sql`
+                    UPDATE ${runDefinitions}
+                    SET definition_status = ${migrationDefinitionRunStatus(
+                      definitionId,
+                      input.status,
+                      input.definitionOutcomes
+                    )}
+                    WHERE run_key = ${sqlKey(runId)}
+                      AND run_id = ${runId}
+                      AND definition_key = ${sqlKey(definitionId)}
+                      AND definition_id = ${definitionId}
+                  `
+                );
+              }
+            }
 
             return updated;
           })
@@ -843,27 +905,41 @@ const makeLayer = (
           })
       );
 
-      const completeRun = Effect.fn("SqlMigrationStore.completeRun")(
-        (
-          runId: MigrationRunIdType,
-          definitionIds: readonly MigrationDefinitionIdType[]
-        ) =>
-          updateRunState(runId, definitionIds, {
-            finish: true,
-            status: "succeeded",
-          })
-      );
+      const completeRun = Effect.fn("SqlMigrationStore.completeRun")(function* (
+        runId: MigrationRunIdType,
+        definitionIds: readonly MigrationDefinitionIdType[],
+        definitionOutcomes: readonly MigrationDefinitionRunOutcome[]
+      ) {
+        const outcomeByDefinitionId =
+          yield* validateMigrationDefinitionRunOutcomes(
+            definitionIds,
+            definitionOutcomes
+          );
 
-      const failRun = Effect.fn("SqlMigrationStore.failRun")(
-        (
-          runId: MigrationRunIdType,
-          definitionIds: readonly MigrationDefinitionIdType[]
-        ) =>
-          updateRunState(runId, definitionIds, {
-            finish: true,
-            status: "failed",
-          })
-      );
+        return yield* updateRunState(runId, definitionIds, {
+          definitionOutcomes: outcomeByDefinitionId,
+          finish: true,
+          status: "succeeded",
+        });
+      });
+
+      const failRun = Effect.fn("SqlMigrationStore.failRun")(function* (
+        runId: MigrationRunIdType,
+        definitionIds: readonly MigrationDefinitionIdType[],
+        definitionOutcomes: readonly MigrationDefinitionRunOutcome[]
+      ) {
+        const outcomeByDefinitionId =
+          yield* validateMigrationDefinitionRunOutcomes(
+            definitionIds,
+            definitionOutcomes
+          );
+
+        return yield* updateRunState(runId, definitionIds, {
+          definitionOutcomes: outcomeByDefinitionId,
+          finish: true,
+          status: "failed",
+        });
+      });
 
       const decodeLockRow = (
         row: unknown,

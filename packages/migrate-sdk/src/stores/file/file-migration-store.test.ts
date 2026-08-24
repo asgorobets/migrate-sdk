@@ -1414,7 +1414,11 @@ describe("FileMigrationStore", () => {
 
           expect(yield* store.getLatestRunState(definitionId)).toBeNull();
           yield* store.beginRun(runId, [definitionId]);
-          const completedRun = yield* store.completeRun(runId, [definitionId]);
+          const completedRun = yield* store.completeRun(
+            runId,
+            [definitionId],
+            [{ definitionId, status: "succeeded" }]
+          );
 
           yield* store.upsertItemState({
             definitionId,
@@ -1466,9 +1470,11 @@ describe("FileMigrationStore", () => {
             updatedAt,
           });
 
-          expect(yield* store.getLatestRunState(definitionId)).toEqual(
-            completedRun
-          );
+          expect(yield* store.getLatestRunState(definitionId)).toEqual({
+            ...completedRun,
+            definitionId,
+            runStatus: "succeeded",
+          });
           expect(yield* store.getItemStateSummary(definitionId)).toEqual({
             failed: 1,
             migrated: 1,
@@ -1476,6 +1482,45 @@ describe("FileMigrationStore", () => {
             skipped: 1,
           });
         }).pipe(Effect.provide(fileStoreLayer(directory)));
+      })
+    )
+  );
+
+  it.effect("persists each definition outcome from a failed shared run", () =>
+    withTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const authorsId = toMigrationDefinitionId("authors");
+        const articlesId = toMigrationDefinitionId("articles");
+        const definitionIds = [authorsId, articlesId] as const;
+        const runId = toMigrationRunId("run-mixed-file");
+
+        const states = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+          yield* store.beginRun(runId, definitionIds);
+          const failedRun = yield* store.failRun(runId, definitionIds, [
+            { definitionId: authorsId, status: "succeeded" },
+            { definitionId: articlesId, status: "failed" },
+          ]);
+
+          return yield* Effect.all([
+            store.getLatestRunState(authorsId),
+            store.getLatestRunState(articlesId),
+          ]).pipe(Effect.map((latest) => ({ failedRun, latest })));
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        expect(states.failedRun.status).toBe("failed");
+        expect(states.latest).toEqual([
+          expect.objectContaining({
+            definitionId: authorsId,
+            runStatus: "failed",
+            status: "succeeded",
+          }),
+          expect.objectContaining({
+            definitionId: articlesId,
+            runStatus: "failed",
+            status: "failed",
+          }),
+        ]);
       })
     )
   );

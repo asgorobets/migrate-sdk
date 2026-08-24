@@ -1,6 +1,6 @@
-import type { Effect } from "effect";
+import { Effect } from "effect";
 import { Service } from "effect/Context";
-import type { MigrationStoreError } from "../domain/errors.ts";
+import { MigrationStoreError } from "../domain/errors.ts";
 import type {
   EncodedSourceCursor,
   EncodedSourceIdentity,
@@ -10,6 +10,8 @@ import type {
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type { MigrationContract } from "../domain/migration-contract.ts";
 import type {
+  MigrationDefinitionRunOutcome,
+  MigrationDefinitionRunState,
   MigrationExecutionHandle,
   MigrationRunState,
 } from "../domain/run.ts";
@@ -25,6 +27,68 @@ export interface OrphanItemStatePageInput {
   readonly afterIdentity?: EncodedSourceIdentity;
   readonly limit: number;
 }
+
+export type MigrationDefinitionRunOutcomeMap = ReadonlyMap<
+  MigrationDefinitionId,
+  MigrationDefinitionRunOutcome["status"]
+>;
+
+export const validateMigrationDefinitionRunOutcomes = (
+  definitionIds: readonly MigrationDefinitionId[],
+  outcomes: readonly MigrationDefinitionRunOutcome[]
+): Effect.Effect<MigrationDefinitionRunOutcomeMap, MigrationStoreError> =>
+  Effect.gen(function* () {
+    const expectedDefinitionIds = new Set(definitionIds);
+    const outcomeByDefinitionId = new Map<
+      MigrationDefinitionId,
+      MigrationDefinitionRunOutcome["status"]
+    >();
+    const duplicateDefinitionIds: MigrationDefinitionId[] = [];
+    const unexpectedDefinitionIds: MigrationDefinitionId[] = [];
+
+    for (const outcome of outcomes) {
+      if (!expectedDefinitionIds.has(outcome.definitionId)) {
+        unexpectedDefinitionIds.push(outcome.definitionId);
+        continue;
+      }
+
+      if (outcomeByDefinitionId.has(outcome.definitionId)) {
+        duplicateDefinitionIds.push(outcome.definitionId);
+        continue;
+      }
+
+      outcomeByDefinitionId.set(outcome.definitionId, outcome.status);
+    }
+
+    const missingDefinitionIds = definitionIds.filter(
+      (definitionId) => !outcomeByDefinitionId.has(definitionId)
+    );
+
+    if (
+      missingDefinitionIds.length > 0 ||
+      duplicateDefinitionIds.length > 0 ||
+      unexpectedDefinitionIds.length > 0
+    ) {
+      return yield* new MigrationStoreError({
+        message:
+          "Migration Definition Run outcomes must match the Migration Run definitions",
+        cause: {
+          duplicateDefinitionIds,
+          missingDefinitionIds,
+          unexpectedDefinitionIds,
+        },
+      });
+    }
+
+    return outcomeByDefinitionId;
+  });
+
+export const migrationDefinitionRunStatus = (
+  definitionId: MigrationDefinitionId,
+  runStatus: MigrationRunState["status"],
+  outcomes?: MigrationDefinitionRunOutcomeMap
+): MigrationDefinitionRunState["status"] =>
+  outcomes?.get(definitionId) ?? runStatus;
 
 interface MigrationStoreOrphanMethods {
   /**
@@ -100,7 +164,7 @@ export class MigrationStore extends Service<
 
     readonly getLatestRunState: (
       definitionId: MigrationDefinitionId
-    ) => Effect.Effect<MigrationRunState | null, MigrationStoreError>;
+    ) => Effect.Effect<MigrationDefinitionRunState | null, MigrationStoreError>;
 
     readonly beginRun: (
       runId: MigrationRunId,
@@ -130,12 +194,14 @@ export class MigrationStore extends Service<
 
     readonly completeRun: (
       runId: MigrationRunId,
-      definitionIds: readonly MigrationDefinitionId[]
+      definitionIds: readonly MigrationDefinitionId[],
+      definitionOutcomes: readonly MigrationDefinitionRunOutcome[]
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
     readonly failRun: (
       runId: MigrationRunId,
-      definitionIds: readonly MigrationDefinitionId[]
+      definitionIds: readonly MigrationDefinitionId[],
+      definitionOutcomes: readonly MigrationDefinitionRunOutcome[]
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
     readonly acquireDefinitionLock: (

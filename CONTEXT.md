@@ -156,6 +156,9 @@ One execution attempt of one or more migration definitions.
 **Migration Run State**:
 The durable state for one migration run.
 
+**Migration Definition Run State**:
+The durable state of one migration definition's participation in a migration run.
+
 **Migration Run Handle**:
 A run-scoped capability for observing and cooperatively cancelling work owned by
 the current execution host.
@@ -196,6 +199,18 @@ An execution adapter that starts a Workflow SDK run from a migration execution e
 
 **Effect Workflow Execution Adapter**:
 An execution adapter that starts an Effect workflow from a migration execution envelope.
+
+**Migrate Server**:
+An environment-bound application that serves migration operations backed by an authoritative Migration Definition Registry and the capabilities required to inspect, plan, execute, observe, and control its migrations.
+
+**Migrate Client**:
+A user-facing or automated caller, such as the TUI, that uses a Migrate Server without owning the server environment's source, destination, migration store, or execution capabilities.
+
+**Migrate Protocol**:
+The versioned, schema-backed contract of requests, results, events, and errors exchanged between a Migrate Client and a Migrate Server.
+
+**Migrate Connection**:
+The configured path by which a Migrate Client reaches a Migrate Server. It selects a server target and access method, not an Execution Adapter.
 
 **Migration Reference Lookup**:
 A process capability for reading migrated tracking state or destination references from migration item states.
@@ -343,7 +358,7 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A source item with a valid identity and version but invalid payload becomes a failed **Migration Item State** with durable **Migration Item Error Details**.
 - A **Source Lookup Strategy** may be direct or scan-based.
 - A **Migration Definition** may select separate **Source Cursor Retry Strategy** and **Source Lookup Retry Strategy** wrappers.
-- A **Migration Store** records **Migration Item State**, the latest **Migration Run State**, the last successful **Source Cursor**, and the **Migration Contract** for each **Migration Definition**.
+- A **Migration Store** records **Migration Item State**, the latest **Migration Definition Run State**, the last successful **Source Cursor**, and the **Migration Contract** for each **Migration Definition**.
 - A **Migration Store** may be backed by SQL, key/value storage, files, or another durable system.
 - A **Migration Definition** uses one public **Migration Store** service.
 - A **Migration Run** blocks before processing items when the current **Migration Contract** differs from the stored **Migration Contract** and any **Migration Item State** exists for the **Migration Definition**.
@@ -365,13 +380,17 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Migration Definition Registry Catalog** rejects duplicate **Migration Definition Registry Ids** at construction.
 - A **Migration Definition Registry** is distinct from a **Plugin Registry** and does not compile **Migration Specs**.
 - A **Migration Definition Registry** may be authored directly or initialized from previously compiled **Migration Definitions**.
+- A **Migrate Server** runs in the environment that owns its authoritative **Migration Definition Registry** and required runtime capabilities.
+- A **Migrate Client** selects a **Migrate Server** through a **Migrate Connection**; it does not select the server's **Execution Adapter**.
+- A **Migrate Protocol** carries serializable domain requests, results, events, and errors; it does not carry executable plans, Effects, Layers, or migration definitions.
+- Closing a **Migrate Client** observation does not cancel a detached **Migration Run**; cancellation is an explicit operator action.
 - An **Executable Migration Definition Registry** validates that planned definitions have all runtime service requirements provided.
 - An **Executable Migration Definition Registry** relies on Effect requirements for static executability and uses **Migration Definition Registry Executable Error** for dynamic runtime diagnostics.
 - An **Executable Migration Definition Registry** produces executable plans that are distinct from non-executable registry plans.
 - A **Migration Definition Registry** plans migration run and rollback execution before a **Migration Executable** executes the plan.
 - A **Migration Executable** executes plans whose **Migration Definitions** have all runtime service requirements provided before execution starts.
 - A **Migration Status Report** inspects selected **Migration Definitions** without acquiring **Migration Definition Locks** or creating **Migration Run State**.
-- A **Migration Status Report** may include current durable item-state counts, latest **Migration Run State** lifecycle metadata, and **Source Inventory Scan** counts.
+- A **Migration Status Report** may include current durable item-state counts, latest **Migration Definition Run State** lifecycle metadata, and **Source Inventory Scan** counts.
 - A **Migration Status Report** over multiple **Migration Definitions** may read each definition's own **Migration Store** independently.
 - A **Migration Definition Lock** is acquired through the **Migration Store** before a migration definition is executed.
 - A **Migration Definition Lock** prevents concurrent runners from executing the same **Migration Definition** in the first version.
@@ -388,6 +407,8 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Migration Run** executes ordered **Migration Definitions** sequentially in the first version.
 - A **Migration Run** continues processing source items after an item failure in the first version.
 - A **Migration Run** is marked failed when one or more source items fail, even if other items complete.
+- A failed **Migration Run** does not make every participating **Migration Definition Run State** failed; each definition records its own outcome.
+- Dependency readiness uses the dependency's latest **Migration Definition Run State**, not the aggregate status of a shared **Migration Run**.
 - A completed **Migration Run** produces a **Migration Run Summary** for SDK callers and CLI rendering.
 - A completed rollback run produces a **Rollback Run Summary** for SDK callers and CLI rendering.
 - A **Rollback Run Summary** is distinct from a **Migration Run Summary**.

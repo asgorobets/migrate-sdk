@@ -3,7 +3,7 @@
 ---
 
 Manage SQL Migration Store schemas with bundled Effect SQL migrations. Fresh
-stores install schema version 1, while existing stores are checked without
+stores install the current bundled schema, while existing stores are checked without
 mutation and rejected when their history or shape is older, newer, divergent,
 partial, or untracked. TypeScript callers can inspect a stable schema plan and
 explicitly apply it with `SqlMigrationStore.planSchema` and

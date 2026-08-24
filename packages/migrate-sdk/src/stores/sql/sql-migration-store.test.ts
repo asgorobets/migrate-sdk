@@ -393,8 +393,48 @@ describe("SqlMigrationStore", () => {
           expect.objectContaining({ execution, runId, status: "cancelled" })
         );
         expect(cancelled.finishedAt).toBeInstanceOf(Date);
-        expect(states).toEqual([cancelled, cancelled]);
+        expect(states).toEqual(
+          definitionIds.map((definitionId) => ({
+            ...cancelled,
+            definitionId,
+            runStatus: "cancelled",
+          }))
+        );
       }).pipe(Effect.provide(sqlStoreLayer))
+  );
+
+  it.effect("persists each definition outcome from a failed shared run", () =>
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const authorsId = toMigrationDefinitionId("authors");
+      const articlesId = toMigrationDefinitionId("articles");
+      const definitionIds = [authorsId, articlesId] as const;
+      const runId = toMigrationRunId("run-mixed-sql");
+
+      yield* store.beginRun(runId, definitionIds);
+      const failedRun = yield* store.failRun(runId, definitionIds, [
+        { definitionId: authorsId, status: "succeeded" },
+        { definitionId: articlesId, status: "failed" },
+      ]);
+      const states = yield* Effect.all([
+        store.getLatestRunState(authorsId),
+        store.getLatestRunState(articlesId),
+      ]);
+
+      expect(failedRun.status).toBe("failed");
+      expect(states).toEqual([
+        expect.objectContaining({
+          definitionId: authorsId,
+          runStatus: "failed",
+          status: "succeeded",
+        }),
+        expect.objectContaining({
+          definitionId: articlesId,
+          runStatus: "failed",
+          status: "failed",
+        }),
+      ]);
+    }).pipe(Effect.provide(sqlStoreLayer))
   );
 
   it.effect("enforces definition-lock ownership", () =>

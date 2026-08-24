@@ -1,8 +1,7 @@
 #!/usr/bin/env bun
 
-import { createCliRenderer } from "@opentui/core";
-import { createRoot } from "@opentui/react";
-import { MigrationTuiApp } from "./app.tsx";
+import { makeMigrationTuiLifecycleSupervisor } from "./lifecycle-supervisor.ts";
+import { createMigrationTuiRenderSession } from "./render-session.tsx";
 import { makeMigrationTuiRuntime } from "./runtime.ts";
 
 declare const MIGRATE_TUI_VERSION: string | undefined;
@@ -75,26 +74,20 @@ const main = async () => {
     return;
   }
 
-  let renderer: Awaited<ReturnType<typeof createCliRenderer>> | undefined;
+  const runtime = await makeMigrationTuiRuntime({
+    ...(parsed.configPath === undefined
+      ? {}
+      : { configPath: parsed.configPath }),
+    cwd: process.cwd(),
+  });
+  const supervisor = makeMigrationTuiLifecycleSupervisor({
+    createSession: (input) =>
+      createMigrationTuiRenderSession({ ...input, runtime }),
+    runtime,
+  });
 
-  try {
-    const runtime = await makeMigrationTuiRuntime({
-      ...(parsed.configPath === undefined
-        ? {}
-        : { configPath: parsed.configPath }),
-      cwd: process.cwd(),
-    });
-    renderer = await createCliRenderer({
-      exitOnCtrlC: false,
-      screenMode: "alternate-screen",
-    });
-
-    renderer.setTerminalTitle("Migrate");
-    createRoot(renderer).render(<MigrationTuiApp runtime={runtime} />);
-  } catch (cause) {
-    renderer?.destroy();
-    throw cause;
-  }
+  await supervisor.start();
+  await supervisor.wait();
 };
 
 main().catch((cause: unknown) => {

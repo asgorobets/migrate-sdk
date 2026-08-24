@@ -250,8 +250,10 @@ export const completeMigrationRunExecutionEnvelope = (input: {
   });
 
 export const failMigrationRunExecutionEnvelope = (input: {
+  readonly definitions: MigrationRunSummary["definitions"];
   readonly envelope: MigrationRunExecutionEnvelopeType;
   readonly error: unknown;
+  readonly failedDefinitionId?: MigrationDefinitionId;
 }): Effect.Effect<
   void,
   WorkflowSdkMigrationRunStepError,
@@ -266,6 +268,21 @@ export const failMigrationRunExecutionEnvelope = (input: {
     }
 
     return yield* MigrationRunStepExecutor.fail({
+      definitionOutcomes: job.plan.executionDefinitionIds.map(
+        (definitionId) => {
+          const completed = input.definitions.find(
+            (definition) => definition.definitionId === definitionId
+          );
+
+          return {
+            definitionId,
+            status:
+              definitionId === input.failedDefinitionId
+                ? ("failed" as const)
+                : (completed?.status ?? ("skipped" as const)),
+          };
+        }
+      ),
       definitionIds: job.plan.executionDefinitionIds,
       error: input.error,
       lease,

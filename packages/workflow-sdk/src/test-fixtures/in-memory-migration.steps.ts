@@ -293,15 +293,25 @@ export async function completeMigrationRunStep(input: {
 }
 
 export async function failMigrationRunStep(input: {
+  readonly definitions: WorkflowSdkMigrationRunSummary["definitions"];
   readonly envelope: WorkflowSdkMigrationRunEnvelope;
   readonly error: unknown;
+  readonly failedDefinitionId?: string;
 }): Promise<void> {
   "use step";
 
   return await runEffect(
     failMigrationRunExecutionEnvelope({
+      definitions: input.definitions as MigrationRunSummary["definitions"],
       envelope: toMigrationRunEnvelope(input.envelope),
       error: input.error,
+      ...(input.failedDefinitionId === undefined
+        ? {}
+        : {
+            failedDefinitionId: toMigrationDefinitionId(
+              input.failedDefinitionId
+            ),
+          }),
     })
   );
 }

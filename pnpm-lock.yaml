@@ -21,6 +21,9 @@ catalogs:
     '@effect/sql-pg':
       specifier: 4.0.0-rc.111
       version: 4.0.0-rc.111
+    '@effect/sql-sqlite-bun':
+      specifier: 4.0.0-rc.111
+      version: 4.0.0-rc.111
     '@effect/sql-sqlite-node':
       specifier: 4.0.0-rc.111
       version: 4.0.0-rc.111
@@ -190,6 +193,9 @@ importers:
         specifier: 'catalog:'
         version: 4.0.0-rc.111(@types/node@24.13.1)(effect@4.0.0-rc.111)
       '@effect/sql-pg':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.111(effect@4.0.0-rc.111)
+      '@effect/sql-sqlite-bun':
         specifier: 'catalog:'
         version: 4.0.0-rc.111(effect@4.0.0-rc.111)
       '@effect/sql-sqlite-node':
@@ -662,6 +668,11 @@ packages:
 
   '@effect/sql-pg@4.0.0-rc.111':
     resolution: {integrity: sha512-QjYFyN5cUlJGJWzXA8GHh7BJydc2K8ImIFvG3kf8f/Nv3w6ZuycuRKIW3TUNtOmHtVvqr/OugPFtyvHYhkDEbg==}
+    peerDependencies:
+      effect: ^4.0.0-rc.111
+
+  '@effect/sql-sqlite-bun@4.0.0-rc.111':
+    resolution: {integrity: sha512-u5HqWLYISTH5ydsCr45nOGmkspmAeNzK4q+plMrJntDoG8sQttwizC4akGfbQDgoSxyYfyBzi3YyVW/NvhvSQQ==}
     peerDependencies:
       effect: ^4.0.0-rc.111
 
@@ -4898,6 +4909,10 @@ snapshots:
       pg-types: 4.1.0
     transitivePeerDependencies:
       - pg-native
+
+  '@effect/sql-sqlite-bun@4.0.0-rc.111(effect@4.0.0-rc.111)':
+    dependencies:
+      effect: 4.0.0-rc.111
 
   '@effect/sql-sqlite-node@4.0.0-rc.111(effect@4.0.0-rc.111)':
     dependencies:

@@ -20,6 +20,7 @@ import {
   type MigrationRunId,
   type MigrationRunState,
   MigrationStore,
+  makeMigrationRunState,
   RollbackProgress,
   SourceIdentity,
   type SourceIdentitySnapshotKey,
@@ -153,6 +154,7 @@ export interface MigrationTuiRuntime {
     operation: MigrationTuiPreparedOperation,
     options?: MigrationTuiExecuteOptions
   ) => Promise<string>;
+  readonly getExecutionState: () => MigrationTuiExecutionState | undefined;
   readonly groups: readonly MigrationDefinitionRegistryGroup[];
   readonly listMessages: (
     target: MigrationTuiTarget
@@ -175,6 +177,9 @@ export interface MigrationTuiRuntime {
     target: MigrationTuiTarget,
     options?: MigrationTuiScanSourceOptions
   ) => Promise<MigrationTuiSnapshot>;
+  readonly subscribeExecution: (
+    listener: (state: MigrationTuiExecutionState | undefined) => void
+  ) => () => void;
 }
 
 export interface LoadMigrationTuiInput {
@@ -308,7 +313,11 @@ export const makeMigrationTuiRuntime = async (
 
     const observe = Effect.gen(function* () {
       const store = yield* MigrationStore;
-      const readLatestRunState = store.getLatestRunState(definitionId);
+      const readLatestRunState = store.getLatestRunState(definitionId).pipe(
+        Effect.map((state) =>
+          state === null ? null : makeMigrationRunState(state)
+        )
+      );
       const durableObservation = waitForDurableRunState({
         pollIntervalMs: terminalPollIntervalMs,
         readLatestRunState,
@@ -790,6 +799,7 @@ export const makeMigrationTuiRuntime = async (
     cancelActiveExecution: executionController.cancelActiveExecution,
     configPath: loaded.configPath,
     execute,
+    getExecutionState: executionController.getExecutionState,
     groups,
     listMessages,
     listSourceIdentityHistory,
@@ -798,5 +808,6 @@ export const makeMigrationTuiRuntime = async (
     refresh,
     rows,
     scanSource,
+    subscribeExecution: executionController.subscribeExecution,
   };
 };

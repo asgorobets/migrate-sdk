@@ -227,7 +227,11 @@ describe("getMigrationStatuses", () => {
               needsUpdate: 1,
               skipped: 1,
             },
-            lastRun,
+            lastRun: {
+              ...lastRun,
+              definitionId,
+              runStatus: "succeeded",
+            },
             lock,
             warnings: [],
           },

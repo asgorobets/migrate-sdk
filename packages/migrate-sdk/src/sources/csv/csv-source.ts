@@ -1,4 +1,4 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import type { ParseError } from "papaparse";
@@ -146,6 +146,8 @@ export interface CsvSourceOptions<
   Payload,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
 > extends CsvParserOptions<IdentityKey> {
+  /** Maximum number of rows returned by each cursor window. */
+  readonly batchSize?: number;
   /**
    * Controls cursor retention after completed runs. Defaults to `"full"`.
    * Use `"incremental"` only when changed rows always follow the saved cursor.
@@ -882,6 +884,48 @@ const makeImplementation = <
   IdentityKey
 > => {
   const load = () => loadPathDocument(fs, path, options);
+  type LoadedDocument = CsvParsedDocument<IdentityKey> & {
+    readonly fileFingerprint: string;
+    readonly resolvedPath: string;
+  };
+  interface CursorDocumentCache {
+    readonly document: LoadedDocument;
+    readonly inode: number | undefined;
+    readonly modifiedAt: number | undefined;
+    readonly size: bigint;
+  }
+  let cursorDocument: CursorDocumentCache | undefined;
+  const fileMetadata = () =>
+    fs.stat(path.resolve(options.path)).pipe(
+      Effect.map((info) => ({
+        inode: Option.getOrUndefined(info.ino),
+        modifiedAt: Option.getOrUndefined(info.mtime)?.getTime(),
+        size: info.size,
+      })),
+      Effect.mapError((cause) =>
+        csvError("Unable to inspect CSV source file", {
+          cause,
+          path: options.path,
+        })
+      )
+    );
+  const loadCursorDocument = (cursor: CsvSourceCursor | null) =>
+    Effect.gen(function* () {
+      const metadata = yield* fileMetadata();
+      if (
+        cursor !== null &&
+        cursorDocument?.document.fileFingerprint === cursor.fileFingerprint &&
+        cursorDocument.size === metadata.size &&
+        cursorDocument.modifiedAt === metadata.modifiedAt &&
+        cursorDocument.inode === metadata.inode
+      ) {
+        return cursorDocument.document;
+      }
+
+      const document = yield* load();
+      cursorDocument = { document, ...metadata };
+      return document;
+    });
   const identity = makeCsvIdentityDefinition(options.identity);
   const countTotal = Effect.fn("CsvSource.countTotal")(() =>
     load().pipe(Effect.map((document) => document.rows.length))
@@ -890,13 +934,55 @@ const makeImplementation = <
   const read = Effect.fn("CsvSource.read")(function* (
     cursor: CsvSourceCursor | null
   ) {
-    const document = yield* load();
+    if (
+      options.batchSize !== undefined &&
+      (!Number.isSafeInteger(options.batchSize) || options.batchSize <= 0)
+    ) {
+      return yield* csvError("CSV batch size must be a positive integer", {
+        batchSize: options.batchSize,
+      });
+    }
+    if (
+      cursor !== null &&
+      (!Number.isSafeInteger(cursor.nextRowIndex) || cursor.nextRowIndex < 0)
+    ) {
+      return yield* csvError(
+        "CSV cursor row index must be a non-negative integer",
+        {
+          nextRowIndex: cursor.nextRowIndex,
+        }
+      );
+    }
+
+    const document = yield* loadCursorDocument(cursor);
     const startRowIndex =
       cursor?.fileFingerprint === document.fileFingerprint
         ? Math.max(cursor.nextRowIndex, document.dataStartRowIndex)
         : document.dataStartRowIndex;
-    const rows = document.rows.filter((row) => row.rowIndex >= startRowIndex);
+    let lowerBound = 0;
+    let upperBound = document.rows.length;
+    while (lowerBound < upperBound) {
+      const middle = Math.floor((lowerBound + upperBound) / 2);
+      const middleRow = document.rows[middle];
+      if (middleRow !== undefined && middleRow.rowIndex < startRowIndex) {
+        lowerBound = middle + 1;
+      } else {
+        upperBound = middle;
+      }
+    }
+    const endRowOffset =
+      options.batchSize === undefined
+        ? document.rows.length
+        : Math.min(lowerBound + options.batchSize, document.rows.length);
+    const rows =
+      lowerBound === 0 && endRowOffset === document.rows.length
+        ? document.rows
+        : document.rows.slice(lowerBound, endRowOffset);
     const shouldAdvanceCursor = startRowIndex < document.nextRowIndex;
+    const nextRowIndex =
+      endRowOffset === document.rows.length
+        ? document.nextRowIndex
+        : (rows.at(-1)?.rowIndex ?? startRowIndex) + 1;
 
     return {
       items: rows.map((row) => row.sourceItem),
@@ -904,7 +990,7 @@ const makeImplementation = <
         ? {
             nextCursor: {
               fileFingerprint: document.fileFingerprint,
-              nextRowIndex: document.nextRowIndex,
+              nextRowIndex,
             } satisfies CsvSourceCursor,
           }
         : {}),

@@ -833,6 +833,7 @@ type DefinitionState =
   | "ok"
   | "pending"
   | "running"
+  | "skipped"
   | "warning";
 
 const latestStatus = (definition: StatusDefinition): string =>
@@ -866,6 +867,10 @@ const definitionState = (definition: StatusDefinition): DefinitionState => {
     return "warning";
   }
 
+  if (definition.lastRun?.status === "skipped") {
+    return "skipped";
+  }
+
   if (
     definition.durable.needsUpdate > 0 ||
     (source?.duplicate ?? 0) > 0 ||
@@ -896,6 +901,7 @@ const styleDefinitionState = (
     case "failed":
       return red(value, options);
     case "new":
+    case "skipped":
       return dim(value, options);
     case "ok":
       return green(value, options);

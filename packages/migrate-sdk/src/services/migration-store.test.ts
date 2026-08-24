@@ -10,7 +10,67 @@ import {
   toSourceVersion,
 } from "../domain/ids.ts";
 import type { MigrationItemState } from "../domain/state.ts";
-import { MigrationStore } from "./migration-store.ts";
+import {
+  MigrationStore,
+  validateMigrationDefinitionRunOutcomes,
+} from "./migration-store.ts";
+
+describe("MigrationStore definition outcomes", () => {
+  it.effect("rejects incomplete, duplicate, and unexpected outcomes", () =>
+    Effect.gen(function* () {
+      const authorsId = toMigrationDefinitionId("authors");
+      const articlesId = toMigrationDefinitionId("articles");
+      const assetsId = toMigrationDefinitionId("assets");
+      const error = yield* Effect.flip(
+        validateMigrationDefinitionRunOutcomes(
+          [authorsId, articlesId],
+          [
+            { definitionId: authorsId, status: "succeeded" },
+            { definitionId: authorsId, status: "failed" },
+            { definitionId: assetsId, status: "skipped" },
+          ]
+        )
+      );
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationStoreError",
+          cause: {
+            duplicateDefinitionIds: [authorsId],
+            missingDefinitionIds: [articlesId],
+            unexpectedDefinitionIds: [assetsId],
+          },
+          message:
+            "Migration Definition Run outcomes must match the Migration Run definitions",
+        })
+      );
+    })
+  );
+
+  it.effect("does not mutate a run when terminal outcomes are incomplete", () =>
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const authorsId = toMigrationDefinitionId("authors");
+      const articlesId = toMigrationDefinitionId("articles");
+      const definitionIds = [authorsId, articlesId] as const;
+      const runId = toMigrationRunId("run-incomplete-outcomes");
+
+      yield* store.beginRun(runId, definitionIds);
+      yield* Effect.flip(
+        store.failRun(runId, definitionIds, [
+          { definitionId: articlesId, status: "failed" },
+        ])
+      );
+
+      expect(yield* store.getLatestRunState(authorsId)).toEqual(
+        expect.objectContaining({ runId, status: "running" })
+      );
+      expect(yield* store.getLatestRunState(articlesId)).toEqual(
+        expect.objectContaining({ runId, status: "running" })
+      );
+    }).pipe(Effect.provide(InMemoryMigrationStore.layer()))
+  );
+});
 
 const migratedState = (
   identity: string,

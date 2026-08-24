@@ -45,6 +45,38 @@ const waitForState = (
   });
 
 describe("Migration TUI execution controller", () => {
+  it("publishes execution state independently of a rendered app", async () => {
+    const start = Promise.withResolvers<ExecutionStartResult<TestSummary>>();
+    const published: Array<MigrationTuiExecutionState | undefined> = [];
+    const controller = makeMigrationTuiExecutionController({
+      observeDetachedRun: () => Promise.reject(new Error("not detached")),
+    });
+    const unsubscribe = controller.subscribeExecution((state) => {
+      published.push(state);
+    });
+    const execution = controller.execute({
+      definitionId,
+      start: () => start.promise,
+    });
+
+    expect(controller.getExecutionState()).toEqual({
+      definitionId,
+      kind: "starting",
+    });
+
+    start.resolve({
+      kind: "completed",
+      runId,
+      summary: { status: "succeeded" },
+    });
+
+    expect(await execution).toBe(`Run ${runId} succeeded`);
+    expect(controller.getExecutionState()).toBeUndefined();
+    expect(published).toEqual([{ definitionId, kind: "starting" }, undefined]);
+
+    unsubscribe();
+  });
+
   it("requests attached cancellation once and drains to terminal state", async () => {
     const states: MigrationTuiExecutionState[] = [];
     let cancelCalls = 0;

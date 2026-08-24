@@ -47,7 +47,11 @@ export {
 export type { MigrationDefinitionRegistryPlanningError } from "./domain/registry.ts";
 
 export type {
+  MigrationDefinitionRunOutcome,
+  MigrationDefinitionRunState,
+  MigrationDefinitionRunStatus,
   MigrationDefinitionRunSummary,
+  MigrationRunStatus,
   MigrationRunSummary,
   RollbackOrphansCounts,
 } from "./domain/run.ts";

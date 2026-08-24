@@ -196,7 +196,14 @@ function registerProviderSuite(
           expect.objectContaining({ execution, runId, status: "running" })
         );
 
-        const completed = yield* store.completeRun(runId, definitionIds);
+        const completed = yield* store.completeRun(
+          runId,
+          definitionIds,
+          definitionIds.map((definitionId) => ({
+            definitionId,
+            status: "succeeded" as const,
+          }))
+        );
         expect(completed).toEqual(
           expect.objectContaining({ execution, runId, status: "succeeded" })
         );
@@ -205,7 +212,13 @@ function registerProviderSuite(
         const latest = yield* Effect.forEach(definitionIds, (definitionId) =>
           store.getLatestRunState(definitionId)
         );
-        expect(latest).toEqual([completed, completed]);
+        expect(latest).toEqual(
+          definitionIds.map((definitionId) => ({
+            ...completed,
+            definitionId,
+            runStatus: "succeeded",
+          }))
+        );
       }).pipe(Effect.provide(makeStoreLayer()))
     );
 

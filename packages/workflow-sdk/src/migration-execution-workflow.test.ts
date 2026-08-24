@@ -56,6 +56,76 @@ describe("runMigrationExecutionWorkflow", () => {
     ).rejects.toEqual(cancellation);
     expect(executeRollbackOrphansPage).not.toHaveBeenCalled();
     expect(fail).toHaveBeenCalledOnce();
+    expect(fail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        definitions: [],
+        failedDefinitionId: "articles",
+      })
+    );
+  });
+
+  it("reports completed and active definitions when a later scan fails", async () => {
+    const envelope: WorkflowSdkMigrationRunEnvelope = {
+      ...makeEnvelope(),
+      executionDefinitionIds: ["authors", "articles", "assets"],
+    };
+    const sourceError = new Error("Article source is unavailable");
+    const fail = vi.fn<WorkflowSdkMigrationRunSteps["fail"]>();
+    const executeCursorWindow = vi.fn(({ definitionId }) => {
+      if (definitionId === "articles") {
+        return Promise.reject(sourceError);
+      }
+
+      return Promise.resolve({
+        kind: "definition-completed" as const,
+        state: {
+          counts: {
+            failed: 0,
+            migrated: 1,
+            needsUpdate: 0,
+            skipped: 0,
+            unchanged: 0,
+          },
+          excludedSourceIdentities: [],
+          phase: "scan" as const,
+        },
+        summary: {
+          counts: {
+            failed: 0,
+            migrated: 1,
+            needsUpdate: 0,
+            skipped: 0,
+            unchanged: 0,
+          },
+          definitionId,
+          status: "succeeded" as const,
+        },
+      });
+    });
+    const steps: WorkflowSdkMigrationRunSteps = {
+      begin: vi.fn().mockResolvedValue({ rollbackOrphans: false }),
+      complete: vi.fn(),
+      executeCursorWindow,
+      executeRollbackOrphansPage: vi.fn(),
+      fail,
+    };
+
+    await expect(runMigrationExecutionWorkflow(envelope, steps)).rejects.toBe(
+      sourceError
+    );
+
+    expect(executeCursorWindow).toHaveBeenCalledTimes(2);
+    expect(fail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        definitions: [
+          expect.objectContaining({
+            definitionId: "authors",
+            status: "succeeded",
+          }),
+        ],
+        failedDefinitionId: "articles",
+      })
+    );
   });
 
   it("finishes every scan before rolling back orphans in reverse order", async () => {
@@ -124,6 +194,77 @@ describe("runMigrationExecutionWorkflow", () => {
       expect.objectContaining({ orphaned: 1, rolledBack: 1 }),
       expect.objectContaining({ orphaned: 1, rolledBack: 1 }),
     ]);
+  });
+
+  it("reports only completed rollbacks when a later rollback fails", async () => {
+    const envelope: WorkflowSdkMigrationRunEnvelope = {
+      ...makeEnvelope(),
+      executionDefinitionIds: ["authors", "articles", "assets"],
+    };
+    const rollbackError = new Error("article rollback unavailable");
+    const fail = vi.fn<WorkflowSdkMigrationRunSteps["fail"]>();
+    const rollbackCalls: string[] = [];
+    const definitionSummary = (definitionId: string) => ({
+      counts: {
+        failed: 0,
+        migrated: 0,
+        needsUpdate: 0,
+        skipped: 0,
+        unchanged: 1,
+      },
+      definitionId,
+      status: "succeeded" as const,
+    });
+    const steps: WorkflowSdkMigrationRunSteps = {
+      begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      complete: vi.fn(),
+      executeCursorWindow: vi.fn(({ definitionId }) => {
+        const summary = definitionSummary(definitionId);
+        return Promise.resolve({
+          kind: "definition-completed" as const,
+          state: {
+            counts: summary.counts,
+            excludedSourceIdentities: [],
+            phase: "scan" as const,
+          },
+          summary,
+        });
+      }),
+      executeRollbackOrphansPage: vi.fn(({ definitionId, state }) => {
+        rollbackCalls.push(definitionId);
+
+        if (definitionId === "articles") {
+          return Promise.reject(rollbackError);
+        }
+
+        return Promise.resolve({
+          kind: "completed" as const,
+          state: {
+            ...state,
+            orphaned: 1,
+            rolledBack: 1,
+          },
+        });
+      }),
+      fail,
+    };
+
+    await expect(runMigrationExecutionWorkflow(envelope, steps)).rejects.toBe(
+      rollbackError
+    );
+
+    expect(rollbackCalls).toEqual(["assets", "articles"]);
+    expect(fail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        definitions: [
+          expect.objectContaining({
+            definitionId: "assets",
+            status: "succeeded",
+          }),
+        ],
+        failedDefinitionId: "articles",
+      })
+    );
   });
 
   it("carries rollback page cursor and counts in workflow state", async () => {

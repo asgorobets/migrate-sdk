@@ -15,9 +15,20 @@ pnpm exec migrate-tui
 
 The published command is a small Node launcher. It runs the JavaScript TUI with
 the pinned Bun runtime supplied by the package, so users do not need a global
-Bun installation. `migrate-sdk` and `effect` remain peer dependencies: both the
-TUI and `migrate.config.ts` load the migration project's compatible versions.
-`@migrate-sdk/tui` and `migrate-sdk` are published with matching versions.
+Bun installation.
+
+The current implementation loads `migrate.config.ts`, `migrate-sdk`, and the
+configuration's dependencies inside that Bun process. A migration project used
+through the TUI must therefore be Bun-compatible today, even if the same config
+already works through the Node-based CLI. This is a temporary runtime boundary,
+not the intended customer authoring contract. The planned local Migrate Server
+will load the project config under Node and let the Bun-rendered TUI communicate
+with it as a client. See
+[`ADR 0007`](../../docs/adr/0007-server-boundary-for-local-and-remote-clients.md).
+
+`migrate-sdk` and `effect` remain peer dependencies: the TUI and config use the
+migration project's compatible versions. `@migrate-sdk/tui` and `migrate-sdk`
+are published with matching versions.
 
 For workspace development:
 
@@ -31,8 +42,9 @@ Use an explicit project config:
 pnpm --filter @migrate-sdk/tui dev -- --config ./migrate.config.ts
 ```
 
-The npm package uses the Node launcher and packaged Bun runtime. A compiled UI
-binary remains available for testing direct-download or Homebrew distribution:
+The npm package uses the Node launcher and packaged Bun runtime; it does not
+make a Node-only migration config Bun-compatible. A compiled UI binary remains
+available for testing direct-download or Homebrew distribution:
 
 ```sh
 pnpm --filter @migrate-sdk/tui build:binary
@@ -83,9 +95,16 @@ channel is unavailable, the TUI reports the fallback and continues following
 durable run state. Provider failure or cancellation is reconciled against
 durable terminal state before it is reported. `q`, Ctrl+C,
 SIGINT, SIGTERM, and SIGHUP cancel active local work and wait for it to finish
-before closing. Runs already handed to a background executor continue after the
-TUI closes; the TUI stops observing them locally but does not claim to cancel
-provider-owned work.
+before closing. A second Ctrl+C, or a five-second graceful-shutdown timeout,
+always restores the terminal and exits. Runs already handed to a background
+executor continue after the TUI closes; the TUI stops observing them locally
+but does not claim to cancel provider-owned work.
+
+If React or the terminal renderer fails unexpectedly, the TUI destroys the
+failed renderer, reloads durable migration state, and creates one fresh UI
+session. An active execution remains owned by the runtime and the replacement
+screen reattaches to its status. A second renderer failure exits normally after
+restoring the terminal instead of entering a restart loop.
 
 ## Terminal regression test
 

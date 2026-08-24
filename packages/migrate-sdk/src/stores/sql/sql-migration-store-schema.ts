@@ -8,6 +8,7 @@ import {
   type SqlMigrationStoreTableNames,
 } from "./dialects/dialect.ts";
 import { makeInitialSqlMigrationStoreSchema } from "./schema/migrations/0001-initial-schema.ts";
+import { addDefinitionRunStatus } from "./schema/migrations/0002-definition-run-status.ts";
 import { makeSqlMigrationStoreDialect } from "./sql-migration-store-dialect.ts";
 import {
   defaultSqlMigrationStoreTablePrefix,
@@ -164,6 +165,24 @@ const schemaV1Shape = (
   };
 };
 
+const schemaV2Shape = (
+  names: SqlMigrationStoreTableNames,
+  prefix: string
+): SqlMigrationStoreSchemaShape => {
+  const shape = schemaV1Shape(names, prefix);
+
+  return {
+    ...shape,
+    columns: {
+      ...shape.columns,
+      [names.runDefinitions]: [
+        ...(shape.columns[names.runDefinitions] ?? []),
+        "definition_status",
+      ],
+    },
+  };
+};
+
 const makeMigrations = (
   context: SqlMigrationStoreSchemaContext
 ): readonly SqlMigrationStoreSchemaMigrationDefinition[] => [
@@ -177,6 +196,13 @@ const makeMigrations = (
     id: 1,
     name: "initial_schema",
     shape: schemaV1Shape(context.names, context.prefix),
+  },
+  {
+    description: "Record each migration definition outcome within a run",
+    effect: addDefinitionRunStatus(context.sql, context.names),
+    id: 2,
+    name: "definition_run_status",
+    shape: schemaV2Shape(context.names, context.prefix),
   },
 ];
 

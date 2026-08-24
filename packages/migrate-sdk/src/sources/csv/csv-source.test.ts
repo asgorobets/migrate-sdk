@@ -15,7 +15,11 @@ import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { SourceIdentity, toEncodedSourceIdentity } from "../../domain/ids.ts";
 import { useConfiguredSource } from "../../testing/configured-source-runtime.ts";
 import { runInlineDefinition } from "../../testing/inline-registry-execution.ts";
-import { CsvParserCore, type CsvParserOptions } from "./csv-source.ts";
+import {
+  CsvParserCore,
+  type CsvParserOptions,
+  CsvSourceCursor,
+} from "./csv-source.ts";
 
 const CsvArticleSource = Schema.Struct({
   id: Schema.String,
@@ -450,6 +454,150 @@ describe("CsvSource", () => {
     }).pipe(Effect.provide(testPlatformLayer))
   );
 
+  it.effect("reads large CSV sources in bounded cursor windows", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem;
+      const path = yield* Path;
+      const directory = yield* fs.makeTempDirectoryScoped({
+        prefix: "migrate-sdk-csv-",
+      });
+      const filePath = path.join(directory, "articles.csv");
+      yield* fs.writeFileString(
+        filePath,
+        "id,title,views\n1,One,1\n2,Two,2\n3,Three,3\n4,Four,4\n5,Five,5\n"
+      );
+
+      const source = CsvSource.make({
+        ...csvOptions,
+        batchSize: 2,
+        path: filePath,
+        platform: testPlatformLayer,
+        sourceSchema: CsvArticleSource,
+      });
+
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const first = yield* sourceRuntime.read(null);
+          const second = yield* sourceRuntime.read(first.nextCursor ?? null);
+          const third = yield* sourceRuntime.read(second.nextCursor ?? null);
+          const finished = yield* sourceRuntime.read(third.nextCursor ?? null);
+
+          expect(first.items.map((item) => item.item.id)).toEqual(["1", "2"]);
+          expect(second.items.map((item) => item.item.id)).toEqual(["3", "4"]);
+          expect(third.items.map((item) => item.item.id)).toEqual(["5"]);
+          expect(finished.items).toHaveLength(0);
+          expect(finished.nextCursor).toBeUndefined();
+        })
+      );
+    }).pipe(Effect.provide(testPlatformLayer))
+  );
+
+  it.effect("reloads a changed file between bounded cursor windows", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem;
+      const path = yield* Path;
+      const directory = yield* fs.makeTempDirectoryScoped({
+        prefix: "migrate-sdk-csv-",
+      });
+      const filePath = path.join(directory, "articles.csv");
+      yield* fs.writeFileString(
+        filePath,
+        "id,title,views\n1,One,1\n2,Two,2\n3,Three,3\n"
+      );
+
+      const source = CsvSource.make({
+        ...csvOptions,
+        batchSize: 2,
+        path: filePath,
+        platform: testPlatformLayer,
+        sourceSchema: CsvArticleSource,
+      });
+
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const first = yield* sourceRuntime.read(null);
+          yield* fs.writeFileString(
+            filePath,
+            "id,title,views\n1,Revised,1\n2,Two,2\n4,Four,4\n"
+          );
+
+          const second = yield* sourceRuntime.read(first.nextCursor ?? null);
+          const nextRun = yield* sourceRuntime.read(null);
+
+          expect(second.items.map((item) => item.item.title)).toEqual([
+            "Revised",
+            "Two",
+          ]);
+          expect(nextRun.items.map((item) => item.item.title)).toEqual([
+            "Revised",
+            "Two",
+          ]);
+        })
+      );
+    }).pipe(Effect.provide(testPlatformLayer))
+  );
+
+  it.effect("rejects invalid CSV batch sizes", () =>
+    Effect.gen(function* () {
+      const source = CsvSource.make({
+        ...csvOptions,
+        batchSize: 0,
+        path: "articles.csv",
+        platform: testPlatformLayer,
+        sourceSchema: CsvArticleSource,
+      });
+
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const error = yield* Effect.flip(sourceRuntime.read(null));
+
+          expect(error).toEqual(
+            expect.objectContaining({
+              message: "CSV batch size must be a positive integer",
+            })
+          );
+        })
+      );
+    }).pipe(Effect.provide(testPlatformLayer))
+  );
+
+  it.effect("rejects invalid durable CSV cursor row indexes", () =>
+    Effect.gen(function* () {
+      const source = CsvSource.make({
+        ...csvOptions,
+        path: "articles.csv",
+        platform: testPlatformLayer,
+        sourceSchema: CsvArticleSource,
+      });
+
+      yield* useConfiguredSource(source, (sourceRuntime) =>
+        Effect.gen(function* () {
+          const error = yield* Effect.flip(
+            sourceRuntime.read({
+              fileFingerprint: "fixture",
+              nextRowIndex: 1.5,
+            })
+          );
+
+          expect(error).toEqual(
+            expect.objectContaining({
+              message: "CSV cursor row index must be a non-negative integer",
+            })
+          );
+        })
+      );
+    }).pipe(Effect.provide(testPlatformLayer))
+  );
+
+  it("rejects fractional row indexes in the public cursor schema", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(CsvSourceCursor)({
+        fileFingerprint: "fixture",
+        nextRowIndex: 1.5,
+      })
+    ).toThrow();
+  });
+
   it.effect(
     "counts totals that respect provided headers, custom separators, and skipped blank rows",
     () =>
@@ -572,7 +720,7 @@ describe("CsvSource", () => {
           unchanged: 0,
           needsUpdate: 0,
         });
-        expect(platformState.readFileAttempts).toBe(3);
+        expect(platformState.readFileAttempts).toBe(2);
         expect(progressEvents).toEqual(
           expect.arrayContaining([
             expect.objectContaining({

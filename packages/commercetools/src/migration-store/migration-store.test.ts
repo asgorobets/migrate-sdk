@@ -1840,7 +1840,11 @@ describe("CommercetoolsMigrationStore", () => {
       const error = yield* Effect.gen(function* () {
         const store = yield* MigrationStore;
 
-        return yield* store.completeRun(runId, [definitionId]);
+        return yield* store.completeRun(
+          runId,
+          [definitionId],
+          [{ definitionId, status: "succeeded" }]
+        );
       }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
 
       expect(error).toEqual(
@@ -1903,7 +1907,14 @@ describe("CommercetoolsMigrationStore", () => {
       const error = yield* Effect.gen(function* () {
         const store = yield* MigrationStore;
 
-        return yield* store.completeRun(runId, definitionIds);
+        return yield* store.completeRun(
+          runId,
+          definitionIds,
+          definitionIds.map((currentDefinitionId) => ({
+            definitionId: currentDefinitionId,
+            status: "succeeded" as const,
+          }))
+        );
       }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
 
       expect(error).toEqual(
@@ -1968,7 +1979,14 @@ describe("CommercetoolsMigrationStore", () => {
       const error = yield* Effect.gen(function* () {
         const store = yield* MigrationStore;
 
-        return yield* store.completeRun(runId, definitionIds);
+        return yield* store.completeRun(
+          runId,
+          definitionIds,
+          definitionIds.map((currentDefinitionId) => ({
+            definitionId: currentDefinitionId,
+            status: "succeeded" as const,
+          }))
+        );
       }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
 
       expect(error).toEqual(
@@ -1992,10 +2010,24 @@ describe("CommercetoolsMigrationStore", () => {
       const store = yield* MigrationStore;
 
       const running = yield* store.beginRun(runId, definitionIds);
-      const succeeded = yield* store.completeRun(runId, definitionIds);
+      const succeeded = yield* store.completeRun(
+        runId,
+        definitionIds,
+        definitionIds.map((currentDefinitionId) => ({
+          definitionId: currentDefinitionId,
+          status: "succeeded" as const,
+        }))
+      );
       const rerun = toMigrationRunId("run-latest-state-retry");
       const retryRunning = yield* store.beginRun(rerun, definitionIds);
-      const failed = yield* store.failRun(rerun, definitionIds);
+      const failed = yield* store.failRun(
+        rerun,
+        definitionIds,
+        definitionIds.map((currentDefinitionId) => ({
+          definitionId: currentDefinitionId,
+          status: "failed" as const,
+        }))
+      );
       const cancelledRunId = toMigrationRunId("run-latest-state-cancelled");
       yield* store.beginRun(cancelledRunId, definitionIds);
       const cancelled = yield* store.markRunCancelled(
@@ -2061,6 +2093,41 @@ describe("CommercetoolsMigrationStore", () => {
           },
         },
       });
+    }).pipe(Effect.provide(makeStoreLayer(recording)));
+  });
+
+  it.effect("persists each definition outcome from a failed shared run", () => {
+    const recording = makeRecordingCustomObjectApiRoot();
+    const runId = toMigrationRunId("run-mixed-outcomes");
+    const additionalDefinitionId = toMigrationDefinitionId("catalog-prices");
+    const definitionIds = [definitionId, additionalDefinitionId] as const;
+
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+
+      yield* store.beginRun(runId, definitionIds);
+      const failedRun = yield* store.failRun(runId, definitionIds, [
+        { definitionId, status: "succeeded" },
+        { definitionId: additionalDefinitionId, status: "failed" },
+      ]);
+      const states = yield* Effect.all([
+        store.getLatestRunState(definitionId),
+        store.getLatestRunState(additionalDefinitionId),
+      ]);
+
+      expect(failedRun.status).toBe("failed");
+      expect(states).toEqual([
+        expect.objectContaining({
+          definitionId,
+          runStatus: "failed",
+          status: "succeeded",
+        }),
+        expect.objectContaining({
+          definitionId: additionalDefinitionId,
+          runStatus: "failed",
+          status: "failed",
+        }),
+      ]);
     }).pipe(Effect.provide(makeStoreLayer(recording)));
   });
 });

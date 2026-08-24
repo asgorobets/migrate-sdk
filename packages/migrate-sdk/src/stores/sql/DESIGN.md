@@ -28,9 +28,10 @@ Both constructors accept:
   never upgrades an existing schema. Set it to `false` to require a separately
   installed schema even on first use.
 
-Schema version 1 is bundled with the package and executed by Effect SQL
-Migrator. Its history is stored in `${tablePrefix}_schema_migrations`. Ordinary
-store construction is deliberately conservative:
+Schema version 2 is bundled with the package and executed by Effect SQL
+Migrator. It records each definition's outcome separately from its shared run
+status. Migration history is stored in `${tablePrefix}_schema_migrations`.
+Ordinary store construction is deliberately conservative:
 
 - an empty database is installed automatically when `initialize` is enabled;
 - a current schema is opened without mutation; and

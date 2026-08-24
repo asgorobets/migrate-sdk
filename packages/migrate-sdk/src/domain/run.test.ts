@@ -1,10 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import { expectTypeOf } from "vitest";
-import { toMigrationDefinitionId } from "./ids.ts";
+import { toMigrationDefinitionId, toMigrationRunId } from "./ids.ts";
 import {
   type ExecutionStartResult,
   type MigrationDefinitionRunSummary,
   type MigrationRunHandle,
+  makeMigrationDefinitionRunState,
+  makeMigrationRunState,
   makeRunRequest,
 } from "./run.ts";
 
@@ -95,5 +97,34 @@ describe("MigrationDefinitionRunSummary", () => {
       })
     );
     expect(summary).not.toHaveProperty("sourceIdentities");
+  });
+});
+
+describe("MigrationDefinitionRunState", () => {
+  it("preserves the aggregate run status alongside one definition outcome", () => {
+    const runState = {
+      definitionIds: [
+        toMigrationDefinitionId("authors"),
+        toMigrationDefinitionId("articles"),
+      ],
+      finishedAt: new Date("2026-01-01T00:01:00.000Z"),
+      runId: toMigrationRunId("run-1"),
+      startedAt: new Date("2026-01-01T00:00:00.000Z"),
+      status: "failed" as const,
+    };
+
+    const definitionRunState = makeMigrationDefinitionRunState(
+      toMigrationDefinitionId("authors"),
+      runState,
+      "succeeded"
+    );
+
+    expect(definitionRunState).toEqual({
+      ...runState,
+      definitionId: toMigrationDefinitionId("authors"),
+      runStatus: "failed",
+      status: "succeeded",
+    });
+    expect(makeMigrationRunState(definitionRunState)).toEqual(runState);
   });
 });

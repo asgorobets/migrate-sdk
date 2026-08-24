@@ -116,6 +116,20 @@ export const makeMigrationTuiExecutionController = (
   input: MigrationTuiExecutionControllerInput
 ) => {
   let active: ActiveExecution | undefined;
+  let executionState: MigrationTuiExecutionState | undefined;
+  const executionListeners = new Set<
+    (state: MigrationTuiExecutionState | undefined) => void
+  >();
+
+  const publishExecutionState = (
+    state: MigrationTuiExecutionState | undefined
+  ) => {
+    executionState = state;
+
+    for (const listener of executionListeners) {
+      listener(state);
+    }
+  };
 
   const execute = async <Summary extends { readonly status: string }>({
     definitionId,
@@ -131,8 +145,10 @@ export const makeMigrationTuiExecutionController = (
     }
 
     const token = Symbol("MigrationTuiExecution");
-    const notify = (state: MigrationTuiExecutionState) =>
+    const notify = (state: MigrationTuiExecutionState) => {
+      publishExecutionState(state);
       options?.onStateChange?.(state);
+    };
     const current: ActiveExecution = {
       cancelRequested: false,
       definitionId,
@@ -230,6 +246,7 @@ export const makeMigrationTuiExecutionController = (
     } finally {
       if (active?.token === token) {
         active = undefined;
+        publishExecutionState(undefined);
       }
     }
   };
@@ -274,5 +291,13 @@ export const makeMigrationTuiExecutionController = (
   return {
     cancelActiveExecution,
     execute,
+    getExecutionState: () => executionState,
+    subscribeExecution: (
+      listener: (state: MigrationTuiExecutionState | undefined) => void
+    ) => {
+      executionListeners.add(listener);
+
+      return () => executionListeners.delete(listener);
+    },
   } as const;
 };

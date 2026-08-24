@@ -49,10 +49,16 @@ describe("SqlMigrationStore schema migrations", () => {
                 id: 1,
                 name: "initial_schema",
               },
+              {
+                description:
+                  "Record each migration definition outcome within a run",
+                id: 2,
+                name: "definition_run_status",
+              },
             ],
             status: "not-installed",
             tablePrefix: "migrate_sdk",
-            targetVersion: 1,
+            targetVersion: 2,
             warnings: [],
           })
         );
@@ -62,7 +68,7 @@ describe("SqlMigrationStore schema migrations", () => {
     )
   );
 
-  it.effect("applies the inspected plan and records schema version 1", () =>
+  it.effect("applies the inspected plan and records the current schema", () =>
     withSqlite(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -77,16 +83,20 @@ describe("SqlMigrationStore schema migrations", () => {
 
         expect(completedPlan).toEqual(
           expect.objectContaining({
-            applied: [{ id: 1, name: "initial_schema" }],
-            currentVersion: 1,
+            applied: [
+              { id: 1, name: "initial_schema" },
+              { id: 2, name: "definition_run_status" },
+            ],
+            currentVersion: 2,
             issues: [],
             pending: [],
             status: "current",
-            targetVersion: 1,
+            targetVersion: 2,
           })
         );
         expect(migrations).toEqual([
           { migration_id: 1, name: "initial_schema" },
+          { migration_id: 2, name: "definition_run_status" },
         ]);
         expect(yield* SqlMigrationStore.planSchema()).toEqual(completedPlan);
       })
@@ -112,6 +122,53 @@ describe("SqlMigrationStore schema migrations", () => {
           );
         })
       )
+  );
+
+  it.effect("upgrades a version 1 schema with definition outcomes", () =>
+    withSqlite(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const initialPlan = yield* SqlMigrationStore.planSchema();
+        yield* SqlMigrationStore.applySchemaPlan(initialPlan);
+        yield* sql`
+          DELETE FROM migrate_sdk_schema_migrations
+          WHERE migration_id = 2
+        `;
+        yield* sql`
+          ALTER TABLE migrate_sdk_run_definitions
+          DROP COLUMN definition_status
+        `;
+
+        const upgradePlan = yield* SqlMigrationStore.planSchema();
+
+        expect(upgradePlan).toEqual(
+          expect.objectContaining({
+            currentVersion: 1,
+            pending: [
+              {
+                description:
+                  "Record each migration definition outcome within a run",
+                id: 2,
+                name: "definition_run_status",
+              },
+            ],
+            status: "upgrade-required",
+            targetVersion: 2,
+          })
+        );
+
+        const completedPlan =
+          yield* SqlMigrationStore.applySchemaPlan(upgradePlan);
+
+        expect(completedPlan).toEqual(
+          expect.objectContaining({
+            currentVersion: 2,
+            pending: [],
+            status: "current",
+          })
+        );
+      })
+    )
   );
 
   it.effect("refuses tables that have no SDK migration history", () =>
@@ -192,7 +249,7 @@ describe("SqlMigrationStore schema migrations", () => {
         yield* SqlMigrationStore.applySchemaPlan(futureInitialPlan);
         yield* sql`
           INSERT INTO future_store_schema_migrations (migration_id, name)
-          VALUES (2, 'future_schema')
+          VALUES (3, 'future_schema')
         `;
         expect(
           yield* SqlMigrationStore.planSchema({ tablePrefix: "future_store" })

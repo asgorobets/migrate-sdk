@@ -55,6 +55,8 @@ import type {
 import type {
   AnyMigrationDefinition,
   ExecutionStartResult,
+  MigrationDefinitionRunOutcome,
+  MigrationDefinitionRunStatus,
   MigrationDefinitionRunSummary,
   MigrationExecutionHandle,
   MigrationRunHandle,
@@ -335,13 +337,41 @@ const rollbackStatusForDefinitions = (
     ? "failed"
     : "succeeded";
 
+const definitionOutcomesAfterFailure = (
+  definitionIds: readonly MigrationDefinitionId[],
+  completed: readonly MigrationDefinitionRunOutcome[],
+  failedDefinitionId: MigrationDefinitionId | undefined
+): readonly MigrationDefinitionRunOutcome[] => {
+  const completedById = new Map(
+    completed.map((outcome) => [outcome.definitionId, outcome] as const)
+  );
+
+  return definitionIds.map((definitionId) => {
+    if (definitionId === failedDefinitionId) {
+      return { definitionId, status: "failed" as const };
+    }
+
+    const outcome = completedById.get(definitionId);
+
+    if (outcome !== undefined) {
+      return outcome;
+    }
+
+    return {
+      definitionId,
+      status: "skipped" as const,
+    };
+  });
+};
+
 const failRunAndRethrow = <Error>(
   store: typeof MigrationStore.Service,
   runId: MigrationRunId,
   definitionIds: readonly MigrationDefinitionId[],
-  error: Error
+  error: Error,
+  definitionOutcomes: readonly MigrationDefinitionRunOutcome[]
 ): Effect.Effect<never, Error | MigrationStoreError> =>
-  store.failRun(runId, definitionIds).pipe(
+  store.failRun(runId, definitionIds, definitionOutcomes).pipe(
     Effect.mapError((failRunError) =>
       failRunFinalizationError(runId, definitionIds, error, failRunError)
     ),
@@ -489,6 +519,7 @@ const acquireDefinitionLocks = (
   );
 
 interface MigrationRunBodyResult<A> {
+  readonly definitionOutcomes: readonly MigrationDefinitionRunOutcome[];
   readonly status: MigrationRunSummary["status"];
   readonly value: A;
 }
@@ -593,6 +624,7 @@ export interface MigrationRunRollbackOrphansPageInput {
 
 export interface MigrationRunFailureInput {
   readonly definitionIds?: readonly MigrationDefinitionId[];
+  readonly definitionOutcomes: readonly MigrationDefinitionRunOutcome[];
   readonly error: unknown;
   readonly lease: MigrationRunExecutionLease;
   readonly storeLayer: Layer.Layer<MigrationStore, MigrationStoreError>;
@@ -660,8 +692,8 @@ const completeMigrationRunExecution = (
     const status = runStatusForDefinitions(input.definitions);
     const completedRunExit = yield* Effect.exit(
       status === "failed"
-        ? store.failRun(input.lease.runId, definitionIds)
-        : store.completeRun(input.lease.runId, definitionIds)
+        ? store.failRun(input.lease.runId, definitionIds, input.definitions)
+        : store.completeRun(input.lease.runId, definitionIds, input.definitions)
     );
 
     if (Exit.isSuccess(completedRunExit)) {
@@ -707,7 +739,7 @@ const failMigrationRunExecution = (
       runId: input.lease.runId,
     });
     const failedRunExit = yield* Effect.exit(
-      store.failRun(input.lease.runId, definitionIds)
+      store.failRun(input.lease.runId, definitionIds, input.definitionOutcomes)
     );
     yield* releaseDefinitionLocks(store, input.lease.locks, failedRunExit);
     yield* failedRunExit;
@@ -720,9 +752,10 @@ const executeMigrationRun = <A, E, R = never>(
   body: (
     runId: MigrationRunId
   ) => Effect.Effect<MigrationRunBodyResult<A>, E | MigrationStoreError, R>,
-  beforeBegin?: (
-    runId: MigrationRunId
-  ) => Effect.Effect<void, E | MigrationStoreError>,
+  beforeBegin:
+    | ((runId: MigrationRunId) => Effect.Effect<void, E | MigrationStoreError>)
+    | undefined,
+  failureOutcomes: () => readonly MigrationDefinitionRunOutcome[],
   options: InternalMigrationRuntimeExecutionOptions = {}
 ): Effect.Effect<MigrationRunExecutionResult<A>, E | MigrationStoreError, R> =>
   Effect.gen(function* () {
@@ -758,7 +791,15 @@ const executeMigrationRun = <A, E, R = never>(
         kind: "run-failed",
         runId,
       }).pipe(
-        Effect.andThen(failRunAndRethrow(store, runId, definitionIds, error))
+        Effect.andThen(
+          failRunAndRethrow(
+            store,
+            runId,
+            definitionIds,
+            error,
+            failureOutcomes()
+          )
+        )
       );
     const begin = Effect.gen(function* () {
       const runState = yield* store.beginRun(runId, definitionIds);
@@ -794,8 +835,16 @@ const executeMigrationRun = <A, E, R = never>(
 
         const completedRun =
           bodyResult.status === "failed"
-            ? yield* store.failRun(runState.runId, definitionIds)
-            : yield* store.completeRun(runState.runId, definitionIds);
+            ? yield* store.failRun(
+                runState.runId,
+                definitionIds,
+                bodyResult.definitionOutcomes
+              )
+            : yield* store.completeRun(
+                runState.runId,
+                definitionIds,
+                bodyResult.definitionOutcomes
+              );
         yield* MigrationProgress.emit({
           definitionIds,
           kind: "run-completed",
@@ -845,7 +894,9 @@ const executeMigrationRun = <A, E, R = never>(
               kind: "run-failed",
               runId,
             }).pipe(
-              Effect.andThen(store.failRun(runId, definitionIds)),
+              Effect.andThen(
+                store.failRun(runId, definitionIds, failureOutcomes())
+              ),
               Effect.asVoid
             );
           })
@@ -965,7 +1016,7 @@ const runDependencyPreflightFailure = (input: {
   readonly dependencyId: MigrationDefinitionId;
   readonly failedItems?: number;
   readonly requiredByDefinitionId: MigrationDefinitionId;
-  readonly status?: MigrationRunState["status"];
+  readonly status?: MigrationDefinitionRunStatus;
 }) => {
   let reason: string;
 
@@ -2401,8 +2452,16 @@ const finishStubDefinitionRun = (
     const shouldFailRun = lease.failed || Exit.isFailure(primaryExit);
     const finalizedRunExit = yield* Effect.exit(
       shouldFailRun
-        ? lease.store.failRun(lease.runId, [lease.definitionId])
-        : lease.store.completeRun(lease.runId, [lease.definitionId])
+        ? lease.store.failRun(
+            lease.runId,
+            [lease.definitionId],
+            [{ definitionId: lease.definitionId, status: "failed" }]
+          )
+        : lease.store.completeRun(
+            lease.runId,
+            [lease.definitionId],
+            [{ definitionId: lease.definitionId, status: "succeeded" }]
+          )
     );
 
     yield* releaseDefinitionLocks(
@@ -3431,6 +3490,8 @@ const executePreparedRollbackDefinitions = <
 
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
+    const summaries: RollbackDefinitionRunSummary[] = [];
+    let activeDefinitionId: MigrationDefinitionId | undefined;
     const runRollbackBody = (runId: MigrationRunId) =>
       Effect.gen(function* () {
         yield* RollbackProgress.emit({
@@ -3438,13 +3499,12 @@ const executePreparedRollbackDefinitions = <
           kind: "rollback-started",
           runId,
         });
-        const summaries: RollbackDefinitionRunSummary[] = [];
-
         for (const definition of input.definitions) {
           if (!(yield* canScheduleRunWork)) {
             break;
           }
 
+          activeDefinitionId = definition.id;
           const summary = yield* runRollbackMigrationDefinition(
             definition,
             runId,
@@ -3454,9 +3514,11 @@ const executePreparedRollbackDefinitions = <
             break;
           }
           summaries.push(summary);
+          activeDefinitionId = undefined;
         }
 
         return {
+          definitionOutcomes: summaries,
           status: (yield* canScheduleRunWork)
             ? rollbackStatusForDefinitions(summaries)
             : ("cancelled" as const),
@@ -3480,6 +3542,12 @@ const executePreparedRollbackDefinitions = <
       "preparedLease" in executionOptions
         ? undefined
         : () => preparation.preflight(store),
+      () =>
+        definitionOutcomesAfterFailure(
+          definitionIds,
+          summaries,
+          activeDefinitionId
+        ),
       executionOptions
     );
     if (run.status === "cancelled") {
@@ -3644,7 +3712,11 @@ const rollbackOrphansForDefinitions = (
   scanSummaries: readonly MigrationDefinitionRunSummary[],
   runId: MigrationRunId,
   store: typeof MigrationStore.Service,
-  rollbackExecution?: PipelineExecutionOptions
+  rollbackExecution?: PipelineExecutionOptions,
+  onActiveDefinition?: (
+    definitionId: MigrationDefinitionId | undefined
+  ) => void,
+  onCompletedDefinition?: (summary: MigrationDefinitionRunSummary) => void
 ): Effect.Effect<readonly MigrationDefinitionRunSummary[], RunMigrationError> =>
   Effect.gen(function* () {
     const summaries = scanSummaries.map((summary) =>
@@ -3674,6 +3746,8 @@ const rollbackOrphansForDefinitions = (
         break;
       }
 
+      onActiveDefinition?.(definition.id);
+
       if (!isRollbackMigrationDefinition(definition)) {
         return yield* missingRollbackPipelineError(definition.id);
       }
@@ -3684,11 +3758,18 @@ const rollbackOrphansForDefinitions = (
         store,
         rollbackExecution
       );
-      summaries[index] = mergeRollbackOrphansCounts(summary, rollback.counts);
+      const completedSummary = mergeRollbackOrphansCounts(
+        summary,
+        rollback.counts
+      );
+      summaries[index] = completedSummary;
 
       if (!rollback.completed) {
         break;
       }
+
+      onCompletedDefinition?.(completedSummary);
+      onActiveDefinition?.(undefined);
     }
 
     return summaries;
@@ -3707,6 +3788,9 @@ const executePreparedRunDefinitions = <
 > => {
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
+    const summaries: MigrationDefinitionRunSummary[] = [];
+    const completedDefinitionOutcomes: MigrationDefinitionRunOutcome[] = [];
+    let activeDefinitionId: MigrationDefinitionId | undefined;
 
     const run = yield* executeMigrationRun(
       store,
@@ -3720,14 +3804,13 @@ const executePreparedRunDefinitions = <
           },
           (stubRunScope) =>
             Effect.gen(function* () {
-              const summaries: MigrationDefinitionRunSummary[] = [];
-
               for (const definition of input.definitions) {
                 if (!(yield* canScheduleRunWork)) {
                   break;
                 }
 
                 const mode = runModeForDefinition(input, definition.id);
+                activeDefinitionId = definition.id;
                 const summary = yield* runMigrationDefinition(
                   definition,
                   runId,
@@ -3745,6 +3828,10 @@ const executePreparedRunDefinitions = <
                   break;
                 }
                 summaries.push(summary);
+                if (input.rollbackOrphans !== true) {
+                  completedDefinitionOutcomes.push(summary);
+                }
+                activeDefinitionId = undefined;
               }
 
               const completedSummaries =
@@ -3754,11 +3841,18 @@ const executePreparedRunDefinitions = <
                       summaries,
                       runId,
                       store,
-                      input.execution?.rollback
+                      input.execution?.rollback,
+                      (definitionId) => {
+                        activeDefinitionId = definitionId;
+                      },
+                      (summary) => {
+                        completedDefinitionOutcomes.push(summary);
+                      }
                     )
                   : summaries;
 
               return {
+                definitionOutcomes: completedSummaries,
                 status: (yield* canScheduleRunWork)
                   ? runStatusForDefinitions(completedSummaries)
                   : ("cancelled" as const),
@@ -3769,6 +3863,12 @@ const executePreparedRunDefinitions = <
       "preparedLease" in executionOptions
         ? undefined
         : () => preparation.preflight(store),
+      () =>
+        definitionOutcomesAfterFailure(
+          input.definitionIds,
+          completedDefinitionOutcomes,
+          activeDefinitionId
+        ),
       executionOptions
     );
 

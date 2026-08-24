@@ -4139,7 +4139,7 @@ describe("migrate CLI", () => {
           currentVersion: null,
           status: "not-installed",
           tablePrefix: "cli_schema",
-          targetVersion: 1,
+          targetVersion: 2,
         })
       );
       expect(repeatedPlan).toEqual(initialPlan);
@@ -4172,10 +4172,10 @@ describe("migrate CLI", () => {
       expect(upgraded.stderr).toBe("");
       expect(currentPlan).toEqual(
         expect.objectContaining({
-          currentVersion: 1,
+          currentVersion: 2,
           status: "current",
           tablePrefix: "cli_schema",
-          targetVersion: 1,
+          targetVersion: 2,
         })
       );
 
@@ -4301,7 +4301,7 @@ describe("migrate CLI", () => {
         );
 
         expect(decodeCliSchemaPlan(upgrade.stdout)).toEqual(
-          expect.objectContaining({ currentVersion: 1, status: "current" })
+          expect.objectContaining({ currentVersion: 2, status: "current" })
         );
 
         const run = yield* runCli(

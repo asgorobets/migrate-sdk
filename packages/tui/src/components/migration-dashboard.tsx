@@ -565,7 +565,10 @@ const SourceInventorySummary = ({
   if (inventory === undefined) {
     return (
       <box style={{ flexShrink: 0, height: 1 }}>
-        <text fg={migrationColors.dim}>Not scanned · press s to scan</text>
+        <text
+          content="Not scanned · press s to scan"
+          fg={migrationColors.dim}
+        />
       </box>
     );
   }

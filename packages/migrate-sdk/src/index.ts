@@ -146,7 +146,15 @@ export {
   reduceRollbackProgressState,
 } from "./domain/rollback-progress.ts";
 
-export { MigrationRunState } from "./domain/run.ts";
+export {
+  makeMigrationDefinitionRunState,
+  makeMigrationRunState,
+  MigrationDefinitionRunOutcome,
+  MigrationDefinitionRunState,
+  MigrationDefinitionRunStatus,
+  MigrationRunState,
+  MigrationRunStatus,
+} from "./domain/run.ts";
 export type {
   ExecutionStartResult,
   MigrationExecutionHandle,
@@ -336,8 +344,13 @@ export type {
   MigrationDefinitionRegistryCatalogLayerInput,
   MigrationDefinitionRegistryCatalogService,
 } from "./services/migration-definition-registry-catalog.ts";
-export { MigrationStore } from "./services/migration-store.ts";
+export {
+  MigrationStore,
+  migrationDefinitionRunStatus,
+  validateMigrationDefinitionRunOutcomes,
+} from "./services/migration-store.ts";
 export type {
+  MigrationDefinitionRunOutcomeMap,
   OrphanItemStatePage,
   OrphanItemStatePageInput,
 } from "./services/migration-store.ts";

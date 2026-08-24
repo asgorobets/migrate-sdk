@@ -47,7 +47,7 @@
     "test": "vitest run --passWithNoTests",
     "test:binary": "bash test/binary-smoke.sh",
     "test:package": "node test/package-smoke.mjs",
-    "test:renderer": "bun test src/app.test.tsx",
+    "test:renderer": "bun test src/app.test.tsx src/render-session.test.ts",
     "test:pilotty": "pnpm run build && pnpm run test:renderer && bash test/pilotty-layout.sh"
   },
   "dependencies": {

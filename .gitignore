@@ -21,6 +21,7 @@ coverage
 .workflow-data
 .workflow-vitest
 packages/migrate-sdk/examples/.migration-state/
+packages/migrate-sdk/examples/sqlite-catalog/.data/
 
 # Turbo
 .turbo
