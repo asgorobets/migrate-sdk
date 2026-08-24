@@ -9,6 +9,10 @@ import { defineMigrationCliConfig } from "migrate-sdk/cli";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 
+if ("Bun" in globalThis) {
+  throw new Error("The packaging fixture must be loaded by the Node server");
+}
+
 const Content = Schema.Struct({ title: Schema.String });
 const ContentIdentity = SourceIdentity.make({
   id: "packaging-fixture@v1",

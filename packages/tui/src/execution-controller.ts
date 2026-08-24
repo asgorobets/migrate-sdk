@@ -45,6 +45,12 @@ export type MigrationTuiCancellationResult =
       readonly message: string;
     };
 
+export interface MigrationTuiExecutionResult {
+  readonly message: string;
+  readonly outcome: "cancelled" | "completed" | "detached";
+  readonly runId: MigrationRunId;
+}
+
 interface MigrationTuiExecutionControllerOptions {
   readonly onDetached?: () => void;
   readonly onProgressCheckpoint?: (
@@ -139,7 +145,7 @@ export const makeMigrationTuiExecutionController = (
     readonly definitionId: MigrationDefinitionId;
     readonly options?: MigrationTuiExecutionControllerOptions | undefined;
     readonly start: () => Promise<ExecutionStartResult<Summary>>;
-  }): Promise<string> => {
+  }): Promise<MigrationTuiExecutionResult> => {
     if (active !== undefined) {
       throw new Error("Another migration is already running");
     }
@@ -162,7 +168,11 @@ export const makeMigrationTuiExecutionController = (
       const started = await start();
 
       if (started.kind === "completed") {
-        return `Run ${started.runId} ${started.summary.status}`;
+        return {
+          message: `Run ${started.runId} ${started.summary.status}`,
+          outcome: "completed",
+          runId: started.runId,
+        };
       }
 
       current.runId = started.runId;
@@ -191,11 +201,19 @@ export const makeMigrationTuiExecutionController = (
 
         switch (terminal.kind) {
           case "cancelled":
-            return `Run ${terminal.state.runId} cancelled`;
+            return {
+              message: `Run ${terminal.state.runId} cancelled`,
+              outcome: "cancelled",
+              runId: terminal.state.runId,
+            };
           case "execution-failed":
             throw new Error(errorMessage(terminal.cause));
           case "finished":
-            return `Run ${terminal.state.runId} ${terminal.summary.status}`;
+            return {
+              message: `Run ${terminal.state.runId} ${terminal.summary.status}`,
+              outcome: "completed",
+              runId: terminal.state.runId,
+            };
           default: {
             const unhandled: never = terminal;
             return unhandled;
@@ -235,11 +253,19 @@ export const makeMigrationTuiExecutionController = (
 
         const terminal = await observation;
 
-        return `Run ${terminal.runId} ${terminal.status}`;
+        return {
+          message: `Run ${terminal.runId} ${terminal.status}`,
+          outcome: "completed",
+          runId: terminal.runId,
+        };
       } catch (cause) {
         if (observer.signal.aborted) {
           options?.onDetached?.();
-          return `Run ${started.runId} continues in the background`;
+          return {
+            message: `Run ${started.runId} continues in the background`,
+            outcome: "detached",
+            runId: started.runId,
+          };
         }
         throw cause;
       }

@@ -13,17 +13,12 @@ pnpm add --save-dev @migrate-sdk/tui
 pnpm exec migrate-tui
 ```
 
-The published command is a small Node launcher. It runs the JavaScript TUI with
-the pinned Bun runtime supplied by the package, so users do not need a global
-Bun installation.
-
-The current implementation loads `migrate.config.ts`, `migrate-sdk`, and the
-configuration's dependencies inside that Bun process. A migration project used
-through the TUI must therefore be Bun-compatible today, even if the same config
-already works through the Node-based CLI. This is a temporary runtime boundary,
-not the intended customer authoring contract. The planned local Migrate Server
-will load the project config under Node and let the Bun-rendered TUI communicate
-with it as a client. See
+The published command is a small Node launcher. It runs the renderer with the
+pinned Bun runtime supplied by the package, so users do not need a global Bun
+installation. The renderer starts a local Node Migrate Server and communicates
+with it over Effect RPC. `migrate.config.ts`, `migrate-sdk`, migration
+dependencies, stores, sources, destinations, and execution adapters all remain
+in Node, matching the local CLI runtime contract. See
 [`ADR 0007`](../../docs/adr/0007-server-boundary-for-local-and-remote-clients.md).
 
 `migrate-sdk` and `effect` remain peer dependencies: the TUI and config use the
@@ -42,22 +37,18 @@ Use an explicit project config:
 pnpm --filter @migrate-sdk/tui dev -- --config ./migrate.config.ts
 ```
 
-The npm package uses the Node launcher and packaged Bun runtime; it does not
-make a Node-only migration config Bun-compatible. A compiled UI binary remains
-available for testing direct-download or Homebrew distribution:
+The npm package is the supported local distribution. A compiled renderer binary
+remains available for packaging experiments and version smoke tests:
 
 ```sh
 pnpm --filter @migrate-sdk/tui build:binary
 (cd packages/tui && ./dist/binary/migrate-tui --version)
 ```
 
-That binary embeds OpenTUI, but deliberately leaves `migrate-sdk` and `effect`
-external. Run it from the migration project so the UI and its config use that
-project's compatible SDK installation rather than a second embedded copy. It
-also autoloads the consumer project's `tsconfig.json` and `package.json` for
-external TypeScript configs. Cross-compilation requires the matching OpenTUI
-native package for every target. The npm packaging decision, direct-binary
-release matrix, signing gates, and OpenCode references are documented
+The renderer binary is not currently a standalone Migrate TUI distribution: a
+functional release also needs the Node Migrate Server entry and the migration
+project's compatible `migrate-sdk` and `effect` packages. Cross-compilation,
+the companion server layout, signing gates, and OpenCode references are documented
 in [`docs/research/tui-binary-distribution.md`](../../docs/research/tui-binary-distribution.md).
 
 The footer keeps primary and contextual shortcuts visible for the current
@@ -121,9 +112,10 @@ cooperative cancellation and draining, the 72×34 compact dashboard, and the
 snapshots for further inspection.
 
 The compiled-binary smoke check builds and relocates the host executable, loads
-the external TypeScript example config, performs a migration with the workspace
-SDK, and verifies a clean terminal exit:
+its embedded version, and verifies it can start independently. The npm package
+smoke and local IPC test cover real migration execution:
 
 ```sh
 pnpm --filter @migrate-sdk/tui test:binary
+pnpm --filter @migrate-sdk/tui test:ipc
 ```

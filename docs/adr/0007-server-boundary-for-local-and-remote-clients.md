@@ -18,12 +18,11 @@ same process. That is appropriate for a command-line host, but it does not give
 the TUI a durable runtime boundary. The TUI renderer may run under Bun while a
 customer's existing configuration and migration dependencies require Node.
 
-Until the local Migrate Server is implemented, the published TUI launches its
-renderer with a package-pinned Bun executable and loads the customer config in
-that same Bun process. Customers do not need to install Bun globally, but their
-TUI-loaded config and dependencies must currently be Bun-compatible. The
-Node-based CLI keeps its existing Node runtime contract. This compatibility gap
-is temporary and is the first use case for the server boundary in this ADR.
+The published TUI launches its renderer with a package-pinned Bun executable,
+then starts a local Node Migrate Server over child-process IPC. The customer
+config and its dependencies load only in that Node process. Customers do not
+need to install Bun globally, and configs that already work through the
+Node-based CLI retain the same runtime contract in the TUI.
 
 The same problem becomes more important for remote execution. A remote
 environment may own its Migration Store, Sources, Destinations, execution
@@ -65,7 +64,7 @@ The server describes its registry, deployment or environment identity, protocol
 version, SDK version, and supported capabilities so that the client can detect
 incompatibility before offering an action.
 
-The first local connection will use a Node Migrate Server process started by
+The first local connection uses a Node Migrate Server process started by
 the TUI. The Bun renderer communicates with that process over IPC, while the
 Node process loads the same local configuration and SDK package that the CLI
 would load. The npm launcher remains responsible for locating and passing the

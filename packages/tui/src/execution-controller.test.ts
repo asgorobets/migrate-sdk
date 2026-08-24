@@ -70,7 +70,11 @@ describe("Migration TUI execution controller", () => {
       summary: { status: "succeeded" },
     });
 
-    expect(await execution).toBe(`Run ${runId} succeeded`);
+    expect(await execution).toEqual({
+      message: `Run ${runId} succeeded`,
+      outcome: "completed",
+      runId,
+    });
     expect(controller.getExecutionState()).toBeUndefined();
     expect(published).toEqual([{ definitionId, kind: "starting" }, undefined]);
 
@@ -127,7 +131,11 @@ describe("Migration TUI execution controller", () => {
 
     expect((await first).kind).toBe("requested");
     expect((await second).kind).toBe("requested");
-    expect(await execution).toBe(`Run ${runId} cancelled`);
+    expect(await execution).toEqual({
+      message: `Run ${runId} cancelled`,
+      outcome: "cancelled",
+      runId,
+    });
     expect(cancelCalls).toBe(1);
     expect(states.map((state) => state.kind)).toEqual([
       "starting",
@@ -170,7 +178,11 @@ describe("Migration TUI execution controller", () => {
         }),
     });
 
-    expect(result).toBe(`Run ${runId} succeeded`);
+    expect(result).toEqual({
+      message: `Run ${runId} succeeded`,
+      outcome: "completed",
+      runId,
+    });
     expect(states.map((state) => state.kind)).toEqual([
       "starting",
       "observing",
@@ -215,7 +227,11 @@ describe("Migration TUI execution controller", () => {
     const cancellation = await controller.cancelActiveExecution();
 
     expect(cancellation.kind).toBe("detached");
-    expect(await execution).toBe(`Run ${runId} continues in the background`);
+    expect(await execution).toEqual({
+      message: `Run ${runId} continues in the background`,
+      outcome: "detached",
+      runId,
+    });
     expect(detached).toBe(true);
     expect(states.at(-1)?.kind).toBe("cancelling");
   });
@@ -266,7 +282,11 @@ describe("Migration TUI execution controller", () => {
       runId,
     });
 
-    expect(await execution).toBe(`Run ${runId} cancelled`);
+    expect(await execution).toEqual({
+      message: `Run ${runId} cancelled`,
+      outcome: "cancelled",
+      runId,
+    });
     expect(cancelCalls).toBe(1);
   });
 });

@@ -9,7 +9,7 @@ integer-validated.
 
 Add a persistent SQLite catalog example backed by checked-in CC0 Wikidata CSV
 metadata, including deterministic failures, skips, updates, retry, concurrency,
-dependency groups, and rollback scenarios in the Bun-powered TUI. Fixture setup
+dependency groups, and rollback scenarios in the TUI. Fixture setup
 only resets directories it previously created, and the source schema rejects
-unknown fixture dispositions. The Node CLI will support this demo after the
-Migrate Server boundary removes config loading from the TUI process.
+unknown fixture dispositions. The local Node Migrate Server now loads this and
+other Node migration configurations on behalf of the Bun-rendered TUI.

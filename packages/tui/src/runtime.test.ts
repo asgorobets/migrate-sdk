@@ -80,9 +80,11 @@ describe("Migration TUI runtime", () => {
       },
     });
 
-    await expect(runtime.execute(operation)).resolves.toMatch(
-      succeededRunPattern
-    );
+    await expect(runtime.execute(operation)).resolves.toEqual({
+      message: expect.stringMatching(succeededRunPattern),
+      outcome: "completed",
+      runId: expect.any(String),
+    });
     const snapshot = await runtime.refresh();
     const articles = snapshot.rows.find((row) => row.entry.id === articlesId);
 
@@ -127,7 +129,11 @@ describe("Migration TUI runtime", () => {
         onStateChange: (state) => executionStates.push(state.kind),
       });
 
-      await expect(execution).resolves.toMatch(succeededRunPattern);
+      await expect(execution).resolves.toEqual({
+        message: expect.stringMatching(succeededRunPattern),
+        outcome: "completed",
+        runId: expect.any(String),
+      });
 
       expect(executionStates).toContain(testCase.executionState);
       expect(sawIntermediateProgressWhileRunning).toBe(true);
@@ -273,9 +279,9 @@ describe("Migration TUI runtime", () => {
         }),
       ])
     );
-    expect(
+    await expect(
       runtime.normalizeSourceIdentity(articlesId, "article%2Dwelcome")
-    ).toBe("article-welcome");
+    ).resolves.toBe("article-welcome");
     expect(operation).toMatchObject({
       action: "run",
       plan: {

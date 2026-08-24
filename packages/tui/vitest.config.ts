@@ -5,6 +5,7 @@ export default defineConfig({
     exclude: [
       "src/app.test.tsx",
       "src/render-session.test.ts",
+      "test/local-ipc.test.ts",
       "node_modules/**",
     ],
   },

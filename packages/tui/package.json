@@ -45,6 +45,7 @@
     "dev": "bun src/bin.tsx",
     "prepack": "node scripts/verify-package.mjs",
     "test": "vitest run --passWithNoTests",
+    "test:ipc": "bun test test/local-ipc.test.ts",
     "test:binary": "bash test/binary-smoke.sh",
     "test:package": "node test/package-smoke.mjs",
     "test:renderer": "bun test src/app.test.tsx src/render-session.test.ts",

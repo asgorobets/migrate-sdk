@@ -2,7 +2,7 @@
 
 import { makeMigrationTuiLifecycleSupervisor } from "./lifecycle-supervisor.ts";
 import { createMigrationTuiRenderSession } from "./render-session.tsx";
-import { makeMigrationTuiRuntime } from "./runtime.ts";
+import { makeLocalMigrationTuiRuntime } from "./server/tui-runtime.ts";
 
 declare const MIGRATE_TUI_VERSION: string | undefined;
 
@@ -74,20 +74,24 @@ const main = async () => {
     return;
   }
 
-  const runtime = await makeMigrationTuiRuntime({
+  const runtime = await makeLocalMigrationTuiRuntime({
     ...(parsed.configPath === undefined
       ? {}
       : { configPath: parsed.configPath }),
     cwd: process.cwd(),
   });
-  const supervisor = makeMigrationTuiLifecycleSupervisor({
-    createSession: (input) =>
-      createMigrationTuiRenderSession({ ...input, runtime }),
-    runtime,
-  });
+  try {
+    const supervisor = makeMigrationTuiLifecycleSupervisor({
+      createSession: (input) =>
+        createMigrationTuiRenderSession({ ...input, runtime }),
+      runtime,
+    });
 
-  await supervisor.start();
-  await supervisor.wait();
+    await supervisor.start();
+    await supervisor.wait();
+  } finally {
+    await runtime.dispose?.();
+  }
 };
 
 main().catch((cause: unknown) => {

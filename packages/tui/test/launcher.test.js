@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   bunPlatformPackageCandidates,
   resolveBunExecutable,
+  tuiChildEnvironment,
 } from "../bin/launcher.js";
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -54,5 +55,14 @@ describe("Migrate TUI Node launcher", () => {
     );
 
     expect(version.trim()).toBe(packageJson.version);
+  });
+
+  it("passes the exact Node executable to the Bun application", () => {
+    expect(tuiChildEnvironment({ EXISTING: "value" }, "/runtime/node")).toEqual(
+      {
+        EXISTING: "value",
+        MIGRATE_TUI_NODE_EXECUTABLE: "/runtime/node",
+      }
+    );
   });
 });

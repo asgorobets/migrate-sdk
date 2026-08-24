@@ -152,6 +152,8 @@ const operationNeedsDependencyDecision = (
   operation.plan.force !== true &&
   operation.dependencyChecks.some((dependency) => !dependency.satisfied);
 
+type PlanHierarchyRow = MigrationTuiPreparedOperation["planRows"][number];
+
 interface PlanHierarchyItem {
   readonly ancestorsAreLast: readonly boolean[];
   readonly depth: number;
@@ -159,7 +161,7 @@ interface PlanHierarchyItem {
   readonly id: MigrationTuiRow["entry"]["id"];
   readonly isLast: boolean;
   readonly relation?: "optional" | "required";
-  readonly row?: MigrationTuiRow;
+  readonly row?: PlanHierarchyRow;
 }
 
 const planHierarchyItems = (
@@ -801,7 +803,7 @@ export const MigrationTuiApp = ({
           return;
         }
 
-        setNotice(result);
+        setNotice(result.message);
         await refresh();
       } catch (cause) {
         if (lifecycle.isExitRequested()) {
@@ -942,7 +944,7 @@ export const MigrationTuiApp = ({
   }, [prepareOperation, selectiveEntries, selectiveTarget, startTask]);
 
   const submitSelectiveEntry = useCallback(
-    (value: string) => {
+    async (value: string) => {
       const target = selectiveTarget;
       const sourceIdentity = value.trim();
 
@@ -956,7 +958,7 @@ export const MigrationTuiApp = ({
       }
 
       try {
-        const normalized = runtime.normalizeSourceIdentity(
+        const normalized = await runtime.normalizeSourceIdentity(
           target.definitionId,
           sourceIdentity
         );

@@ -73,6 +73,9 @@ jobs:
       - name: Test launcher and packed installation
         run: pnpm turbo run test test:package --filter=@migrate-sdk/tui
 
+      - name: Test Bun client and Node server IPC
+        run: pnpm --filter @migrate-sdk/tui test:ipc
+
       - name: Test real terminal interactions
         if: matrix.pilotty
         run: pnpm --filter @migrate-sdk/tui test:pilotty

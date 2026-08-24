@@ -14,7 +14,7 @@ import {
   type MigrationTuiRuntime,
   type MigrationTuiSnapshot,
   type MigrationTuiSourceIdentityHistoryEntry,
-  makeMigrationTuiRuntime,
+  makeMigrationTuiRuntime as makeMigrationTuiServerRuntime,
 } from "./runtime.ts";
 
 const actEnvironment = globalThis as typeof globalThis & {
@@ -40,6 +40,13 @@ const MigrationTuiApp = ({
     runtime={runtime}
   />
 );
+
+const makeMigrationTuiRuntime = async (
+  ...args: Parameters<typeof makeMigrationTuiServerRuntime>
+): Promise<MigrationTuiRuntime> =>
+  (await makeMigrationTuiServerRuntime(
+    ...args
+  )) as unknown as MigrationTuiRuntime;
 
 const settle = async (
   renderOnce: () => Promise<void>,
@@ -1105,7 +1112,7 @@ describe("MigrationTuiApp", () => {
         expect(
           await settle(setup.renderOnce, () => {
             const frame = setup.captureCharFrame();
-            return frame.includes("1 migrated") || frame.includes("TypeError:");
+            return frame.includes("✓ articles") || frame.includes("TypeError:");
           })
         ).toBe(true);
 

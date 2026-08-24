@@ -45,6 +45,18 @@
       "source": "./src/core.ts",
       "import": "./dist/core.js"
     },
+    "./protocol": {
+      "types": "./dist/protocol/index.d.ts",
+      "bun": "./src/protocol/index.ts",
+      "source": "./src/protocol/index.ts",
+      "import": "./dist/protocol/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/handlers.d.ts",
+      "bun": "./src/server/handlers.ts",
+      "source": "./src/server/handlers.ts",
+      "import": "./dist/server/handlers.js"
+    },
     "./destinations/in-memory": {
       "types": "./dist/destinations/in-memory/index.d.ts",
       "bun": "./src/destinations/in-memory/index.ts",

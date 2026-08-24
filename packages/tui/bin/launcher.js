@@ -154,6 +154,11 @@ const signalExitCode = (signal) => {
   return signalNumber === undefined ? 1 : 128 + signalNumber;
 };
 
+export const tuiChildEnvironment = (env, nodeExecutable) => ({
+  ...env,
+  MIGRATE_TUI_NODE_EXECUTABLE: nodeExecutable,
+});
+
 export const launch = async (
   args,
   { cwd = process.cwd(), env = process.env, spawnProcess = spawn } = {}
@@ -161,7 +166,7 @@ export const launch = async (
   const executable = await resolveBunExecutable();
   const child = spawnProcess(executable, [appEntryPath(), ...args], {
     cwd,
-    env,
+    env: tuiChildEnvironment(env, process.execPath),
     stdio: "inherit",
   });
   const forwardedSignals = ["SIGINT", "SIGHUP", "SIGTERM"];

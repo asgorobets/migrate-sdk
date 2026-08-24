@@ -9,6 +9,7 @@ import {
   type MigrationDefinitionLock,
   type MigrationDefinitionRegistryEntry,
   type MigrationDefinitionRegistryGroup,
+  type MigrationDefinitionRegistryId,
   type MigrationDefinitionRegistryStatusReport,
   type MigrationDefinitionStatus,
   MigrationExecutable,
@@ -30,12 +31,14 @@ import {
   type MigrationCliConfig,
   MigrationCliConfigLoadError,
 } from "migrate-sdk/cli";
+import type { MigratePreparedOperation } from "migrate-sdk/protocol";
 import {
   isTerminalRunState,
   waitForDurableRunState,
 } from "./durable-observation.ts";
 import {
   type MigrationTuiCancellationResult,
+  type MigrationTuiExecutionResult,
   type MigrationTuiExecutionState,
   makeMigrationTuiExecutionController,
 } from "./execution-controller.ts";
@@ -73,7 +76,9 @@ export type MigrationTuiTarget =
       readonly kind: "group";
     };
 
-export type MigrationTuiPreparedOperation =
+export type MigrationTuiPreparedOperation = MigratePreparedOperation;
+
+export type MigrationTuiExecutablePreparedOperation =
   | {
       readonly action: MigrationTuiRunAction;
       readonly dependencyChecks: readonly MigrationTuiDependencyCheck[];
@@ -150,10 +155,11 @@ export interface MigrationTuiRuntime {
   ) => Promise<MigrationTuiBreakLockResult>;
   readonly cancelActiveExecution: () => Promise<MigrationTuiCancellationResult>;
   readonly configPath: string;
+  readonly dispose?: (() => Promise<void>) | undefined;
   readonly execute: (
     operation: MigrationTuiPreparedOperation,
     options?: MigrationTuiExecuteOptions
-  ) => Promise<string>;
+  ) => Promise<MigrationTuiExecutionResult>;
   readonly getExecutionState: () => MigrationTuiExecutionState | undefined;
   readonly groups: readonly MigrationDefinitionRegistryGroup[];
   readonly listMessages: (
@@ -165,7 +171,7 @@ export interface MigrationTuiRuntime {
   readonly normalizeSourceIdentity: (
     definitionId: MigrationDefinitionId,
     sourceIdentity: string
-  ) => string;
+  ) => Promise<string>;
   readonly prepare: (
     target: MigrationTuiTarget,
     action: MigrationTuiAction,
@@ -180,6 +186,20 @@ export interface MigrationTuiRuntime {
   readonly subscribeExecution: (
     listener: (state: MigrationTuiExecutionState | undefined) => void
   ) => () => void;
+}
+
+export interface MigrationTuiServerRuntime
+  extends Omit<MigrationTuiRuntime, "execute" | "prepare"> {
+  readonly execute: (
+    operation: MigrationTuiExecutablePreparedOperation,
+    options?: MigrationTuiExecuteOptions
+  ) => Promise<MigrationTuiExecutionResult>;
+  readonly prepare: (
+    target: MigrationTuiTarget,
+    action: MigrationTuiAction,
+    options?: MigrationTuiPrepareOptions
+  ) => Promise<MigrationTuiExecutablePreparedOperation>;
+  readonly registryId?: MigrationDefinitionRegistryId;
 }
 
 export interface LoadMigrationTuiInput {
@@ -245,11 +265,12 @@ const sourceIdentityKeyText = (key: SourceIdentitySnapshotKey): string =>
 
 export const makeMigrationTuiRuntime = async (
   input: LoadMigrationTuiInput
-): Promise<MigrationTuiRuntime> => {
+): Promise<MigrationTuiServerRuntime> => {
   const loaded = await loadConfig(input);
   const config = loaded.config;
   const entries = config.registry.list();
   const groups = config.registry.groups();
+  const registryId = Option.getOrUndefined(config.registry.id());
   const executable =
     config.executableLayer === undefined
       ? MigrationExecutable.inlineService
@@ -313,11 +334,13 @@ export const makeMigrationTuiRuntime = async (
 
     const observe = Effect.gen(function* () {
       const store = yield* MigrationStore;
-      const readLatestRunState = store.getLatestRunState(definitionId).pipe(
-        Effect.map((state) =>
-          state === null ? null : makeMigrationRunState(state)
-        )
-      );
+      const readLatestRunState = store
+        .getLatestRunState(definitionId)
+        .pipe(
+          Effect.map((state) =>
+            state === null ? null : makeMigrationRunState(state)
+          )
+        );
       const durableObservation = waitForDurableRunState({
         pollIntervalMs: terminalPollIntervalMs,
         readLatestRunState,
@@ -397,14 +420,14 @@ export const makeMigrationTuiRuntime = async (
   const normalizeSourceIdentity = (
     definitionId: MigrationDefinitionId,
     sourceIdentity: string
-  ): string => {
+  ): Promise<string> => {
     const definition = getDefinition(definitionId);
     const identity = SourceIdentity.fromText(
       definition.source.identity,
       sourceIdentity
     );
 
-    return sourceIdentityKeyText(identity.key);
+    return Promise.resolve(sourceIdentityKeyText(identity.key));
   };
 
   const listSourceIdentityHistory = async (
@@ -532,7 +555,7 @@ export const makeMigrationTuiRuntime = async (
   const prepareRollback = async (
     target: MigrationTuiTarget,
     options: MigrationTuiPrepareOptions
-  ): Promise<MigrationTuiPreparedOperation> => {
+  ): Promise<MigrationTuiExecutablePreparedOperation> => {
     const withDependencies =
       options.withDependencies ?? target.kind === "migration";
     const plan = await Effect.runPromise(
@@ -579,7 +602,7 @@ export const makeMigrationTuiRuntime = async (
     target: MigrationTuiTarget,
     action: MigrationTuiRunAction,
     options: MigrationTuiPrepareOptions
-  ): Promise<MigrationTuiPreparedOperation> => {
+  ): Promise<MigrationTuiExecutablePreparedOperation> => {
     if (options.sourceIdentities !== undefined && target.kind !== "migration") {
       throw new Error("Select one migration to run specific source identities");
     }
@@ -660,15 +683,15 @@ export const makeMigrationTuiRuntime = async (
     target: MigrationTuiTarget,
     action: MigrationTuiAction,
     options: MigrationTuiPrepareOptions = {}
-  ): Promise<MigrationTuiPreparedOperation> =>
+  ): Promise<MigrationTuiExecutablePreparedOperation> =>
     action === "rollback"
       ? prepareRollback(target, options)
       : prepareRun(target, action, options);
 
   const execute = async (
-    operation: MigrationTuiPreparedOperation,
+    operation: MigrationTuiExecutablePreparedOperation,
     options?: MigrationTuiExecuteOptions
-  ): Promise<string> => {
+  ): Promise<MigrationTuiExecutionResult> => {
     const onProgress = options?.onProgress;
     const progress =
       onProgress === undefined
@@ -806,6 +829,7 @@ export const makeMigrationTuiRuntime = async (
     normalizeSourceIdentity,
     prepare,
     refresh,
+    ...(registryId === undefined ? {} : { registryId }),
     rows,
     scanSource,
     subscribeExecution: executionController.subscribeExecution,

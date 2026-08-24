@@ -54,7 +54,9 @@ interface SourceInventory {
 const countLabel = (count: number, singular: string): string =>
   `${count} ${singular}${count === 1 ? "" : "s"}`;
 
-const statusLabel = (row: MigrationTuiRow): string => {
+const statusLabel = (row: {
+  readonly status?: MigrationTuiRow["status"] | undefined;
+}): string => {
   const status = row.status;
 
   if (status === undefined) {

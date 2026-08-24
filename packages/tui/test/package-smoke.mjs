@@ -125,6 +125,40 @@ const runPackedMigration = async ({ command, fixtureDirectory }) => {
   }
 };
 
+const runPackedRpcMigration = async ({ fixtureDirectory }) => {
+  const scriptPath = resolve(fixtureDirectory, "rpc-smoke.mjs");
+  await writeFile(
+    scriptPath,
+    `import { makeLocalMigrationTuiRuntime } from "./node_modules/@migrate-sdk/tui/dist/server/tui-runtime.js";
+import { toMigrationDefinitionId } from "migrate-sdk";
+
+const runtime = await makeLocalMigrationTuiRuntime({
+  configPath: "migrate.config.ts",
+  cwd: process.cwd(),
+});
+
+try {
+  const operation = await runtime.prepare(
+    { definitionId: toMigrationDefinitionId("packaging-fixture"), kind: "migration" },
+    "run"
+  );
+  const result = await runtime.execute(operation);
+  const status = (await runtime.refresh()).rows[0]?.status;
+
+  if (result.outcome !== "completed" || status?.durable.migrated !== 1) {
+    throw new Error("Packed RPC migration did not reach durable migrated state");
+  }
+} finally {
+  await runtime.dispose?.();
+}
+`
+  );
+
+  run(pnpm, ["exec", "bun", basename(scriptPath)], {
+    cwd: fixtureDirectory,
+  });
+};
+
 const findTarball = async (directory, prefix) => {
   const files = await readdir(directory);
   const tarball = files.find(
@@ -228,6 +262,7 @@ try {
     throw new Error("Packed launcher did not start the TUI application");
   }
 
+  await runPackedRpcMigration({ fixtureDirectory });
   await runPackedMigration({ command, fixtureDirectory });
 
   process.stdout.write(
