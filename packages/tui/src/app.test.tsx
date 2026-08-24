@@ -15,6 +15,9 @@ const actEnvironment = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
 };
 const previousActEnvironment = actEnvironment.IS_REACT_ACT_ENVIRONMENT;
+const processConcurrencyValuePattern = /│ 3\s+│/;
+const rollbackConcurrencyValuePattern = /│ 5\s+│/;
+const sourceInventoryScanConcurrencyValuePattern = /│ 2\s+│/;
 
 const settle = async (
   renderOnce: () => Promise<void>,
@@ -45,6 +48,58 @@ afterAll(() => {
 
 describe("MigrationTuiApp", () => {
   const itWithOpenTui = process.versions.bun === undefined ? it.skip : it;
+
+  itWithOpenTui(
+    "updates durable item counts while an inline run is still active",
+    async () => {
+      const runtime = await makeMigrationTuiRuntime({
+        configPath: "examples/live-progress.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+        progressFallbackIntervalMs: 10,
+        terminalPollIntervalMs: 10,
+      });
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("r"));
+
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            const hasIntermediateCount = [1, 2, 3].some((count) =>
+              frame.includes(`${count} migrated`)
+            );
+
+            return hasIntermediateCount && frame.includes("is running…");
+          })
+        ).toBe(true);
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => {
+              const frame = setup.captureCharFrame();
+              return (
+                frame.includes("4 migrated") && frame.includes("succeeded")
+              );
+            },
+            1500
+          )
+        ).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
 
   itWithOpenTui(
     "keeps position and source identity visible while navigating many messages",
@@ -295,7 +350,7 @@ describe("MigrationTuiApp", () => {
           await settle(setup.renderOnce, () => {
             const frame = setup.captureCharFrame();
             return (
-              frame.includes("Source scan complete") &&
+              frame.includes("Source Inventory Scan complete") &&
               frame.includes(
                 "3 total · 2 unprocessed · 0 invalid · 1 duplicate · 0 orphaned"
               ) &&
@@ -499,6 +554,113 @@ describe("MigrationTuiApp", () => {
         expect(allActions).toContain("[f]");
         expect(allActions).toContain("Retry skipped");
         expect(allActions).toContain("[t]");
+        expect(allActions).toContain("Concurrency settings");
+        expect(allActions).toContain("[c]");
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "edits concurrency with numeric fields and explicit unbounded choices",
+    async () => {
+      const runtime = await makeMigrationTuiRuntime({
+        configPath: "examples/migrate.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("g"));
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("All actions · content")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("c"));
+
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Concurrency settings")
+          )
+        ).toBe(true);
+        const concurrencySettings = setup.captureCharFrame();
+        expect(concurrencySettings).toContain("Process Pipeline concurrency");
+        expect(concurrencySettings).toContain("Rollback Pipeline concurrency");
+        expect(concurrencySettings).toContain(
+          "Source Inventory Scan concurrency"
+        );
+        expect(concurrencySettings.match(/Unbounded/g)?.length ?? 0).toBe(2);
+
+        await act(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 150));
+        });
+        await act(async () => setup.renderOnce());
+        await act(async () => setup.mockInput.typeText("3"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            processConcurrencyValuePattern.test(setup.captureCharFrame())
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressTab());
+        await act(async () => setup.renderOnce());
+        act(() => setup.mockInput.pressKey(" "));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("✓ Unbounded")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressTab());
+        await act(async () => setup.renderOnce());
+        await act(async () => setup.mockInput.typeText("4"));
+        act(() => setup.mockInput.pressArrow("up"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            rollbackConcurrencyValuePattern.test(setup.captureCharFrame())
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressTab());
+        await act(async () => setup.renderOnce());
+        act(() => setup.mockInput.pressKey(" "));
+        expect(
+          await settle(
+            setup.renderOnce,
+            () =>
+              (setup.captureCharFrame().match(/✓ Unbounded/g)?.length ?? 0) ===
+              2
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressTab());
+        await act(async () => setup.renderOnce());
+        await act(async () => setup.mockInput.typeText("2"));
+
+        expect(
+          await settle(setup.renderOnce, () =>
+            sourceInventoryScanConcurrencyValuePattern.test(
+              setup.captureCharFrame()
+            )
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("s", { ctrl: true }));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("All actions · content")
+          )
+        ).toBe(true);
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();

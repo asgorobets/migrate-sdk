@@ -3,18 +3,19 @@
 export { MigrationTuiApp } from "./app.tsx";
 export type {
   MigrationTuiCancellationResult,
-  MigrationTuiExecuteOptions,
   MigrationTuiExecutionState,
 } from "./execution-controller.ts";
 export type {
   LoadMigrationTuiInput,
   MigrationTuiAction,
   MigrationTuiBreakLockResult,
+  MigrationTuiExecuteOptions,
   MigrationTuiMessage,
   MigrationTuiPreparedOperation,
   MigrationTuiPrepareOptions,
   MigrationTuiRow,
   MigrationTuiRuntime,
+  MigrationTuiScanSourceOptions,
   MigrationTuiSnapshot,
 } from "./runtime.ts";
 export {

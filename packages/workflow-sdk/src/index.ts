@@ -4,9 +4,11 @@
 export {
   WorkflowSdkMigrationExecutable,
   WorkflowSdkMigrationExecutableAttachError,
+  WorkflowSdkMigrationExecutableObservationError,
   WorkflowSdkMigrationExecutableStartError,
 } from "./workflow-sdk-migration-executable.ts";
 export type {
+  WorkflowSdkGetRun,
   WorkflowSdkMigrationExecutableLayerOptions,
   WorkflowSdkMigrationWorkflow,
   WorkflowSdkRun,

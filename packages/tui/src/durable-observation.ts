@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import type { MigrationRunId, MigrationRunState } from "migrate-sdk";
 
-const isTerminalRunState = (state: MigrationRunState): boolean =>
+export const isTerminalRunState = (state: MigrationRunState): boolean =>
   state.finishedAt !== undefined &&
   (state.status === "cancelled" ||
     state.status === "failed" ||

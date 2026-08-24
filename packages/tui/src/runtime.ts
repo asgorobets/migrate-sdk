@@ -1,5 +1,5 @@
 import { layer as nodeServicesLayer } from "@effect/platform-node/NodeServices";
-import { Effect, Option } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import {
   type AnySelfContainedMigrationDefinition,
   type MigrationDefinitionExecutableRollbackPlan,
@@ -12,10 +12,14 @@ import {
   type MigrationDefinitionRegistryStatusReport,
   type MigrationDefinitionStatus,
   MigrationExecutable,
+  type MigrationExecutableProgressCheckpoint,
+  type MigrationExecutionOptions,
   type MigrationItemState,
+  MigrationProgress,
   type MigrationRunId,
   type MigrationRunState,
   MigrationStore,
+  RollbackProgress,
   SourceIdentity,
   type SourceIdentitySnapshotKey,
 } from "migrate-sdk";
@@ -24,16 +28,28 @@ import {
   type MigrationCliConfig,
   MigrationCliConfigLoadError,
 } from "migrate-sdk/cli";
-import { waitForDurableRunState } from "./durable-observation.ts";
+import {
+  isTerminalRunState,
+  waitForDurableRunState,
+} from "./durable-observation.ts";
 import {
   type MigrationTuiCancellationResult,
-  type MigrationTuiExecuteOptions,
+  type MigrationTuiExecutionState,
   makeMigrationTuiExecutionController,
 } from "./execution-controller.ts";
+import { makeMigrationTuiExecutionProgressScheduler } from "./execution-progress.ts";
 
 type MigrationTuiConfig = MigrationCliConfig<
   readonly AnySelfContainedMigrationDefinition[]
 >;
+
+class MigrationTuiProviderObservationError extends Schema.TaggedError<MigrationTuiProviderObservationError>()(
+  "MigrationTuiProviderObservationError",
+  {
+    cause: Schema.optional(Schema.Defect()),
+    message: Schema.String,
+  }
+) {}
 
 export type MigrationTuiAction =
   | "rescan"
@@ -84,9 +100,14 @@ export interface MigrationTuiDependencyCheck {
 }
 
 export interface MigrationTuiPrepareOptions {
+  readonly execution?: MigrationExecutionOptions;
   readonly force?: boolean;
   readonly sourceIdentities?: readonly string[];
   readonly withDependencies?: boolean;
+}
+
+export interface MigrationTuiScanSourceOptions {
+  readonly concurrency?: number;
 }
 
 export interface MigrationTuiSourceIdentityHistoryEntry {
@@ -120,6 +141,15 @@ export interface MigrationTuiBreakLockResult {
   readonly kind: "already-clear" | "cleared";
 }
 
+export interface MigrationTuiExecuteOptions {
+  readonly onObservationWarning?: (message: string) => void;
+  readonly onProgress?: (progress: {
+    readonly definitions: readonly MigrationDefinitionStatus[];
+  }) => void;
+  readonly onProgressError?: (cause: unknown) => void;
+  readonly onStateChange?: (state: MigrationTuiExecutionState) => void;
+}
+
 export interface MigrationTuiRuntime {
   readonly breakLock: (
     lock: MigrationDefinitionLock
@@ -149,14 +179,17 @@ export interface MigrationTuiRuntime {
   readonly refresh: () => Promise<MigrationTuiSnapshot>;
   readonly rows: readonly MigrationTuiRow[];
   readonly scanSource: (
-    target: MigrationTuiTarget
+    target: MigrationTuiTarget,
+    options?: MigrationTuiScanSourceOptions
   ) => Promise<MigrationTuiSnapshot>;
 }
 
 export interface LoadMigrationTuiInput {
   readonly configPath?: string;
   readonly cwd: string;
-  readonly durablePollIntervalMs?: number;
+  readonly progressFallbackIntervalMs?: number;
+  readonly providerSettlementGraceMs?: number;
+  readonly terminalPollIntervalMs?: number;
 }
 
 const loadConfig = async (
@@ -331,14 +364,49 @@ export const makeMigrationTuiRuntime = async (
           MigrationExecutable.pipe(Effect.provide(config.executableLayer))
         );
   const rows = entries.map((entry) => ({ entry }));
-  const durablePollIntervalMs = input.durablePollIntervalMs ?? 500;
+  const progressFallbackIntervalMs = input.progressFallbackIntervalMs ?? 5000;
+  const providerSettlementGraceMs = input.providerSettlementGraceMs ?? 2000;
+  const terminalPollIntervalMs = input.terminalPollIntervalMs ?? 500;
+
+  const readExecutionProgress = async (
+    definitionIds: readonly MigrationDefinitionId[],
+    signal?: AbortSignal
+  ): Promise<readonly MigrationDefinitionStatus[]> => {
+    const firstDefinitionId = definitionIds[0];
+
+    if (firstDefinitionId === undefined) {
+      return [];
+    }
+
+    const report = await Effect.runPromise(
+      config.registry.status({
+        definitionIds: [firstDefinitionId, ...definitionIds.slice(1)],
+        scanSource: false,
+        withDependencies: false,
+      }),
+      signal === undefined ? undefined : { signal }
+    );
+
+    return report.definitions;
+  };
 
   const observeDetachedRun = ({
     definitionId,
+    execution,
+    onProgressCheckpoint,
+    onProviderObservationError,
     runId,
     signal,
   }: {
     readonly definitionId: MigrationDefinitionId;
+    readonly execution: {
+      readonly adapter: string;
+      readonly executionId: string;
+    };
+    readonly onProgressCheckpoint?: (
+      checkpoint: MigrationExecutableProgressCheckpoint
+    ) => void;
+    readonly onProviderObservationError?: (cause: unknown) => void;
     readonly runId: MigrationRunId;
     readonly signal: AbortSignal;
   }): Promise<MigrationRunState> => {
@@ -352,12 +420,65 @@ export const makeMigrationTuiRuntime = async (
 
     const observe = Effect.gen(function* () {
       const store = yield* MigrationStore;
-
-      return yield* waitForDurableRunState({
-        pollIntervalMs: durablePollIntervalMs,
-        readLatestRunState: store.getLatestRunState(definitionId),
+      const readLatestRunState = store.getLatestRunState(definitionId);
+      const durableObservation = waitForDurableRunState({
+        pollIntervalMs: terminalPollIntervalMs,
+        readLatestRunState,
         runId,
       });
+      const providerObservation = executable.waitForExecution?.(execution, {
+        ...(onProgressCheckpoint === undefined
+          ? {}
+          : {
+              onProgressCheckpoint: (checkpoint) =>
+                checkpoint.runId === runId
+                  ? Effect.sync(() => onProgressCheckpoint(checkpoint))
+                  : Effect.void,
+            }),
+      });
+
+      if (providerObservation === undefined) {
+        return yield* durableObservation;
+      }
+
+      const providerGuard = providerObservation.pipe(
+        Effect.flatMap((result) => {
+          if (result.kind === "succeeded") {
+            return Effect.never;
+          }
+
+          return Effect.sleep(providerSettlementGraceMs).pipe(
+            Effect.andThen(readLatestRunState),
+            Effect.flatMap((state) => {
+              if (
+                state !== null &&
+                state.runId === runId &&
+                isTerminalRunState(state)
+              ) {
+                return Effect.succeed(state);
+              }
+
+              return Effect.fail(
+                new MigrationTuiProviderObservationError({
+                  message: `Provider execution ${execution.executionId} ${result.kind} before run ${runId} reached durable terminal state`,
+                  ...(result.kind === "failed" && result.cause !== undefined
+                    ? { cause: result.cause }
+                    : {}),
+                })
+              );
+            })
+          );
+        }),
+        Effect.catch((cause) =>
+          cause instanceof MigrationTuiProviderObservationError
+            ? Effect.fail(cause)
+            : Effect.sync(() => onProviderObservationError?.(cause)).pipe(
+                Effect.andThen(Effect.never)
+              )
+        )
+      );
+
+      return yield* Effect.raceFirst(durableObservation, providerGuard);
     }).pipe(Effect.provide(definition.store));
 
     return Effect.runPromise(observe, { signal });
@@ -437,7 +558,8 @@ export const makeMigrationTuiRuntime = async (
   };
 
   const readRows = async (
-    scanTarget?: MigrationTuiTarget
+    scanTarget?: MigrationTuiTarget,
+    scanOptions: MigrationTuiScanSourceOptions = {}
   ): Promise<readonly MigrationTuiRow[]> => {
     const durableReport = await Effect.runPromise(
       config.registry.status({ all: true, scanSource: false })
@@ -451,11 +573,17 @@ export const makeMigrationTuiRuntime = async (
         await Effect.runPromise(
           scanTarget.kind === "group"
             ? config.registry.status({
+                ...(scanOptions.concurrency === undefined
+                  ? {}
+                  : { concurrency: scanOptions.concurrency }),
                 group: scanTarget.groupId,
                 scanSource: true,
                 withDependencies: true,
               })
             : config.registry.status({
+                ...(scanOptions.concurrency === undefined
+                  ? {}
+                  : { concurrency: scanOptions.concurrency }),
                 definitionIds: [scanTarget.definitionId],
                 scanSource: true,
                 withDependencies: true,
@@ -483,9 +611,10 @@ export const makeMigrationTuiRuntime = async (
   });
 
   const scanSource = async (
-    target: MigrationTuiTarget
+    target: MigrationTuiTarget,
+    options: MigrationTuiScanSourceOptions = {}
   ): Promise<MigrationTuiSnapshot> => ({
-    rows: await readRows(target),
+    rows: await readRows(target, options),
     scannedSource: true,
   });
 
@@ -512,12 +641,18 @@ export const makeMigrationTuiRuntime = async (
     const plan = await Effect.runPromise(
       target.kind === "group"
         ? config.registry.executable().planRollback({
+            ...(options.execution === undefined
+              ? {}
+              : { execution: options.execution }),
             group: target.groupId,
             ...(options.force === undefined ? {} : { force: options.force }),
             withDependencies,
           })
         : config.registry.executable().planRollback({
             definitionIds: [target.definitionId],
+            ...(options.execution === undefined
+              ? {}
+              : { execution: options.execution }),
             ...(options.force === undefined ? {} : { force: options.force }),
             withDependencies,
           })
@@ -553,6 +688,9 @@ export const makeMigrationTuiRuntime = async (
     }
 
     const runOptions = {
+      ...(options.execution === undefined
+        ? {}
+        : { execution: options.execution }),
       ...(action === "retry-failed"
         ? { mode: { kind: "failed" as const } }
         : {}),
@@ -630,24 +768,119 @@ export const makeMigrationTuiRuntime = async (
       ? prepareRollback(target, options)
       : prepareRun(target, action, options);
 
-  const execute = (
+  const execute = async (
     operation: MigrationTuiPreparedOperation,
     options?: MigrationTuiExecuteOptions
   ): Promise<string> => {
-    if (operation.action === "rollback") {
-      return executionController.execute({
-        definitionId: operation.observationDefinitionId,
-        options,
-        start: () =>
-          Effect.runPromise(executable.startRollback(operation.plan)),
-      });
-    }
+    const onProgress = options?.onProgress;
+    const progress =
+      onProgress === undefined
+        ? undefined
+        : makeMigrationTuiExecutionProgressScheduler({
+            definitionIds: operation.plan.executionDefinitionIds,
+            fallbackIntervalMs: progressFallbackIntervalMs,
+            onError: (cause) => options?.onProgressError?.(cause),
+            onProgress: (definitions) => onProgress({ definitions }),
+            read: readExecutionProgress,
+          });
+    const progressDefinitionIds = new Set(
+      operation.plan.executionDefinitionIds
+    );
+    const requestProgress = (definitionId: MigrationDefinitionId) => {
+      if (progress !== undefined && progressDefinitionIds.has(definitionId)) {
+        progress.request([definitionId]);
+      }
+    };
+    const progressLayer = Layer.merge(
+      Layer.succeed(MigrationProgress, {
+        emit: (event) => {
+          if (
+            event.kind === "source-cursor-window-completed" ||
+            event.kind === "definition-completed"
+          ) {
+            requestProgress(event.definitionId);
+          }
 
-    return executionController.execute({
-      definitionId: operation.observationDefinitionId,
-      options,
-      start: () => Effect.runPromise(executable.startRun(operation.plan)),
-    });
+          return Effect.void;
+        },
+      }),
+      Layer.succeed(RollbackProgress, {
+        emit: (event) => {
+          if (event.kind === "definition-completed") {
+            requestProgress(event.definitionId);
+          }
+
+          return Effect.void;
+        },
+      })
+    );
+    let cancellationRequested = false;
+    let detached = false;
+    const executionOptions = {
+      onDetached: () => {
+        detached = true;
+      },
+      onProgressCheckpoint: (
+        checkpoint: MigrationExecutableProgressCheckpoint
+      ) => requestProgress(checkpoint.definitionId),
+      onProviderObservationError: () =>
+        options?.onObservationWarning?.(
+          "Execution provider updates are unavailable; following durable migration state"
+        ),
+      onStateChange: (state: MigrationTuiExecutionState) => {
+        options?.onStateChange?.(state);
+
+        if (state.kind === "cancelling") {
+          cancellationRequested = true;
+        }
+
+        if (state.kind === "observing" || state.kind === "running") {
+          progress?.start();
+        }
+      },
+    };
+
+    try {
+      const result = await (operation.action === "rollback"
+        ? executionController.execute({
+            definitionId: operation.observationDefinitionId,
+            options: executionOptions,
+            start: () =>
+              Effect.runPromise(
+                executable
+                  .startRollback(operation.plan)
+                  .pipe(Effect.provide(progressLayer))
+              ),
+          })
+        : executionController.execute({
+            definitionId: operation.observationDefinitionId,
+            options: executionOptions,
+            start: () =>
+              Effect.runPromise(
+                executable
+                  .startRun(operation.plan)
+                  .pipe(Effect.provide(progressLayer))
+              ),
+          }));
+
+      await progress?.stop();
+
+      if (!(cancellationRequested || detached) && onProgress !== undefined) {
+        try {
+          onProgress({
+            definitions: await readExecutionProgress(
+              operation.plan.executionDefinitionIds
+            ),
+          });
+        } catch (cause) {
+          options?.onProgressError?.(cause);
+        }
+      }
+
+      return result;
+    } finally {
+      await progress?.stop();
+    }
   };
 
   const listMessages = async (

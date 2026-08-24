@@ -5,8 +5,16 @@ import {
   useRenderer,
   useTerminalDimensions,
 } from "@opentui/react";
+import type {
+  MigrationExecutionOptions,
+  PipelineExecutionConcurrency,
+} from "migrate-sdk";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BreakLockDialog } from "./components/break-lock-dialog.tsx";
+import {
+  ExecutionSettingsDialog,
+  type MigrationTuiExecutionSettingsDrafts,
+} from "./components/execution-settings-dialog.tsx";
 import { MessageDetailDialog } from "./components/message-detail-dialog.tsx";
 import {
   type MigrationTuiAvailableAction,
@@ -53,8 +61,39 @@ type View =
   | "break-lock"
   | "confirm"
   | "dashboard"
+  | "execution-settings"
   | "message-detail"
   | "selective-run";
+
+interface MigrationTuiExecutionSettings {
+  readonly process?: PipelineExecutionConcurrency;
+  readonly rollback?: PipelineExecutionConcurrency;
+  readonly sourceInventoryScan?: number;
+}
+
+const pipelineConcurrencyDraft = (
+  concurrency: PipelineExecutionConcurrency | undefined
+): { readonly unbounded: boolean; readonly value: number | null } => ({
+  unbounded: concurrency === "unbounded",
+  value: typeof concurrency === "number" ? concurrency : null,
+});
+
+const migrationExecutionOptions = (
+  settings: MigrationTuiExecutionSettings
+): MigrationExecutionOptions | undefined => {
+  if (settings.process === undefined && settings.rollback === undefined) {
+    return;
+  }
+
+  return {
+    ...(settings.process === undefined
+      ? {}
+      : { process: { concurrency: settings.process } }),
+    ...(settings.rollback === undefined
+      ? {}
+      : { rollback: { concurrency: settings.rollback } }),
+  };
+};
 
 const errorMessage = (cause: unknown): string => {
   if (cause instanceof Error) {
@@ -539,6 +578,18 @@ export const MigrationTuiApp = ({
       }
     | undefined
   >();
+  const [executionSettings, setExecutionSettings] =
+    useState<MigrationTuiExecutionSettings>({});
+  const [executionSettingsDrafts, setExecutionSettingsDrafts] =
+    useState<MigrationTuiExecutionSettingsDrafts>({
+      process: null,
+      processUnbounded: false,
+      rollback: null,
+      rollbackUnbounded: false,
+      sourceInventoryScan: null,
+    });
+  const [executionSettingsInputReady, setExecutionSettingsInputReady] =
+    useState(false);
   const selectedRow = rows[selectedIndex] ?? rows[0];
   const selectedGroup = runtime.groups[selectedIndex] ?? runtime.groups[0];
   const selectedGroupRows = useMemo(() => {
@@ -622,20 +673,24 @@ export const MigrationTuiApp = ({
         return;
       }
 
-      setBusy(`Scanning source for ${targetLabel(target)}…`);
+      setBusy(`Running Source Inventory Scan for ${targetLabel(target)}…`);
       setError(null);
 
       try {
-        const snapshot = await runtime.scanSource(target);
+        const snapshot = await runtime.scanSource(target, {
+          ...(executionSettings.sourceInventoryScan === undefined
+            ? {}
+            : { concurrency: executionSettings.sourceInventoryScan }),
+        });
         setRows(snapshot.rows);
-        setNotice(`Source scan complete for ${targetLabel(target)}`);
+        setNotice(`Source Inventory Scan complete for ${targetLabel(target)}`);
       } catch (cause) {
         setError(errorMessage(cause));
       } finally {
         setBusy("");
       }
     },
-    [runtime]
+    [executionSettings.sourceInventoryScan, runtime]
   );
 
   const openMessages = useCallback(() => {
@@ -676,6 +731,39 @@ export const MigrationTuiApp = ({
 
       try {
         const result = await runtime.execute(operation, {
+          onProgress: ({ definitions }) => {
+            const statuses = new Map(
+              definitions.map((status) => [status.definitionId, status])
+            );
+
+            setRows((current) =>
+              current.map((row) => {
+                const status = statuses.get(row.entry.id);
+
+                if (status === undefined) {
+                  return row;
+                }
+
+                return {
+                  ...row,
+                  status:
+                    row.status === undefined
+                      ? status
+                      : {
+                          ...row.status,
+                          durable: status.durable,
+                          lastRun: status.lastRun,
+                          lock: status.lock,
+                        },
+                };
+              })
+            );
+            setError(null);
+          },
+          onProgressError: (cause) => {
+            setError(`Unable to refresh live status: ${errorMessage(cause)}`);
+          },
+          onObservationWarning: setNotice,
           onStateChange: (state) => setBusy(executionStateLabel(state)),
         });
 
@@ -718,7 +806,11 @@ export const MigrationTuiApp = ({
       setError(null);
 
       try {
-        const operation = await runtime.prepare(target, action, options);
+        const execution = migrationExecutionOptions(executionSettings);
+        const operation = await runtime.prepare(target, action, {
+          ...options,
+          ...(execution === undefined ? {} : { execution }),
+        });
 
         if (shutdown.isExitRequested()) {
           return;
@@ -740,7 +832,7 @@ export const MigrationTuiApp = ({
         setBusy("");
       }
     },
-    [executeOperation, runtime, shutdown]
+    [executeOperation, executionSettings, runtime, shutdown]
   );
 
   const openSelectiveRun = useCallback(
@@ -966,6 +1058,69 @@ export const MigrationTuiApp = ({
     ]
   );
 
+  const openExecutionSettings = useCallback(() => {
+    const process = pipelineConcurrencyDraft(executionSettings.process);
+    const rollback = pipelineConcurrencyDraft(executionSettings.rollback);
+
+    setExecutionSettingsDrafts({
+      process: process.value,
+      processUnbounded: process.unbounded,
+      rollback: rollback.value,
+      rollbackUnbounded: rollback.unbounded,
+      sourceInventoryScan: executionSettings.sourceInventoryScan ?? null,
+    });
+    setExecutionSettingsInputReady(false);
+    setView("execution-settings");
+  }, [executionSettings]);
+
+  const cancelExecutionSettings = useCallback(() => {
+    setExecutionSettingsInputReady(false);
+    setView("actions");
+  }, []);
+
+  const saveExecutionSettings = useCallback(() => {
+    const process = executionSettingsDrafts.processUnbounded
+      ? "unbounded"
+      : (executionSettingsDrafts.process ?? undefined);
+    const rollback = executionSettingsDrafts.rollbackUnbounded
+      ? "unbounded"
+      : (executionSettingsDrafts.rollback ?? undefined);
+    const sourceInventoryScan =
+      executionSettingsDrafts.sourceInventoryScan ?? undefined;
+
+    setExecutionSettings({
+      ...(process === undefined ? {} : { process }),
+      ...(rollback === undefined ? {} : { rollback }),
+      ...(sourceInventoryScan === undefined ? {} : { sourceInventoryScan }),
+    });
+    setExecutionSettingsInputReady(false);
+    setNotice("Concurrency settings saved for this session");
+    setView("actions");
+  }, [executionSettingsDrafts]);
+
+  const handleExecutionSettingsKey = useCallback(
+    (key: KeyEvent) => {
+      if (!executionSettingsInputReady) {
+        return;
+      }
+
+      if (key.ctrl && key.name === "s") {
+        key.preventDefault();
+        key.stopPropagation();
+        saveExecutionSettings();
+      } else if (key.name === "escape") {
+        key.preventDefault();
+        key.stopPropagation();
+        cancelExecutionSettings();
+      }
+    },
+    [
+      cancelExecutionSettings,
+      executionSettingsInputReady,
+      saveExecutionSettings,
+    ]
+  );
+
   const chooseOption = useCallback(
     (option: MigrationTuiAvailableAction | undefined) => {
       if (option === undefined) {
@@ -980,6 +1135,11 @@ export const MigrationTuiApp = ({
       if (option.view === "scan") {
         setView("dashboard");
         startTask(scanSelectedSource());
+        return;
+      }
+
+      if (option.view === "execution-settings") {
+        openExecutionSettings();
         return;
       }
 
@@ -999,6 +1159,7 @@ export const MigrationTuiApp = ({
     },
     [
       openBreakLock,
+      openExecutionSettings,
       openMessages,
       openSelectiveRun,
       prepareOperation,
@@ -1025,6 +1186,15 @@ export const MigrationTuiApp = ({
     }
 
     const timer = setTimeout(() => setSelectiveInputReady(true), 100);
+    return () => clearTimeout(timer);
+  }, [view]);
+
+  useEffect(() => {
+    if (view !== "execution-settings") {
+      return;
+    }
+
+    const timer = setTimeout(() => setExecutionSettingsInputReady(true), 100);
     return () => clearTimeout(timer);
   }, [view]);
 
@@ -1368,6 +1538,8 @@ export const MigrationTuiApp = ({
     } else if (key.ctrl && key.name === "c") {
       process.exitCode = 130;
       startTask(requestExit());
+    } else if (view === "execution-settings") {
+      handleExecutionSettingsKey(key);
     } else if (view === "selective-run") {
       handleSelectiveRunKey(key);
     } else if (key.name === "q") {
@@ -1571,6 +1743,29 @@ export const MigrationTuiApp = ({
           onClose={() => setView("dashboard")}
           showDefinitionId={selectedTarget?.kind === "group"}
           total={messages.length}
+          width={dimensions.width}
+        />
+      ) : null}
+      {view === "execution-settings" ? (
+        <ExecutionSettingsDialog
+          drafts={executionSettingsDrafts}
+          height={dimensions.height}
+          inputReady={executionSettingsInputReady}
+          onCancel={cancelExecutionSettings}
+          onKeyDown={handleExecutionSettingsKey}
+          onSave={saveExecutionSettings}
+          onUnboundedChange={(field, checked) => {
+            setExecutionSettingsDrafts((current) => ({
+              ...current,
+              [field]: checked,
+            }));
+          }}
+          onValueChange={(field, value) => {
+            setExecutionSettingsDrafts((current) => ({
+              ...current,
+              [field]: value,
+            }));
+          }}
           width={dimensions.width}
         />
       ) : null}

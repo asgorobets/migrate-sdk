@@ -53,13 +53,21 @@ export type {
 } from "./domain/run.ts";
 export { mergeRollbackOrphansCounts } from "./domain/run.ts";
 export type { RollbackRunSummary } from "./domain/rollback.ts";
+export type {
+  MigrationProgressCounts,
+  MigrationProgressEvent,
+} from "./domain/progress.ts";
 
 export { MigrationExecutable } from "./services/migration-executable.ts";
 export type {
+  MigrationExecutableObservationOptions,
+  MigrationExecutableObservationResult,
+  MigrationExecutableProgressCheckpoint,
   MigrationExecutableRollbackError,
   MigrationExecutableRunError,
   MigrationExecutableService,
 } from "./services/migration-executable.ts";
+export { MigrationProgress } from "./services/migration-progress.ts";
 export { MigrationExecution } from "./services/migration-execution.ts";
 export type {
   BoundMigrationExecutionService,

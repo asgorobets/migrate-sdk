@@ -18,6 +18,7 @@ LARGE_HIERARCHY_SESSION="migrate-tui-large-hierarchy"
 SELECTIVE_SESSION="migrate-tui-selective"
 SOURCE_STATUS_SESSION="migrate-tui-source-status"
 LOCK_SESSION="migrate-tui-lock"
+LIVE_PROGRESS_SESSION="migrate-tui-live-progress"
 
 mkdir -p "${ARTIFACT_DIR}"
 PILOTTY_SOCKET_DIR="/tmp/migrate-tui-pilotty-socket-$$"
@@ -40,6 +41,7 @@ cleanup() {
   "${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" q >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" key -s "${LOCK_SESSION}" Escape >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" key -s "${LOCK_SESSION}" q >/dev/null 2>&1 || true
+  "${PILOTTY_BIN}" key -s "${LIVE_PROGRESS_SESSION}" q >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" stop >/dev/null 2>&1 || true
 }
 
@@ -151,6 +153,25 @@ trap cleanup EXIT
   --format text >"${ARTIFACT_DIR}/button-dashboard-after-run.txt"
 
 "${PILOTTY_BIN}" spawn \
+  --name "${LIVE_PROGRESS_SESSION}" \
+  --cwd "${PACKAGE_DIR}" \
+  node bin/migrate-tui.js --config examples/live-progress.config.ts >/dev/null
+"${PILOTTY_BIN}" resize -s "${LIVE_PROGRESS_SESSION}" 120 30 >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 30000 \
+  "Status reloaded" >/dev/null
+"${PILOTTY_BIN}" key -s "${LIVE_PROGRESS_SESSION}" r >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 5000 \
+  "is running" >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 5000 --regex \
+  "[123] migrated" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LIVE_PROGRESS_SESSION}" \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/live-progress.txt"
+rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
+"${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 5000 \
+  "4 migrated" >/dev/null
+
+"${PILOTTY_BIN}" spawn \
   --name "${GROUP_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   node bin/migrate-tui.js --config examples/migrate.config.ts >/dev/null
@@ -187,6 +208,34 @@ trap cleanup EXIT
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/group-all-actions.txt"
+"${PILOTTY_BIN}" key -s "${GROUP_SESSION}" c >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 5000 \
+  "Concurrency settings" >/dev/null
+"${PILOTTY_BIN}" resize -s "${GROUP_SESSION}" 120 30 >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${GROUP_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/execution-settings.txt"
+"${PILOTTY_BIN}" resize -s "${GROUP_SESSION}" 72 24 >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${GROUP_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/execution-settings-compact.txt"
+"${PILOTTY_BIN}" type -s "${GROUP_SESSION}" "3" >/dev/null
+"${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Tab >/dev/null
+"${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Tab >/dev/null
+"${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Tab >/dev/null
+"${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Space >/dev/null
+"${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Tab >/dev/null
+"${PILOTTY_BIN}" type -s "${GROUP_SESSION}" "2" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${GROUP_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/execution-settings-values.txt"
+"${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Ctrl+S >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 5000 \
+  "All actions · content" >/dev/null
+"${PILOTTY_BIN}" resize -s "${GROUP_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Escape >/dev/null
 "${PILOTTY_BIN}" key -s "${GROUP_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 5000 \
@@ -333,7 +382,7 @@ done
   "Status reloaded" >/dev/null
 "${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" s >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SOURCE_STATUS_SESSION}" -t 5000 \
-  "Source scan complete" >/dev/null
+  "Source Inventory Scan complete" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SOURCE_STATUS_SESSION}" \
   --settle 150 \
   --strict \
@@ -451,7 +500,7 @@ assert_line_excludes \
   "short wide action footer does not overlap diagnostic text"
 assert_contains \
   "${ARTIFACT_DIR}/compact.txt" \
-  "m messages · s scan · R reload · q quit" \
+  "m messages · s inventory scan · R reload · q quit" \
   "compact shortcut footer remains readable"
 assert_contains \
   "${ARTIFACT_DIR}/compact.txt" \
@@ -550,6 +599,42 @@ assert_contains \
   "Retry skipped  [t]" \
   "All actions includes the skipped-item retry"
 assert_contains \
+  "${ARTIFACT_DIR}/group-all-actions.txt" \
+  "Concurrency settings  [c]" \
+  "All actions includes session concurrency settings"
+assert_contains \
+  "${ARTIFACT_DIR}/group-all-actions.txt" \
+  "Source Inventory Scan  [s]" \
+  "All actions uses canonical Source Inventory Scan terminology"
+assert_contains \
+  "${ARTIFACT_DIR}/execution-settings.txt" \
+  "Process Pipeline concurrency" \
+  "concurrency settings expose Process Pipeline concurrency"
+assert_contains \
+  "${ARTIFACT_DIR}/execution-settings-compact.txt" \
+  "Leave a value blank" \
+  "compact concurrency settings preserve the complete session guidance"
+assert_contains \
+  "${ARTIFACT_DIR}/execution-settings-compact.txt" \
+  "to use the configured default." \
+  "compact concurrency settings preserve the complete session guidance"
+assert_contains \
+  "${ARTIFACT_DIR}/execution-settings.txt" \
+  "Rollback Pipeline concurrency" \
+  "concurrency settings expose Rollback Pipeline concurrency"
+assert_contains \
+  "${ARTIFACT_DIR}/execution-settings.txt" \
+  "Source Inventory Scan concurrency" \
+  "concurrency settings expose Source Inventory Scan concurrency"
+assert_contains \
+  "${ARTIFACT_DIR}/execution-settings-compact.txt" \
+  "tab move · ↑↓ value · space toggle · ^s save · esc cancel" \
+  "compact concurrency settings retain navigation controls"
+assert_contains \
+  "${ARTIFACT_DIR}/execution-settings-values.txt" \
+  "✓ Unbounded" \
+  "concurrency settings expose unbounded Rollback Pipeline concurrency"
+assert_contains \
   "${ARTIFACT_DIR}/group-dashboard-after-run.txt" \
   "5 migrated" \
   "ordinary group Run executes directly"
@@ -644,11 +729,11 @@ assert_contains \
 assert_contains \
   "${ARTIFACT_DIR}/source-status.txt" \
   "3 total · 2 unprocessed · 0 invalid · 1 duplicate · 0 orphaned" \
-  "source scan displays inventory counts"
+  "Source Inventory Scan displays inventory counts"
 assert_contains \
   "${ARTIFACT_DIR}/source-status.txt" \
   "Duplicate product-duplicate · 2 occurrences" \
-  "source scan displays identity-specific warnings"
+  "Source Inventory Scan displays identity-specific warnings"
 assert_contains \
   "${ARTIFACT_DIR}/source-status-compact-scrolled.txt" \
   "Capabilities" \

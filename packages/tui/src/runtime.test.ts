@@ -5,6 +5,7 @@ import {
   toMigrationDefinitionLockToken,
 } from "migrate-sdk";
 import { describe, expect, it } from "vitest";
+import { liveProgressProviderObservations } from "../examples/live-progress-fixture.ts";
 import { makeMigrationTuiRuntime } from "./runtime.ts";
 
 const packageDirectory = fileURLToPath(new URL("..", import.meta.url));
@@ -15,6 +16,27 @@ const contentGroupId = toMigrationDefinitionGroupId("content");
 const succeededRunPattern = /^Run .+ succeeded$/;
 
 describe("Migration TUI runtime", () => {
+  const liveProgressCases = [
+    {
+      configPath: "examples/live-progress.config.ts",
+      executionState: "running",
+      label: "attached inline",
+      observationWarning: false,
+    },
+    {
+      configPath: "examples/detached-live-progress.config.ts",
+      executionState: "observing",
+      label: "detached durable",
+      observationWarning: false,
+    },
+    {
+      configPath: "examples/provider-observation-failure.config.ts",
+      executionState: "observing",
+      label: "provider observation fallback",
+      observationWarning: true,
+    },
+  ] as const;
+
   it("loads the CLI config through the shared loader", async () => {
     const runtime = await makeMigrationTuiRuntime({
       cwd: fileURLToPath(new URL("../examples", import.meta.url)),
@@ -68,6 +90,55 @@ describe("Migration TUI runtime", () => {
     expect(articles?.status?.durable.migrated).toBe(2);
   });
 
+  for (const testCase of liveProgressCases) {
+    it(`publishes live durable counts during ${testCase.label} execution`, async () => {
+      liveProgressProviderObservations.length = 0;
+      const runtime = await makeMigrationTuiRuntime({
+        configPath: testCase.configPath,
+        cwd: packageDirectory,
+        progressFallbackIntervalMs: 10,
+        terminalPollIntervalMs: 10,
+      });
+      const operation = await runtime.prepare(
+        {
+          definitionId: toMigrationDefinitionId("live-progress"),
+          kind: "migration",
+        },
+        "run"
+      );
+      const executionStates: string[] = [];
+      const migratedCounts: number[] = [];
+      const observationWarnings: string[] = [];
+      let sawIntermediateProgressWhileRunning = false;
+      const execution = runtime.execute(operation, {
+        onProgress: ({ definitions }) => {
+          const status = definitions.find(
+            (definition) => definition.definitionId === "live-progress"
+          );
+
+          if (status !== undefined) {
+            migratedCounts.push(status.durable.migrated);
+            if (status.durable.migrated > 0 && status.durable.migrated < 4) {
+              sawIntermediateProgressWhileRunning = true;
+            }
+          }
+        },
+        onObservationWarning: (warning) => observationWarnings.push(warning),
+        onStateChange: (state) => executionStates.push(state.kind),
+      });
+
+      await expect(execution).resolves.toMatch(succeededRunPattern);
+
+      expect(executionStates).toContain(testCase.executionState);
+      expect(sawIntermediateProgressWhileRunning).toBe(true);
+      expect(migratedCounts.at(-1)).toBe(4);
+      expect(liveProgressProviderObservations).toHaveLength(
+        testCase.executionState === "observing" ? 1 : 0
+      );
+      expect(observationWarnings.length > 0).toBe(testCase.observationWarning);
+    });
+  }
+
   it("prepares skipped-item retries without expanding dependencies", async () => {
     const runtime = await makeMigrationTuiRuntime({
       configPath: "examples/migrate.config.ts",
@@ -91,7 +162,7 @@ describe("Migration TUI runtime", () => {
     });
   });
 
-  it("returns source inventory and warnings after a source scan", async () => {
+  it("returns source inventory and warnings after a Source Inventory Scan", async () => {
     const runtime = await makeMigrationTuiRuntime({
       configPath: "examples/source-status.config.ts",
       cwd: packageDirectory,
@@ -333,5 +404,33 @@ describe("Migration TUI runtime", () => {
       },
       target: { groupId: contentGroupId, kind: "group" },
     });
+  });
+
+  it("applies session concurrency to run, rollback, and Source Inventory Scan requests", async () => {
+    const runtime = await makeMigrationTuiRuntime({
+      configPath: "examples/migrate.config.ts",
+      cwd: packageDirectory,
+    });
+    const target = { groupId: contentGroupId, kind: "group" } as const;
+    const run = await runtime.prepare(target, "run", {
+      execution: {
+        process: { concurrency: 3 },
+        rollback: { concurrency: "unbounded" },
+      },
+    });
+    const rollback = await runtime.prepare(target, "rollback", {
+      execution: { rollback: { concurrency: 2 } },
+    });
+
+    expect(run.plan.execution).toEqual({
+      process: { concurrency: 3 },
+      rollback: { concurrency: "unbounded" },
+    });
+    expect(rollback.plan.execution).toEqual({
+      rollback: { concurrency: 2 },
+    });
+    await expect(
+      runtime.scanSource(target, { concurrency: 0 })
+    ).rejects.toThrow("positive integer");
   });
 });

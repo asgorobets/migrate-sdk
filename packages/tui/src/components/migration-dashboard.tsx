@@ -687,7 +687,7 @@ const Capabilities = ({ row }: { readonly row: MigrationTuiRow }) => (
       label="Rollback"
       tone="success"
     />
-    <Checkbox checked disabled label="Source scan" tone="success" />
+    <Checkbox checked disabled label="Source Inventory Scan" tone="success" />
     <Checkbox
       checked={row.status?.discovery === "incremental"}
       disabled

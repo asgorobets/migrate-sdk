@@ -50,21 +50,38 @@ in [`docs/research/tui-binary-distribution.md`](../../docs/research/tui-binary-d
 
 The footer keeps primary and contextual shortcuts visible for the current
 selection. Press `Enter` to open All actions, which includes the complete action
-set such as rescan and update. Press `g` to switch between migration and group
-tabs, `m` for errors and messages, `r` to run the selected migration or group,
+set such as rescan, update, and Concurrency settings. Concurrency settings provides
+session-scoped concurrency overrides for the Process Pipeline, Rollback Pipeline,
+and Source Inventory Scan; blank values preserve the configured defaults and
+Process or Rollback concurrency can be set to unbounded. Press `c` to open
+Concurrency settings and `g` to switch
+between migration and group tabs, `m` for errors and messages, `r` to run the selected migration or group,
 `e` to run selected source identities, `f` to retry failed items, `b` to
-rollback, `s` to scan source status for the current selection and its required
-dependencies, `R` to reload status, and `q` to quit. When applicable, `t`
+rollback, `s` to run a Source Inventory Scan for the current selection and its
+required dependencies, `R` to reload status, and `q` to quit. When applicable, `t`
 retries skipped items and `u` opens the guarded break-lock confirmation. Use
 Page Up and Page Down to scroll the overview while the arrow keys continue to
 select migrations.
 
-Runs start directly when their dependencies are ready. If required dependencies
+Runs start directly when their dependencies are ready. A group concurrency
+override controls item processing within each migration; migration definitions
+still execute in SDK plan order. If required dependencies
 have not succeeded, the TUI asks whether to include them or force the selected
 run. Rollback always shows the affected migrations in execution order and asks
-for confirmation. `q`, Ctrl+C, SIGINT, SIGTERM, and SIGHUP cancel active local
-work and wait for it to finish before closing. Runs already handed to a
-background executor continue after the TUI closes.
+for confirmation. While a run is active, committed cursor-window checkpoints
+carry cumulative run counts and trigger targeted durable-status refreshes for
+the migration that made progress.
+Inline and provider-backed runs therefore update in committed batches without
+scanning their sources; after an idle interval, a slower full-plan refresh
+covers adapters that cannot publish checkpoints. When an execution adapter supports native observation, the
+TUI also waits through its provider execution identity. If that observation
+channel is unavailable, the TUI reports the fallback and continues following
+durable run state. Provider failure or cancellation is reconciled against
+durable terminal state before it is reported. `q`, Ctrl+C,
+SIGINT, SIGTERM, and SIGHUP cancel active local work and wait for it to finish
+before closing. Runs already handed to a background executor continue after the
+TUI closes; the TUI stops observing them locally but does not claim to cancel
+provider-owned work.
 
 ## Terminal regression test
 

@@ -147,6 +147,7 @@ describe("Migration TUI execution controller", () => {
 
   it("stops local observation without claiming to cancel a detached run", async () => {
     const states: MigrationTuiExecutionState[] = [];
+    let detached = false;
     const observing = Promise.withResolvers<void>();
     const controller = makeMigrationTuiExecutionController({
       observeDetachedRun: ({ signal }) =>
@@ -160,6 +161,9 @@ describe("Migration TUI execution controller", () => {
     const execution = controller.execute({
       definitionId,
       options: {
+        onDetached: () => {
+          detached = true;
+        },
         onStateChange: (state) => {
           states.push(state);
         },
@@ -180,6 +184,7 @@ describe("Migration TUI execution controller", () => {
 
     expect(cancellation.kind).toBe("detached");
     expect(await execution).toBe(`Run ${runId} continues in the background`);
+    expect(detached).toBe(true);
     expect(states.at(-1)?.kind).toBe("cancelling");
   });
 

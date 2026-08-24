@@ -47,7 +47,7 @@
     "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
     "check-types": "tsc --noEmit -p tsconfig.check.json",
     "test": "vitest run",
-    "test:workflow": "vitest run --config vitest.workflow.config.ts",
+    "test:workflow": "pnpm run build && vitest run --config vitest.workflow.config.ts",
     "test:watch": "vitest"
   },
   "peerDependencies": {

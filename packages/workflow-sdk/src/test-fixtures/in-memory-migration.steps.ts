@@ -82,6 +82,21 @@ const getRollbackCalls = (): string[] => {
   return scope[rollbackCallsKey];
 };
 const rollbackCalls = getRollbackCalls();
+const processConcurrencyKey = "__migrateSdkWorkflowInMemoryProcessConcurrency";
+interface ProcessConcurrencyState {
+  active: number;
+  max: number;
+}
+const getProcessConcurrencyState = (): ProcessConcurrencyState => {
+  const scope = globalThis as typeof globalThis & {
+    [processConcurrencyKey]?: ProcessConcurrencyState;
+  };
+
+  scope[processConcurrencyKey] ??= { active: 0, max: 0 };
+
+  return scope[processConcurrencyKey];
+};
+const processConcurrencyState = getProcessConcurrencyState();
 
 type InterruptionPoint =
   | "after-source-window"
@@ -133,13 +148,29 @@ const resetStoreState = (state: InMemoryMigrationStoreState) => {
   state.sourceCursors.clear();
   state.nextLockNumber = 1;
   state.nextRunNumber = 1;
+  processConcurrencyState.active = 0;
+  processConcurrencyState.max = 0;
 };
 
 const storeState = getStoreState();
 const storeLayer = InMemoryMigrationStore.layer(storeState);
 const articles = MigrationDefinition.make({
   id: articleDefinitionId,
-  process: () => Effect.void,
+  process: () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        processConcurrencyState.active += 1;
+        processConcurrencyState.max = Math.max(
+          processConcurrencyState.max,
+          processConcurrencyState.active
+        );
+      }),
+      () => Effect.sleep("5 millis"),
+      () =>
+        Effect.sync(() => {
+          processConcurrencyState.active -= 1;
+        })
+    ),
   rollback: (state) => {
     rollbackCalls.push(state.sourceIdentity.encoded);
   },
@@ -322,6 +353,8 @@ export async function inspectMigrationStoreStep(): Promise<{
 
 export const inMemoryMigrationTestRegistry = registry;
 export const inMemoryMigrationTestStoreState = storeState;
+export const inMemoryMigrationTestProcessConcurrency = () =>
+  processConcurrencyState.max;
 export const removeInMemoryMigrationTestSourceItem = (identity: string) => {
   const index = sourceItems.findIndex((item) => item.identityKey === identity);
   if (index >= 0) {

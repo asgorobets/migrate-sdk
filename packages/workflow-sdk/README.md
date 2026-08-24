@@ -42,7 +42,16 @@ export async function migrationExecutionWorkflow(envelope) {
 This package currently implements the durable run boundary: allocate a migration
 run id, acquire definition locks, queue migration run state, start the Workflow
 SDK run, attach the Workflow SDK run id, then let the Workflow SDK workflow
-consume the locked run envelope through cursor-window steps.
+consume the locked run envelope through cursor-window steps. The executable can
+reattach to that Workflow SDK run id for native terminal observation. Each
+committed cursor window also publishes a checkpoint on the adapter's named
+progress stream. A checkpoint carries cumulative committed run counts, and
+reattachment begins with the most recent buffered checkpoint before following
+live updates. Clients can render those counts directly or refresh the affected
+migration in batches.
+The migration store remains authoritative for migration status and item
+progress. Process Pipeline concurrency from the executable plan is applied
+inside every cursor-window step.
 
 ## Local World test
 
@@ -54,5 +63,6 @@ pnpm --filter @migrate-sdk/workflow-sdk test:workflow
 ```
 
 The test starts a real adapter-backed Workflow SDK run in the in-process Local
-World, scans 100 source entries, and asserts that the scan is split into two
-completed Workflow SDK steps of 50 entries each.
+World, scans 100 source entries, asserts that the scan is split into two
+completed Workflow SDK steps of 50 entries each, and verifies planned Process
+Pipeline concurrency inside those steps.

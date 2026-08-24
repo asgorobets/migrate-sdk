@@ -395,6 +395,7 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Migration Execution** selects and plans registry-bound work; a **Migration Executable** starts it.
 - An attached **Migration Run Handle** observes and cooperatively cancels work owned by the current host.
 - Detached execution is observed through the execution provider's identity and native observability surface.
+- A **Migration Executable** may reattach to a detached provider execution by execution identity, wait for its native terminal lifecycle, and publish cursor-window progress checkpoints with cumulative committed counts; durable **Migration Run State** and **Migration Item State** remain authoritative for migration status and item progress.
 - Existing function-style run and rollback entrypoints may delegate to the default inline **Migration Executable** for compatibility.
 - A **Migration Executable** allocates the **Migration Run** id when starting execution.
 - A durable **Migration Executable** creates **Migration Run State** before returning a started **Execution Start Result**.

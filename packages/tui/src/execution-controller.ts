@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import type {
   ExecutionStartResult,
   MigrationDefinitionId,
+  MigrationExecutableProgressCheckpoint,
   MigrationExecutionHandle,
   MigrationRunId,
   MigrationRunState,
@@ -44,7 +45,12 @@ export type MigrationTuiCancellationResult =
       readonly message: string;
     };
 
-export interface MigrationTuiExecuteOptions {
+interface MigrationTuiExecutionControllerOptions {
+  readonly onDetached?: () => void;
+  readonly onProgressCheckpoint?: (
+    checkpoint: MigrationExecutableProgressCheckpoint
+  ) => void;
+  readonly onProviderObservationError?: (cause: unknown) => void;
   readonly onStateChange?: (state: MigrationTuiExecutionState) => void;
 }
 
@@ -53,6 +59,10 @@ interface DetachedRunObservationInput {
   readonly execution: MigrationExecutionHandle & {
     readonly executionId: string;
   };
+  readonly onProgressCheckpoint?: (
+    checkpoint: MigrationExecutableProgressCheckpoint
+  ) => void;
+  readonly onProviderObservationError?: (cause: unknown) => void;
   readonly runId: MigrationRunId;
   readonly signal: AbortSignal;
 }
@@ -113,7 +123,7 @@ export const makeMigrationTuiExecutionController = (
     start,
   }: {
     readonly definitionId: MigrationDefinitionId;
-    readonly options?: MigrationTuiExecuteOptions | undefined;
+    readonly options?: MigrationTuiExecutionControllerOptions | undefined;
     readonly start: () => Promise<ExecutionStartResult<Summary>>;
   }): Promise<string> => {
     if (active !== undefined) {
@@ -191,6 +201,14 @@ export const makeMigrationTuiExecutionController = (
         const observation = input.observeDetachedRun({
           definitionId,
           execution: started.execution,
+          ...(options?.onProgressCheckpoint === undefined
+            ? {}
+            : { onProgressCheckpoint: options.onProgressCheckpoint }),
+          ...(options?.onProviderObservationError === undefined
+            ? {}
+            : {
+                onProviderObservationError: options.onProviderObservationError,
+              }),
           runId: started.runId,
           signal: observer.signal,
         });
@@ -204,6 +222,7 @@ export const makeMigrationTuiExecutionController = (
         return `Run ${terminal.runId} ${terminal.status}`;
       } catch (cause) {
         if (observer.signal.aborted) {
+          options?.onDetached?.();
           return `Run ${started.runId} continues in the background`;
         }
         throw cause;

@@ -24,6 +24,7 @@ import {
   type RollbackRunSummary,
   toMigrationDefinitionId,
 } from "migrate-sdk/core";
+import { workflowSdkMigrationProgressLayer } from "./migration-progress.ts";
 
 export type WorkflowSdkMigrationRunStepError =
   | MigrationDefinitionRegistryCatalogLookupError
@@ -155,14 +156,18 @@ export const executeMigrationRunCursorWindow = (input: {
       });
     }
 
-    return yield* MigrationRunStepExecutor.executeCursorWindow(definition, {
-      definitionId: input.definitionId,
-      definitionIds: job.plan.executionDefinitionIds,
-      lease,
-      ...(job.plan.rollbackOrphans === true ? { rollbackOrphans: true } : {}),
-      runId: input.runId,
-      state: input.state,
-    });
+    return yield* MigrationRunStepExecutor.executeCursorWindow(
+      definition,
+      {
+        definitionId: input.definitionId,
+        definitionIds: job.plan.executionDefinitionIds,
+        lease,
+        ...(job.plan.rollbackOrphans === true ? { rollbackOrphans: true } : {}),
+        runId: input.runId,
+        state: input.state,
+      },
+      job.plan.execution?.process
+    ).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
   });
 
 export const executeMigrationRunRollbackOrphansPage = (input: {

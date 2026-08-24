@@ -1,9 +1,13 @@
 import { Effect } from "effect";
-import { MigrationExecutable } from "migrate-sdk";
+import {
+  MigrationExecutable,
+  type MigrationExecutableProgressCheckpoint,
+} from "migrate-sdk";
 import { expect, test } from "vitest";
 import { getRun, start } from "workflow/api";
 import { getWorld } from "workflow/runtime";
 import type { WorkflowSdkMigrationRunEnvelope } from "./migration-execution-workflow.ts";
+import { workflowSdkMigrationProgressStreamNamespace } from "./migration-progress.ts";
 import type { WorkflowSdkMigrationRollbackEnvelope } from "./migration-rollback-workflow.ts";
 import {
   beginMigrationRunStep,
@@ -12,6 +16,7 @@ import {
   executeMigrationRunCursorWindowStep,
   executeMigrationRunRollbackOrphansPageStep,
   failMigrationRunStep,
+  inMemoryMigrationTestProcessConcurrency,
   inMemoryMigrationTestRegistry,
   inMemoryMigrationTestStoreState,
   interruptInMemoryMigrationTestWorkflowAt,
@@ -27,15 +32,21 @@ import { WorkflowSdkMigrationExecutable } from "./workflow-sdk-migration-executa
 const runWorkflow =
   inMemoryMigrationTestWorkflow as WorkflowSdkMigrationWorkflow;
 
-const startInMemoryMigrationRun = async (rollbackOrphans = false) => {
+const startInMemoryMigrationRun = async (
+  rollbackOrphans = false,
+  processConcurrency?: number
+) => {
   const plan = await Effect.runPromise(
     inMemoryMigrationTestRegistry.executable().planRun({
       definitionIds: ["articles"],
+      ...(processConcurrency === undefined
+        ? {}
+        : { execution: { process: { concurrency: processConcurrency } } }),
       ...(rollbackOrphans ? { rollbackOrphans: true } : {}),
     })
   );
-  const started = await Effect.runPromise(
-    MigrationExecutable.startRun(plan).pipe(
+  const executable = await Effect.runPromise(
+    MigrationExecutable.pipe(
       Effect.provide(
         WorkflowSdkMigrationExecutable.layer({
           start: (workflow, args) =>
@@ -48,6 +59,7 @@ const startInMemoryMigrationRun = async (rollbackOrphans = false) => {
       )
     )
   );
+  const started = await Effect.runPromise(executable.startRun(plan));
 
   if (started.kind !== "started") {
     throw new Error("Expected Workflow SDK adapter to start the run");
@@ -59,6 +71,7 @@ const startInMemoryMigrationRun = async (rollbackOrphans = false) => {
   }
 
   return {
+    executable,
     run: getRun<Awaited<ReturnType<typeof inMemoryMigrationTestWorkflow>>>(
       executionId
     ),
@@ -316,6 +329,94 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
       }
     ).maxRetries
   ).toBe(0);
+});
+
+test("Workflow SDK applies planned Process Pipeline concurrency inside cursor-window steps", async () => {
+  resetInMemoryMigrationTestState();
+  const execution = await startInMemoryMigrationRun(false, 3);
+
+  await execution.run.returnValue;
+
+  expect(inMemoryMigrationTestProcessConcurrency()).toBe(3);
+});
+
+test("Workflow SDK streams committed cursor-window checkpoints during a detached run", async () => {
+  resetInMemoryMigrationTestState();
+  const execution = await startInMemoryMigrationRun();
+  const checkpoints: MigrationExecutableProgressCheckpoint[] = [];
+  const waitForExecution = execution.executable.waitForExecution;
+
+  if (waitForExecution === undefined) {
+    throw new Error("Expected Workflow SDK execution observation");
+  }
+
+  const observed = await Effect.runPromise(
+    waitForExecution(
+      {
+        adapter: execution.started.execution.adapter,
+        executionId: execution.run.runId,
+      },
+      {
+        onProgressCheckpoint: (checkpoint) =>
+          Effect.sync(() => checkpoints.push(checkpoint)),
+      }
+    )
+  );
+
+  expect(observed).toEqual({ kind: "succeeded" });
+  const progressStream = execution.run.getReadable({
+    namespace: workflowSdkMigrationProgressStreamNamespace,
+  });
+  expect(await progressStream.getTailIndex()).toBe(1);
+  const progressReader = execution.run
+    .getReadable({
+      namespace: workflowSdkMigrationProgressStreamNamespace,
+      startIndex: 0,
+    })
+    .getReader();
+  const firstRawCheckpoint = await progressReader.read();
+  await progressReader.cancel();
+  expect(firstRawCheckpoint).toEqual({
+    done: false,
+    value: {
+      counts: {
+        failed: 0,
+        migrated: 50,
+        needsUpdate: 0,
+        skipped: 0,
+        unchanged: 0,
+      },
+      definitionId: "articles",
+      kind: "source-cursor-window-completed",
+      runId: execution.started.runId,
+    },
+  });
+  expect(checkpoints).toEqual([
+    {
+      counts: {
+        failed: 0,
+        migrated: 50,
+        needsUpdate: 0,
+        skipped: 0,
+        unchanged: 0,
+      },
+      definitionId: "articles",
+      kind: "source-cursor-window-completed",
+      runId: execution.started.runId,
+    },
+    {
+      counts: {
+        failed: 0,
+        migrated: 100,
+        needsUpdate: 0,
+        skipped: 0,
+        unchanged: 0,
+      },
+      definitionId: "articles",
+      kind: "source-cursor-window-completed",
+      runId: execution.started.runId,
+    },
+  ]);
 });
 
 test("Workflow SDK restarts Rollback Orphans from the beginning after interruption between source windows", async () => {

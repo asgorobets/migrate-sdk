@@ -6,6 +6,7 @@ import type {
 
 export type MigrationTuiActionView =
   | "break-lock"
+  | "execution-settings"
   | "messages"
   | "scan"
   | "selective-run";
@@ -106,7 +107,7 @@ export const migrationTuiAvailableActions = (
       description: `Scan this ${noun} from the beginning and skip unchanged items`,
       id: "rescan",
       key: "",
-      label: "Rescan source",
+      label: "Source Rescan",
     },
     {
       action: "update",
@@ -163,12 +164,20 @@ export const migrationTuiAvailableActions = (
       view: "messages",
     },
     {
-      description: `Scan source status for this ${noun} and its required dependencies`,
+      description: `Run a Source Inventory Scan for this ${noun} and its required dependencies`,
       id: "scan",
       key: "s",
-      label: "Scan source status",
-      shortcutLabel: "s scan",
+      label: "Source Inventory Scan",
+      shortcutLabel: "s inventory scan",
       view: "scan",
+    },
+    {
+      description:
+        "Set Process Pipeline, Rollback Pipeline, and Source Inventory Scan concurrency",
+      id: "execution-settings",
+      key: "c",
+      label: "Concurrency settings",
+      view: "execution-settings",
     }
   );
 

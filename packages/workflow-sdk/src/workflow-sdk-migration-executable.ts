@@ -1,4 +1,4 @@
-import { Effect, Exit, Layer, Schema } from "effect";
+import { Effect, Exit, Filter, Layer, Schema, Stream } from "effect";
 import {
   type ExecutionStartResult,
   type MigrationDefinitionExecutableRollbackPlan,
@@ -6,6 +6,9 @@ import {
   type MigrationDefinitionId,
   type MigrationDefinitionLock,
   MigrationExecutable,
+  type MigrationExecutableObservationOptions,
+  type MigrationExecutableObservationResult,
+  type MigrationProgressCounts,
   type MigrationRunId,
   MigrationRunId as MigrationRunIdSchema,
   type MigrationRunSummary,
@@ -14,6 +17,8 @@ import {
   MigrationStoreError,
   type RollbackPreflightError,
   type RollbackRunSummary,
+  toMigrationDefinitionId,
+  toMigrationRunId,
 } from "migrate-sdk";
 import {
   type MigrationExecutionEnvelopeMissingRegistryIdError,
@@ -23,7 +28,15 @@ import {
   validateMigrationRunDependencyPreflight,
   validateMigrationRunRollbackOrphansDependencyPreflight,
 } from "migrate-sdk/core";
-import type { Run, StartOptions } from "workflow/api";
+import {
+  getRun as getWorkflowRun,
+  type Run,
+  type StartOptions,
+} from "workflow/api";
+import {
+  WorkflowSdkMigrationProgressCheckpoint,
+  workflowSdkMigrationProgressStreamNamespace,
+} from "./migration-progress.ts";
 
 export type WorkflowSdkRun = Run<unknown>;
 type MigrationExecutionEnvelope = MigrationExecutionEnvelopeType;
@@ -59,8 +72,11 @@ export interface WorkflowSdkStart {
   ): Promise<WorkflowSdkRun>;
 }
 
+export type WorkflowSdkGetRun = (runId: string) => WorkflowSdkRun;
+
 export interface WorkflowSdkMigrationExecutableLayerOptions {
   readonly adapterName?: string;
+  readonly getRun?: WorkflowSdkGetRun;
   readonly start: WorkflowSdkStart;
   readonly startOptions?:
     | WorkflowSdkStartOptions
@@ -93,6 +109,125 @@ export class WorkflowSdkMigrationExecutableAttachError extends Schema.TaggedErro
     runId: MigrationRunIdSchema,
   }
 ) {}
+
+export class WorkflowSdkMigrationExecutableObservationError extends Schema.TaggedError<WorkflowSdkMigrationExecutableObservationError>()(
+  "WorkflowSdkMigrationExecutableObservationError",
+  {
+    cause: Schema.Defect(),
+    execution: WorkflowSdkExecutionHandle,
+    message: Schema.String,
+  }
+) {}
+
+const toMigrationProgressCounts = (
+  counts: WorkflowSdkMigrationProgressCheckpoint["counts"]
+): MigrationProgressCounts => ({
+  failed: counts.failed,
+  migrated: counts.migrated,
+  needsUpdate: counts.needsUpdate,
+  ...(counts.orphaned === undefined ? {} : { orphaned: counts.orphaned }),
+  ...(counts.rollbackFailed === undefined
+    ? {}
+    : { rollbackFailed: counts.rollbackFailed }),
+  ...(counts.rolledBack === undefined ? {} : { rolledBack: counts.rolledBack }),
+  skipped: counts.skipped,
+  unchanged: counts.unchanged,
+});
+
+const observeWorkflowProgress = (
+  run: WorkflowSdkRun,
+  options: MigrationExecutableObservationOptions,
+  observationError: (
+    cause: unknown
+  ) => WorkflowSdkMigrationExecutableObservationError
+) =>
+  Effect.tryPromise({
+    try: async () => {
+      const probe = run.getReadable({
+        namespace: workflowSdkMigrationProgressStreamNamespace,
+      });
+      const tailIndex = await probe.getTailIndex();
+
+      return tailIndex < 0
+        ? run.getReadable<unknown>({
+            namespace: workflowSdkMigrationProgressStreamNamespace,
+          })
+        : run.getReadable<unknown>({
+            namespace: workflowSdkMigrationProgressStreamNamespace,
+            startIndex: tailIndex,
+          });
+    },
+    catch: observationError,
+  }).pipe(
+    Effect.flatMap((readable) =>
+      Stream.fromReadableStream({
+        evaluate: () => readable,
+        onError: observationError,
+      }).pipe(
+        Stream.filterMap(
+          Filter.fromPredicateOption(
+            Schema.decodeUnknownOption(WorkflowSdkMigrationProgressCheckpoint)
+          )
+        ),
+        Stream.runForEach(
+          (checkpoint) =>
+            options.onProgressCheckpoint?.({
+              counts: toMigrationProgressCounts(checkpoint.counts),
+              definitionId: toMigrationDefinitionId(checkpoint.definitionId),
+              kind: checkpoint.kind,
+              runId: toMigrationRunId(checkpoint.runId),
+            }) ?? Effect.void
+        )
+      )
+    )
+  );
+
+const observeWorkflowTerminal = (
+  run: WorkflowSdkRun,
+  observationError: (
+    cause: unknown
+  ) => WorkflowSdkMigrationExecutableObservationError
+): Effect.Effect<
+  MigrationExecutableObservationResult,
+  WorkflowSdkMigrationExecutableObservationError
+> => {
+  const readStatus = Effect.tryPromise({
+    try: () => run.status,
+    catch: observationError,
+  });
+  const readTerminalReturnValue = Effect.tryPromise({
+    try: () => run.returnValue,
+    catch: observationError,
+  });
+
+  return Effect.gen(function* () {
+    let status = yield* readStatus;
+
+    while (status === "pending" || status === "running") {
+      yield* Effect.sleep("1 second");
+      status = yield* readStatus;
+    }
+
+    if (status === "cancelled") {
+      return { kind: "cancelled" as const };
+    }
+
+    if (status === "failed") {
+      return yield* readTerminalReturnValue.pipe(
+        Effect.match({
+          onFailure: (error) => ({
+            cause: error.cause,
+            kind: "failed" as const,
+          }),
+          onSuccess: () => ({ kind: "succeeded" as const }),
+        })
+      );
+    }
+
+    yield* readTerminalReturnValue;
+    return { kind: "succeeded" as const };
+  });
+};
 
 type WorkflowSdkMigrationExecutableError =
   | WorkflowSdkMigrationExecutableStartError
@@ -353,13 +488,11 @@ const startDurablePlan = <Summary>({
         ).pipe(Effect.andThen(Effect.fail(error)))
       )
     );
-
     yield* store
       .attachRunExecution(runId, scopeDefinitionIds, execution)
       .pipe(
         Effect.mapError((error) => makeAttachError(runId, execution, error))
       );
-
     return {
       execution,
       kind: "started" as const,
@@ -368,8 +501,10 @@ const startDurablePlan = <Summary>({
   }).pipe(Effect.provide(storeLayer));
 
 export const WorkflowSdkMigrationExecutable = {
-  layer: (input: WorkflowSdkMigrationExecutableLayerOptions) =>
-    Layer.succeed(MigrationExecutable, {
+  layer: (input: WorkflowSdkMigrationExecutableLayerOptions) => {
+    const adapterName = input.adapterName ?? "workflow-sdk";
+
+    return Layer.succeed(MigrationExecutable, {
       startRun: (plan: MigrationDefinitionExecutableRunPlan) =>
         validateMigrationRunDependencyPreflight(plan).pipe(
           Effect.andThen(
@@ -403,5 +538,49 @@ export const WorkflowSdkMigrationExecutable = {
             storeLayer,
           })
         ),
-    }),
+      waitForExecution: (
+        execution,
+        options: MigrationExecutableObservationOptions = {}
+      ) => {
+        if (execution.adapter !== adapterName) {
+          return Effect.fail(
+            new WorkflowSdkMigrationExecutableObservationError({
+              cause: { adapterName },
+              execution,
+              message: `Workflow SDK cannot observe execution from adapter ${execution.adapter}`,
+            })
+          );
+        }
+
+        const observationError = (cause: unknown) =>
+          new WorkflowSdkMigrationExecutableObservationError({
+            cause,
+            execution,
+            message: `Unable to observe Workflow SDK execution ${execution.executionId}`,
+          });
+        const getRun = Effect.try({
+          try: () => (input.getRun ?? getWorkflowRun)(execution.executionId),
+          catch: observationError,
+        });
+
+        return getRun.pipe(
+          Effect.flatMap((run) => {
+            const terminal = observeWorkflowTerminal(run, observationError);
+
+            if (options.onProgressCheckpoint === undefined) {
+              return terminal;
+            }
+
+            const progress = observeWorkflowProgress(
+              run,
+              options,
+              observationError
+            ).pipe(Effect.andThen(Effect.never));
+
+            return Effect.raceFirst(terminal, progress);
+          })
+        );
+      },
+    });
+  },
 } as const;
