@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { toMigrationDefinitionId } from "migrate-sdk";
+import { makeMigrationTuiRuntime } from "../src/index.ts";
 import { connectLocalMigrateServer } from "../src/server/local-client.ts";
-import { makeLocalMigrationTuiRuntime } from "../src/server/tui-runtime.ts";
 
 const within = <Value>(promise: Promise<Value>, milliseconds: number) =>
   Promise.race([
@@ -16,7 +18,7 @@ const within = <Value>(promise: Promise<Value>, milliseconds: number) =>
   ]);
 
 test("Bun operates a Node-only migration through local Effect RPC", async () => {
-  const runtime = await makeLocalMigrationTuiRuntime({
+  const runtime = await makeMigrationTuiRuntime({
     configPath: resolve("test/fixtures/node-only.config.ts"),
     cwd: process.cwd(),
   });
@@ -43,7 +45,7 @@ test("Bun operates a Node-only migration through local Effect RPC", async () => 
 }, 20_000);
 
 test("live observation does not block dashboard reads or explicit cancellation", async () => {
-  const runtime = await makeLocalMigrationTuiRuntime({
+  const runtime = await makeMigrationTuiRuntime({
     configPath: resolve("examples/cancellation.config.ts"),
     cwd: process.cwd(),
   });
@@ -77,6 +79,25 @@ test("live observation does not block dashboard reads or explicit cancellation",
     await runtime.dispose?.();
   }
 }, 20_000);
+
+test("Node server bootstrap failures exit unsuccessfully", () => {
+  const result = spawnSync(
+    process.env.MIGRATE_TUI_NODE_EXECUTABLE ?? "node",
+    [
+      fileURLToPath(new URL("../src/server/node-entry.ts", import.meta.url)),
+      "--cwd",
+      process.cwd(),
+      "--config",
+      resolve("test/fixtures/missing.config.ts"),
+    ],
+    { encoding: "utf8" }
+  );
+
+  expect(result.status).toBe(1);
+  expect(`${result.stdout}${result.stderr}`).toContain(
+    "Migration config file was not found"
+  );
+});
 
 test("reports a local server startup timeout and releases the child", async () => {
   await expect(

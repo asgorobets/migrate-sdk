@@ -129,10 +129,10 @@ const runPackedRpcMigration = async ({ fixtureDirectory }) => {
   const scriptPath = resolve(fixtureDirectory, "rpc-smoke.mjs");
   await writeFile(
     scriptPath,
-    `import { makeLocalMigrationTuiRuntime } from "./node_modules/@migrate-sdk/tui/dist/server/tui-runtime.js";
+    `import { makeMigrationTuiRuntime } from "@migrate-sdk/tui";
 import { toMigrationDefinitionId } from "migrate-sdk";
 
-const runtime = await makeLocalMigrationTuiRuntime({
+const runtime = await makeMigrationTuiRuntime({
   configPath: "migrate.config.ts",
   cwd: process.cwd(),
 });

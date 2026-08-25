@@ -10,11 +10,11 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { MigrationTuiApp as MigrationTuiAppView } from "./app.tsx";
 import { MigrationTuiRenderErrorBoundary } from "./render-session.tsx";
 import {
+  loadConfiguredMigrationHost,
   type MigrationTuiMessage,
   type MigrationTuiRuntime,
   type MigrationTuiSnapshot,
   type MigrationTuiSourceIdentityHistoryEntry,
-  makeMigrationTuiRuntime as makeMigrationTuiServerRuntime,
 } from "./runtime.ts";
 
 const actEnvironment = globalThis as typeof globalThis & {
@@ -41,12 +41,47 @@ const MigrationTuiApp = ({
   />
 );
 
-const makeMigrationTuiRuntime = async (
-  ...args: Parameters<typeof makeMigrationTuiServerRuntime>
-): Promise<MigrationTuiRuntime> =>
-  (await makeMigrationTuiServerRuntime(
-    ...args
-  )) as unknown as MigrationTuiRuntime;
+const makeInProcessMigrationTuiRuntime = async (
+  ...args: Parameters<typeof loadConfiguredMigrationHost>
+): Promise<MigrationTuiRuntime> => {
+  const server = await loadConfiguredMigrationHost(...args);
+  let executionState: ReturnType<MigrationTuiRuntime["getExecutionState"]>;
+  const listeners = new Set<
+    Parameters<MigrationTuiRuntime["subscribeExecution"]>[0]
+  >();
+  const publish = (state: typeof executionState) => {
+    executionState = state;
+    for (const listener of listeners) {
+      listener(state);
+    }
+  };
+
+  return {
+    ...server,
+    execute: async (operation, options) => {
+      try {
+        return await server.execute(
+          operation as unknown as Parameters<typeof server.execute>[0],
+          {
+            ...options,
+            onStateChange: (state) => {
+              publish(state);
+              options?.onStateChange?.(state);
+            },
+          }
+        );
+      } finally {
+        publish(undefined);
+      }
+    },
+    getExecutionState: () => executionState,
+    prepare: server.prepare as unknown as MigrationTuiRuntime["prepare"],
+    subscribeExecution: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+};
 
 const settle = async (
   renderOnce: () => Promise<void>,
@@ -118,7 +153,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "refreshes durable state after mounting the recovery snapshot",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/migrate.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -163,7 +198,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "reattaches to supervisor-owned execution state after a renderer restart",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/migrate.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -237,7 +272,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "keeps the completion refresh when the recovery refresh settles later",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/migrate.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -330,7 +365,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "updates durable item counts while an inline run is still active",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/live-progress.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
         progressFallbackIntervalMs: 10,
@@ -382,7 +417,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "renders and follows a bounded message list while navigating many messages",
     async () => {
-      const baseRuntime = await makeMigrationTuiRuntime({
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/migrate.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -488,7 +523,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "expands and scrolls long messages while keeping controls visible",
     async () => {
-      const baseRuntime = await makeMigrationTuiRuntime({
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/migrate.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -571,7 +606,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "identifies the owning migration in group messages",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/migrate.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -619,7 +654,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "shows source inventory counts and bounded scan warnings",
     async () => {
-      const baseRuntime = await makeMigrationTuiRuntime({
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/source-status.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -672,7 +707,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "reloads status after a source inventory scan without crashing the renderer",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/source-status.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -723,7 +758,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "scrolls compact overview details without moving the migration selection",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/source-status.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -760,7 +795,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "shows lock ownership and requires confirmation before breaking a lock",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/locked.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -814,7 +849,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "retries skipped items from the selected migration",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/migrate.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -850,7 +885,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "keeps secondary retries in All actions without crowding the primary row",
     async () => {
-      const baseRuntime = await makeMigrationTuiRuntime({
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/migrate.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -917,7 +952,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "edits concurrency with numeric fields and explicit unbounded choices",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/migrate.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -1022,7 +1057,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "offers include or force when rescan dependencies are unmet",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/dependency-preflight.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -1068,7 +1103,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "executes an expanded dependency plan without crashing the renderer",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/dependency-preflight.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -1130,7 +1165,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "preserves selected entries and reruns multiple identities from durable history",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/migrate.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -1229,7 +1264,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "ignores history that resolves after the operator opens another migration",
     async () => {
-      const baseRuntime = await makeMigrationTuiRuntime({
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/migrate.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -1342,7 +1377,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "renders transitive rollback dependents as a numbered hierarchy",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/transitive-dependency.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
@@ -1381,7 +1416,7 @@ describe("MigrationTuiApp", () => {
   itWithOpenTui(
     "keeps rollback controls fixed while a large hierarchy scrolls",
     async () => {
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/large-rollback.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });

@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
+import { runMain } from "@effect/platform-node/NodeRuntime";
 import { layer as layerNodeWorkerRunner } from "@effect/platform-node/NodeWorkerRunner";
 import { Effect, Layer, Stream } from "effect";
-import { makeRunMain } from "effect/Runtime";
 import {
   layerProtocolWorkerRunner,
   layer as layerRpcServer,
@@ -68,4 +68,4 @@ const Server = layerRpcServer(MigrateRpcs, {
   Layer.provide(layerNodeWorkerRunner)
 );
 
-makeRunMain(({ teardown }) => teardown)(Layer.launch(Server));
+runMain(Layer.launch(Server));

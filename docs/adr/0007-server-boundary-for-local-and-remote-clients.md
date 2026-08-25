@@ -107,6 +107,15 @@ internal implementation detail rather than the public compatibility promise.
 The application-level Migrate Protocol, version negotiation, and capability
 semantics are owned by Migrate SDK and must remain independently versioned.
 
+The SDK exposes `MigrateClient.make` / `MigrateClient.layer` and
+`MigrateServer.make` / `MigrateServer.layer`. Transports provide the RPC
+protocol required by the client Layer, while server hosts provide the
+registry-bound backend required by the server Layer. Tests use those same
+interfaces for Migrate Protocol, service, transport, and packaging behavior.
+Renderer-only component tests may adapt the configured migration host in
+process; the IPC and Pilotty suites remain responsible for verifying the
+process and protocol boundary.
+
 The CLI may continue loading configuration and invoking the SDK directly. It is
 not required to route local one-shot commands through the Migrate Protocol.
 Shared server handlers should still delegate to the same registry-bound SDK
@@ -131,10 +140,9 @@ services used by the CLI rather than reimplementing migration behavior.
 - Streaming observation is an optimization over durable state, not a second
   source of truth, and reconnecting clients must be able to refresh from stored
   status.
-- Implementing the boundary requires extracting serializable server requests
-  and handlers from the current in-process TUI runtime, but it does not require
-  rewriting the migration engine or changing the existing Execution Adapter
-  interface.
+- The boundary extracts serializable server requests and handlers from the
+  in-process server runtime without rewriting the migration engine or changing
+  the existing Execution Adapter interface.
 
 ## Related Research
 

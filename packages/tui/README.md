@@ -21,6 +21,29 @@ dependencies, stores, sources, destinations, and execution adapters all remain
 in Node, matching the local CLI runtime contract. See
 [`ADR 0007`](../../docs/adr/0007-server-boundary-for-local-and-remote-clients.md).
 
+Programmatic consumers use the same client/server boundary:
+
+```ts
+import { makeMigrationTuiRuntime } from "@migrate-sdk/tui";
+
+const runtime = await makeMigrationTuiRuntime({ cwd: process.cwd() });
+
+try {
+  const dashboard = await runtime.refresh();
+  console.log(dashboard.rows);
+} finally {
+  await runtime.dispose?.();
+}
+```
+
+The package does not expose the in-process server runtime from its public entry
+point.
+
+Transport and server hosts can integrate directly with the Effect services
+exported as `MigrateClient` from `migrate-sdk/client` and `MigrateServer` from
+`migrate-sdk/server`. The local TUI supplies a child-process transport and a
+Node-configured migration backend for those services.
+
 `migrate-sdk` and `effect` remain peer dependencies: the TUI and config use the
 migration project's compatible versions. `@migrate-sdk/tui` and `migrate-sdk`
 are published with matching versions.

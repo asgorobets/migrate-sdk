@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSystem";
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
-import { SqliteClient } from "@effect/sql-sqlite-bun";
+import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Config, Effect, Layer, Schema } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";

@@ -88,7 +88,7 @@ const toTuiRow = (row: {
   ...(row.status === undefined ? {} : { status: row.status }),
 });
 
-export const makeLocalMigrationTuiRuntime = async (
+export const makeMigrationTuiRuntime = async (
   input: LoadMigrationTuiInput
 ): Promise<MigrationTuiRuntime> => {
   const connection = await connectLocalMigrateServer(input);

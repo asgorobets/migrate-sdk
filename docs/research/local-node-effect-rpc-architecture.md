@@ -258,67 +258,63 @@ coalesce status updates. Durable Migration Run and Item State remains the source
 of truth. Reconnection begins with a dashboard/status read and then resumes live
 observation where supported.
 
-## Mapping onto the current TUI
+## Mapping onto the TUI
 
-### `runtime.ts`
+### SDK services and the configured host
 
-`runtime.ts` currently imports Node services, the CLI config loader, registry,
-store, and executable services directly
-([lines 1-36](../../packages/tui/src/runtime.ts#L1-L36)). It then loads config in
-the Bun process ([lines 193-212](../../packages/tui/src/runtime.ts#L193-L212))
-and constructs the executable runtime in-process
-([lines 246-262](../../packages/tui/src/runtime.ts#L246-L262)).
+The implementation separates the runtime into three roles:
 
-Split this into two modules:
-
-- **server application service**: owns current config/registry/store/executable,
-  preparation, execution, observation, messages, scans, history, and lock work;
-- **`RpcMigrationTuiRuntime` adapter**: implements the existing
+- **`MigrateServer`**: an SDK Effect service that owns plan fingerprints,
+  authoritative replanning, execution references, observation streams, and
+  request routing;
+- **configured migration host**: loads config and binds registry, store,
+  executable, messages, scans, history, and lock work to the server backend;
+- **protocol-backed `MigrationTuiRuntime` adapter**: implements the public
   `MigrationTuiRuntime` interface with RPC calls and maps protocol DTOs to UI
   models.
 
-Keeping the interface initially limits UI churn. Its prepared-operation type
-must become a serializable projection rather than carrying an executable plan.
-Schema-decode all values crossing the boundary instead of exporting new
-anonymous interfaces.
+The public prepared-operation type is a serializable projection. Executable SDK
+plans remain in the configured host and all values crossing the boundary are
+schema-encoded protocol values. `MigrateClient.make` / `MigrateClient.layer`
+and `MigrateServer.make` / `MigrateServer.layer` expose the reusable Effect
+services; the local child-process transport only supplies their Layers.
+
+The configured host currently remains in the TUI package as the local Node
+bootstrap implementation. Moving it is a follow-up package-boundary cleanup,
+not a prerequisite for validating the protocol seam: the server service no
+longer inherits or exposes the UI runtime interface.
 
 ### Config loading
 
-The Node server should call the existing
+The Node server calls the existing
 `loadMigrationCliConfigWithPath({ cwd, configPath })` with Node services. That
 loader already discovers the config and installs `tsx`'s Node registration for
 TypeScript imports when the runtime is not Bun
 ([`config-loader.ts:200-235`](../../packages/migrate-sdk/src/cli/config-loader.ts#L200-L235),
 [`282-311`](../../packages/migrate-sdk/src/cli/config-loader.ts#L282-L311)).
-The Bun renderer must no longer import customer config.
+The Bun renderer does not import customer config.
 
-Bootstrap may initially travel through process arguments/environment or an RPC
-initial message. Effect exposes a schema-backed worker initial-message facility
-(`RpcWorker.ts:67-118`), but choosing it is optional. Either way, limit bootstrap
-to `cwd`, optional `configPath`, and protocol version; send no credentials over
-the wire when the server can inherit its environment.
+Bootstrap travels through process arguments and the inherited environment. It
+is limited to `cwd` and optional `configPath`; credentials are not copied into
+the application protocol.
 
 ### `execution-controller.ts`
 
-The controller's UI state and single-active-operation guard remain useful.
-Replace its direct SDK `start`, live `handle.wait`, and `handle.cancel` branches
-([`execution-controller.ts:134-252`](../../packages/tui/src/execution-controller.ts#L134-L252))
-with `StartOperation`, `ObserveExecution`, and `CancelExecution` calls. The
-client should own only an observation scope; the Node server owns real SDK
-handles and provider/store observation.
+The existing execution controller is now server-owned, where its direct SDK
+`start`, `handle.wait`, and `handle.cancel` branches retain the real execution
+handles. The client adapter uses `StartOperation`, `ObserveExecution`, and
+`CancelExecution` and owns only the observation stream and UI-facing state.
 
-The current abort behavior for detached observation
-([lines 206-245](../../packages/tui/src/execution-controller.ts#L206-L245)) maps
-naturally to closing the observation stream. It must continue to display that
-the run is still active, not call `CancelExecution` implicitly.
+Closing the observation stream does not implicitly request cancellation. A
+detached run continues in its execution provider and is reported as detached to
+the client.
 
 ### TUI lifecycle
 
-Acquire the child process, worker protocol, and RPC client in one Effect scope
-before creating the renderer. Release that scope only after the TUI lifecycle
-supervisor has stopped rendering and performed any explicit attached-run exit
-decision. Effect then cleans up IPC listeners and the child process even when
-renderer setup or execution fails.
+The child process, worker protocol, and RPC client are acquired in one Effect
+scope before the renderer is created. That scope is released after the TUI
+lifecycle supervisor stops rendering and performs any explicit attached-run
+exit decision, including renderer setup and execution failure paths.
 
 Keep stdout/stderr separate from the RPC channel. Child IPC carries protocol
 messages; server logs can be captured through `silent: true` pipes and rendered
@@ -368,23 +364,28 @@ contract and removes the immediate Bun runtime incompatibility without
 prematurely choosing remote authentication, discovery, deployment, or daemon
 semantics.
 
-## Proposed module boundary
+## Implemented module boundary
 
 Avoid a new published package until there is an independently deployable remote
-server. Keep the client contract and server implementation as separate SDK
+server. The client contract and server implementation remain separate SDK
 subpaths so clients do not import server construction code. The first
-implementation can use:
+implementation uses:
 
 ```text
 packages/migrate-sdk/src/protocol/
   index.ts          # schemas, errors, RPC group, versions and capabilities
 
+packages/migrate-sdk/src/client/
+  index.ts          # runtime-neutral Effect RPC client service and Layer
+
 packages/migrate-sdk/src/server/
-  handlers.ts       # runtime-neutral handlers delegating to SDK services
+  service.ts        # plan validation, execution registry, and observation
+  handlers.ts       # RPC handlers delegating to MigrateServer
 
 packages/tui/src/server/
   node-entry.ts     # Node config bootstrap and server Layer
   local-client.ts   # Bun child-process connection Layer
+  migration-backend.ts # configured host adapter for MigrateServer
   tui-runtime.ts    # MigrationTuiRuntime RPC adapter
 ```
 
@@ -396,4 +397,6 @@ SDK again.
 
 The resulting boundary is narrow: the migration engine remains unchanged, the
 CLI may continue invoking it directly, and the TUI changes only from a direct
-runtime implementation to a protocol-backed implementation.
+runtime implementation to a protocol-backed implementation. The next cleanup
+can relocate the configured host without changing the client, protocol, server
+service, or transport contracts established here.

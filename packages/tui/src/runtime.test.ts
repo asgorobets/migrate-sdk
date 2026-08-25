@@ -6,7 +6,7 @@ import {
 } from "migrate-sdk";
 import { describe, expect, it } from "vitest";
 import { liveProgressProviderObservations } from "../examples/live-progress-fixture.ts";
-import { makeMigrationTuiRuntime } from "./runtime.ts";
+import { loadConfiguredMigrationHost } from "./runtime.ts";
 
 const packageDirectory = fileURLToPath(new URL("..", import.meta.url));
 const authorsId = toMigrationDefinitionId("authors");
@@ -15,7 +15,7 @@ const assetsId = toMigrationDefinitionId("assets");
 const contentGroupId = toMigrationDefinitionGroupId("content");
 const succeededRunPattern = /^Run .+ succeeded$/;
 
-describe("Migration TUI runtime", () => {
+describe("Migration TUI server runtime", () => {
   const liveProgressCases = [
     {
       configPath: "examples/live-progress.config.ts",
@@ -38,7 +38,7 @@ describe("Migration TUI runtime", () => {
   ] as const;
 
   it("loads the CLI config through the shared loader", async () => {
-    const runtime = await makeMigrationTuiRuntime({
+    const runtime = await loadConfiguredMigrationHost({
       cwd: fileURLToPath(new URL("../examples", import.meta.url)),
     });
 
@@ -59,7 +59,7 @@ describe("Migration TUI runtime", () => {
   });
 
   it("prepares an executable SDK plan before executing it", async () => {
-    const runtime = await makeMigrationTuiRuntime({
+    const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/migrate.config.ts",
       cwd: packageDirectory,
     });
@@ -95,7 +95,7 @@ describe("Migration TUI runtime", () => {
   for (const testCase of liveProgressCases) {
     it(`publishes live durable counts during ${testCase.label} execution`, async () => {
       liveProgressProviderObservations.length = 0;
-      const runtime = await makeMigrationTuiRuntime({
+      const runtime = await loadConfiguredMigrationHost({
         configPath: testCase.configPath,
         cwd: packageDirectory,
         progressFallbackIntervalMs: 10,
@@ -146,7 +146,7 @@ describe("Migration TUI runtime", () => {
   }
 
   it("prepares skipped-item retries without expanding dependencies", async () => {
-    const runtime = await makeMigrationTuiRuntime({
+    const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/migrate.config.ts",
       cwd: packageDirectory,
     });
@@ -169,7 +169,7 @@ describe("Migration TUI runtime", () => {
   });
 
   it("returns source inventory and warnings after a Source Inventory Scan", async () => {
-    const runtime = await makeMigrationTuiRuntime({
+    const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/source-status.config.ts",
       cwd: packageDirectory,
     });
@@ -199,7 +199,7 @@ describe("Migration TUI runtime", () => {
   });
 
   it("scans source status only for the selected migration scope", async () => {
-    const runtime = await makeMigrationTuiRuntime({
+    const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/migrate.config.ts",
       cwd: packageDirectory,
     });
@@ -215,7 +215,7 @@ describe("Migration TUI runtime", () => {
   });
 
   it("breaks a persisted migration lock through its configured store", async () => {
-    const runtime = await makeMigrationTuiRuntime({
+    const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/locked.config.ts",
       cwd: packageDirectory,
     });
@@ -255,7 +255,7 @@ describe("Migration TUI runtime", () => {
   });
 
   it("prepares multiple source identities from durable item history", async () => {
-    const runtime = await makeMigrationTuiRuntime({
+    const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/migrate.config.ts",
       cwd: packageDirectory,
     });
@@ -295,7 +295,7 @@ describe("Migration TUI runtime", () => {
   });
 
   it("preserves the owning migration for messages in a group", async () => {
-    const runtime = await makeMigrationTuiRuntime({
+    const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/migrate.config.ts",
       cwd: packageDirectory,
     });
@@ -321,7 +321,7 @@ describe("Migration TUI runtime", () => {
   });
 
   it("prepares rollback dependencies in reverse execution order", async () => {
-    const runtime = await makeMigrationTuiRuntime({
+    const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/migrate.config.ts",
       cwd: packageDirectory,
     });
@@ -344,7 +344,7 @@ describe("Migration TUI runtime", () => {
   });
 
   it("reports unmet run dependencies and prepares include or force resolutions", async () => {
-    const runtime = await makeMigrationTuiRuntime({
+    const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/dependency-preflight.config.ts",
       cwd: packageDirectory,
     });
@@ -389,7 +389,7 @@ describe("Migration TUI runtime", () => {
   });
 
   it("prepares a group plan without expanding external dependencies", async () => {
-    const runtime = await makeMigrationTuiRuntime({
+    const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/migrate.config.ts",
       cwd: packageDirectory,
     });
@@ -413,7 +413,7 @@ describe("Migration TUI runtime", () => {
   });
 
   it("applies session concurrency to run, rollback, and Source Inventory Scan requests", async () => {
-    const runtime = await makeMigrationTuiRuntime({
+    const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/migrate.config.ts",
       cwd: packageDirectory,
     });

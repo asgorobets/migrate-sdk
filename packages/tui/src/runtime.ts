@@ -29,7 +29,6 @@ import {
 import {
   loadMigrationCliConfigWithPath,
   type MigrationCliConfig,
-  MigrationCliConfigLoadError,
 } from "migrate-sdk/cli";
 import type { MigratePreparedOperation } from "migrate-sdk/protocol";
 import {
@@ -188,8 +187,15 @@ export interface MigrationTuiRuntime {
   ) => () => void;
 }
 
-export interface MigrationTuiServerRuntime
-  extends Omit<MigrationTuiRuntime, "execute" | "prepare"> {
+export interface ConfiguredMigrationHost
+  extends Omit<
+    MigrationTuiRuntime,
+    | "dispose"
+    | "execute"
+    | "getExecutionState"
+    | "prepare"
+    | "subscribeExecution"
+  > {
   readonly execute: (
     operation: MigrationTuiExecutablePreparedOperation,
     options?: MigrationTuiExecuteOptions
@@ -205,6 +211,10 @@ export interface MigrationTuiServerRuntime
 export interface LoadMigrationTuiInput {
   readonly configPath?: string;
   readonly cwd: string;
+}
+
+export interface LoadConfiguredMigrationHostInput
+  extends LoadMigrationTuiInput {
   readonly progressFallbackIntervalMs?: number;
   readonly providerSettlementGraceMs?: number;
   readonly terminalPollIntervalMs?: number;
@@ -230,9 +240,6 @@ const loadConfig = async (
     configPath: loaded.configPath,
   };
 };
-
-export type MigrationTuiConfigError = MigrationCliConfigLoadError;
-export const MigrationTuiConfigError = MigrationCliConfigLoadError;
 
 const readItemStates = (
   config: MigrationTuiConfig,
@@ -263,9 +270,9 @@ const sourceIdentityKeyText = (key: SourceIdentitySnapshotKey): string =>
     ? key.map(sourceIdentityPartText).join(":")
     : sourceIdentityPartText(key as string | number | boolean);
 
-export const makeMigrationTuiRuntime = async (
-  input: LoadMigrationTuiInput
-): Promise<MigrationTuiServerRuntime> => {
+export const loadConfiguredMigrationHost = async (
+  input: LoadConfiguredMigrationHostInput
+): Promise<ConfiguredMigrationHost> => {
   const loaded = await loadConfig(input);
   const config = loaded.config;
   const entries = config.registry.list();
@@ -822,7 +829,6 @@ export const makeMigrationTuiRuntime = async (
     cancelActiveExecution: executionController.cancelActiveExecution,
     configPath: loaded.configPath,
     execute,
-    getExecutionState: executionController.getExecutionState,
     groups,
     listMessages,
     listSourceIdentityHistory,
@@ -832,6 +838,5 @@ export const makeMigrationTuiRuntime = async (
     ...(registryId === undefined ? {} : { registryId }),
     rows,
     scanSource,
-    subscribeExecution: executionController.subscribeExecution,
   };
 };

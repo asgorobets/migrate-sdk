@@ -4,6 +4,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SDK_PACKAGE_DIR="$(cd "${PACKAGE_DIR}/../migrate-sdk" && pwd)"
 PILOTTY_BIN="${PILOTTY_BIN:-${PACKAGE_DIR}/node_modules/.bin/pilotty}"
 TASK_TEMP_ROOT="${TMPDIR:-/tmp}"
 ARTIFACT_DIR="${TASK_TEMP_ROOT%/}/migrate-tui-pilotty-$$"
@@ -19,6 +20,7 @@ SELECTIVE_SESSION="migrate-tui-selective"
 SOURCE_STATUS_SESSION="migrate-tui-source-status"
 LOCK_SESSION="migrate-tui-lock"
 LIVE_PROGRESS_SESSION="migrate-tui-live-progress"
+CATALOG_SESSION="migrate-tui-sqlite-catalog"
 
 mkdir -p "${ARTIFACT_DIR}"
 PILOTTY_SOCKET_DIR="/tmp/migrate-tui-pilotty-socket-$$"
@@ -42,10 +44,16 @@ cleanup() {
   "${PILOTTY_BIN}" key -s "${LOCK_SESSION}" Escape >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" key -s "${LOCK_SESSION}" q >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" key -s "${LIVE_PROGRESS_SESSION}" q >/dev/null 2>&1 || true
+  "${PILOTTY_BIN}" key -s "${CATALOG_SESSION}" q >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" stop >/dev/null 2>&1 || true
 }
 
 trap cleanup EXIT
+
+(
+  cd "${SDK_PACKAGE_DIR}"
+  pnpm exec tsx examples/sqlite-catalog/setup.ts --scale small --reset
+)
 
 "${PILOTTY_BIN}" spawn \
   --name "${SESSION}" \
@@ -171,6 +179,44 @@ trap cleanup EXIT
 rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 5000 \
   "4 migrated" >/dev/null
+
+"${PILOTTY_BIN}" spawn \
+  --name "${CATALOG_SESSION}" \
+  --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_SQLITE_CATALOG_DELAY_MS=5 node bin/migrate-tui.js \
+  --config ../migrate-sdk/examples/sqlite-catalog/migrate.config.ts >/dev/null
+"${PILOTTY_BIN}" resize -s "${CATALOG_SESSION}" 120 36 >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_SESSION}" -t 30000 \
+  "Status reloaded" >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_SESSION}" g >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_SESSION}" -t 5000 \
+  "catalog  GROUP" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${CATALOG_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/sqlite-catalog-initial.txt"
+"${PILOTTY_BIN}" key -s "${CATALOG_SESSION}" r >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_SESSION}" -t 10000 \
+  "is running" >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_SESSION}" -t 30000 --regex \
+  "[1-9][0-9]* migrated" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${CATALOG_SESSION}" \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/sqlite-catalog-progress.txt"
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_SESSION}" -t 60000 \
+  "GROUP   FAILED" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${CATALOG_SESSION}" \
+  --settle 300 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/sqlite-catalog-completed.txt"
+"${PILOTTY_BIN}" key -s "${CATALOG_SESSION}" g >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${CATALOG_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/sqlite-catalog-books.txt"
 
 "${PILOTTY_BIN}" spawn \
   --name "${GROUP_SESSION}" \
@@ -476,6 +522,17 @@ assert_not_contains() {
   fi
 }
 
+assert_matches() {
+  local file="$1"
+  local pattern="$2"
+  local label="$3"
+
+  if ! grep -Eq "${pattern}" "${file}"; then
+    echo "FAIL: ${label}" >&2
+    failed=1
+  fi
+}
+
 assert_line_excludes() {
   local file="$1"
   local containing="$2"
@@ -643,6 +700,46 @@ assert_not_contains \
   "${ARTIFACT_DIR}/group-dashboard-after-run.txt" \
   "Confirm" \
   "ordinary group Run does not open a generic confirmation"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-initial.txt" \
+  "catalog  GROUP   PARTIAL" \
+  "packaged TUI loads the persistent SQLite catalog through the Node server"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-initial.txt" \
+  "4 migrations" \
+  "SQLite catalog exposes its complete migration group"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-progress.txt" \
+  "is running" \
+  "SQLite catalog execution remains observable while it runs"
+assert_matches \
+  "${ARTIFACT_DIR}/sqlite-catalog-progress.txt" \
+  "[1-9][0-9]* migrated" \
+  "SQLite catalog reports live checkpoint progress through IPC"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-completed.txt" \
+  "616 migrated" \
+  "SQLite catalog reports persisted migrated item totals"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-books.txt" \
+  "480 migrated" \
+  "SQLite catalog reports the expected migrated book count"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-books.txt" \
+  "8 failed" \
+  "SQLite catalog reports deterministic book failures"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-books.txt" \
+  "12 skipped" \
+  "SQLite catalog reports deterministic skipped books"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-completed.txt" \
+  "✓ authors" \
+  "successful catalog dependencies retain their terminal status"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-completed.txt" \
+  "✕ books" \
+  "only the catalog migration with item failures is marked failed"
 assert_contains \
   "${ARTIFACT_DIR}/dependency-decision.txt" \
   "Required dependencies not ready" \

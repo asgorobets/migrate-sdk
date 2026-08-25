@@ -27,6 +27,12 @@
       "source": "./src/index.ts",
       "import": "./dist/index.js"
     },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "bun": "./src/client/index.ts",
+      "source": "./src/client/index.ts",
+      "import": "./dist/client/index.js"
+    },
     "./cli": {
       "types": "./dist/cli/index.d.ts",
       "bun": "./src/cli/index.ts",

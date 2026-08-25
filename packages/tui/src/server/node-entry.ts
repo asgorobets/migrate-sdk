@@ -2,9 +2,9 @@
 
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
+import { runMain } from "@effect/platform-node/NodeRuntime";
 import { layer as layerNodeWorkerRunner } from "@effect/platform-node/NodeWorkerRunner";
 import { Effect, Layer, Schema } from "effect";
-import { makeRunMain } from "effect/Runtime";
 import {
   layerProtocolWorkerRunner,
   layer as layerRpcServer,
@@ -17,8 +17,8 @@ import {
   type MigrateServerInfo,
 } from "migrate-sdk/protocol";
 import { MigrateServer, MigrateServerHandlers } from "migrate-sdk/server";
-import { makeMigrationTuiRuntime } from "../runtime.ts";
-import { makeMigrationServerService } from "./application.ts";
+import { loadConfiguredMigrationHost } from "../runtime.ts";
+import { makeConfiguredMigrationServerBackend } from "./migration-backend.ts";
 
 const require = createRequire(import.meta.url);
 const sdkPackage = require("migrate-sdk/package.json") as {
@@ -90,7 +90,7 @@ const main = Effect.gen(function* () {
         }`,
       }),
     try: () =>
-      makeMigrationTuiRuntime({
+      loadConfiguredMigrationHost({
         ...(parsed.configPath === undefined
           ? {}
           : { configPath: parsed.configPath }),
@@ -121,10 +121,10 @@ const main = Effect.gen(function* () {
     runtime: { name: "node", version: process.versions.node },
     sdkVersion: sdkPackage.version,
   };
-  const ServerApplication = Layer.succeed(
-    MigrateServer,
-    makeMigrationServerService({ runtime, serverInfo })
-  );
+  const ServerApplication = MigrateServer.layer({
+    backend: makeConfiguredMigrationServerBackend(runtime),
+    serverInfo,
+  });
   const Handlers = MigrateServerHandlers.pipe(Layer.provide(ServerApplication));
   const Server = layerRpcServer(MigrateRpcs, {
     disableFatalDefects: true,
@@ -136,7 +136,5 @@ const main = Effect.gen(function* () {
 
   return yield* Layer.launch(Server);
 });
-
-const runMain = makeRunMain(({ teardown }) => teardown);
 
 runMain(main);

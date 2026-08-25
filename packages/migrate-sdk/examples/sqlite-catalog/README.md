@@ -41,17 +41,16 @@ in separate SQLite databases.
 ## Open the TUI
 
 ```sh
-pnpm --filter @migrate-sdk/tui exec bun src/bin.tsx \
-  --config ../migrate-sdk/examples/sqlite-catalog/migrate.config.ts
+node packages/tui/bin/migrate-tui.js \
+  --config packages/migrate-sdk/examples/sqlite-catalog/migrate.config.ts
 ```
 
-This demo config currently uses `@effect/sql-sqlite-bun` because the TUI loads
-the config in its Bun renderer process. The package supplies Bun; no global Bun
-installation is required. The Node CLI cannot load this particular demo config.
-That temporary TUI limitation will be removed by the local Migrate Server
-boundary described in
-[`ADR 0007`](../../../../docs/adr/0007-server-boundary-for-local-and-remote-clients.md),
-where Node loads local project configs and the TUI acts as a client.
+The published command starts the package's pinned Bun renderer, which acts as a
+client of a local Node Migrate Server over Effect RPC. The Node process loads
+this config and runs the SDK, SQLite adapters, sources, stores, destinations,
+and migration code. No global Bun installation is required, and the migration
+runtime matches the Node CLI. See
+[`ADR 0007`](../../../../docs/adr/0007-server-boundary-for-local-and-remote-clients.md).
 
 The `catalog` group contains Authors, Publishers, Subjects, and Books. Books
 require Authors and Publishers and optionally depend on Subjects. Run Books
@@ -63,8 +62,8 @@ without rebuilding the fixture:
 
 ```sh
 MIGRATE_SQLITE_CATALOG_DELAY_MS=25 \
-  pnpm --filter @migrate-sdk/tui exec bun src/bin.tsx \
-  --config ../migrate-sdk/examples/sqlite-catalog/migrate.config.ts
+  node packages/tui/bin/migrate-tui.js \
+  --config packages/migrate-sdk/examples/sqlite-catalog/migrate.config.ts
 ```
 
 Use Concurrency settings in the TUI to compare 1, 4, 16, and Unbounded. SQLite
