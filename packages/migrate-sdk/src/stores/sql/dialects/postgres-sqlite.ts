@@ -25,12 +25,20 @@ const initializePostgresOrSqlite = (
   const locks = sql(names.locks);
   const runDefinitions = sql(names.runDefinitions);
   const runs = sql(names.runs);
-  const indexes = indexDefinitions(names, prefix).map(
+  const indexes = [
+    ...indexDefinitions(names, prefix),
+    {
+      columns:
+        "definition_key, source_identity_key, last_source_inventory_run_key",
+      name: `${prefix}_item_states_orphan_idx`,
+      table: names.itemStates,
+    },
+  ].map(
     ({ columns, name, table }) =>
       sql`CREATE INDEX IF NOT EXISTS ${sql(name)} ON ${sql(table)} (${sql.literal(columns)})`
   );
 
-  return runStatements([
+  const createTables = runStatements([
     sql`
       CREATE TABLE IF NOT EXISTS ${cursors} (
         definition_key CHAR(64) PRIMARY KEY,
@@ -57,6 +65,8 @@ const initializePostgresOrSqlite = (
         status VARCHAR(32) NOT NULL,
         last_run_key CHAR(64) NOT NULL,
         last_run_id TEXT NOT NULL,
+        last_source_inventory_run_key CHAR(64) NULL,
+        last_source_inventory_run_id TEXT NULL,
         updated_at VARCHAR(33) NOT NULL,
         source_version TEXT NULL,
         source_version_contract_fingerprint TEXT NULL,
@@ -104,8 +114,12 @@ const initializePostgresOrSqlite = (
         created_at VARCHAR(33) NOT NULL
       )
     `,
-    ...indexes,
   ]);
+
+  return Effect.gen(function* () {
+    yield* createTables;
+    yield* runStatements(indexes);
+  });
 };
 
 const makeOnConflictUpsert =
@@ -123,10 +137,33 @@ export const makePostgresOrSqliteDialect = (
   prefix: string
 ): SqlMigrationStoreDialect => {
   const locks = sql(names.locks);
+  const itemStates = sql(names.itemStates);
   const upsert = makeOnConflictUpsert(sql);
 
   return {
     initialize: initializePostgresOrSqlite(sql, names, prefix),
+    listOrphanItemStateRows: (query) => {
+      const whereAfterIdentity =
+        query.afterIdentityKey === null
+          ? sql``
+          : sql`AND source_identity_key > ${query.afterIdentityKey}`;
+
+      return sql`
+        SELECT payload_json
+        FROM ${itemStates}
+        WHERE definition_key = ${query.definitionKey}
+          AND definition_id = ${query.definitionId}
+          AND (
+            last_source_inventory_run_key IS NULL
+            OR last_source_inventory_run_key <> ${query.sourceInventoryRunKey}
+            OR last_source_inventory_run_id IS NULL
+            OR last_source_inventory_run_id <> ${query.sourceInventoryRunId}
+          )
+          ${whereAfterIdentity}
+        ORDER BY source_identity_key
+        LIMIT ${query.limit}
+      `;
+    },
     upsertCursor: (row) =>
       upsert(names.cursors, cursorRecord(row), ["definition_key"]),
     upsertContract: (row) =>

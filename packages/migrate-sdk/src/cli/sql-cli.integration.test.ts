@@ -47,6 +47,7 @@ interface ObservedMigrationState {
 }
 
 interface SqlCliProvider {
+  readonly deleteThirdSourceArticle: Effect.Effect<void, unknown>;
   readonly failSecondSourceArticle: Effect.Effect<void, unknown>;
   readonly id: "mysql" | "postgres" | "sqlserver";
   readonly name: string;
@@ -154,6 +155,14 @@ const failSecondSourceArticle = Effect.gen(function* () {
   `;
 });
 
+const deleteThirdSourceArticle = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  yield* sql`
+    DELETE FROM sql_cli_source_articles
+    WHERE id = 'article-3'
+  `;
+});
+
 const recoverSecondSourceArticle = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`
@@ -168,6 +177,9 @@ const makeProvider = <ClientError>(
   name: string,
   layer: Layer.Layer<SqlClient.SqlClient, ClientError>
 ): SqlCliProvider => ({
+  deleteThirdSourceArticle: deleteThirdSourceArticle.pipe(
+    Effect.provide(layer)
+  ),
   failSecondSourceArticle: failSecondSourceArticle.pipe(Effect.provide(layer)),
   id,
   name,
@@ -493,6 +505,26 @@ for (const provider of providers) {
           });
           expect(yield* provider.readDestination).toEqual(
             updatedDestinationRows
+          );
+
+          yield* provider.deleteThirdSourceArticle;
+          const rollbackOrphans = yield* runCli(provider, options, [
+            "run",
+            "--config",
+            configPath,
+            "--rollback-orphans",
+            "articles",
+          ]);
+
+          expectSuccessfulCli(rollbackOrphans);
+          expect(rollbackOrphans.stdout).toContain("Orphaned");
+          expect(rollbackOrphans.stdout).toContain("Rolled Back");
+          expect(yield* provider.readMigrationState(tablePrefix)).toEqual({
+            lastRunStatus: "succeeded",
+            summary: { ...emptySummary, migrated: 2 },
+          });
+          expect(yield* provider.readDestination).toEqual(
+            updatedDestinationRows.slice(0, 2)
           );
         })
     );

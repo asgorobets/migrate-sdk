@@ -70,6 +70,7 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "../index.ts";
+import { MigrationRunStepExecutor } from "../services/migration-run-step-executor.ts";
 import { useConfiguredSource } from "../testing/configured-source-runtime.ts";
 import {
   rollbackInlineDefinition,
@@ -4660,9 +4661,7 @@ describe("runInlineDefinition", () => {
         "article-4",
         "article-5",
       ]);
-      expect(storeState.sourceCursors.get(definition.id)).toEqual(
-        encodedInMemoryCursor(4)
-      );
+      expect(storeState.sourceCursors.has(definition.id)).toBe(false);
       expect(storeState.sourceCursorCommits).toEqual([
         {
           definitionId: definition.id,
@@ -5106,9 +5105,7 @@ describe("runInlineDefinition", () => {
         needsUpdate: 0,
       });
       expect(processCalls).toEqual(["article-2", "article-3"]);
-      expect(storeState.sourceCursors.get(definition.id)).toEqual(
-        encodedInMemoryCursor(2)
-      );
+      expect(storeState.sourceCursors.has(definition.id)).toBe(false);
       expect(storeState.sourceCursorCommits).toEqual([
         {
           definitionId: definition.id,
@@ -5453,6 +5450,287 @@ describe("runInlineDefinition", () => {
   );
 
   it.effect(
+    "rescans from the beginning while leaving matching versions unchanged",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const processCalls: string[] = [];
+        const definition = MigrationDefinition.make({
+          id: "articles",
+          source: makeTestInMemorySource({
+            batchSize: 1,
+            items: [
+              {
+                identityKey: "article-migrated",
+                version: "source-version-1",
+                item: { title: "Already migrated" },
+              },
+              {
+                identityKey: "article-new",
+                version: "source-version-1",
+                item: { title: "New article" },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (source) =>
+            Effect.sync(() => {
+              processCalls.push(source.identity.encoded);
+            }),
+        });
+
+        seedArticleMigrationContract(storeState);
+        storeState.sourceCursors.set(definition.id, encodedInMemoryCursor(2));
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-migrated"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: articleSourceIdentity("article-migrated"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            sourceVersionContractFingerprint:
+              defaultSourceVersionContractFingerprint,
+            lastRunId: toMigrationRunId("run-previous"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "migrated",
+          }
+        );
+
+        const summary = yield* runInlineRegistry({
+          definitions: [definition],
+          rescan: true,
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 1,
+          skipped: 0,
+          failed: 0,
+          unchanged: 1,
+          needsUpdate: 0,
+        });
+        expect(processCalls).toEqual(["article-new"]);
+        expect(storeState.sourceCursors.has(definition.id)).toBe(false);
+      })
+  );
+
+  it.effect("retains completed cursors for incremental discovery", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const items = [
+        {
+          identityKey: "article-1",
+          version: "source-version-1",
+          item: { title: "First article" },
+        },
+        {
+          identityKey: "article-2",
+          version: "source-version-1",
+          item: { title: "Second article" },
+        },
+      ];
+      const processCalls: string[] = [];
+      const definition = MigrationDefinition.make({
+        id: "articles",
+        source: makeTestInMemorySource({
+          batchSize: 1,
+          discovery: "incremental",
+          items,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        process: (source) =>
+          Effect.sync(() => {
+            processCalls.push(source.identity.encoded);
+          }),
+      });
+
+      yield* runInlineDefinition(definition);
+
+      expect(storeState.sourceCursors.has(definition.id)).toBe(true);
+
+      items.push({
+        identityKey: "article-3",
+        version: "source-version-1",
+        item: { title: "Third article" },
+      });
+
+      yield* runInlineDefinition(definition);
+
+      expect(processCalls).toEqual(["article-1", "article-2", "article-3"]);
+      expect(storeState.sourceCursors.has(definition.id)).toBe(true);
+    })
+  );
+
+  it.effect("rescans completed full-discovery sources on later runs", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const items = [
+        {
+          identityKey: "article-1",
+          version: "source-version-1",
+          item: { title: "First article" },
+        },
+        {
+          identityKey: "article-2",
+          version: "source-version-1",
+          item: { title: "Second article" },
+        },
+      ];
+      const processCalls: string[] = [];
+      const definition = MigrationDefinition.make({
+        id: "articles",
+        source: makeTestInMemorySource({ batchSize: 1, items }),
+        store: InMemoryMigrationStore.layer(storeState),
+        process: (source) =>
+          Effect.sync(() => {
+            processCalls.push(`${source.identity.encoded}@${source.version}`);
+          }),
+      });
+
+      yield* runInlineDefinition(definition);
+
+      items[0] = {
+        identityKey: "article-1",
+        version: "source-version-2",
+        item: { title: "Updated first article" },
+      };
+
+      yield* runInlineDefinition(definition);
+
+      expect(processCalls).toEqual([
+        "article-1@source-version-1",
+        "article-2@source-version-1",
+        "article-1@source-version-2",
+      ]);
+      expect(storeState.sourceCursors.has(definition.id)).toBe(false);
+    })
+  );
+
+  it.effect("resets the cursor when a cursor-window rescan begins", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const storeLayer = InMemoryMigrationStore.layer(storeState);
+      const definition = MigrationDefinition.make({
+        id: "articles",
+        source: makeTestInMemorySource({ items: [] }),
+        store: storeLayer,
+        process: () => Effect.void,
+      });
+      const runId = toMigrationRunId("run-rescan");
+
+      seedArticleMigrationContract(storeState);
+      storeState.sourceCursors.set(definition.id, encodedInMemoryCursor(2));
+
+      const lock = yield* Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        return yield* store.acquireDefinitionLock(definition.id, runId);
+      }).pipe(Effect.provide(storeLayer));
+
+      yield* MigrationRunStepExecutor.begin({
+        definitions: [definition],
+        lease: {
+          locks: [lock],
+          runId,
+          scopeDefinitionIds: [definition.id],
+        },
+        rescan: true,
+      });
+
+      expect(storeState.sourceCursors.has(definition.id)).toBe(false);
+    }).pipe(Effect.provide(MigrationRunStepExecutor.defaultLayer))
+  );
+
+  it.effect(
+    "keeps full-discovery checkpoints between cursor windows and clears them on completion",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const storeLayer = InMemoryMigrationStore.layer(storeState);
+        const processCalls: string[] = [];
+        const definition = MigrationDefinition.make({
+          id: "articles",
+          source: makeTestInMemorySource({
+            batchSize: 1,
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: { title: "First article" },
+              },
+              {
+                identityKey: "article-2",
+                version: "source-version-1",
+                item: { title: "Second article" },
+              },
+            ],
+          }),
+          store: storeLayer,
+          process: (source) =>
+            Effect.sync(() => {
+              processCalls.push(source.identity.encoded);
+            }),
+        });
+        const runId = toMigrationRunId("run-full-discovery");
+
+        seedArticleMigrationContract(storeState);
+        const lock = yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+
+          return yield* store.acquireDefinitionLock(definition.id, runId);
+        }).pipe(Effect.provide(storeLayer));
+        const lease = {
+          locks: [lock],
+          runId,
+          scopeDefinitionIds: [definition.id],
+        };
+
+        yield* MigrationRunStepExecutor.begin({
+          definitions: [definition],
+          lease,
+        });
+
+        const firstWindow = yield* MigrationRunStepExecutor.executeCursorWindow(
+          definition,
+          {
+            definitionId: definition.id,
+            definitionIds: [definition.id],
+            lease,
+            runId,
+            state: {
+              counts: {
+                migrated: 0,
+                skipped: 0,
+                failed: 0,
+                unchanged: 0,
+                needsUpdate: 0,
+              },
+              excludedSourceIdentities: [],
+              phase: "scan",
+            },
+          }
+        );
+
+        expect(firstWindow.kind).toBe("continue");
+        expect(storeState.sourceCursors.get(definition.id)).toEqual(
+          encodedInMemoryCursor(1)
+        );
+
+        const secondWindow =
+          yield* MigrationRunStepExecutor.executeCursorWindow(definition, {
+            definitionId: definition.id,
+            definitionIds: [definition.id],
+            lease,
+            runId,
+            state: firstWindow.state,
+          });
+
+        expect(secondWindow.kind).toBe("definition-completed");
+        expect(processCalls).toEqual(["article-1", "article-2"]);
+        expect(storeState.sourceCursors.has(definition.id)).toBe(false);
+      }).pipe(Effect.provide(MigrationRunStepExecutor.defaultLayer))
+  );
+
+  it.effect(
     "reprocesses matching-version migrated Source Items during update runs",
     () =>
       Effect.gen(function* () {
@@ -5541,9 +5819,7 @@ describe("runInlineDefinition", () => {
         });
         expect(processCalls).toEqual(["article-migrated", "article-new"]);
         expect(sourceState.readByIdentityAttempts).toBe(0);
-        expect(storeState.sourceCursors.get(definition.id)).toEqual(
-          encodedInMemoryCursor(1)
-        );
+        expect(storeState.sourceCursors.has(definition.id)).toBe(false);
         expect(previousStates[0]).toEqual(
           expect.objectContaining({
             status: "needs-update",

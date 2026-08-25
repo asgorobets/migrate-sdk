@@ -1,20 +1,27 @@
 import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSystem";
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Schema, Stream } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
+import { systemError } from "effect/PlatformError";
 import { TestClock } from "effect/testing";
 import {
   InMemorySource,
   InMemorySourceCursor,
 } from "migrate-sdk/sources/in-memory";
-import { FileMigrationStore } from "migrate-sdk/stores/file";
+import {
+  FileMigrationStore,
+  FileMigrationStoreDirectoryEntries,
+  FileMigrationStorePlatform,
+} from "migrate-sdk/stores/file";
 import { makeSourceVersionContractFingerprint } from "../../domain/migration-contract.ts";
 import {
   DestinationChangeDescriptorId,
   MigrationDefinition,
+  MigrationRuntimeError,
   MigrationStore,
+  MigrationStoreError,
   Source,
   SourceError,
   SourceIdentity,
@@ -47,7 +54,59 @@ type ArticleSourceItem = SourceItemInput<ArticleSource, string>;
 const encodedInMemoryCursor = (offset: number) =>
   toEncodedSourceCursor(JSON.stringify({ offset }));
 
-const testPlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
+const testPlatformLayer = FileMigrationStorePlatform.node;
+
+const sourceCursorWriteFailurePlatform = Layer.mergeAll(
+  nodePathLayer,
+  FileMigrationStorePlatform.directoryEntries.node,
+  Layer.effect(
+    FileSystem,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem;
+
+      return FileSystem.of({
+        ...fs,
+        rename: (oldPath, newPath) =>
+          newPath.endsWith("/cursor.json")
+            ? Effect.fail(
+                systemError({
+                  _tag: "PermissionDenied",
+                  description: "Injected source cursor write failure",
+                  method: "rename",
+                  module: "FileSystem",
+                  pathOrDescriptor: newPath,
+                })
+              )
+            : fs.rename(oldPath, newPath),
+      });
+    })
+  ).pipe(Layer.provide(nodeFileSystemLayer))
+);
+
+const makeDirectoryEntriesFailurePlatform = (
+  shouldFail: (directory: string) => boolean
+): FileMigrationStorePlatform =>
+  Layer.mergeAll(
+    nodePathLayer,
+    nodeFileSystemLayer,
+    Layer.effect(
+      FileMigrationStoreDirectoryEntries,
+      Effect.gen(function* () {
+        const directoryEntries = yield* FileMigrationStoreDirectoryEntries;
+
+        return FileMigrationStoreDirectoryEntries.of({
+          stream: (directory) =>
+            shouldFail(directory)
+              ? Stream.fail(
+                  new MigrationStoreError({
+                    message: "Injected directory entries failure",
+                  })
+                )
+              : directoryEntries.stream(directory),
+        });
+      })
+    ).pipe(Layer.provide(FileMigrationStorePlatform.directoryEntries.node))
+  );
 
 const fileStoreLayer = (directory: string) =>
   FileMigrationStore.layer({ directory, platform: testPlatformLayer });
@@ -220,18 +279,28 @@ const writeMalformedJournalItemStateRecord = (directory: string) =>
   });
 
 const makeArticlesMigration = (options: {
+  readonly batchSize?: number;
   readonly directory: string;
   readonly items: readonly ArticleSourceItem[];
+  readonly platform?: FileMigrationStorePlatform;
   readonly processCalls?: string[];
+  readonly rollbackCalls?: string[];
+  readonly rollbackFailureIdentity?: string;
 }) =>
   MigrationDefinition.make({
     id: "articles",
     source: InMemorySource.make({
+      ...(options.batchSize === undefined
+        ? {}
+        : { batchSize: options.batchSize }),
       identity: TestSourceIdentity,
       sourceSchema: ArticleSource,
       items: options.items,
     }),
-    store: fileStoreLayer(options.directory),
+    store: FileMigrationStore.layer({
+      directory: options.directory,
+      ...(options.platform === undefined ? {} : { platform: options.platform }),
+    }),
     process: (source) =>
       Effect.gen(function* () {
         if (source.item.publish === false) {
@@ -240,6 +309,22 @@ const makeArticlesMigration = (options: {
 
         options.processCalls?.push(source.identity.encoded);
       }),
+    ...(options.rollbackCalls === undefined
+      ? {}
+      : {
+          rollback: (state) => {
+            options.rollbackCalls?.push(state.sourceIdentity.encoded);
+
+            return state.sourceIdentity.encoded ===
+              options.rollbackFailureIdentity
+              ? Effect.fail(
+                  new MigrationRuntimeError({
+                    message: "File-backed rollback failed",
+                  })
+                )
+              : Effect.void;
+          },
+        }),
   });
 
 describe("FileMigrationStore", () => {
@@ -371,6 +456,10 @@ describe("FileMigrationStore", () => {
           const failedSourceIdentity = toEncodedSourceIdentity(
             "article-failed-tracked"
           );
+          const needsUpdateSourceIdentity = toEncodedSourceIdentity(
+            "article-needs-update-tracked"
+          );
+          const sourceInventoryRunId = toMigrationRunId("run-inventory");
           const failedAt = new Date("2026-01-01T00:00:03.000Z");
           const itemState = {
             definitionId,
@@ -405,6 +494,7 @@ describe("FileMigrationStore", () => {
               ],
             },
             lastRunId: toMigrationRunId("run-process"),
+            lastSourceInventoryRunId: sourceInventoryRunId,
             sourceIdentity: SourceIdentity.fromEncoded(
               TestSourceIdentity,
               sourceIdentity
@@ -416,6 +506,7 @@ describe("FileMigrationStore", () => {
           const skippedItemState = {
             definitionId,
             lastRunId: toMigrationRunId("run-skipped"),
+            lastSourceInventoryRunId: sourceInventoryRunId,
             skipReason: "Update no longer needed",
             sourceIdentity: SourceIdentity.fromEncoded(
               TestSourceIdentity,
@@ -437,6 +528,7 @@ describe("FileMigrationStore", () => {
               message: "Update failed",
             },
             lastRunId: toMigrationRunId("run-failed"),
+            lastSourceInventoryRunId: sourceInventoryRunId,
             sourceIdentity: SourceIdentity.fromEncoded(
               TestSourceIdentity,
               failedSourceIdentity
@@ -449,6 +541,18 @@ describe("FileMigrationStore", () => {
             },
             updatedAt: new Date("2026-01-01T00:00:02.000Z"),
           };
+          const needsUpdateItemState = {
+            definitionId,
+            lastRunId: toMigrationRunId("run-needs-update"),
+            lastSourceInventoryRunId: sourceInventoryRunId,
+            reason: "Source version changed",
+            sourceIdentity: SourceIdentity.fromEncoded(
+              TestSourceIdentity,
+              needsUpdateSourceIdentity
+            ),
+            status: "needs-update" as const,
+            updatedAt: new Date("2026-01-01T00:00:03.000Z"),
+          };
 
           yield* Effect.gen(function* () {
             const store = yield* MigrationStore;
@@ -456,19 +560,20 @@ describe("FileMigrationStore", () => {
             yield* store.upsertItemState(itemState);
             yield* store.upsertItemState(skippedItemState);
             yield* store.upsertItemState(failedItemState);
+            yield* store.upsertItemState(needsUpdateItemState);
           }).pipe(Effect.provide(fileStoreLayer(directory)));
 
-          const [stored, storedSkipped, storedFailed] = yield* Effect.gen(
-            function* () {
+          const [stored, storedSkipped, storedFailed, storedNeedsUpdate] =
+            yield* Effect.gen(function* () {
               const store = yield* MigrationStore;
 
               return yield* Effect.all([
                 store.getItemState(definitionId, sourceIdentity),
                 store.getItemState(definitionId, skippedSourceIdentity),
                 store.getItemState(definitionId, failedSourceIdentity),
+                store.getItemState(definitionId, needsUpdateSourceIdentity),
               ]);
-            }
-          ).pipe(Effect.provide(fileStoreLayer(directory)));
+            }).pipe(Effect.provide(fileStoreLayer(directory)));
 
           expect(stored).toEqual(itemState);
           expect(stored?.journal?.rollbackAttempts[0]?.failedAt).toBeInstanceOf(
@@ -476,6 +581,7 @@ describe("FileMigrationStore", () => {
           );
           expect(storedSkipped).toEqual(skippedItemState);
           expect(storedFailed).toEqual(failedItemState);
+          expect(storedNeedsUpdate).toEqual(needsUpdateItemState);
         })
       )
   );
@@ -523,12 +629,705 @@ describe("FileMigrationStore", () => {
     )
   );
 
+  it.effect(
+    "observes existing state and pages orphaned state across fresh store instances",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const definitionId = toMigrationDefinitionId("articles");
+          const inventoryRunId = toMigrationRunId("run-inventory-file");
+          const makeItemState = (identity: string) => ({
+            definitionId,
+            lastRunId: toMigrationRunId("run-migrate-file"),
+            sourceIdentity: SourceIdentity.fromKey(
+              TestSourceIdentity,
+              identity
+            ),
+            sourceVersion: toSourceVersion("source-version-1"),
+            status: "migrated" as const,
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+          });
+
+          yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            yield* store.upsertItemState(makeItemState("article-c"));
+            yield* store.upsertItemState(makeItemState("article-a"));
+            yield* store.upsertItemState(makeItemState("article-b"));
+            yield* store.observeItemState(
+              definitionId,
+              toEncodedSourceIdentity("article-b"),
+              inventoryRunId
+            );
+            yield* store.observeItemState(
+              definitionId,
+              toEncodedSourceIdentity("article-b"),
+              inventoryRunId
+            );
+            yield* store.observeItemState(
+              definitionId,
+              toEncodedSourceIdentity("article-missing"),
+              inventoryRunId
+            );
+          }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          const firstPage = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            expect(
+              yield* store.getItemState(
+                definitionId,
+                toEncodedSourceIdentity("article-b")
+              )
+            ).toEqual(
+              expect.objectContaining({
+                lastSourceInventoryRunId: inventoryRunId,
+              })
+            );
+            expect(
+              yield* store.getItemState(
+                definitionId,
+                toEncodedSourceIdentity("article-missing")
+              )
+            ).toBeNull();
+
+            return yield* store.listOrphanItemStates(
+              definitionId,
+              inventoryRunId,
+              { limit: 1 }
+            );
+          }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          expect(
+            firstPage.items.map((state) => state.sourceIdentity.encoded)
+          ).toEqual(["article-a"]);
+          expect(firstPage.nextAfterIdentity).toBe("article-a");
+
+          yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            yield* store.deleteItemState(
+              definitionId,
+              toEncodedSourceIdentity("article-a")
+            );
+          }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          const secondPage = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            return yield* store.listOrphanItemStates(
+              definitionId,
+              inventoryRunId,
+              {
+                afterIdentity: toEncodedSourceIdentity("article-a"),
+                limit: 1,
+              }
+            );
+          }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          expect(
+            secondPage.items.map((state) => state.sourceIdentity.encoded)
+          ).toEqual(["article-c"]);
+          expect(secondPage.nextAfterIdentity).toBeUndefined();
+        })
+      )
+  );
+
+  it.effect(
+    "rolls back file-backed orphaned state through the public TypeScript runner",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const rollbackCalls: string[] = [];
+          const initialDefinition = makeArticlesMigration({
+            directory,
+            items: [
+              {
+                identityKey: "article-current",
+                item: { title: "Current article" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: "article-orphan",
+                item: { title: "Orphaned article" },
+                version: "source-version-1",
+              },
+            ],
+            rollbackCalls,
+          });
+
+          yield* runInlineDefinition(initialDefinition);
+
+          const currentDefinition = makeArticlesMigration({
+            directory,
+            items: [
+              {
+                identityKey: "article-current",
+                item: { title: "Current article" },
+                version: "source-version-1",
+              },
+            ],
+            rollbackCalls,
+          });
+          const summary = yield* runInlineRegistry({
+            definitions: [currentDefinition],
+            rollbackOrphans: true,
+          });
+
+          expect(summary.status).toBe("succeeded");
+          expect(summary.definitions[0]?.counts).toEqual({
+            failed: 0,
+            migrated: 0,
+            needsUpdate: 0,
+            orphaned: 1,
+            rollbackFailed: 0,
+            rolledBack: 1,
+            skipped: 0,
+            unchanged: 1,
+          });
+          expect(rollbackCalls).toEqual(["article-orphan"]);
+
+          const remainingStates = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            return yield* store.listItemStates(
+              toMigrationDefinitionId("articles")
+            );
+          }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          expect(remainingStates).toEqual([
+            expect.objectContaining({
+              lastSourceInventoryRunId: summary.runId,
+              sourceIdentity: expect.objectContaining({
+                encoded: "article-current",
+              }),
+            }),
+          ]);
+          expect(
+            yield* itemStateFileExists(directory, "articles", "article-orphan")
+          ).toBe(false);
+        })
+      )
+  );
+
+  it.effect(
+    "keeps orphaned state when the inline run is interrupted between scan and rollback",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const rollbackCalls: string[] = [];
+          const initialDefinition = makeArticlesMigration({
+            directory,
+            items: [
+              {
+                identityKey: "article-current",
+                item: { title: "Current article" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: "article-orphan",
+                item: { title: "Orphaned article" },
+                version: "source-version-1",
+              },
+            ],
+            rollbackCalls,
+          });
+
+          yield* runInlineDefinition(initialDefinition);
+
+          let orphanPageCount = 0;
+          const interruptedDefinition = makeArticlesMigration({
+            directory,
+            items: [
+              {
+                identityKey: "article-current",
+                item: { title: "Current article" },
+                version: "source-version-1",
+              },
+            ],
+            platform: makeDirectoryEntriesFailurePlatform((itemDirectory) => {
+              if (!itemDirectory.endsWith("/definitions/articles/items")) {
+                return false;
+              }
+
+              orphanPageCount += 1;
+              return orphanPageCount === 1;
+            }),
+            rollbackCalls,
+          });
+          const error = yield* runInlineRegistry({
+            definitions: [interruptedDefinition],
+            rollbackOrphans: true,
+          }).pipe(Effect.flip);
+
+          expect(error).toEqual(
+            expect.objectContaining({
+              _tag: "MigrationStoreError",
+              message: "Injected directory entries failure",
+            })
+          );
+          expect(rollbackCalls).toEqual([]);
+
+          const [cursor, itemStates, latestRun] = yield* Effect.gen(
+            function* () {
+              const store = yield* MigrationStore;
+              const definitionId = toMigrationDefinitionId("articles");
+
+              return yield* Effect.all([
+                store.getSourceCursor(definitionId),
+                store.listItemStates(definitionId),
+                store.getLatestRunState(definitionId),
+              ]);
+            }
+          ).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          expect(cursor).toBeNull();
+          expect(latestRun?.status).toBe("failed");
+          expect(itemStates).toHaveLength(2);
+          expect(
+            itemStates.find(
+              (state) => state.sourceIdentity.encoded === "article-current"
+            )?.lastSourceInventoryRunId
+          ).toBe(latestRun?.runId);
+          expect(
+            itemStates.find(
+              (state) => state.sourceIdentity.encoded === "article-orphan"
+            )?.lastSourceInventoryRunId
+          ).toBeUndefined();
+
+          const restartedDefinition = makeArticlesMigration({
+            directory,
+            items: [
+              {
+                identityKey: "article-current",
+                item: { title: "Current article" },
+                version: "source-version-1",
+              },
+            ],
+            rollbackCalls,
+          });
+          const restarted = yield* runInlineRegistry({
+            definitions: [restartedDefinition],
+            rollbackOrphans: true,
+          });
+
+          expect(restarted.status).toBe("succeeded");
+          expect(restarted.definitions[0]?.counts).toEqual(
+            expect.objectContaining({
+              orphaned: 1,
+              rolledBack: 1,
+              unchanged: 1,
+            })
+          );
+          expect(rollbackCalls).toEqual(["article-orphan"]);
+        })
+      )
+  );
+
+  it.effect(
+    "keeps the next orphan page when the inline run is interrupted between rollback pages",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const rollbackCalls: string[] = [];
+          const sourceItems = Array.from({ length: 101 }, (_, index) => {
+            const identity = `article-${String(index + 1).padStart(3, "0")}`;
+
+            return {
+              identityKey: identity,
+              item: { title: identity },
+              version: "source-version-1",
+            };
+          });
+          const initialDefinition = makeArticlesMigration({
+            directory,
+            items: sourceItems,
+            rollbackCalls,
+          });
+
+          yield* runInlineDefinition(initialDefinition);
+
+          let orphanPageCount = 0;
+          const interruptedDefinition = makeArticlesMigration({
+            directory,
+            items: [],
+            platform: makeDirectoryEntriesFailurePlatform((itemDirectory) => {
+              if (!itemDirectory.endsWith("/definitions/articles/items")) {
+                return false;
+              }
+
+              orphanPageCount += 1;
+              return orphanPageCount === 2;
+            }),
+            rollbackCalls,
+          });
+          const error = yield* runInlineRegistry({
+            definitions: [interruptedDefinition],
+            rollbackOrphans: true,
+          }).pipe(Effect.flip);
+
+          expect(error).toEqual(
+            expect.objectContaining({
+              _tag: "MigrationStoreError",
+              message: "Injected directory entries failure",
+            })
+          );
+          expect(rollbackCalls).toHaveLength(100);
+          expect(rollbackCalls).not.toContain("article-101");
+
+          const [remainingStates, latestRun] = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+            const definitionId = toMigrationDefinitionId("articles");
+
+            return yield* Effect.all([
+              store.listItemStates(definitionId),
+              store.getLatestRunState(definitionId),
+            ]);
+          }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          expect(latestRun?.status).toBe("failed");
+          expect(remainingStates).toEqual([
+            expect.objectContaining({
+              sourceIdentity: expect.objectContaining({
+                encoded: "article-101",
+              }),
+            }),
+          ]);
+
+          const restartedDefinition = makeArticlesMigration({
+            directory,
+            items: [],
+            rollbackCalls,
+          });
+          const restarted = yield* runInlineRegistry({
+            definitions: [restartedDefinition],
+            rollbackOrphans: true,
+          });
+
+          expect(restarted.status).toBe("succeeded");
+          expect(restarted.definitions[0]?.counts).toEqual(
+            expect.objectContaining({
+              orphaned: 1,
+              rolledBack: 1,
+            })
+          );
+          expect(rollbackCalls).toHaveLength(101);
+          expect(rollbackCalls.at(-1)).toBe("article-101");
+        })
+      )
+  );
+
+  it.effect(
+    "persists successful deletions and failed rollback evidence across orphan pages",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const rollbackCalls: string[] = [];
+          const sourceItems = Array.from({ length: 101 }, (_, index) => {
+            const identity = `article-${String(index + 1).padStart(3, "0")}`;
+
+            return {
+              identityKey: identity,
+              item: { title: identity },
+              version: "source-version-1",
+            };
+          });
+          const initialDefinition = makeArticlesMigration({
+            directory,
+            items: sourceItems,
+            rollbackCalls,
+            rollbackFailureIdentity: "article-050",
+          });
+
+          yield* runInlineDefinition(initialDefinition);
+
+          const emptyDefinition = makeArticlesMigration({
+            directory,
+            items: [],
+            rollbackCalls,
+            rollbackFailureIdentity: "article-050",
+          });
+          const summary = yield* runInlineRegistry({
+            definitions: [emptyDefinition],
+            rollbackOrphans: true,
+          });
+
+          expect(summary.status).toBe("failed");
+          expect(summary.definitions[0]?.counts).toEqual({
+            failed: 0,
+            migrated: 0,
+            needsUpdate: 0,
+            orphaned: 101,
+            rollbackFailed: 1,
+            rolledBack: 100,
+            skipped: 0,
+            unchanged: 0,
+          });
+          expect(rollbackCalls).toHaveLength(101);
+
+          const remainingStates = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            return yield* store.listItemStates(
+              toMigrationDefinitionId("articles")
+            );
+          }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          expect(remainingStates).toEqual([
+            expect.objectContaining({
+              journal: expect.objectContaining({
+                rollbackAttempts: [expect.any(Object)],
+              }),
+              sourceIdentity: expect.objectContaining({
+                encoded: "article-050",
+              }),
+              status: "migrated",
+            }),
+          ]);
+        })
+      )
+  );
+
+  it.effect(
+    "does not advance the cursor or roll back when an observation write fails",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const rollbackCalls: string[] = [];
+          const initialDefinition = makeArticlesMigration({
+            batchSize: 1,
+            directory,
+            items: [
+              {
+                identityKey: "article-current-1",
+                item: { title: "Current article 1" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: "article-current-2",
+                item: { title: "Current article 2" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: "article-orphan",
+                item: { title: "Orphaned article" },
+                version: "source-version-1",
+              },
+            ],
+            rollbackCalls,
+          });
+
+          yield* runInlineDefinition(initialDefinition);
+
+          const fs = yield* FileSystem;
+          const path = yield* Path;
+          const itemStateDirectory = path.join(
+            directory,
+            "definitions",
+            "articles",
+            "items"
+          );
+          yield* fs.chmod(itemStateDirectory, 0o500);
+
+          const currentDefinition = makeArticlesMigration({
+            batchSize: 1,
+            directory,
+            items: [
+              {
+                identityKey: "article-current-1",
+                item: { title: "Current article 1" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: "article-current-2",
+                item: { title: "Current article 2" },
+                version: "source-version-1",
+              },
+            ],
+            rollbackCalls,
+          });
+          const error = yield* runInlineRegistry({
+            definitions: [currentDefinition],
+            rollbackOrphans: true,
+          }).pipe(
+            Effect.ensuring(
+              fs.chmod(itemStateDirectory, 0o700).pipe(Effect.orDie)
+            ),
+            Effect.flip
+          );
+
+          expect(error).toEqual(
+            expect.objectContaining({
+              _tag: "MigrationStoreError",
+              message: expect.stringContaining("Unable to write"),
+            })
+          );
+          expect(rollbackCalls).toEqual([]);
+
+          const interruptedState = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+
+            return yield* Effect.all([
+              store.getSourceCursor(toMigrationDefinitionId("articles")),
+              store.listItemStates(toMigrationDefinitionId("articles")),
+            ]);
+          }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          expect(interruptedState[0]).toBeNull();
+          expect(interruptedState[1]).toHaveLength(3);
+          expect(
+            interruptedState[1].every(
+              (state) => state.lastSourceInventoryRunId === undefined
+            )
+          ).toBe(true);
+
+          const restartedSummary = yield* runInlineRegistry({
+            definitions: [currentDefinition],
+            rollbackOrphans: true,
+          });
+
+          expect(restartedSummary.status).toBe("succeeded");
+          expect(restartedSummary.definitions[0]?.counts).toEqual(
+            expect.objectContaining({
+              orphaned: 1,
+              rolledBack: 1,
+              unchanged: 2,
+            })
+          );
+          expect(rollbackCalls).toEqual(["article-orphan"]);
+        })
+      )
+  );
+
+  it.effect(
+    "restarts a fresh scan when the cursor write fails after observation",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const rollbackCalls: string[] = [];
+          const initialDefinition = makeArticlesMigration({
+            batchSize: 1,
+            directory,
+            items: [
+              {
+                identityKey: "article-current-1",
+                item: { title: "Current article 1" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: "article-current-2",
+                item: { title: "Current article 2" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: "article-orphan",
+                item: { title: "Orphaned article" },
+                version: "source-version-1",
+              },
+            ],
+            rollbackCalls,
+          });
+
+          yield* runInlineDefinition(initialDefinition);
+
+          const interruptedDefinition = makeArticlesMigration({
+            batchSize: 1,
+            directory,
+            items: [
+              {
+                identityKey: "article-current-1",
+                item: { title: "Current article 1" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: "article-current-2",
+                item: { title: "Current article 2" },
+                version: "source-version-1",
+              },
+            ],
+            platform: sourceCursorWriteFailurePlatform,
+            rollbackCalls,
+          });
+          const error = yield* runInlineRegistry({
+            definitions: [interruptedDefinition],
+            rollbackOrphans: true,
+          }).pipe(Effect.flip);
+
+          expect(error).toEqual(
+            expect.objectContaining({
+              _tag: "MigrationStoreError",
+              message: expect.stringContaining("Unable to write"),
+            })
+          );
+          expect(rollbackCalls).toEqual([]);
+
+          const [cursor, itemStates, latestRun] = yield* Effect.gen(
+            function* () {
+              const store = yield* MigrationStore;
+              const definitionId = toMigrationDefinitionId("articles");
+
+              return yield* Effect.all([
+                store.getSourceCursor(definitionId),
+                store.listItemStates(definitionId),
+                store.getLatestRunState(definitionId),
+              ]);
+            }
+          ).pipe(Effect.provide(fileStoreLayer(directory)));
+
+          expect(cursor).toBeNull();
+          expect(latestRun?.status).toBe("failed");
+          expect(
+            itemStates.find(
+              (state) => state.sourceIdentity.encoded === "article-current-1"
+            )?.lastSourceInventoryRunId
+          ).toBe(latestRun?.runId);
+          expect(
+            itemStates.find(
+              (state) => state.sourceIdentity.encoded === "article-current-2"
+            )?.lastSourceInventoryRunId
+          ).toBeUndefined();
+
+          const restartedDefinition = makeArticlesMigration({
+            batchSize: 1,
+            directory,
+            items: [
+              {
+                identityKey: "article-current-1",
+                item: { title: "Current article 1" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: "article-current-2",
+                item: { title: "Current article 2" },
+                version: "source-version-1",
+              },
+            ],
+            rollbackCalls,
+          });
+          const restarted = yield* runInlineRegistry({
+            definitions: [restartedDefinition],
+            rollbackOrphans: true,
+          });
+
+          expect(restarted.definitions[0]?.counts).toEqual(
+            expect.objectContaining({
+              orphaned: 1,
+              rolledBack: 1,
+              unchanged: 2,
+            })
+          );
+          expect(rollbackCalls).toEqual(["article-orphan"]);
+        })
+      )
+  );
+
   it.effect("persists encoded Source Cursor across fresh store instances", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
         const definition = MigrationDefinition.make({
           id: "articles",
           source: InMemorySource.make({
+            discovery: "incremental",
             identity: TestSourceIdentity,
             sourceSchema: ArticleSource,
             batchSize: 1,

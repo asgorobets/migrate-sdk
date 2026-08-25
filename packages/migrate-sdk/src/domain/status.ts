@@ -73,6 +73,7 @@ export type MigrationStatusWarning = typeof MigrationStatusWarning.Type;
 
 export const MigrationDefinitionStatus = Schema.Struct({
   definitionId: MigrationDefinitionIdSchema,
+  discovery: Schema.Literals(["full", "incremental"]),
   durable: MigrationItemStateSummary,
   lastRun: Schema.NullOr(MigrationRunState),
   lock: Schema.NullOr(MigrationDefinitionLock),
@@ -147,33 +148,37 @@ export const emptyMigrationItemStateSummary =
     needsUpdate: 0,
   });
 
+export const addMigrationItemStateToSummary = (
+  summary: MigrationItemStateSummary,
+  itemState: MigrationItemState
+): MigrationItemStateSummary => {
+  switch (itemState.status) {
+    case "migrated":
+      return { ...summary, migrated: summary.migrated + 1 };
+    case "skipped":
+      return { ...summary, skipped: summary.skipped + 1 };
+    case "failed":
+      return { ...summary, failed: summary.failed + 1 };
+    case "needs-update":
+      return { ...summary, needsUpdate: summary.needsUpdate + 1 };
+    default: {
+      const unhandledItemState: never = itemState;
+      return unhandledItemState;
+    }
+  }
+};
+
+export const isMigrationItemStateSummaryEmpty = (
+  summary: MigrationItemStateSummary
+): boolean => Object.values(summary).every((count) => count === 0);
+
 export const summarizeMigrationItemStates = (
   itemStates: readonly MigrationItemState[]
 ): MigrationItemStateSummary => {
-  const summary = {
-    migrated: 0,
-    skipped: 0,
-    failed: 0,
-    needsUpdate: 0,
-  };
+  let summary = emptyMigrationItemStateSummary();
 
   for (const itemState of itemStates) {
-    switch (itemState.status) {
-      case "migrated":
-        summary.migrated += 1;
-        break;
-      case "skipped":
-        summary.skipped += 1;
-        break;
-      case "failed":
-        summary.failed += 1;
-        break;
-      case "needs-update":
-        summary.needsUpdate += 1;
-        break;
-      default:
-        break;
-    }
+    summary = addMigrationItemStateToSummary(summary, itemState);
   }
 
   return summary;

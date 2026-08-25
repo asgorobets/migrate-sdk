@@ -36,6 +36,7 @@ const customerSourceDescriptor: CommercetoolsEntitySourceDescriptor<
 > = {
   getId: (customer) => customer.id,
   getKey: (customer) => customer.key,
+  getLastModifiedAt: (customer) => customer.lastModifiedAt,
   getVersion: (customer) => customer.version,
   identity: makeCommercetoolsSourceIdentityDefinitions({
     resource: "customer",

@@ -169,6 +169,7 @@ const valueRecord = (
   readonly index?: { readonly definitionId?: unknown };
   readonly namespace?: unknown;
   readonly recordKind?: unknown;
+  readonly state?: { readonly lastSourceInventoryRunId?: unknown };
 } | null => {
   if (typeof value !== "object" || value === null) {
     return null;
@@ -178,11 +179,18 @@ const valueRecord = (
     "index" in value && isRecord(value.index) && "definitionId" in value.index
       ? { definitionId: value.index.definitionId }
       : undefined;
+  const state =
+    "state" in value &&
+    isRecord(value.state) &&
+    "lastSourceInventoryRunId" in value.state
+      ? { lastSourceInventoryRunId: value.state.lastSourceInventoryRunId }
+      : undefined;
 
   return {
     ...(index === undefined ? {} : { index }),
     namespace: "namespace" in value ? value.namespace : undefined,
     recordKind: "recordKind" in value ? value.recordKind : undefined,
+    ...(state === undefined ? {} : { state }),
   };
 };
 
@@ -205,6 +213,10 @@ const customObjectMatchesWhere = (
   const recordKind = queryVariable(queryParams, "recordKind");
   const definitionId = queryVariable(queryParams, "definitionId");
   const lastKey = queryVariable(queryParams, "lastKey");
+  const sourceInventoryRunId = queryVariable(
+    queryParams,
+    "sourceInventoryRunId"
+  );
 
   return (
     (!where.includes("value(namespace = :namespace)") ||
@@ -213,6 +225,10 @@ const customObjectMatchesWhere = (
       value.recordKind === recordKind) &&
     (!where.includes("value(index(definitionId = :definitionId))") ||
       value.index?.definitionId === definitionId) &&
+    (!where.includes(
+      "value(state(lastSourceInventoryRunId is not defined or lastSourceInventoryRunId != :sourceInventoryRunId))"
+    ) ||
+      value.state?.lastSourceInventoryRunId !== sourceInventoryRunId) &&
     (!where.includes("key > :lastKey") ||
       (lastKey !== undefined && customObject.key > lastKey))
   );

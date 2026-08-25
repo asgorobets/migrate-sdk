@@ -6,6 +6,7 @@ import {
 import type { MigrationDefinitionId } from "../domain/ids.ts";
 import type { MigrationContract } from "../domain/migration-contract.ts";
 import type { AnyMigrationDefinition } from "../domain/run.ts";
+import { isMigrationItemStateSummaryEmpty } from "../domain/status.ts";
 import type { MigrationStore } from "../services/migration-store.ts";
 
 const sourceContractChangedError = (
@@ -81,9 +82,9 @@ export const validateMigrationContract = (
     const stored = yield* store.getMigrationContract(definition.id);
 
     if (stored === null) {
-      const itemStates = yield* store.listItemStates(definition.id);
+      const itemStateSummary = yield* store.getItemStateSummary(definition.id);
 
-      if (itemStates.length === 0) {
+      if (isMigrationItemStateSummaryEmpty(itemStateSummary)) {
         yield* store.upsertMigrationContract(current);
         return;
       }
@@ -105,9 +106,9 @@ export const validateMigrationContract = (
       return;
     }
 
-    const itemStates = yield* store.listItemStates(definition.id);
+    const itemStateSummary = yield* store.getItemStateSummary(definition.id);
 
-    if (itemStates.length === 0) {
+    if (isMigrationItemStateSummaryEmpty(itemStateSummary)) {
       yield* store.upsertMigrationContract(current);
       return;
     }

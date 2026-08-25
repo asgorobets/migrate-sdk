@@ -63,10 +63,14 @@ import type {
   MigrationRunSummary,
   MigrationRunTerminalResult,
   MigrationRunTerminalState,
+  RollbackOrphansCounts,
   RunRequestSourceImplementationError,
   RunRequestSourceRequirements,
 } from "../domain/run.ts";
-import { isMigrationRunTerminal } from "../domain/run.ts";
+import {
+  isMigrationRunTerminal,
+  mergeRollbackOrphansCounts,
+} from "../domain/run.ts";
 import { normalRunMode, type RunMode } from "../domain/run-mode.ts";
 import { normalizeSourceItemTotal, SourceItemTotal } from "../domain/source.ts";
 import type {
@@ -116,7 +120,8 @@ export type RunMigrationDefinitionError = SourceError | MigrationStoreError;
 
 export type RunMigrationError =
   | MigrationRuntimeError
-  | RunMigrationDefinitionError;
+  | RunMigrationDefinitionError
+  | RollbackPreflightError;
 
 export type RollbackMigrationDefinitionError = MigrationStoreError;
 
@@ -155,6 +160,18 @@ const invalidUpdateRunModeError = (mode: RunMode) =>
         : `Update run cannot combine with ${mode.kind} mode`,
   });
 
+const invalidRescanRunModeError = (mode: RunMode) =>
+  new MigrationRuntimeError({
+    message:
+      mode.kind === "item"
+        ? "Rescan run cannot target source identities"
+        : `Rescan run cannot combine with ${mode.kind} mode`,
+  });
+
+const conflictingRescanUpdateError = new MigrationRuntimeError({
+  message: "Rescan run cannot combine with update intent",
+});
+
 const unsafeDependentRollbackError = (
   definitionId: MigrationDefinitionId,
   dependentDefinitionId: MigrationDefinitionId
@@ -173,6 +190,12 @@ const missingRollbackPipelineError = (definitionId: MigrationDefinitionId) =>
     message: "Migration Definition does not define a rollback process",
     cause: { definitionId },
   });
+
+export const isRollbackMigrationDefinition = (
+  definition: AnyMigrationDefinition
+): definition is AnyRollbackMigrationDefinition & {
+  readonly rollback: NonNullable<AnyRollbackMigrationDefinition["rollback"]>;
+} => definition.rollback !== undefined;
 
 const rollbackDependencyStoreError = (
   definitionId: MigrationDefinitionId,
@@ -252,6 +275,7 @@ export const emptyMigrationRunCursorWindowState: MigrationRunCursorWindowState =
   {
     counts: emptyCounts,
     excludedSourceIdentities: [],
+    phase: "scan",
   };
 
 const snapshotCounts = (
@@ -496,6 +520,7 @@ export interface MigrationRunExecutionLease {
 export interface MigrationRunCursorWindowState {
   readonly counts: MigrationDefinitionRunSummary["counts"];
   readonly excludedSourceIdentities: readonly EncodedSourceIdentity[];
+  readonly phase: "scan";
 }
 
 export type MigrationRunCursorWindowResult =
@@ -515,6 +540,7 @@ export type MigrationRunCursorWindowResult =
 
 export interface MigrationRunCursorWindowInput {
   readonly definitionId: MigrationDefinitionId;
+  readonly rollbackOrphans?: boolean;
   readonly runId: MigrationRunId;
   readonly state: MigrationRunCursorWindowState;
 }
@@ -522,6 +548,8 @@ export interface MigrationRunCursorWindowInput {
 export interface MigrationRunBeginInput {
   readonly definitions: readonly AnyMigrationDefinition[];
   readonly lease: MigrationRunExecutionLease;
+  readonly rescan?: boolean;
+  readonly rollbackOrphans?: boolean;
 }
 
 export interface MigrationRunDefinitionCursorWindowInput
@@ -534,6 +562,33 @@ export interface MigrationRunCompletionInput {
   readonly definitions: readonly MigrationDefinitionRunSummary[];
   readonly lease: MigrationRunExecutionLease;
   readonly storeLayer: Layer.Layer<MigrationStore, MigrationStoreError>;
+}
+
+export interface MigrationRunRollbackOrphansState
+  extends RollbackOrphansCounts {
+  readonly afterIdentity?: EncodedSourceIdentity;
+  readonly phase: "rollback";
+}
+
+export type MigrationRunRollbackOrphansPageResult =
+  | {
+      readonly kind: "cancelled";
+      readonly state: MigrationRunRollbackOrphansState;
+    }
+  | {
+      readonly kind: "continue";
+      readonly state: MigrationRunRollbackOrphansState;
+    }
+  | {
+      readonly kind: "completed";
+      readonly state: MigrationRunRollbackOrphansState;
+    };
+
+export interface MigrationRunRollbackOrphansPageInput {
+  readonly definitionIds: readonly MigrationDefinitionId[];
+  readonly lease: MigrationRunExecutionLease;
+  readonly runId: MigrationRunId;
+  readonly state: MigrationRunRollbackOrphansState;
 }
 
 export interface MigrationRunFailureInput {
@@ -570,6 +625,15 @@ const beginMigrationRunExecution = (
     );
     yield* validateMigrationContracts(store, input.definitions);
     const runState = yield* store.beginRun(input.lease.runId, definitionIds);
+
+    if (input.rescan === true || input.rollbackOrphans === true) {
+      yield* Effect.forEach(
+        definitionIds,
+        (definitionId) => store.deleteSourceCursor(definitionId),
+        { discard: true }
+      );
+    }
+
     yield* MigrationProgress.emit({
       definitionIds,
       kind: "run-started",
@@ -850,6 +914,51 @@ const validateUpdateRunRequest = (request: {
   const mode = request.mode ?? normalRunMode;
 
   return mode.kind === "normal" ? null : invalidUpdateRunModeError(mode);
+};
+
+const validateRescanRunRequest = (request: {
+  readonly mode?: RunMode;
+  readonly rescan?: boolean;
+  readonly update?: boolean;
+}): MigrationRuntimeError | null => {
+  if (request.rescan !== true) {
+    return null;
+  }
+
+  if (request.update === true) {
+    return conflictingRescanUpdateError;
+  }
+
+  const mode = request.mode ?? normalRunMode;
+
+  return mode.kind === "normal" ? null : invalidRescanRunModeError(mode);
+};
+
+const validateRollbackOrphansRunRequest = (request: {
+  readonly mode?: RunMode;
+  readonly rollbackOrphans?: boolean;
+  readonly update?: boolean;
+}): MigrationRuntimeError | null => {
+  if (request.rollbackOrphans !== true) {
+    return null;
+  }
+
+  if (request.update === true) {
+    return new MigrationRuntimeError({
+      message: "Rollback orphans cannot combine with update execution",
+    });
+  }
+
+  const mode = request.mode ?? normalRunMode;
+
+  return mode.kind === "normal"
+    ? null
+    : new MigrationRuntimeError({
+        message:
+          mode.kind === "item"
+            ? "Rollback orphans cannot target source identities"
+            : `Rollback orphans cannot combine with ${mode.kind} mode`,
+      });
 };
 
 const runDependencyPreflightFailure = (input: {
@@ -1604,6 +1713,118 @@ const rollbackItemState = <Definition extends AnyRollbackMigrationDefinition>({
     return "rolled-back" as const;
   });
 
+const orphanItemStatePageSize = 100;
+
+const rollbackOrphansPage = (
+  definition: AnyRollbackMigrationDefinition,
+  runId: MigrationRunId,
+  store: typeof MigrationStore.Service,
+  state: MigrationRunRollbackOrphansState,
+  execution?: PipelineExecutionOptions
+): Effect.Effect<MigrationRunRollbackOrphansPageResult, RunMigrationError> =>
+  Effect.gen(function* () {
+    const rollbackConcurrency = resolvePipelineExecutionOptions(
+      execution,
+      definition.execution?.rollback,
+      "Rollback Pipeline Execution"
+    ).concurrency;
+    let rolledBack = state.rolledBack;
+    let rollbackFailed = state.rollbackFailed;
+
+    if (!(yield* canScheduleRunWork)) {
+      return { kind: "cancelled", state };
+    }
+
+    const page = yield* store.listOrphanItemStates(definition.id, runId, {
+      ...(state.afterIdentity === undefined
+        ? {}
+        : { afterIdentity: state.afterIdentity }),
+      limit: orphanItemStatePageSize,
+    });
+    const orphaned = state.orphaned + page.items.length;
+    const scheduled = yield* Effect.forEach(
+      page.items,
+      (itemState) =>
+        Effect.gen(function* () {
+          if (!(yield* canScheduleRunWork)) {
+            return false;
+          }
+
+          const outcome = yield* rollbackItemState({
+            definition,
+            itemState,
+            runId,
+            store,
+          });
+
+          if (outcome === "rolled-back") {
+            rolledBack += 1;
+          } else if (outcome === "failed") {
+            rollbackFailed += 1;
+          }
+
+          return true;
+        }),
+      { concurrency: rollbackConcurrency }
+    );
+    const nextState = {
+      orphaned,
+      phase: "rollback" as const,
+      rollbackFailed,
+      rolledBack,
+    };
+
+    if (!scheduled.every(Boolean)) {
+      return { kind: "cancelled", state: nextState };
+    }
+
+    return page.nextAfterIdentity === undefined
+      ? { kind: "completed", state: nextState }
+      : {
+          kind: "continue",
+          state: {
+            ...nextState,
+            afterIdentity: page.nextAfterIdentity,
+          },
+        };
+  });
+
+const rollbackOrphans = (
+  definition: AnyRollbackMigrationDefinition,
+  runId: MigrationRunId,
+  store: typeof MigrationStore.Service,
+  execution?: PipelineExecutionOptions
+): Effect.Effect<
+  { readonly completed: boolean; readonly counts: RollbackOrphansCounts },
+  RunMigrationError
+> =>
+  Effect.gen(function* () {
+    let state: MigrationRunRollbackOrphansState = {
+      orphaned: 0,
+      phase: "rollback",
+      rollbackFailed: 0,
+      rolledBack: 0,
+    };
+
+    while (true) {
+      const result = yield* rollbackOrphansPage(
+        definition,
+        runId,
+        store,
+        state,
+        execution
+      );
+      state = result.state;
+
+      if (result.kind === "cancelled") {
+        return { completed: false, counts: state };
+      }
+      if (result.kind === "completed") {
+        return { completed: true, counts: state };
+      }
+    }
+  });
+
 interface ProcessTargetedSourceIdentitiesOptions<
   Source,
   PipelineError,
@@ -1806,6 +2027,7 @@ interface ProcessCursorDiscoveryOptions<
     EncodedPayload,
     IdentityKey
   >;
+  readonly sourceInventoryRunId?: MigrationRunId;
   readonly store: typeof MigrationStore.Service;
 }
 
@@ -1827,6 +2049,7 @@ const processNextCursorWindow = <
   processConcurrency,
   reprocessUnchangedTerminal = false,
   runId,
+  sourceInventoryRunId,
   source,
   store,
 }: ProcessCursorDiscoveryOptions<
@@ -1852,6 +2075,19 @@ const processNextCursorWindow = <
         : definition.sourceCursorRetry(read);
     const readResult = yield* readWithRetry;
 
+    if (sourceInventoryRunId !== undefined) {
+      yield* Effect.forEach(
+        readResult.items,
+        (sourceItem) =>
+          store.observeItemState(
+            definition.id,
+            sourceItem.identity.encoded,
+            sourceInventoryRunId
+          ),
+        { concurrency: processConcurrency, discard: true }
+      );
+    }
+
     const scheduled = yield* Effect.forEach(
       readResult.items,
       (sourceItem) =>
@@ -1866,6 +2102,9 @@ const processNextCursorWindow = <
                 definition,
                 reprocessUnchangedTerminal,
                 runId,
+                ...(sourceInventoryRunId === undefined
+                  ? {}
+                  : { sourceInventoryRunId }),
                 sourceSchema: source.sourceSchema,
                 sourceItem,
               });
@@ -1935,6 +2174,7 @@ const processCursorDiscovery = <
   processConcurrency,
   reprocessUnchangedTerminal = false,
   runId,
+  sourceInventoryRunId,
   source,
   store,
 }: ProcessCursorDiscoveryOptions<
@@ -1963,6 +2203,7 @@ const processCursorDiscovery = <
         reprocessUnchangedTerminal,
         runId,
         source,
+        ...(sourceInventoryRunId === undefined ? {} : { sourceInventoryRunId }),
         store,
       });
 
@@ -1979,6 +2220,15 @@ const processCursorDiscovery = <
 
     return { committedCursor, completed: true };
   });
+
+function finalizeCompletedSourceDiscovery(
+  definition: AnyMigrationDefinition,
+  store: typeof MigrationStore.Service
+): Effect.Effect<void, MigrationStoreError> {
+  return definition.source.discovery === "full"
+    ? store.deleteSourceCursor(definition.id)
+    : Effect.void;
+}
 
 const processStubSourceIdentity = ({
   definition,
@@ -2363,7 +2613,11 @@ const runMigrationDefinition = <
   >,
   runId: MigrationRunId,
   mode: RunMode,
-  update: boolean,
+  runOptions: {
+    readonly rescan: boolean;
+    readonly rollbackOrphans: boolean;
+    readonly update: boolean;
+  },
   createStubReference: CreateMigrationReferenceStub,
   processExecution?: PipelineExecutionOptions
 ): Effect.Effect<
@@ -2384,7 +2638,6 @@ const runMigrationDefinition = <
     ).concurrency;
 
     const counts = { ...emptyCounts };
-    const itemStates = yield* store.listItemStates(definition.id);
     yield* MigrationProgress.emit({
       definitionId: definition.id,
       kind: "definition-started",
@@ -2397,7 +2650,12 @@ const runMigrationDefinition = <
       source,
     });
 
-    if (update) {
+    if (runOptions.rescan) {
+      yield* store.deleteSourceCursor(definition.id);
+    }
+
+    if (runOptions.update) {
+      const itemStates = yield* store.listItemStates(definition.id);
       yield* prepareUpdateRunDefinition({
         definitionId: definition.id,
         itemStates,
@@ -2420,6 +2678,8 @@ const runMigrationDefinition = <
         return null;
       }
 
+      yield* finalizeCompletedSourceDiscovery(definition, store);
+
       const summary = {
         definitionId: definition.id,
         status:
@@ -2438,16 +2698,18 @@ const runMigrationDefinition = <
       return summary;
     }
 
-    const targeted = yield* processTargetedSourceIdentities({
-      counts,
-      definition,
-      itemStates,
-      mode,
-      processConcurrency,
-      runId,
-      source,
-      store,
-    });
+    const targeted = runOptions.rollbackOrphans
+      ? { completed: true, sourceIdentities: [] }
+      : yield* processTargetedSourceIdentities({
+          counts,
+          definition,
+          itemStates: yield* store.listItemStates(definition.id),
+          mode,
+          processConcurrency,
+          runId,
+          source,
+          store,
+        });
 
     if (!targeted.completed) {
       return null;
@@ -2478,6 +2740,7 @@ const runMigrationDefinition = <
       excludedSourceIdentities: targeted.sourceIdentities,
       processConcurrency,
       runId,
+      ...(runOptions.rollbackOrphans ? { sourceInventoryRunId: runId } : {}),
       source,
       store,
     });
@@ -2485,6 +2748,8 @@ const runMigrationDefinition = <
     if (!discovery.completed) {
       return null;
     }
+
+    yield* finalizeCompletedSourceDiscovery(definition, store);
 
     const summary = {
       definitionId: definition.id,
@@ -2562,7 +2827,6 @@ const runMigrationDefinitionCursorWindow = <
     let excludedSourceIdentities = input.state.excludedSourceIdentities;
 
     if (isFirstWindow) {
-      const itemStates = yield* store.listItemStates(definition.id);
       yield* MigrationProgress.emit({
         definitionId: definition.id,
         kind: "definition-started",
@@ -2573,16 +2837,18 @@ const runMigrationDefinitionCursorWindow = <
         runId: input.runId,
         source,
       });
-      const targeted = yield* processTargetedSourceIdentities({
-        counts,
-        definition,
-        itemStates,
-        mode: normalRunMode,
-        processConcurrency,
-        runId: input.runId,
-        source,
-        store,
-      });
+      const targeted = input.rollbackOrphans
+        ? { completed: true, sourceIdentities: [] }
+        : yield* processTargetedSourceIdentities({
+            counts,
+            definition,
+            itemStates: yield* store.listItemStates(definition.id),
+            mode: normalRunMode,
+            processConcurrency,
+            runId: input.runId,
+            source,
+            store,
+          });
       excludedSourceIdentities = targeted.sourceIdentities;
 
       if (!targeted.completed) {
@@ -2591,6 +2857,7 @@ const runMigrationDefinitionCursorWindow = <
           state: {
             counts: snapshotCounts(counts),
             excludedSourceIdentities,
+            phase: "scan" as const,
           },
         };
       }
@@ -2602,6 +2869,7 @@ const runMigrationDefinitionCursorWindow = <
         state: {
           counts: snapshotCounts(counts),
           excludedSourceIdentities,
+          phase: "scan" as const,
         },
       };
     }
@@ -2612,12 +2880,14 @@ const runMigrationDefinitionCursorWindow = <
       excludedSourceIdentities,
       processConcurrency,
       runId: input.runId,
+      ...(input.rollbackOrphans ? { sourceInventoryRunId: input.runId } : {}),
       source,
       store,
     });
     const state = {
       counts: snapshotCounts(counts),
       excludedSourceIdentities,
+      phase: "scan" as const,
     };
 
     if (windowResult.kind === "cancelled") {
@@ -2633,6 +2903,8 @@ const runMigrationDefinitionCursorWindow = <
         state,
       };
     }
+
+    yield* finalizeCompletedSourceDiscovery(definition, store);
 
     const summary = {
       counts: state.counts,
@@ -2721,6 +2993,34 @@ const executeMigrationRunDefinitionCursorWindow = <
           stubRunScope.createStubReference,
           processExecution
         )
+    );
+  }).pipe(Effect.provide(definition.store));
+
+const executeMigrationRunDefinitionRollbackOrphansPage = (
+  definition: AnyRollbackMigrationDefinition & {
+    readonly rollback: NonNullable<AnyRollbackMigrationDefinition["rollback"]>;
+  },
+  input: MigrationRunRollbackOrphansPageInput,
+  rollbackExecution?: PipelineExecutionOptions
+): Effect.Effect<MigrationRunRollbackOrphansPageResult, RunMigrationError> =>
+  Effect.gen(function* () {
+    const store = yield* MigrationStore;
+
+    yield* assertCurrentMigrationRunExecutionLease(
+      store,
+      input.lease,
+      input.definitionIds
+    );
+    if (input.lease.runId !== input.runId) {
+      return yield* lockOwnerMismatchError(input.lease);
+    }
+
+    return yield* rollbackOrphansPage(
+      definition,
+      input.runId,
+      store,
+      input.state,
+      rollbackExecution
     );
   }).pipe(Effect.provide(definition.store));
 
@@ -2992,6 +3292,23 @@ const validateRollbackDependencyPreflight = (
     }
   });
 
+export const validateMigrationRunRollbackOrphansDependencyPreflight = (
+  plan: MigrationDefinitionExecutableRunPlan
+): Effect.Effect<
+  void,
+  MigrationStoreError | RollbackPreflightError,
+  MigrationStore
+> =>
+  plan.rollbackOrphans === true && plan.force !== true
+    ? Effect.flatMap(MigrationStore, (store) =>
+        validateRollbackDependencyPreflight(
+          store,
+          plan.registryDefinitions,
+          plan.definitions
+        )
+      )
+    : Effect.void;
+
 interface PlannedRollbackDefinitionsInput<
   Definitions extends readonly AnyRollbackMigrationDefinition[],
 > {
@@ -3216,6 +3533,8 @@ interface PlannedRunDefinitionsInput<
   readonly mode: RunMode;
   readonly registryDefinitions: readonly AnyMigrationDefinition[];
   readonly requiredDependencyPreflight?: MigrationDefinitionExecutableRunPlan["requiredDependencyPreflight"];
+  readonly rescan?: boolean;
+  readonly rollbackOrphans?: boolean;
   readonly update?: boolean;
 }
 
@@ -3248,6 +3567,19 @@ const preparePlannedRunDefinitions = <
     return Effect.fail(updateRunRequestError);
   }
 
+  const rescanRunRequestError = validateRescanRunRequest(input);
+
+  if (rescanRunRequestError !== null) {
+    return Effect.fail(rescanRunRequestError);
+  }
+
+  const rollbackOrphansRunRequestError =
+    validateRollbackOrphansRunRequest(input);
+
+  if (rollbackOrphansRunRequestError !== null) {
+    return Effect.fail(rollbackOrphansRunRequestError);
+  }
+
   const sharedStoreError = validateSharedStore(input.definitions);
 
   if (sharedStoreError !== null) {
@@ -3266,10 +3598,74 @@ const preparePlannedRunDefinitions = <
               requiredDependencyPreflight: input.requiredDependencyPreflight,
             }),
       }).pipe(
-        Effect.andThen(validateMigrationContracts(store, input.definitions))
+        Effect.andThen(validateMigrationContracts(store, input.definitions)),
+        Effect.andThen(
+          input.rollbackOrphans === true && input.force !== true
+            ? validateRollbackDependencyPreflight(
+                store,
+                input.registryDefinitions,
+                input.definitions
+              )
+            : Effect.void
+        )
       ),
   });
 };
+
+const rollbackOrphansForDefinitions = (
+  definitions: readonly AnyMigrationDefinition[],
+  scanSummaries: readonly MigrationDefinitionRunSummary[],
+  runId: MigrationRunId,
+  store: typeof MigrationStore.Service,
+  rollbackExecution?: PipelineExecutionOptions
+): Effect.Effect<readonly MigrationDefinitionRunSummary[], RunMigrationError> =>
+  Effect.gen(function* () {
+    const summaries = scanSummaries.map((summary) =>
+      mergeRollbackOrphansCounts(summary, {
+        orphaned: 0,
+        rollbackFailed: 0,
+        rolledBack: 0,
+      })
+    );
+    const scanSucceeded =
+      summaries.length === definitions.length &&
+      summaries.every((summary) => summary.status === "succeeded");
+
+    if (!scanSucceeded) {
+      return summaries;
+    }
+
+    for (let index = definitions.length - 1; index >= 0; index -= 1) {
+      const definition = definitions[index];
+      const summary = summaries[index];
+
+      if (
+        definition === undefined ||
+        summary === undefined ||
+        !(yield* canScheduleRunWork)
+      ) {
+        break;
+      }
+
+      if (!isRollbackMigrationDefinition(definition)) {
+        return yield* missingRollbackPipelineError(definition.id);
+      }
+
+      const rollback = yield* rollbackOrphans(
+        definition,
+        runId,
+        store,
+        rollbackExecution
+      );
+      summaries[index] = mergeRollbackOrphansCounts(summary, rollback.counts);
+
+      if (!rollback.completed) {
+        break;
+      }
+    }
+
+    return summaries;
+  });
 
 const executePreparedRunDefinitions = <
   Definitions extends readonly AnyMigrationDefinition[],
@@ -3308,7 +3704,11 @@ const executePreparedRunDefinitions = <
                   definition,
                   runId,
                   input.mode,
-                  input.update === true,
+                  {
+                    rescan: input.rescan === true,
+                    rollbackOrphans: input.rollbackOrphans === true,
+                    update: input.update === true,
+                  },
                   stubRunScope.createStubReference,
                   input.execution?.process
                 );
@@ -3319,11 +3719,22 @@ const executePreparedRunDefinitions = <
                 summaries.push(summary);
               }
 
+              const completedSummaries =
+                input.rollbackOrphans === true
+                  ? yield* rollbackOrphansForDefinitions(
+                      input.definitions,
+                      summaries,
+                      runId,
+                      store,
+                      input.execution?.rollback
+                    )
+                  : summaries;
+
               return {
                 status: (yield* canScheduleRunWork)
-                  ? runStatusForDefinitions(summaries)
+                  ? runStatusForDefinitions(completedSummaries)
                   : ("cancelled" as const),
-                value: summaries,
+                value: completedSummaries,
               };
             })
         ),
@@ -3378,6 +3789,10 @@ const migrationRunPlanInput = <
           encodedSourceIdentity: plan.target.sourceIdentities[0],
         },
   registryDefinitions: plan.registryDefinitions,
+  ...(plan.rollbackOrphans === undefined
+    ? {}
+    : { rollbackOrphans: plan.rollbackOrphans }),
+  ...(plan.rescan === undefined ? {} : { rescan: plan.rescan }),
   ...(plan.requiredDependencyPreflight === undefined
     ? {}
     : { requiredDependencyPreflight: plan.requiredDependencyPreflight }),
@@ -3699,6 +4114,16 @@ export interface MigrationRunExecutorService {
     RunRequestSourceRequirements<Definitions>
   >;
 
+  readonly executeRollbackOrphansPage: (
+    definition: AnyRollbackMigrationDefinition & {
+      readonly rollback: NonNullable<
+        AnyRollbackMigrationDefinition["rollback"]
+      >;
+    },
+    input: MigrationRunRollbackOrphansPageInput,
+    rollbackExecution?: PipelineExecutionOptions
+  ) => Effect.Effect<MigrationRunRollbackOrphansPageResult, RunMigrationError>;
+
   readonly fail: (
     input: MigrationRunFailureInput
   ) => Effect.Effect<void, RunMigrationError>;
@@ -3726,6 +4151,15 @@ const migrationRunExecutor: MigrationRunExecutorService = {
         input,
         processExecution
       )
+  ),
+  executeRollbackOrphansPage: Effect.fn(
+    "MigrationRunExecutor.executeRollbackOrphansPage"
+  )((definition, input, rollbackExecution) =>
+    executeMigrationRunDefinitionRollbackOrphansPage(
+      definition,
+      input,
+      rollbackExecution
+    )
   ),
   executePlan: Effect.fn("MigrationRunExecutor.executePlan")((plan, options) =>
     executeMigrationRunPlan(plan, options)
@@ -3788,6 +4222,19 @@ export class MigrationRunExecutor extends Service<
   ) =>
     Effect.flatMap(MigrationRunExecutor, (executor) =>
       executor.executePlan(plan, options)
+    );
+
+  static readonly executeRollbackOrphansPage = (
+    definition: AnyRollbackMigrationDefinition & {
+      readonly rollback: NonNullable<
+        AnyRollbackMigrationDefinition["rollback"]
+      >;
+    },
+    input: MigrationRunRollbackOrphansPageInput,
+    rollbackExecution?: PipelineExecutionOptions
+  ) =>
+    Effect.flatMap(MigrationRunExecutor, (executor) =>
+      executor.executeRollbackOrphansPage(definition, input, rollbackExecution)
     );
 
   static readonly fail = (input: MigrationRunFailureInput) =>

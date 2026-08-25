@@ -44,6 +44,8 @@ export type InlineRegistryRunInput<
   readonly mode?: RunModeInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
+  readonly rollbackOrphans?: boolean;
+  readonly rescan?: boolean;
   readonly sourceIdentities?: readonly string[];
   readonly update?: boolean;
 };
@@ -134,6 +136,10 @@ const runRequestInput = <Definitions extends readonly AnyMigrationDefinition[]>(
       ...selection,
       ...(input.execution === undefined ? {} : { execution: input.execution }),
       ...(input.force === undefined ? {} : { force: input.force }),
+      ...(input.rollbackOrphans === undefined
+        ? {}
+        : { rollbackOrphans: input.rollbackOrphans }),
+      ...(input.rescan === undefined ? {} : { rescan: input.rescan }),
       sourceIdentities: [sourceIdentityKeyToText(input.mode.sourceIdentityKey)],
       ...(input.update === undefined ? {} : { update: input.update }),
     };
@@ -144,6 +150,10 @@ const runRequestInput = <Definitions extends readonly AnyMigrationDefinition[]>(
     ...(input.execution === undefined ? {} : { execution: input.execution }),
     ...(input.force === undefined ? {} : { force: input.force }),
     ...(input.mode === undefined ? {} : { mode: input.mode }),
+    ...(input.rollbackOrphans === undefined
+      ? {}
+      : { rollbackOrphans: input.rollbackOrphans }),
+    ...(input.rescan === undefined ? {} : { rescan: input.rescan }),
     ...(input.sourceIdentities === undefined
       ? {}
       : { sourceIdentities: input.sourceIdentities }),

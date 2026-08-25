@@ -3,7 +3,11 @@ import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import type { ParseError } from "papaparse";
 import Papa from "papaparse";
-import { type ConfiguredSource, Source } from "../../domain/definition.ts";
+import {
+  type ConfiguredSource,
+  Source,
+  type SourceDiscovery,
+} from "../../domain/definition.ts";
 import { SourceError } from "../../domain/errors.ts";
 import {
   SourceIdentity,
@@ -141,6 +145,11 @@ export interface CsvSourceOptions<
   Payload,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
 > extends CsvParserOptions<IdentityKey> {
+  /**
+   * Controls cursor retention after completed runs. Defaults to `"full"`.
+   * Use `"incremental"` only when changed rows always follow the saved cursor.
+   */
+  readonly discovery?: SourceDiscovery;
   readonly path: string;
   readonly platform: CsvSourcePlatform;
   readonly sourceSchema: Schema.Codec<Payload, CsvEncodedPayload, never, never>;
@@ -966,6 +975,9 @@ const make = <Payload, IdentityKey extends SourceIdentitySnapshotKey>(
         )
       ),
     cursorSchema: CsvSourceCursor,
+    ...(options.discovery === undefined
+      ? {}
+      : { discovery: options.discovery }),
     identity: identityDefinition,
     sourceIdentityContractFingerprint: makeCsvSourceIdentityContractFingerprint(
       options,

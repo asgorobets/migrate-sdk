@@ -950,9 +950,9 @@ Scan       durable store only
 Hint       Pass --scan-source to include source inventory counts.
 
 Definitions
-State  Migration ID  Last Run   Lock   Migrated  Skipped  Failed  Needs Update
------  ------------  ---------  -----  --------  -------  ------  ------------
-ok     articles      succeeded  clear         2        1       0             0
+State  Migration ID  Discovery  Last Run   Lock   Migrated  Skipped  Failed  Needs Update
+-----  ------------  ---------  ---------  -----  --------  -------  ------  ------------
+ok     articles      full       succeeded  clear         2        1       0             0
 ```
 
 `status --scan-source` additionally initializes sources and scans current
@@ -969,9 +969,9 @@ Included   articles
 Scan       source inventory
 
 Definitions
-State    Migration ID  Last Run   Lock   Migrated  Skipped  Failed  Needs Update  Total  Unprocessed  Invalid  Duplicate  Orphaned
--------  ------------  ---------  -----  --------  -------  ------  ------------  -----  -----------  -------  ---------  --------
-warning  articles      succeeded  clear         2        1       0             0      4            1        0          1         1
+State    Migration ID  Discovery  Last Run   Lock   Migrated  Skipped  Failed  Needs Update  Total  Unprocessed  Invalid  Duplicate  Orphaned
+-------  ------------  ---------  ---------  -----  --------  -------  ------  ------------  -----  -----------  -------  ---------  --------
+warning  articles      full       succeeded  clear         2        1       0             0      4            1        0          1         1
 
 Warnings:
 ! Duplicate source identity in articles: article-new (1 duplicate item(s)). Check the source identity mapping.
@@ -980,6 +980,10 @@ Warnings:
 Status output is ordered by registry/list order, not dependency execution
 order. `--with-dependencies` expands required dependencies, but status does not
 return `executionDefinitionIds` and does not imply runnable sequencing.
+
+The `Discovery` column shows the configured source policy without initializing
+the source. Incremental definitions also produce a warning that changes at or
+before the saved cursor require `--rescan`.
 
 `--concurrency` is valid only with `--scan-source`. It defaults to `1` and
 controls concurrent source scans across selected migration definitions. Each
@@ -1080,6 +1084,15 @@ Execution Order
 -  ------------
 1  authors
 2  articles
+
+Execution Policy
+#  Migration ID  Discovery  Process Concurrency
+-  ------------  ---------  -------------------
+1  authors       full                         1
+2  articles      incremental                   1
+
+Warnings:
+! articles uses incremental source discovery. Once a cursor is saved, changes at or before it will not be discovered. Pass --rescan to scan from the beginning.
 ```
 
 When users provide multiple explicit definition ids, preserve their requested

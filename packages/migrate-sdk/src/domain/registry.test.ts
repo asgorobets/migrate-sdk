@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, type Layer, Option, Schema } from "effect";
+import { Effect, Layer, Option, Schema } from "effect";
 import {
   defaultSourceVersionContractFingerprint,
   type ExecutionStartResult,
@@ -21,8 +21,9 @@ import {
   MigrationExecution,
   type MigrationExecutionOptions,
   type MigrationRunSummary,
-  type MigrationStore,
-  type MigrationStoreError,
+  MigrationRuntimeError,
+  MigrationStore,
+  MigrationStoreError,
   type RollbackPipeline,
   RollbackPreflightError,
   type RollbackRunSummary,
@@ -661,6 +662,497 @@ describe("MigrationDefinitionRegistry", () => {
         toMigrationDefinitionId("articles"),
       ]);
     })
+  );
+
+  it.effect("preserves rescan intent in run plans", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({ id: "articles" });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+
+      const plan = yield* registry.planRun({
+        definitionIds: ["articles"],
+        rescan: true,
+      });
+
+      expect(plan.rescan).toBe(true);
+      expect(plan.executionDefinitionIds).toEqual([
+        toMigrationDefinitionId("articles"),
+      ]);
+    })
+  );
+
+  it.effect("plans rollback orphans as an authoritative full scan", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({
+        id: "articles",
+        rollback: () => undefined,
+      });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+
+      const plan = yield* registry.planRun({
+        definitionIds: ["articles"],
+        rollbackOrphans: true,
+        rescan: false,
+      });
+
+      expect(plan.rollbackOrphans).toBe(true);
+      expect(plan.rescan).toBe(true);
+    })
+  );
+
+  it.effect("rejects incomplete rollback-orphans run scopes", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({
+        id: "articles",
+        rollback: () => undefined,
+      });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+      const invalidInputs = [
+        {
+          definitionIds: ["articles"] as const,
+          mode: { kind: "failed" as const },
+          rollbackOrphans: true,
+        },
+        {
+          definitionIds: ["articles"] as const,
+          mode: { kind: "skipped" as const },
+          rollbackOrphans: true,
+        },
+        {
+          definitionIds: ["articles"] as const,
+          sourceIdentities: ["article-1"],
+          rollbackOrphans: true,
+        },
+        {
+          definitionIds: ["articles"] as const,
+          update: true,
+          rollbackOrphans: true,
+        },
+      ];
+
+      for (const input of invalidInputs) {
+        const error = yield* Effect.flip(registry.planRun(input));
+        expect(error).toBeInstanceOf(
+          MigrationDefinitionRegistryInvalidSelectionError
+        );
+      }
+    })
+  );
+
+  it.effect("requires a Rollback Pipeline for rollback-orphans planning", () =>
+    Effect.gen(function* () {
+      const articles = makeDefinition({ id: "articles" });
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [articles] as const,
+      });
+
+      const error = yield* Effect.flip(
+        registry.planRun({
+          definitionIds: ["articles"],
+          rollbackOrphans: true,
+        })
+      );
+
+      expect(error).toEqual(
+        expect.objectContaining({
+          _tag: "MigrationDefinitionRegistryInvalidSelectionError",
+          message:
+            "Rolling back orphans requires Migration Definition articles to define a Rollback Pipeline",
+        })
+      );
+    })
+  );
+
+  it.effect("scans from the beginning and rolls back orphaned state", () =>
+    Effect.gen(function* () {
+      const storeState = InMemoryMigrationStore.makeState();
+      const processCalls: string[] = [];
+      const rollbackCalls: string[] = [];
+      const articles = MigrationDefinition.make({
+        id: "articles",
+        source: InMemorySource.make({
+          discovery: "incremental",
+          identity: ArticleSourceIdentity,
+          items: [
+            {
+              identityKey: "article-current",
+              item: { title: "Current article" },
+              version: "source-version-1",
+            },
+          ],
+          sourceSchema: ArticleSource,
+        }),
+        store: InMemoryMigrationStore.layer(storeState),
+        process: (item) =>
+          Effect.sync(() => {
+            processCalls.push(item.identity.encoded);
+          }),
+        rollback: (state) =>
+          Effect.sync(() => {
+            rollbackCalls.push(state.sourceIdentity.encoded);
+          }),
+      });
+      const previousRunId = toMigrationRunId("run-previous");
+      const previousUpdatedAt = new Date("2026-01-01T00:00:00.000Z");
+
+      seedMigrationContract(storeState, articles.id);
+      storeState.sourceCursors.set(
+        articles.id,
+        toEncodedSourceCursor('{"offset":1}')
+      );
+
+      for (const identity of ["article-current", "article-orphan"]) {
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey(articles.id, identity),
+          {
+            definitionId: articles.id,
+            lastRunId: previousRunId,
+            sourceIdentity: SourceIdentity.fromKey(
+              ArticleSourceIdentity,
+              identity
+            ),
+            sourceVersion: toSourceVersion("source-version-1"),
+            sourceVersionContractFingerprint:
+              defaultSourceVersionContractFingerprint,
+            status: "migrated",
+            updatedAt: previousUpdatedAt,
+          }
+        );
+      }
+
+      const start = yield* MigrationExecution.make({
+        registry: MigrationDefinitionRegistry.make({
+          definitions: [articles] as const,
+        }),
+      }).run({
+        definitionIds: ["articles"],
+        rollbackOrphans: true,
+      });
+      const summary = yield* awaitRunSummary(start);
+
+      expect(summary.status).toBe("succeeded");
+      expect(summary.definitions).toEqual([
+        expect.objectContaining({
+          counts: {
+            failed: 0,
+            migrated: 0,
+            needsUpdate: 0,
+            orphaned: 1,
+            rollbackFailed: 0,
+            rolledBack: 1,
+            skipped: 0,
+            unchanged: 1,
+          },
+          definitionId: articles.id,
+          status: "succeeded",
+        }),
+      ]);
+      expect(processCalls).toEqual([]);
+      expect(rollbackCalls).toEqual(["article-orphan"]);
+      expect(
+        storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey(articles.id, "article-current")
+        )
+      ).toEqual(
+        expect.objectContaining({
+          lastRunId: previousRunId,
+          lastSourceInventoryRunId: summary.runId,
+        })
+      );
+      expect(
+        storeState.itemStates.has(
+          InMemoryMigrationStore.itemStateKey(articles.id, "article-orphan")
+        )
+      ).toBe(false);
+    })
+  );
+
+  it.effect(
+    "starts a fresh scan after observation failure without rolling back or advancing the cursor",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const sourceState = InMemorySource.makeState();
+        const rollbackCalls: string[] = [];
+        let failObservations = true;
+        const baseStore = InMemoryMigrationStore.layer(storeState);
+        const storeWithObservationFailure = Layer.effect(
+          MigrationStore,
+          Effect.gen(function* () {
+            const base = yield* MigrationStore;
+
+            return {
+              ...base,
+              observeItemState: (definitionId, identity, inventoryRunId) =>
+                failObservations
+                  ? Effect.fail(
+                      new MigrationStoreError({
+                        message: "Source inventory observation failed",
+                      })
+                    )
+                  : base.observeItemState(
+                      definitionId,
+                      identity,
+                      inventoryRunId
+                    ),
+            };
+          })
+        ).pipe(Layer.provide(baseStore));
+        const articles = MigrationDefinition.make({
+          id: "articles",
+          source: InMemorySource.make({
+            batchSize: 1,
+            identity: ArticleSourceIdentity,
+            items: [
+              {
+                identityKey: "article-current-1",
+                item: { title: "Current article 1" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: "article-current-2",
+                item: { title: "Current article 2" },
+                version: "source-version-1",
+              },
+            ],
+            sourceSchema: ArticleSource,
+            state: sourceState,
+          }),
+          store: storeWithObservationFailure,
+          process: () => Effect.void,
+          rollback: (state) =>
+            Effect.sync(() => {
+              rollbackCalls.push(state.sourceIdentity.encoded);
+            }),
+        });
+
+        seedMigrationContract(storeState, articles.id);
+        for (const identity of [
+          "article-current-1",
+          "article-current-2",
+          "article-orphan",
+        ]) {
+          storeState.itemStates.set(
+            InMemoryMigrationStore.itemStateKey(articles.id, identity),
+            {
+              definitionId: articles.id,
+              lastRunId: toMigrationRunId("run-previous"),
+              sourceIdentity: SourceIdentity.fromKey(
+                ArticleSourceIdentity,
+                identity
+              ),
+              sourceVersion: toSourceVersion("source-version-1"),
+              sourceVersionContractFingerprint:
+                defaultSourceVersionContractFingerprint,
+              status: "migrated",
+              updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            }
+          );
+        }
+
+        const execution = MigrationExecution.make({
+          registry: MigrationDefinitionRegistry.make({
+            definitions: [articles] as const,
+          }),
+        });
+        const failedStart = yield* execution.run({
+          definitionIds: ["articles"],
+          rollbackOrphans: true,
+        });
+
+        if (
+          failedStart.kind !== "started" ||
+          failedStart.handle === undefined
+        ) {
+          return yield* Effect.die("Expected attached inline execution");
+        }
+
+        expect((yield* failedStart.handle.wait).kind).toBe("execution-failed");
+        expect(storeState.sourceCursorCommits).toEqual([]);
+        expect(storeState.sourceCursors.size).toBe(0);
+        expect(storeState.definitionLocks.size).toBe(0);
+        expect(rollbackCalls).toEqual([]);
+        expect(storeState.itemStates.size).toBe(3);
+
+        failObservations = false;
+        const restarted = yield* execution.run({
+          definitionIds: ["articles"],
+          rollbackOrphans: true,
+        });
+        const summary = yield* awaitRunSummary(restarted);
+
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          failed: 0,
+          migrated: 0,
+          needsUpdate: 0,
+          orphaned: 1,
+          rollbackFailed: 0,
+          rolledBack: 1,
+          skipped: 0,
+          unchanged: 2,
+        });
+        expect(sourceState.readAttempts).toBe(3);
+        expect(rollbackCalls).toEqual(["article-orphan"]);
+        expect(storeState.itemStates.size).toBe(2);
+        expect(
+          Array.from(storeState.itemStates.values()).map(
+            (state) => state.lastSourceInventoryRunId
+          )
+        ).toEqual([summary.runId, summary.runId]);
+      })
+  );
+
+  it.effect(
+    "continues paginated rollback orphans after a candidate fails",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const rollbackCalls: string[] = [];
+        const articles = MigrationDefinition.make({
+          id: "articles",
+          source: InMemorySource.make({
+            identity: ArticleSourceIdentity,
+            items: [],
+            sourceSchema: ArticleSource,
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: () => Effect.void,
+          rollback: (state) => {
+            rollbackCalls.push(state.sourceIdentity.encoded);
+            return state.sourceIdentity.encoded === "article-050"
+              ? Effect.fail(
+                  new MigrationRuntimeError({ message: "rollback failed" })
+                )
+              : Effect.void;
+          },
+        });
+
+        seedMigrationContract(storeState, articles.id);
+        for (let index = 1; index <= 101; index += 1) {
+          const identity = `article-${String(index).padStart(3, "0")}`;
+          storeState.itemStates.set(
+            InMemoryMigrationStore.itemStateKey(articles.id, identity),
+            {
+              definitionId: articles.id,
+              lastRunId: toMigrationRunId("run-previous"),
+              sourceIdentity: SourceIdentity.fromKey(
+                ArticleSourceIdentity,
+                identity
+              ),
+              sourceVersion: toSourceVersion("source-version-1"),
+              sourceVersionContractFingerprint:
+                defaultSourceVersionContractFingerprint,
+              status: "migrated",
+              updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            }
+          );
+        }
+
+        const start = yield* MigrationExecution.make({
+          registry: MigrationDefinitionRegistry.make({
+            definitions: [articles] as const,
+          }),
+        }).run({ definitionIds: ["articles"], rollbackOrphans: true });
+        const summary = yield* awaitRunSummary(start);
+
+        expect(summary.status).toBe("failed");
+        expect(summary.definitions[0]?.counts).toEqual(
+          expect.objectContaining({
+            orphaned: 101,
+            rollbackFailed: 1,
+            rolledBack: 100,
+          })
+        );
+        expect(rollbackCalls).toHaveLength(101);
+        expect(storeState.itemStates.size).toBe(1);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(articles.id, "article-050")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            journal: expect.objectContaining({
+              rollbackAttempts: [expect.any(Object)],
+            }),
+          })
+        );
+      })
+  );
+
+  it.effect(
+    "persists a new state with its source inventory observation in one write",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const baseStore = InMemoryMigrationStore.layer(storeState);
+        const storeWithoutObservationRepair = Layer.effect(
+          MigrationStore,
+          Effect.gen(function* () {
+            const base = yield* MigrationStore;
+
+            return {
+              ...base,
+              observeItemState: (definitionId, identity, inventoryRunId) =>
+                storeState.itemStates.has(
+                  InMemoryMigrationStore.itemStateKey(definitionId, identity)
+                )
+                  ? Effect.fail(
+                      new MigrationStoreError({
+                        message: "Observation repair write is not allowed",
+                      })
+                    )
+                  : base.observeItemState(
+                      definitionId,
+                      identity,
+                      inventoryRunId
+                    ),
+            };
+          })
+        ).pipe(Layer.provide(baseStore));
+        const articles = MigrationDefinition.make({
+          id: "articles",
+          source: InMemorySource.make({
+            identity: ArticleSourceIdentity,
+            items: [
+              {
+                identityKey: "article-new",
+                item: { title: "New article" },
+                version: "source-version-1",
+              },
+            ],
+            sourceSchema: ArticleSource,
+          }),
+          store: storeWithoutObservationRepair,
+          process: () => Effect.void,
+          rollback: () => undefined,
+        });
+
+        const start = yield* MigrationExecution.make({
+          registry: MigrationDefinitionRegistry.make({
+            definitions: [articles] as const,
+          }),
+        }).run({ definitionIds: ["articles"], rollbackOrphans: true });
+        const summary = yield* awaitRunSummary(start);
+
+        expect(summary.status).toBe("succeeded");
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey(articles.id, "article-new")
+          )
+        ).toEqual(
+          expect.objectContaining({
+            lastSourceInventoryRunId: summary.runId,
+            status: "migrated",
+          })
+        );
+      })
   );
 
   it.effect(

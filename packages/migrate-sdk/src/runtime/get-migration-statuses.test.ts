@@ -220,6 +220,7 @@ describe("getMigrationStatuses", () => {
         definitions: [
           {
             definitionId,
+            discovery: "full",
             durable: {
               failed: 1,
               migrated: 1,
@@ -278,6 +279,8 @@ describe("getMigrationStatuses", () => {
           })
         );
       const store = Layer.succeed(MigrationStore, {
+        listOrphanItemStates: () => fail("listOrphanItemStates"),
+        observeItemState: () => fail("observeItemState"),
         getLatestRunState: (id) =>
           Effect.sync(() => {
             calls.push(`getLatestRunState:${id}`);
@@ -410,6 +413,7 @@ describe("getMigrationStatuses", () => {
           definitions: [
             {
               definitionId,
+              discovery: "full",
               durable: {
                 failed: 0,
                 migrated: 1,
@@ -452,6 +456,8 @@ describe("getMigrationStatuses", () => {
           })
         );
       const store = Layer.succeed(MigrationStore, {
+        listOrphanItemStates: () => fail("listOrphanItemStates"),
+        observeItemState: () => fail("observeItemState"),
         getLatestRunState: (id) =>
           Effect.sync(() => {
             calls.push(`getLatestRunState:${id}`);

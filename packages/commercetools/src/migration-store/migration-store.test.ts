@@ -62,18 +62,27 @@ const itemStateKey = (
   definition: string,
   identity: string | { readonly encoded: string }
 ): string =>
-  `${namespace}__migration-item-state__${definitionHashSegment(definition)}__${sourceIdentityHashSegment(identity)}`;
+  `${namespace}__migration-item-state__${definitionHashSegment(
+    definition
+  )}__${sourceIdentityHashSegment(identity)}`;
 
 const latestRunStateKey = (definition: string): string =>
   `${namespace}__latest-run-state__${definitionHashSegment(definition)}`;
 
 const definitionLockKey = (definition: string): string =>
-  `${namespace}__migration-definition-lock__${definitionHashSegment(definition)}`;
+  `${namespace}__migration-definition-lock__${definitionHashSegment(
+    definition
+  )}`;
 
 const itemStateQueryWhere = [
   "value(namespace = :namespace)",
   "value(recordKind = :recordKind)",
   "value(index(definitionId = :definitionId))",
+].join(" and ");
+
+const orphanItemStateQueryWhere = [
+  itemStateQueryWhere,
+  "value(state(lastSourceInventoryRunId is not defined or lastSourceInventoryRunId != :sourceInventoryRunId))",
 ].join(" and ");
 
 const customObjectKey = (
@@ -1082,6 +1091,194 @@ describe("CommercetoolsMigrationStore", () => {
       ).toBe(false);
     }).pipe(Effect.provide(makeStoreLayer(recording)));
   });
+
+  it.effect(
+    "observes existing item state with its current Custom Object version",
+    () => {
+      const recording = makeRecordingCustomObjectApiRoot();
+      const sourceInventoryRunId = toMigrationRunId("run-source-inventory");
+      const missingIdentity = sourceIdentityFor("product:missing");
+      const itemState = {
+        definitionId,
+        lastRunId: toMigrationRunId("run-item-state-before-inventory"),
+        sourceIdentity,
+        sourceVersion: toSourceVersion("source-v1"),
+        status: "migrated",
+        trackingRecord: {
+          productId: "ct-product-123",
+          productKey: "sku-123",
+        },
+        updatedAt: new Date("2026-06-09T12:00:00.000Z"),
+      } as const;
+      const expectedKey = itemStateKey(definitionId, sourceIdentity);
+
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        yield* store.observeItemState(
+          definitionId,
+          missingIdentity.encoded,
+          sourceInventoryRunId
+        );
+        yield* store.upsertItemState(itemState);
+        yield* store.observeItemState(
+          definitionId,
+          sourceIdentity.encoded,
+          sourceInventoryRunId
+        );
+        yield* store.observeItemState(
+          definitionId,
+          sourceIdentity.encoded,
+          sourceInventoryRunId
+        );
+
+        expect(
+          yield* store.getItemState(definitionId, sourceIdentity.encoded)
+        ).toEqual({
+          ...itemState,
+          lastSourceInventoryRunId: sourceInventoryRunId,
+        });
+
+        const writes = recording.requests.filter(
+          (request) =>
+            request.method === "POST" &&
+            customObjectKey(request) === expectedKey
+        );
+
+        expect(writes).toHaveLength(2);
+        expect(writes[1]).toMatchObject({
+          body: {
+            key: expectedKey,
+            value: {
+              state: {
+                ...itemState,
+                lastSourceInventoryRunId: sourceInventoryRunId,
+                updatedAt: "2026-06-09T12:00:00.000Z",
+              },
+            },
+            version: 1,
+          },
+        });
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  it.effect(
+    "lists orphaned item states through bounded keyset query pages",
+    () => {
+      const recording = makeRecordingCustomObjectApiRoot();
+      const sourceInventoryRunId = toMigrationRunId(
+        "run-current-source-inventory"
+      );
+      const previousSourceInventoryRunId = toMigrationRunId(
+        "run-previous-source-inventory"
+      );
+      const lastRunId = toMigrationRunId("run-item-state");
+      const currentState = {
+        definitionId,
+        lastRunId,
+        lastSourceInventoryRunId: sourceInventoryRunId,
+        sourceIdentity: sourceIdentityFor("product:current"),
+        sourceVersion: toSourceVersion("source-current"),
+        status: "migrated",
+        updatedAt: new Date("2026-06-09T12:00:00.000Z"),
+      } as const;
+      const orphanStates = [
+        {
+          definitionId,
+          lastRunId,
+          lastSourceInventoryRunId: previousSourceInventoryRunId,
+          sourceIdentity: sourceIdentityFor("product:stale"),
+          sourceVersion: toSourceVersion("source-stale"),
+          status: "migrated",
+          updatedAt: new Date("2026-06-09T12:01:00.000Z"),
+        },
+        {
+          definitionId,
+          lastRunId,
+          sourceIdentity: sourceIdentityFor("product:legacy"),
+          sourceVersion: toSourceVersion("source-legacy"),
+          status: "migrated",
+          updatedAt: new Date("2026-06-09T12:02:00.000Z"),
+        },
+      ] as const;
+      const otherDefinitionState = {
+        definitionId: toMigrationDefinitionId("catalog-prices"),
+        lastRunId,
+        sourceIdentity: sourceIdentityFor("price:orphan"),
+        sourceVersion: toSourceVersion("source-price"),
+        status: "migrated",
+        updatedAt: new Date("2026-06-09T12:03:00.000Z"),
+      } as const;
+      const sortedOrphans = [...orphanStates].sort((left, right) =>
+        itemStateKey(definitionId, left.sourceIdentity).localeCompare(
+          itemStateKey(definitionId, right.sourceIdentity)
+        )
+      );
+
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        for (const itemState of [
+          currentState,
+          ...orphanStates,
+          otherDefinitionState,
+        ]) {
+          yield* store.upsertItemState(itemState);
+        }
+
+        const firstPage = yield* store.listOrphanItemStates(
+          definitionId,
+          sourceInventoryRunId,
+          { limit: 1 }
+        );
+        const firstOrphan = sortedOrphans[0];
+        const secondOrphan = sortedOrphans[1];
+
+        if (firstOrphan === undefined || secondOrphan === undefined) {
+          return yield* Effect.die("Expected two orphaned item states");
+        }
+
+        expect(firstPage).toEqual({
+          items: [firstOrphan],
+          nextAfterIdentity: firstOrphan.sourceIdentity.encoded,
+        });
+
+        yield* store.deleteItemState(
+          definitionId,
+          firstOrphan.sourceIdentity.encoded
+        );
+
+        const secondPage = yield* store.listOrphanItemStates(
+          definitionId,
+          sourceInventoryRunId,
+          {
+            afterIdentity: firstOrphan.sourceIdentity.encoded,
+            limit: 1,
+          }
+        );
+
+        expect(secondPage).toEqual({ items: [secondOrphan] });
+
+        const queries = customObjectQueryRequests(recording.requests);
+
+        expect(queries).toHaveLength(2);
+        expect(queries[0]?.queryParams).toMatchObject({
+          "var.definitionId": definitionId,
+          "var.sourceInventoryRunId": sourceInventoryRunId,
+          limit: 2,
+          sort: "key asc",
+          where: orphanItemStateQueryWhere,
+          withTotal: false,
+        });
+        expect(queries[1]?.queryParams).toMatchObject({
+          "var.lastKey": itemStateKey(definitionId, firstOrphan.sourceIdentity),
+          limit: 2,
+          where: `${orphanItemStateQueryWhere} and key > :lastKey`,
+        });
+      }).pipe(Effect.provide(makeStoreLayer(recording, { pageSize: 2 })));
+    }
+  );
 
   it.effect(
     "fails clearly for unsupported future record format versions",

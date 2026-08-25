@@ -32,7 +32,7 @@ The static agreement that defines the id, schema, key derivation, and encoding o
 The observed version or fingerprint of a source item at read time.
 
 **Source Cursor**:
-A source position marker for selecting source items during incremental reads.
+A source position marker for continuing windowed source discovery.
 
 **Encoded Source Cursor**:
 The durable string form of a source cursor after schema encoding.
@@ -40,8 +40,29 @@ The durable string form of a source cursor after schema encoding.
 **Source Cursor Window**:
 One batch of source items read from a source cursor.
 
+**Source Discovery**:
+The source's declared behavior for whether a cursor is only an incomplete-traversal checkpoint or also a completed-traversal high-water mark.
+
+**Full Source Discovery**:
+The default Source Discovery behavior. A completed traversal discards its Source Cursor so the next run starts at the beginning; an incomplete traversal keeps its cursor for recovery.
+
+**Incremental Source Discovery**:
+An opt-in Source Discovery behavior that retains the Source Cursor after a completed traversal so the next run continues from that high-water mark.
+
 **Source Inventory Scan**:
 A read-only traversal of a migration definition's current source items for inspection.
+
+**Orphaned Migration Item State**:
+Migration Item State whose Source Identity was not observed by the current Migration Run's completed authoritative source scan.
+
+**Rollback Orphans**:
+A Migration Run intent that performs an authoritative source scan and then passes Orphaned Migration Item State through the migration definition's Rollback Pipeline.
+
+**Source Rescan**:
+A migration run intent that restarts source discovery at the beginning while preserving item eligibility from existing migration item state and source versions.
+
+**Update Run**:
+A migration run intent that restarts source discovery and makes previously migrated source items eligible for processing even when their source versions have not changed.
 
 **Source Lookup Strategy**:
 The source's declared cost model for reading a source item by identity.
@@ -291,6 +312,10 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Source Inventory Scan** starts from the beginning of the source and does not read or write the persisted **Source Cursor**.
 - A **Source Inventory Scan** validates source item payloads with the **Source Payload Schema**.
 - A **Source Inventory Scan** may return **Migration Diagnostics** for invalid source payloads or duplicate **Source Identities**.
+- A **Source Rescan** resets the persisted **Source Cursor** before normal source discovery.
+- A **Source Rescan** leaves matching **Source Versions** unchanged and does not force the **Process Pipeline** to run.
+- An **Update Run** resets the persisted **Source Cursor** and forces discovered migrated source items back through the **Process Pipeline**.
+- A **Source Rescan** and an **Update Run** are mutually exclusive because an **Update Run** already restarts source discovery.
 - A **Migration Item State** records source identity, migration status, and may record observed source version, destination tracking changes, or failure metadata.
 - A **Migration Item State** is modeled as discriminated variants by status.
 - A **Migration Item State** does not store source item payloads by default.

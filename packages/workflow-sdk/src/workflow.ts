@@ -9,6 +9,8 @@ export type {
   WorkflowSdkMigrationRunCursorWindowResult,
   WorkflowSdkMigrationRunCursorWindowState,
   WorkflowSdkMigrationRunEnvelope,
+  WorkflowSdkMigrationRunRollbackOrphansPageResult,
+  WorkflowSdkMigrationRunRollbackOrphansState,
   WorkflowSdkMigrationRunSteps,
   WorkflowSdkMigrationRunSummary,
 } from "./migration-execution-workflow.ts";

@@ -305,6 +305,13 @@ const renderExecutionOrderTable = (
 const renderConcurrency = (value: number | "unbounded"): string =>
   value === "unbounded" ? value : String(value);
 
+const runPlanSourceDiscovery = (
+  plan: MigrationDefinitionRunPlan,
+  definitionId: MigrationDefinitionId
+): "full" | "incremental" =>
+  plan.definitions.find((definition) => definition.id === definitionId)?.source
+    .discovery ?? "full";
+
 const renderRunExecutionPolicyTable = (
   plan: MigrationDefinitionRunPlan,
   options: RenderOptions
@@ -321,6 +328,11 @@ const renderRunExecutionPolicyTable = (
           {
             header: "Migration ID",
             render: (policy) => policy.definitionId,
+          },
+          {
+            header: "Discovery",
+            render: (policy) =>
+              runPlanSourceDiscovery(plan, policy.definitionId),
           },
           {
             align: "right",
@@ -419,6 +431,59 @@ const renderNoticeSection = (
         ),
       ];
 
+const incrementalDiscoveryWarning = (
+  definitionId: MigrationDefinitionId,
+  restartsFromBeginning: boolean
+): string =>
+  restartsFromBeginning
+    ? `${definitionId} uses incremental source discovery. This run starts from the beginning and will retain the new high-water cursor for later runs.`
+    : `${definitionId} uses incremental source discovery. Once a cursor is saved, changes at or before it will not be discovered. Pass --rescan to scan from the beginning.`;
+
+const runDiscoveryWarningLines = (
+  plan: MigrationDefinitionRunPlan
+): readonly string[] => {
+  const traversesSourceCursor =
+    plan.target === undefined &&
+    (plan.mode === undefined || plan.mode.kind === "normal");
+
+  if (!traversesSourceCursor) {
+    return [];
+  }
+
+  const restartsFromBeginning = plan.rescan === true || plan.update === true;
+
+  return plan.definitions
+    .filter((definition) => definition.source.discovery === "incremental")
+    .map((definition) =>
+      incrementalDiscoveryWarning(definition.id, restartsFromBeginning)
+    );
+};
+
+function renderWarningSection(
+  warnings: readonly string[],
+  options: RenderOptions,
+  includeLeadingBlank = true
+): readonly string[] {
+  if (warnings.length === 0) {
+    return [];
+  }
+
+  return [
+    ...(includeLeadingBlank ? [""] : []),
+    yellow("Warnings:", options),
+    ...warnings.map((warning) => yellow(`! ${warning}`, options)),
+  ];
+}
+
+export const renderRunDiscoveryWarnings = (
+  plan: MigrationDefinitionRunPlan,
+  options: RenderOptions = {}
+): string => {
+  const warnings = runDiscoveryWarningLines(plan);
+
+  return renderWarningSection(warnings, options, false).join("\n");
+};
+
 const renderPlanScope = (
   input: {
     readonly force?: boolean;
@@ -428,6 +493,8 @@ const renderPlanScope = (
     readonly requestedDefinitionIds:
       | MigrationDefinitionRunPlan["requestedDefinitionIds"]
       | MigrationDefinitionRollbackPlan["requestedDefinitionIds"];
+    readonly rescan?: boolean;
+    readonly rollbackOrphans?: boolean;
     readonly sourceIdentities?: readonly string[];
     readonly update?: boolean;
   },
@@ -441,6 +508,8 @@ const renderPlanScope = (
   `Included   ${renderDefinitionIdInlineList(input.includedDefinitionIds)}`,
   ...(input.force === true ? ["Force      yes"] : []),
   ...(input.mode === undefined ? [] : [`Mode       ${input.mode}`]),
+  ...(input.rescan === true ? ["Rescan     yes"] : []),
+  ...(input.rollbackOrphans === true ? ["Rollback orphans  yes"] : []),
   ...(input.update === true ? ["Update     yes"] : []),
   ...(input.sourceIdentities === undefined
     ? []
@@ -466,6 +535,10 @@ export const renderRunPlan = (
           : { requestedGroup: plan.requestedGroup }),
         ...(options.mode === undefined ? {} : { mode: options.mode }),
         requestedDefinitionIds: plan.requestedDefinitionIds,
+        ...(plan.rescan === undefined ? {} : { rescan: plan.rescan }),
+        ...(plan.rollbackOrphans === undefined
+          ? {}
+          : { rollbackOrphans: plan.rollbackOrphans }),
         ...(plan.target === undefined
           ? {}
           : { sourceIdentities: plan.target.sourceIdentities }),
@@ -483,6 +556,7 @@ export const renderRunPlan = (
     bold("Execution Policy", options),
     ...renderRunExecutionPolicyTable(plan, options),
     ...renderNoticeSection(plan.notices, options),
+    ...renderWarningSection(runDiscoveryWarningLines(plan), options),
   ].join("\n");
 
 export const renderRollbackPlan = (
@@ -601,6 +675,38 @@ const renderRunSummaryTable = (
           yellow
         ),
       },
+      ...(summary.definitions.some(
+        (definition) => definition.counts.orphaned !== undefined
+      )
+        ? [
+            {
+              align: "right" as const,
+              header: "Orphaned",
+              render: (
+                definition: MigrationRunSummary["definitions"][number]
+              ) => String(definition.counts.orphaned ?? 0),
+            },
+            {
+              align: "right" as const,
+              header: "Rolled Back",
+              render: (
+                definition: MigrationRunSummary["definitions"][number]
+              ) => String(definition.counts.rolledBack ?? 0),
+            },
+            {
+              align: "right" as const,
+              header: "Rollback Failed",
+              render: (
+                definition: MigrationRunSummary["definitions"][number]
+              ) => String(definition.counts.rollbackFailed ?? 0),
+              style: stylePositiveCount(
+                (definition: MigrationRunSummary["definitions"][number]) =>
+                  definition.counts.rollbackFailed ?? 0,
+                red
+              ),
+            },
+          ]
+        : []),
     ],
     summary.definitions,
     options
@@ -847,6 +953,10 @@ const durableStatusColumns = [
     render: (definition: StatusDefinition) => definition.definitionId,
   },
   {
+    header: "Discovery",
+    render: (definition: StatusDefinition) => definition.discovery,
+  },
+  {
     header: "Last Run",
     render: latestStatus,
     style: styleLatestStatus,
@@ -1004,8 +1114,15 @@ const renderStatusWarning = (
 export const renderStatusReport = (
   report: MigrationDefinitionRegistryStatusReport,
   options: RenderOptions = {}
-): string =>
-  [
+): string => {
+  const discoveryWarnings = report.definitions
+    .filter((definition) => definition.discovery === "incremental")
+    .map((definition) =>
+      incrementalDiscoveryWarning(definition.definitionId, false)
+    );
+  const statusWarnings = report.warnings.map(renderStatusWarning);
+
+  return [
     bold("Migration Status", options),
     "",
     ...renderStatusScope(report, options),
@@ -1013,16 +1130,9 @@ export const renderStatusReport = (
     bold("Definitions", options),
     ...renderStatusTable(report, options),
     ...renderNoticeSection(report.notices),
-    ...(report.warnings.length === 0
-      ? []
-      : [
-          "",
-          yellow("Warnings:", options),
-          ...report.warnings.map((warning) =>
-            yellow(`! ${renderStatusWarning(warning)}`, options)
-          ),
-        ]),
+    ...renderWarningSection([...discoveryWarnings, ...statusWarnings], options),
   ].join("\n");
+};
 
 const formatPlanCommand = (
   command: "rollback" | "run" | "status",
@@ -1068,6 +1178,8 @@ export const renderPlanningError = (
     readonly group?: string;
     readonly hasTarget: boolean;
     readonly mode?: "failed" | "skipped";
+    readonly rescan?: boolean;
+    readonly rollbackOrphans?: boolean;
     readonly update?: boolean;
   }
 ): string => {
@@ -1086,8 +1198,13 @@ export const renderPlanningError = (
       const modeFlags =
         input.mode === undefined ? [] : ([`--${input.mode}`] as const);
       const runOptionFlags =
-        input.command === "run" && input.update === true
-          ? ["--update", ...modeFlags]
+        input.command === "run"
+          ? [
+              ...(input.rescan === true ? ["--rescan"] : []),
+              ...(input.rollbackOrphans === true ? ["--rollback-orphans"] : []),
+              ...(input.update === true ? ["--update"] : []),
+              ...modeFlags,
+            ]
           : modeFlags;
       const selectionFlags =
         input.group === undefined ? [] : ["--group", input.group];

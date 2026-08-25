@@ -1,5 +1,9 @@
 import { Effect, Schema } from "effect";
-import { type ConfiguredSource, Source } from "../../domain/definition.ts";
+import {
+  type ConfiguredSource,
+  Source,
+  type SourceDiscovery,
+} from "../../domain/definition.ts";
 import { SourceError } from "../../domain/errors.ts";
 import type {
   SourceIdentity,
@@ -27,6 +31,11 @@ interface InMemorySourceBaseOptions<
   IdentityKey extends SourceIdentitySnapshotKey,
 > {
   readonly batchSize?: number;
+  /**
+   * Controls cursor retention after completed runs. Defaults to `"full"`.
+   * Use `"incremental"` only when changed items always follow the saved cursor.
+   */
+  readonly discovery?: SourceDiscovery;
   readonly identity: SourceIdentityDefinition<IdentityKey>;
   readonly items: readonly SourceItemInput<EncodedPayload, IdentityKey>[];
   readonly lookupStrategy?: SourceLookupStrategy;
@@ -175,6 +184,9 @@ const make = <
 > =>
   Source.make({
     cursorSchema: InMemorySourceCursor,
+    ...(options.discovery === undefined
+      ? {}
+      : { discovery: options.discovery }),
     identity: options.identity,
     make: () => makeImplementation(options, options.identity),
     sourceSchema: options.sourceSchema,

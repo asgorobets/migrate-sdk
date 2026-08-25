@@ -10,6 +10,7 @@ import {
 } from "migrate-sdk";
 import {
   MigrationExecutionEnvelopeMissingRegistryIdError,
+  MigrationRunExecutionEnvelope,
   makeMigrationRollbackExecutionEnvelope,
   makeMigrationRunExecutionEnvelope,
 } from "migrate-sdk/core";
@@ -122,5 +123,44 @@ describe("MigrationExecutionEnvelope", () => {
         })
       );
     })
+  );
+
+  it.effect(
+    "round-trips rollback-orphans intent for workflow re-planning",
+    () =>
+      Effect.gen(function* () {
+        const articles = MigrationDefinition.make({
+          id: "articles",
+          source: makeArticlesSource(),
+          store: InMemoryMigrationStore.layer(),
+          process: () => Effect.void,
+          rollback: () => undefined,
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          id: "catalog",
+          definitions: [articles] as const,
+        });
+        const plan = yield* registry.executable().planRun({
+          definitionIds: ["articles"],
+          rollbackOrphans: true,
+        });
+        const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
+          runId: "run-rollback-orphans",
+        });
+        const decoded = yield* Schema.decodeUnknownEffect(
+          MigrationRunExecutionEnvelope
+        )(JSON.parse(JSON.stringify(envelope)));
+
+        expect(decoded.request).toEqual({
+          definitionIds: ["articles"],
+          rollbackOrphans: true,
+        });
+
+        const replanned = yield* registry
+          .executable()
+          .planRun(decoded.request as typeof envelope.request);
+        expect(replanned.rollbackOrphans).toBe(true);
+        expect(replanned.rescan).toBe(true);
+      })
   );
 });

@@ -2,8 +2,8 @@ import { Effect, Layer } from "effect";
 import {
   Source,
   type SourceIdentityTarget,
-  type SourceRuntimeImplementation,
   SourceItemTotal,
+  type SourceRuntimeImplementation,
 } from "migrate-sdk";
 import { CommercetoolsSdk } from "../../sdk.ts";
 import type {
@@ -212,6 +212,9 @@ export const makeProjectedEntitySource = <
         })
       ),
     cursorSchema: CommercetoolsSourceCursor,
+    ...(options.discovery === undefined
+      ? {}
+      : { discovery: options.discovery }),
     identity,
     sourceSchema: options.sourceSchema,
   });

@@ -35,15 +35,18 @@ const selectedRunSummaryPattern =
 const articleRunSummaryPattern = /1\s+articles\s+succeeded\s+1\s+0\s+0\s+0\s+0/;
 const progressArticleRunSummaryPattern =
   /1\s+articles\s+succeeded\s+3\s+0\s+0\s+0\s+0/;
-const activeLockedStatusRowPattern = /running\s+active\s+running\s+locked/;
-const staleRunningStatusRowPattern = /warning\s+stale\s+running\s+clear/;
+const activeLockedStatusRowPattern =
+  /running\s+active\s+full\s+running\s+locked/;
+const staleRunningStatusRowPattern = /warning\s+stale\s+full\s+running\s+clear/;
 const rollbackAllSummaryPattern =
   /1\s+articles\s+succeeded\s+1\s+0\s+0[\s\S]*2\s+authors\s+succeeded\s+1\s+0\s+0[\s\S]*3\s+tags\s+succeeded\s+1\s+0\s+0/;
 const tagRollbackSummaryPattern = /1\s+tags\s+succeeded\s+1\s+0\s+0/;
 const interactiveDefinitionPattern = /definition=([^\s]+)/;
-const tagsProcessConcurrencyPattern = /tags\s+4/;
-const authorsProcessConcurrencyPattern = /authors\s+4/;
+const tagsProcessConcurrencyPattern = /tags\s+full\s+4/;
+const authorsProcessConcurrencyPattern = /authors\s+full\s+4/;
 const tagsRollbackConcurrencyPattern = /tags\s+unbounded/;
+const rollbackOrphansSummaryPattern =
+  /articles\s+succeeded\s+0\s+1\s+0\s+0\s+0\s+1\s+1\s+0/;
 
 interface CliRuntimeTestOptions {
   readonly stdoutColumns?: number;
@@ -147,7 +150,8 @@ const readCliFixture = (name: string) =>
   );
 
 const tsDefinitionFixtureSource = (
-  processExpression = "() => undefined"
+  processExpression = "() => undefined",
+  sourceDiscovery: "full" | "incremental" = "full"
 ): string => `
   const CliFixtureSource = Schema.Struct({ id: Schema.NonEmptyString });
   const cliFixtureSourceIdentity = SourceIdentity.make({
@@ -156,6 +160,7 @@ const tsDefinitionFixtureSource = (
   });
   const cliFixtureSource = InMemorySource.make({
     batchSize: 1,
+    discovery: "${sourceDiscovery}",
     identity: cliFixtureSourceIdentity,
     sourceSchema: CliFixtureSource,
     items: []
@@ -205,7 +210,10 @@ const jsDefinitionFixtureSource = (): string => `
     });
 `;
 
-const configSource = (definitionId: string): string => `
+const configSource = (
+  definitionId: string,
+  sourceDiscovery?: "full" | "incremental"
+): string => `
   import {
     MigrationDefinition,
     MigrationDefinitionRegistry,
@@ -220,7 +228,7 @@ const configSource = (definitionId: string): string => `
   import { Schema } from "effect";
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
-  ${tsDefinitionFixtureSource()}
+  ${tsDefinitionFixtureSource("() => undefined", sourceDiscovery)}
 
   export default defineMigrationCliConfig({
     registry: MigrationDefinitionRegistry.make({
@@ -300,7 +308,7 @@ const graphConfigSource = (): string => `
   });
 `;
 
-const planConfigSource = (): string => `
+const planConfigSource = (sourceDiscovery?: "full" | "incremental"): string => `
   import {
     MigrationDefinition,
     MigrationDefinitionRegistry,
@@ -315,7 +323,10 @@ const planConfigSource = (): string => `
   import { defineMigrationCliConfig } from "migrate-sdk/cli";
   import { Schema } from "effect";
 
-  ${tsDefinitionFixtureSource('() => { throw new Error("definition executed"); }')}
+  ${tsDefinitionFixtureSource(
+    '() => { throw new Error("definition executed"); }',
+    sourceDiscovery
+  )}
 
   const authors = definition("authors", {
     group: "articles"
@@ -407,6 +418,8 @@ const lockedStoreConfigSource = (): string => `
   };
 
   const store = Layer.succeed(MigrationStore, {
+    listOrphanItemStates: () => Effect.die("not implemented"),
+    observeItemState: () => Effect.die("not implemented"),
     getDefinitionLock: (definitionId) =>
       Effect.sync(() => storeState.definitionLocks.get(definitionId) ?? null),
     breakDefinitionLock: (definitionId) =>
@@ -458,6 +471,32 @@ const getExecutionProbe = (): CliExecutionProbe => {
   }
 
   return probe as CliExecutionProbe;
+};
+
+interface CliFileRollbackOrphansProbe {
+  readonly rollbackCalls: string[];
+  readonly sourceItems: unknown[];
+}
+
+const fileRollbackOrphansProbeGlobal =
+  "__migrateSdkCliFileRollbackOrphansProbe";
+
+const resetFileRollbackOrphansProbe = () => {
+  delete (globalThis as Record<string, unknown>)[
+    fileRollbackOrphansProbeGlobal
+  ];
+};
+
+const getFileRollbackOrphansProbe = (): CliFileRollbackOrphansProbe => {
+  const probe = (globalThis as Record<string, unknown>)[
+    fileRollbackOrphansProbeGlobal
+  ];
+
+  if (typeof probe !== "object" || probe === null) {
+    throw new Error("CLI File Rollback Orphans probe was not initialized");
+  }
+
+  return probe as CliFileRollbackOrphansProbe;
 };
 
 interface CliTotalCountProbe {
@@ -707,6 +746,8 @@ describe("migrate CLI", () => {
       expect(result.stdout).toContain("State");
       expect(result.stdout).toContain("ok");
       expect(result.stdout).toContain("Migration ID");
+      expect(result.stdout).toContain("Discovery");
+      expect(result.stdout).toContain("full");
       expect(result.stdout).toContain("Last Run");
       expect(result.stdout).toContain("Migrated");
       expect(result.stdout).toContain("articles");
@@ -717,6 +758,33 @@ describe("migrate CLI", () => {
       );
       expect(result.stdout).not.toContain("Unprocessed");
       expect(result.stdout).not.toContain("Orphaned");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("warns about incremental discovery in status", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource("incremental")
+      );
+
+      const result = yield* runCli(
+        ["status", "--config", "migrate.config.ts", "tags"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Discovery");
+      expect(result.stdout).toContain("incremental");
+      expect(result.stdout).toContain("Warnings:");
+      expect(result.stdout).toContain(
+        "tags uses incremental source discovery. Once a cursor is saved, changes at or before it will not be discovered. Pass --rescan to scan from the beginning."
+      );
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -1028,6 +1096,7 @@ describe("migrate CLI", () => {
         definitions: [
           {
             definitionId: "articles",
+            discovery: "full",
             durable: {
               failed: 0,
               migrated: 1,
@@ -1066,6 +1135,7 @@ describe("migrate CLI", () => {
         definitions: [
           {
             definitionId: activeDefinitionId,
+            discovery: "full",
             durable: {
               failed: 0,
               migrated: 1,
@@ -1083,6 +1153,7 @@ describe("migrate CLI", () => {
           },
           {
             definitionId: staleDefinitionId,
+            discovery: "full",
             durable: {
               failed: 0,
               migrated: 1,
@@ -1115,6 +1186,7 @@ describe("migrate CLI", () => {
         definitions: [
           {
             definitionId,
+            discovery: "full",
             durable: {
               failed: 0,
               migrated: 0,
@@ -1199,11 +1271,41 @@ describe("migrate CLI", () => {
         expect(result.stdout).toContain("Execution Order");
         expect(result.stdout).toContain("Execution Policy");
         expect(result.stdout).toContain("Process Concurrency");
+        expect(result.stdout).toContain("Discovery");
+        expect(result.stdout).toContain("full");
         expect(result.stdout).toMatch(tagsProcessConcurrencyPattern);
         expect(result.stdout).toMatch(authorsProcessConcurrencyPattern);
         expect(result.stdout).toMatch(tagsAuthorsArticlesOrderPattern);
         expect(result.stdout).not.toContain("executed");
       }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("warns about incremental discovery in run plans", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource("incremental")
+      );
+
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--plan", "tags"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Discovery");
+      expect(result.stdout).toContain("incremental");
+      expect(result.stdout).toContain("Warnings:");
+      expect(result.stdout).toContain(
+        "tags uses incremental source discovery. Once a cursor is saved, changes at or before it will not be discovered. Pass --rescan to scan from the beginning."
+      );
+      expect(result.stdout).not.toContain("executed");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
   it.effect("plans a complete Migration Definition group", () =>
@@ -1317,14 +1419,95 @@ describe("migrate CLI", () => {
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
-  it.effect("renders update intent in run plans without executing", () =>
+  it.effect(
+    "renders reset-aware incremental discovery warnings for update plans",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          planConfigSource("incremental")
+        );
+
+        const result = yield* runCli(
+          [
+            "run",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            "--update",
+            "--with-dependencies",
+            "articles",
+          ],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Run Plan");
+        expect(result.stdout).toContain("Requested  articles");
+        expect(result.stdout).toContain("Included   articles, authors");
+        expect(result.stdout).toContain("Update     yes");
+        expect(result.stdout).toMatch(authorsArticlesOrderPattern);
+        expect(result.stdout).toContain(
+          "articles uses incremental source discovery. This run starts from the beginning and will retain the new high-water cursor for later runs."
+        );
+        expect(result.stdout).not.toContain("Pass --rescan");
+        expect(result.stdout).not.toContain("executed");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("omits cursor warnings for targeted incremental runs", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const project = yield* makeProject;
 
       yield* fs.writeFileString(
         `${project}/migrate.config.ts`,
-        planConfigSource()
+        planConfigSource("incremental")
+      );
+
+      const targetedRunArguments = [
+        ["--failed"],
+        ["--skipped"],
+        ["--id", "article-1"],
+      ] as const;
+
+      for (const runArguments of targetedRunArguments) {
+        const result = yield* runCli(
+          [
+            "run",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            ...runArguments,
+            "tags",
+          ],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Discovery");
+        expect(result.stdout).toContain("incremental");
+        expect(result.stdout).not.toContain("Warnings:");
+        expect(result.stdout).not.toContain("Pass --rescan");
+      }
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("renders rescan intent in run plans without executing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource("incremental")
       );
 
       const result = yield* runCli(
@@ -1333,7 +1516,7 @@ describe("migrate CLI", () => {
           "--config",
           "migrate.config.ts",
           "--plan",
-          "--update",
+          "--rescan",
           "--with-dependencies",
           "articles",
         ],
@@ -1344,11 +1527,40 @@ describe("migrate CLI", () => {
       expect(result.cause).toBe("");
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("Run Plan");
-      expect(result.stdout).toContain("Requested  articles");
-      expect(result.stdout).toContain("Included   articles, authors");
-      expect(result.stdout).toContain("Update     yes");
-      expect(result.stdout).toMatch(authorsArticlesOrderPattern);
+      expect(result.stdout).toContain("Rescan     yes");
+      expect(result.stdout).toContain(
+        "articles uses incremental source discovery. This run starts from the beginning and will retain the new high-water cursor for later runs."
+      );
       expect(result.stdout).not.toContain("executed");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("maps rollback-orphans into the run plan", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource("incremental")
+      );
+
+      const result = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--plan",
+          "--rollback-orphans",
+          "tags",
+        ],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Rollback orphans  yes");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -1766,6 +1978,54 @@ describe("migrate CLI", () => {
       expect(targetResult.stderr).toContain(
         "Update run planning cannot target source identities"
       );
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rejects unsupported rescan run flag combinations", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        planConfigSource()
+      );
+
+      const combinations = [
+        {
+          args: ["--rescan", "--update"],
+          message: "Rescan run planning cannot combine with update intent",
+        },
+        {
+          args: ["--rescan", "--failed"],
+          message: "Rescan run planning cannot combine with failed mode",
+        },
+        {
+          args: ["--rescan", "--skipped"],
+          message: "Rescan run planning cannot combine with skipped mode",
+        },
+        {
+          args: ["--rescan", "--id", "article-1"],
+          message: "Rescan run planning cannot target source identities",
+        },
+      ] as const;
+
+      for (const combination of combinations) {
+        const result = yield* runCli(
+          [
+            "run",
+            "--config",
+            "migrate.config.ts",
+            "--plan",
+            ...combination.args,
+            "articles",
+          ],
+          project
+        );
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain(combination.message);
+      }
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
@@ -2375,6 +2635,59 @@ describe("migrate CLI", () => {
       expect(result.stdout).not.toContain("tags          succeeded");
       expect(getExecutionProbe().executions).toEqual(["authors", "articles"]);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("warns before executing an incremental-discovery source", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        configSource("articles", "incremental")
+      );
+
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "articles"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(
+        "articles uses incremental source discovery. Once a cursor is saved, changes at or before it will not be discovered. Pass --rescan to scan from the beginning."
+      );
+      expect(result.stdout).toContain("Run Completed succeeded");
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "warns that incremental update execution starts from the beginning",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const project = yield* makeProject;
+
+        yield* fs.writeFileString(
+          `${project}/migrate.config.ts`,
+          configSource("articles", "incremental")
+        );
+
+        const result = yield* runCli(
+          ["run", "--config", "migrate.config.ts", "--update", "articles"],
+          project
+        );
+
+        expect(result.stderr).toBe("");
+        expect(result.cause).toBe("");
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain(
+          "articles uses incremental source discovery. This run starts from the beginning and will retain the new high-water cursor for later runs."
+        );
+        expect(result.stdout).not.toContain("Pass --rescan");
+        expect(result.stdout).toContain("Run Completed succeeded");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 
   it.effect("executes a selected Migration Definition group", () =>
@@ -3039,6 +3352,88 @@ describe("migrate CLI", () => {
         "article-migrated",
         "article-new",
       ]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("executes rescans through the CLI execution path", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetExecutionProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        yield* readCliFixture("update-execution.config.ts")
+      );
+
+      const result = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "--rescan", "articles"],
+        project
+      );
+
+      expect(result.stderr).toBe("");
+      expect(result.cause).toBe("");
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Run Completed succeeded");
+      expect(getExecutionProbe().executions).toEqual(["article-new"]);
+    }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect("rolls back File Migration Store orphans through the CLI", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const project = yield* makeProject;
+      resetFileRollbackOrphansProbe();
+
+      yield* fs.writeFileString(
+        `${project}/migrate.config.ts`,
+        yield* readCliFixture("file-rollback-orphans.config.ts")
+      );
+
+      const initialResult = yield* runCli(
+        ["run", "--config", "migrate.config.ts", "articles"],
+        project
+      );
+
+      expect(initialResult.stderr).toBe("");
+      expect(initialResult.cause).toBe("");
+      expect(initialResult.exitCode).toBe(0);
+
+      getFileRollbackOrphansProbe().sourceItems.pop();
+      const rollbackOrphansResult = yield* runCli(
+        [
+          "run",
+          "--config",
+          "migrate.config.ts",
+          "--rollback-orphans",
+          "articles",
+        ],
+        project
+      );
+
+      expect(rollbackOrphansResult.stderr).toBe("");
+      expect(rollbackOrphansResult.cause).toBe("");
+      expect(rollbackOrphansResult.exitCode).toBe(0);
+      expect(rollbackOrphansResult.stdout).toContain("Run Completed succeeded");
+      expect(rollbackOrphansResult.stdout).toContain("Orphaned");
+      expect(rollbackOrphansResult.stdout).toContain("Rolled Back");
+      expect(rollbackOrphansResult.stdout).toContain("Rollback Failed");
+      expect(rollbackOrphansResult.stdout).toMatch(
+        rollbackOrphansSummaryPattern
+      );
+      expect(getFileRollbackOrphansProbe().rollbackCalls).toEqual([
+        "article-2",
+      ]);
+      expect(
+        yield* fs.exists(
+          `${project}/.migration-state/definitions/articles/items/article-1.json`
+        )
+      ).toBe(true);
+      expect(
+        yield* fs.exists(
+          `${project}/.migration-state/definitions/articles/items/article-2.json`
+        )
+      ).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
   );
 

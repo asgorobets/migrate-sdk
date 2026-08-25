@@ -16,9 +16,43 @@ import type {
 import type { MigrationItemState } from "../domain/state.ts";
 import type { MigrationItemStateSummary } from "../domain/status.ts";
 
+export interface OrphanItemStatePage {
+  readonly items: readonly MigrationItemState[];
+  readonly nextAfterIdentity?: EncodedSourceIdentity;
+}
+
+export interface OrphanItemStatePageInput {
+  readonly afterIdentity?: EncodedSourceIdentity;
+  readonly limit: number;
+}
+
+interface MigrationStoreOrphanMethods {
+  /**
+   * Lists states not observed by `sourceInventoryRunId` in a stable order
+   * derived from Encoded Source Identity. `afterIdentity` is an exclusive
+   * keyset cursor.
+   */
+  readonly listOrphanItemStates: (
+    definitionId: MigrationDefinitionId,
+    sourceInventoryRunId: MigrationRunId,
+    page: OrphanItemStatePageInput
+  ) => Effect.Effect<OrphanItemStatePage, MigrationStoreError>;
+
+  /** Marks an existing state as observed without inserting a missing state. */
+  readonly observeItemState: (
+    definitionId: MigrationDefinitionId,
+    identity: EncodedSourceIdentity,
+    sourceInventoryRunId: MigrationRunId
+  ) => Effect.Effect<void, MigrationStoreError>;
+}
+
 export class MigrationStore extends Service<
   MigrationStore,
   {
+    readonly listOrphanItemStates: MigrationStoreOrphanMethods["listOrphanItemStates"];
+
+    readonly observeItemState: MigrationStoreOrphanMethods["observeItemState"];
+
     readonly getSourceCursor: (
       definitionId: MigrationDefinitionId
     ) => Effect.Effect<EncodedSourceCursor | null, MigrationStoreError>;

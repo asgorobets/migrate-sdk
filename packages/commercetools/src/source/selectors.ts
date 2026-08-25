@@ -13,10 +13,14 @@ import type { CommercetoolsSourceCursor } from "./schemas.ts";
 export const defaultSourceBatchSize = 100;
 export const defaultSourceIdentity = "id" as const;
 
+const incrementalCursorPredicate =
+  "lastModifiedAt > :lastModifiedAt or (lastModifiedAt = :lastModifiedAt and id > :lastId)";
+
 export const entitySourceBaseOptions = (
   options: CommercetoolsEntitySourceBaseOptions
 ): CommercetoolsEntitySourceBaseOptions => ({
   ...(options.batchSize === undefined ? {} : { batchSize: options.batchSize }),
+  ...(options.discovery === undefined ? {} : { discovery: options.discovery }),
   ...(options.expand === undefined ? {} : { expand: options.expand }),
   ...(options.identity === undefined ? {} : { identity: options.identity }),
   ...(options.where === undefined ? {} : { where: options.where }),
@@ -57,7 +61,7 @@ const maybeStringArray = (
   value: readonly string[]
 ): string | string[] | undefined => {
   if (value.length === 0) {
-    return undefined;
+    return;
   }
 
   return value.length === 1 ? value[0] : [...value];
@@ -99,17 +103,22 @@ export const makeReadQueryArgs = (
   const expand = maybeStringArray(asArray(options.expand));
   const where = maybeStringArray([
     ...asArray(options.where),
-    ...(cursor === null ? [] : ["id > :lastId"]),
+    ...(cursor === null ? [] : [incrementalCursorPredicate]),
   ]);
 
   return {
     ...(expand === undefined ? {} : { expand }),
     limit,
-    sort: "id asc",
+    sort: ["lastModifiedAt asc", "id asc"],
     withTotal: false,
     ...(where === undefined ? {} : { where }),
     ...whereVariableQueryArgs(options.whereVariables),
-    ...(cursor === null ? {} : { "var.lastId": cursor.lastId }),
+    ...(cursor === null
+      ? {}
+      : {
+          "var.lastId": cursor.lastId,
+          "var.lastModifiedAt": cursor.lastModifiedAt,
+        }),
   };
 };
 
@@ -157,12 +166,15 @@ export const nextCursorFromPage = <
   page: Page
 ): CommercetoolsSourceCursor | undefined => {
   if (page.results.length === 0) {
-    return undefined;
+    return;
   }
 
   const lastResource = page.results.at(-1);
 
   return lastResource === undefined
     ? undefined
-    : { lastId: descriptor.getId(lastResource) };
+    : {
+        lastId: descriptor.getId(lastResource),
+        lastModifiedAt: descriptor.getLastModifiedAt(lastResource),
+      };
 };

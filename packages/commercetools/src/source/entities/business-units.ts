@@ -36,6 +36,7 @@ const businessUnitSourceDescriptor: CommercetoolsEntitySourceDescriptor<
 > = {
   getId: (businessUnit) => businessUnit.id,
   getKey: (businessUnit) => businessUnit.key,
+  getLastModifiedAt: (businessUnit) => businessUnit.lastModifiedAt,
   getVersion: (businessUnit) => businessUnit.version,
   identity: makeCommercetoolsSourceIdentityDefinitions({
     resource: "business-unit",

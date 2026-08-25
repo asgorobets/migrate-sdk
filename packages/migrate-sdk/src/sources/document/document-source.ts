@@ -1,5 +1,9 @@
 import { Effect, Schema, SchemaAST } from "effect";
-import { type ConfiguredSource, Source } from "../../domain/definition.ts";
+import {
+  type ConfiguredSource,
+  Source,
+  type SourceDiscovery,
+} from "../../domain/definition.ts";
 import { SourceError } from "../../domain/errors.ts";
 import type {
   SourceIdentityContractIdInput,
@@ -190,6 +194,11 @@ export interface DocumentSourceBaseOptions<
     FetcherCursor,
     Document
   >;
+  /**
+   * Controls cursor retention after completed runs. Defaults to `"full"`.
+   * Use `"incremental"` only when changes always follow the saved cursor.
+   */
+  readonly discovery?: SourceDiscovery;
   readonly fetcher: DocumentFetcher<Resource, FetcherCursor>;
   readonly lookup: DocumentSourceLookup<Resource, FetcherCursor, IdentityKey>;
   readonly parser: DocumentParser<Resource, Document>;
@@ -1461,6 +1470,9 @@ function makeSource<
   return Source.make<Payload, DocumentSourceCursor<FetcherCursor>, IdentityKey>(
     {
       cursorSchema,
+      ...(options.discovery === undefined
+        ? {}
+        : { discovery: options.discovery }),
       identity,
       make: () => makeImplementation(compiledOptions),
       sourceIdentityContractFingerprint:

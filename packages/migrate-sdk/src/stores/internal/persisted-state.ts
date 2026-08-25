@@ -16,6 +16,7 @@ import {
 const PersistedMigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionId,
   lastRunId: MigrationRunId,
+  lastSourceInventoryRunId: Schema.optional(MigrationRunId),
   sourceIdentity: SourceIdentitySnapshot,
   updatedAt: Schema.DateFromString,
 } as const;

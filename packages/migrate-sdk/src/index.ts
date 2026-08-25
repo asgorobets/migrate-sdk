@@ -11,6 +11,7 @@ export type {
   MigrationDefinitionInput,
   ProcessPipelineFor,
   SourceFactoryInput,
+  SourceDiscovery,
   SourceLayerInput,
   SourceMakeInput,
   SourcePayloadSchema,
@@ -23,6 +24,7 @@ export type {
   SourceRuntimeImplementation,
 } from "./services/source.ts";
 export {
+  defaultSourceDiscovery,
   MigrationDefinition,
   Source,
 } from "./domain/definition.ts";
@@ -321,6 +323,10 @@ export type {
   MigrationDefinitionRegistryCatalogService,
 } from "./services/migration-definition-registry-catalog.ts";
 export { MigrationStore } from "./services/migration-store.ts";
+export type {
+  OrphanItemStatePage,
+  OrphanItemStatePageInput,
+} from "./services/migration-store.ts";
 export { MigrationProgress } from "./services/migration-progress.ts";
 export { RollbackProgress } from "./services/rollback-progress.ts";
 export { Tracking } from "./services/tracking.ts";

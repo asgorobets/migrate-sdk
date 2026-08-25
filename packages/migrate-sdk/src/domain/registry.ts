@@ -94,6 +94,8 @@ export type MigrationDefinitionRegistryRunInput =
     readonly execution?: MigrationExecutionOptions;
     readonly force?: boolean;
     readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
+    readonly rollbackOrphans?: boolean;
+    readonly rescan?: boolean;
     readonly sourceIdentities?: readonly string[];
     readonly update?: boolean;
   };
@@ -210,6 +212,8 @@ export interface MigrationDefinitionRunPlan<
   readonly requestedDefinitionIds: "all" | readonly MigrationDefinitionId[];
   readonly requestedGroup?: MigrationDefinitionGroupId;
   readonly requiredDependencyPreflight?: readonly MigrationDefinitionRequiredDependencyPreflight[];
+  readonly rescan?: boolean;
+  readonly rollbackOrphans?: boolean;
   readonly target?: MigrationDefinitionPlanTarget;
   readonly update?: boolean;
   readonly withDependencies: boolean;
@@ -1122,6 +1126,103 @@ const validateUpdateRunInput = (
   return Effect.void;
 };
 
+const validateRescanRunInput = (
+  input: MigrationDefinitionRegistryRunInput
+): Effect.Effect<void, MigrationDefinitionRegistryInvalidSelectionError> => {
+  if (input.rescan !== true) {
+    return Effect.void;
+  }
+
+  if (input.update === true) {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Rescan run planning cannot combine with update intent",
+      })
+    );
+  }
+
+  if (input.mode?.kind === "failed") {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Rescan run planning cannot combine with failed mode",
+      })
+    );
+  }
+
+  if (input.mode?.kind === "skipped") {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Rescan run planning cannot combine with skipped mode",
+      })
+    );
+  }
+
+  if (input.sourceIdentities !== undefined) {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Rescan run planning cannot target source identities",
+      })
+    );
+  }
+
+  return Effect.void;
+};
+
+const validateRollbackOrphansRunInput = (
+  input: MigrationDefinitionRegistryRunInput
+): Effect.Effect<void, MigrationDefinitionRegistryInvalidSelectionError> => {
+  if (input.rollbackOrphans !== true) {
+    return Effect.void;
+  }
+
+  if (input.update === true) {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Rollback orphans cannot combine with update execution",
+      })
+    );
+  }
+
+  if (input.sourceIdentities !== undefined) {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: "Rollback orphans cannot target source identities",
+      })
+    );
+  }
+
+  if (input.mode !== undefined && input.mode.kind !== "normal") {
+    return Effect.fail(
+      new MigrationDefinitionRegistryInvalidSelectionError({
+        message: `Rollback orphans cannot combine with ${input.mode.kind} mode`,
+      })
+    );
+  }
+
+  return Effect.void;
+};
+
+const validateRollbackOrphansDefinitions = (
+  definitions: readonly AnyMigrationDefinition[],
+  rollbackOrphans: boolean | undefined
+): Effect.Effect<void, MigrationDefinitionRegistryInvalidSelectionError> => {
+  if (rollbackOrphans !== true) {
+    return Effect.void;
+  }
+
+  const definitionWithoutRollback = definitions.find(
+    (definition) => !hasRollbackPipeline(definition)
+  );
+
+  return definitionWithoutRollback === undefined
+    ? Effect.void
+    : Effect.fail(
+        new MigrationDefinitionRegistryInvalidSelectionError({
+          message: `Rolling back orphans requires Migration Definition ${definitionWithoutRollback.id} to define a Rollback Pipeline`,
+        })
+      );
+};
+
 const normalizeRollbackTarget = (
   input: MigrationDefinitionRegistryRollbackInput,
   selection: ResolvedRegistrySelection,
@@ -1556,6 +1657,8 @@ export class MigrationDefinitionRegistry<
         input
       );
       yield* validateUpdateRunInput(input);
+      yield* validateRescanRunInput(input);
+      yield* validateRollbackOrphansRunInput(input);
       const targetOption = yield* normalizeRunTarget(
         input,
         selection,
@@ -1578,11 +1681,16 @@ export class MigrationDefinitionRegistry<
       const planDefinitions = planDetails.executionDefinitionIds.map(
         (definitionId) => definitionsById.get(definitionId)
       ) as unknown as Definitions;
+      yield* validateRollbackOrphansDefinitions(
+        planDefinitions,
+        input.rollbackOrphans
+      );
       const executionPolicy = yield* resolveDefinitionExecutionPolicy(
         planDefinitions,
         input.execution
       );
       const target = Option.getOrUndefined(targetOption);
+      const rescan = input.rollbackOrphans === true ? true : input.rescan;
 
       return {
         kind: "run",
@@ -1603,6 +1711,10 @@ export class MigrationDefinitionRegistry<
           ? {}
           : { execution: input.execution }),
         ...(input.mode === undefined ? {} : { mode: input.mode }),
+        ...(input.rollbackOrphans === undefined
+          ? {}
+          : { rollbackOrphans: input.rollbackOrphans }),
+        ...(rescan === undefined ? {} : { rescan }),
         ...(requiredDependencyPreflight.length === 0
           ? {}
           : { requiredDependencyPreflight }),

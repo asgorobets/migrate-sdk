@@ -136,6 +136,7 @@ type MigrationContractRecord = typeof MigrationContractRecord.Type;
 const PersistedMigrationItemStateBaseFields = {
   definitionId: MigrationDefinitionIdSchema,
   lastRunId: MigrationRunIdSchema,
+  lastSourceInventoryRunId: Schema.optional(MigrationRunIdSchema),
   sourceIdentity: SourceIdentitySnapshotSchema,
   updatedAt: Schema.DateFromString,
 } as const;
@@ -284,7 +285,9 @@ const itemStateKey = (
   definitionId: MigrationDefinitionId,
   identity: EncodedSourceIdentity
 ): string =>
-  `${namespace}__migration-item-state__${definitionHashSegment(definitionId)}__${sourceIdentityHashSegment(identity)}`;
+  `${namespace}__migration-item-state__${definitionHashSegment(
+    definitionId
+  )}__${sourceIdentityHashSegment(identity)}`;
 
 const latestRunStateKey = (
   namespace: string,
@@ -296,7 +299,9 @@ const definitionLockKey = (
   namespace: string,
   definitionId: MigrationDefinitionId
 ): string =>
-  `${namespace}__migration-definition-lock__${definitionHashSegment(definitionId)}`;
+  `${namespace}__migration-definition-lock__${definitionHashSegment(
+    definitionId
+  )}`;
 
 const resolveOptions = (
   options: CommercetoolsMigrationStoreOptions = {}
@@ -445,6 +450,33 @@ const itemStateListPredicate = ({
     "value(namespace = :namespace)",
     "value(recordKind = :recordKind)",
     "value(index(definitionId = :definitionId))",
+    ...(lastKey === undefined ? [] : ["key > :lastKey"]),
+  ].join(" and "),
+});
+
+const orphanItemStateListPredicate = ({
+  definitionId,
+  lastKey,
+  namespace,
+  sourceInventoryRunId,
+}: {
+  readonly definitionId: MigrationDefinitionId;
+  readonly lastKey?: string;
+  readonly namespace: string;
+  readonly sourceInventoryRunId: MigrationRunId;
+}): CustomObjectQueryPredicate => ({
+  variables: {
+    "var.definitionId": definitionId,
+    ...(lastKey === undefined ? {} : { "var.lastKey": lastKey }),
+    "var.namespace": namespace,
+    "var.recordKind": "migration-item-state",
+    "var.sourceInventoryRunId": sourceInventoryRunId,
+  },
+  where: [
+    "value(namespace = :namespace)",
+    "value(recordKind = :recordKind)",
+    "value(index(definitionId = :definitionId))",
+    "value(state(lastSourceInventoryRunId is not defined or lastSourceInventoryRunId != :sourceInventoryRunId))",
     ...(lastKey === undefined ? [] : ["key > :lastKey"]),
   ].join(" and "),
 });
@@ -963,7 +995,8 @@ const deleteCustomObject = (
 const queryCustomObjects = (
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions,
-  predicate: CustomObjectQueryPredicate
+  predicate: CustomObjectQueryPredicate,
+  limit = options.pageSize
 ): Effect.Effect<CustomObjectPagedQueryResponse, MigrationStoreError> =>
   sdk
     .request("customObjects.queryMigrationStoreRecords", (project) =>
@@ -972,7 +1005,7 @@ const queryCustomObjects = (
         .withContainer({ container: options.container })
         .get({
           queryArgs: {
-            limit: options.pageSize,
+            limit,
             sort: "key asc",
             where: predicate.where,
             withTotal: false,
@@ -985,6 +1018,46 @@ const queryCustomObjects = (
         storeError("Unable to query migration store Custom Objects", cause)
       )
     );
+
+interface ItemStateQueryPage {
+  readonly exhausted: boolean;
+  readonly lastKey?: string;
+  readonly states: readonly MigrationItemState[];
+}
+
+const queryItemStatePage = Effect.fn(
+  "CommercetoolsMigrationStore.queryItemStatePage"
+)(function* (
+  sdk: typeof CommercetoolsSdk.Service,
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  definitionId: MigrationDefinitionId,
+  predicate: CustomObjectQueryPredicate,
+  limit: number
+) {
+  const response = yield* queryCustomObjects(sdk, options, predicate, limit);
+  const states = yield* Effect.forEach(response.results, (customObject) =>
+    Effect.gen(function* () {
+      const record = yield* decodeRecord(
+        MigrationItemStateRecord,
+        customObject.value,
+        customObject.key
+      );
+
+      yield* validateItemStateRecord(options, customObject.key, record, {
+        definitionId,
+      });
+
+      return record.state;
+    })
+  );
+  const lastKey = response.results.at(-1)?.key;
+
+  return {
+    exhausted: response.results.length < limit || lastKey === undefined,
+    ...(lastKey === undefined ? {} : { lastKey }),
+    states,
+  } satisfies ItemStateQueryPage;
+});
 
 const readRecordOptional = <A>(
   sdk: typeof CommercetoolsSdk.Service,
@@ -1120,35 +1193,25 @@ const listItemStates = (
     let lastKey: string | undefined;
 
     while (true) {
-      const page = yield* queryCustomObjects(
+      const page = yield* queryItemStatePage(
         sdk,
         options,
+        definitionId,
         itemStateListPredicate({
           definitionId,
           namespace: options.namespace,
           ...(lastKey === undefined ? {} : { lastKey }),
-        })
+        }),
+        options.pageSize
       );
 
-      for (const customObject of page.results) {
-        const record = yield* decodeRecord(
-          MigrationItemStateRecord,
-          customObject.value,
-          customObject.key
-        );
+      itemStates.push(...page.states);
 
-        yield* validateItemStateRecord(options, customObject.key, record, {
-          definitionId,
-        });
-
-        itemStates.push(record.state);
-      }
-
-      if (page.results.length < options.pageSize) {
+      if (page.exhausted) {
         break;
       }
 
-      const nextLastKey = page.results.at(-1)?.key;
+      const nextLastKey = page.lastKey;
 
       if (nextLastKey === undefined || nextLastKey === lastKey) {
         break;
@@ -1437,6 +1500,112 @@ const makeService = (
     );
   });
 
+  const observeItemState: (typeof MigrationStore)["Service"]["observeItemState"] =
+    Effect.fn("CommercetoolsMigrationStore.observeItemState")(
+      function* (definitionId, identity, sourceInventoryRunId) {
+        const key = itemStateKey(options.namespace, definitionId, identity);
+        const customObject = yield* readCustomObjectOptional(sdk, options, key);
+
+        if (customObject === null) {
+          return;
+        }
+
+        const record = yield* decodeRecord(
+          MigrationItemStateRecord,
+          customObject.value,
+          key
+        );
+
+        yield* validateItemStateRecord(options, key, record, {
+          definitionId,
+          sourceIdentity: identity,
+        });
+
+        if (record.state.lastSourceInventoryRunId === sourceInventoryRunId) {
+          return;
+        }
+
+        const state = {
+          ...record.state,
+          lastSourceInventoryRunId: sourceInventoryRunId,
+        };
+
+        yield* writeRecord(
+          sdk,
+          options,
+          key,
+          MigrationItemStateRecord,
+          itemStateRecord(options, state),
+          { version: customObject.version }
+        );
+      }
+    );
+
+  const listOrphanItemStates: (typeof MigrationStore)["Service"]["listOrphanItemStates"] =
+    Effect.fn("CommercetoolsMigrationStore.listOrphanItemStates")(
+      function* (definitionId, sourceInventoryRunId, page) {
+        const limit = Math.max(0, Math.floor(page.limit));
+
+        if (limit === 0) {
+          return { items: [] };
+        }
+
+        const candidates: MigrationItemState[] = [];
+        const candidateLimit = limit + 1;
+        let lastKey =
+          page.afterIdentity === undefined
+            ? undefined
+            : itemStateKey(options.namespace, definitionId, page.afterIdentity);
+
+        while (candidates.length < candidateLimit) {
+          const queryLimit = Math.min(
+            options.pageSize,
+            candidateLimit - candidates.length
+          );
+          const result = yield* queryItemStatePage(
+            sdk,
+            options,
+            definitionId,
+            orphanItemStateListPredicate({
+              definitionId,
+              ...(lastKey === undefined ? {} : { lastKey }),
+              namespace: options.namespace,
+              sourceInventoryRunId,
+            }),
+            queryLimit
+          );
+
+          for (const state of result.states) {
+            if (state.lastSourceInventoryRunId !== sourceInventoryRunId) {
+              candidates.push(state);
+            }
+          }
+
+          const nextLastKey = result.lastKey;
+
+          if (
+            result.exhausted ||
+            nextLastKey === undefined ||
+            nextLastKey === lastKey
+          ) {
+            break;
+          }
+
+          lastKey = nextLastKey;
+        }
+
+        const items = candidates.slice(0, limit);
+        const lastItem = items.at(-1);
+
+        return {
+          items,
+          ...(lastItem !== undefined && candidates.length > items.length
+            ? { nextAfterIdentity: lastItem.sourceIdentity.encoded }
+            : {}),
+        };
+      }
+    );
+
   const beginRun = Effect.fn("CommercetoolsMigrationStore.beginRun")(
     (runId: MigrationRunId, definitionIds: readonly MigrationDefinitionId[]) =>
       writeOrTransitionLatestRunState(
@@ -1648,6 +1817,8 @@ const makeService = (
   });
 
   return {
+    listOrphanItemStates,
+    observeItemState,
     getSourceCursor,
     setSourceCursor,
     deleteSourceCursor,

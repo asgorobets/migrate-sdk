@@ -10,7 +10,7 @@ import {
   toSourceVersion,
 } from "./ids.ts";
 import {
-  type MigrationItemState,
+  MigrationItemState,
   type MigrationItemStateForTrackingContract,
   makeMigrationItemStateWithTrackingRecordSchema,
 } from "./state.ts";
@@ -53,7 +53,32 @@ describe("MigrationItemState", () => {
           entryId: "entry-1",
           views: 42,
         });
+        expect(decoded.lastSourceInventoryRunId).toBeUndefined();
       })
+  );
+
+  it.effect("decodes the latest Source Inventory observation", () =>
+    Effect.gen(function* () {
+      const decoded = yield* Schema.decodeUnknownEffect(MigrationItemState)({
+        definitionId: toMigrationDefinitionId("articles"),
+        lastRunId: toMigrationRunId("run-process"),
+        lastSourceInventoryRunId: toMigrationRunId("run-inventory"),
+        sourceIdentity: {
+          encoded: toEncodedSourceIdentity("article-1"),
+          fingerprint: SourceIdentityContractFingerprint.make("article-source"),
+          id: SourceIdentityContractId.make("article-id"),
+          key: "article-1",
+        },
+        sourceVersion: toSourceVersion("source-version-1"),
+        status: "migrated",
+        updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+      });
+
+      expect(decoded.lastRunId).toBe(toMigrationRunId("run-process"));
+      expect(decoded.lastSourceInventoryRunId).toBe(
+        toMigrationRunId("run-inventory")
+      );
+    })
   );
 
   it("types composed item state tracking records from the tracking schema", () => {
