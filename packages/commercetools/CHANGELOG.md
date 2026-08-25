@@ -1,5 +1,40 @@
 # @migrate-sdk/commercetools
 
+## 0.7.0
+
+### Minor Changes
+
+- 9213153: Sources now use full discovery by default. Completed runs clear their cursor, so
+  the next run scans from the beginning and can discover changes anywhere in the
+  source while still skipping items whose version has not changed. Sources with a
+  reliable high-water cursor can opt into `discovery: "incremental"` instead.
+
+  Customers can use `migrate run --rescan` to ignore a saved cursor without
+  forcing unchanged items through the Process Pipeline. Run plans and status show
+  the configured discovery mode and warn when an incremental run trusts its saved
+  cursor.
+
+  Commercetools sources now page by `(lastModifiedAt, id)` so new and updated
+  resources are not missed because of UUID ordering. Existing Commercetools
+  migrations with a saved cursor must run once with `--rescan` after upgrading to
+  replace the old cursor shape.
+
+- 3bca36d: Add Rollback Orphans to the TypeScript runner with `rollbackOrphans: true` and
+  to the CLI with `--rollback-orphans`. The migration performs a complete Source
+  Inventory Scan before rolling back durable Migration Item States that were not
+  observed. Successful rollback deletes the item state, while failed rollback
+  preserves the state and its rollback-attempt evidence.
+
+  Migration Item State now records its latest Source Inventory observation, and
+  every Migration Store exposes methods to observe existing item state and list
+  orphan candidates with bounded, deletion-safe keyset pagination. The In-Memory,
+  File, SQL, and Commercetools Migration Stores implement these operations. SQL
+  fresh-schema initialization includes the required observation columns and
+  indexes; existing schemas are not upgraded automatically.
+
+  The Workflow SDK executes the same Source Inventory Scan and Rollback phases
+  through its durable workflow boundary.
+
 ## 0.6.0
 
 ### Patch Changes
