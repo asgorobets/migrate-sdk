@@ -378,6 +378,63 @@ const failRunAndRethrow = <Error>(
     Effect.flatMap(() => Effect.fail(error))
   );
 
+const retryCommittedRunTransition = (
+  runId: MigrationRunId,
+  input: {
+    readonly confirmationMessage: string;
+    readonly isCommitted: (state: MigrationRunState) => boolean;
+    readonly onCommitted?: () => void;
+    readonly read: Effect.Effect<MigrationRunState | null, MigrationStoreError>;
+    readonly repairMessage: string;
+    readonly transition: Effect.Effect<MigrationRunState, MigrationStoreError>;
+  }
+): Effect.Effect<MigrationRunState, MigrationStoreError> =>
+  input.transition.pipe(
+    Effect.catch((transitionError) =>
+      input.read.pipe(
+        Effect.mapError(
+          (readError) =>
+            new MigrationStoreError({
+              message: input.confirmationMessage,
+              cause: { readError, runId, transitionError },
+            })
+        ),
+        Effect.flatMap((committed) => {
+          if (committed === null || !input.isCommitted(committed)) {
+            return Effect.fail(transitionError);
+          }
+
+          input.onCommitted?.();
+          return input.transition.pipe(
+            Effect.mapError(
+              (repairError) =>
+                new MigrationStoreError({
+                  message: input.repairMessage,
+                  cause: { repairError, runId, transitionError },
+                })
+            )
+          );
+        })
+      )
+    )
+  );
+
+const retryCommittedTerminalRunTransition = (
+  store: typeof MigrationStore.Service,
+  runId: MigrationRunId,
+  expectedStatus: "cancelled" | "failed" | "succeeded",
+  transition: Effect.Effect<MigrationRunState, MigrationStoreError>
+): Effect.Effect<MigrationRunState, MigrationStoreError> =>
+  retryCommittedRunTransition(runId, {
+    confirmationMessage: "Unable to confirm Migration Run terminal state",
+    isCommitted: (committed) =>
+      committed.status === expectedStatus && committed.finishedAt !== undefined,
+    read: store.getRunState(runId),
+    repairMessage:
+      "Unable to repair latest Migration Definition Run State projections",
+    transition,
+  });
+
 interface MigrationRunSchedulingControl {
   readonly canSchedule: Effect.Effect<boolean>;
 }
@@ -802,7 +859,17 @@ const executeMigrationRun = <A, E, R = never>(
         )
       );
     const begin = Effect.gen(function* () {
-      const runState = yield* store.beginRun(runId, definitionIds);
+      const runState = yield* retryCommittedRunTransition(runId, {
+        confirmationMessage: "Unable to confirm Migration Run start state",
+        isCommitted: (committed) => committed.status === "running",
+        onCommitted: () => {
+          runStatePersisted = true;
+        },
+        read: store.getRunState(runId),
+        repairMessage:
+          "Unable to repair latest Migration Definition Run State projections",
+        transition: store.beginRun(runId, definitionIds),
+      });
       runStatePersisted = true;
       yield* MigrationProgress.emit({
         definitionIds,
@@ -811,13 +878,17 @@ const executeMigrationRun = <A, E, R = never>(
       });
       return runState;
     });
-    const executeStartedRun = (runState: MigrationRunState) =>
+    const finalizeStartedRun = (
+      runState: MigrationRunState,
+      bodyResult: MigrationRunBodyResult<A>
+    ) =>
       Effect.gen(function* () {
-        const bodyResult = yield* body(runState.runId);
         if (bodyResult.status === "cancelled") {
-          const cancelledRun = yield* store.markRunCancelled(
+          const cancelledRun = yield* retryCommittedTerminalRunTransition(
+            store,
             runState.runId,
-            definitionIds
+            "cancelled",
+            store.markRunCancelled(runState.runId, definitionIds)
           );
           yield* MigrationProgress.emit({
             definitionIds,
@@ -833,18 +904,22 @@ const executeMigrationRun = <A, E, R = never>(
           };
         }
 
-        const completedRun =
+        const completedRun = yield* retryCommittedTerminalRunTransition(
+          store,
+          runState.runId,
+          bodyResult.status === "failed" ? "failed" : "succeeded",
           bodyResult.status === "failed"
-            ? yield* store.failRun(
+            ? store.failRun(
                 runState.runId,
                 definitionIds,
                 bodyResult.definitionOutcomes
               )
-            : yield* store.completeRun(
+            : store.completeRun(
                 runState.runId,
                 definitionIds,
                 bodyResult.definitionOutcomes
-              );
+              )
+        );
         yield* MigrationProgress.emit({
           definitionIds,
           kind: "run-completed",
@@ -858,8 +933,19 @@ const executeMigrationRun = <A, E, R = never>(
           runState,
         };
       });
-    const runWithOwnedFailure = Effect.flatMap(begin, executeStartedRun).pipe(
-      Effect.catch(failExecution)
+    const executeBody = (runState: MigrationRunState) =>
+      body(runState.runId).pipe(
+        Effect.catch(failExecution),
+        Effect.flatMap((bodyResult) => finalizeStartedRun(runState, bodyResult))
+      );
+    const beginWithOwnedFailure = begin.pipe(
+      Effect.catch((error) =>
+        runStatePersisted ? failExecution(error) : Effect.fail(error)
+      )
+    );
+    const runWithOwnedFailure = Effect.flatMap(
+      beginWithOwnedFailure,
+      executeBody
     );
     const execution = yield* Effect.acquireUseRelease(
       acquireLocks,
@@ -873,10 +959,7 @@ const executeMigrationRun = <A, E, R = never>(
             return yield* runWithOwnedFailure;
           }
 
-          const runState = yield* begin;
-          return yield* executeStartedRun(runState).pipe(
-            Effect.catch(failExecution)
-          );
+          return yield* Effect.flatMap(beginWithOwnedFailure, executeBody);
         }).pipe(
           Effect.onExit((exit) => {
             if (
@@ -4005,10 +4088,37 @@ const superviseInlinePlan = <
           runId,
           scopeDefinitionIds: input.definitionIds,
         };
+        const queueRun = retryCommittedRunTransition(runId, {
+          confirmationMessage: "Unable to confirm queued Migration Run state",
+          isCommitted: (committed) => committed.status === "queued",
+          read: store.getRunState(runId),
+          repairMessage:
+            "Unable to repair latest Migration Definition Run State projections",
+          transition: store.queueRun(runId, input.definitionIds),
+        });
         const queued = yield* restore(
-          input
-            .preflight(store)
-            .pipe(Effect.andThen(store.queueRun(runId, input.definitionIds)))
+          input.preflight(store).pipe(Effect.andThen(queueRun))
+        ).pipe(
+          Effect.catch((queueError) =>
+            store.getRunState(runId).pipe(
+              Effect.mapError(() => queueError),
+              Effect.flatMap((committed) =>
+                committed?.status === "queued"
+                  ? store.markRunStartFailed(runId, input.definitionIds).pipe(
+                      Effect.mapError((finalizationError) =>
+                        failRunFinalizationError(
+                          runId,
+                          input.definitionIds,
+                          queueError,
+                          finalizationError
+                        )
+                      ),
+                      Effect.andThen(Effect.fail(queueError))
+                    )
+                  : Effect.fail(queueError)
+              )
+            )
+          )
         );
 
         const execution: MigrationExecutionHandle = {

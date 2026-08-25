@@ -9,9 +9,10 @@ import {
 } from "../domain/ids.ts";
 import { MigrationDefinitionLock } from "../domain/lock.ts";
 import { MigrationMessage } from "../domain/message.ts";
+import { activeMigrationRunHasObservationDefinition } from "../domain/run.ts";
 import { MigrationDefinitionStatus } from "../domain/status.ts";
 
-export const MIGRATE_PROTOCOL_VERSION = 1;
+export const MIGRATE_PROTOCOL_VERSION = 2;
 
 const PositiveInteger = Schema.Finite.check(Schema.isInt()).check(
   Schema.isGreaterThan(0)
@@ -21,12 +22,14 @@ export const MigrateProtocolVersion = PositiveInteger;
 export type MigrateProtocolVersion = typeof MigrateProtocolVersion.Type;
 
 export const MIGRATE_CAPABILITIES = [
+  "active-runs",
   "break-lock",
   "cancel-execution",
   "dashboard",
   "messages",
   "normalize-source-identity",
   "observe-execution",
+  "observe-run",
   "prepare-operation",
   "scan-source",
   "source-identity-history",
@@ -65,6 +68,25 @@ export const MigrateAction = Schema.Literals([
   "update",
 ]);
 export type MigrateAction = typeof MigrateAction.Type;
+
+export const MigrateActiveRun = Schema.Struct({
+  definitionIds: Schema.NonEmptyArray(MigrationDefinitionId),
+  execution: Schema.optional(
+    Schema.Struct({
+      adapter: Schema.NonEmptyString,
+      executionId: Schema.NonEmptyString,
+    })
+  ),
+  observationDefinitionId: MigrationDefinitionId,
+  runId: MigrationRunId,
+  startedAt: Schema.DateFromString,
+  status: Schema.Literals(["queued", "running"]),
+}).check(
+  Schema.makeFilter(activeMigrationRunHasObservationDefinition, {
+    message: "Observation definition must belong to the Active Migration Run",
+  })
+);
+export type MigrateActiveRun = typeof MigrateActiveRun.Type;
 
 export const MigrateTarget = Schema.Union([
   Schema.Struct({
@@ -133,6 +155,7 @@ export const MigrateDashboardRow = Schema.Struct({
 export type MigrateDashboardRow = typeof MigrateDashboardRow.Type;
 
 export const MigrateDashboard = Schema.Struct({
+  activeRuns: Schema.Array(MigrateActiveRun),
   groups: Schema.Array(MigrateRegistryGroup),
   rows: Schema.Array(MigrateDashboardRow),
   scannedSource: Schema.Boolean,
@@ -316,6 +339,11 @@ export class GetDashboard extends makeRpc("GetDashboard", {
   success: MigrateDashboard,
 }) {}
 
+export class GetActiveRuns extends makeRpc("GetActiveRuns", {
+  error: MigrateProtocolError,
+  success: Schema.Array(MigrateActiveRun),
+}) {}
+
 export class GetMessages extends makeRpc("GetMessages", {
   error: MigrateProtocolError,
   payload: { target: MigrateTarget },
@@ -369,6 +397,13 @@ export class ObserveExecution extends makeRpc("ObserveExecution", {
   success: MigrateObservationEvent,
 }) {}
 
+export class ObserveRun extends makeRpc("ObserveRun", {
+  error: MigrateProtocolError,
+  payload: { runId: MigrationRunId },
+  stream: true,
+  success: MigrateObservationEvent,
+}) {}
+
 export class CancelExecution extends makeRpc("CancelExecution", {
   error: MigrateProtocolError,
   payload: { executionId: Schema.optional(MigrateExecutionId) },
@@ -393,12 +428,14 @@ export class BreakLock extends makeRpc("BreakLock", {
 export const MigrateRpcs = makeRpcGroup(
   GetServerInfo,
   GetDashboard,
+  GetActiveRuns,
   GetMessages,
   GetSourceIdentityHistory,
   NormalizeSourceIdentity,
   PrepareOperation,
   StartOperation,
   ObserveExecution,
+  ObserveRun,
   CancelExecution,
   ScanSource,
   BreakLock

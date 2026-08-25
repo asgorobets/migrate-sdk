@@ -144,6 +144,7 @@ const resetStoreState = (state: InMemoryMigrationStoreState) => {
   state.itemStates.clear();
   state.latestRunStates.clear();
   state.migrationContracts.clear();
+  state.runStates.clear();
   state.sourceCursorCommits.splice(0);
   state.sourceCursors.clear();
   state.nextLockNumber = 1;

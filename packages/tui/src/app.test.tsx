@@ -334,7 +334,11 @@ describe("MigrationTuiApp", () => {
           await settle(setup.renderOnce, () => refresh.mock.calls.length === 2)
         ).toBe(true);
 
-        completionRefresh.resolve({ rows: [], scannedSource: false });
+        completionRefresh.resolve({
+          activeRuns: [],
+          rows: [],
+          scannedSource: false,
+        });
         expect(
           await settle(setup.renderOnce, () =>
             setup
@@ -344,6 +348,7 @@ describe("MigrationTuiApp", () => {
         ).toBe(true);
 
         recoveryRefresh.resolve({
+          activeRuns: [],
           rows: runtime.rows,
           scannedSource: false,
         });
@@ -406,6 +411,124 @@ describe("MigrationTuiApp", () => {
             },
             1500
           )
+        ).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "keeps keyboard navigation available while a migration is running",
+    async () => {
+      const runtime = await makeInProcessMigrationTuiRuntime({
+        configPath: "examples/dependent-live-progress.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+        progressFallbackIntervalMs: 10,
+        terminalPollIntervalMs: 10,
+      });
+      const prerequisite = await runtime.prepare(
+        {
+          definitionId: toMigrationDefinitionId(
+            "live-progress-prerequisite"
+          ),
+          kind: "migration",
+        },
+        "run"
+      );
+      await runtime.execute(prerequisite);
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("j"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            /live-progress\s+NOT RUN/.test(setup.captureCharFrame())
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("r"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("is running…")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("k"));
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              /live-progress-prerequisite\s+SUCCEEDED/.test(frame) &&
+              frame.includes("is running…")
+            );
+          })
+        ).toBe(true);
+
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => !setup.captureCharFrame().includes("is running…"),
+            1500
+          )
+        ).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "shows live refresh warnings while an operation is running",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: "examples/migrate.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const execution = Promise.withResolvers<never>();
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        execute: async (_operation, options) => {
+          options?.onObservationWarning?.(
+            "Unable to refresh live status: dependency status unavailable"
+          );
+          return execution.promise;
+        },
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("r"));
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("Running authors…") &&
+              frame.includes(
+                "Unable to refresh live status: dependency status unavailable"
+              )
+            );
+          })
         ).toBe(true);
       } finally {
         act(() => root.unmount());
@@ -785,6 +908,185 @@ describe("MigrationTuiApp", () => {
         ).toBe(true);
         expect(setup.captureCharFrame()).toContain("products");
         expect(setup.captureCharFrame()).toContain("PgUp/PgDn details");
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "offers attachment for a reconnectable locked run",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: "examples/locked.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const runId = toMigrationRunId("run-stuck");
+      const observeRun = vi.fn(() =>
+        Promise.resolve({
+          message: `Run ${runId} succeeded`,
+          outcome: "completed" as const,
+          runId,
+        })
+      );
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        refresh: async () => ({
+          ...(await baseRuntime.refresh()),
+          activeRuns: [
+            {
+              definitionIds: [toMigrationDefinitionId("locked-migration")],
+              execution: {
+                adapter: "workflow-sdk",
+                executionId: "workflow-stuck",
+              },
+              observationDefinitionId:
+                toMigrationDefinitionId("locked-migration"),
+              runId,
+              startedAt: new Date("2026-08-25T12:00:00.000Z"),
+              status: "running" as const,
+            },
+          ],
+        }),
+        observeRun,
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("a Attach to run")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("a"));
+        expect(
+          await settle(setup.renderOnce, () => observeRun.mock.calls.length > 0)
+        ).toBe(true);
+        expect(observeRun).toHaveBeenCalledWith(runId, expect.any(Object));
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui("replaces active-run actions after a source scan", async () => {
+    const baseRuntime = await makeInProcessMigrationTuiRuntime({
+      configPath: "examples/locked.config.ts",
+      cwd: new URL("..", import.meta.url).pathname,
+    });
+    const definitionId = toMigrationDefinitionId("locked-migration");
+    const runId = toMigrationRunId("run-stuck");
+    const durable = await baseRuntime.refresh();
+    const runtime: MigrationTuiRuntime = {
+      ...baseRuntime,
+      refresh: async () => ({
+        ...durable,
+        activeRuns: [
+          {
+            definitionIds: [definitionId],
+            execution: {
+              adapter: "workflow-sdk",
+              executionId: "workflow-stuck",
+            },
+            observationDefinitionId: definitionId,
+            runId,
+            startedAt: new Date("2026-08-25T12:00:00.000Z"),
+            status: "running" as const,
+          },
+        ],
+      }),
+      scanSource: async () => ({
+        ...durable,
+        activeRuns: [],
+        scannedSource: true,
+      }),
+    };
+    const setup = await createTestRenderer({ height: 30, width: 120 });
+    const root = createRoot(setup.renderer);
+
+    act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+    try {
+      expect(
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("a Attach to run")
+        )
+      ).toBe(true);
+
+      act(() => setup.mockInput.pressKey("s"));
+
+      expect(
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Source Inventory Scan complete")
+        )
+      ).toBe(true);
+      expect(setup.captureCharFrame()).not.toContain("a Attach to run");
+    } finally {
+      act(() => root.unmount());
+      setup.renderer.destroy();
+    }
+  });
+
+  itWithOpenTui(
+    "reloads durable status after a reconnectable run fails",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: "examples/locked.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const runId = toMigrationRunId("run-stuck");
+      const activeRun = {
+        definitionIds: [toMigrationDefinitionId("locked-migration")] as const,
+        execution: {
+          adapter: "workflow-sdk",
+          executionId: "workflow-stuck",
+        },
+        observationDefinitionId: toMigrationDefinitionId("locked-migration"),
+        runId,
+        startedAt: new Date("2026-08-25T12:00:00.000Z"),
+        status: "running" as const,
+      };
+      const durable = await baseRuntime.refresh();
+      const refresh = vi
+        .fn<MigrationTuiRuntime["refresh"]>()
+        .mockResolvedValueOnce({ ...durable, activeRuns: [activeRun] })
+        .mockResolvedValueOnce({ ...durable, activeRuns: [] });
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        refresh,
+        observeRun: vi.fn(() =>
+          Promise.reject(new Error(`Run ${runId} failed`))
+        ),
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("a Attach to run")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("a"));
+
+        expect(
+          await settle(
+            setup.renderOnce,
+            () =>
+              refresh.mock.calls.length === 2 &&
+              setup.captureCharFrame().includes(`Run ${runId} failed`)
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).not.toContain("a Attach to run");
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();

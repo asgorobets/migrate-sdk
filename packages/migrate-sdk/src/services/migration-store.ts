@@ -33,6 +33,19 @@ export type MigrationDefinitionRunOutcomeMap = ReadonlyMap<
   MigrationDefinitionRunOutcome["status"]
 >;
 
+export const canReplaceLatestMigrationDefinitionRun = ({
+  currentRunId,
+  predecessorRunId,
+  runId,
+}: {
+  readonly currentRunId: MigrationRunId | null;
+  readonly predecessorRunId?: MigrationRunId | null;
+  readonly runId: MigrationRunId;
+}): boolean =>
+  currentRunId === null ||
+  currentRunId === runId ||
+  (predecessorRunId !== undefined && currentRunId === predecessorRunId);
+
 export const validateMigrationDefinitionRunOutcomes = (
   definitionIds: readonly MigrationDefinitionId[],
   outcomes: readonly MigrationDefinitionRunOutcome[]
@@ -89,6 +102,31 @@ export const migrationDefinitionRunStatus = (
   outcomes?: MigrationDefinitionRunOutcomeMap
 ): MigrationDefinitionRunState["status"] =>
   outcomes?.get(definitionId) ?? runStatus;
+
+export const validateMigrationRunDefinitionIds = (
+  runState: MigrationRunState,
+  definitionIds: readonly MigrationDefinitionId[]
+): Effect.Effect<MigrationRunState, MigrationStoreError> => {
+  const matches =
+    runState.definitionIds.length === definitionIds.length &&
+    runState.definitionIds.every(
+      (definitionId, index) => definitionId === definitionIds[index]
+    );
+
+  return matches
+    ? Effect.succeed(runState)
+    : Effect.fail(
+        new MigrationStoreError({
+          message:
+            "Migration Run definitions do not match the persisted Migration Run",
+          cause: {
+            actualDefinitionIds: definitionIds,
+            expectedDefinitionIds: runState.definitionIds,
+            runId: runState.runId,
+          },
+        })
+      );
+};
 
 interface MigrationStoreOrphanMethods {
   /**
@@ -161,6 +199,10 @@ export class MigrationStore extends Service<
     ) => Effect.Effect<void, MigrationStoreError>;
 
     readonly createRunId: Effect.Effect<MigrationRunId, MigrationStoreError>;
+
+    readonly getRunState: (
+      runId: MigrationRunId
+    ) => Effect.Effect<MigrationRunState | null, MigrationStoreError>;
 
     readonly getLatestRunState: (
       definitionId: MigrationDefinitionId

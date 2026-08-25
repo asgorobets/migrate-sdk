@@ -22,7 +22,7 @@ const variant = configIndex === -1 ? "protocol" : process.argv[configIndex + 1];
 const baseInfo: MigrateServerInfo = {
   capabilities: [...MIGRATE_CAPABILITIES],
   environment: { id: "test" },
-  protocolVersion: 1,
+  protocolVersion: 2,
   registryId: "test",
   runtime: { name: "node", version: process.versions.node },
   sdkVersion: sdkPackage.version,
@@ -39,7 +39,7 @@ const makeServerInfo = (): MigrateServerInfo => {
     case "sdk":
       return { ...baseInfo, sdkVersion: "999.0.0" };
     default:
-      return { ...baseInfo, protocolVersion: 2 };
+      return { ...baseInfo, protocolVersion: 3 };
   }
 };
 const serverInfo = makeServerInfo();
@@ -49,12 +49,14 @@ const ServerApplication = Layer.succeed(
   MigrateServer.of({
     breakLock: unused,
     cancelExecution: unused,
+    getActiveRuns: Effect.die("not used"),
     getDashboard: Effect.die("not used"),
     getMessages: unused,
     getServerInfo: Effect.succeed(serverInfo),
     getSourceIdentityHistory: unused,
     normalizeSourceIdentity: unused,
     observeExecution: () => Stream.die("not used"),
+    observeRun: () => Stream.die("not used"),
     prepareOperation: unused,
     scanSource: unused,
     startOperation: unused,

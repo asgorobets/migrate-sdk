@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
+import { Schema } from "effect";
 import { expectTypeOf } from "vitest";
 import { toMigrationDefinitionId, toMigrationRunId } from "./ids.ts";
 import {
+  ActiveMigrationRun,
   type ExecutionStartResult,
   type MigrationDefinitionRunSummary,
   type MigrationRunHandle,
@@ -9,6 +11,20 @@ import {
   makeMigrationRunState,
   makeRunRequest,
 } from "./run.ts";
+
+describe("ActiveMigrationRun", () => {
+  it("rejects an observation definition outside the run", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(ActiveMigrationRun)({
+        definitionIds: [toMigrationDefinitionId("articles")],
+        observationDefinitionId: toMigrationDefinitionId("authors"),
+        runId: toMigrationRunId("run-1"),
+        startedAt: new Date("2026-08-25T12:00:00.000Z"),
+        status: "running",
+      })
+    ).toThrow();
+  });
+});
 
 type AttachedStart = Extract<
   ExecutionStartResult,

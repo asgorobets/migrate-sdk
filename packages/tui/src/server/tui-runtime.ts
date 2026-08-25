@@ -1,14 +1,19 @@
 import { Effect, Stream } from "effect";
-import type { MigrationDefinitionLock } from "migrate-sdk";
+import type { MigrationDefinitionLock, MigrationRunId } from "migrate-sdk";
 import type {
   MigrateExecutionId,
   MigrateExecutionState,
+  MigrateObservationEvent,
   MigratePrepareOptions,
   MigrateTarget,
 } from "migrate-sdk/protocol";
-import type { MigrationTuiExecutionState } from "../execution-controller.ts";
+import type {
+  MigrationTuiExecutionResult,
+  MigrationTuiExecutionState,
+} from "../execution-controller.ts";
 import type {
   LoadMigrationTuiInput,
+  MigrationTuiExecuteOptions,
   MigrationTuiRow,
   MigrationTuiRuntime,
   MigrationTuiSnapshot,
@@ -101,6 +106,9 @@ export const makeMigrationTuiRuntime = async (
   );
   let executionState: MigrationTuiExecutionState | undefined;
   let activeExecutionId: MigrateExecutionId | undefined;
+  let activeRunObservation:
+    | { readonly controller: AbortController; readonly runId: MigrationRunId }
+    | undefined;
   const executionListeners = new Set<
     (state: MigrationTuiExecutionState | undefined) => void
   >();
@@ -116,26 +124,115 @@ export const makeMigrationTuiRuntime = async (
   };
 
   const snapshot = (dashboard: {
+    readonly activeRuns: MigrationTuiSnapshot["activeRuns"];
     readonly rows:
       | Parameters<typeof toTuiRow>[0][]
       | readonly Parameters<typeof toTuiRow>[0][];
     readonly scannedSource: boolean;
   }): MigrationTuiSnapshot => ({
+    activeRuns: dashboard.activeRuns,
     rows: dashboard.rows.map(toTuiRow),
     scannedSource: dashboard.scannedSource,
   });
 
+  const consumeObservation = async <ObservationError>(
+    stream: Stream.Stream<MigrateObservationEvent, ObservationError>,
+    runId: MigrationRunId,
+    options?: MigrationTuiExecuteOptions,
+    signal?: AbortSignal
+  ): Promise<MigrationTuiExecutionResult> => {
+    let completion:
+      | Extract<MigrateObservationEvent, { readonly kind: "terminal" }>
+      | {
+          readonly kind: "detached";
+          readonly message: string;
+          readonly runId: MigrationRunId;
+        }
+      | undefined;
+
+    try {
+      await runPromise(
+        stream.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              switch (event.kind) {
+                case "progress":
+                  options?.onProgress?.({ definitions: event.definitions });
+                  break;
+                case "state": {
+                  const state = toTuiExecutionState(event.state);
+                  publishExecutionState(state);
+                  options?.onStateChange?.(state);
+                  break;
+                }
+                case "detached":
+                  completion = event;
+                  break;
+                case "terminal":
+                  completion = event;
+                  break;
+                case "warning":
+                  options?.onObservationWarning?.(event.message);
+                  break;
+                default: {
+                  const unhandled: never = event;
+                  return unhandled;
+                }
+              }
+            })
+          )
+        ),
+        signal === undefined ? undefined : { signal }
+      );
+    } finally {
+      publishExecutionState(undefined);
+    }
+
+    if (completion === undefined) {
+      throw new Error(
+        `Observation ended before run ${runId} reached a terminal state`
+      );
+    }
+    if (completion.kind === "terminal") {
+      if (completion.outcome === "failed") {
+        throw new Error(completion.message);
+      }
+
+      return {
+        message: completion.message,
+        outcome: completion.outcome,
+        runId: completion.runId,
+      };
+    }
+
+    return {
+      message: completion.message,
+      outcome: "detached",
+      runId: completion.runId,
+    };
+  };
+
   return {
     breakLock: (lock: MigrationDefinitionLock) =>
       runPromise(client.BreakLock({ lock })),
-    cancelActiveExecution: () =>
-      runPromise(
+    cancelActiveExecution: () => {
+      if (activeRunObservation !== undefined) {
+        const { controller, runId } = activeRunObservation;
+        controller.abort();
+        return Promise.resolve({
+          kind: "detached" as const,
+          message: `Run ${runId} will continue in the background after this screen closes…`,
+        });
+      }
+
+      return runPromise(
         client.CancelExecution(
           activeExecutionId === undefined
             ? {}
             : { executionId: activeExecutionId }
         )
-      ),
+      );
+    },
     configPath: serverInfo.configPath ?? "Migrate Server",
     dispose: connection.dispose,
     execute: async (operation, options) => {
@@ -149,76 +246,24 @@ export const makeMigrationTuiRuntime = async (
           },
         })
       );
-      let completion:
-        | {
-            readonly message: string;
-            readonly outcome: "cancelled" | "completed" | "detached" | "failed";
-            readonly runId: typeof reference.runId;
-          }
-        | undefined;
       activeExecutionId = reference.executionId;
 
       try {
-        await runPromise(
-          client.ObserveExecution({ executionId: reference.executionId }).pipe(
-            Stream.runForEach((event) =>
-              Effect.sync(() => {
-                switch (event.kind) {
-                  case "progress":
-                    options?.onProgress?.({ definitions: event.definitions });
-                    break;
-                  case "state":
-                    publishExecutionState(toTuiExecutionState(event.state));
-                    options?.onStateChange?.(toTuiExecutionState(event.state));
-                    break;
-                  case "detached":
-                    completion = {
-                      message: event.message,
-                      outcome: "detached",
-                      runId: event.runId,
-                    };
-                    break;
-                  case "terminal":
-                    completion = event;
-                    break;
-                  case "warning":
-                    options?.onObservationWarning?.(event.message);
-                    break;
-                  default: {
-                    const unhandled: never = event;
-                    return unhandled;
-                  }
-                }
-              })
-            )
-          )
+        return await consumeObservation(
+          client.ObserveExecution({ executionId: reference.executionId }),
+          reference.runId,
+          options
         );
       } catch (cause) {
         options?.onProgressError?.(cause);
         throw cause;
       } finally {
         activeExecutionId = undefined;
-        publishExecutionState(undefined);
       }
-
-      if (completion === undefined) {
-        throw new Error(
-          `Observation ended before run ${reference.runId} reached a terminal state`
-        );
-      }
-
-      if (completion.outcome === "failed") {
-        throw new Error(completion.message);
-      }
-
-      return {
-        message: completion.message,
-        outcome: completion.outcome,
-        runId: completion.runId,
-      };
     },
     getExecutionState: () => executionState,
     groups: initialDashboard.groups,
+    listActiveRuns: () => runPromise(client.GetActiveRuns()),
     listMessages: (target) =>
       runPromise(client.GetMessages({ target: toProtocolTarget(target) })),
     listSourceIdentityHistory: (definitionId) =>
@@ -227,6 +272,41 @@ export const makeMigrationTuiRuntime = async (
       runPromise(
         client.NormalizeSourceIdentity({ definitionId, sourceIdentity })
       ),
+    observeRun: async (runId, options) => {
+      if (
+        activeExecutionId !== undefined ||
+        activeRunObservation !== undefined
+      ) {
+        throw new Error("Another migration is already running");
+      }
+
+      const controller = new AbortController();
+      activeRunObservation = { controller, runId };
+
+      try {
+        return await consumeObservation(
+          client.ObserveRun({ runId }),
+          runId,
+          options,
+          controller.signal
+        );
+      } catch (cause) {
+        if (controller.signal.aborted) {
+          return {
+            message: `Run ${runId} continues in the background`,
+            outcome: "detached",
+            runId,
+          };
+        }
+
+        options?.onProgressError?.(cause);
+        throw cause;
+      } finally {
+        if (activeRunObservation?.controller === controller) {
+          activeRunObservation = undefined;
+        }
+      }
+    },
     prepare: (target, action, options = {}) =>
       runPromise(
         client.PrepareOperation({

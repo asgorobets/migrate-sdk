@@ -1,7 +1,7 @@
 import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSystem";
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import { systemError } from "effect/PlatformError";
@@ -38,6 +38,7 @@ import {
   runInlineDefinition,
   runInlineRegistry,
 } from "../../testing/inline-registry-execution.ts";
+import { runSupersededMigrationRunScenario } from "../../testing/migration-store-conformance.ts";
 
 const TestSourceIdentity = SourceIdentity.make({
   id: "test-source@v1",
@@ -82,6 +83,136 @@ const sourceCursorWriteFailurePlatform = Layer.mergeAll(
     })
   ).pipe(Layer.provide(nodeFileSystemLayer))
 );
+
+const makeLatestRunWriteFailurePlatform = (
+  definitionId: string,
+  options: {
+    readonly failRunReadAfterProjectionFailure?: boolean;
+    readonly projectionFailures?: number;
+  } = {}
+) => {
+  let armed = false;
+  let projectionFailures = 0;
+  let runReadFailed = false;
+  const maximumProjectionFailures = options.projectionFailures ?? 1;
+
+  return {
+    arm: () => {
+      armed = true;
+    },
+    platform: Layer.mergeAll(
+      nodePathLayer,
+      FileMigrationStorePlatform.directoryEntries.node,
+      Layer.effect(
+        FileSystem,
+        Effect.gen(function* () {
+          const fs = yield* FileSystem;
+
+          return FileSystem.of({
+            ...fs,
+            readFileString: (path, encoding) => {
+              if (
+                armed &&
+                options.failRunReadAfterProjectionFailure === true &&
+                projectionFailures > 0 &&
+                !runReadFailed &&
+                path.includes("/runs/")
+              ) {
+                runReadFailed = true;
+                return Effect.fail(
+                  systemError({
+                    _tag: "PermissionDenied",
+                    description: "Injected Migration Run State read failure",
+                    method: "readFileString",
+                    module: "FileSystem",
+                    pathOrDescriptor: path,
+                  })
+                );
+              }
+
+              return fs.readFileString(path, encoding);
+            },
+            rename: (oldPath, newPath) => {
+              if (
+                armed &&
+                projectionFailures < maximumProjectionFailures &&
+                newPath.endsWith(`/definitions/${definitionId}/latest-run.json`)
+              ) {
+                projectionFailures += 1;
+                return Effect.fail(
+                  systemError({
+                    _tag: "PermissionDenied",
+                    description: "Injected latest run projection failure",
+                    method: "rename",
+                    module: "FileSystem",
+                    pathOrDescriptor: newPath,
+                  })
+                );
+              }
+
+              return fs.rename(oldPath, newPath);
+            },
+          });
+        })
+      ).pipe(Layer.provide(nodeFileSystemLayer))
+    ),
+  };
+};
+
+const makePausedTerminalProjectionPlatform = (
+  definitionId: string,
+  runId: string,
+  paused: Deferred.Deferred<void>,
+  release: Deferred.Deferred<void>
+) => {
+  let didPause = false;
+
+  return Layer.mergeAll(
+    nodePathLayer,
+    FileMigrationStorePlatform.directoryEntries.node,
+    Layer.effect(
+      FileSystem,
+      Effect.gen(function* () {
+        const fs = yield* FileSystem;
+
+        return FileSystem.of({
+          ...fs,
+          rename: (oldPath, newPath) => {
+            if (
+              didPause ||
+              !newPath.endsWith(`/definitions/${definitionId}/latest-run.json`)
+            ) {
+              return fs.rename(oldPath, newPath);
+            }
+
+            return Effect.gen(function* () {
+              const pending = JSON.parse(
+                yield* fs.readFileString(oldPath, "utf8")
+              ) as {
+                readonly state?: {
+                  readonly runId?: string;
+                  readonly status?: string;
+                };
+              };
+
+              if (
+                pending.state?.runId !== runId ||
+                pending.state.status !== "succeeded"
+              ) {
+                return yield* fs.rename(oldPath, newPath);
+              }
+
+              didPause = true;
+              yield* Deferred.succeed(paused, undefined);
+              yield* Deferred.await(release);
+              yield* fs.rename(oldPath, newPath);
+            });
+          },
+        });
+      })
+    )
+  ).pipe(Layer.provide(nodeFileSystemLayer));
+};
 
 const makeDirectoryEntriesFailurePlatform = (
   shouldFail: (directory: string) => boolean
@@ -282,6 +413,7 @@ const makeArticlesMigration = (options: {
   readonly batchSize?: number;
   readonly directory: string;
   readonly items: readonly ArticleSourceItem[];
+  readonly onProcess?: () => void;
   readonly platform?: FileMigrationStorePlatform;
   readonly processCalls?: string[];
   readonly rollbackCalls?: string[];
@@ -303,6 +435,8 @@ const makeArticlesMigration = (options: {
     }),
     process: (source) =>
       Effect.gen(function* () {
+        options.onProcess?.();
+
         if (source.item.publish === false) {
           return yield* skipItem("Article is not published");
         }
@@ -1486,6 +1620,34 @@ describe("FileMigrationStore", () => {
     )
   );
 
+  it.effect(
+    "completes a shared run after one definition starts a newer run",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const result = yield* runSupersededMigrationRunScenario("file").pipe(
+            Effect.provide(fileStoreLayer(directory))
+          );
+
+          expect(result.originalRunState).toEqual(result.completed);
+          expect(result.selectedLatest).toEqual(
+            expect.objectContaining({
+              definitionId: result.selectedId,
+              runId: result.originalRunId,
+              status: "succeeded",
+            })
+          );
+          expect(result.dependencyLatest).toEqual(
+            expect.objectContaining({
+              definitionId: result.dependencyId,
+              runId: result.newerRunId,
+              status: "running",
+            })
+          );
+        })
+      )
+  );
+
   it.effect("persists each definition outcome from a failed shared run", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
@@ -1523,6 +1685,80 @@ describe("FileMigrationStore", () => {
         ]);
       })
     )
+  );
+
+  it.effect(
+    "keeps a terminal run observable when its latest projection write fails",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const definitionId = toMigrationDefinitionId(
+            "terminal-projection-recovery"
+          );
+          const runId = toMigrationRunId("run-terminal-projection-recovery");
+          const injected = makeLatestRunWriteFailurePlatform(definitionId);
+          const normalStore = fileStoreLayer(directory);
+          const failingStore = FileMigrationStore.layer({
+            directory,
+            platform: injected.platform,
+          });
+
+          yield* MigrationStore.pipe(
+            Effect.flatMap((store) => store.beginRun(runId, [definitionId])),
+            Effect.provide(normalStore)
+          );
+          injected.arm();
+
+          yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              store.completeRun(
+                runId,
+                [definitionId],
+                [{ definitionId, status: "succeeded" }]
+              )
+            ),
+            Effect.provide(failingStore),
+            Effect.flip
+          );
+
+          const afterFailure = yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              Effect.all({
+                latest: store.getLatestRunState(definitionId),
+                run: store.getRunState(runId),
+              })
+            ),
+            Effect.provide(normalStore)
+          );
+
+          expect(afterFailure.run).toEqual(
+            expect.objectContaining({ runId, status: "succeeded" })
+          );
+          expect(afterFailure.latest).toEqual(
+            expect.objectContaining({ runId, status: "running" })
+          );
+
+          const repaired = yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              store.completeRun(
+                runId,
+                [definitionId],
+                [{ definitionId, status: "succeeded" }]
+              )
+            ),
+            Effect.andThen(
+              MigrationStore.pipe(
+                Effect.flatMap((store) => store.getLatestRunState(definitionId))
+              )
+            ),
+            Effect.provide(normalStore)
+          );
+
+          expect(repaired).toEqual(
+            expect.objectContaining({ runId, status: "succeeded" })
+          );
+        })
+      )
   );
 
   it.effect("persists queued run state and provider execution handles", () =>
@@ -1587,6 +1823,121 @@ describe("FileMigrationStore", () => {
         );
       })
     )
+  );
+
+  it.effect(
+    "does not replace a newer latest projection when retrying a partial run start",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const dependencyId = toMigrationDefinitionId("projection-dependency");
+          const selectedId = toMigrationDefinitionId("projection-selected");
+          const originalRunId = toMigrationRunId("run-partial-start");
+          const newerRunId = toMigrationRunId("run-newer-start");
+          const injected = makeLatestRunWriteFailurePlatform(selectedId);
+          const storeLayer = FileMigrationStore.layer({
+            directory,
+            platform: injected.platform,
+          });
+
+          injected.arm();
+          yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              store.beginRun(originalRunId, [dependencyId, selectedId])
+            ),
+            Effect.provide(storeLayer),
+            Effect.flip
+          );
+          yield* MigrationStore.pipe(
+            Effect.flatMap((store) => store.beginRun(newerRunId, [selectedId])),
+            Effect.provide(storeLayer)
+          );
+          yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              store.beginRun(originalRunId, [dependencyId, selectedId])
+            ),
+            Effect.provide(storeLayer)
+          );
+
+          const latest = yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              Effect.all([
+                store.getLatestRunState(dependencyId),
+                store.getLatestRunState(selectedId),
+              ])
+            ),
+            Effect.provide(storeLayer)
+          );
+
+          expect(latest).toEqual([
+            expect.objectContaining({ runId: originalRunId }),
+            expect.objectContaining({ runId: newerRunId }),
+          ]);
+        })
+      )
+  );
+
+  it.live(
+    "does not replace a newer projection when an old run finishes after its lock is broken",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const definitionId = toMigrationDefinitionId("projection-race");
+          const originalRunId = toMigrationRunId("run-projection-race-old");
+          const newerRunId = toMigrationRunId("run-projection-race-new");
+          const paused = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const storeLayer = FileMigrationStore.layer({
+            directory,
+            platform: makePausedTerminalProjectionPlatform(
+              definitionId,
+              originalRunId,
+              paused,
+              release
+            ),
+          });
+
+          yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              store.beginRun(originalRunId, [definitionId])
+            ),
+            Effect.provide(storeLayer)
+          );
+          const originalCompletion = yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              store.completeRun(
+                originalRunId,
+                [definitionId],
+                [{ definitionId, status: "succeeded" }]
+              )
+            ),
+            Effect.provide(storeLayer),
+            Effect.forkChild
+          );
+          yield* Deferred.await(paused);
+          const newerStart = yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              store.beginRun(newerRunId, [definitionId])
+            ),
+            Effect.provide(storeLayer),
+            Effect.forkChild
+          );
+
+          yield* Effect.sleep("100 millis");
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(originalCompletion);
+          yield* Fiber.join(newerStart);
+
+          const latest = yield* MigrationStore.pipe(
+            Effect.flatMap((store) => store.getLatestRunState(definitionId)),
+            Effect.provide(storeLayer)
+          );
+
+          expect(latest).toEqual(
+            expect.objectContaining({ runId: newerRunId, status: "running" })
+          );
+        })
+      )
   );
 
   it.effect("persists cancelled run state", () =>
@@ -1695,6 +2046,168 @@ describe("FileMigrationStore", () => {
       )
   );
 
+  it.effect(
+    "repairs a terminal projection failure without failing successful execution",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const definitionId = toMigrationDefinitionId("articles");
+          const injected = makeLatestRunWriteFailurePlatform(definitionId);
+          const definition = makeArticlesMigration({
+            directory,
+            items: [
+              {
+                identityKey: "article:projection-repair",
+                item: { title: "Projection repair" },
+                version: "source-version-1",
+              },
+            ],
+            onProcess: injected.arm,
+            platform: injected.platform,
+          });
+
+          const summary = yield* runInlineDefinition(definition);
+          const stored = yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              Effect.all({
+                latest: store.getLatestRunState(definitionId),
+                run: store.getRunState(summary.runId),
+              })
+            ),
+            Effect.provide(
+              FileMigrationStore.layer({
+                directory,
+                platform: injected.platform,
+              })
+            )
+          );
+
+          expect(summary.status).toBe("succeeded");
+          expect(stored.run).toEqual(
+            expect.objectContaining({ status: "succeeded" })
+          );
+          expect(stored.latest).toEqual(
+            expect.objectContaining({
+              runId: summary.runId,
+              status: "succeeded",
+            })
+          );
+        })
+      )
+  );
+
+  it.effect(
+    "surfaces persistent terminal projection failure without changing authoritative success",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const definitionId = toMigrationDefinitionId("articles");
+          const injected = makeLatestRunWriteFailurePlatform(definitionId, {
+            projectionFailures: Number.POSITIVE_INFINITY,
+          });
+          const definition = makeArticlesMigration({
+            directory,
+            items: [
+              {
+                identityKey: "article:persistent-projection-failure",
+                item: { title: "Persistent projection failure" },
+                version: "source-version-1",
+              },
+            ],
+            onProcess: injected.arm,
+            platform: injected.platform,
+          });
+
+          const error = yield* runInlineDefinition(definition).pipe(
+            Effect.flip
+          );
+          const runId = (error.cause as { readonly runId?: string } | undefined)
+            ?.runId;
+
+          expect(error).toEqual(
+            expect.objectContaining({
+              _tag: "MigrationStoreError",
+              message: expect.stringContaining(
+                "latest Migration Definition Run State projections"
+              ),
+            })
+          );
+          expect(runId).toEqual(expect.any(String));
+
+          if (runId === undefined) {
+            return;
+          }
+
+          const authoritative = yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              store.getRunState(toMigrationRunId(runId))
+            ),
+            Effect.provide(fileStoreLayer(directory))
+          );
+
+          expect(authoritative).toEqual(
+            expect.objectContaining({ status: "succeeded" })
+          );
+        })
+      )
+  );
+
+  it.effect(
+    "does not overwrite committed success when terminal verification cannot read it",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const definitionId = toMigrationDefinitionId("articles");
+          const injected = makeLatestRunWriteFailurePlatform(definitionId, {
+            failRunReadAfterProjectionFailure: true,
+          });
+          const definition = makeArticlesMigration({
+            directory,
+            items: [
+              {
+                identityKey: "article:terminal-verification-failure",
+                item: { title: "Terminal verification failure" },
+                version: "source-version-1",
+              },
+            ],
+            onProcess: injected.arm,
+            platform: injected.platform,
+          });
+
+          const error = yield* runInlineDefinition(definition).pipe(
+            Effect.flip
+          );
+          const runId = (error.cause as { readonly runId?: string } | undefined)
+            ?.runId;
+
+          expect(error).toEqual(
+            expect.objectContaining({
+              _tag: "MigrationStoreError",
+              message: expect.stringContaining(
+                "Unable to confirm Migration Run terminal state"
+              ),
+            })
+          );
+          expect(runId).toEqual(expect.any(String));
+
+          if (runId === undefined) {
+            return;
+          }
+
+          const authoritative = yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              store.getRunState(toMigrationRunId(runId))
+            ),
+            Effect.provide(fileStoreLayer(directory))
+          );
+
+          expect(authoritative).toEqual(
+            expect.objectContaining({ status: "succeeded" })
+          );
+        })
+      )
+  );
+
   it.effect("releases the Migration Definition Lock after a failed run", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {
@@ -1727,6 +2240,56 @@ describe("FileMigrationStore", () => {
         expect(hasLockFile).toBe(false);
       })
     )
+  );
+
+  it.effect(
+    "repairs a queued projection failure before starting execution",
+    () =>
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const definitionId = toMigrationDefinitionId("articles");
+          const injected = makeLatestRunWriteFailurePlatform(definitionId);
+          const definition = makeArticlesMigration({
+            directory,
+            items: [
+              {
+                identityKey: "article:queue-projection-repair",
+                item: { title: "Queue projection repair" },
+                version: "source-version-1",
+              },
+            ],
+            platform: injected.platform,
+          });
+
+          injected.arm();
+          const summary = yield* runInlineDefinition(definition);
+          const stored = yield* MigrationStore.pipe(
+            Effect.flatMap((store) =>
+              Effect.all({
+                latest: store.getLatestRunState(definitionId),
+                run: store.getRunState(summary.runId),
+              })
+            ),
+            Effect.provide(
+              FileMigrationStore.layer({
+                directory,
+                platform: injected.platform,
+              })
+            )
+          );
+
+          expect(summary.status).toBe("succeeded");
+          expect(stored.run).toEqual(
+            expect.objectContaining({ status: "succeeded" })
+          );
+          expect(stored.latest).toEqual(
+            expect.objectContaining({
+              runId: summary.runId,
+              status: "succeeded",
+            })
+          );
+        })
+      )
   );
 
   it.effect("returns MigrationStoreError for corrupt persisted records", () =>

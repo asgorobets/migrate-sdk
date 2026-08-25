@@ -25,7 +25,7 @@ const errorMessage = (cause: unknown): string =>
   cause instanceof Error ? cause.message : String(cause);
 
 const fromPromise = <Value>(
-  evaluate: () => Promise<Value>
+  evaluate: (signal: AbortSignal) => Promise<Value>
 ): Effect.Effect<Value, MigrationServerBackendError> =>
   Effect.tryPromise({
     catch: (cause) =>
@@ -40,6 +40,7 @@ const dashboard = (
   runtime: ConfiguredMigrationHost,
   snapshot: Awaited<ReturnType<ConfiguredMigrationHost["refresh"]>>
 ): MigrateDashboard => ({
+  activeRuns: snapshot.activeRuns,
   groups: runtime.groups,
   rows: snapshot.rows,
   scannedSource: snapshot.scannedSource,
@@ -142,6 +143,7 @@ export const makeConfiguredMigrationServerBackend = (
   cancelActiveExecution: fromPromise(runtime.cancelActiveExecution),
   executeOperation: (operation, observer) =>
     fromPromise(() => runtime.execute(operation, observer)),
+  getActiveRuns: fromPromise(runtime.listActiveRuns),
   getDashboard: fromPromise(runtime.refresh).pipe(
     Effect.map((snapshot) => dashboard(runtime, snapshot))
   ),
@@ -153,6 +155,8 @@ export const makeConfiguredMigrationServerBackend = (
     fromPromise(() =>
       runtime.normalizeSourceIdentity(definitionId, sourceIdentity)
     ),
+  observeRun: (runId, observer) =>
+    fromPromise((signal) => runtime.observeRun(runId, { ...observer, signal })),
   prepareOperation: (input) =>
     fromPromise(() =>
       runtime.prepare(

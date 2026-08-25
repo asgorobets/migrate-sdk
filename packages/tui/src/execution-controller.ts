@@ -253,6 +253,21 @@ export const makeMigrationTuiExecutionController = (
 
         const terminal = await observation;
 
+        if (
+          terminal.status === "failed" ||
+          terminal.status === "start-failed"
+        ) {
+          throw new Error(`Run ${terminal.runId} ${terminal.status}`);
+        }
+
+        if (terminal.status === "cancelled") {
+          return {
+            message: `Run ${terminal.runId} cancelled`,
+            outcome: "cancelled",
+            runId: terminal.runId,
+          };
+        }
+
         return {
           message: `Run ${terminal.runId} ${terminal.status}`,
           outcome: "completed",

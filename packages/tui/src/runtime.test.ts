@@ -145,6 +145,110 @@ describe("Migration TUI server runtime", () => {
     });
   }
 
+  it("publishes live durable counts when a dependent migration runs alone", async () => {
+    const runtime = await loadConfiguredMigrationHost({
+      configPath: "examples/dependent-live-progress.config.ts",
+      cwd: packageDirectory,
+      progressFallbackIntervalMs: 10,
+      terminalPollIntervalMs: 10,
+    });
+    const prerequisite = await runtime.prepare(
+      {
+        definitionId: toMigrationDefinitionId("live-progress-prerequisite"),
+        kind: "migration",
+      },
+      "run"
+    );
+    await runtime.execute(prerequisite);
+    const operation = await runtime.prepare(
+      {
+        definitionId: toMigrationDefinitionId("live-progress"),
+        kind: "migration",
+      },
+      "run"
+    );
+    const migratedCounts: number[] = [];
+    const progressErrors: unknown[] = [];
+
+    expect(operation.plan.executionDefinitionIds).toEqual(["live-progress"]);
+
+    await runtime.execute(operation, {
+      onProgress: ({ definitions }) => {
+        const status = definitions.find(
+          (definition) => definition.definitionId === "live-progress"
+        );
+
+        if (status !== undefined) {
+          migratedCounts.push(status.durable.migrated);
+        }
+      },
+      onProgressError: (cause) => progressErrors.push(cause),
+    });
+
+    expect(migratedCounts.some((count) => count > 0 && count < 4)).toBe(true);
+    expect(migratedCounts.at(-1)).toBe(4);
+    expect(progressErrors).toEqual([]);
+  });
+
+  it("rediscovers and observes a detached run by its durable run id", async () => {
+    liveProgressProviderObservations.length = 0;
+    const runtime = await loadConfiguredMigrationHost({
+      configPath: "examples/detached-live-progress.config.ts",
+      cwd: packageDirectory,
+      progressFallbackIntervalMs: 10,
+      terminalPollIntervalMs: 10,
+    });
+    const operation = await runtime.prepare(
+      {
+        definitionId: toMigrationDefinitionId("live-progress"),
+        kind: "migration",
+      },
+      "run"
+    );
+    const observing = Promise.withResolvers<void>();
+    const firstObservation = runtime.execute(operation, {
+      onStateChange: (state) => {
+        if (state.kind === "observing") {
+          observing.resolve();
+        }
+      },
+    });
+
+    await observing.promise;
+    await expect(runtime.cancelActiveExecution()).resolves.toMatchObject({
+      kind: "detached",
+    });
+    const detached = await firstObservation;
+    const activeRuns = await runtime.listActiveRuns();
+
+    expect(detached).toMatchObject({ outcome: "detached" });
+    expect(activeRuns).toEqual([
+      expect.objectContaining({
+        definitionIds: ["live-progress"],
+        execution: {
+          adapter: "test-detached",
+          executionId: `detached-${detached.runId}`,
+        },
+        runId: detached.runId,
+        status: "running",
+      }),
+    ]);
+    await expect(runtime.observeRun(detached.runId)).resolves.toEqual({
+      message: `Run ${detached.runId} succeeded`,
+      outcome: "completed",
+      runId: detached.runId,
+    });
+    await expect(runtime.observeRun(detached.runId)).resolves.toEqual({
+      message: `Run ${detached.runId} succeeded`,
+      outcome: "completed",
+      runId: detached.runId,
+    });
+    expect(liveProgressProviderObservations).toEqual([
+      `detached-${detached.runId}`,
+      `detached-${detached.runId}`,
+    ]);
+  });
+
   it("prepares skipped-item retries without expanding dependencies", async () => {
     const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/migrate.config.ts",
@@ -220,8 +324,10 @@ describe("Migration TUI server runtime", () => {
       cwd: packageDirectory,
     });
     const definitionId = toMigrationDefinitionId("locked-migration");
-    const lock = (await runtime.refresh()).rows[0]?.status?.lock;
+    const initial = await runtime.refresh();
+    const lock = initial.rows[0]?.status?.lock;
 
+    expect(initial.activeRuns).toEqual([]);
     expect(lock).toMatchObject({
       ownerRunId: "run-stuck",
       token: "lock-stuck",

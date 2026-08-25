@@ -1,3 +1,4 @@
+import type { ActiveMigrationRun, MigrationRunId } from "migrate-sdk";
 import type {
   MigrationTuiAction,
   MigrationTuiRow,
@@ -5,13 +6,14 @@ import type {
 } from "../runtime.ts";
 
 export type MigrationTuiActionView =
+  | "attach-run"
   | "break-lock"
   | "execution-settings"
   | "messages"
   | "scan"
   | "selective-run";
 
-type MigrationTuiPrimarySlot = "lock" | "retry" | "rollback" | "run";
+type MigrationTuiPrimarySlot = "attach" | "lock" | "retry" | "rollback" | "run";
 
 interface MigrationTuiPrimaryAction {
   readonly compactLabel: string;
@@ -20,20 +22,50 @@ interface MigrationTuiPrimaryAction {
   readonly slot: MigrationTuiPrimarySlot;
 }
 
-export interface MigrationTuiAvailableAction {
-  readonly action?: MigrationTuiAction;
+interface MigrationTuiAvailableActionBase {
   readonly description: string;
-  readonly id: MigrationTuiAction | MigrationTuiActionView;
   readonly key: string;
   readonly label: string;
   readonly primary?: MigrationTuiPrimaryAction;
   readonly shortcutLabel?: string;
-  readonly view?: MigrationTuiActionView;
 }
+
+type MigrationTuiOperationAction = {
+  readonly [Action in MigrationTuiAction]: MigrationTuiAvailableActionBase & {
+    readonly action: Action;
+    readonly id: Action;
+    readonly runId?: never;
+    readonly view?: never;
+  };
+}[MigrationTuiAction];
+
+type MigrationTuiNonAttachView = Exclude<MigrationTuiActionView, "attach-run">;
+
+type MigrationTuiViewAction = {
+  readonly [View in MigrationTuiNonAttachView]: MigrationTuiAvailableActionBase & {
+    readonly action?: never;
+    readonly id: View;
+    readonly runId?: never;
+    readonly view: View;
+  };
+}[MigrationTuiNonAttachView];
+
+type MigrationTuiAttachAction = MigrationTuiAvailableActionBase & {
+  readonly action?: never;
+  readonly id: "attach-run";
+  readonly runId: MigrationRunId;
+  readonly view: "attach-run";
+};
+
+export type MigrationTuiAvailableAction =
+  | MigrationTuiAttachAction
+  | MigrationTuiOperationAction
+  | MigrationTuiViewAction;
 
 export const migrationTuiAvailableActions = (
   target: MigrationTuiTarget,
-  rows: readonly MigrationTuiRow[]
+  rows: readonly MigrationTuiRow[],
+  activeRuns: readonly ActiveMigrationRun[] = []
 ): readonly MigrationTuiAvailableAction[] => {
   const isGroup = target.kind === "group";
   const noun = isGroup ? "group" : "migration";
@@ -55,6 +87,31 @@ export const migrationTuiAvailableActions = (
       shortcutLabel: "r run",
     },
   ];
+  const matchingActiveRuns = activeRuns.filter(
+    (run) =>
+      run.execution !== undefined &&
+      rows.some((row) => row.status?.lock?.ownerRunId === run.runId)
+  );
+  const activeRun =
+    matchingActiveRuns.length === 1 ? matchingActiveRuns[0] : undefined;
+
+  if (activeRun !== undefined) {
+    options.unshift({
+      description: `Follow live progress for run ${activeRun.runId}`,
+      id: "attach-run",
+      key: "a",
+      label: "Attach to run",
+      primary: {
+        compactLabel: "a Attach",
+        intent: "primary",
+        label: "a Attach to run",
+        slot: "attach",
+      },
+      runId: activeRun.runId,
+      shortcutLabel: "a attach",
+      view: "attach-run",
+    });
+  }
 
   if (!isGroup) {
     options.push({
@@ -193,6 +250,12 @@ const primarySlotOrder: readonly MigrationTuiPrimarySlot[] = [
 export const migrationTuiPrimaryActions = (
   actions: readonly MigrationTuiAvailableAction[]
 ): readonly MigrationTuiAvailableAction[] => {
+  const attach = actions.find((action) => action.primary?.slot === "attach");
+
+  if (attach !== undefined) {
+    return [attach];
+  }
+
   const breakLock = actions.find((action) => action.primary?.slot === "lock");
 
   if (breakLock !== undefined) {

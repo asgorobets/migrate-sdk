@@ -16,6 +16,7 @@ import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type { MigrationMessage } from "../domain/message.ts";
 import type { MigrationDefinitionStatus } from "../domain/status.ts";
 import {
+  type MigrateActiveRun,
   type MigrateBreakLockResult,
   type MigrateCancellationResult,
   type MigrateDashboard,
@@ -44,6 +45,10 @@ export interface MigrateServerService {
   readonly cancelExecution: (input: {
     readonly executionId?: MigrateExecutionId | undefined;
   }) => Effect.Effect<MigrateCancellationResult, MigrateProtocolError>;
+  readonly getActiveRuns: Effect.Effect<
+    readonly MigrateActiveRun[],
+    MigrateProtocolError
+  >;
   readonly getDashboard: Effect.Effect<MigrateDashboard, MigrateProtocolError>;
   readonly getMessages: (input: {
     readonly target: MigrateTarget;
@@ -61,6 +66,9 @@ export interface MigrateServerService {
   }) => Effect.Effect<string, MigrateProtocolError>;
   readonly observeExecution: (input: {
     readonly executionId: MigrateExecutionId;
+  }) => Stream.Stream<MigrateObservationEvent, MigrateProtocolError>;
+  readonly observeRun: (input: {
+    readonly runId: MigrationRunId;
   }) => Stream.Stream<MigrateObservationEvent, MigrateProtocolError>;
   readonly prepareOperation: (
     input: MigratePrepareOperationInput
@@ -107,6 +115,7 @@ export interface MigrateServerBackend<ExecutableOperation> {
     operation: ExecutableOperation,
     observer: MigrateServerExecutionObserver
   ) => Effect.Effect<MigrateServerExecutionResult, unknown>;
+  readonly getActiveRuns: Effect.Effect<readonly MigrateActiveRun[], unknown>;
   readonly getDashboard: Effect.Effect<MigrateDashboard, unknown>;
   readonly getMessages: (
     target: MigrateTarget
@@ -118,6 +127,10 @@ export interface MigrateServerBackend<ExecutableOperation> {
     definitionId: MigrationDefinitionId,
     sourceIdentity: string
   ) => Effect.Effect<string, unknown>;
+  readonly observeRun: (
+    runId: MigrationRunId,
+    observer: MigrateServerExecutionObserver
+  ) => Effect.Effect<MigrateServerExecutionResult, unknown>;
   readonly prepareOperation: (
     input: MigrateOperationRequest
   ) => Effect.Effect<
@@ -288,6 +301,7 @@ const makeMigrationServerService = <ExecutableOperation>(
         );
       }),
     getDashboard: backend.getDashboard.pipe(Effect.mapError(operationError)),
+    getActiveRuns: backend.getActiveRuns.pipe(Effect.mapError(operationError)),
     getMessages: ({ target }) =>
       backend.getMessages(target).pipe(Effect.mapError(operationError)),
     getServerInfo: Effect.succeed(serverInfo),
@@ -344,6 +358,53 @@ const makeMigrationServerService = <ExecutableOperation>(
         )
       );
     },
+    observeRun: ({ runId }) =>
+      Stream.callback<MigrateObservationEvent, MigrateProtocolError>((queue) =>
+        backend
+          .observeRun(runId, {
+            onObservationWarning: (message) =>
+              Queue.offerUnsafe(queue, { kind: "warning", message }),
+            onProgress: ({ definitions }) =>
+              Queue.offerUnsafe(queue, { definitions, kind: "progress" }),
+            onProgressError: (cause) =>
+              Queue.offerUnsafe(queue, {
+                kind: "warning",
+                message: `Unable to refresh live status: ${errorMessage(cause)}`,
+              }),
+            onStateChange: (state) =>
+              Queue.offerUnsafe(queue, { kind: "state", state }),
+          })
+          .pipe(
+            Effect.matchCause({
+              onFailure: (cause) =>
+                Queue.failCauseUnsafe(
+                  queue,
+                  Cause.fail(
+                    operationError(Cause.squash(cause), "execution-failed")
+                  )
+                ),
+              onSuccess: (result) => {
+                Queue.offerUnsafe(
+                  queue,
+                  result.outcome === "detached"
+                    ? {
+                        kind: "detached",
+                        message: result.message,
+                        runId: result.runId,
+                      }
+                    : {
+                        kind: "terminal",
+                        message: result.message,
+                        outcome: result.outcome,
+                        runId: result.runId,
+                      }
+                );
+                Queue.endUnsafe(queue);
+              },
+            }),
+            Effect.forkScoped
+          )
+      ),
     prepareOperation: prepare,
     scanSource: ({ concurrency, target }) =>
       backend

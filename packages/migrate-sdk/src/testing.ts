@@ -7,6 +7,8 @@ export {
   TestDurableMigrationExecutableAttachError,
   TestDurableMigrationExecutableStartRejectedError,
 } from "./services/test-durable-migration-executable.ts";
+export type { ConfiguredSourceRuntime } from "./testing/configured-source-runtime.ts";
+export { useConfiguredSource } from "./testing/configured-source-runtime.ts";
 export type {
   InlineRegistryRollbackInput,
   InlineRegistryRunInput,
@@ -17,5 +19,4 @@ export {
   runInlineDefinition,
   runInlineRegistry,
 } from "./testing/inline-registry-execution.ts";
-export type { ConfiguredSourceRuntime } from "./testing/configured-source-runtime.ts";
-export { useConfiguredSource } from "./testing/configured-source-runtime.ts";
+export { runSupersededMigrationRunScenario } from "./testing/migration-store-conformance.ts";

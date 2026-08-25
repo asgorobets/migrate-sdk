@@ -2,7 +2,10 @@ import { basename } from "node:path";
 import { type KeyEvent, RGBA } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type {
+  ActiveMigrationRun,
+  MigrationDefinitionStatus,
   MigrationExecutionOptions,
+  MigrationRunId,
   PipelineExecutionConcurrency,
 } from "migrate-sdk";
 import {
@@ -553,6 +556,9 @@ export const MigrationTuiApp = ({
     runtime.getExecutionState
   );
   const [rows, setRows] = useState(initialRows ?? runtime.rows);
+  const [activeRuns, setActiveRuns] = useState<readonly ActiveMigrationRun[]>(
+    []
+  );
   const [listTab, setListTab] = useState<MigrationListTab>("migrations");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [actionIndex, setActionIndex] = useState(0);
@@ -684,6 +690,7 @@ export const MigrationTuiApp = ({
         }
 
         setRows(snapshot.rows);
+        setActiveRuns(snapshot.activeRuns);
         setNotice(nextNotice);
       } catch (cause) {
         if (requestId === refreshRequestRef.current) {
@@ -716,6 +723,7 @@ export const MigrationTuiApp = ({
             : { concurrency: executionSettings.sourceInventoryScan }),
         });
         setRows(snapshot.rows);
+        setActiveRuns(snapshot.activeRuns);
         setNotice(`Source Inventory Scan complete for ${targetLabel(target)}`);
       } catch (cause) {
         setError(errorMessage(cause));
@@ -748,6 +756,55 @@ export const MigrationTuiApp = ({
     task.catch((cause: unknown) => setError(errorMessage(cause)));
   }, []);
 
+  const updateLiveStatuses = useCallback(
+    ({
+      definitions,
+    }: {
+      readonly definitions: readonly MigrationDefinitionStatus[];
+    }) => {
+      const statuses = new Map(
+        definitions.map((status) => [status.definitionId, status])
+      );
+
+      setRows((current) =>
+        current.map((row) => {
+          const status = statuses.get(row.entry.id);
+
+          if (status === undefined) {
+            return row;
+          }
+
+          return {
+            ...row,
+            status:
+              row.status === undefined
+                ? status
+                : {
+                    ...row.status,
+                    durable: status.durable,
+                    lastRun: status.lastRun,
+                    lock: status.lock,
+                  },
+          };
+        })
+      );
+      setError(null);
+    },
+    []
+  );
+
+  const refreshAfterExecutionFailure = useCallback(
+    async (cause: unknown) => {
+      const executionError = errorMessage(cause);
+      await refresh();
+
+      if (!lifecycle.isExitRequested()) {
+        setError(executionError);
+      }
+    },
+    [lifecycle, refresh]
+  );
+
   const executeOperation = useCallback(
     async (operation: MigrationTuiPreparedOperation) => {
       if (executingRef.current) {
@@ -757,6 +814,7 @@ export const MigrationTuiApp = ({
       executingRef.current = true;
       setView("dashboard");
       setPendingOperation(null);
+      setNotice(null);
       setBusy(
         `${actionCopy[operation.action].progress} ${targetLabel(operation.target)}…`
       );
@@ -764,35 +822,7 @@ export const MigrationTuiApp = ({
 
       try {
         const result = await runtime.execute(operation, {
-          onProgress: ({ definitions }) => {
-            const statuses = new Map(
-              definitions.map((status) => [status.definitionId, status])
-            );
-
-            setRows((current) =>
-              current.map((row) => {
-                const status = statuses.get(row.entry.id);
-
-                if (status === undefined) {
-                  return row;
-                }
-
-                return {
-                  ...row,
-                  status:
-                    row.status === undefined
-                      ? status
-                      : {
-                          ...row.status,
-                          durable: status.durable,
-                          lastRun: status.lastRun,
-                          lock: status.lock,
-                        },
-                };
-              })
-            );
-            setError(null);
-          },
+          onProgress: updateLiveStatuses,
           onProgressError: (cause) => {
             setError(`Unable to refresh live status: ${errorMessage(cause)}`);
           },
@@ -810,14 +840,66 @@ export const MigrationTuiApp = ({
           return;
         }
 
-        setError(errorMessage(cause));
-        setBusy("");
+        await refreshAfterExecutionFailure(cause);
       } finally {
         executingRef.current = false;
         lifecycle.executionSettled();
       }
     },
-    [lifecycle, refresh, runtime]
+    [
+      lifecycle,
+      refresh,
+      refreshAfterExecutionFailure,
+      runtime,
+      updateLiveStatuses,
+    ]
+  );
+
+  const observeActiveRun = useCallback(
+    async (runId: MigrationRunId) => {
+      if (executingRef.current || lifecycle.isExitRequested()) {
+        return;
+      }
+
+      executingRef.current = true;
+      setView("dashboard");
+      setNotice(null);
+      setBusy(`Attaching to run ${runId}…`);
+      setError(null);
+
+      try {
+        const result = await runtime.observeRun(runId, {
+          onObservationWarning: setNotice,
+          onProgress: updateLiveStatuses,
+          onProgressError: (cause) => {
+            setError(`Unable to refresh live status: ${errorMessage(cause)}`);
+          },
+        });
+
+        if (lifecycle.isExitRequested()) {
+          return;
+        }
+
+        setNotice(result.message);
+        await refresh();
+      } catch (cause) {
+        if (lifecycle.isExitRequested()) {
+          return;
+        }
+
+        await refreshAfterExecutionFailure(cause);
+      } finally {
+        executingRef.current = false;
+        lifecycle.executionSettled();
+      }
+    },
+    [
+      lifecycle,
+      refresh,
+      refreshAfterExecutionFailure,
+      runtime,
+      updateLiveStatuses,
+    ]
   );
 
   const prepareOperation = useCallback(
@@ -1164,6 +1246,11 @@ export const MigrationTuiApp = ({
         return;
       }
 
+      if (option.view === "attach-run" && option.runId !== undefined) {
+        startTask(observeActiveRun(option.runId));
+        return;
+      }
+
       if (option.view === "scan") {
         setView("dashboard");
         startTask(scanSelectedSource());
@@ -1194,6 +1281,7 @@ export const MigrationTuiApp = ({
       openExecutionSettings,
       openMessages,
       openSelectiveRun,
+      observeActiveRun,
       prepareOperation,
       scanSelectedSource,
       startTask,
@@ -1204,8 +1292,12 @@ export const MigrationTuiApp = ({
     () =>
       selectedTarget === undefined
         ? []
-        : migrationTuiAvailableActions(selectedTarget, selectedRows),
-    [selectedRows, selectedTarget]
+        : migrationTuiAvailableActions(
+            selectedTarget,
+            selectedRows,
+            activeRuns
+          ),
+    [activeRuns, selectedRows, selectedTarget]
   );
 
   useEffect(() => {
@@ -1426,7 +1518,7 @@ export const MigrationTuiApp = ({
       }
 
       const option = migrationTuiActionForKey(
-        migrationTuiAvailableActions(target, state.selectedRows),
+        migrationTuiAvailableActions(target, state.selectedRows, activeRuns),
         key.name
       );
 
@@ -1436,7 +1528,7 @@ export const MigrationTuiApp = ({
         chooseOption(option);
       }
     },
-    [chooseOption, refresh, startTask]
+    [activeRuns, chooseOption, refresh, startTask]
   );
 
   const requestExit = useCallback(async () => {
@@ -1467,10 +1559,6 @@ export const MigrationTuiApp = ({
 
   const handleOverviewKey = useCallback(
     (key: KeyEvent) => {
-      if (dashboardStateRef.current.busy !== "") {
-        return;
-      }
-
       const visibleCount =
         listTab === "groups" ? runtime.groups.length : rows.length;
 
@@ -1484,6 +1572,10 @@ export const MigrationTuiApp = ({
         setSelectedIndex((index) =>
           visibleCount === 0 ? 0 : (index + 1) % visibleCount
         );
+      } else if (key.name === "m") {
+        openMessages();
+      } else if (dashboardStateRef.current.busy !== "") {
+        return;
       } else if (key.name === "return" || key.name === "linefeed") {
         key.preventDefault();
         key.stopPropagation();
@@ -1497,6 +1589,7 @@ export const MigrationTuiApp = ({
       changeListTab,
       handleDashboardKey,
       listTab,
+      openMessages,
       rows.length,
       runtime.groups.length,
     ]
@@ -1693,14 +1786,21 @@ export const MigrationTuiApp = ({
         selectedIndex={selectedIndex}
         terminalWidth={dimensions.width}
       />
-      <box style={{ flexShrink: 0, height: 1 }}>
+      <box
+        style={{
+          flexDirection: "column",
+          flexShrink: 0,
+          height:
+            effectiveBusy !== "" && (error !== null || notice !== null) ? 2 : 1,
+        }}
+      >
         {effectiveBusy === "" ? null : (
           <text fg={colors.info}>{effectiveBusy}</text>
         )}
-        {effectiveBusy !== "" || error === null ? null : (
+        {error === null ? null : (
           <text fg={colors.danger}>{error}</text>
         )}
-        {effectiveBusy !== "" || error !== null || notice === null ? null : (
+        {error !== null || notice === null ? null : (
           <text fg={colors.success}>{notice}</text>
         )}
       </box>

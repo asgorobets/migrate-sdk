@@ -1,6 +1,7 @@
 import { Effect, Option, Schema } from "effect";
 import { getMigrationMessages } from "../runtime/get-migration-messages.ts";
 import { getMigrationStatuses } from "../runtime/get-migration-statuses.ts";
+import { MigrationStore } from "../services/migration-store.ts";
 import type { MigrationStoreError } from "./errors.ts";
 import type {
   MigrationExecutionOptions,
@@ -27,10 +28,13 @@ import {
 } from "./ids.ts";
 import type { MigrationMessage } from "./message.ts";
 import type { AnyRollbackMigrationDefinition } from "./rollback.ts";
-import type {
-  AnyMigrationDefinition,
-  RunRequestSourceImplementationError,
-  RunRequestSourceRequirements,
+import {
+  type ActiveMigrationRun,
+  type AnyMigrationDefinition,
+  type MigrationRunState,
+  makeMigrationRunState,
+  type RunRequestSourceImplementationError,
+  type RunRequestSourceRequirements,
 } from "./run.ts";
 import type { RunModeInput } from "./run-mode.ts";
 import type {
@@ -287,6 +291,39 @@ export type MigrationDefinitionRegistryMessagesError =
 export type MigrationDefinitionRegistryStatusError =
   | MigrationDefinitionRegistryPlanningError
   | GetMigrationStatusesError;
+
+const activeMigrationRunFromState = (
+  observationDefinitionId: MigrationDefinitionId,
+  state: MigrationRunState
+): ActiveMigrationRun | null => {
+  const firstDefinitionId = state.definitionIds[0];
+
+  if (
+    firstDefinitionId === undefined ||
+    !state.definitionIds.includes(observationDefinitionId) ||
+    (state.status !== "queued" && state.status !== "running")
+  ) {
+    return null;
+  }
+
+  const execution = state.execution;
+
+  return {
+    definitionIds: [firstDefinitionId, ...state.definitionIds.slice(1)],
+    ...(execution?.executionId === undefined
+      ? {}
+      : {
+          execution: {
+            adapter: execution.adapter,
+            executionId: execution.executionId,
+          },
+        }),
+    observationDefinitionId,
+    runId: state.runId,
+    startedAt: state.startedAt,
+    status: state.status,
+  };
+};
 
 export class DuplicateMigrationDefinitionId extends Schema.TaggedClass<DuplicateMigrationDefinitionId>()(
   "DuplicateMigrationDefinitionId",
@@ -1843,6 +1880,62 @@ export class MigrationDefinitionRegistry<
           : { requestedGroup: selection.requestedGroup }),
         requestedDefinitionIds: selection.requestedDefinitionIds,
       };
+    });
+  }
+
+  activeRuns(): Effect.Effect<
+    readonly ActiveMigrationRun[],
+    MigrationDefinitionRegistryStatusError
+  > {
+    const definitions = this.#definitions;
+
+    return Effect.gen(function* () {
+      const activeRuns = new Map<string, ActiveMigrationRun>();
+
+      for (const definition of definitions) {
+        const candidate = yield* MigrationStore.pipe(
+          Effect.flatMap((store) =>
+            store.getDefinitionLock(definition.id).pipe(
+              Effect.flatMap((lock) => {
+                if (lock === null || activeRuns.has(lock.ownerRunId)) {
+                  return Effect.succeed(null);
+                }
+
+                return store
+                  .getRunState(lock.ownerRunId)
+                  .pipe(
+                    Effect.flatMap((state) =>
+                      state === null
+                        ? store
+                            .getLatestRunState(definition.id)
+                            .pipe(
+                              Effect.map((latest) =>
+                                latest?.runId === lock.ownerRunId
+                                  ? makeMigrationRunState(latest)
+                                  : null
+                              )
+                            )
+                        : Effect.succeed(state)
+                    )
+                  );
+              })
+            )
+          ),
+          Effect.provide(definition.store)
+        );
+
+        if (candidate === null) {
+          continue;
+        }
+
+        const activeRun = activeMigrationRunFromState(definition.id, candidate);
+
+        if (activeRun !== null) {
+          activeRuns.set(activeRun.runId, activeRun);
+        }
+      }
+
+      return [...activeRuns.values()];
     });
   }
 

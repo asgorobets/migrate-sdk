@@ -37,6 +37,7 @@ import {
   MigrationStore,
   migrationDefinitionRunStatus,
   validateMigrationDefinitionRunOutcomes,
+  validateMigrationRunDefinitionIds,
 } from "../../services/migration-store.ts";
 import { PersistedMigrationItemState } from "../internal/persisted-state.ts";
 import {
@@ -707,6 +708,13 @@ const makeLayer = (
             );
       });
 
+      const getRunState = Effect.fn("SqlMigrationStore.getRunState")(function* (
+        runId: MigrationRunIdType
+      ) {
+        const decoded = yield* readRunState("run-id", runId);
+        return decoded?.runState ?? null;
+      });
+
       const upsertRunRecord = (
         state: MigrationRunState
       ): Effect.Effect<void, MigrationStoreError> =>
@@ -821,18 +829,13 @@ const makeLayer = (
         withTransaction(
           "update Migration Run State",
           Effect.gen(function* () {
-            const states = yield* Effect.forEach(
-              definitionIds,
-              getLatestRunState
-            );
             const current = (yield* readRunState("run-id", runId))?.runState;
 
-            if (
-              current === undefined ||
-              states.some((state) => state?.runId !== runId)
-            ) {
+            if (current === undefined) {
               return yield* storeError("Migration run was not found", runId);
             }
+
+            yield* validateMigrationRunDefinitionIds(current, definitionIds);
 
             const finishedAt =
               input.finish === true ? yield* DateTime.nowAsDate : undefined;
@@ -1081,6 +1084,7 @@ const makeLayer = (
         deleteItemState,
         upsertItemState,
         createRunId,
+        getRunState,
         getLatestRunState,
         beginRun,
         queueRun,

@@ -1,5 +1,6 @@
 import { Effect, Layer, Schema } from "effect";
 import {
+  type ExecutionStartResult,
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecutable,
@@ -7,6 +8,8 @@ import {
   MigrationProgress,
   type MigrationRunSummary,
   type MigrationRunTerminalResult,
+  MigrationStore,
+  type MigrationStoreError,
   SourceIdentity,
 } from "migrate-sdk";
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
@@ -16,6 +19,10 @@ import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 const Content = Schema.Struct({ title: Schema.String });
 const ContentIdentity = SourceIdentity.make({
   id: "live-progress-content@v1",
+  schema: SourceIdentity.key("id", Schema.NonEmptyString),
+});
+const PrerequisiteIdentity = SourceIdentity.make({
+  id: "live-progress-prerequisite@v1",
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 
@@ -97,27 +104,62 @@ const makeDetachedExecutableLayer = (observationFails: boolean) =>
 
       return MigrationExecutable.inlineService.startRun(plan).pipe(
         Effect.provide(providerProgress),
-        Effect.map((result) => {
-          if (result.kind !== "started" || result.handle === undefined) {
-            return result;
-          }
+        Effect.flatMap(
+          (
+            result
+          ): Effect.Effect<
+            ExecutionStartResult<MigrationRunSummary>,
+            MigrationStoreError
+          > => {
+            if (result.kind !== "started" || result.handle === undefined) {
+              return Effect.succeed(result);
+            }
 
-          const executionId = `detached-${result.runId}`;
-          detachedRuns.set(executionId, {
-            checkpoints,
-            listeners,
-            wait: result.handle.wait,
-          });
-
-          return {
-            execution: {
+            const executionId = `detached-${result.runId}`;
+            const execution = {
               adapter: "test-detached",
               executionId,
-            },
-            kind: "started" as const,
-            runId: result.runId,
-          };
-        })
+            };
+            const definition = plan.definitions[0];
+
+            if (definition === undefined) {
+              return Effect.die(
+                "Detached test execution requires a definition"
+              );
+            }
+
+            detachedRuns.set(executionId, {
+              checkpoints,
+              listeners,
+              wait: result.handle.wait,
+            });
+            Effect.runFork(
+              result.handle.wait.pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    detachedRuns.delete(executionId);
+                  })
+                )
+              )
+            );
+
+            return MigrationStore.pipe(
+              Effect.flatMap((migrationStore) =>
+                migrationStore.attachRunExecution(
+                  result.runId,
+                  plan.executionDefinitionIds,
+                  execution
+                )
+              ),
+              Effect.provide(definition.store),
+              Effect.as({
+                execution,
+                kind: "started" as const,
+                runId: result.runId,
+              })
+            );
+          }
+        )
       );
     },
     waitForExecution: (execution, options) =>
@@ -151,7 +193,6 @@ const makeDetachedExecutableLayer = (observationFails: boolean) =>
           Effect.ensuring(
             Effect.sync(() => {
               run.listeners.delete(publish);
-              detachedRuns.delete(execution.executionId);
             })
           )
         );
@@ -185,6 +226,54 @@ export const makeLiveProgressConfig = (
       : {}),
     registry: MigrationDefinitionRegistry.make({
       definitions: [definition],
+    }),
+  });
+};
+
+export const makeDependentLiveProgressConfig = () => {
+  const store = InMemoryMigrationStore.layer();
+  const prerequisite = MigrationDefinition.make({
+    id: "live-progress-prerequisite",
+    process: () => Effect.void,
+    source: InMemorySource.make({
+      batchSize: 1,
+      identity: PrerequisiteIdentity,
+      items: [
+        {
+          identityKey: "prerequisite",
+          item: { title: "Prerequisite" },
+          version: "v1",
+        },
+      ],
+      sourceSchema: Content,
+    }),
+    store,
+  });
+  const definition = MigrationDefinition.make({
+    dependencies: { required: [prerequisite.id] },
+    id: "live-progress",
+    process: () => Effect.sleep("250 millis"),
+    source: InMemorySource.make({
+      batchSize: 1,
+      identity: ContentIdentity,
+      items: [
+        { identityKey: "item-1", item: { title: "One" }, version: "v1" },
+        { identityKey: "item-2", item: { title: "Two" }, version: "v1" },
+        {
+          identityKey: "item-3",
+          item: { title: "Three" },
+          version: "v1",
+        },
+        { identityKey: "item-4", item: { title: "Four" }, version: "v1" },
+      ],
+      sourceSchema: Content,
+    }),
+    store,
+  });
+
+  return defineMigrationCliConfig({
+    registry: MigrationDefinitionRegistry.make({
+      definitions: [prerequisite, definition],
     }),
   });
 };

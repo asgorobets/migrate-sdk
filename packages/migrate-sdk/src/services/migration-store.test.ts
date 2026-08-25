@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
+import { runSupersededMigrationRunScenario } from "migrate-sdk/testing";
 import {
   SourceIdentityContractFingerprint,
   SourceIdentityContractId,
@@ -16,6 +17,30 @@ import {
 } from "./migration-store.ts";
 
 describe("MigrationStore definition outcomes", () => {
+  it.effect(
+    "completes a shared run after one definition starts a newer run",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* runSupersededMigrationRunScenario("memory");
+
+        expect(result.originalRunState).toEqual(result.completed);
+        expect(result.selectedLatest).toEqual(
+          expect.objectContaining({
+            definitionId: result.selectedId,
+            runId: result.originalRunId,
+            status: "succeeded",
+          })
+        );
+        expect(result.dependencyLatest).toEqual(
+          expect.objectContaining({
+            definitionId: result.dependencyId,
+            runId: result.newerRunId,
+            status: "running",
+          })
+        );
+      }).pipe(Effect.provide(InMemoryMigrationStore.layer()))
+  );
+
   it.effect("rejects incomplete, duplicate, and unexpected outcomes", () =>
     Effect.gen(function* () {
       const authorsId = toMigrationDefinitionId("authors");

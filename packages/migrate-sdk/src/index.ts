@@ -147,6 +147,7 @@ export {
 } from "./domain/rollback-progress.ts";
 
 export {
+  ActiveMigrationRun,
   makeMigrationDefinitionRunState,
   makeMigrationRunState,
   MigrationDefinitionRunOutcome,
@@ -345,9 +346,11 @@ export type {
   MigrationDefinitionRegistryCatalogService,
 } from "./services/migration-definition-registry-catalog.ts";
 export {
+  canReplaceLatestMigrationDefinitionRun,
   MigrationStore,
   migrationDefinitionRunStatus,
   validateMigrationDefinitionRunOutcomes,
+  validateMigrationRunDefinitionIds,
 } from "./services/migration-store.ts";
 export type {
   MigrationDefinitionRunOutcomeMap,

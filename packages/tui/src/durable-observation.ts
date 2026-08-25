@@ -10,11 +10,11 @@ export const isTerminalRunState = (state: MigrationRunState): boolean =>
 
 export const waitForDurableRunState = <Error, Requirements>({
   pollIntervalMs,
-  readLatestRunState,
+  readRunState,
   runId,
 }: {
   readonly pollIntervalMs: number;
-  readonly readLatestRunState: Effect.Effect<
+  readonly readRunState: Effect.Effect<
     MigrationRunState | null,
     Error,
     Requirements
@@ -23,7 +23,7 @@ export const waitForDurableRunState = <Error, Requirements>({
 }): Effect.Effect<MigrationRunState, Error, Requirements> =>
   Effect.gen(function* () {
     while (true) {
-      const state = yield* readLatestRunState;
+      const state = yield* readRunState;
 
       if (state?.runId === runId && isTerminalRunState(state)) {
         return state;

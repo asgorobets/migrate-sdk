@@ -4,6 +4,7 @@ import { DateTime, Effect, Layer, Random, Schema, Stream } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { Path } from "effect/Path";
 import type { PlatformError } from "effect/PlatformError";
+import { lock } from "proper-lockfile";
 import { MigrationStoreError } from "../../domain/errors.ts";
 import {
   EncodedSourceCursor,
@@ -36,10 +37,12 @@ import {
   emptyMigrationItemStateSummary,
 } from "../../domain/status.ts";
 import {
+  canReplaceLatestMigrationDefinitionRun,
   type MigrationDefinitionRunOutcomeMap,
   MigrationStore,
   migrationDefinitionRunStatus,
   validateMigrationDefinitionRunOutcomes,
+  validateMigrationRunDefinitionIds,
 } from "../../services/migration-store.ts";
 import { PersistedMigrationItemState } from "../internal/persisted-state.ts";
 import { FileMigrationStoreDirectoryEntries } from "./file-migration-store-directory-entries.ts";
@@ -89,7 +92,22 @@ const LatestRunStateRecord = Schema.Struct({
   recordKind: Schema.Literal("latest-run-state"),
   state: PersistedMigrationRunState,
 });
-type LatestRunStateRecord = typeof LatestRunStateRecord.Type;
+
+const MigrationRunProjectionPredecessor = Schema.Struct({
+  definitionId: MigrationDefinitionIdSchema,
+  runId: Schema.optional(MigrationRunIdSchema),
+});
+type MigrationRunProjectionPredecessor =
+  typeof MigrationRunProjectionPredecessor.Type;
+
+const MigrationRunStateRecord = Schema.Struct({
+  formatVersion: Schema.Literal(formatVersion),
+  projectionPredecessors: Schema.optional(
+    Schema.Array(MigrationRunProjectionPredecessor)
+  ),
+  recordKind: Schema.Literal("migration-run-state"),
+  state: PersistedMigrationRunState,
+});
 
 const EncodedSourceCursorRecord = Schema.Struct({
   formatVersion: Schema.Literal(formatVersion),
@@ -371,6 +389,10 @@ const makePaths = (path: Path, directory: string) => {
     manifest: path.join(directory, "manifest.json"),
     latestRunState: (definitionId: MigrationDefinitionId) =>
       path.join(definitionDirectory(definitionId), "latest-run.json"),
+    projectionLockTarget: (definitionId: MigrationDefinitionId) =>
+      definitionDirectory(definitionId),
+    runState: (runId: MigrationRunId) =>
+      path.join(directory, "runs", `${encodePathSegment(runId)}.json`),
     sourceCursor: (definitionId: MigrationDefinitionId) =>
       path.join(definitionDirectory(definitionId), "cursor.json"),
     migrationContract: (definitionId: MigrationDefinitionId) =>
@@ -390,6 +412,18 @@ const makePaths = (path: Path, directory: string) => {
       path.join(directory, "locks", `${encodePathSegment(definitionId)}.json`),
   };
 };
+
+const projectionLockOptions = {
+  realpath: false,
+  retries: {
+    factor: 1.2,
+    maxTimeout: 100,
+    minTimeout: 10,
+    retries: 200,
+  },
+  stale: 30_000,
+  update: 10_000,
+} as const;
 
 const makeManifestRecord = (createdAt: Date): ManifestRecord => ({
   formatVersion,
@@ -723,57 +757,205 @@ const makeLayerWithoutPlatform = (
         );
       });
 
+      const getRunState = Effect.fn("FileMigrationStore.getRunState")(
+        function* (runId: MigrationRunId) {
+          const record = yield* readRecordOptional(
+            fs,
+            paths.runState(runId),
+            MigrationRunStateRecord
+          );
+
+          if (record === null) {
+            return null;
+          }
+
+          const { definitionStatus: _definitionStatus, ...runState } =
+            record.state;
+          return runState;
+        }
+      );
+
+      const writeRunRecord = (
+        runState: MigrationRunState,
+        projectionPredecessors?: readonly MigrationRunProjectionPredecessor[]
+      ) =>
+        writeRecordAtomic(
+          fs,
+          path,
+          paths.runState(runState.runId),
+          MigrationRunStateRecord,
+          {
+            formatVersion,
+            ...(projectionPredecessors === undefined
+              ? {}
+              : { projectionPredecessors }),
+            recordKind: "migration-run-state",
+            state: runState,
+          }
+        );
+
+      const acquireProjectionLock = (definitionId: MigrationDefinitionId) => {
+        const target = paths.projectionLockTarget(definitionId);
+
+        return fs.makeDirectory(target, { recursive: true }).pipe(
+          Effect.mapError((cause) =>
+            storeError(
+              `Unable to create Migration Definition projection directory ${target}`,
+              cause
+            )
+          ),
+          Effect.andThen(
+            Effect.tryPromise({
+              try: () => lock(target, projectionLockOptions),
+              catch: (cause) =>
+                storeError(
+                  `Unable to acquire Migration Definition projection lock ${definitionId}`,
+                  cause
+                ),
+            })
+          )
+        );
+      };
+
+      const withProjectionLocks = <A, E, R>(
+        definitionIds: readonly MigrationDefinitionId[],
+        effect: Effect.Effect<A, E, R>
+      ): Effect.Effect<A, E | MigrationStoreError, R> => {
+        const orderedDefinitionIds = Array.from(new Set(definitionIds)).sort(
+          (left, right) => left.localeCompare(right)
+        );
+        const acquireAt = (
+          index: number
+        ): Effect.Effect<A, E | MigrationStoreError, R> => {
+          const definitionId = orderedDefinitionIds[index];
+
+          if (definitionId === undefined) {
+            return effect;
+          }
+
+          return Effect.acquireUseRelease(
+            acquireProjectionLock(definitionId),
+            () => acquireAt(index + 1),
+            (release) =>
+              Effect.tryPromise({
+                try: () => release(),
+                catch: (cause) =>
+                  storeError(
+                    `Unable to release Migration Definition projection lock ${definitionId}`,
+                    cause
+                  ),
+              })
+          );
+        };
+
+        return acquireAt(0);
+      };
+
       const writeRunState = (
         runId: MigrationRunId,
         definitionIds: readonly MigrationDefinitionId[],
         status: MigrationRunState["status"]
       ) =>
-        Effect.gen(function* () {
-          const current =
-            definitionIds[0] === undefined
-              ? undefined
-              : yield* readRecordOptional(
-                  fs,
-                  paths.latestRunState(definitionIds[0]),
-                  LatestRunStateRecord
-                ).pipe(
-                  Effect.map((record) =>
-                    record?.state.runId === runId ? record.state : undefined
-                  )
-                );
-          const currentRunState =
-            current === undefined
-              ? undefined
-              : (({ definitionStatus: _definitionStatus, ...runState }) =>
-                  runState)(current);
-          const runState: MigrationRunState = {
-            ...(currentRunState ?? {}),
-            runId,
-            definitionIds,
-            status,
-            startedAt:
-              currentRunState?.startedAt ?? (yield* DateTime.nowAsDate),
-          };
-
-          for (const definitionId of definitionIds) {
-            yield* writeRecordAtomic(
+        withProjectionLocks(
+          definitionIds,
+          Effect.gen(function* () {
+            const currentRecord = yield* readRecordOptional(
               fs,
-              path,
-              paths.latestRunState(definitionId),
-              LatestRunStateRecord,
-              {
-                formatVersion,
-                recordKind: "latest-run-state",
-                state: {
-                  ...runState,
-                  definitionStatus: status,
-                },
-              }
+              paths.runState(runId),
+              MigrationRunStateRecord
             );
-          }
+            const currentRunState =
+              currentRecord === null
+                ? undefined
+                : (({ definitionStatus: _definitionStatus, ...runState }) =>
+                    runState)(currentRecord.state);
 
-          return runState;
-        });
+            if (currentRunState !== undefined) {
+              yield* validateMigrationRunDefinitionIds(
+                currentRunState,
+                definitionIds
+              );
+            }
+
+            const projectionPredecessors =
+              currentRecord?.projectionPredecessors ??
+              (currentRecord === null
+                ? yield* Effect.forEach(definitionIds, (definitionId) =>
+                    Effect.gen(function* () {
+                      const latest = yield* readRecordOptional(
+                        fs,
+                        paths.latestRunState(definitionId),
+                        LatestRunStateRecord
+                      );
+
+                      return {
+                        definitionId,
+                        ...(latest === null
+                          ? {}
+                          : { runId: latest.state.runId }),
+                      } satisfies MigrationRunProjectionPredecessor;
+                    })
+                  )
+                : undefined);
+
+            const runState: MigrationRunState = {
+              ...(currentRunState ?? {}),
+              runId,
+              definitionIds,
+              status,
+              startedAt:
+                currentRunState?.startedAt ?? (yield* DateTime.nowAsDate),
+            };
+
+            yield* writeRunRecord(runState, projectionPredecessors);
+
+            const predecessorByDefinitionId = new Map(
+              projectionPredecessors?.map((predecessor) => [
+                predecessor.definitionId,
+                predecessor.runId,
+              ])
+            );
+
+            for (const definitionId of definitionIds) {
+              const latest = yield* readRecordOptional(
+                fs,
+                paths.latestRunState(definitionId),
+                LatestRunStateRecord
+              );
+              const predecessorRunId =
+                predecessorByDefinitionId.get(definitionId);
+              const canUpdateProjection =
+                canReplaceLatestMigrationDefinitionRun({
+                  currentRunId: latest?.state.runId ?? null,
+                  ...(predecessorByDefinitionId.has(definitionId)
+                    ? { predecessorRunId: predecessorRunId ?? null }
+                    : {}),
+                  runId,
+                });
+
+              if (!canUpdateProjection) {
+                continue;
+              }
+
+              yield* writeRecordAtomic(
+                fs,
+                path,
+                paths.latestRunState(definitionId),
+                LatestRunStateRecord,
+                {
+                  formatVersion,
+                  recordKind: "latest-run-state",
+                  state: {
+                    ...runState,
+                    definitionStatus: status,
+                  },
+                }
+              );
+            }
+
+            return runState;
+          })
+        );
 
       const beginRun = Effect.fn("FileMigrationStore.beginRun")(
         (
@@ -799,63 +981,78 @@ const makeLayerWithoutPlatform = (
           readonly status?: MigrationRunState["status"];
         }
       ) =>
-        Effect.gen(function* () {
-          const records: LatestRunStateRecord[] = [];
-
-          for (const definitionId of definitionIds) {
-            const record = yield* readRecord(
+        withProjectionLocks(
+          definitionIds,
+          Effect.gen(function* () {
+            const currentRecord = yield* readRecordOptional(
               fs,
-              paths.latestRunState(definitionId),
-              LatestRunStateRecord
+              paths.runState(runId),
+              MigrationRunStateRecord
             );
-            records.push(record);
-          }
 
-          const current = records[0];
+            if (currentRecord === null) {
+              return yield* storeError("Migration run was not found", runId);
+            }
 
-          if (
-            current === undefined ||
-            records.some((record) => record.state.runId !== runId)
-          ) {
-            return yield* storeError("Migration run was not found", runId);
-          }
+            const { definitionStatus: _definitionStatus, ...current } =
+              currentRecord.state;
+            yield* validateMigrationRunDefinitionIds(current, definitionIds);
 
-          const finishedAt =
-            input.finish === true ? yield* DateTime.nowAsDate : undefined;
-          const { definitionStatus: _definitionStatus, ...currentRunState } =
-            current.state;
-          const updated: MigrationRunState = {
-            ...currentRunState,
-            ...(input.status === undefined ? {} : { status: input.status }),
-            ...(input.execution === undefined
-              ? {}
-              : { execution: input.execution }),
-            ...(finishedAt === undefined ? {} : { finishedAt }),
-          };
+            const finishedAt =
+              input.finish === true
+                ? (current.finishedAt ?? (yield* DateTime.nowAsDate))
+                : undefined;
+            const updated: MigrationRunState = {
+              ...current,
+              ...(input.status === undefined ? {} : { status: input.status }),
+              ...(input.execution === undefined
+                ? {}
+                : { execution: input.execution }),
+              ...(finishedAt === undefined ? {} : { finishedAt }),
+            };
+            const currentProjectionDefinitionIds: MigrationDefinitionId[] = [];
 
-          for (const definitionId of definitionIds) {
-            yield* writeRecordAtomic(
-              fs,
-              path,
-              paths.latestRunState(definitionId),
-              LatestRunStateRecord,
-              {
-                formatVersion,
-                recordKind: "latest-run-state",
-                state: {
-                  ...updated,
-                  definitionStatus: migrationDefinitionRunStatus(
-                    definitionId,
-                    updated.status,
-                    input.definitionOutcomes
-                  ),
-                },
+            for (const definitionId of definitionIds) {
+              const latest = yield* readRecordOptional(
+                fs,
+                paths.latestRunState(definitionId),
+                LatestRunStateRecord
+              );
+
+              if (latest?.state.runId === runId) {
+                currentProjectionDefinitionIds.push(definitionId);
               }
-            );
-          }
+            }
 
-          return updated;
-        });
+            yield* writeRunRecord(
+              updated,
+              currentRecord.projectionPredecessors
+            );
+
+            for (const definitionId of currentProjectionDefinitionIds) {
+              yield* writeRecordAtomic(
+                fs,
+                path,
+                paths.latestRunState(definitionId),
+                LatestRunStateRecord,
+                {
+                  formatVersion,
+                  recordKind: "latest-run-state",
+                  state: {
+                    ...updated,
+                    definitionStatus: migrationDefinitionRunStatus(
+                      definitionId,
+                      updated.status,
+                      input.definitionOutcomes
+                    ),
+                  },
+                }
+              );
+            }
+
+            return updated;
+          })
+        );
 
       const completeRun = Effect.fn("FileMigrationStore.completeRun")(
         function* (
@@ -1051,6 +1248,7 @@ const makeLayerWithoutPlatform = (
         deleteItemState,
         upsertItemState,
         createRunId,
+        getRunState,
         getLatestRunState,
         beginRun,
         queueRun,

@@ -15,6 +15,7 @@ import {
 } from "migrate-sdk";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { SqlMigrationStore } from "migrate-sdk/stores/sql";
+import { runSupersededMigrationRunScenario } from "migrate-sdk/testing";
 import { runInlineRegistry } from "../../testing/inline-registry-execution.ts";
 
 const TestSourceIdentity = SourceIdentity.make({
@@ -399,6 +400,30 @@ describe("SqlMigrationStore", () => {
             definitionId,
             runStatus: "cancelled",
           }))
+        );
+      }).pipe(Effect.provide(sqlStoreLayer))
+  );
+
+  it.effect(
+    "completes a shared run after one definition starts a newer run",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* runSupersededMigrationRunScenario("sql");
+
+        expect(result.originalRunState).toEqual(result.completed);
+        expect(result.selectedLatest).toEqual(
+          expect.objectContaining({
+            definitionId: result.selectedId,
+            runId: result.originalRunId,
+            status: "succeeded",
+          })
+        );
+        expect(result.dependencyLatest).toEqual(
+          expect.objectContaining({
+            definitionId: result.dependencyId,
+            runId: result.newerRunId,
+            status: "running",
+          })
         );
       }).pipe(Effect.provide(sqlStoreLayer))
   );

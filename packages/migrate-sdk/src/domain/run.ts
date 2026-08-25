@@ -148,6 +148,30 @@ const MigrationRunStateFields = {
 export const MigrationRunState = Schema.Struct(MigrationRunStateFields);
 export type MigrationRunState = typeof MigrationRunState.Type;
 
+export const activeMigrationRunHasObservationDefinition = (run: {
+  readonly definitionIds: readonly MigrationDefinitionId[];
+  readonly observationDefinitionId: MigrationDefinitionId;
+}): boolean => run.definitionIds.includes(run.observationDefinitionId);
+
+export const ActiveMigrationRun = Schema.Struct({
+  definitionIds: Schema.NonEmptyArray(MigrationDefinitionIdSchema),
+  execution: Schema.optional(
+    Schema.Struct({
+      adapter: Schema.NonEmptyString,
+      executionId: Schema.NonEmptyString,
+    })
+  ),
+  observationDefinitionId: MigrationDefinitionIdSchema,
+  runId: MigrationRunId,
+  startedAt: Schema.Date,
+  status: Schema.Literals(["queued", "running"]),
+}).check(
+  Schema.makeFilter(activeMigrationRunHasObservationDefinition, {
+    message: "Observation definition must belong to the Active Migration Run",
+  })
+);
+export type ActiveMigrationRun = typeof ActiveMigrationRun.Type;
+
 export const MigrationDefinitionRunState = Schema.Struct({
   ...MigrationRunStateFields,
   definitionId: MigrationDefinitionIdSchema,

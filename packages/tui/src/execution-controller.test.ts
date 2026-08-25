@@ -189,6 +189,27 @@ describe("Migration TUI execution controller", () => {
     ]);
   });
 
+  it("reports a durable failed detached execution as failed", async () => {
+    const controller = makeMigrationTuiExecutionController({
+      observeDetachedRun: () => Promise.resolve(runState("failed")),
+    });
+
+    await expect(
+      controller.execute({
+        definitionId,
+        start: () =>
+          Promise.resolve({
+            execution: {
+              adapter: "workflow" as const,
+              executionId: "workflow-failed",
+            },
+            kind: "started" as const,
+            runId,
+          }),
+      })
+    ).rejects.toThrow(`Run ${runId} failed`);
+  });
+
   it("stops local observation without claiming to cancel a detached run", async () => {
     const states: MigrationTuiExecutionState[] = [];
     let detached = false;

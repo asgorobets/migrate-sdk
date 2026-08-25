@@ -22,7 +22,10 @@ const maxDiagnosticLength = 8000;
 export interface LocalMigrateRpcConnection {
   readonly client: MigrateClientService;
   readonly dispose: () => Promise<void>;
-  readonly runPromise: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>;
+  readonly runPromise: <A, E>(
+    effect: Effect.Effect<A, E>,
+    options?: { readonly signal?: AbortSignal }
+  ) => Promise<A>;
   readonly serverInfo: MigrateServerInfo;
 }
 
@@ -188,7 +191,8 @@ export const connectLocalMigrateServer = async ({
     return {
       client,
       dispose,
-      runPromise: (effect) => runtime.runPromise(effect),
+      runPromise: (effect, options?: { readonly signal?: AbortSignal }) =>
+        runtime.runPromise(effect, options),
       serverInfo,
     };
   } catch (cause) {

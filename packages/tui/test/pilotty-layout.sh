@@ -21,6 +21,7 @@ SOURCE_STATUS_SESSION="migrate-tui-source-status"
 LOCK_SESSION="migrate-tui-lock"
 LIVE_PROGRESS_SESSION="migrate-tui-live-progress"
 CATALOG_SESSION="migrate-tui-sqlite-catalog"
+CATALOG_STANDALONE_SESSION="migrate-tui-sqlite-catalog-standalone"
 
 mkdir -p "${ARTIFACT_DIR}"
 PILOTTY_SOCKET_DIR="/tmp/migrate-tui-pilotty-socket-$$"
@@ -45,6 +46,7 @@ cleanup() {
   "${PILOTTY_BIN}" key -s "${LOCK_SESSION}" q >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" key -s "${LIVE_PROGRESS_SESSION}" q >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" key -s "${CATALOG_SESSION}" q >/dev/null 2>&1 || true
+  "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" q >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" stop >/dev/null 2>&1 || true
 }
 
@@ -53,6 +55,13 @@ trap cleanup EXIT
 (
   cd "${SDK_PACKAGE_DIR}"
   pnpm exec tsx examples/sqlite-catalog/setup.ts --scale small --reset
+)
+
+CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
+(
+  cd "${SDK_PACKAGE_DIR}"
+  MIGRATE_SQLITE_CATALOG_DIR="${CATALOG_STANDALONE_DIR}" \
+    pnpm exec tsx examples/sqlite-catalog/setup.ts --scale small
 )
 
 "${PILOTTY_BIN}" spawn \
@@ -217,6 +226,57 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/sqlite-catalog-books.txt"
+
+"${PILOTTY_BIN}" spawn \
+  --name "${CATALOG_STANDALONE_SESSION}" \
+  --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_SQLITE_CATALOG_DIR="${CATALOG_STANDALONE_DIR}" \
+  MIGRATE_SQLITE_CATALOG_DELAY_MS=50 node bin/migrate-tui.js \
+  --config ../migrate-sdk/examples/sqlite-catalog/migrate.config.ts >/dev/null
+"${PILOTTY_BIN}" resize -s "${CATALOG_STANDALONE_SESSION}" 120 36 >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 30000 \
+  "Status reloaded" >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" r >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 10000 \
+  "71 migrated" >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" r >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 10000 \
+  "53 migrated" >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Enter >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 5000 \
+  "All actions · books" >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" c >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 5000 \
+  "Concurrency settings" >/dev/null
+"${PILOTTY_BIN}" type -s "${CATALOG_STANDALONE_SESSION}" "1" >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Ctrl+S >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 5000 \
+  "All actions · books" >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" r >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 10000 \
+  "is running" >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 30000 \
+  "97 migrated" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${CATALOG_STANDALONE_SESSION}" \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/sqlite-catalog-standalone-progress.txt"
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Up >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 5000 \
+  "No item history" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${CATALOG_STANDALONE_SESSION}" \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/sqlite-catalog-running-navigation.txt"
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 60000 \
+  "480 migrated" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${CATALOG_STANDALONE_SESSION}" \
+  --settle 300 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/sqlite-catalog-standalone-completed.txt"
 
 "${PILOTTY_BIN}" spawn \
   --name "${GROUP_SESSION}" \
@@ -436,13 +496,26 @@ done
   --format text >"${ARTIFACT_DIR}/source-status.txt"
 "${PILOTTY_BIN}" resize -s "${SOURCE_STATUS_SESSION}" 72 28 >/dev/null
 "${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" PageDown >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SOURCE_STATUS_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format compact >/dev/null
 "${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" PageDown >/dev/null
-"${PILOTTY_BIN}" wait-for -s "${SOURCE_STATUS_SESSION}" -t 5000 \
-  "Capabilities" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SOURCE_STATUS_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format compact >/dev/null
+"${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" PageDown >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SOURCE_STATUS_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format compact >/dev/null
+"${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" PageUp >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SOURCE_STATUS_SESSION}" \
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
+rg -q "Rollback" "${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
 
 "${PILOTTY_BIN}" spawn \
   --name "${LOCK_SESSION}" \
@@ -741,6 +814,26 @@ assert_contains \
   "✕ books" \
   "only the catalog migration with item failures is marked failed"
 assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-standalone-progress.txt" \
+  "97 migrated" \
+  "standalone books execution reports its first committed cursor window"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-standalone-progress.txt" \
+  "is running" \
+  "standalone books progress remains attached through the Node IPC server"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-running-navigation.txt" \
+  "No item history" \
+  "keyboard navigation changes the selected migration during execution"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-running-navigation.txt" \
+  "is running" \
+  "keyboard navigation does not detach the active execution"
+assert_contains \
+  "${ARTIFACT_DIR}/sqlite-catalog-standalone-completed.txt" \
+  "480 migrated" \
+  "standalone books execution reaches its persisted terminal totals"
+assert_contains \
   "${ARTIFACT_DIR}/dependency-decision.txt" \
   "Required dependencies not ready" \
   "blocked Run opens a dependency decision"
@@ -834,8 +927,8 @@ assert_contains \
   "Source Inventory Scan displays identity-specific warnings"
 assert_contains \
   "${ARTIFACT_DIR}/source-status-compact-scrolled.txt" \
-  "Capabilities" \
-  "compact overview paging reaches details below source inventory"
+  "Rollback" \
+  "compact overview paging reaches capabilities below source inventory"
 assert_contains \
   "${ARTIFACT_DIR}/source-status-compact-scrolled.txt" \
   "PgUp/PgDn details" \

@@ -29,6 +29,7 @@ import {
   MigrationStore,
   migrationDefinitionRunStatus,
   validateMigrationDefinitionRunOutcomes,
+  validateMigrationRunDefinitionIds,
 } from "../../services/migration-store.ts";
 
 export interface InMemoryMigrationStoreState {
@@ -43,6 +44,7 @@ export interface InMemoryMigrationStoreState {
   readonly migrationContracts: Map<MigrationDefinitionId, MigrationContract>;
   nextLockNumber: number;
   nextRunNumber: number;
+  readonly runStates: Map<MigrationRunId, MigrationRunState>;
   readonly sourceCursorCommits: {
     readonly definitionId: MigrationDefinitionId;
     readonly cursor: EncodedSourceCursor;
@@ -60,6 +62,7 @@ const makeState = (): InMemoryMigrationStoreState => ({
   itemStates: new Map(),
   latestRunStates: new Map(),
   migrationContracts: new Map(),
+  runStates: new Map(),
   sourceCursors: new Map(),
   sourceCursorCommits: [],
   definitionLocks: new Map(),
@@ -94,28 +97,35 @@ const lockNotFoundError = (
     token: lock.token,
   });
 
-const readRunState = (
+const readRunStateForUpdate = (
   state: InMemoryMigrationStoreState,
   runId: MigrationRunId,
   definitionIds: readonly MigrationDefinitionId[]
 ): Effect.Effect<MigrationRunState, MigrationStoreError> =>
   Effect.gen(function* () {
-    const runStates = definitionIds.map((definitionId) =>
-      state.latestRunStates.get(definitionId)
-    );
-    const current = runStates[0];
+    const current = state.runStates.get(runId);
 
-    if (
-      current === undefined ||
-      runStates.some((runState) => runState?.runId !== runId)
-    ) {
+    if (current === undefined) {
       return yield* storeError("Migration run was not found", runId);
     }
 
-    const { definitionStatus: _definitionStatus, ...runState } = current;
-
-    return runState;
+    return yield* validateMigrationRunDefinitionIds(current, definitionIds);
   });
+
+const updateCurrentLatestRunStates = (
+  state: InMemoryMigrationStoreState,
+  runId: MigrationRunId,
+  definitionIds: readonly MigrationDefinitionId[],
+  makeState: (definitionId: MigrationDefinitionId) => MigrationRunState & {
+    readonly definitionStatus?: MigrationDefinitionRunStatus;
+  }
+): void => {
+  for (const definitionId of definitionIds) {
+    if (state.latestRunStates.get(definitionId)?.runId === runId) {
+      state.latestRunStates.set(definitionId, makeState(definitionId));
+    }
+  }
+};
 
 const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
   Layer.sync(MigrationStore, () => {
@@ -272,6 +282,11 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       })
     );
 
+    const getRunState = Effect.fn("InMemoryMigrationStore.getRunState")(
+      (runId: MigrationRunId) =>
+        Effect.sync(() => state.runStates.get(runId) ?? null)
+    );
+
     const writeRunState = (
       runId: MigrationRunId,
       definitionIds: readonly MigrationDefinitionId[],
@@ -292,6 +307,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         for (const definitionId of definitionIds) {
           state.latestRunStates.set(definitionId, runState);
         }
+        state.runStates.set(runId, runState);
 
         return runState;
       });
@@ -317,15 +333,14 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       definitionIds: readonly MigrationDefinitionId[],
       execution: MigrationExecutionHandle
     ) {
-      const current = yield* readRunState(state, runId, definitionIds);
+      const current = yield* readRunStateForUpdate(state, runId, definitionIds);
       const updated: MigrationRunState = {
         ...current,
         ...(execution === undefined ? {} : { execution }),
       };
 
-      for (const definitionId of definitionIds) {
-        state.latestRunStates.set(definitionId, updated);
-      }
+      updateCurrentLatestRunStates(state, runId, definitionIds, () => updated);
+      state.runStates.set(runId, updated);
 
       return updated;
     });
@@ -336,7 +351,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       runId: MigrationRunId,
       definitionIds: readonly MigrationDefinitionId[]
     ) {
-      const current = yield* readRunState(state, runId, definitionIds);
+      const current = yield* readRunStateForUpdate(state, runId, definitionIds);
       const finishedAt = yield* DateTime.nowAsDate;
       const failed: MigrationRunState = {
         ...current,
@@ -344,9 +359,8 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         finishedAt,
       };
 
-      for (const definitionId of definitionIds) {
-        state.latestRunStates.set(definitionId, failed);
-      }
+      updateCurrentLatestRunStates(state, runId, definitionIds, () => failed);
+      state.runStates.set(runId, failed);
 
       return failed;
     });
@@ -362,7 +376,11 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
             definitionIds,
             definitionOutcomes
           );
-        const current = yield* readRunState(state, runId, definitionIds);
+        const current = yield* readRunStateForUpdate(
+          state,
+          runId,
+          definitionIds
+        );
         const finishedAt = yield* DateTime.nowAsDate;
         const completed: MigrationRunState = {
           ...current,
@@ -370,16 +388,20 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
           finishedAt,
         };
 
-        for (const definitionId of definitionIds) {
-          state.latestRunStates.set(definitionId, {
+        updateCurrentLatestRunStates(
+          state,
+          runId,
+          definitionIds,
+          (definitionId) => ({
             ...completed,
             definitionStatus: migrationDefinitionRunStatus(
               definitionId,
               completed.status,
               outcomeByDefinitionId
             ),
-          });
-        }
+          })
+        );
+        state.runStates.set(runId, completed);
 
         return completed;
       }
@@ -395,7 +417,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
           definitionIds,
           definitionOutcomes
         );
-      const current = yield* readRunState(state, runId, definitionIds);
+      const current = yield* readRunStateForUpdate(state, runId, definitionIds);
       const finishedAt = yield* DateTime.nowAsDate;
       const failed: MigrationRunState = {
         ...current,
@@ -403,16 +425,20 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         finishedAt,
       };
 
-      for (const definitionId of definitionIds) {
-        state.latestRunStates.set(definitionId, {
+      updateCurrentLatestRunStates(
+        state,
+        runId,
+        definitionIds,
+        (definitionId) => ({
           ...failed,
           definitionStatus: migrationDefinitionRunStatus(
             definitionId,
             failed.status,
             outcomeByDefinitionId
           ),
-        });
-      }
+        })
+      );
+      state.runStates.set(runId, failed);
 
       return failed;
     });
@@ -423,7 +449,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       runId: MigrationRunId,
       definitionIds: readonly MigrationDefinitionId[]
     ) {
-      const current = yield* readRunState(state, runId, definitionIds);
+      const current = yield* readRunStateForUpdate(state, runId, definitionIds);
       const finishedAt = yield* DateTime.nowAsDate;
       const cancelled: MigrationRunState = {
         ...current,
@@ -431,9 +457,13 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         finishedAt,
       };
 
-      for (const definitionId of definitionIds) {
-        state.latestRunStates.set(definitionId, cancelled);
-      }
+      updateCurrentLatestRunStates(
+        state,
+        runId,
+        definitionIds,
+        () => cancelled
+      );
+      state.runStates.set(runId, cancelled);
 
       return cancelled;
     });
@@ -546,6 +576,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       deleteItemState,
       upsertItemState,
       createRunId,
+      getRunState,
       getLatestRunState,
       beginRun,
       queueRun,

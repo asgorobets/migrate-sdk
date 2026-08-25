@@ -17,6 +17,7 @@ describe("Migration TUI lifecycle supervisor", () => {
     const exitCodes: number[] = [];
     const errors: string[] = [];
     const snapshot: MigrationTuiSnapshot = {
+      activeRuns: [],
       rows,
       scannedSource: false,
     };
@@ -78,7 +79,11 @@ describe("Migration TUI lifecycle supervisor", () => {
       runtime: {
         cancelActiveExecution,
         refresh: () =>
-          Promise.resolve({ rows: [], scannedSource: false as const }),
+          Promise.resolve({
+            activeRuns: [],
+            rows: [],
+            scannedSource: false as const,
+          }),
       },
       setExitCode: vi.fn(),
       signalSource: {
@@ -120,7 +125,11 @@ describe("Migration TUI lifecycle supervisor", () => {
       runtime: {
         cancelActiveExecution: () => new Promise(() => undefined),
         refresh: () =>
-          Promise.resolve({ rows: [], scannedSource: false as const }),
+          Promise.resolve({
+            activeRuns: [],
+            rows: [],
+            scannedSource: false as const,
+          }),
       },
       setExitCode: vi.fn(),
       signalSource: {

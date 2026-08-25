@@ -100,6 +100,15 @@ state with timely checkpoint updates. Observation is reconnectable where the
 server supports it. Ending an observation stops only that observer; cancelling
 a detached run requires an explicit cancellation operation.
 
+Protocol version 2 does not define provider-neutral cancellation by Migration
+Run id. Its `CancelExecution` operation is limited to work owned by the current
+Migrate Server process; when that work is an attached observation, cancellation
+ends the observation only. Run-id cancellation is deferred until Execution
+Adapters expose a capability that can distinguish unsupported cancellation,
+accepted cancellation, and durable terminal cancellation. Breaking a Migration
+Definition Lock is recovery metadata management and never claims to cancel the
+provider execution.
+
 The controlled local and remote implementations may use Effect RPC to derive
 clients and handlers from the schema-backed contract, including streaming
 observation. Effect RPC is currently unstable, so its wire representation is an

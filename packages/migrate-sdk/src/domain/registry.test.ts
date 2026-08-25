@@ -1427,6 +1427,174 @@ describe("MigrationDefinitionRegistry", () => {
     })
   );
 
+  it.effect(
+    "discovers one active run shared by multiple locked definitions",
+    () =>
+      Effect.gen(function* () {
+        const authorsId = toMigrationDefinitionId("authors");
+        const articlesId = toMigrationDefinitionId("articles");
+        const runId = toMigrationRunId("run-active");
+        const storeLayer = InMemoryMigrationStore.layer();
+        const authors = makeStatusDefinition({
+          id: authorsId,
+          store: storeLayer,
+        });
+        const articles = makeStatusDefinition({
+          id: articlesId,
+          store: storeLayer,
+        });
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [authors, articles] as const,
+        });
+
+        yield* Effect.gen(function* () {
+          const migrationStore = yield* MigrationStore;
+          yield* migrationStore.beginRun(runId, [authorsId, articlesId]);
+          yield* migrationStore.acquireDefinitionLock(authorsId, runId);
+          yield* migrationStore.acquireDefinitionLock(articlesId, runId);
+          yield* migrationStore.attachRunExecution(
+            runId,
+            [authorsId, articlesId],
+            {
+              adapter: "workflow-sdk",
+              executionId: "workflow-run-active",
+            }
+          );
+        }).pipe(Effect.provide(storeLayer));
+
+        expect(yield* registry.activeRuns()).toEqual([
+          {
+            definitionIds: [authorsId, articlesId],
+            execution: {
+              adapter: "workflow-sdk",
+              executionId: "workflow-run-active",
+            },
+            observationDefinitionId: authorsId,
+            runId,
+            startedAt: expect.any(Date),
+            status: "running",
+          },
+        ]);
+      })
+  );
+
+  it.effect("discovers active runs without reading item-state summaries", () =>
+    Effect.gen(function* () {
+      const articlesId = toMigrationDefinitionId("metadata-only-articles");
+      const runId = toMigrationRunId("run-metadata-only");
+      const baseStoreLayer = InMemoryMigrationStore.layer();
+      const metadataOnlyStoreLayer = Layer.effect(
+        MigrationStore,
+        MigrationStore.pipe(
+          Effect.map((migrationStore) => ({
+            ...migrationStore,
+            getItemStateSummary: () =>
+              Effect.die(
+                new Error(
+                  "Active Migration Run discovery must not read item states"
+                )
+              ),
+          }))
+        )
+      ).pipe(Layer.provide(baseStoreLayer));
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [
+          makeStatusDefinition({
+            id: articlesId,
+            store: metadataOnlyStoreLayer,
+          }),
+        ] as const,
+      });
+
+      yield* Effect.gen(function* () {
+        const migrationStore = yield* MigrationStore;
+        yield* migrationStore.beginRun(runId, [articlesId]);
+        yield* migrationStore.acquireDefinitionLock(articlesId, runId);
+      }).pipe(Effect.provide(metadataOnlyStoreLayer));
+
+      expect(yield* registry.activeRuns()).toEqual([
+        expect.objectContaining({
+          definitionIds: [articlesId],
+          observationDefinitionId: articlesId,
+          runId,
+          status: "running",
+        }),
+      ]);
+    })
+  );
+
+  it.effect(
+    "observes an active run through a definition whose lock it still owns",
+    () =>
+      Effect.gen(function* () {
+        const articlesId = toMigrationDefinitionId("articles");
+        const authorsId = toMigrationDefinitionId("authors");
+        const activeRunId = toMigrationRunId("run-active");
+        const laterRunId = toMigrationRunId("run-later");
+        const storeLayer = InMemoryMigrationStore.layer();
+        const registry = MigrationDefinitionRegistry.make({
+          definitions: [
+            makeStatusDefinition({ id: articlesId, store: storeLayer }),
+            makeStatusDefinition({ id: authorsId, store: storeLayer }),
+          ] as const,
+        });
+
+        yield* Effect.gen(function* () {
+          const migrationStore = yield* MigrationStore;
+          yield* migrationStore.beginRun(activeRunId, [articlesId, authorsId]);
+          yield* migrationStore.acquireDefinitionLock(authorsId, activeRunId);
+          yield* migrationStore.attachRunExecution(
+            activeRunId,
+            [articlesId, authorsId],
+            {
+              adapter: "workflow-sdk",
+              executionId: "workflow-run-active",
+            }
+          );
+          yield* migrationStore.beginRun(laterRunId, [articlesId]);
+          yield* migrationStore.completeRun(
+            laterRunId,
+            [articlesId],
+            [{ definitionId: articlesId, status: "succeeded" }]
+          );
+        }).pipe(Effect.provide(storeLayer));
+
+        expect(yield* registry.activeRuns()).toEqual([
+          expect.objectContaining({
+            definitionIds: [articlesId, authorsId],
+            observationDefinitionId: authorsId,
+            runId: activeRunId,
+          }),
+        ]);
+      })
+  );
+
+  it.effect("does not treat a terminal run with a stale lock as active", () =>
+    Effect.gen(function* () {
+      const articlesId = toMigrationDefinitionId("articles");
+      const runId = toMigrationRunId("run-terminal");
+      const storeLayer = InMemoryMigrationStore.layer();
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [
+          makeStatusDefinition({ id: articlesId, store: storeLayer }),
+        ] as const,
+      });
+
+      yield* Effect.gen(function* () {
+        const migrationStore = yield* MigrationStore;
+        yield* migrationStore.beginRun(runId, [articlesId]);
+        yield* migrationStore.acquireDefinitionLock(articlesId, runId);
+        yield* migrationStore.completeRun(
+          runId,
+          [articlesId],
+          [{ definitionId: articlesId, status: "succeeded" }]
+        );
+      }).pipe(Effect.provide(storeLayer));
+
+      expect(yield* registry.activeRuns()).toEqual([]);
+    })
+  );
+
   it.effect("rejects run planning without an explicit scope", () =>
     Effect.gen(function* () {
       const registry = MigrationDefinitionRegistry.make({

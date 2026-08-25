@@ -156,6 +156,13 @@ One execution attempt of one or more migration definitions.
 **Migration Run State**:
 The durable state for one migration run.
 
+**Active Migration Run**:
+A non-terminal migration run whose run id still owns at least one Migration Definition Lock.
+
+**Reconnectable Migration Run**:
+An Active Migration Run whose durable Migration Run State includes the Execution Adapter identity required for a new Migrate Server to observe it.
+_Avoid_: Attached run, server execution
+
 **Migration Definition Run State**:
 The durable state of one migration definition's participation in a migration run.
 
@@ -383,7 +390,16 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Migrate Server** runs in the environment that owns its authoritative **Migration Definition Registry** and required runtime capabilities.
 - A **Migrate Client** selects a **Migrate Server** through a **Migrate Connection**; it does not select the server's **Execution Adapter**.
 - A **Migrate Protocol** carries serializable domain requests, results, events, and errors; it does not carry executable plans, Effects, Layers, or migration definitions.
-- Closing a **Migrate Client** observation does not cancel a detached **Migration Run**; cancellation is an explicit operator action.
+- Closing a **Migrate Client** observation does not cancel a detached **Migration Run**; provider-neutral cancellation must be an explicit operator action and is not part of Migrate Protocol version 2.
+- An **Active Migration Run** is discovered from non-terminal **Migration Run State** whose run id matches a current **Migration Definition Lock** owner.
+- An **Active Migration Run** retains a lock-owning **Migration Definition** as its durable observation anchor, even when another definition from the same run has been unlocked and run again.
+- A terminal **Migration Run** with a remaining **Migration Definition Lock** is lock-recovery work, not an **Active Migration Run**.
+- Breaking the last **Migration Definition Lock** owned by an **Active Migration Run** removes that run from active-run discovery without claiming to cancel its Execution Adapter.
+- A **Reconnectable Migration Run** is observed by **Migration Run** id; the **Migrate Server** resolves its durable Execution Adapter identity rather than relying on a previous server process's execution id.
+- A **Migration Store** retains **Migration Run State** by **Migration Run** id after a newer run replaces a definition's latest **Migration Definition Run State**.
+- **Migration Run State** addressed by **Migration Run** id is authoritative; latest **Migration Definition Run State** records are replaceable per-definition projections.
+- A non-transactional **Migration Store** persists authoritative **Migration Run State** before updating latest-definition projections. Retrying the same transition repairs projections that still reference that run without replacing a newer run.
+- Ending observation of a **Reconnectable Migration Run** ends only that observation and leaves the **Migration Run** active.
 - An **Executable Migration Definition Registry** validates that planned definitions have all runtime service requirements provided.
 - An **Executable Migration Definition Registry** relies on Effect requirements for static executability and uses **Migration Definition Registry Executable Error** for dynamic runtime diagnostics.
 - An **Executable Migration Definition Registry** produces executable plans that are distinct from non-executable registry plans.

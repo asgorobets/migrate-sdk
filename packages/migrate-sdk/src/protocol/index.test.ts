@@ -4,12 +4,14 @@ import { MigrationMessage } from "../domain/message.ts";
 import {
   BreakLock,
   CancelExecution,
+  GetActiveRuns,
   GetDashboard,
   GetMessages,
   GetServerInfo,
   GetSourceIdentityHistory,
   MIGRATE_PROTOCOL_VERSION,
   MigrateAction,
+  MigrateActiveRun,
   MigrateBreakLockResult,
   MigrateCancellationResult,
   MigrateCapability,
@@ -39,6 +41,7 @@ import {
   MigrateTarget,
   NormalizeSourceIdentity,
   ObserveExecution,
+  ObserveRun,
   PrepareOperation,
   ScanSource,
   StartOperation,
@@ -62,6 +65,7 @@ const messageBase = {
 };
 
 const dashboardValue = {
+  activeRuns: [],
   groups: [{ definitionIds: ["articles"], id: "content" }],
   rows: [
     {
@@ -145,6 +149,21 @@ const contractCases: readonly {
     },
   },
   { name: "action", schema: MigrateAction, value: "rollback" },
+  {
+    name: "active migration run",
+    schema: MigrateActiveRun,
+    value: {
+      definitionIds: ["authors", "articles"],
+      execution: {
+        adapter: "workflow-sdk",
+        executionId: "workflow-run-1",
+      },
+      observationDefinitionId: "authors",
+      runId: "run-1",
+      startedAt: "2026-08-25T12:00:00.000Z",
+      status: "running",
+    },
+  },
   {
     name: "migration target",
     schema: MigrateTarget,
@@ -447,6 +466,11 @@ const rpcPayloadCases: readonly {
     value: undefined,
   },
   {
+    name: "GetActiveRuns",
+    schema: GetActiveRuns.payloadSchema,
+    value: undefined,
+  },
+  {
     name: "GetMessages",
     schema: GetMessages.payloadSchema,
     value: { target: operationRequestValue.target },
@@ -478,6 +502,11 @@ const rpcPayloadCases: readonly {
     name: "ObserveExecution",
     schema: ObserveExecution.payloadSchema,
     value: { executionId: "execution-1" },
+  },
+  {
+    name: "ObserveRun",
+    schema: ObserveRun.payloadSchema,
+    value: { runId: "run-1" },
   },
   {
     name: "CancelExecution",
@@ -525,6 +554,11 @@ const rpcUnarySuccessCases: readonly {
     schema: GetDashboard.successSchema,
     value: dashboardValue,
   },
+  {
+    name: "GetActiveRuns",
+    schema: GetActiveRuns.successSchema,
+    value: [],
+  },
   { name: "GetMessages", schema: GetMessages.successSchema, value: [] },
   {
     name: "GetSourceIdentityHistory",
@@ -568,6 +602,7 @@ const rpcUnarySuccessCases: readonly {
 ];
 
 const rpcErrorCases = [
+  GetActiveRuns,
   GetDashboard,
   GetMessages,
   GetSourceIdentityHistory,
@@ -621,7 +656,31 @@ describe("Migrate Protocol", () => {
 
     expect(encoded).toEqual(preparedOperationValue);
     expect("definitions" in prepared.plan).toBe(false);
-    expect(MIGRATE_PROTOCOL_VERSION).toBe(1);
+    expect(MIGRATE_PROTOCOL_VERSION).toBe(2);
+  });
+
+  it("rejects an active run without any definitions", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(MigrateActiveRun)({
+        definitionIds: [],
+        observationDefinitionId: "articles",
+        runId: "run-empty",
+        startedAt: "2026-08-25T12:00:00.000Z",
+        status: "running",
+      })
+    ).toThrow();
+  });
+
+  it("rejects an active run whose observation definition is outside the run", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(MigrateActiveRun)({
+        definitionIds: ["articles"],
+        observationDefinitionId: "authors",
+        runId: "run-invalid-anchor",
+        startedAt: "2026-08-25T12:00:00.000Z",
+        status: "running",
+      })
+    ).toThrow();
   });
 
   it("rejects invalid protocol concurrency", () => {
@@ -653,7 +712,7 @@ describe("Migrate Protocol", () => {
       sdkVersion: "0.6.0",
     });
 
-    expect(info.protocolVersion).toBe(2);
+    expect(info.protocolVersion).toBe(MIGRATE_PROTOCOL_VERSION + 1);
   });
 
   it("can reject excess public protocol fields during strict decoding", () => {
