@@ -147,6 +147,7 @@ export {
 } from "./domain/rollback-progress.ts";
 
 export {
+  activeMigrationRunFromState,
   ActiveMigrationRun,
   makeMigrationDefinitionRunState,
   makeMigrationRunState,

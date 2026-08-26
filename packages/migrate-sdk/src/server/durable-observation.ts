@@ -1,5 +1,6 @@
 import { Effect } from "effect";
-import type { MigrationRunId, MigrationRunState } from "migrate-sdk";
+import type { MigrationRunId } from "../domain/ids.ts";
+import type { MigrationRunState } from "../domain/run.ts";
 
 export const isTerminalRunState = (state: MigrationRunState): boolean =>
   state.finishedAt !== undefined &&

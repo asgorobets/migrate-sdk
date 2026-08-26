@@ -23,6 +23,12 @@ import {
 
 const LOCK_ERROR_PATTERN = /lock/i;
 const incompatibleProtocolMessage = `Migrate Protocol version ${MIGRATE_PROTOCOL_VERSION + 1} is not supported`;
+const serverFixtureUrl = new URL(
+  "../../migrate-sdk/test/fixtures/server/",
+  import.meta.url
+);
+const serverFixturePath = (fileName: string): string =>
+  fileURLToPath(new URL(fileName, serverFixtureUrl));
 
 const within = <Value>(promise: Promise<Value>, milliseconds: number) =>
   Promise.race([
@@ -119,6 +125,26 @@ const waitForPath = async (path: string, timeoutMs: number): Promise<void> => {
   }
 };
 
+const readProcessId = async (path: string): Promise<number> => {
+  await waitForPath(path, 5000);
+  const pid = Number(await readFile(path, "utf8"));
+
+  if (!(Number.isSafeInteger(pid) && pid > 0)) {
+    throw new Error(`Invalid process id in ${path}`);
+  }
+
+  return pid;
+};
+
+const terminateProcess = async (pid: number | undefined): Promise<void> => {
+  if (pid === undefined || !processIsRunning(pid)) {
+    return;
+  }
+
+  process.kill(pid, "SIGKILL");
+  await waitForProcessExit(pid, 5000);
+};
+
 test("Bun operates a Node-only migration through local Effect RPC", async () => {
   const runtime = await makeMigrationTuiRuntime({
     configPath: resolve("test/fixtures/node-only.config.ts"),
@@ -149,7 +175,7 @@ test("Bun operates a Node-only migration through local Effect RPC", async () => 
 
 test("live observation does not block dashboard reads or explicit cancellation", async () => {
   const runtime = await makeMigrationTuiRuntime({
-    configPath: resolve("examples/cancellation.config.ts"),
+    configPath: serverFixturePath("cancellation.config.ts"),
     cwd: resolve("src"),
   });
   try {
@@ -184,7 +210,7 @@ test("an inline run survives client exit and is observed by a fresh TUI", async 
     | undefined;
 
   try {
-    const configPath = resolve("examples/cancellation.config.ts");
+    const configPath = serverFixturePath("cancellation.config.ts");
     firstRuntime = await makeMigrationTuiRuntime({
       configPath,
       cwd: resolve("test"),
@@ -349,7 +375,7 @@ test("definition locks reject an overlapping run without stopping its owner", as
 
 test("stops a selected server-owned run by migration run id", async () => {
   const runtime = await makeMigrationTuiRuntime({
-    configPath: resolve("examples/cancellation.config.ts"),
+    configPath: serverFixturePath("cancellation.config.ts"),
     cwd: resolve("examples"),
   });
   try {
@@ -380,7 +406,7 @@ test("stops a selected server-owned run by migration run id", async () => {
 
 test("reattaches to a detached run through the public run id", async () => {
   const runtime = await makeMigrationTuiRuntime({
-    configPath: resolve("examples/detached-live-progress.config.ts"),
+    configPath: serverFixturePath("detached-live-progress.config.ts"),
     cwd: process.cwd(),
   });
   try {
@@ -429,10 +455,20 @@ test("reattaches to a detached run through the public run id", async () => {
 test("reattaches through a fresh Node server using persistent run state", async () => {
   const directory = await mkdtemp(join(tmpdir(), "migrate-tui-reconnect-"));
   const previousDirectory = process.env.MIGRATE_TUI_RECONNECT_FIXTURE_DIR;
+  const previousServerPidPath =
+    process.env.MIGRATE_TUI_RECONNECT_SERVER_PID_PATH;
   const previousToken = process.env.MIGRATE_TUI_RECONNECT_FIXTURE_TOKEN;
   const fixtureToken = randomUUID();
+  const serverPidPath = join(directory, "server.pid");
+  const serverEntry = new URL(
+    "./fixtures/recording-server-entry.ts",
+    import.meta.url
+  );
   process.env.MIGRATE_TUI_RECONNECT_FIXTURE_DIR = directory;
+  process.env.MIGRATE_TUI_RECONNECT_SERVER_PID_PATH = serverPidPath;
   process.env.MIGRATE_TUI_RECONNECT_FIXTURE_TOKEN = fixtureToken;
+  let firstServerPid: number | undefined;
+  let secondServerPid: number | undefined;
   let firstRuntime:
     | Awaited<ReturnType<typeof makeMigrationTuiRuntime>>
     | undefined;
@@ -445,7 +481,9 @@ test("reattaches through a fresh Node server using persistent run state", async 
     firstRuntime = await makeMigrationTuiRuntime({
       configPath,
       cwd: process.cwd(),
+      serverEntry,
     });
+    firstServerPid = await readProcessId(serverPidPath);
     const operation = await firstRuntime.prepare(
       {
         definitionId: toMigrationDefinitionId("persistent-reconnect"),
@@ -461,11 +499,16 @@ test("reattaches through a fresh Node server using persistent run state", async 
     const detached = await firstObservation;
     await firstRuntime.dispose?.();
     firstRuntime = undefined;
+    await terminateProcess(firstServerPid);
+    await unlink(serverPidPath);
 
     secondRuntime = await makeMigrationTuiRuntime({
       configPath,
       cwd: process.cwd(),
+      serverEntry,
     });
+    secondServerPid = await readProcessId(serverPidPath);
+    expect(secondServerPid).not.toBe(firstServerPid);
     expect(await secondRuntime.listActiveRuns()).toEqual([
       expect.objectContaining({
         observationDefinitionId: "persistent-reconnect",
@@ -482,6 +525,8 @@ test("reattaches through a fresh Node server using persistent run state", async 
   } finally {
     await firstRuntime?.dispose?.();
     await secondRuntime?.dispose?.();
+    await terminateProcess(firstServerPid);
+    await terminateProcess(secondServerPid);
 
     try {
       const startedToken = await readFixtureToken(
@@ -505,6 +550,12 @@ test("reattaches through a fresh Node server using persistent run state", async 
       } else {
         process.env.MIGRATE_TUI_RECONNECT_FIXTURE_DIR = previousDirectory;
       }
+      if (previousServerPidPath === undefined) {
+        delete process.env.MIGRATE_TUI_RECONNECT_SERVER_PID_PATH;
+      } else {
+        process.env.MIGRATE_TUI_RECONNECT_SERVER_PID_PATH =
+          previousServerPidPath;
+      }
       if (previousToken === undefined) {
         delete process.env.MIGRATE_TUI_RECONNECT_FIXTURE_TOKEN;
       } else {
@@ -525,6 +576,8 @@ test("Node server bootstrap failures exit unsuccessfully", () => {
       process.cwd(),
       "--config",
       resolve("test/fixtures/missing.config.ts"),
+      "--socket",
+      join(tmpdir(), `migrate-bootstrap-${randomUUID()}.sock`),
     ],
     { encoding: "utf8" }
   );
@@ -663,27 +716,26 @@ for (const variant of ["protocol", "malformed"] as const) {
   );
 }
 
-test("reports child crashes with server diagnostics", async () => {
+test("reports when the socket server exits during startup", async () => {
   await expect(
     connectLocalMigrateServer({
       cwd: process.cwd(),
       serverEntry: new URL("./fixtures/crashing-server.ts", import.meta.url),
       startupTimeoutMs: 2000,
     })
-  ).rejects.toThrow("Migrate Server fixture crashed during startup");
+  ).rejects.toThrow("exited before startup completed");
 });
 
 test.each([
   [undefined, incompatibleProtocolMessage],
   ["sdk", "Migrate SDK version 999.0.0 is not supported"],
-  ["capabilities", "missing required capabilities"],
   ["malformed", "Unable to connect to the local Migrate Server"],
 ] as const)("rejects incompatible server info (%s)", async (configPath, message) => {
   await expect(
     connectLocalMigrateServer({
       ...(configPath === undefined ? {} : { configPath }),
       cwd: process.cwd(),
-      serverEntry: new URL("./fixtures/server-info.ts", import.meta.url),
+      serverEntry: new URL("./fixtures/socket-server-info.ts", import.meta.url),
       startupTimeoutMs: 2000,
     })
   ).rejects.toThrow(message);

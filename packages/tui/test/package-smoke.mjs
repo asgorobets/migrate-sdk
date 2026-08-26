@@ -131,6 +131,11 @@ const runPackedRpcMigration = async ({ fixtureDirectory }) => {
     scriptPath,
     `import { makeMigrationTuiRuntime } from "@migrate-sdk/tui";
 import { toMigrationDefinitionId } from "migrate-sdk";
+import { makeMigrateServerHttpHandler } from "migrate-sdk/server";
+
+if (typeof makeMigrateServerHttpHandler !== "function") {
+  throw new Error("Packed Migrate Server HTTP export is unavailable");
+}
 
 const runtime = await makeMigrationTuiRuntime({
   configPath: "migrate.config.ts",

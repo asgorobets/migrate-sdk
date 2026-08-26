@@ -68,7 +68,7 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
   --name "${SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env MIGRATE_TUI_SERVER_IDENTITY="${SESSION}" \
-  node bin/migrate-tui.js --config examples/migrate.config.ts >/dev/null
+  node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/migrate.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
@@ -156,7 +156,7 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
   --name "${BUTTON_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env MIGRATE_TUI_SERVER_IDENTITY="${BUTTON_SESSION}" \
-  node bin/migrate-tui.js --config examples/migrate.config.ts >/dev/null
+  node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/migrate.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${BUTTON_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${BUTTON_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
@@ -176,7 +176,7 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
   --name "${LIVE_PROGRESS_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env MIGRATE_TUI_SERVER_IDENTITY="${LIVE_PROGRESS_SESSION}" \
-  node bin/migrate-tui.js --config examples/live-progress.config.ts >/dev/null
+  node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/live-progress.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${LIVE_PROGRESS_SESSION}" 120 30 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
@@ -288,7 +288,7 @@ sleep 0.2
   --name "${GROUP_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env MIGRATE_TUI_SERVER_IDENTITY="${GROUP_SESSION}" \
-  node bin/migrate-tui.js --config examples/migrate.config.ts >/dev/null
+  node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/migrate.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${GROUP_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
@@ -363,7 +363,7 @@ sleep 0.2
   --name "${DEPENDENCY_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env MIGRATE_TUI_SERVER_IDENTITY="${DEPENDENCY_SESSION}" \
-  node bin/migrate-tui.js --config examples/dependency-preflight.config.ts >/dev/null
+  node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/dependency-preflight.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${DEPENDENCY_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${DEPENDENCY_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
@@ -393,7 +393,7 @@ sleep 0.2
   --name "${FORCE_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env MIGRATE_TUI_SERVER_IDENTITY="${FORCE_SESSION}" \
-  node bin/migrate-tui.js --config examples/dependency-preflight.config.ts >/dev/null
+  node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/dependency-preflight.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${FORCE_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${FORCE_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
@@ -453,7 +453,7 @@ done
   --name "${SELECTIVE_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env MIGRATE_TUI_SERVER_IDENTITY="${SELECTIVE_SESSION}" \
-  node bin/migrate-tui.js --config examples/migrate.config.ts >/dev/null
+  node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/migrate.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${SELECTIVE_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
@@ -496,7 +496,7 @@ done
   --name "${SOURCE_STATUS_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env MIGRATE_TUI_SERVER_IDENTITY="${SOURCE_STATUS_SESSION}" \
-  node bin/migrate-tui.js --config examples/source-status.config.ts >/dev/null
+  node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/source-status.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${SOURCE_STATUS_SESSION}" 120 30 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SOURCE_STATUS_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
@@ -534,7 +534,7 @@ rg -q "Rollback" "${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
   --name "${LOCK_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env MIGRATE_TUI_SERVER_IDENTITY="${LOCK_SESSION}" \
-  node bin/migrate-tui.js --config examples/locked.config.ts >/dev/null
+  node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/locked.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${LOCK_SESSION}" 120 30 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LOCK_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
@@ -561,7 +561,7 @@ rg -q "Rollback" "${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
   --name "${CANCELLATION_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env MIGRATE_TUI_SERVER_IDENTITY="${CANCELLATION_SESSION}" \
-  node bin/migrate-tui.js --config examples/cancellation.config.ts >/dev/null
+  node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/cancellation.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${CANCELLATION_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CANCELLATION_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null

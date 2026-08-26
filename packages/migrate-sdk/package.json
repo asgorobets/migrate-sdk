@@ -58,10 +58,10 @@
       "import": "./dist/protocol/index.js"
     },
     "./server": {
-      "types": "./dist/server/handlers.d.ts",
-      "bun": "./src/server/handlers.ts",
-      "source": "./src/server/handlers.ts",
-      "import": "./dist/server/handlers.js"
+      "types": "./dist/server/index.d.ts",
+      "bun": "./src/server/index.ts",
+      "source": "./src/server/index.ts",
+      "import": "./dist/server/index.js"
     },
     "./destinations/in-memory": {
       "types": "./dist/destinations/in-memory/index.d.ts",

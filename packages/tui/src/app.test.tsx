@@ -1,29 +1,33 @@
+import { basename } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createTestRenderer } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import { Effect } from "effect";
 import {
+  type MigrationMessage,
   type MigrationRunId,
   toEncodedSourceIdentity,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
   toMigrationRunId,
 } from "migrate-sdk";
-import {
-  MigrateExecutionId,
-  type MigrateExecutionReference,
+import type {
+  MigrateRunStartResult,
+  MigrateSourceIdentityHistoryEntry,
 } from "migrate-sdk/protocol";
+import {
+  loadLocalMigrateServerRuntime,
+  type MigrateServerExecutionHandle,
+  type MigrateServerExecutionResult,
+} from "migrate-sdk/server";
 import { act } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { MigrationTuiApp as MigrationTuiAppView } from "./app.tsx";
 import type { MigrationTuiExecutionResult } from "./execution.ts";
 import { MigrationTuiRenderErrorBoundary } from "./render-session.tsx";
-import {
-  type ConfiguredMigrationExecution,
-  loadConfiguredMigrationHost,
-  type MigrationTuiExecuteOptions,
-  type MigrationTuiMessage,
-  type MigrationTuiRuntime,
-  type MigrationTuiSourceIdentityHistoryEntry,
+import type {
+  MigrationTuiExecuteOptions,
+  MigrationTuiRuntime,
 } from "./runtime.ts";
 
 const actEnvironment = globalThis as typeof globalThis & {
@@ -37,6 +41,24 @@ const liveProgressNotRunPattern = /live-progress\s+NOT RUN/;
 const liveProgressPrerequisiteSucceededPattern =
   /live-progress-prerequisite\s+SUCCEEDED/;
 const messageRunId = toMigrationRunId("run-messages");
+const serverFixtureUrl = new URL(
+  "../../migrate-sdk/test/fixtures/server/",
+  import.meta.url
+);
+const serverFixturePath = (fileName: string): string =>
+  fileURLToPath(new URL(fileName, serverFixtureUrl));
+
+const toTuiExecutionResult = (
+  result: MigrateServerExecutionResult
+): MigrationTuiExecutionResult => {
+  const { message, outcome, runId } = result;
+
+  if (outcome === "failed") {
+    throw new Error(message);
+  }
+
+  return { message, outcome, runId };
+};
 
 const MigrationTuiApp = ({
   runtime,
@@ -54,17 +76,16 @@ const MigrationTuiApp = ({
 );
 
 const makeInProcessMigrationTuiRuntime = async (
-  ...args: Parameters<typeof loadConfiguredMigrationHost>
+  ...args: Parameters<typeof loadLocalMigrateServerRuntime>
 ): Promise<MigrationTuiRuntime> => {
   const server = await Effect.runPromise(
-    Effect.scoped(loadConfiguredMigrationHost(...args))
+    Effect.scoped(loadLocalMigrateServerRuntime(...args))
   );
-  let executionSequence = 0;
   let activeObservation:
     | { readonly controller: AbortController; readonly runId: MigrationRunId }
     | undefined;
   interface InProcessExecution {
-    readonly execution: ConfiguredMigrationExecution;
+    readonly execution: MigrateServerExecutionHandle;
     observer?: MigrationTuiExecuteOptions | undefined;
     readonly result: Promise<MigrationTuiExecutionResult>;
   }
@@ -86,6 +107,7 @@ const makeInProcessMigrationTuiRuntime = async (
   return {
     ...server,
     breakLock: (lock) => Effect.runPromise(server.breakLock(lock)),
+    environmentLabel: basename(server.configPath),
     detachForExit: () => {
       const runId = activeObservation?.runId;
       if (runId === undefined) {
@@ -136,7 +158,7 @@ const makeInProcessMigrationTuiRuntime = async (
 
         return await Effect.runPromise(server.observeRun(runId, options), {
           signal: controller.signal,
-        });
+        }).then(toTuiExecutionResult);
       } catch (cause) {
         if (controller.signal.aborted) {
           return {
@@ -164,7 +186,7 @@ const makeInProcessMigrationTuiRuntime = async (
     scanSource: (target, options) =>
       Effect.runPromise(server.scanSource(target, options)),
     start: async (operation) => {
-      const started = Promise.withResolvers<MigrateExecutionReference>();
+      const started = Promise.withResolvers<MigrateRunStartResult>();
       let record: InProcessExecution | undefined;
       const execution = await Effect.runPromise(
         server.startExecution(
@@ -177,23 +199,13 @@ const makeInProcessMigrationTuiRuntime = async (
               record?.observer?.onProgressError?.(cause),
             onStateChange: (state) => {
               record?.observer?.onStateChange?.(state);
-              if (state.kind === "running" || state.kind === "observing") {
+              if (state.kind === "running") {
                 if (record !== undefined) {
                   executions.set(state.runId, record);
                 }
                 started.resolve({
-                  ...(state.kind === "observing"
-                    ? {
-                        adapter: state.adapter,
-                        providerExecutionId: state.executionId,
-                      }
-                    : { adapter: state.adapter }),
-                  executionId: MigrateExecutionId.make(
-                    `test-execution-${executionSequence++}`
-                  ),
-                  lifecycle:
-                    state.kind === "observing" ? "detached" : "attached",
                   runId: state.runId,
+                  status: "started",
                 });
               }
             },
@@ -202,10 +214,9 @@ const makeInProcessMigrationTuiRuntime = async (
       );
       const completion = Promise.withResolvers<MigrationTuiExecutionResult>();
       record = { execution, result: completion.promise };
-      Effect.runPromise(execution.result).then(
-        completion.resolve,
-        completion.reject
-      );
+      Effect.runPromise(execution.result)
+        .then(toTuiExecutionResult)
+        .then(completion.resolve, completion.reject);
       completion.promise
         .catch(() => undefined)
         .finally(() => {
@@ -232,7 +243,7 @@ const makeInProcessMigrationTuiRuntime = async (
       switch (result.kind) {
         case "requested":
           return { ...result, runId };
-        case "detached":
+        case "provider-owned":
           return {
             kind: "unsupported" as const,
             message: result.message,
@@ -324,7 +335,7 @@ describe("MigrationTuiApp", () => {
     "refreshes durable state after mounting the recovery snapshot",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/migrate.config.ts",
+        configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const refresh = vi.fn(runtime.refresh);
@@ -369,7 +380,7 @@ describe("MigrationTuiApp", () => {
     "updates durable item counts while an inline run is still active",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/live-progress.config.ts",
+        configPath: serverFixturePath("live-progress.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
         progressFallbackIntervalMs: 10,
         terminalPollIntervalMs: 10,
@@ -421,7 +432,7 @@ describe("MigrationTuiApp", () => {
     "keeps keyboard navigation available while a migration is running",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/dependent-live-progress.config.ts",
+        configPath: serverFixturePath("dependent-live-progress.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
         progressFallbackIntervalMs: 10,
         terminalPollIntervalMs: 10,
@@ -497,10 +508,10 @@ describe("MigrationTuiApp", () => {
     "renders and follows a bounded message list while navigating many messages",
     async () => {
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/migrate.config.ts",
+        configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
-      const messages: readonly MigrationTuiMessage[] = Array.from(
+      const messages: readonly MigrationMessage[] = Array.from(
         { length: 40 },
         (_, index) => {
           const message = {
@@ -603,7 +614,7 @@ describe("MigrationTuiApp", () => {
     "expands and scrolls long messages while keeping controls visible",
     async () => {
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/migrate.config.ts",
+        configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const runtime: MigrationTuiRuntime = {
@@ -686,7 +697,7 @@ describe("MigrationTuiApp", () => {
     "identifies the owning migration in group messages",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/migrate.config.ts",
+        configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const setup = await createTestRenderer({ height: 30, width: 120 });
@@ -734,7 +745,7 @@ describe("MigrationTuiApp", () => {
     "shows source inventory counts and bounded scan warnings",
     async () => {
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/source-status.config.ts",
+        configPath: serverFixturePath("source-status.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       let scannedTarget:
@@ -787,7 +798,7 @@ describe("MigrationTuiApp", () => {
     "reloads status after a source inventory scan without crashing the renderer",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/source-status.config.ts",
+        configPath: serverFixturePath("source-status.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const setup = await createTestRenderer({ height: 30, width: 120 });
@@ -838,7 +849,7 @@ describe("MigrationTuiApp", () => {
     "scrolls compact overview details without moving the migration selection",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/source-status.config.ts",
+        configPath: serverFixturePath("source-status.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const setup = await createTestRenderer({ height: 28, width: 72 });
@@ -875,7 +886,7 @@ describe("MigrationTuiApp", () => {
     "offers run focus and an explicit stop for a server-owned locked run",
     async () => {
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/locked.config.ts",
+        configPath: serverFixturePath("locked.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const runId = toMigrationRunId("run-stuck");
@@ -953,7 +964,7 @@ describe("MigrationTuiApp", () => {
     "moves run observation with migration selection without stopping the run",
     async () => {
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/migrate.config.ts",
+        configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const durable = await baseRuntime.refresh();
@@ -1027,7 +1038,7 @@ describe("MigrationTuiApp", () => {
 
   itWithOpenTui("replaces active-run actions after a source scan", async () => {
     const baseRuntime = await makeInProcessMigrationTuiRuntime({
-      configPath: "examples/locked.config.ts",
+      configPath: serverFixturePath("locked.config.ts"),
       cwd: new URL("..", import.meta.url).pathname,
     });
     const definitionId = toMigrationDefinitionId("locked-migration");
@@ -1088,7 +1099,7 @@ describe("MigrationTuiApp", () => {
     "reloads durable status after a reconnectable run fails",
     async () => {
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/locked.config.ts",
+        configPath: serverFixturePath("locked.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const runId = toMigrationRunId("run-stuck");
@@ -1150,7 +1161,7 @@ describe("MigrationTuiApp", () => {
     "shows lock ownership and requires confirmation before breaking a lock",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/locked.config.ts",
+        configPath: serverFixturePath("locked.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const setup = await createTestRenderer({ height: 30, width: 120 });
@@ -1204,7 +1215,7 @@ describe("MigrationTuiApp", () => {
     "retries skipped items from the selected migration",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/migrate.config.ts",
+        configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const setup = await createTestRenderer({ height: 30, width: 120 });
@@ -1240,7 +1251,7 @@ describe("MigrationTuiApp", () => {
     "keeps secondary retries in All actions without crowding the primary row",
     async () => {
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/migrate.config.ts",
+        configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const runtime: MigrationTuiRuntime = {
@@ -1307,7 +1318,7 @@ describe("MigrationTuiApp", () => {
     "edits concurrency with numeric fields and explicit unbounded choices",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/migrate.config.ts",
+        configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const setup = await createTestRenderer({ height: 30, width: 120 });
@@ -1412,7 +1423,7 @@ describe("MigrationTuiApp", () => {
     "offers include or force when rescan dependencies are unmet",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/dependency-preflight.config.ts",
+        configPath: serverFixturePath("dependency-preflight.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const setup = await createTestRenderer({ height: 30, width: 120 });
@@ -1458,7 +1469,7 @@ describe("MigrationTuiApp", () => {
     "executes an expanded dependency plan without crashing the renderer",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/dependency-preflight.config.ts",
+        configPath: serverFixturePath("dependency-preflight.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const setup = await createTestRenderer({ height: 36, width: 120 });
@@ -1520,7 +1531,7 @@ describe("MigrationTuiApp", () => {
     "preserves selected entries and reruns multiple identities from durable history",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/migrate.config.ts",
+        configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const setup = await createTestRenderer({ height: 36, width: 120 });
@@ -1619,19 +1630,15 @@ describe("MigrationTuiApp", () => {
     "ignores history that resolves after the operator opens another migration",
     async () => {
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/migrate.config.ts",
+        configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
       const authorsId = toMigrationDefinitionId("authors");
       const articlesId = toMigrationDefinitionId("articles");
       const authorsHistory =
-        Promise.withResolvers<
-          readonly MigrationTuiSourceIdentityHistoryEntry[]
-        >();
+        Promise.withResolvers<readonly MigrateSourceIdentityHistoryEntry[]>();
       const articlesHistory =
-        Promise.withResolvers<
-          readonly MigrationTuiSourceIdentityHistoryEntry[]
-        >();
+        Promise.withResolvers<readonly MigrateSourceIdentityHistoryEntry[]>();
       const runtime: MigrationTuiRuntime = {
         ...baseRuntime,
         listSourceIdentityHistory: (definitionId) => {

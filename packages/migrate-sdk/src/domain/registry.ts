@@ -31,7 +31,7 @@ import type { AnyRollbackMigrationDefinition } from "./rollback.ts";
 import {
   type ActiveMigrationRun,
   type AnyMigrationDefinition,
-  type MigrationRunState,
+  activeMigrationRunFromState,
   makeMigrationRunState,
   type RunRequestSourceImplementationError,
   type RunRequestSourceRequirements,
@@ -291,39 +291,6 @@ export type MigrationDefinitionRegistryMessagesError =
 export type MigrationDefinitionRegistryStatusError =
   | MigrationDefinitionRegistryPlanningError
   | GetMigrationStatusesError;
-
-const activeMigrationRunFromState = (
-  observationDefinitionId: MigrationDefinitionId,
-  state: MigrationRunState
-): ActiveMigrationRun | null => {
-  const firstDefinitionId = state.definitionIds[0];
-
-  if (
-    firstDefinitionId === undefined ||
-    !state.definitionIds.includes(observationDefinitionId) ||
-    (state.status !== "queued" && state.status !== "running")
-  ) {
-    return null;
-  }
-
-  const execution = state.execution;
-
-  return {
-    definitionIds: [firstDefinitionId, ...state.definitionIds.slice(1)],
-    ...(execution?.executionId === undefined
-      ? {}
-      : {
-          execution: {
-            adapter: execution.adapter,
-            executionId: execution.executionId,
-          },
-        }),
-    observationDefinitionId,
-    runId: state.runId,
-    startedAt: state.startedAt,
-    status: state.status,
-  };
-};
 
 export class DuplicateMigrationDefinitionId extends Schema.TaggedClass<DuplicateMigrationDefinitionId>()(
   "DuplicateMigrationDefinitionId",

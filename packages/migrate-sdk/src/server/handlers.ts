@@ -1,6 +1,6 @@
 import { Effect } from "effect";
-import { MigrateRpcs } from "../protocol/index.ts";
-import { MigrateServer } from "./service.ts";
+import { MigrateHttpRpcs, MigrateStreamingRpcs } from "../protocol/index.ts";
+import { MigrateServer, type MigrateServerService } from "./service.ts";
 
 // biome-ignore lint/performance/noBarrelFile: The public server subpath exposes its service and RPC handler layer together.
 export {
@@ -10,30 +10,45 @@ export {
   type MigrateServerExecutionHandle,
   type MigrateServerExecutionObserver,
   type MigrateServerExecutionResult,
+  type MigrateServerExecutionStopResult,
   type MigrateServerInput,
   type MigrateServerPreparedOperation,
+  type MigrateServerRunProgress,
   type MigrateServerService,
 } from "./service.ts";
 
-export const MigrateServerHandlers = MigrateRpcs.toLayer(
+const controlHandlers = (server: MigrateServerService) => ({
+  BreakLock: server.breakLock,
+  GetActiveRuns: () => server.getActiveRuns,
+  GetDashboard: () => server.getDashboard,
+  GetMessages: server.getMessages,
+  GetServerInfo: () => server.getServerInfo,
+  GetSourceIdentityHistory: server.getSourceIdentityHistory,
+  NormalizeSourceIdentity: server.normalizeSourceIdentity,
+  PrepareOperation: server.prepareOperation,
+  ScanSource: server.scanSource,
+  StartOperation: server.startOperation,
+  StopRun: server.stopRun,
+});
+
+export const MigrateStreamingServerHandlers = MigrateStreamingRpcs.toLayer(
   Effect.gen(function* () {
     const server = yield* MigrateServer;
 
-    return MigrateRpcs.of({
-      BreakLock: server.breakLock,
-      CancelExecution: server.cancelExecution,
-      GetActiveRuns: () => server.getActiveRuns,
-      GetDashboard: () => server.getDashboard,
-      GetMessages: server.getMessages,
-      GetServerInfo: () => server.getServerInfo,
-      GetSourceIdentityHistory: server.getSourceIdentityHistory,
-      NormalizeSourceIdentity: server.normalizeSourceIdentity,
-      ObserveExecution: server.observeExecution,
+    return MigrateStreamingRpcs.of({
+      ...controlHandlers(server),
       ObserveRun: server.observeRun,
-      PrepareOperation: server.prepareOperation,
-      ScanSource: server.scanSource,
-      StartOperation: server.startOperation,
-      StopRun: server.stopRun,
+    });
+  })
+);
+
+export const MigrateHttpServerHandlers = MigrateHttpRpcs.toLayer(
+  Effect.gen(function* () {
+    const server = yield* MigrateServer;
+
+    return MigrateHttpRpcs.of({
+      ...controlHandlers(server),
+      ObserveRunLease: server.observeRunLease,
     });
   })
 );

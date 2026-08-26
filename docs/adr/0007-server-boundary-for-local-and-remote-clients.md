@@ -4,8 +4,9 @@ Migrate Clients such as the TUI will communicate with a Migrate Server that
 runs in the environment owning the migration registry and its credentials. The
 Migrate Protocol is versioned and schema-backed, while Migrate Connections and
 Execution Adapters remain separate choices. This supports a Node-hosted
-local configuration now and remote SSH or HTTPS operation later without making
-the TUI own remote database, source, destination, or workflow-provider access.
+local configuration and remote HTTPS operation now, with SSH remaining a later
+connection option, without making the TUI own remote database, source,
+destination, or workflow-provider access.
 
 ## Status
 
@@ -52,7 +53,8 @@ providers answer how that environment executes them.
 A **Migrate Server** is the application boundary for interactive and remote
 migration operations. It runs with the authoritative Migration Definition
 Registry and the environment's required Effect layers, including Migration
-Stores, Sources, Destinations, and the configured Migration Executable. It
+Stores, Sources, Destinations, and the environment-selected Migration
+Executable. It
 exposes discovery, status, messages, planning, starting, observation,
 cancellation, rollback, source scanning, and lock recovery through one
 **Migrate Protocol**.
@@ -61,8 +63,9 @@ The TUI is a **Migrate Client**. It does not load remote migration definitions,
 choose a workflow provider, or require credentials for the resources behind a
 server. A connection profile identifies the server target and access method.
 The server describes its registry, deployment or environment identity, protocol
-version, SDK version, and supported capabilities so that the client can detect
-incompatibility before offering an action.
+version, and SDK version so that the client can detect incompatibility before
+offering an action. Every compatible Migrate Server implements the complete
+Migrate Protocol; customer-facing operations are not negotiated individually.
 
 The first local connection uses a Node Migrate Server process started by
 the TUI. The Bun renderer communicates with that process over a reconnectable
@@ -97,9 +100,29 @@ execution boundary, but the receiving environment plans authoritatively.
 
 Durable Migration Run State and Migration Item State remain authoritative for
 status and item progress. Provider or attached-host events supplement that
-state with timely checkpoint updates. Observation is reconnectable where the
-server supports it. Ending an observation stops only that observer; cancelling
-a detached run requires an explicit cancellation operation.
+state with timely checkpoint updates. Observation is reconnectable. Ending an
+observation stops only that observer; stopping a run requires an explicit
+`StopRun` operation.
+
+HTTPS observation uses bounded, resumable leases rather than making one HTTP
+response own the lifetime of a Migration Run. `ObserveRunLease` accepts an
+opaque resume token and returns token-bearing observation events. A lease starts
+with the current absolute durable progress snapshot, suppresses an already-seen
+snapshot, and then waits for a later checkpoint or terminal state until its
+configured duration ends. The client concatenates leases into one logical
+observation stream. Replayed snapshots are safe because progress events carry
+absolute counts rather than deltas. The opaque resume token retains the run's
+durable observation definition so later leases can address its Migration Store
+directly.
+Transient lifecycle states and warnings are delivered with the next progress or
+completion checkpoint and do not independently advance the resume position.
+
+Attaching to provider events within a lease is an optional latency optimization.
+A serverless function, deployment, or network connection may end between any
+two leases; the next invocation reconstructs observation from the durable
+Migration Store and the Execution Adapter identity stored on the Migration Run.
+Process memory is never required for provider-owned run discovery or
+observation.
 
 The Migrate Protocol separates observation from control. Ending an observation
 or closing a client never stops a Migration Run. `StopRun` addresses one
@@ -123,22 +146,28 @@ The controlled local and remote implementations may use Effect RPC to derive
 clients and handlers from the schema-backed contract, including streaming
 observation. Effect RPC is currently unstable, so its wire representation is an
 internal implementation detail rather than the public compatibility promise.
-The application-level Migrate Protocol, version negotiation, and capability
-semantics are owned by Migrate SDK and must remain independently versioned.
+The application-level Migrate Protocol and version negotiation are owned by
+Migrate SDK and must remain independently versioned. Connection implementations
+hide their observation transport: local IPC uses an RPC stream, while HTTPS
+concatenates bounded observation leases into the same client-facing stream.
+Their internal Effect RPC groups expose only the observation operation valid for
+that transport, so an HTTPS caller cannot open the local unbounded stream.
 
-The SDK exposes `MigrateClient.make` / `MigrateClient.layer` and
-`MigrateServer.make` / `MigrateServer.layer`. Transports provide the RPC
-protocol required by the client Layer, while server hosts provide the
-registry-bound backend required by the server Layer. Tests use those same
-interfaces for Migrate Protocol, service, transport, and packaging behavior.
-Renderer-only component tests may adapt the configured migration host in
-process; the IPC and Pilotty suites remain responsible for verifying the
-process and protocol boundary.
+The SDK exposes one logical `MigrateClient` service with streaming and HTTP
+Layer constructors, plus `MigrateServer.make` / `MigrateServer.layer`.
+Transports provide the RPC protocol required by the appropriate client Layer,
+while server hosts provide the registry-bound backend required by the server
+Layer. Tests use those same interfaces for Migrate Protocol, service,
+transport, and packaging behavior.
+Renderer-only component tests may adapt the registry-backed migration server
+runtime in process; the IPC and Pilotty suites remain responsible for verifying
+the process and protocol boundary.
 
-The CLI may continue loading configuration and invoking the SDK directly. It is
-not required to route local one-shot commands through the Migrate Protocol.
-Shared server handlers should still delegate to the same registry-bound SDK
-services used by the CLI rather than reimplementing migration behavior.
+The CLI may continue loading configuration and invoking the SDK directly during
+an incremental refactor. The intended seam for migration-control commands is
+the Migrate Server interface: local commands may call it in-process, while
+remote commands use a Migrate Connection. Store schema and other
+infrastructure-only commands may remain outside that interface.
 
 ## Consequences
 
@@ -152,8 +181,11 @@ services used by the CLI rather than reimplementing migration behavior.
 - Local IPC, SSH, and HTTPS clients can share one operation and event model.
 - Execution providers remain replaceable behind Migration Executable instead of
   becoming TUI integrations.
-- The TUI and server must negotiate protocol, SDK, registry, environment, and
-  capability information before exposing unsupported actions.
+- The TUI and server negotiate protocol and SDK compatibility and exchange
+  registry and environment identity before operations begin.
+- Contextual availability, such as rollback support or whether a run can be
+  stopped, is represented by migration and run data rather than server feature
+  negotiation.
 - HTTPS Migrate Servers require authentication, authorization, transport
   security, and deployment-specific lifecycle handling.
 - A connection-scoped SSH Migrate Server cannot guarantee survival of inline
@@ -162,6 +194,8 @@ services used by the CLI rather than reimplementing migration behavior.
 - Streaming observation is an optimization over durable state, not a second
   source of truth, and reconnecting clients must be able to refresh from stored
   status.
+- Remote clients can compose bounded HTTP observation leases into a continuous
+  interface without keeping a serverless invocation alive for the run duration.
 - The boundary extracts serializable server requests and handlers from the
   in-process server runtime without rewriting the migration engine or changing
   the existing Execution Adapter interface.

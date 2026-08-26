@@ -13,7 +13,7 @@ import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 
 const Content = Schema.Struct({ title: Schema.String });
 const ContentIdentity = SourceIdentity.make({
-  id: "tui-locked@v1",
+  id: "locked-fixture-content@v1",
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 const state = InMemoryMigrationStore.makeState();

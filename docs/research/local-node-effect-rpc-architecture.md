@@ -1,21 +1,21 @@
 # Local Node Migrate Server over Effect RPC
 
-Status: implemented for the first local client/server slice
+Status: implemented for local socket and remote HTTP connections
 
 ## Recommendation
 
 Keep OpenTUI in Bun, but move config loading and all Migrate SDK execution into a
-Node child process. The Bun process should use Effect RPC over Node child-process
-IPC to call that process. This is the smallest architecture that preserves the
-existing Node migration authoring contract and creates the protocol seam needed
-for later HTTPS and SSH connections.
+Node child process. The Bun process uses Effect RPC over a reconnectable local
+socket to call that process. This preserves the existing Node migration
+authoring contract, lets inline work outlive one TUI connection, and uses the
+same Migrate Protocol exposed remotely over HTTPS.
 
-Do not build the remote server yet. The first slice should introduce:
+The implemented slices provide:
 
 1. a runtime-neutral, schema-backed Migrate Protocol and server handler layer;
 2. a Node server entry point that loads the existing CLI config;
 3. a Bun-side adapter implementing the current `MigrationTuiRuntime` interface;
-4. one local child-process IPC connection with explicit RPC multiplexing; and
+4. a reconnectable local socket plus bounded HTTP observation leases; and
 5. an end-to-end fixture proving a Node-only config can be operated from the Bun
    TUI process.
 
@@ -28,19 +28,19 @@ already identifies Node child-process IPC as the first local connection
 
 ## Validated runtime shape
 
-The proposed process tree is:
+The implemented local process tree is:
 
 ```text
 shell
 └─ Node npm launcher
    └─ Bun OpenTUI renderer
-      └─ Node Migrate Server (IPC-enabled child process)
+      └─ Node Migrate Server (detached, socket-enabled child process)
 ```
 
 The npm launcher already runs in Node and launches Bun
 ([`packages/tui/bin/launcher.js:157-166`](../../packages/tui/bin/launcher.js#L157-L166)).
-It should pass its exact `process.execPath` to the Bun process. Bun then uses
-that path as the `execPath` when it forks the server entry. It must not use
+It passes its exact `process.execPath` to the Bun process. Bun then uses that
+path as the executable when it spawns the server entry. It must not use
 Bun's own `process.execPath` for the Node server.
 
 I validated this shape locally with Node 24.16.0, Bun 1.3.14, Effect
@@ -50,10 +50,11 @@ I validated this shape locally with Node 24.16.0, Bun 1.3.14, Effect
 - a complete Effect RPC spike successfully made a unary `Ping` call and consumed
   a three-item streaming `Observe` response across that Bun-to-Node channel.
 
-The spike used the same layers recommended below. It was temporary and was not
-added to the repository. The implementation now runs its own Bun-parent and
-Node-child RPC regression plus packed migration smoke in the TUI package matrix
-on macOS, Linux, and Windows; it does not depend on the inactive upstream test.
+The spike used the worker layers documented below. It was temporary and was not
+added to the repository. The production implementation instead uses Effect's
+NDJSON socket protocol so the Node server can accept a later client. The test
+matrix includes Bun-parent/Node-child socket coverage plus packed migration
+smoke on macOS, Linux, and Windows.
 
 ## Exact Effect RPC composition
 
@@ -75,7 +76,10 @@ The contract module must be runtime-neutral: it can depend on Effect Schema and
 serializable Migrate domain schemas, but not Node, Bun, OpenTUI, config modules,
 Migration Definitions, Effect Layers, or executable plans.
 
-### Bun client
+### Evaluated worker client
+
+The initial spike used the following connection-scoped worker transport. It is
+retained here as research evidence, not as the active implementation:
 
 The local connection can be composed as:
 
@@ -98,7 +102,7 @@ const ProtocolLive = RpcClient.layerProtocolWorker({
   concurrency: 64
 }).pipe(Layer.provide(WorkerLive))
 
-const client = yield* RpcClient.make(MigrateServerRpcs)
+const client = yield* RpcClient.make(MigrateStreamingRpcs)
 ```
 
 `NodeWorker.layer` accepts either a worker thread or a Node `ChildProcess` and
@@ -109,13 +113,13 @@ kills an unresponsive child after five seconds
 The explicit `concurrency` is essential. `RpcClient.layerProtocolWorker` uses a
 worker pool (`RpcClient.ts:1330-1344`), and Effect's pool defaults per-item
 concurrency to **1** (`effect/src/Pool.ts:239-245,323-346`). With
-`{ size: 1 }` alone, a long-running `ObserveExecution` stream holds the only
+`{ size: 1 }` alone, a long-running `ObserveRun` stream holds the only
 lease and blocks refresh, cancel, and other command RPCs. `{ size: 1,
 concurrency: 64 }` keeps one Node server process while allowing its IPC channel
 to multiplex requests. This transport concurrency is unrelated to the
 migration execution concurrency exposed to users.
 
-### Node server
+### Evaluated worker server
 
 The child process can be composed as:
 
@@ -123,10 +127,10 @@ The child process can be composed as:
 import * as NodeWorkerRunner from "@effect/platform-node/NodeWorkerRunner"
 import * as RpcServer from "effect/unstable/rpc/RpcServer"
 
-const ServerLive = RpcServer.layer(MigrateServerRpcs, {
+const ServerLive = RpcServer.layer(MigrateStreamingRpcs, {
   disableFatalDefects: true
 }).pipe(
-  Layer.provide(MigrateServerHandlers),
+  Layer.provide(MigrateStreamingServerHandlers),
   Layer.provide(RpcServer.layerProtocolWorkerRunner),
   Layer.provide(NodeWorkerRunner.layer)
 )
@@ -177,15 +181,15 @@ for Node child IPC.
 Effect RPC does not supply the application protocol or process productization.
 Migrate SDK still owns:
 
-- public protocol versions and capability negotiation;
+- public protocol version negotiation and one complete operation contract;
 - the schema-backed request, projection, event, and error types;
 - discovery of the Node executable and packaged server entry;
 - child startup timeout, logs, crash messages, and restart policy;
 - config-path and working-directory bootstrap;
 - config loading and construction of the authoritative server Layer;
 - plan fingerprinting and plan-change rejection;
-- the server-side map from serializable execution references to live handles;
-- attached versus detached execution semantics;
+- the server-side map from Migration Run ids to server-owned live handles;
+- server-owned versus provider-owned execution semantics;
 - explicit cancellation authorization and behavior; and
 - durable state recovery after a stream reconnects.
 
@@ -201,25 +205,32 @@ Start with a small vertical protocol rather than a generic
 
 | RPC | Shape | Purpose |
 | --- | --- | --- |
-| `GetServerInfo` | unary | Protocol version, SDK version, Node runtime, registry/environment identity, capabilities |
+| `GetServerInfo` | unary | Protocol version, SDK version, and registry/environment identity |
 | `GetDashboard` | unary | Registry entries, groups, and durable definition status projection |
+| `GetActiveRuns` | unary | Discover queued and running Migration Runs |
 | `GetMessages` | unary | Durable messages for one migration or group |
+| `GetSourceIdentityHistory` | unary | Durable source-identity history for selective runs |
+| `NormalizeSourceIdentity` | unary | Validate and encode a source identity with the authoritative Source |
 | `PrepareOperation` | unary | Serializable plan projection, dependency checks, and plan fingerprint |
-| `StartOperation` | unary | Replan, verify fingerprint, start, and promptly return an execution reference |
-| `ObserveExecution` | stream | Coalesced progress checkpoints, durable status snapshots, warnings, and terminal event |
-| `CancelExecution` | unary | Explicitly request cancellation where the execution capability supports it |
+| `StartOperation` | unary | Replan, verify fingerprint, start, and return the Migration Run id and start status |
+| `ObserveRun` | stream | Coalesced progress checkpoints, durable status snapshots, warnings, and terminal event for a Migration Run id |
+| `ObserveRunLease` | unary | Bounded, resume-token-based form of the same observation for HTTP and serverless connections |
+| `StopRun` | unary | Explicitly request a safe stop for one Migration Run and report whether the current execution supports it |
+| `ScanSource` | unary | Scan the selected migration or group with explicit concurrency |
+| `BreakLock` | unary | Clear one selected stale Migration Definition Lock |
 
-Additional operations such as source scan, source-identity history, lock
-recovery, and rollback can be added as schema-backed RPCs while the TUI runtime
-adapter is cut over. The server handlers should delegate to the existing SDK
-services; they must not reimplement migration behavior.
+Every compatible server implements this complete surface. Rollback, retry, and
+update are operation actions carried by `PrepareOperation` and `StartOperation`,
+not separate RPC variants. The server handlers delegate to the existing SDK
+services; they do not reimplement migration behavior.
 
 ### Never send executable plans
 
-The current prepared TUI operation embeds
+The registry-backed Migrate Server runtime keeps
 `MigrationDefinitionExecutableRunPlan` or
-`MigrationDefinitionExecutableRollbackPlan`
-([`packages/tui/src/runtime.ts:76-95`](../../packages/tui/src/runtime.ts#L76-L95)).
+`MigrationDefinitionExecutableRollbackPlan` inside its runtime-only
+`ExecutableMigrationOperation`
+([`packages/migrate-sdk/src/server/registry-runtime.ts`](../../packages/migrate-sdk/src/server/registry-runtime.ts)).
 Those plans contain live definitions and executable capabilities, so they are
 not protocol values. This follows the domain rule that Effects, Layers,
 definitions, and executable plans never cross the Migrate Protocol
@@ -240,18 +251,19 @@ fiber (`RpcServer.ts:188-207`).
 
 Instead:
 
-1. `StartOperation` returns a schema-backed `{ runId, executionId, lifecycle }`
-   reference as soon as the SDK starts the run;
+1. `StartOperation` returns a schema-backed
+   `{ runId, status: "started" | "completed" }` result as soon as the SDK has a
+   Migration Run id;
 2. the Node server retains any host-local execution handle;
-3. `ObserveExecution(reference)` streams progress independently; and
-4. `CancelExecution(reference)` is the only operation that requests execution
-   cancellation.
+3. `ObserveRun({ runId })` streams progress independently; and
+4. `StopRun({ runId })` is the only operation that requests execution
+   cancellation from the server.
 
 Closing an observation therefore stops only the observer, as required by the
-domain model. Detached provider executions can be observed again from their
-durable state. A local inline run still depends on the connection-scoped Node
-server process; surviving TUI/server shutdown requires a durable execution
-adapter or a future daemon, not an RPC flag.
+domain model. Provider-owned executions can be observed again from their
+durable state. A local inline run remains owned by the detached Node server,
+which accepts a later client on the same socket and exits only after it has no
+clients or active work.
 
 The stream should publish checkpoints at natural cursor-window commits and may
 coalesce status updates. Durable Migration Run and Item State remains the source
@@ -260,39 +272,45 @@ observation where supported.
 
 ## Mapping onto the TUI
 
-### SDK services and the configured host
+### SDK services, registry runtime, and local loader
 
 The implementation separates the runtime into three roles:
 
 - **`MigrateServer`**: an SDK Effect service that owns plan fingerprints,
-  authoritative replanning, execution references, observation streams, and
+  authoritative replanning, run starts, observation streams, and
   request routing;
-- **configured migration host**: loads config and binds registry, store,
-  executable, messages, scans, history, and lock work to the server backend;
+- **registry migration server runtime**: accepts an existing registry and
+  executable, then binds store, messages, scans, history, execution, and lock
+  work to the server backend;
+- **local migration server loader**: discovers `migrate.config.*`, resolves its
+  executable Layer, and constructs the registry runtime;
 - **protocol-backed `MigrationTuiRuntime` adapter**: implements the public
   `MigrationTuiRuntime` interface with RPC calls and maps protocol DTOs to UI
   models.
 
 The public prepared-operation type is a serializable projection. Executable SDK
-plans remain in the configured host and all values crossing the boundary are
-schema-encoded protocol values. `MigrateClient.make` / `MigrateClient.layer`
-and `MigrateServer.make` / `MigrateServer.layer` expose the reusable Effect
-services; the local child-process transport only supplies their Layers.
+plans remain in the registry runtime and all values crossing the boundary are
+schema-encoded protocol values. `MigrateClient.streamingLayer` /
+`MigrateClient.httpLayer` expose one logical client observation interface, and
+`MigrateServer.make` / `MigrateServer.layer` expose the reusable server service;
+the connection transport supplies the remaining protocol Layer.
 
-The configured host currently remains in the TUI package as the local Node
-bootstrap implementation. Moving it is a follow-up package-boundary cleanup,
-not a prerequisite for validating the protocol seam: the server service no
-longer inherits or exposes the UI runtime interface.
+The registry runtime, local loader, and `MigrateServerBackend` adapter live
+under `migrate-sdk/server`. The TUI package retains the local Node process
+bootstrap and its protocol-backed UI adapter, but it no longer owns migration
+planning, execution, or durable observation.
 
 ### Config loading
 
-The Node server calls the existing
+Only the local Node server loader calls the existing
 `loadMigrationCliConfigWithPath({ cwd, configPath })` with Node services. That
 loader already discovers the config and installs `tsx`'s Node registration for
 TypeScript imports when the runtime is not Bun
 ([`config-loader.ts:200-235`](../../packages/migrate-sdk/src/cli/config-loader.ts#L200-L235),
 [`282-311`](../../packages/migrate-sdk/src/cli/config-loader.ts#L282-L311)).
-The Bun renderer does not import customer config.
+The Bun renderer does not import customer config. Remote hosts construct the
+same registry runtime from an already-imported registry and executable, with no
+config-file discovery.
 
 Bootstrap travels through process arguments and the inherited environment. It
 is limited to `cwd` and optional `configPath`; credentials are not copied into
@@ -300,12 +318,13 @@ the application protocol.
 
 ### Effect-native execution ownership
 
-The configured migration host exposes configuration loading, discovery,
-planning, status, messages, source scans, execution, and observation as Effects.
+The registry migration server runtime exposes discovery, planning, status,
+messages, source scans, execution, and observation as Effects. Config loading
+is isolated in the local loader.
 It retains real execution handles on the server without interpreting SDK work
-through Promises. The client adapter uses `StartOperation`,
-`ObserveExecution`, and `CancelExecution` and owns only the observation stream
-and UI-facing state. Promise interpretation is limited to that client and
+through Promises. The client adapter uses `StartOperation`, `ObserveRun`, and
+`StopRun` and owns only the observation stream and UI-facing state. Promise
+interpretation is limited to that client and
 process boundary; there is no shared UI execution controller between the
 layers.
 
@@ -315,14 +334,14 @@ the client.
 
 ### TUI lifecycle
 
-The child process, worker protocol, and RPC client are acquired in one Effect
-scope before the renderer is created. That scope is released after the TUI
-lifecycle supervisor stops rendering and performs any explicit attached-run
-exit decision, including renderer setup and execution failure paths.
+The TUI owns only its socket connection and observation scope. A newly launched
+Node server is detached from the renderer process and owns its execution fibers;
+disconnecting or aborting observation does not interrupt a run. The server
+remains reachable at the deterministic local endpoint until its idle policy
+finds no clients and no active executions.
 
-Keep stdout/stderr separate from the RPC channel. Child IPC carries protocol
-messages; server logs can be captured through `silent: true` pipes and rendered
-or written without corrupting the protocol.
+Keep logs separate from the RPC socket. The socket carries NDJSON protocol
+frames; server logging must use a separate deployment or process channel.
 
 ## Testing the first slice
 
@@ -336,8 +355,8 @@ The merge bar for the local adapter should include:
 4. a Node-only config fixture that would fail if Bun tried to load it;
 5. dashboard, prepare, start, progress stream, terminal state, and explicit
    cancel assertions;
-6. a concurrency regression where `ObserveExecution` remains open while a
-   dashboard or cancel RPC completes, proving pool concurrency is greater than
+6. a concurrency regression where `ObserveRun` remains open while a dashboard
+   or stop RPC completes, proving pool concurrency is greater than
    one;
 7. child crash, startup timeout, schema mismatch, and protocol-version mismatch
    behavior; and
@@ -345,28 +364,29 @@ The merge bar for the local adapter should include:
 
 `RpcTest` is an in-memory protocol implementation
 (`effect/src/unstable/rpc/RpcTest.ts:34-63` in the local checkout). It does not
-prove worker serialization, Bun compatibility, child lifecycle, or packaging,
+prove socket serialization, Bun compatibility, child lifecycle, or packaging,
 so the cross-process fixture is mandatory.
 
-## Later HTTP and SSH connections
+## HTTP and later SSH connections
 
 Keep the logical `RpcGroup`, schemas, handler Layer, and TUI runtime adapter
 transport-independent. Later connections should replace only the protocol
 Layer and connection bootstrap:
 
-- Effect already provides HTTP client and server protocol layers
-  (`RpcClient.ts` and `RpcServer.ts:800-825`), suitable for a deployed Migrate
-  Server after authentication, authorization, transport security, and durable
-  lifecycle are designed.
+- The deployed HTTP connection uses Effect's HTTP client and server protocol
+  layers. Remote observation is implemented as bounded `ObserveRunLease` calls
+  with opaque resume tokens, so correctness does not depend on an HTTP response
+  surviving for the duration of a Migration Run. Server hosts still own
+  authentication, authorization, transport security, and the registry-bound
+  backend.
 - Effect currently provides a stdio server protocol
   (`RpcServer.ts:1275-1341`) but no symmetric built-in stdio client. SSH can
   later start the same Node server in stdio mode, but the project would own the
   client-side byte-stream adapter/framing, or tunnel HTTP/TCP instead.
 
-Do not implement either in the first slice. Child-process IPC proves the
-contract and removes the immediate Bun runtime incompatibility without
-prematurely choosing remote authentication, discovery, deployment, or daemon
-semantics.
+SSH remains a later connection option. Child-process IPC continues to preserve
+the local Node runtime contract, while HTTP proves the same Migrate Protocol can
+cross a stateless remote boundary.
 
 ## Implemented module boundary
 
@@ -377,30 +397,33 @@ implementation uses:
 
 ```text
 packages/migrate-sdk/src/protocol/
-  index.ts          # schemas, errors, RPC group, versions and capabilities
+  index.ts          # schemas, errors, RPC group, and protocol version
 
 packages/migrate-sdk/src/client/
   index.ts          # runtime-neutral Effect RPC client service and Layer
 
 packages/migrate-sdk/src/server/
+  registry-runtime.ts # registry-backed planning, execution, and observation
+  registry-backend.ts # adapter from registry runtime to MigrateServer
+  local-runtime.ts    # local migrate.config discovery and composition
+  durable-observation.ts # durable terminal-state observation
   service.ts        # plan validation, execution registry, and observation
   handlers.ts       # RPC handlers delegating to MigrateServer
 
 packages/tui/src/server/
   node-entry.ts     # Node config bootstrap and server Layer
-  local-client.ts   # Bun child-process connection Layer
-  migration-backend.ts # configured host adapter for MigrateServer
+  local-client.ts   # reconnectable local socket client and server launcher
   tui-runtime.ts    # MigrationTuiRuntime RPC adapter
 ```
 
-Export the contract from `migrate-sdk/protocol` and handler construction from
-`migrate-sdk/server`. Keep Node process code in the TUI package for this
-local-only slice. When a deployable Migrate Server is introduced, it can consume
-the same protocol and server exports without moving execution logic out of the
-SDK again.
+Export the contract from `migrate-sdk/protocol` and registry runtime, local
+loader, backend, and handler construction from `migrate-sdk/server`. Keep the
+local Node process launcher in the TUI package for this local-only slice. A
+deployable Migrate Server or future CLI can consume the same server module
+without importing TUI code or loading a config file.
 
 The resulting boundary is narrow: the migration engine remains unchanged, the
-CLI may continue invoking it directly, and the TUI changes only from a direct
-runtime implementation to a protocol-backed implementation. The next cleanup
-can relocate the configured host without changing the client, protocol, server
-service, or transport contracts established here.
+CLI may continue invoking it directly until its incremental client refactor,
+and the TUI changes from a direct runtime implementation to a protocol-backed
+implementation. Migration-control behavior now has one server-owned
+implementation independent of its clients and transports.

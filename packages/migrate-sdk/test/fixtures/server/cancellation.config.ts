@@ -11,7 +11,7 @@ import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 
 const Content = Schema.Struct({ title: Schema.String });
 const ContentIdentity = SourceIdentity.make({
-  id: "tui-cancellation@v1",
+  id: "cancellation-fixture-content@v1",
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 

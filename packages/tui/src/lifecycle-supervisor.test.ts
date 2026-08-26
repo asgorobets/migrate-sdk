@@ -63,7 +63,7 @@ describe("Migration TUI lifecycle supervisor", () => {
 
   it("forces terminal restoration on a second Ctrl-C", async () => {
     const cancellation = Promise.withResolvers<{
-      readonly kind: "requested";
+      readonly kind: "detached";
       readonly message: string;
     }>();
     const detachForExit = vi.fn(() => cancellation.promise);
@@ -106,8 +106,8 @@ describe("Migration TUI lifecycle supervisor", () => {
     expect(forceExit).toHaveBeenCalledWith(130);
 
     cancellation.resolve({
-      kind: "requested",
-      message: "Cancellation completed",
+      kind: "detached",
+      message: "Detachment completed",
     });
   });
 

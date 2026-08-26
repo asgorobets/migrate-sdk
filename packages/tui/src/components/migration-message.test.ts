@@ -1,10 +1,10 @@
+import type { MigrationMessage } from "migrate-sdk";
 import {
   toEncodedSourceIdentity,
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "migrate-sdk";
 import { describe, expect, it } from "vitest";
-import type { MigrationTuiMessage } from "../runtime.ts";
 import {
   migrationMessageMarker,
   migrationMessageRowKey,
@@ -13,7 +13,7 @@ import {
 const diagnostic = (
   sequence: number,
   runId = "run-articles"
-): MigrationTuiMessage => ({
+): MigrationMessage => ({
   definitionId: toMigrationDefinitionId("articles"),
   kind: "process-diagnostic",
   message: "Author lookup failed",

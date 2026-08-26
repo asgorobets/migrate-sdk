@@ -1,8 +1,8 @@
-import type { MigrationTuiCancellationResult } from "./execution.ts";
+import type { MigrationTuiDetachResult } from "./runtime.ts";
 
 interface MigrationTuiShutdownControllerInput {
   readonly destroy: () => void;
-  readonly detachForExit: () => Promise<MigrationTuiCancellationResult>;
+  readonly detachForExit: () => Promise<MigrationTuiDetachResult>;
 }
 
 export type MigrationTuiExitSignal = "SIGHUP" | "SIGINT" | "SIGTERM";
@@ -45,7 +45,7 @@ export const registerMigrationTuiSignalHandlers = ({
 export interface MigrationTuiShutdownController {
   readonly executionSettled: () => boolean;
   readonly isExitRequested: () => boolean;
-  readonly requestExit: () => Promise<MigrationTuiCancellationResult>;
+  readonly requestExit: () => Promise<MigrationTuiDetachResult>;
 }
 
 export const makeMigrationTuiShutdownController = (
@@ -53,7 +53,7 @@ export const makeMigrationTuiShutdownController = (
 ): MigrationTuiShutdownController => {
   let destroyed = false;
   let exitRequested = false;
-  let request: Promise<MigrationTuiCancellationResult> | undefined;
+  let request: Promise<MigrationTuiDetachResult> | undefined;
 
   const destroyOnce = () => {
     if (destroyed) {
@@ -64,7 +64,7 @@ export const makeMigrationTuiShutdownController = (
     input.destroy();
   };
 
-  const requestExit = (): Promise<MigrationTuiCancellationResult> => {
+  const requestExit = (): Promise<MigrationTuiDetachResult> => {
     exitRequested = true;
 
     request ??= input.detachForExit().then(

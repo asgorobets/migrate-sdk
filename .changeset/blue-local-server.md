@@ -26,8 +26,8 @@ observation or Migrate Server instance is gone. The TUI offers Attach to run for
 matching locked migrations, follows committed progress, and can end the new
 observation without cancelling work owned by its Execution Adapter.
 
-Advance the Migrate Protocol to version 2 for active-run discovery and
-run-based observation. Dashboard snapshots include active runs so the TUI reads
+Add active-run discovery and run-based observation to the unreleased Migrate
+Protocol. Dashboard snapshots include active runs so the TUI reads
 durable status once per refresh. Reconnection preserves failed terminal states
 and observes through a Migration Definition Lock still owned by the run.
 Migration Stores retain Migration Run State by Migration Run id when a later run
@@ -36,4 +36,4 @@ authoritative run record before latest-definition projections, and retries
 repair interrupted projection writes without overwriting newer runs.
 Integration coverage closes one Node
 server and proves that a fresh server can rediscover and observe a file-backed
-run whose execution worker remained active.
+run whose execution provider process remained active.

@@ -56,7 +56,7 @@ describe("Migration TUI shutdown controller", () => {
     const controller = makeMigrationTuiShutdownController({
       detachForExit: () =>
         Promise.resolve({
-          kind: "requested" as const,
+          kind: "detached" as const,
           message: "Detaching from the active run…",
         }),
       destroy,
@@ -64,7 +64,7 @@ describe("Migration TUI shutdown controller", () => {
 
     const cancellation = await controller.requestExit();
 
-    expect(cancellation.kind).toBe("requested");
+    expect(cancellation.kind).toBe("detached");
     expect(controller.isExitRequested()).toBe(true);
     expect(destroy).not.toHaveBeenCalled();
 

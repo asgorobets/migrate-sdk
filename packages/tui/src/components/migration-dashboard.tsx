@@ -3,11 +3,12 @@ import { useKeyboard } from "@opentui/react";
 import type {
   MigrationDefinitionRegistryGroup,
   MigrationDefinitionSourceStatus,
+  MigrationMessage,
   MigrationStatusWarning,
 } from "migrate-sdk";
+import type { MigrateDashboardRow } from "migrate-sdk/protocol";
 import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
-import type { MigrationTuiMessage, MigrationTuiRow } from "../runtime.ts";
 import {
   type MigrationTuiAvailableAction,
   migrationTuiPrimaryActions,
@@ -55,7 +56,7 @@ const countLabel = (count: number, singular: string): string =>
   `${count} ${singular}${count === 1 ? "" : "s"}`;
 
 const statusLabel = (row: {
-  readonly status?: MigrationTuiRow["status"] | undefined;
+  readonly status?: MigrateDashboardRow["status"] | undefined;
 }): string => {
   const status = row.status;
 
@@ -132,7 +133,7 @@ const statusBadgeIntent = (label: string): BadgeIntent => {
   }
 };
 
-const durableCounts = (row: MigrationTuiRow): DurableCounts => {
+const durableCounts = (row: MigrateDashboardRow): DurableCounts => {
   const durable = row.status?.durable;
 
   return {
@@ -143,7 +144,7 @@ const durableCounts = (row: MigrationTuiRow): DurableCounts => {
   };
 };
 
-const aggregateCounts = (rows: readonly MigrationTuiRow[]): DurableCounts =>
+const aggregateCounts = (rows: readonly MigrateDashboardRow[]): DurableCounts =>
   rows.reduce(
     (total, row) => {
       const counts = durableCounts(row);
@@ -159,7 +160,7 @@ const aggregateCounts = (rows: readonly MigrationTuiRow[]): DurableCounts =>
   );
 
 const sourceInventory = (
-  rows: readonly MigrationTuiRow[]
+  rows: readonly MigrateDashboardRow[]
 ): SourceInventory | undefined => {
   const scannedRows = rows.filter((row) => row.status?.source !== undefined);
 
@@ -203,7 +204,7 @@ const sourceWarningLabel = (warning: MigrationStatusWarning): string => {
   }
 };
 
-const groupStatusLabel = (rows: readonly MigrationTuiRow[]): string => {
+const groupStatusLabel = (rows: readonly MigrateDashboardRow[]): string => {
   const labels = rows.map(statusLabel);
 
   if (labels.includes("running")) {
@@ -227,8 +228,8 @@ const groupStatusLabel = (rows: readonly MigrationTuiRow[]): string => {
 
 const rowsForGroup = (
   group: MigrationDefinitionRegistryGroup,
-  rows: readonly MigrationTuiRow[]
-): readonly MigrationTuiRow[] => {
+  rows: readonly MigrateDashboardRow[]
+): readonly MigrateDashboardRow[] => {
   const rowsById = new Map(rows.map((row) => [row.entry.id, row]));
 
   return group.definitionIds.flatMap((definitionId) => {
@@ -237,7 +238,7 @@ const rowsForGroup = (
   });
 };
 
-const listCountsLabel = (row: MigrationTuiRow): string => {
+const listCountsLabel = (row: MigrateDashboardRow): string => {
   if (row.status === undefined) {
     return "Reading status…";
   }
@@ -264,7 +265,7 @@ const formatDate = (date: Date | undefined): string => {
   }).format(date);
 };
 
-const lastRunLabel = (row: MigrationTuiRow): string => {
+const lastRunLabel = (row: MigrateDashboardRow): string => {
   const lastRun = row.status?.lastRun;
 
   if (lastRun === null || lastRun === undefined) {
@@ -322,7 +323,7 @@ const MigrationList = ({
   readonly layout: "compact" | "wide";
   readonly onSelectedIndexChange: (index: number) => void;
   readonly onSelectCurrent: () => void;
-  readonly rows: readonly MigrationTuiRow[];
+  readonly rows: readonly MigrateDashboardRow[];
   readonly selectedIndex: number;
 }) => {
   const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
@@ -433,7 +434,7 @@ const GroupList = ({
   readonly layout: "compact" | "wide";
   readonly onSelectedIndexChange: (index: number) => void;
   readonly onSelectCurrent: () => void;
-  readonly rows: readonly MigrationTuiRow[];
+  readonly rows: readonly MigrateDashboardRow[];
   readonly selectedIndex: number;
 }) => {
   const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
@@ -560,7 +561,7 @@ const SourceInventorySummary = ({
   rows,
 }: {
   readonly compact: boolean;
-  readonly rows: readonly MigrationTuiRow[];
+  readonly rows: readonly MigrateDashboardRow[];
 }) => {
   const inventory = sourceInventory(rows);
 
@@ -608,7 +609,7 @@ const SourceInventorySummary = ({
   );
 };
 
-const LockDetails = ({ row }: { readonly row: MigrationTuiRow }) => {
+const LockDetails = ({ row }: { readonly row: MigrateDashboardRow }) => {
   const lock = row.status?.lock;
 
   if (lock === null || lock === undefined) {
@@ -640,7 +641,7 @@ const LockDetails = ({ row }: { readonly row: MigrationTuiRow }) => {
 const GroupLocks = ({
   rows,
 }: {
-  readonly rows: readonly MigrationTuiRow[];
+  readonly rows: readonly MigrateDashboardRow[];
 }) => {
   const lockedRows = rows.filter(
     (row) => row.status?.lock !== null && row.status?.lock !== undefined
@@ -674,7 +675,7 @@ const GroupLocks = ({
   );
 };
 
-const Capabilities = ({ row }: { readonly row: MigrationTuiRow }) => (
+const Capabilities = ({ row }: { readonly row: MigrateDashboardRow }) => (
   <box style={{ flexDirection: "row", flexShrink: 0, gap: 3, height: 1 }}>
     <Checkbox
       checked={row.entry.hasRollback}
@@ -698,8 +699,8 @@ const Dependencies = ({
   rows,
 }: {
   readonly compact: boolean;
-  readonly row: MigrationTuiRow;
-  readonly rows: readonly MigrationTuiRow[];
+  readonly row: MigrateDashboardRow;
+  readonly rows: readonly MigrateDashboardRow[];
 }) => {
   const dependencies = [
     ...row.entry.dependencies.required.map((id) => ({ id, kind: "required" })),
@@ -775,7 +776,7 @@ const LatestMessage = ({
 }: {
   readonly compact: boolean;
   readonly loading: boolean;
-  readonly messages: readonly MigrationTuiMessage[];
+  readonly messages: readonly MigrationMessage[];
   readonly showDefinitionId?: boolean;
 }) => {
   const latest = messages[0];
@@ -882,10 +883,10 @@ const Overview = ({
 }: {
   readonly active: boolean;
   readonly compact: boolean;
-  readonly messages: readonly MigrationTuiMessage[];
+  readonly messages: readonly MigrationMessage[];
   readonly messagesLoading: boolean;
-  readonly row: MigrationTuiRow;
-  readonly rows: readonly MigrationTuiRow[];
+  readonly row: MigrateDashboardRow;
+  readonly rows: readonly MigrateDashboardRow[];
 }) => (
   <OverviewViewport active={active}>
     <box style={{ flexShrink: 0, height: 1 }}>
@@ -928,9 +929,9 @@ const GroupOverview = ({
 }: {
   readonly active: boolean;
   readonly compact: boolean;
-  readonly messages: readonly MigrationTuiMessage[];
+  readonly messages: readonly MigrationMessage[];
   readonly messagesLoading: boolean;
-  readonly rows: readonly MigrationTuiRow[];
+  readonly rows: readonly MigrateDashboardRow[];
 }) => {
   const counts = aggregateCounts(rows);
 
@@ -1052,14 +1053,14 @@ const GroupDetailPane = ({
   readonly compact: boolean;
   readonly disabled: boolean;
   readonly group: MigrationDefinitionRegistryGroup;
-  readonly messages: readonly MigrationTuiMessage[];
+  readonly messages: readonly MigrationMessage[];
   readonly messageIndex: number;
   readonly messagesLoading: boolean;
   readonly onMessageIndexChange: (index: number) => void;
   readonly onOpenActions: () => void;
   readonly onSelectAction: (action: MigrationTuiAvailableAction) => void;
   readonly onTabChange: (tab: MigrationDetailTab) => void;
-  readonly rows: readonly MigrationTuiRow[];
+  readonly rows: readonly MigrateDashboardRow[];
 }) => {
   const label = groupStatusLabel(rows);
 
@@ -1185,15 +1186,15 @@ const DetailPane = ({
   readonly actions: readonly MigrationTuiAvailableAction[];
   readonly compact: boolean;
   readonly disabled: boolean;
-  readonly messages: readonly MigrationTuiMessage[];
+  readonly messages: readonly MigrationMessage[];
   readonly messageIndex: number;
   readonly messagesLoading: boolean;
   readonly onMessageIndexChange: (index: number) => void;
   readonly onOpenActions: () => void;
   readonly onSelectAction: (action: MigrationTuiAvailableAction) => void;
   readonly onTabChange: (tab: MigrationDetailTab) => void;
-  readonly row: MigrationTuiRow;
-  readonly rows: readonly MigrationTuiRow[];
+  readonly row: MigrateDashboardRow;
+  readonly rows: readonly MigrateDashboardRow[];
 }) => {
   const label = statusLabel(row);
 
@@ -1325,7 +1326,7 @@ export const MigrationDashboard = ({
   readonly busy: string;
   readonly groups: readonly MigrationDefinitionRegistryGroup[];
   readonly listTab: MigrationListTab;
-  readonly messages: readonly MigrationTuiMessage[];
+  readonly messages: readonly MigrationMessage[];
   readonly messageIndex: number;
   readonly messagesLoading: boolean;
   readonly onListTabChange: (tab: MigrationListTab) => void;
@@ -1335,7 +1336,7 @@ export const MigrationDashboard = ({
   readonly onSelectedIndexChange: (index: number) => void;
   readonly onSelectCurrent: () => void;
   readonly onTabChange: (tab: MigrationDetailTab) => void;
-  readonly rows: readonly MigrationTuiRow[];
+  readonly rows: readonly MigrateDashboardRow[];
   readonly selectedIndex: number;
   readonly terminalWidth: number;
 }) => {

@@ -1,10 +1,10 @@
+import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import {
   type MigrationRunState,
   toMigrationDefinitionId,
   toMigrationRunId,
-} from "migrate-sdk";
-import { describe, expect, it } from "vitest";
+} from "../index.ts";
 import { waitForDurableRunState } from "./durable-observation.ts";
 
 const definitionId = toMigrationDefinitionId("articles");
@@ -29,24 +29,26 @@ const runState = (
 });
 
 describe("waitForDurableRunState", () => {
-  it("polls until the requested run reaches durable terminal state", async () => {
-    const observed = [
-      null,
-      runState(runId, "queued"),
-      runState(runId, "running"),
-      runState(runId, "succeeded"),
-    ];
-    let reads = 0;
+  it.effect(
+    "polls until the requested run reaches durable terminal state",
+    () =>
+      Effect.gen(function* () {
+        const observed = [
+          null,
+          runState(runId, "queued"),
+          runState(runId, "running"),
+          runState(runId, "succeeded"),
+        ];
+        let reads = 0;
 
-    const terminal = await Effect.runPromise(
-      waitForDurableRunState({
-        pollIntervalMs: 0,
-        readRunState: Effect.sync(() => observed[reads++] ?? null),
-        runId,
+        const terminal = yield* waitForDurableRunState({
+          pollIntervalMs: 0,
+          readRunState: Effect.sync(() => observed[reads++] ?? null),
+          runId,
+        });
+
+        expect(terminal).toEqual(runState(runId, "succeeded"));
+        expect(reads).toBe(4);
       })
-    );
-
-    expect(terminal).toEqual(runState(runId, "succeeded"));
-    expect(reads).toBe(4);
-  });
+  );
 });

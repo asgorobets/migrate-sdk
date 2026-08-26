@@ -4,8 +4,8 @@ import {
   toMigrationDefinitionLockToken,
   toMigrationRunId,
 } from "migrate-sdk";
+import type { MigrateActiveRun } from "migrate-sdk/protocol";
 import { describe, expect, it } from "vitest";
-import type { MigrationTuiActiveRun } from "../runtime.ts";
 import {
   migrationTuiAvailableActions,
   migrationTuiPrimaryActions,
@@ -13,7 +13,7 @@ import {
 
 const definitionId = toMigrationDefinitionId("articles");
 const runId = toMigrationRunId("run-active");
-const activeRun: MigrationTuiActiveRun = {
+const activeRun: MigrateActiveRun = {
   definitionIds: [definitionId],
   execution: {
     adapter: "workflow-sdk",

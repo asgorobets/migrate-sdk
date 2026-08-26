@@ -1,9 +1,9 @@
 # Migrate TUI
 
-Explore and operate migrations without memorizing CLI flags. The TUI loads the
-same `migrate.config.ts` as the CLI and provides status, item counts, messages,
-dependency-aware execution plans, and contextual actions for every registered
-migration.
+Explore and operate migrations without memorizing CLI flags. For local use, the
+TUI's Node Migrate Server loads the same `migrate.config.ts` as the CLI. The TUI
+provides status, item counts, messages, dependency-aware execution plans, and
+contextual actions for every registered migration.
 
 Install it in the migration project alongside the SDK:
 
@@ -39,10 +39,58 @@ try {
 The package does not expose the in-process server runtime from its public entry
 point.
 
+Connect to a deployed Migrate Server without loading a local migration config:
+
+```sh
+pnpm exec migrate-tui --server https://migrate.example.com/api/rpc
+```
+
+When `MIGRATE_SERVER_TOKEN` is set, its value is sent as an HTTP Bearer token.
+Source, destination, Migration Store,
+and Execution Adapter credentials remain in the remote environment. The TUI
+requires the complete Migrate Server contract, so local and remote connections
+provide the same dashboard, messages, operations, source scanning, active-run
+discovery, source-identity history, and run controls. Availability that depends
+on a selected migration or run is reported in its data—for example, whether
+rollback or stopping is supported.
+
 Transport and server hosts can integrate directly with the Effect services
 exported as `MigrateClient` from `migrate-sdk/client` and `MigrateServer` from
 `migrate-sdk/server`. The local TUI supplies a child-process transport and a
-Node-configured migration backend for those services.
+Node bootstrap that discovers `migrate.config.*`. Remote hosts instead supply
+an already-imported registry and executable to the registry-backed server
+runtime; no config file is required.
+
+Remote hosts can expose the same server Layer as a Web-standard HTTP handler:
+
+```ts
+import {
+  makeMigrateServerHttpHandler,
+  makeRegistryMigrateServerBackend,
+  makeRegistryMigrateServerRuntime,
+  MigrateServer,
+} from "migrate-sdk/server";
+
+const runtime = makeRegistryMigrateServerRuntime({ registry, executable });
+const backend = makeRegistryMigrateServerBackend(runtime);
+const remoteServer = makeMigrateServerHttpHandler(
+  MigrateServer.layer({ backend, serverInfo }),
+  {
+    authorize: (request) => verifyMigrateRequest(request),
+    path: "/api/rpc",
+  },
+);
+
+export const POST = (request: Request) => remoteServer.handler(request);
+```
+
+`authorize` is application-owned so deployments can use their existing identity
+provider. Deployments where an authenticated reverse proxy enforces access can
+instead pass `authentication: "external"` explicitly. The HTTP handler uses
+bounded observation leases: each response returns an opaque resume token and
+absolute progress snapshot, and the TUI reconnects from the last token. No
+function invocation or HTTP response owns the lifetime of a durable Migration
+Run.
 
 `migrate-sdk` and `effect` remain peer dependencies: the TUI and config use the
 migration project's compatible versions. `@migrate-sdk/tui` and `migrate-sdk`

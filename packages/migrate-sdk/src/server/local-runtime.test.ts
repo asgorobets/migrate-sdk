@@ -1,70 +1,79 @@
+/** @effect-diagnostics asyncFunction:skip-file */
 import { fileURLToPath } from "node:url";
-import { Effect, Fiber } from "effect";
+import { Deferred, Effect, Fiber } from "effect";
 import {
   type MigrationRunId,
   toMigrationDefinitionGroupId,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
+  toMigrationRunId,
 } from "migrate-sdk";
-import { describe, expect, expectTypeOf, it } from "vitest";
-import { liveProgressProviderObservations } from "../examples/live-progress-fixture.ts";
 import {
-  resetScopedExecutableState,
-  scopedExecutableState,
-} from "../test/fixtures/scoped-executable-support.ts";
-import {
-  type ConfiguredMigrationHost,
-  loadConfiguredMigrationHost as loadConfiguredMigrationHostEffect,
-  type MigrationTuiExecutablePreparedOperation,
-  type MigrationTuiExecuteOptions,
-} from "./runtime.ts";
+  type ExecutableMigrationOperation,
+  loadLocalMigrateServerRuntime as loadLocalMigrateServerRuntimeEffect,
+  type RegistryMigrateServerExecutionObserver,
+  type RegistryMigrateServerRuntime,
+} from "migrate-sdk/server";
+import { describe, expect, it } from "vitest";
 
-const packageDirectory = fileURLToPath(new URL("..", import.meta.url));
+const serverFixtureUrl = new URL(
+  "../../test/fixtures/server/",
+  import.meta.url
+);
+const fixtureDirectory = fileURLToPath(serverFixtureUrl);
+const loadLiveProgressFixture = () =>
+  import(
+    new URL("live-progress-fixture.ts", serverFixtureUrl).href
+  ) as Promise<{
+    readonly liveProgressProviderObservations: string[];
+  }>;
+const loadScopedExecutableFixture = () =>
+  import(
+    new URL("scoped-executable-support.ts", serverFixtureUrl).href
+  ) as Promise<{
+    readonly resetScopedExecutableState: () => void;
+    readonly scopedExecutableState: () => {
+      readonly acquisitions: number;
+      readonly releases: number;
+    };
+  }>;
 const authorsId = toMigrationDefinitionId("authors");
 const articlesId = toMigrationDefinitionId("articles");
 const assetsId = toMigrationDefinitionId("assets");
 const contentGroupId = toMigrationDefinitionGroupId("content");
 const succeededRunPattern = /^Run .+ succeeded$/;
-type ConfiguredObserver = NonNullable<
-  Parameters<ConfiguredMigrationHost["observeRun"]>[1]
->;
-
-expectTypeOf<
-  "signal" extends keyof ConfiguredObserver ? true : false
->().toEqualTypeOf<false>();
-
-const loadConfiguredMigrationHost = async (
-  ...args: Parameters<typeof loadConfiguredMigrationHostEffect>
+const loadLocalMigrateServerRuntime = async (
+  ...args: Parameters<typeof loadLocalMigrateServerRuntimeEffect>
 ) => {
-  const host = await Effect.runPromise(
-    Effect.scoped(loadConfiguredMigrationHostEffect(...args))
+  const runtime = await Effect.runPromise(
+    Effect.scoped(loadLocalMigrateServerRuntimeEffect(...args))
   );
 
   return {
-    ...host,
-    breakLock: (lock: Parameters<typeof host.breakLock>[0]) =>
-      Effect.runPromise(host.breakLock(lock)),
-    listActiveRuns: () => Effect.runPromise(host.listActiveRuns),
-    listMessages: (...input: Parameters<typeof host.listMessages>) =>
-      Effect.runPromise(host.listMessages(...input)),
+    ...runtime,
+    breakLock: (lock: Parameters<typeof runtime.breakLock>[0]) =>
+      Effect.runPromise(runtime.breakLock(lock)),
+    listActiveRuns: () => Effect.runPromise(runtime.listActiveRuns),
+    listMessages: (...input: Parameters<typeof runtime.listMessages>) =>
+      Effect.runPromise(runtime.listMessages(...input)),
     listSourceIdentityHistory: (
-      ...input: Parameters<typeof host.listSourceIdentityHistory>
-    ) => Effect.runPromise(host.listSourceIdentityHistory(...input)),
+      ...input: Parameters<typeof runtime.listSourceIdentityHistory>
+    ) => Effect.runPromise(runtime.listSourceIdentityHistory(...input)),
     normalizeSourceIdentity: (
-      ...input: Parameters<typeof host.normalizeSourceIdentity>
-    ) => Effect.runPromise(host.normalizeSourceIdentity(...input)),
-    prepare: (...input: Parameters<typeof host.prepare>) =>
-      Effect.runPromise(host.prepare(...input)),
-    refresh: () => Effect.runPromise(host.refresh),
-    scanSource: (...input: Parameters<typeof host.scanSource>) =>
-      Effect.runPromise(host.scanSource(...input)),
+      ...input: Parameters<typeof runtime.normalizeSourceIdentity>
+    ) => Effect.runPromise(runtime.normalizeSourceIdentity(...input)),
+    prepare: (...input: Parameters<typeof runtime.prepare>) =>
+      Effect.runPromise(runtime.prepare(...input)),
+    refresh: () => Effect.runPromise(runtime.refresh),
+    scanSource: (...input: Parameters<typeof runtime.scanSource>) =>
+      Effect.runPromise(runtime.scanSource(...input)),
   };
 };
 
-const executeConfiguredMigration = async (
-  runtime: Pick<ConfiguredMigrationHost, "startExecution">,
-  operation: MigrationTuiExecutablePreparedOperation,
-  options?: MigrationTuiExecuteOptions
+const executeRegistryMigration = async (
+  runtime: Pick<RegistryMigrateServerRuntime, "startExecution">,
+  operation: ExecutableMigrationOperation,
+  options?: RegistryMigrateServerExecutionObserver
 ) => {
   const execution = await Effect.runPromise(
     runtime.startExecution(operation, options)
@@ -73,35 +82,35 @@ const executeConfiguredMigration = async (
   return Effect.runPromise(execution.result);
 };
 
-describe("Migration TUI server runtime", () => {
+describe("Local Migrate Server runtime", () => {
   const liveProgressCases = [
     {
-      configPath: "examples/live-progress.config.ts",
-      executionState: "running",
+      configPath: "live-progress.config.ts",
       label: "attached inline",
       observationWarning: false,
+      ownership: "server",
     },
     {
-      configPath: "examples/detached-live-progress.config.ts",
-      executionState: "observing",
+      configPath: "detached-live-progress.config.ts",
       label: "detached durable",
       observationWarning: false,
+      ownership: "provider",
     },
     {
-      configPath: "examples/provider-observation-failure.config.ts",
-      executionState: "observing",
+      configPath: "provider-observation-failure.config.ts",
       label: "provider observation fallback",
       observationWarning: true,
+      ownership: "provider",
     },
   ] as const;
 
   it("loads the CLI config through the shared loader", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      cwd: fileURLToPath(new URL("../examples", import.meta.url)),
+    const runtime = await loadLocalMigrateServerRuntime({
+      cwd: fixtureDirectory,
     });
 
     expect(runtime.configPath).toBe(
-      fileURLToPath(new URL("../examples/migrate.config.ts", import.meta.url))
+      fileURLToPath(new URL("migrate.config.ts", serverFixtureUrl))
     );
     expect(runtime.rows.map((row) => row.entry.id)).toEqual([
       "authors",
@@ -116,15 +125,17 @@ describe("Migration TUI server runtime", () => {
     ]);
   });
 
-  it("keeps a configured Migration Executable alive for the host scope", async () => {
+  it("keeps the Migration Executable layer alive for the runtime scope", async () => {
+    const { resetScopedExecutableState, scopedExecutableState } =
+      await loadScopedExecutableFixture();
     resetScopedExecutableState();
 
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const host = yield* loadConfiguredMigrationHostEffect({
-            configPath: "test/fixtures/scoped-executable.config.ts",
-            cwd: packageDirectory,
+          const runtime = yield* loadLocalMigrateServerRuntimeEffect({
+            configPath: "scoped-executable.config.ts",
+            cwd: fixtureDirectory,
           });
 
           expect(scopedExecutableState()).toEqual({
@@ -132,7 +143,7 @@ describe("Migration TUI server runtime", () => {
             releases: 0,
           });
 
-          const operation = yield* host.prepare(
+          const operation = yield* runtime.prepare(
             {
               definitionId: toMigrationDefinitionId(
                 "scoped-executable-fixture"
@@ -141,7 +152,7 @@ describe("Migration TUI server runtime", () => {
             },
             "run"
           );
-          const execution = yield* host.startExecution(operation);
+          const execution = yield* runtime.startExecution(operation);
           const result = yield* execution.result;
 
           expect(result.outcome).toBe("completed");
@@ -156,9 +167,9 @@ describe("Migration TUI server runtime", () => {
   });
 
   it("prepares an executable SDK plan before executing it", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/migrate.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "migrate.config.ts",
+      cwd: fixtureDirectory,
     });
     const operation = await runtime.prepare(
       { definitionId: articlesId, kind: "migration" },
@@ -177,13 +188,13 @@ describe("Migration TUI server runtime", () => {
       },
     });
 
-    await expect(
-      executeConfiguredMigration(runtime, operation)
-    ).resolves.toEqual({
-      message: expect.stringMatching(succeededRunPattern),
-      outcome: "completed",
-      runId: expect.any(String),
-    });
+    await expect(executeRegistryMigration(runtime, operation)).resolves.toEqual(
+      {
+        message: expect.stringMatching(succeededRunPattern),
+        outcome: "completed",
+        runId: expect.any(String),
+      }
+    );
     const snapshot = await runtime.refresh();
     const articles = snapshot.rows.find((row) => row.entry.id === articlesId);
 
@@ -192,9 +203,9 @@ describe("Migration TUI server runtime", () => {
   });
 
   it("drains attached SDK work when the execution fiber is interrupted", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/cancellation.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "cancellation.config.ts",
+      cwd: fixtureDirectory,
     });
     const operation = await runtime.prepare(
       {
@@ -203,19 +214,19 @@ describe("Migration TUI server runtime", () => {
       },
       "run"
     );
-    const running = Promise.withResolvers<void>();
+    const running = await Effect.runPromise(Deferred.make<void>());
     const execution = await Effect.runPromise(
       runtime.startExecution(operation, {
         onStateChange: (state) => {
           if (state.kind === "running") {
-            running.resolve();
+            Deferred.doneUnsafe(running, Effect.void);
           }
         },
       })
     );
 
     const fiber = Effect.runFork(execution.result);
-    await running.promise;
+    await Effect.runPromise(Deferred.await(running));
 
     expect(runtime.hasActiveExecutions()).toBe(true);
     await Effect.runPromise(Fiber.interrupt(fiber));
@@ -228,10 +239,12 @@ describe("Migration TUI server runtime", () => {
 
   for (const testCase of liveProgressCases) {
     it(`publishes live durable counts during ${testCase.label} execution`, async () => {
+      const { liveProgressProviderObservations } =
+        await loadLiveProgressFixture();
       liveProgressProviderObservations.length = 0;
-      const runtime = await loadConfiguredMigrationHost({
+      const runtime = await loadLocalMigrateServerRuntime({
         configPath: testCase.configPath,
-        cwd: packageDirectory,
+        cwd: fixtureDirectory,
         progressFallbackIntervalMs: 10,
         terminalPollIntervalMs: 10,
       });
@@ -242,11 +255,11 @@ describe("Migration TUI server runtime", () => {
         },
         "run"
       );
-      const executionStates: string[] = [];
+      const executionOwnerships: string[] = [];
       const migratedCounts: number[] = [];
       const observationWarnings: string[] = [];
       let sawIntermediateProgressWhileRunning = false;
-      const execution = executeConfiguredMigration(runtime, operation, {
+      const execution = executeRegistryMigration(runtime, operation, {
         onProgress: ({ definitions }) => {
           const status = definitions.find(
             (definition) => definition.definitionId === "live-progress"
@@ -260,7 +273,11 @@ describe("Migration TUI server runtime", () => {
           }
         },
         onObservationWarning: (warning) => observationWarnings.push(warning),
-        onStateChange: (state) => executionStates.push(state.kind),
+        onStateChange: (state) => {
+          if (state.kind === "running") {
+            executionOwnerships.push(state.ownership);
+          }
+        },
       });
 
       await expect(execution).resolves.toEqual({
@@ -269,20 +286,20 @@ describe("Migration TUI server runtime", () => {
         runId: expect.any(String),
       });
 
-      expect(executionStates).toContain(testCase.executionState);
+      expect(executionOwnerships).toContain(testCase.ownership);
       expect(sawIntermediateProgressWhileRunning).toBe(true);
       expect(migratedCounts.at(-1)).toBe(4);
       expect(liveProgressProviderObservations).toHaveLength(
-        testCase.executionState === "observing" ? 1 : 0
+        testCase.ownership === "provider" ? 1 : 0
       );
       expect(observationWarnings.length > 0).toBe(testCase.observationWarning);
     });
   }
 
   it("publishes live durable counts when a dependent migration runs alone", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/dependent-live-progress.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "dependent-live-progress.config.ts",
+      cwd: fixtureDirectory,
       progressFallbackIntervalMs: 10,
       terminalPollIntervalMs: 10,
     });
@@ -293,7 +310,7 @@ describe("Migration TUI server runtime", () => {
       },
       "run"
     );
-    await executeConfiguredMigration(runtime, prerequisite);
+    await executeRegistryMigration(runtime, prerequisite);
     const operation = await runtime.prepare(
       {
         definitionId: toMigrationDefinitionId("live-progress"),
@@ -306,7 +323,7 @@ describe("Migration TUI server runtime", () => {
 
     expect(operation.plan.executionDefinitionIds).toEqual(["live-progress"]);
 
-    await executeConfiguredMigration(runtime, operation, {
+    await executeRegistryMigration(runtime, operation, {
       onProgress: ({ definitions }) => {
         const status = definitions.find(
           (definition) => definition.definitionId === "live-progress"
@@ -325,10 +342,12 @@ describe("Migration TUI server runtime", () => {
   });
 
   it("rediscovers and observes a detached run by its durable run id", async () => {
+    const { liveProgressProviderObservations } =
+      await loadLiveProgressFixture();
     liveProgressProviderObservations.length = 0;
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/detached-live-progress.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "detached-live-progress.config.ts",
+      cwd: fixtureDirectory,
       progressFallbackIntervalMs: 10,
       terminalPollIntervalMs: 10,
     });
@@ -339,23 +358,23 @@ describe("Migration TUI server runtime", () => {
       },
       "run"
     );
-    const observing = Promise.withResolvers<void>();
+    const observing = await Effect.runPromise(Deferred.make<void>());
     let detachedRunId: MigrationRunId | undefined;
     const execution = await Effect.runPromise(
       runtime.startExecution(operation, {
         onStateChange: (state) => {
-          if (state.kind === "observing") {
+          if (state.kind === "running" && state.ownership === "provider") {
             detachedRunId = state.runId;
-            observing.resolve();
+            Deferred.doneUnsafe(observing, Effect.void);
           }
         },
       })
     );
     const firstObservation = Effect.runFork(execution.result);
 
-    await observing.promise;
+    await Effect.runPromise(Deferred.await(observing));
     await expect(Effect.runPromise(execution.stop)).resolves.toMatchObject({
-      kind: "detached",
+      kind: "provider-owned",
     });
     await Effect.runPromise(Fiber.interrupt(firstObservation));
 
@@ -377,6 +396,12 @@ describe("Migration TUI server runtime", () => {
       }),
     ]);
     await expect(
+      Effect.runPromise(runtime.getRunProgress(detachedRunId))
+    ).resolves.toEqual({
+      definitions: [expect.objectContaining({ definitionId: "live-progress" })],
+      observationDefinitionId: "live-progress",
+    });
+    await expect(
       Effect.runPromise(runtime.observeRun(detachedRunId))
     ).resolves.toEqual({
       message: `Run ${detachedRunId} succeeded`,
@@ -396,10 +421,33 @@ describe("Migration TUI server runtime", () => {
     ]);
   });
 
+  it("returns a failed terminal outcome for a durably completed run", async () => {
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "failed-run.config.ts",
+      cwd: fixtureDirectory,
+    });
+    const runId = toMigrationRunId("failed-run-1");
+
+    await expect(
+      Effect.runPromise(runtime.getRunProgress(runId))
+    ).resolves.toEqual({
+      definitions: [expect.objectContaining({ definitionId: "failed-run" })],
+      observationDefinitionId: "failed-run",
+    });
+
+    await expect(Effect.runPromise(runtime.observeRun(runId))).resolves.toEqual(
+      {
+        message: `Run ${runId} failed`,
+        outcome: "failed",
+        runId,
+      }
+    );
+  });
+
   it("prepares skipped-item retries without expanding dependencies", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/migrate.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "migrate.config.ts",
+      cwd: fixtureDirectory,
     });
     const operation = await runtime.prepare(
       { definitionId: assetsId, kind: "migration" },
@@ -420,9 +468,9 @@ describe("Migration TUI server runtime", () => {
   });
 
   it("returns source inventory and warnings after a Source Inventory Scan", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/source-status.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "source-status.config.ts",
+      cwd: fixtureDirectory,
     });
     const durableOnly = await runtime.refresh();
     const scanned = await runtime.scanSource({
@@ -450,9 +498,9 @@ describe("Migration TUI server runtime", () => {
   });
 
   it("scans source status only for the selected migration scope", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/migrate.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "migrate.config.ts",
+      cwd: fixtureDirectory,
     });
     const scanned = await runtime.scanSource({
       definitionId: authorsId,
@@ -466,9 +514,9 @@ describe("Migration TUI server runtime", () => {
   });
 
   it("breaks a persisted migration lock through its configured store", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/locked.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "locked.config.ts",
+      cwd: fixtureDirectory,
     });
     const definitionId = toMigrationDefinitionId("locked-migration");
     const initial = await runtime.refresh();
@@ -508,9 +556,9 @@ describe("Migration TUI server runtime", () => {
   });
 
   it("prepares multiple source identities from durable item history", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/migrate.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "migrate.config.ts",
+      cwd: fixtureDirectory,
     });
     const history = await runtime.listSourceIdentityHistory(articlesId);
     const sourceIdentities = history.map((entry) => entry.sourceIdentity);
@@ -548,9 +596,9 @@ describe("Migration TUI server runtime", () => {
   });
 
   it("preserves the owning migration for messages in a group", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/migrate.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "migrate.config.ts",
+      cwd: fixtureDirectory,
     });
     const messages = await runtime.listMessages({
       groupId: contentGroupId,
@@ -574,9 +622,9 @@ describe("Migration TUI server runtime", () => {
   });
 
   it("prepares rollback dependencies in reverse execution order", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/migrate.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "migrate.config.ts",
+      cwd: fixtureDirectory,
     });
     const operation = await runtime.prepare(
       { definitionId: authorsId, kind: "migration" },
@@ -597,9 +645,9 @@ describe("Migration TUI server runtime", () => {
   });
 
   it("reports unmet run dependencies and prepares include or force resolutions", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/dependency-preflight.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "dependency-preflight.config.ts",
+      cwd: fixtureDirectory,
     });
     const target = { definitionId: articlesId, kind: "migration" } as const;
     const selectedOnly = await runtime.prepare(target, "run");
@@ -642,9 +690,9 @@ describe("Migration TUI server runtime", () => {
   });
 
   it("prepares a group plan without expanding external dependencies", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/migrate.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "migrate.config.ts",
+      cwd: fixtureDirectory,
     });
     const operation = await runtime.prepare(
       { groupId: contentGroupId, kind: "group" },
@@ -666,9 +714,9 @@ describe("Migration TUI server runtime", () => {
   });
 
   it("applies session concurrency to run, rollback, and Source Inventory Scan requests", async () => {
-    const runtime = await loadConfiguredMigrationHost({
-      configPath: "examples/migrate.config.ts",
-      cwd: packageDirectory,
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "migrate.config.ts",
+      cwd: fixtureDirectory,
     });
     const target = { groupId: contentGroupId, kind: "group" } as const;
     const run = await runtime.prepare(target, "run", {

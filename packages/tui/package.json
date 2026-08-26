@@ -41,7 +41,7 @@
     "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
     "build:binary": "bun scripts/build-binary.ts",
     "check-types": "tsc --noEmit -p tsconfig.check.json",
-    "demo": "bun src/bin.tsx --config examples/migrate.config.ts",
+    "demo": "bun src/bin.tsx --config ../migrate-sdk/test/fixtures/server/migrate.config.ts",
     "dev": "bun src/bin.tsx",
     "prepack": "node scripts/verify-package.mjs",
     "test": "vitest run --passWithNoTests",

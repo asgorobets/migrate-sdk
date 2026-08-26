@@ -1,6 +1,6 @@
 import { type KeyEvent, RGBA, type ScrollBoxRenderable } from "@opentui/core";
+import type { MigrationMessage } from "migrate-sdk";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MigrationTuiMessage } from "../runtime.ts";
 import {
   migrationColors as colors,
   migrationStatusColor,
@@ -19,7 +19,7 @@ import {
 } from "./ui/dialog.tsx";
 
 const severityIntent = (
-  severity: MigrationTuiMessage["severity"]
+  severity: MigrationMessage["severity"]
 ): BadgeIntent => {
   if (severity === "error") {
     return "danger";
@@ -42,7 +42,7 @@ export const MessageDetailDialog = ({
 }: {
   readonly height: number;
   readonly index: number;
-  readonly message: MigrationTuiMessage;
+  readonly message: MigrationMessage;
   readonly onClose: () => void;
   readonly showDefinitionId?: boolean;
   readonly total: number;

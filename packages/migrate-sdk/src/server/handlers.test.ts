@@ -6,19 +6,21 @@ import {
   MIGRATE_PROTOCOL_VERSION,
   MigrateActiveRun,
   MigrateDashboard,
-  MigrateExecutionId,
-  MigrateRpcs,
+  MigrateHttpRpcs,
+  MigrateObservationResumeToken,
   MigrateServerInfo,
+  MigrateStreamingRpcs,
 } from "../protocol/index.ts";
-import { MigrateServer, MigrateServerHandlers } from "./handlers.ts";
+import {
+  MigrateHttpServerHandlers,
+  MigrateServer,
+  MigrateStreamingServerHandlers,
+} from "./handlers.ts";
 
 const info = Schema.decodeUnknownSync(MigrateServerInfo)({
-  capabilities: ["dashboard", "observe-execution"],
-  configPath: "/workspace/migrate.config.ts",
   environment: { id: "test" },
   protocolVersion: MIGRATE_PROTOCOL_VERSION,
   registryId: "catalog",
-  runtime: { name: "node", version: "24.16.0" },
   sdkVersion: "0.6.0",
 });
 
@@ -37,7 +39,6 @@ const dashboard = Schema.decodeUnknownSync(MigrateDashboard)({
   scannedSource: false,
 });
 
-const executionId = MigrateExecutionId.make("execution-1");
 const activeRuns = Schema.decodeUnknownSync(Schema.Array(MigrateActiveRun))([
   {
     definitionIds: ["articles"],
@@ -54,7 +55,6 @@ const serverLayer = Layer.succeed(
   MigrateServer,
   MigrateServer.of({
     breakLock: () => Effect.die("not used"),
-    cancelExecution: () => Effect.succeed({ kind: "idle" as const }),
     getActiveRuns: Effect.succeed(activeRuns),
     getDashboard: Effect.succeed(dashboard),
     getMessages: () => Effect.succeed([]),
@@ -62,19 +62,6 @@ const serverLayer = Layer.succeed(
     getSourceIdentityHistory: () => Effect.succeed([]),
     normalizeSourceIdentity: ({ sourceIdentity }) =>
       Effect.succeed(sourceIdentity),
-    observeExecution: () =>
-      Stream.fromIterable([
-        {
-          kind: "warning" as const,
-          message: "Following durable migration state",
-        },
-        {
-          kind: "terminal" as const,
-          message: "Run run-1 succeeded",
-          outcome: "completed" as const,
-          runId: MigrationRunId.make("run-1"),
-        },
-      ]),
     observeRun: () =>
       Stream.fromIterable([
         {
@@ -88,6 +75,20 @@ const serverLayer = Layer.succeed(
           runId: MigrationRunId.make("run-1"),
         },
       ]),
+    observeRunLease: () =>
+      Effect.succeed({
+        event: {
+          resumeToken: MigrateObservationResumeToken.make("sha256:terminal"),
+          event: {
+            kind: "terminal" as const,
+            message: "Run run-1 succeeded",
+            outcome: "completed" as const,
+            runId: MigrationRunId.make("run-1"),
+          },
+        },
+        events: [],
+        kind: "terminal" as const,
+      }),
     prepareOperation: () => Effect.die("not used"),
     scanSource: () => Effect.succeed(dashboard),
     startOperation: () => Effect.die("not used"),
@@ -101,13 +102,10 @@ const serverLayer = Layer.succeed(
 );
 
 const program = Effect.gen(function* () {
-  const client = yield* makeClient(MigrateRpcs);
+  const client = yield* makeClient(MigrateStreamingRpcs);
   const serverInfo = yield* client.GetServerInfo();
   const currentDashboard = yield* client.GetDashboard();
   const currentActiveRuns = yield* client.GetActiveRuns();
-  const events = yield* client
-    .ObserveExecution({ executionId })
-    .pipe(Stream.runCollect);
   const runEvents = yield* client
     .ObserveRun({ runId: MigrationRunId.make("run-1") })
     .pipe(Stream.runCollect);
@@ -115,32 +113,34 @@ const program = Effect.gen(function* () {
   return {
     currentActiveRuns,
     currentDashboard,
-    events: [...events],
     runEvents: [...runEvents],
     serverInfo,
   };
-}).pipe(Effect.provide(MigrateServerHandlers.pipe(Layer.provide(serverLayer))));
+}).pipe(
+  Effect.provide(
+    MigrateStreamingServerHandlers.pipe(Layer.provide(serverLayer))
+  )
+);
+
+const httpProgram = Effect.gen(function* () {
+  const client = yield* makeClient(MigrateHttpRpcs);
+
+  return yield* client.ObserveRunLease({
+    runId: MigrationRunId.make("run-1"),
+  });
+}).pipe(
+  Effect.provide(MigrateHttpServerHandlers.pipe(Layer.provide(serverLayer)))
+);
 
 describe("Migrate Server RPC handlers", () => {
   it.effect("serves unary and streaming operations through the protocol", () =>
     Effect.gen(function* () {
       const result = yield* program;
+      const runLease = yield* httpProgram;
 
       expect(result.serverInfo).toEqual(info);
       expect(result.currentDashboard).toEqual(dashboard);
       expect(result.currentActiveRuns).toEqual(activeRuns);
-      expect(result.events).toEqual([
-        {
-          kind: "warning",
-          message: "Following durable migration state",
-        },
-        {
-          kind: "terminal",
-          message: "Run run-1 succeeded",
-          outcome: "completed",
-          runId: "run-1",
-        },
-      ]);
       expect(result.runEvents).toEqual([
         { definitions: [], kind: "progress" },
         {
@@ -150,6 +150,19 @@ describe("Migrate Server RPC handlers", () => {
           runId: "run-1",
         },
       ]);
+      expect(runLease).toEqual({
+        event: {
+          resumeToken: "sha256:terminal",
+          event: {
+            kind: "terminal",
+            message: "Run run-1 succeeded",
+            outcome: "completed",
+            runId: "run-1",
+          },
+        },
+        events: [],
+        kind: "terminal",
+      });
     })
   );
 });

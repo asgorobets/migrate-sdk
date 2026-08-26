@@ -2,6 +2,7 @@ import {
   Cause,
   Context,
   Deferred,
+  type Duration,
   Effect,
   FiberSet,
   Layer,
@@ -10,26 +11,26 @@ import {
   Stream,
 } from "effect";
 import type { Scope } from "effect/Scope";
-import type { MigrationDefinitionId, MigrationRunId } from "../domain/ids.ts";
+import { MigrationDefinitionId, type MigrationRunId } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type { MigrationMessage } from "../domain/message.ts";
 import type { MigrationDefinitionStatus } from "../domain/status.ts";
 import {
   type MigrateActiveRun,
   type MigrateBreakLockResult,
-  type MigrateCancellationResult,
   type MigrateDashboard,
-  MigrateExecutionId,
-  MigrateExecutionNotFoundError,
-  type MigrateExecutionReference,
   type MigrateExecutionState,
-  type MigrateObservationEvent,
+  type MigrateObservationContinuingEvent,
+  MigrateObservationEvent,
+  type MigrateObservationLease,
+  MigrateObservationResumeToken,
   MigrateOperationError,
   type MigrateOperationRequest,
   MigratePlanChangedError,
   MigratePlanFingerprint,
   type MigratePreparedOperation,
   MigrateProtocolError,
+  type MigrateRunStartResult,
   type MigrateRunStopResult,
   type MigrateServerInfo,
   type MigrateSourceIdentityHistoryEntry,
@@ -42,9 +43,6 @@ export interface MigrateServerService {
   readonly breakLock: (input: {
     readonly lock: MigrationDefinitionLock;
   }) => Effect.Effect<MigrateBreakLockResult, MigrateProtocolError>;
-  readonly cancelExecution: (input: {
-    readonly executionId?: MigrateExecutionId | undefined;
-  }) => Effect.Effect<MigrateCancellationResult, MigrateProtocolError>;
   readonly getActiveRuns: Effect.Effect<
     readonly MigrateActiveRun[],
     MigrateProtocolError
@@ -64,12 +62,13 @@ export interface MigrateServerService {
     readonly definitionId: MigrationDefinitionId;
     readonly sourceIdentity: string;
   }) => Effect.Effect<string, MigrateProtocolError>;
-  readonly observeExecution: (input: {
-    readonly executionId: MigrateExecutionId;
-  }) => Stream.Stream<MigrateObservationEvent, MigrateProtocolError>;
   readonly observeRun: (input: {
     readonly runId: MigrationRunId;
   }) => Stream.Stream<MigrateObservationEvent, MigrateProtocolError>;
+  readonly observeRunLease: (input: {
+    readonly after?: MigrateObservationResumeToken | undefined;
+    readonly runId: MigrationRunId;
+  }) => Effect.Effect<MigrateObservationLease, MigrateProtocolError>;
   readonly prepareOperation: (
     input: MigratePrepareOperationInput
   ) => Effect.Effect<MigratePreparedOperation, MigrateProtocolError>;
@@ -80,7 +79,7 @@ export interface MigrateServerService {
   readonly startOperation: (input: {
     readonly acceptedFingerprint: MigratePreparedOperation["fingerprint"];
     readonly request: MigrateOperationRequest;
-  }) => Effect.Effect<MigrateExecutionReference, MigrateProtocolError>;
+  }) => Effect.Effect<MigrateRunStartResult, MigrateProtocolError>;
   readonly stopRun: (input: {
     readonly runId: MigrationRunId;
   }) => Effect.Effect<MigrateRunStopResult, MigrateProtocolError>;
@@ -97,18 +96,28 @@ export interface MigrateServerExecutionObserver {
 
 export interface MigrateServerExecutionResult {
   readonly message: string;
-  readonly outcome: "cancelled" | "completed" | "detached";
+  readonly outcome: "cancelled" | "completed" | "detached" | "failed";
   readonly runId: MigrationRunId;
+}
+
+export interface MigrateServerRunProgress {
+  readonly definitions: readonly MigrationDefinitionStatus[];
+  readonly observationDefinitionId: MigrationDefinitionId;
 }
 
 export interface MigrateServerExecutionHandle {
   readonly result: Effect.Effect<MigrateServerExecutionResult, unknown>;
-  readonly stop: Effect.Effect<MigrateCancellationResult, unknown>;
+  readonly stop: Effect.Effect<MigrateServerExecutionStopResult, unknown>;
 }
+
+export type MigrateServerExecutionStopResult =
+  | { readonly kind: "idle" }
+  | { readonly kind: "requested"; readonly message: string }
+  | { readonly kind: "provider-owned"; readonly message: string };
 
 export interface MigrateServerPreparedOperation<ExecutableOperation> {
   readonly executable: ExecutableOperation;
-  readonly operation: Omit<MigratePreparedOperation, "fingerprint">;
+  readonly operation: Omit<MigratePreparedOperation, "fingerprint" | "request">;
 }
 
 export interface MigrateServerBackend<ExecutableOperation> {
@@ -124,6 +133,10 @@ export interface MigrateServerBackend<ExecutableOperation> {
   readonly getMessages: (
     target: MigrateTarget
   ) => Effect.Effect<readonly MigrationMessage[], unknown>;
+  readonly getRunProgress: (
+    runId: MigrationRunId,
+    observationDefinitionId?: MigrationDefinitionId
+  ) => Effect.Effect<MigrateServerRunProgress | undefined, unknown>;
   readonly getSourceIdentityHistory: (
     definitionId: MigrationDefinitionId
   ) => Effect.Effect<readonly MigrateSourceIdentityHistoryEntry[], unknown>;
@@ -133,7 +146,8 @@ export interface MigrateServerBackend<ExecutableOperation> {
   ) => Effect.Effect<string, unknown>;
   readonly observeRun: (
     runId: MigrationRunId,
-    observer: MigrateServerExecutionObserver
+    observer: MigrateServerExecutionObserver,
+    observationDefinitionId?: MigrationDefinitionId
   ) => Effect.Effect<MigrateServerExecutionResult, unknown>;
   readonly prepareOperation: (
     input: MigrateOperationRequest
@@ -149,23 +163,56 @@ export interface MigrateServerBackend<ExecutableOperation> {
 
 export interface MigrateServerInput<ExecutableOperation> {
   readonly backend: MigrateServerBackend<ExecutableOperation>;
+  readonly observationLeaseDuration?: Duration.Input | undefined;
   readonly serverInfo: MigrateServerInfo;
 }
 
 interface ExecutionListener {
-  readonly emit: (event: MigrateObservationEvent) => void;
+  readonly emit: (event: MigrateObservationEvent, index: number) => void;
   readonly end: () => void;
+}
+
+interface IndexedExecutionEvent {
+  readonly event: MigrateObservationEvent;
+  readonly index: number;
+}
+
+interface ObservationEnvelope {
+  readonly event: MigrateObservationEvent;
+  readonly resumeToken: MigrateObservationResumeToken;
+}
+
+interface ContinuingObservationEnvelope extends ObservationEnvelope {
+  readonly event: MigrateObservationContinuingEvent;
+}
+
+interface CompletionObservationEnvelope extends ObservationEnvelope {
+  readonly event: Extract<
+    MigrateObservationEvent,
+    { readonly kind: "detached" | "terminal" }
+  >;
+}
+
+interface BackendObservationResumePosition {
+  readonly eventToken: MigrateObservationResumeToken;
+  readonly observationDefinitionId: MigrationDefinitionId;
+}
+
+interface ExecutionObservationResumePosition
+  extends BackendObservationResumePosition {
+  readonly executionId: MigrateServerExecutionId;
+  readonly index: number;
 }
 
 interface ExecutionRecord {
   closed: boolean;
   readonly events: MigrateObservationEvent[];
-  readonly executionId: MigrateExecutionId;
-  lifecycle?: MigrateExecutionReference["lifecycle"] | undefined;
+  readonly executionId: MigrateServerExecutionId;
   readonly listeners: Set<ExecutionListener>;
-  observed: boolean;
+  readonly observationDefinitionId: MigrationDefinitionId;
+  ownership?: "provider" | "server" | undefined;
   runId?: MigrationRunId | undefined;
-  stop?: Effect.Effect<MigrateCancellationResult, unknown> | undefined;
+  stop?: Effect.Effect<MigrateServerExecutionStopResult, unknown> | undefined;
 }
 
 const errorMessage = (cause: unknown): string => {
@@ -197,7 +244,7 @@ const operationError = (
 };
 
 const fingerprintInput = (
-  operation: Omit<MigratePreparedOperation, "fingerprint">
+  operation: Omit<MigratePreparedOperation, "fingerprint" | "request">
 ) => ({
   action: operation.action,
   dependencyChecks: operation.dependencyChecks.map((check) => ({
@@ -213,14 +260,19 @@ const fingerprintInput = (
 const bytesToHex = (bytes: Uint8Array): string =>
   Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 
+const MigrateServerExecutionId = Schema.NonEmptyString.pipe(
+  Schema.brand("MigrateServerExecutionId")
+);
+type MigrateServerExecutionId = typeof MigrateServerExecutionId.Type;
+
 const makeExecutionId = Effect.sync(() => {
   const bytes = new Uint8Array(16);
   globalThis.crypto.getRandomValues(bytes);
-  return MigrateExecutionId.make(bytesToHex(bytes));
+  return MigrateServerExecutionId.make(bytesToHex(bytes));
 });
 
 const fingerprint = (
-  operation: Omit<MigratePreparedOperation, "fingerprint">
+  operation: Omit<MigratePreparedOperation, "fingerprint" | "request">
 ): Effect.Effect<MigratePlanFingerprint> =>
   Effect.gen(function* () {
     const serialized = yield* Schema.encodeEffect(
@@ -238,16 +290,156 @@ const fingerprint = (
     );
   });
 
+const observationResumeToken = (
+  event: MigrateObservationEvent
+): Effect.Effect<MigrateObservationResumeToken> =>
+  Effect.gen(function* () {
+    const serialized = yield* Schema.encodeEffect(
+      Schema.fromJsonString(MigrateObservationEvent)
+    )(event).pipe(Effect.orDie);
+    const digest = yield* Effect.promise(() =>
+      globalThis.crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(serialized)
+      )
+    );
+
+    return MigrateObservationResumeToken.make(
+      `sha256:${bytesToHex(new Uint8Array(digest))}`
+    );
+  });
+
+const backendObservationResumeToken = (
+  observationDefinitionId: MigrationDefinitionId,
+  eventToken: MigrateObservationResumeToken
+): MigrateObservationResumeToken =>
+  MigrateObservationResumeToken.make(
+    `backend:${encodeURIComponent(observationDefinitionId)}:${eventToken}`
+  );
+
+const backendObservationResumePosition = (
+  resumeToken: MigrateObservationResumeToken | undefined
+): BackendObservationResumePosition | undefined => {
+  if (resumeToken === undefined || !resumeToken.startsWith("backend:")) {
+    return;
+  }
+
+  const locatorStart = "backend:".length;
+  const separator = resumeToken.indexOf(":", locatorStart);
+
+  if (separator < locatorStart + 1) {
+    return;
+  }
+
+  try {
+    const observationDefinitionId = decodeURIComponent(
+      resumeToken.slice(locatorStart, separator)
+    );
+    const eventToken = resumeToken.slice(separator + 1);
+
+    if (
+      !(
+        Schema.is(MigrationDefinitionId)(observationDefinitionId) &&
+        Schema.is(MigrateObservationResumeToken)(eventToken)
+      )
+    ) {
+      return;
+    }
+
+    return {
+      eventToken,
+      observationDefinitionId,
+    };
+  } catch {
+    return;
+  }
+};
+
+const executionObservationResumeToken = (
+  executionId: MigrateServerExecutionId,
+  observationDefinitionId: MigrationDefinitionId,
+  index: number,
+  eventToken: MigrateObservationResumeToken
+): MigrateObservationResumeToken =>
+  MigrateObservationResumeToken.make(
+    `execution:${executionId}:${encodeURIComponent(observationDefinitionId)}:${index}:${eventToken}`
+  );
+
+const beforeFirstExecutionEventIndex = -1;
+
+const executionObservationResumePosition = (
+  resumeToken: MigrateObservationResumeToken | undefined
+): ExecutionObservationResumePosition | undefined => {
+  if (resumeToken === undefined || !resumeToken.startsWith("execution:")) {
+    return;
+  }
+
+  const executionStart = "execution:".length;
+  const executionEnd = resumeToken.indexOf(":", executionStart);
+  const definitionEnd = resumeToken.indexOf(":", executionEnd + 1);
+  const indexEnd = resumeToken.indexOf(":", definitionEnd + 1);
+
+  if (
+    executionEnd < executionStart + 1 ||
+    definitionEnd < executionEnd + 2 ||
+    indexEnd < definitionEnd + 2
+  ) {
+    return;
+  }
+
+  try {
+    const executionId = resumeToken.slice(executionStart, executionEnd);
+    const observationDefinitionId = decodeURIComponent(
+      resumeToken.slice(executionEnd + 1, definitionEnd)
+    );
+    const index = Number(resumeToken.slice(definitionEnd + 1, indexEnd));
+    const eventToken = resumeToken.slice(indexEnd + 1);
+
+    if (
+      !(
+        Schema.is(MigrateServerExecutionId)(executionId) &&
+        Schema.is(MigrationDefinitionId)(observationDefinitionId) &&
+        Number.isSafeInteger(index) &&
+        index >= beforeFirstExecutionEventIndex &&
+        Schema.is(MigrateObservationResumeToken)(eventToken)
+      )
+    ) {
+      return;
+    }
+
+    return {
+      eventToken,
+      executionId,
+      index,
+      observationDefinitionId,
+    };
+  } catch {
+    return;
+  }
+};
+
+const resumeEventToken = (
+  resumeToken: MigrateObservationResumeToken
+): MigrateObservationResumeToken =>
+  backendObservationResumePosition(resumeToken)?.eventToken ??
+  executionObservationResumePosition(resumeToken)?.eventToken ??
+  resumeToken;
+
 const makeMigrationServerService = <ExecutableOperation>(
-  { backend, serverInfo }: MigrateServerInput<ExecutableOperation>,
+  {
+    backend,
+    observationLeaseDuration = "20 seconds",
+    serverInfo,
+  }: MigrateServerInput<ExecutableOperation>,
   runExecution: (effect: Effect.Effect<void>) => unknown
 ): MigrateServerService => {
-  const executions = new Map<string, ExecutionRecord>();
   const executionsByRunId = new Map<string, ExecutionRecord>();
 
   const removeExecution = (record: ExecutionRecord) => {
-    executions.delete(record.executionId);
-    if (record.runId !== undefined) {
+    if (
+      record.runId !== undefined &&
+      executionsByRunId.get(record.runId) === record
+    ) {
       executionsByRunId.delete(record.runId);
     }
   };
@@ -255,16 +447,16 @@ const makeMigrationServerService = <ExecutableOperation>(
   const registerRun = (
     record: ExecutionRecord,
     runId: MigrationRunId,
-    lifecycle: MigrateExecutionReference["lifecycle"]
+    ownership: NonNullable<ExecutionRecord["ownership"]>
   ) => {
-    record.lifecycle = lifecycle;
+    record.ownership = ownership;
     record.runId = runId;
     executionsByRunId.set(runId, record);
   };
 
   const stopSupported = (runId: MigrationRunId): boolean => {
     const record = executionsByRunId.get(runId);
-    return record?.closed === false && record.lifecycle === "attached";
+    return record?.closed === false && record.ownership === "server";
   };
 
   const decorateActiveRun = (run: MigrateActiveRun): MigrateActiveRun => ({
@@ -274,9 +466,10 @@ const makeMigrationServerService = <ExecutableOperation>(
 
   const publish = (record: ExecutionRecord, event: MigrateObservationEvent) => {
     record.events.push(event);
+    const index = record.events.length - 1;
 
     for (const listener of record.listeners) {
-      listener.emit(event);
+      listener.emit(event, index);
     }
   };
 
@@ -289,16 +482,23 @@ const makeMigrationServerService = <ExecutableOperation>(
     record.listeners.clear();
   };
 
-  const observeRecord = (
-    record: ExecutionRecord
-  ): Stream.Stream<MigrateObservationEvent> => {
-    record.observed = true;
-
-    return Stream.callback<MigrateObservationEvent>((queue) =>
+  const observeRecordEntriesFromIndex = (
+    record: ExecutionRecord,
+    startIndex: number
+  ): Stream.Stream<IndexedExecutionEvent> =>
+    Stream.callback<IndexedExecutionEvent>((queue) =>
       Effect.acquireRelease(
         Effect.sync(() => {
-          for (const event of record.events) {
-            Queue.offerUnsafe(queue, event);
+          for (
+            let index = startIndex;
+            index < record.events.length;
+            index += 1
+          ) {
+            const event = record.events[index];
+
+            if (event !== undefined) {
+              Queue.offerUnsafe(queue, { event, index });
+            }
           }
 
           if (record.closed) {
@@ -307,7 +507,7 @@ const makeMigrationServerService = <ExecutableOperation>(
           }
 
           const listener: ExecutionListener = {
-            emit: (event) => Queue.offerUnsafe(queue, event),
+            emit: (event, index) => Queue.offerUnsafe(queue, { event, index }),
             end: () => Queue.endUnsafe(queue),
           };
           record.listeners.add(listener);
@@ -318,13 +518,16 @@ const makeMigrationServerService = <ExecutableOperation>(
             if (listener !== undefined) {
               record.listeners.delete(listener);
             }
-            if (record.closed) {
-              removeExecution(record);
-            }
           })
       )
     );
-  };
+
+  const observeRecord = (
+    record: ExecutionRecord
+  ): Stream.Stream<MigrateObservationEvent> =>
+    observeRecordEntriesFromIndex(record, 0).pipe(
+      Stream.map(({ event }) => event)
+    );
 
   const prepareExecutable = (
     input: MigratePrepareOperationInput
@@ -340,60 +543,417 @@ const makeMigrationServerService = <ExecutableOperation>(
       Effect.map(fingerprint(operation), (planFingerprint) => ({
         ...operation,
         fingerprint: planFingerprint,
+        request: input,
       }))
     );
+
+  const getDashboard = backend.getDashboard.pipe(
+    Effect.map((dashboard) => ({
+      ...dashboard,
+      activeRuns: dashboard.activeRuns.map(decorateActiveRun),
+    })),
+    Effect.mapError(operationError)
+  );
+  const getActiveRuns = backend.getActiveRuns.pipe(
+    Effect.map((runs) => runs.map(decorateActiveRun)),
+    Effect.mapError(operationError)
+  );
+  const observeBackendRun = (
+    runId: MigrationRunId,
+    observationDefinitionId?: MigrationDefinitionId
+  ): Stream.Stream<MigrateObservationEvent, MigrateProtocolError> =>
+    Stream.callback<MigrateObservationEvent, MigrateProtocolError>((queue) =>
+      backend
+        .observeRun(
+          runId,
+          {
+            onObservationWarning: (message) =>
+              Queue.offerUnsafe(queue, { kind: "warning", message }),
+            onProgress: ({ definitions }) =>
+              Queue.offerUnsafe(queue, { definitions, kind: "progress" }),
+            onProgressError: (cause) =>
+              Queue.offerUnsafe(queue, {
+                kind: "warning",
+                message: `Unable to refresh live status: ${errorMessage(cause)}`,
+              }),
+            onStateChange: (state) =>
+              Queue.offerUnsafe(queue, { kind: "state", state }),
+          },
+          observationDefinitionId
+        )
+        .pipe(
+          Effect.matchCause({
+            onFailure: (cause) =>
+              Queue.failCauseUnsafe(
+                queue,
+                Cause.fail(
+                  operationError(Cause.squash(cause), "execution-failed")
+                )
+              ),
+            onSuccess: (result) => {
+              Queue.offerUnsafe(
+                queue,
+                result.outcome === "detached"
+                  ? {
+                      kind: "detached",
+                      message: result.message,
+                      runId: result.runId,
+                    }
+                  : {
+                      kind: "terminal",
+                      message: result.message,
+                      outcome: result.outcome,
+                      runId: result.runId,
+                    }
+              );
+              Queue.endUnsafe(queue);
+            },
+          }),
+          Effect.forkScoped
+        )
+    );
+
+  const observeRun = ({
+    runId,
+  }: {
+    readonly runId: MigrationRunId;
+  }): Stream.Stream<MigrateObservationEvent, MigrateProtocolError> => {
+    const owned = executionsByRunId.get(runId);
+
+    if (owned !== undefined) {
+      return observeRecord(owned);
+    }
+
+    return observeBackendRun(runId);
+  };
+
+  const initialRunProgress = (
+    runId: MigrationRunId,
+    observationDefinitionId?: MigrationDefinitionId
+  ): Effect.Effect<
+    MigrateServerRunProgress | undefined,
+    MigrateProtocolError
+  > =>
+    backend
+      .getRunProgress(runId, observationDefinitionId)
+      .pipe(Effect.mapError(operationError));
+
+  const envelope = <Event extends MigrateObservationEvent>(
+    event: Event
+  ): Effect.Effect<{
+    readonly resumeToken: MigrateObservationResumeToken;
+    readonly event: Event;
+  }> =>
+    observationResumeToken(event).pipe(
+      Effect.map((resumeToken) => ({ resumeToken, event }))
+    );
+
+  const backendEnvelope = <Event extends MigrateObservationEvent>(
+    observationDefinitionId: MigrationDefinitionId,
+    event: Event
+  ): Effect.Effect<{
+    readonly resumeToken: MigrateObservationResumeToken;
+    readonly event: Event;
+  }> =>
+    observationResumeToken(event).pipe(
+      Effect.map((eventToken) => ({
+        resumeToken: backendObservationResumeToken(
+          observationDefinitionId,
+          eventToken
+        ),
+        event,
+      }))
+    );
+
+  const ownedObservationResumePosition = (
+    record: ExecutionRecord,
+    position: ExecutionObservationResumePosition | undefined
+  ): ExecutionObservationResumePosition | undefined =>
+    position?.executionId === record.executionId &&
+    position.observationDefinitionId === record.observationDefinitionId
+      ? position
+      : undefined;
+
+  const ownedObservationStartIndex = (
+    record: ExecutionRecord,
+    position:
+      | {
+          readonly eventToken: MigrateObservationResumeToken;
+          readonly index: number;
+        }
+      | undefined
+  ): number => {
+    if (position !== undefined && position.index < record.events.length) {
+      return position.index + 1;
+    }
+
+    if (record.closed) {
+      for (let index = record.events.length - 1; index >= 0; index -= 1) {
+        const event = record.events[index];
+
+        if (event?.kind === "terminal" || event?.kind === "detached") {
+          return index;
+        }
+      }
+    }
+
+    return record.events.length;
+  };
+
+  const ownedEnvelope = (
+    record: ExecutionRecord,
+    { event, index }: IndexedExecutionEvent
+  ): Effect.Effect<{
+    readonly resumeToken: MigrateObservationResumeToken;
+    readonly event: MigrateObservationEvent;
+  }> =>
+    observationResumeToken(event).pipe(
+      Effect.map((eventToken) => ({
+        resumeToken: executionObservationResumeToken(
+          record.executionId,
+          record.observationDefinitionId,
+          index,
+          eventToken
+        ),
+        event,
+      }))
+    );
+
+  const continuingLease = (
+    events: readonly [
+      ContinuingObservationEnvelope,
+      ...ContinuingObservationEnvelope[],
+    ]
+  ): MigrateObservationLease => {
+    const nextResumeToken = events.at(-1)?.resumeToken ?? events[0].resumeToken;
+
+    return {
+      events,
+      kind: "continuing",
+      nextResumeToken,
+    };
+  };
+
+  const terminalLease = (
+    completion: CompletionObservationEnvelope,
+    events: readonly ContinuingObservationEnvelope[] = []
+  ): MigrateObservationLease => ({
+    event: completion,
+    events,
+    kind: "terminal",
+  });
+
+  const initialProgressEnvelope = (
+    progress: MigrateServerRunProgress | undefined,
+    owned: ExecutionRecord | undefined,
+    ownedPosition: ExecutionObservationResumePosition | undefined
+  ): Effect.Effect<ContinuingObservationEnvelope | undefined> => {
+    if (progress === undefined) {
+      return Effect.sync(() => undefined);
+    }
+
+    const event = {
+      definitions: progress.definitions,
+      kind: "progress" as const,
+    } satisfies MigrateObservationContinuingEvent;
+
+    return observationResumeToken(event).pipe(
+      Effect.map((eventToken) => ({
+        event,
+        resumeToken:
+          owned === undefined
+            ? backendObservationResumeToken(
+                progress.observationDefinitionId,
+                eventToken
+              )
+            : executionObservationResumeToken(
+                owned.executionId,
+                progress.observationDefinitionId,
+                ownedPosition?.index ?? beforeFirstExecutionEventIndex,
+                eventToken
+              ),
+      }))
+    );
+  };
+
+  const isContinuingEnvelope = (
+    next: ObservationEnvelope
+  ): next is ContinuingObservationEnvelope =>
+    next.event.kind === "progress" ||
+    next.event.kind === "state" ||
+    next.event.kind === "warning";
+
+  const isCompletionEnvelope = (
+    next: ObservationEnvelope
+  ): next is CompletionObservationEnvelope =>
+    next.event.kind === "detached" || next.event.kind === "terminal";
+
+  const isObservationCheckpoint = (next: ObservationEnvelope): boolean =>
+    next.event.kind === "progress" ||
+    next.event.kind === "terminal" ||
+    next.event.kind === "detached";
+
+  const leaseFromObservedEvents = (
+    events: readonly ObservationEnvelope[]
+  ): MigrateObservationLease => {
+    const last = events.at(-1);
+
+    if (
+      last === undefined ||
+      last.event.kind === "state" ||
+      last.event.kind === "warning"
+    ) {
+      return { kind: "heartbeat" };
+    }
+
+    const continuingEvents = events.filter(isContinuingEnvelope);
+
+    if (isCompletionEnvelope(last)) {
+      return terminalLease(last, continuingEvents);
+    }
+
+    const first = continuingEvents[0];
+
+    return first === undefined
+      ? { kind: "heartbeat" }
+      : continuingLease([first, ...continuingEvents.slice(1)]);
+  };
+
+  const observationResumePosition = (
+    runId: MigrationRunId,
+    after: MigrateObservationResumeToken | undefined
+  ) => {
+    const backendPosition = backendObservationResumePosition(after);
+    const executionPosition = executionObservationResumePosition(after);
+    const owned = executionsByRunId.get(runId);
+    const ownedPosition =
+      owned === undefined
+        ? undefined
+        : ownedObservationResumePosition(owned, executionPosition);
+    const resumedExecutionPosition =
+      owned === undefined ? executionPosition : ownedPosition;
+
+    return {
+      owned,
+      ownedPosition,
+      requestedObservationDefinitionId:
+        backendPosition?.observationDefinitionId ??
+        resumedExecutionPosition?.observationDefinitionId,
+      seenEventToken:
+        ownedPosition?.eventToken ??
+        backendPosition?.eventToken ??
+        resumedExecutionPosition?.eventToken ??
+        after,
+    };
+  };
+
+  const observeRunLease = ({
+    after,
+    runId,
+  }: {
+    readonly after?: MigrateObservationResumeToken | undefined;
+    readonly runId: MigrationRunId;
+  }): Effect.Effect<MigrateObservationLease, MigrateProtocolError> =>
+    Effect.gen(function* () {
+      const {
+        owned,
+        ownedPosition,
+        requestedObservationDefinitionId,
+        seenEventToken,
+      } = observationResumePosition(runId, after);
+      const initial = yield* initialRunProgress(
+        runId,
+        requestedObservationDefinitionId
+      );
+      const observationDefinitionId =
+        initial?.observationDefinitionId ?? requestedObservationDefinitionId;
+      const initialEnvelope = yield* initialProgressEnvelope(
+        initial,
+        owned,
+        ownedPosition
+      );
+      const initialEventToken =
+        initialEnvelope === undefined
+          ? undefined
+          : resumeEventToken(initialEnvelope.resumeToken);
+
+      if (
+        initialEnvelope !== undefined &&
+        initialEventToken !== seenEventToken
+      ) {
+        return continuingLease([initialEnvelope]);
+      }
+
+      const observation =
+        owned === undefined
+          ? observeBackendRun(runId, observationDefinitionId).pipe(
+              Stream.mapEffect((event) =>
+                observationDefinitionId === undefined
+                  ? envelope(event)
+                  : backendEnvelope(observationDefinitionId, event)
+              )
+            )
+          : observeRecordEntriesFromIndex(
+              owned,
+              ownedObservationStartIndex(owned, ownedPosition)
+            ).pipe(Stream.mapEffect((entry) => ownedEnvelope(owned, entry)));
+      const events = yield* observation.pipe(
+        Stream.filter((next) => next.resumeToken !== after),
+        Stream.takeUntil(isObservationCheckpoint),
+        Stream.interruptWhen(Effect.sleep(observationLeaseDuration)),
+        Stream.runCollect
+      );
+      const observedLease = leaseFromObservedEvents(events);
+
+      if (observedLease.kind !== "terminal") {
+        return observedLease;
+      }
+
+      const finalProgress = yield* initialRunProgress(
+        runId,
+        observationDefinitionId
+      );
+      const finalEnvelope = yield* initialProgressEnvelope(
+        finalProgress,
+        owned,
+        ownedPosition
+      );
+
+      if (
+        finalEnvelope === undefined &&
+        observedLease.event.event.kind === "terminal"
+      ) {
+        return yield* new MigrateOperationError({
+          code: "operation-failed",
+          message: `Unable to read final durable progress for Migration Run ${runId}`,
+        });
+      }
+
+      const finalEventToken =
+        finalEnvelope === undefined
+          ? undefined
+          : resumeEventToken(finalEnvelope.resumeToken);
+
+      if (finalEnvelope === undefined || finalEventToken === seenEventToken) {
+        return observedLease;
+      }
+
+      const firstContinuingEvent = observedLease.events[0];
+
+      return firstContinuingEvent === undefined
+        ? continuingLease([finalEnvelope])
+        : continuingLease([
+            firstContinuingEvent,
+            ...observedLease.events.slice(1),
+            finalEnvelope,
+          ]);
+    });
 
   return {
     breakLock: ({ lock }) =>
       backend.breakLock(lock).pipe(Effect.mapError(operationError)),
-    cancelExecution: ({ executionId }) =>
-      Effect.gen(function* () {
-        const stoppable = [...executions.values()].filter(
-          (record) => !record.closed && record.stop !== undefined
-        );
-        let record: ExecutionRecord | undefined;
-
-        if (executionId === undefined) {
-          record = stoppable.length === 1 ? stoppable[0] : undefined;
-        } else {
-          record = executions.get(executionId);
-        }
-
-        if (executionId !== undefined && record === undefined) {
-          return yield* new MigrateExecutionNotFoundError({
-            executionId,
-            message: `Execution was not found: ${executionId}`,
-          });
-        }
-
-        if (executionId === undefined && stoppable.length > 1) {
-          return yield* new MigrateOperationError({
-            code: "operation-failed",
-            message: "Execution id is required when multiple runs are active",
-          });
-        }
-
-        if (
-          record === undefined ||
-          record.closed ||
-          record.stop === undefined
-        ) {
-          return { kind: "idle" as const };
-        }
-
-        return yield* record.stop.pipe(Effect.mapError(operationError));
-      }),
-    getDashboard: backend.getDashboard.pipe(
-      Effect.map((dashboard) => ({
-        ...dashboard,
-        activeRuns: dashboard.activeRuns.map(decorateActiveRun),
-      })),
-      Effect.mapError(operationError)
-    ),
-    getActiveRuns: backend.getActiveRuns.pipe(
-      Effect.map((runs) => runs.map(decorateActiveRun)),
-      Effect.mapError(operationError)
-    ),
+    getDashboard,
+    getActiveRuns,
     getMessages: ({ target }) =>
       backend.getMessages(target).pipe(Effect.mapError(operationError)),
     getServerInfo: Effect.succeed(serverInfo),
@@ -405,75 +965,8 @@ const makeMigrationServerService = <ExecutableOperation>(
       backend
         .normalizeSourceIdentity(definitionId, sourceIdentity)
         .pipe(Effect.mapError(operationError)),
-    observeExecution: ({ executionId }) => {
-      const record = executions.get(executionId);
-
-      if (record === undefined) {
-        return Stream.fail(
-          new MigrateExecutionNotFoundError({
-            executionId,
-            message: `Execution was not found: ${executionId}`,
-          })
-        );
-      }
-
-      return observeRecord(record);
-    },
-    observeRun: ({ runId }) => {
-      const owned = executionsByRunId.get(runId);
-
-      if (owned !== undefined) {
-        return observeRecord(owned);
-      }
-
-      return Stream.callback<MigrateObservationEvent, MigrateProtocolError>(
-        (queue) =>
-          backend
-            .observeRun(runId, {
-              onObservationWarning: (message) =>
-                Queue.offerUnsafe(queue, { kind: "warning", message }),
-              onProgress: ({ definitions }) =>
-                Queue.offerUnsafe(queue, { definitions, kind: "progress" }),
-              onProgressError: (cause) =>
-                Queue.offerUnsafe(queue, {
-                  kind: "warning",
-                  message: `Unable to refresh live status: ${errorMessage(cause)}`,
-                }),
-              onStateChange: (state) =>
-                Queue.offerUnsafe(queue, { kind: "state", state }),
-            })
-            .pipe(
-              Effect.matchCause({
-                onFailure: (cause) =>
-                  Queue.failCauseUnsafe(
-                    queue,
-                    Cause.fail(
-                      operationError(Cause.squash(cause), "execution-failed")
-                    )
-                  ),
-                onSuccess: (result) => {
-                  Queue.offerUnsafe(
-                    queue,
-                    result.outcome === "detached"
-                      ? {
-                          kind: "detached",
-                          message: result.message,
-                          runId: result.runId,
-                        }
-                      : {
-                          kind: "terminal",
-                          message: result.message,
-                          outcome: result.outcome,
-                          runId: result.runId,
-                        }
-                  );
-                  Queue.endUnsafe(queue);
-                },
-              }),
-              Effect.forkScoped
-            )
-      );
-    },
+    observeRun,
+    observeRunLease,
     prepareOperation: prepare,
     scanSource: ({ concurrency, target }) =>
       backend
@@ -499,7 +992,7 @@ const makeMigrationServerService = <ExecutableOperation>(
 
         const executionId = yield* makeExecutionId;
         const started = yield* Deferred.make<
-          MigrateExecutionReference,
+          MigrateRunStartResult,
           MigrateProtocolError
         >();
         const record: ExecutionRecord = {
@@ -507,13 +1000,13 @@ const makeMigrationServerService = <ExecutableOperation>(
           executionId,
           events: [],
           listeners: new Set(),
-          observed: false,
+          observationDefinitionId:
+            currentPreparedOperation.operation.observationDefinitionId,
         };
-        let reference: MigrateExecutionReference | undefined;
+        let reference: MigrateRunStartResult | undefined;
         let runId: MigrationRunId | undefined;
-        executions.set(executionId, record);
 
-        const resolveStart = (nextReference: MigrateExecutionReference) => {
+        const resolveStart = (nextReference: MigrateRunStartResult) => {
           if (reference === undefined) {
             reference = nextReference;
             Deferred.doneUnsafe(started, Effect.succeed(nextReference));
@@ -536,22 +1029,10 @@ const makeMigrationServerService = <ExecutableOperation>(
 
               if (state.kind === "running") {
                 runId = state.runId;
-                registerRun(record, state.runId, "attached");
+                registerRun(record, state.runId, state.ownership);
                 resolveStart({
-                  adapter: state.adapter,
-                  executionId,
-                  lifecycle: "attached",
                   runId: state.runId,
-                });
-              } else if (state.kind === "observing") {
-                runId = state.runId;
-                registerRun(record, state.runId, "detached");
-                resolveStart({
-                  adapter: state.adapter,
-                  executionId,
-                  lifecycle: "detached",
-                  providerExecutionId: state.executionId,
-                  runId: state.runId,
+                  status: "started",
                 });
               }
             },
@@ -588,13 +1069,9 @@ const makeMigrationServerService = <ExecutableOperation>(
             },
             onSuccess: (result) => {
               runId = result.runId;
-              if (record.runId === undefined) {
-                registerRun(record, result.runId, "completed");
-              }
               resolveStart({
-                executionId,
-                lifecycle: "completed",
                 runId: result.runId,
+                status: "completed",
               });
               publish(
                 record,
@@ -614,13 +1091,7 @@ const makeMigrationServerService = <ExecutableOperation>(
               close(record);
             },
           }),
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (record.observed && record.listeners.size === 0) {
-                removeExecution(record);
-              }
-            })
-          )
+          Effect.ensuring(Effect.sync(() => removeExecution(record)))
         );
         runExecution(execution);
 
@@ -633,7 +1104,7 @@ const makeMigrationServerService = <ExecutableOperation>(
         if (
           record !== undefined &&
           record.closed === false &&
-          record.lifecycle === "attached" &&
+          record.ownership === "server" &&
           record.stop !== undefined
         ) {
           const cancellation = yield* record.stop;
@@ -641,7 +1112,7 @@ const makeMigrationServerService = <ExecutableOperation>(
           if (cancellation.kind === "requested") {
             return { ...cancellation, runId };
           }
-          if (cancellation.kind === "detached") {
+          if (cancellation.kind === "provider-owned") {
             return {
               kind: "unsupported" as const,
               message: `Run ${runId} cannot be stopped by this Migrate Server`,

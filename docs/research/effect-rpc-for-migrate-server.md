@@ -7,12 +7,12 @@ Research date: 2026-08-24
 Effect already provides most of the protocol machinery needed here. The right
 primitive is [`effect/unstable/rpc`](https://github.com/Effect-TS/effect-smol/tree/6f38f07d5941a211b251383aaab0f4f55e8a6557/packages/effect/src/unstable/rpc), not a hand-written request ID map, SSE implementation, or generic JSON-RPC wrapper.
 
-Define the Migrate Server once as an `RpcGroup` of schema-backed calls.
-Effect derives typed clients and typed server handlers from that group. The
-same group can run:
+Define the Migrate Server as schema-backed RPC groups that share one control
+surface and select the observation operation appropriate to their transport.
+Effect derives typed clients and typed server handlers from those groups. The
+same logical protocol can run:
 
-- locally over a worker-like IPC transport between the Bun renderer and a Node
-  host;
+- locally over a reconnectable socket between the Bun renderer and a Node host;
 - remotely over Effect RPC's HTTP transport;
 - in tests through `RpcTest` without opening a transport.
 
@@ -24,11 +24,10 @@ does **not** send live `Effect`, `Fiber`, `Layer`, migration definitions, or an
 executable plan across the wire. Only schema-encoded data and RPC protocol
 envelopes cross the boundary.
 
-The one missing local primitive is narrow: Effect has a Node child-process
-worker adapter, but its Bun worker adapter targets Bun `Worker` instances, not
-`Bun.spawn` subprocess IPC. The TUI therefore needs either a small Bun
-subprocess `WorkerPlatform` adapter or a small custom `RpcClient.Protocol`. It
-does not need to invent the RPC protocol.
+The implemented local transport uses Effect's socket protocol with NDJSON
+serialization. The TUI can launch a detached Node server and reconnect to its
+deterministic endpoint, while Effect still owns request correlation, streaming,
+interruption, and backpressure.
 
 ## What Effect RPC provides
 
@@ -42,8 +41,10 @@ handler surface. See `Rpc.make` and `RpcGroup.make` in
 and
 [`RpcGroup.ts`](https://github.com/Effect-TS/effect-smol/blob/6f38f07d5941a211b251383aaab0f4f55e8a6557/packages/effect/src/unstable/rpc/RpcGroup.ts#L417-L428).
 
-For the Migrate Server that maps naturally to unary discovery and control
-calls plus one streaming observation call:
+For the Migrate Server, this maps naturally to unary discovery and control
+calls plus one streaming observation call. The early conceptual sketch below
+predates the final operation names (`GetServerInfo`, `GetDashboard`,
+`PrepareOperation`, `StartOperation`, `ObserveRun`, and `StopRun`):
 
 ```ts
 const MigrateServerRpcs = RpcGroup.make(
@@ -130,9 +131,9 @@ and the server request-fiber handling in
 
 That solves transport-level cancellation, but it must not define migration
 semantics. Closing the TUI's observation stream should stop only that observer;
-it must not cancel a detached workflow. Keep `Start` and `Observe` separate and
-make migration cancellation an explicit `Cancel` RPC. The host owns the
-execution lifecycle by `ExecutionReference`; the observation handler merely
+it must not stop a provider-owned workflow. Keep `StartOperation` and
+`ObserveRun` separate and make control an explicit `StopRun` RPC. The host
+addresses live work by Migration Run id; the observation handler merely
 attaches to durable/provider progress.
 
 ### Custom transports are first-class
@@ -164,7 +165,8 @@ and `RpcClient.withHeaders` in the project-pinned rc.111 declarations.
 
 ## Local Node host: what is already solved
 
-Effect's worker RPC transport is the closest match to local process IPC:
+Effect's worker RPC transport was the closest match explored for
+connection-scoped local process IPC:
 
 - `RpcClient.layerProtocolWorker({ size: 1 })` provides the client protocol;
 - `RpcServer.layerProtocolWorkerRunner` provides the server protocol;
@@ -256,16 +258,19 @@ production deployment.
 
 The application still owns:
 
-- **Protocol compatibility.** There is no built-in Migrate Protocol version or
-  capability negotiation. Add `migrate.v1.` to tags and make `Describe`
-  return `protocolVersion`, `sdkVersion`, `registryId` and capabilities.
+- **Protocol compatibility.** There is no built-in Migrate Protocol version
+  negotiation. Add a protocol namespace to tags and make `Describe` return
+  `protocolVersion`, `sdkVersion`, `registryId`, and environment identity. A
+  compatible server implements the complete Migrate Protocol rather than
+  negotiating customer-facing operations individually.
 - **Prepared-operation safety.** Never serialize
   `MigrationDefinitionExecutableRunPlan` or rollback plans; they contain
   executable definitions. Locally, retain the exact plan in the Node host and
   return an opaque receipt plus display projection. A stateless remote host may
   re-plan and compare a fingerprint before execution.
 - **Durable execution semantics.** RPC request interruption is not the same as
-  cancelling a durable migration. Use `Start`, `Observe` and explicit `Cancel`.
+  stopping a durable migration. Use `StartOperation`, `ObserveRun`, and explicit
+  `StopRun` addressed by Migration Run id.
 - **Authentication and authorization.** Middleware and headers are mechanisms,
   not policy.
 - **Host lifecycle.** Spawn, signal forwarding, detach behavior, log routing and
@@ -286,58 +291,59 @@ provider, but they are not needed for one TUI client talking to one Migrate
 Server. Adding Cluster now would introduce storage, runner and sharding concepts
 that do not solve the runtime-compatibility problem.
 
-## Recommended repository boundary
+## Implemented repository boundary
 
 Put the contract in a runtime-independent SDK export, not in the OpenTUI
 package:
 
 ```text
-migrate-sdk/server
-  schemas.ts       serializable requests, results, errors and events
-  rpc.ts           MigrateServerRpcs
-  handlers.ts      handler Layer over registry/store/executable services
+packages/migrate-sdk/src/protocol/index.ts
+  schema-backed Migrate Protocol and transport-specific RPC groups
 
-@migrate-sdk/tui
-  local-host.ts    Node config loading and RpcServer worker-runner wiring
-  local-client.ts  Bun subprocess WorkerPlatform and generated RpcClient
-  remote-client.ts later: HTTP protocol Layer
+packages/migrate-sdk/src/client/index.ts
+  one logical client with streaming-socket and bounded-HTTP Layers
+
+packages/migrate-sdk/src/server/
+  service.ts          plan validation, execution ownership, observation
+  handlers.ts         streaming and HTTP handler Layers
+  registry-runtime.ts registry and executable orchestration
+  registry-backend.ts server backend adapter
+  local-runtime.ts    local migrate.config discovery only
+
+packages/tui/src/server/
+  node-entry.ts       local Node socket host
+  local-client.ts     socket connection and detached server launcher
+  remote-client.ts    authenticated HTTP connection
+  tui-runtime.ts      thin protocol-to-UI adapter
 ```
 
 The `RpcGroup` is the protocol API; do not duplicate it with a hand-maintained
 `MigrateClient` interface. `RpcClient.FromGroup` derives that
 interface, `RpcGroup.toLayer` derives the handler requirements, and
 `RpcTest.makeClient` provides an in-memory client for contract tests. The CLI
-does not need to call through RPC; it may call the same underlying server/SDK
-services directly.
+may continue calling the underlying services during the incremental refactor,
+but the intended migration-control seam is the Migrate Server interface, used
+in-process or remotely.
 
-The current [`packages/tui/src/runtime.ts`](../../packages/tui/src/runtime.ts)
-already contains the orchestration to place behind the handlers, but
-`MigrationTuiPreparedOperation.plan` is deliberately not wire-safe. Split it
-into host-held state and a schema-backed display projection. Existing registry
-entries are already plain DTO-shaped data, while executable plans contain
-`registryDefinitions` and branded runtime-only markers; see
+The registry runtime in
+[`packages/migrate-sdk/src/server/registry-runtime.ts`](../../packages/migrate-sdk/src/server/registry-runtime.ts)
+accepts an already-built registry and executable and owns the orchestration
+behind the handlers. Its
+`ExecutableMigrationOperation.plan` is deliberately runtime-only; the
+registry backend projects it to the schema-backed, wire-safe
+`MigratePreparedOperation`. Existing registry entries are already plain
+DTO-shaped data, while executable plans contain `registryDefinitions` and
+branded runtime-only markers; see
 [`packages/migrate-sdk/src/domain/registry.ts`](../../packages/migrate-sdk/src/domain/registry.ts).
 
-## Minimal implementation slice
+## Implemented slice
 
-1. Define schema-backed `MigrateServerRpcs` under `migrate-sdk/server`.
-2. Add `Describe`, `Catalog`, `Prepare`, `Start`, `Observe`, `Cancel`, status,
-   messages/history, source scan and lock-control calls needed by the current
-   TUI. Keep secondary operations separate rather than creating a generic
-   `execute(command: unknown)` call.
-3. Move the existing TUI orchestration behind RPC handlers in the Node host.
-   Retain executable plans only in that host.
-4. Add a Bun subprocess `WorkerPlatform` adapter and use Effect's worker RPC
-   client with a pool size of one.
-5. Keep the React application behind its current `MigrationTuiRuntime` shape;
-   implement that shape as a thin adapter over the generated RPC client.
-6. Test an intentionally Node-only config through CLI and TUI: discovery,
-   prepare, run, cursor progress, messages, explicit cancel, detach, restart and
-   rollback. Assert that Bun never imports the config.
-7. Add protocol-version mismatch and host-crash tests.
-8. Defer the HTTP adapter, authentication and Cloudflare deployment, but add a
-   contract test that runs the same handlers through both `RpcTest` and the
-   local process transport.
+The SDK now owns the complete schema-backed operation contract, registry-backed
+server construction, exact-request replanning, run-based observation, and
+server-owned stop behavior. The TUI connects locally over a reconnectable
+socket or remotely over authenticated HTTP. HTTP observation is composed from
+bounded leases so no response or serverless invocation owns a run's lifetime.
+The worker transport explored above is not part of the implementation.
 
 ## Risk assessment
 
@@ -351,7 +357,7 @@ changes.
 
 For the immediate local use case, this risk is bounded because the TUI and SDK
 are versioned together and the Node host ships with the TUI. For the remote
-endgame, `Describe` must reject incompatible protocol ranges before the TUI
+endgame, `GetServerInfo` must reject incompatible protocol ranges before the TUI
 performs planning or control actions. If independent client/server evolution
 becomes a public compatibility promise, freeze the external HTTP contract and
 keep Effect RPC behind an adapter rather than exposing Effect's unstable wire

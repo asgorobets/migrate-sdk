@@ -1,26 +1,15 @@
 // biome-ignore-all lint/performance/noBarrelFile: Package entrypoint intentionally exposes the public TUI API.
 
 export { MigrationTuiApp } from "./app.tsx";
+export type { MigrationTuiExecutionResult } from "./execution.ts";
 export type {
-  MigrationTuiCancellationResult,
-  MigrationTuiExecutionResult,
-  MigrationTuiExecutionState,
-} from "./execution.ts";
-export type {
+  LoadLocalMigrationTuiInput,
   LoadMigrationTuiInput,
-  MigrationTuiAction,
-  MigrationTuiActiveRun,
-  MigrationTuiBreakLockResult,
-  MigrationTuiDependencyCheck,
+  LoadRemoteMigrationTuiInput,
+  MigrationTuiDetachResult,
   MigrationTuiExecuteOptions,
-  MigrationTuiMessage,
-  MigrationTuiPreparedOperation,
-  MigrationTuiPrepareOptions,
-  MigrationTuiRow,
   MigrationTuiRuntime,
   MigrationTuiScanSourceOptions,
   MigrationTuiSnapshot,
-  MigrationTuiSourceIdentityHistoryEntry,
-  MigrationTuiTarget,
 } from "./runtime.ts";
 export { makeMigrationTuiRuntime } from "./server/tui-runtime.ts";

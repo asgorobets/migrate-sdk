@@ -21,25 +21,6 @@ const PositiveInteger = Schema.Finite.check(Schema.isInt()).check(
 export const MigrateProtocolVersion = PositiveInteger;
 export type MigrateProtocolVersion = typeof MigrateProtocolVersion.Type;
 
-export const MIGRATE_CAPABILITIES = [
-  "active-runs",
-  "break-lock",
-  "cancel-execution",
-  "dashboard",
-  "messages",
-  "normalize-source-identity",
-  "observe-execution",
-  "observe-run",
-  "prepare-operation",
-  "scan-source",
-  "source-identity-history",
-  "start-operation",
-  "stop-run",
-] as const;
-
-export const MigrateCapability = Schema.Literals(MIGRATE_CAPABILITIES);
-export type MigrateCapability = typeof MigrateCapability.Type;
-
 export const MigrateEnvironmentInfo = Schema.Struct({
   id: Schema.NonEmptyString,
   label: Schema.optional(Schema.NonEmptyString),
@@ -47,15 +28,9 @@ export const MigrateEnvironmentInfo = Schema.Struct({
 export type MigrateEnvironmentInfo = typeof MigrateEnvironmentInfo.Type;
 
 export const MigrateServerInfo = Schema.Struct({
-  capabilities: Schema.Array(MigrateCapability),
-  configPath: Schema.optional(Schema.String),
   environment: MigrateEnvironmentInfo,
   protocolVersion: MigrateProtocolVersion,
   registryId: Schema.optional(MigrationDefinitionRegistryId),
-  runtime: Schema.Struct({
-    name: Schema.String,
-    version: Schema.String,
-  }),
   sdkVersion: Schema.String,
 });
 export type MigrateServerInfo = typeof MigrateServerInfo.Type;
@@ -196,6 +171,7 @@ export const MigratePreparedOperation = Schema.Struct({
   observationDefinitionId: MigrationDefinitionId,
   plan: MigratePlanProjection,
   planRows: Schema.Array(MigrateDashboardRow),
+  request: MigrateOperationRequest,
   sourceIdentities: Schema.optional(Schema.Array(Schema.String)),
   target: MigrateTarget,
 });
@@ -209,11 +185,6 @@ export const MigrateSourceIdentityHistoryEntry = Schema.Struct({
 export type MigrateSourceIdentityHistoryEntry =
   typeof MigrateSourceIdentityHistoryEntry.Type;
 
-export const MigrateExecutionId = Schema.NonEmptyString.pipe(
-  Schema.brand("MigrateExecutionId")
-);
-export type MigrateExecutionId = typeof MigrateExecutionId.Type;
-
 export const MigrateExecutionState = Schema.Union([
   Schema.Struct({
     definitionId: MigrationDefinitionId,
@@ -223,13 +194,15 @@ export const MigrateExecutionState = Schema.Union([
     adapter: Schema.String,
     definitionId: MigrationDefinitionId,
     kind: Schema.Literal("running"),
+    ownership: Schema.Literal("server"),
     runId: MigrationRunId,
   }),
   Schema.Struct({
     adapter: Schema.String,
     definitionId: MigrationDefinitionId,
     executionId: Schema.String,
-    kind: Schema.Literal("observing"),
+    kind: Schema.Literal("running"),
+    ownership: Schema.Literal("provider"),
     runId: MigrationRunId,
   }),
   Schema.Struct({
@@ -240,54 +213,94 @@ export const MigrateExecutionState = Schema.Union([
 ]);
 export type MigrateExecutionState = typeof MigrateExecutionState.Type;
 
-export const MigrateExecutionReference = Schema.Struct({
-  adapter: Schema.optional(Schema.String),
-  executionId: MigrateExecutionId,
-  lifecycle: Schema.Literals(["attached", "completed", "detached"]),
-  providerExecutionId: Schema.optional(Schema.String),
+export const MigrateRunStartResult = Schema.Struct({
+  runId: MigrationRunId,
+  status: Schema.Literals(["completed", "started"]),
+});
+export type MigrateRunStartResult = typeof MigrateRunStartResult.Type;
+
+export const MigrateObservationResumeToken = Schema.NonEmptyString.pipe(
+  Schema.brand("MigrateObservationResumeToken")
+);
+export type MigrateObservationResumeToken =
+  typeof MigrateObservationResumeToken.Type;
+
+const MigrateDetachedObservationEvent = Schema.Struct({
+  kind: Schema.Literal("detached"),
+  message: Schema.String,
   runId: MigrationRunId,
 });
-export type MigrateExecutionReference = typeof MigrateExecutionReference.Type;
+
+const MigrateTerminalObservationEvent = Schema.Struct({
+  kind: Schema.Literal("terminal"),
+  message: Schema.String,
+  outcome: Schema.Literals(["cancelled", "completed", "failed"]),
+  runId: MigrationRunId,
+});
+
+const MigrateStateObservationEvent = Schema.Struct({
+  kind: Schema.Literal("state"),
+  state: MigrateExecutionState,
+});
+
+const MigrateProgressObservationEvent = Schema.Struct({
+  definitions: Schema.Array(MigrationDefinitionStatus),
+  kind: Schema.Literal("progress"),
+});
+
+const MigrateWarningObservationEvent = Schema.Struct({
+  kind: Schema.Literal("warning"),
+  message: Schema.String,
+});
+
+export const MigrateObservationContinuingEvent = Schema.Union([
+  MigrateStateObservationEvent,
+  MigrateProgressObservationEvent,
+  MigrateWarningObservationEvent,
+]);
+export type MigrateObservationContinuingEvent =
+  typeof MigrateObservationContinuingEvent.Type;
 
 export const MigrateObservationEvent = Schema.Union([
-  Schema.Struct({
-    kind: Schema.Literal("state"),
-    state: MigrateExecutionState,
-  }),
-  Schema.Struct({
-    definitions: Schema.Array(MigrationDefinitionStatus),
-    kind: Schema.Literal("progress"),
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("warning"),
-    message: Schema.String,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("detached"),
-    message: Schema.String,
-    runId: MigrationRunId,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("terminal"),
-    message: Schema.String,
-    outcome: Schema.Literals(["cancelled", "completed", "failed"]),
-    runId: MigrationRunId,
-  }),
+  MigrateStateObservationEvent,
+  MigrateProgressObservationEvent,
+  MigrateWarningObservationEvent,
+  MigrateDetachedObservationEvent,
+  MigrateTerminalObservationEvent,
 ]);
 export type MigrateObservationEvent = typeof MigrateObservationEvent.Type;
 
-export const MigrateCancellationResult = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("idle") }),
+const MigrateObservationCompletionEvent = Schema.Union([
+  MigrateDetachedObservationEvent,
+  MigrateTerminalObservationEvent,
+]);
+
+const MigrateObservationCompletionEnvelope = Schema.Struct({
+  resumeToken: MigrateObservationResumeToken,
+  event: MigrateObservationCompletionEvent,
+});
+
+const MigrateObservationContinuingEnvelope = Schema.Struct({
+  resumeToken: MigrateObservationResumeToken,
+  event: MigrateObservationContinuingEvent,
+});
+
+export const MigrateObservationLease = Schema.Union([
   Schema.Struct({
-    kind: Schema.Literal("requested"),
-    message: Schema.String,
+    kind: Schema.Literal("heartbeat"),
   }),
   Schema.Struct({
-    kind: Schema.Literal("detached"),
-    message: Schema.String,
+    events: Schema.NonEmptyArray(MigrateObservationContinuingEnvelope),
+    kind: Schema.Literal("continuing"),
+    nextResumeToken: MigrateObservationResumeToken,
+  }),
+  Schema.Struct({
+    event: MigrateObservationCompletionEnvelope,
+    events: Schema.Array(MigrateObservationContinuingEnvelope),
+    kind: Schema.Literal("terminal"),
   }),
 ]);
-export type MigrateCancellationResult = typeof MigrateCancellationResult.Type;
+export type MigrateObservationLease = typeof MigrateObservationLease.Type;
 
 export const MigrateRunStopResult = Schema.Union([
   Schema.Struct({
@@ -317,12 +330,7 @@ export type MigrateBreakLockResult = typeof MigrateBreakLockResult.Type;
 export class MigrateOperationError extends Schema.TaggedError<MigrateOperationError>()(
   "MigrateOperationError",
   {
-    code: Schema.Literals([
-      "bootstrap-failed",
-      "execution-failed",
-      "operation-failed",
-      "protocol-mismatch",
-    ]),
+    code: Schema.Literals(["execution-failed", "operation-failed"]),
     message: Schema.String,
   }
 ) {}
@@ -336,16 +344,7 @@ export class MigratePlanChangedError extends Schema.TaggedError<MigratePlanChang
   }
 ) {}
 
-export class MigrateExecutionNotFoundError extends Schema.TaggedError<MigrateExecutionNotFoundError>()(
-  "MigrateExecutionNotFoundError",
-  {
-    executionId: MigrateExecutionId,
-    message: Schema.String,
-  }
-) {}
-
 export const MigrateProtocolError = Schema.Union([
-  MigrateExecutionNotFoundError,
   MigrateOperationError,
   MigratePlanChangedError,
 ]);
@@ -408,14 +407,7 @@ export class StartOperation extends makeRpc("StartOperation", {
     acceptedFingerprint: MigratePlanFingerprint,
     request: MigrateOperationRequest,
   },
-  success: MigrateExecutionReference,
-}) {}
-
-export class ObserveExecution extends makeRpc("ObserveExecution", {
-  error: MigrateProtocolError,
-  payload: { executionId: MigrateExecutionId },
-  stream: true,
-  success: MigrateObservationEvent,
+  success: MigrateRunStartResult,
 }) {}
 
 export class ObserveRun extends makeRpc("ObserveRun", {
@@ -425,10 +417,13 @@ export class ObserveRun extends makeRpc("ObserveRun", {
   success: MigrateObservationEvent,
 }) {}
 
-export class CancelExecution extends makeRpc("CancelExecution", {
+export class ObserveRunLease extends makeRpc("ObserveRunLease", {
   error: MigrateProtocolError,
-  payload: { executionId: Schema.optional(MigrateExecutionId) },
-  success: MigrateCancellationResult,
+  payload: {
+    after: Schema.optional(MigrateObservationResumeToken),
+    runId: MigrationRunId,
+  },
+  success: MigrateObservationLease,
 }) {}
 
 export class StopRun extends makeRpc("StopRun", {
@@ -452,7 +447,7 @@ export class BreakLock extends makeRpc("BreakLock", {
   success: MigrateBreakLockResult,
 }) {}
 
-export const MigrateRpcs = makeRpcGroup(
+const MigrateControlRpcs = makeRpcGroup(
   GetServerInfo,
   GetDashboard,
   GetActiveRuns,
@@ -461,10 +456,13 @@ export const MigrateRpcs = makeRpcGroup(
   NormalizeSourceIdentity,
   PrepareOperation,
   StartOperation,
-  ObserveExecution,
-  ObserveRun,
-  CancelExecution,
   StopRun,
   ScanSource,
   BreakLock
 );
+
+/** RPC surface used by connection-oriented transports such as local IPC. */
+export const MigrateStreamingRpcs = MigrateControlRpcs.add(ObserveRun);
+
+/** RPC surface used by bounded request/response transports such as HTTPS. */
+export const MigrateHttpRpcs = MigrateControlRpcs.add(ObserveRunLease);

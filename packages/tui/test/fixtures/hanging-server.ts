@@ -1,1 +1,1 @@
-process.on("message", () => undefined);
+setInterval(() => undefined, 1000);

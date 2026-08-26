@@ -11,7 +11,7 @@ import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 
 const Product = Schema.Struct({ title: Schema.String });
 const ProductIdentity = SourceIdentity.make({
-  id: "tui-source-status@v1",
+  id: "source-status-product@v1",
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 

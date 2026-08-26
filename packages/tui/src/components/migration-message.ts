@@ -1,7 +1,7 @@
-import type { MigrationTuiMessage } from "../runtime.ts";
+import type { MigrationMessage } from "migrate-sdk";
 
 export const migrationMessageKindLabel = (
-  kind: MigrationTuiMessage["kind"]
+  kind: MigrationMessage["kind"]
 ): string => {
   switch (kind) {
     case "process-diagnostic":
@@ -21,11 +21,11 @@ export const migrationMessageKindLabel = (
 };
 
 export const migrationMessageDetailsText = (
-  details: Exclude<MigrationTuiMessage["details"], undefined>
+  details: Exclude<MigrationMessage["details"], undefined>
 ): string => JSON.stringify(details, null, 2) ?? String(details);
 
 export const migrationMessageMarker = (
-  severity: MigrationTuiMessage["severity"]
+  severity: MigrationMessage["severity"]
 ): string => {
   if (severity === "error") {
     return "✗";
@@ -37,7 +37,7 @@ export const migrationMessageMarker = (
   return "•";
 };
 
-export const migrationMessageRowKey = (message: MigrationTuiMessage): string =>
+export const migrationMessageRowKey = (message: MigrationMessage): string =>
   JSON.stringify([
     message.definitionId,
     message.sourceIdentity,

@@ -1,104 +1,29 @@
 import { Effect, Stream } from "effect";
 import type { MigrationDefinitionLock, MigrationRunId } from "migrate-sdk";
 import type {
-  MigrateExecutionReference,
-  MigrateExecutionState,
+  MigrateDashboard,
   MigrateObservationEvent,
-  MigratePrepareOptions,
-  MigrateTarget,
+  MigratePreparedOperation,
+  MigrateRunStartResult,
 } from "migrate-sdk/protocol";
-import type {
-  MigrationTuiCancellationResult,
-  MigrationTuiExecutionResult,
-  MigrationTuiExecutionState,
-} from "../execution.ts";
+import type { MigrationTuiExecutionResult } from "../execution.ts";
 import type {
   LoadMigrationTuiInput,
+  MigrationTuiDetachResult,
   MigrationTuiExecuteOptions,
-  MigrationTuiPreparedOperation,
-  MigrationTuiRow,
   MigrationTuiRuntime,
   MigrationTuiSnapshot,
-  MigrationTuiTarget,
 } from "../runtime.ts";
 import { connectLocalMigrateServer } from "./local-client.ts";
-
-const toProtocolTarget = (target: MigrationTuiTarget): MigrateTarget => target;
-
-const operationOptions = (
-  operation: MigrationTuiPreparedOperation
-): MigratePrepareOptions => ({
-  ...(operation.plan.execution === undefined
-    ? {}
-    : { execution: operation.plan.execution }),
-  ...(operation.plan.force === undefined
-    ? {}
-    : { force: operation.plan.force }),
-  ...(operation.sourceIdentities === undefined
-    ? {}
-    : { sourceIdentities: operation.sourceIdentities }),
-  withDependencies: operation.plan.withDependencies,
-});
-
-const toTuiExecutionState = (
-  state: MigrateExecutionState
-): MigrationTuiExecutionState => {
-  switch (state.kind) {
-    case "starting":
-      return { definitionId: state.definitionId, kind: "starting" };
-    case "running":
-      return {
-        adapter: state.adapter,
-        definitionId: state.definitionId,
-        kind: "running",
-        runId: state.runId,
-      };
-    case "observing":
-      return {
-        adapter: state.adapter,
-        definitionId: state.definitionId,
-        executionId: state.executionId,
-        kind: "observing",
-        runId: state.runId,
-      };
-    case "cancelling":
-      return {
-        definitionId: state.definitionId,
-        kind: "cancelling",
-        ...(state.runId === undefined ? {} : { runId: state.runId }),
-      };
-    default: {
-      const unhandled: never = state;
-      return unhandled;
-    }
-  }
-};
-
-const toTuiRow = (row: {
-  readonly entry: {
-    readonly dependencies: {
-      readonly optional: MigrationTuiRow["entry"]["dependencies"]["optional"];
-      readonly required: MigrationTuiRow["entry"]["dependencies"]["required"];
-    };
-    readonly group?: MigrationTuiRow["entry"]["group"] | undefined;
-    readonly hasRollback: boolean;
-    readonly id: MigrationTuiRow["entry"]["id"];
-  };
-  readonly status?: MigrationTuiRow["status"] | undefined;
-}): MigrationTuiRow => ({
-  entry: {
-    dependencies: row.entry.dependencies,
-    ...(row.entry.group === undefined ? {} : { group: row.entry.group }),
-    hasRollback: row.entry.hasRollback,
-    id: row.entry.id,
-  },
-  ...(row.status === undefined ? {} : { status: row.status }),
-});
+import { connectRemoteMigrateServer } from "./remote-client.ts";
 
 export const makeMigrationTuiRuntime = async (
   input: LoadMigrationTuiInput
 ): Promise<MigrationTuiRuntime> => {
-  const connection = await connectLocalMigrateServer(input);
+  const connection =
+    input.server === undefined
+      ? await connectLocalMigrateServer(input)
+      : await connectRemoteMigrateServer(input.server);
   const { client, runPromise, serverInfo } = connection;
   const initialDashboard = await runPromise(client.GetDashboard()).catch(
     async (cause) => {
@@ -113,15 +38,11 @@ export const makeMigrationTuiRuntime = async (
         readonly token: symbol;
       }
     | undefined;
-  const snapshot = (dashboard: {
-    readonly activeRuns: MigrationTuiSnapshot["activeRuns"];
-    readonly rows:
-      | Parameters<typeof toTuiRow>[0][]
-      | readonly Parameters<typeof toTuiRow>[0][];
-    readonly scannedSource: boolean;
-  }): MigrationTuiSnapshot => ({
+  const snapshot = (
+    dashboard: Pick<MigrateDashboard, "activeRuns" | "rows" | "scannedSource">
+  ): MigrationTuiSnapshot => ({
     activeRuns: dashboard.activeRuns,
-    rows: dashboard.rows.map(toTuiRow),
+    rows: dashboard.rows,
     scannedSource: dashboard.scannedSource,
   });
 
@@ -149,7 +70,7 @@ export const makeMigrationTuiRuntime = async (
                 options?.onProgress?.({ definitions: event.definitions });
                 break;
               case "state": {
-                options?.onStateChange?.(toTuiExecutionState(event.state));
+                options?.onStateChange?.(event.state);
                 break;
               }
               case "detached":
@@ -197,16 +118,12 @@ export const makeMigrationTuiRuntime = async (
   };
 
   const startOperation = (
-    operation: MigrationTuiPreparedOperation
-  ): Promise<MigrateExecutionReference> =>
+    operation: MigratePreparedOperation
+  ): Promise<MigrateRunStartResult> =>
     runPromise(
       client.StartOperation({
         acceptedFingerprint: operation.fingerprint,
-        request: {
-          action: operation.action,
-          options: operationOptions(operation),
-          target: operation.target,
-        },
+        request: operation.request,
       })
     );
 
@@ -225,7 +142,7 @@ export const makeMigrationTuiRuntime = async (
     return true;
   };
 
-  const detachForExit = (): Promise<MigrationTuiCancellationResult> => {
+  const detachForExit = (): Promise<MigrationTuiDetachResult> => {
     if (activeRunObservation !== undefined) {
       const { runId } = activeRunObservation;
       detachRunObservation(runId);
@@ -241,14 +158,13 @@ export const makeMigrationTuiRuntime = async (
   return {
     breakLock: (lock: MigrationDefinitionLock) =>
       runPromise(client.BreakLock({ lock })),
-    configPath: serverInfo.configPath ?? "Migrate Server",
+    environmentLabel: serverInfo.environment.label ?? serverInfo.environment.id,
     detachForExit,
     detachRunObservation,
     dispose: connection.dispose,
     groups: initialDashboard.groups,
     listActiveRuns: () => runPromise(client.GetActiveRuns()),
-    listMessages: (target) =>
-      runPromise(client.GetMessages({ target: toProtocolTarget(target) })),
+    listMessages: (target) => runPromise(client.GetMessages({ target })),
     listSourceIdentityHistory: (definitionId) =>
       runPromise(client.GetSourceIdentityHistory({ definitionId })),
     normalizeSourceIdentity: (definitionId, sourceIdentity) =>
@@ -259,18 +175,22 @@ export const makeMigrationTuiRuntime = async (
       detachRunObservation();
 
       const controller = new AbortController();
+      const observationSignal =
+        options?.signal === undefined
+          ? controller.signal
+          : AbortSignal.any([controller.signal, options.signal]);
       const token = Symbol("MigrationTuiRunObservation");
       activeRunObservation = { controller, runId, token };
 
       try {
         return await consumeObservation(
-          client.ObserveRun({ runId }),
+          client.observeRun({ runId }),
           runId,
           options,
-          controller.signal
+          observationSignal
         );
       } catch (cause) {
-        if (controller.signal.aborted) {
+        if (observationSignal.aborted) {
           return {
             message: `Run ${runId} continues in the background`,
             outcome: "detached",
@@ -291,18 +211,18 @@ export const makeMigrationTuiRuntime = async (
         client.PrepareOperation({
           action,
           options,
-          target: toProtocolTarget(target),
+          target,
         })
       ),
     refresh: () => runPromise(client.GetDashboard()).then(snapshot),
-    rows: initialDashboard.rows.map(toTuiRow),
+    rows: initialDashboard.rows,
     scanSource: (target, options = {}) =>
       runPromise(
         client.ScanSource({
           ...(options.concurrency === undefined
             ? {}
             : { concurrency: options.concurrency }),
-          target: toProtocolTarget(target),
+          target,
         })
       ).then(snapshot),
     start: startOperation,

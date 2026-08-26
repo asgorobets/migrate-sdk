@@ -1,6 +1,6 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
+import type { MigrationMessage } from "migrate-sdk";
 import { useEffect, useRef } from "react";
-import type { MigrationTuiMessage } from "../runtime.ts";
 import {
   migrationMessageKindLabel,
   migrationMessageMarker,
@@ -25,9 +25,9 @@ const MessageLine = ({
 }: {
   readonly colors: MigrationMessageColors;
   readonly index: number;
-  readonly message: MigrationTuiMessage;
+  readonly message: MigrationMessage;
   readonly selected: boolean;
-  readonly severityColor: (severity: MigrationTuiMessage["severity"]) => string;
+  readonly severityColor: (severity: MigrationMessage["severity"]) => string;
   readonly showDefinitionId: boolean;
   readonly total: number;
 }) => {
@@ -69,10 +69,10 @@ export const MigrationMessages = ({
   readonly colors: MigrationMessageColors;
   readonly compact: boolean;
   readonly loading: boolean;
-  readonly messages: readonly MigrationTuiMessage[];
+  readonly messages: readonly MigrationMessage[];
   readonly onSelectedIndexChange: (index: number) => void;
   readonly selectedIndex: number;
-  readonly severityColor: (severity: MigrationTuiMessage["severity"]) => string;
+  readonly severityColor: (severity: MigrationMessage["severity"]) => string;
   readonly showDefinitionId?: boolean;
 }) => {
   const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);

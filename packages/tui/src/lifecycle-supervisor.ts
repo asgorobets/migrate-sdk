@@ -1,5 +1,8 @@
-import type { MigrationTuiCancellationResult } from "./execution.ts";
-import type { MigrationTuiRow, MigrationTuiSnapshot } from "./runtime.ts";
+import type { MigrateDashboardRow } from "migrate-sdk/protocol";
+import type {
+  MigrationTuiDetachResult,
+  MigrationTuiSnapshot,
+} from "./runtime.ts";
 import {
   type MigrationTuiShutdownController,
   type MigrationTuiSignalSource,
@@ -8,7 +11,7 @@ import {
 } from "./shutdown-controller.ts";
 
 export interface MigrationTuiRenderSessionInput {
-  readonly initialRows?: readonly MigrationTuiRow[];
+  readonly initialRows?: readonly MigrateDashboardRow[];
   readonly lifecycle: MigrationTuiShutdownController;
   readonly onControlC: () => void;
   readonly onRenderError: (cause: unknown) => void;
@@ -20,7 +23,7 @@ export interface MigrationTuiRenderSession {
 }
 
 interface MigrationTuiSupervisorRuntime {
-  readonly detachForExit: () => Promise<MigrationTuiCancellationResult>;
+  readonly detachForExit: () => Promise<MigrationTuiDetachResult>;
   readonly refresh: () => Promise<MigrationTuiSnapshot>;
 }
 
@@ -133,7 +136,7 @@ export const makeMigrationTuiLifecycleSupervisor = (
   const requestExit = (
     nextExitCode: number,
     forceWhenAlreadyRequested: boolean
-  ): Promise<MigrationTuiCancellationResult> => {
+  ): Promise<MigrationTuiDetachResult> => {
     if (finished) {
       return Promise.resolve({ kind: "idle" });
     }
@@ -219,7 +222,7 @@ export const makeMigrationTuiLifecycleSupervisor = (
     initialRows,
     recoveryNotice: nextRecoveryNotice,
   }: {
-    readonly initialRows?: readonly MigrationTuiRow[];
+    readonly initialRows?: readonly MigrateDashboardRow[];
     readonly recoveryNotice?: string;
   } = {}): Promise<void> {
     const token = Symbol("MigrationTuiRenderSession");

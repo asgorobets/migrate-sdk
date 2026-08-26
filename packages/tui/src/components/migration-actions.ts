@@ -1,10 +1,10 @@
 import type { MigrationRunId } from "migrate-sdk";
 import type {
-  MigrationTuiAction,
-  MigrationTuiActiveRun,
-  MigrationTuiRow,
-  MigrationTuiTarget,
-} from "../runtime.ts";
+  MigrateAction,
+  MigrateActiveRun,
+  MigrateDashboardRow,
+  MigrateTarget,
+} from "migrate-sdk/protocol";
 
 export type MigrationTuiActionView =
   | "view-run"
@@ -39,13 +39,13 @@ interface MigrationTuiAvailableActionBase {
 }
 
 type MigrationTuiOperationAction = {
-  readonly [Action in MigrationTuiAction]: MigrationTuiAvailableActionBase & {
+  readonly [Action in MigrateAction]: MigrationTuiAvailableActionBase & {
     readonly action: Action;
     readonly id: Action;
     readonly runId?: never;
     readonly view?: never;
   };
-}[MigrationTuiAction];
+}[MigrateAction];
 
 type MigrationTuiNonRunView = Exclude<
   MigrationTuiActionView,
@@ -74,9 +74,9 @@ export type MigrationTuiAvailableAction =
   | MigrationTuiViewAction;
 
 export const migrationTuiAvailableActions = (
-  target: MigrationTuiTarget,
-  rows: readonly MigrationTuiRow[],
-  activeRuns: readonly MigrationTuiActiveRun[] = []
+  target: MigrateTarget,
+  rows: readonly MigrateDashboardRow[],
+  activeRuns: readonly MigrateActiveRun[] = []
 ): readonly MigrationTuiAvailableAction[] => {
   const isGroup = target.kind === "group";
   const noun = isGroup ? "group" : "migration";

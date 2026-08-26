@@ -3,8 +3,8 @@
 import { type KeyEvent, RGBA } from "@opentui/core";
 import { Input } from "@tuiparts/react/input";
 import type { MigrationDefinitionId } from "migrate-sdk";
+import type { MigrateSourceIdentityHistoryEntry } from "migrate-sdk/protocol";
 import { type ElementRef, useEffect, useRef } from "react";
-import type { MigrationTuiSourceIdentityHistoryEntry } from "../runtime.ts";
 import { migrationColors as colors } from "./migration-dashboard.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
@@ -16,7 +16,7 @@ import {
 } from "./ui/dialog.tsx";
 
 const historyStatusPresentation = (
-  status: MigrationTuiSourceIdentityHistoryEntry["status"]
+  status: MigrateSourceIdentityHistoryEntry["status"]
 ): {
   readonly color: string;
   readonly icon: string;
@@ -53,7 +53,7 @@ export interface SelectiveRunDialogProps {
     readonly tone: "error" | "info";
   };
   readonly height: number;
-  readonly history: readonly MigrationTuiSourceIdentityHistoryEntry[];
+  readonly history: readonly MigrateSourceIdentityHistoryEntry[];
   readonly historyIndex: number;
   readonly historyLoading: boolean;
   readonly inputReady: boolean;

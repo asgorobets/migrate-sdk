@@ -1,12 +1,21 @@
-import { basename } from "node:path";
 import { type KeyEvent, RGBA } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type {
   MigrationDefinitionStatus,
   MigrationExecutionOptions,
+  MigrationMessage,
   MigrationRunId,
   PipelineExecutionConcurrency,
 } from "migrate-sdk";
+import type {
+  MigrateAction,
+  MigrateActiveRun,
+  MigrateDashboardRow,
+  MigratePreparedOperation,
+  MigratePrepareOptions,
+  MigrateSourceIdentityHistoryEntry,
+  MigrateTarget,
+} from "migrate-sdk/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BreakLockDialog } from "./components/break-lock-dialog.tsx";
 import {
@@ -37,17 +46,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "./components/ui/dialog.tsx";
-import type {
-  MigrationTuiAction,
-  MigrationTuiActiveRun,
-  MigrationTuiMessage,
-  MigrationTuiPreparedOperation,
-  MigrationTuiPrepareOptions,
-  MigrationTuiRow,
-  MigrationTuiRuntime,
-  MigrationTuiSourceIdentityHistoryEntry,
-  MigrationTuiTarget,
-} from "./runtime.ts";
+import type { MigrationTuiRuntime } from "./runtime.ts";
 import type { MigrationTuiShutdownController } from "./shutdown-controller.ts";
 
 type View =
@@ -97,7 +96,7 @@ const errorMessage = (cause: unknown): string => {
   return String(cause);
 };
 
-const targetLabel = (target: MigrationTuiTarget): string =>
+const targetLabel = (target: MigrateTarget): string =>
   target.kind === "group" ? target.groupId : target.definitionId;
 
 const actionCopy = {
@@ -132,7 +131,7 @@ const actionCopy = {
     progress: "Updating",
   },
 } as const satisfies Record<
-  MigrationTuiAction,
+  MigrateAction,
   {
     readonly button: string;
     readonly preparing: string;
@@ -141,26 +140,26 @@ const actionCopy = {
 >;
 
 const operationNeedsDependencyDecision = (
-  operation: MigrationTuiPreparedOperation
+  operation: MigratePreparedOperation
 ): boolean =>
   operation.action !== "rollback" &&
   operation.plan.force !== true &&
   operation.dependencyChecks.some((dependency) => !dependency.satisfied);
 
-type PlanHierarchyRow = MigrationTuiPreparedOperation["planRows"][number];
+type PlanHierarchyRow = MigratePreparedOperation["planRows"][number];
 
 interface PlanHierarchyItem {
   readonly ancestorsAreLast: readonly boolean[];
   readonly depth: number;
   readonly executionStep?: number;
-  readonly id: MigrationTuiRow["entry"]["id"];
+  readonly id: MigrateDashboardRow["entry"]["id"];
   readonly isLast: boolean;
   readonly relation?: "optional" | "required";
   readonly row?: PlanHierarchyRow;
 }
 
 const planHierarchyItems = (
-  operation: MigrationTuiPreparedOperation
+  operation: MigratePreparedOperation
 ): readonly PlanHierarchyItem[] => {
   const rowsById = new Map(
     operation.planRows.map((row) => [row.entry.id, row])
@@ -184,15 +183,15 @@ const planHierarchyItems = (
       index + 1,
     ])
   );
-  const executionPosition = (id: MigrationTuiRow["entry"]["id"]): number =>
+  const executionPosition = (id: MigrateDashboardRow["entry"]["id"]): number =>
     executionSteps.get(id) ?? Number.MAX_SAFE_INTEGER;
   const children = new Map<
-    MigrationTuiRow["entry"]["id"],
-    Map<MigrationTuiRow["entry"]["id"], "optional" | "required">
+    MigrateDashboardRow["entry"]["id"],
+    Map<MigrateDashboardRow["entry"]["id"], "optional" | "required">
   >();
   const addEdge = (
-    dependentId: MigrationTuiRow["entry"]["id"],
-    dependencyId: MigrationTuiRow["entry"]["id"],
+    dependentId: MigrateDashboardRow["entry"]["id"],
+    dependencyId: MigrateDashboardRow["entry"]["id"],
     relation: "optional" | "required"
   ) => {
     if (!(nodeIds.has(dependentId) && nodeIds.has(dependencyId))) {
@@ -237,11 +236,11 @@ const planHierarchyItems = (
     ...(requestedRoots.length === 0 ? requestedIds : requestedRoots),
   ].sort((left, right) => executionPosition(left) - executionPosition(right));
   const items: PlanHierarchyItem[] = [];
-  const visited = new Set<MigrationTuiRow["entry"]["id"]>();
+  const visited = new Set<MigrateDashboardRow["entry"]["id"]>();
   const groupDepth = operation.target.kind === "group" ? 1 : 0;
 
   const visit = (
-    id: MigrationTuiRow["entry"]["id"],
+    id: MigrateDashboardRow["entry"]["id"],
     relation: "optional" | "required" | undefined,
     depth: number,
     isLast: boolean,
@@ -308,7 +307,7 @@ const hierarchyPrefix = (item: PlanHierarchyItem): string => {
 const PlanHierarchy = ({
   operation,
 }: {
-  readonly operation: MigrationTuiPreparedOperation;
+  readonly operation: MigratePreparedOperation;
 }) => {
   const items = planHierarchyItems(operation);
   const hasGroupRoot = operation.target.kind === "group";
@@ -377,7 +376,7 @@ const SafetyDialog = ({
   readonly onConfirm: () => void;
   readonly onIncludeDependencies: () => void;
   readonly onKeyDown: (key: KeyEvent) => void;
-  readonly operation: MigrationTuiPreparedOperation;
+  readonly operation: MigratePreparedOperation;
   readonly width: number;
 }) => {
   const compact = width < 80;
@@ -517,27 +516,24 @@ export const MigrationTuiApp = ({
   recoveryNotice,
   runtime,
 }: {
-  readonly initialRows?: readonly MigrationTuiRow[];
+  readonly initialRows?: readonly MigrateDashboardRow[];
   readonly lifecycle: MigrationTuiShutdownController;
   readonly recoveryNotice?: string;
   readonly runtime: MigrationTuiRuntime;
 }) => {
   const dimensions = useTerminalDimensions();
   const [rows, setRows] = useState(initialRows ?? runtime.rows);
-  const [activeRuns, setActiveRuns] = useState<
-    readonly MigrationTuiActiveRun[]
-  >([]);
+  const [activeRuns, setActiveRuns] = useState<readonly MigrateActiveRun[]>([]);
   const [listTab, setListTab] = useState<MigrationListTab>("migrations");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [actionIndex, setActionIndex] = useState(0);
   const [view, setView] = useState<View>("dashboard");
   const [pendingOperation, setPendingOperation] =
-    useState<MigrationTuiPreparedOperation | null>(null);
-  const [pendingLockRow, setPendingLockRow] = useState<MigrationTuiRow | null>(
-    null
-  );
+    useState<MigratePreparedOperation | null>(null);
+  const [pendingLockRow, setPendingLockRow] =
+    useState<MigrateDashboardRow | null>(null);
   const [detailTab, setDetailTab] = useState<MigrationDetailTab>("overview");
-  const [messages, setMessages] = useState<readonly MigrationTuiMessage[]>([]);
+  const [messages, setMessages] = useState<readonly MigrationMessage[]>([]);
   const [messageIndex, setMessageIndex] = useState(0);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [busy, setBusy] = useState(
@@ -546,14 +542,14 @@ export const MigrationTuiApp = ({
   const [notice, setNotice] = useState<string | null>(recoveryNotice ?? null);
   const [error, setError] = useState<string | null>(null);
   const [selectiveTarget, setSelectiveTarget] = useState<Extract<
-    MigrationTuiTarget,
+    MigrateTarget,
     { readonly kind: "migration" }
   > | null>(null);
   const [selectiveDraft, setSelectiveDraft] = useState("");
   const [selectiveEntriesByDefinition, setSelectiveEntriesByDefinition] =
     useState<ReadonlyMap<string, readonly string[]>>(() => new Map());
   const [selectiveHistory, setSelectiveHistory] = useState<
-    readonly MigrationTuiSourceIdentityHistoryEntry[]
+    readonly MigrateSourceIdentityHistoryEntry[]
   >([]);
   const [selectiveHistoryIndex, setSelectiveHistoryIndex] = useState(0);
   const [selectiveHistoryLoading, setSelectiveHistoryLoading] = useState(false);
@@ -597,7 +593,7 @@ export const MigrationTuiApp = ({
 
     return selectedRow === undefined ? [] : [selectedRow];
   }, [listTab, selectedGroupRows, selectedRow]);
-  const selectedTarget = useMemo<MigrationTuiTarget | undefined>(() => {
+  const selectedTarget = useMemo<MigrateTarget | undefined>(() => {
     if (listTab === "groups") {
       return selectedGroup === undefined
         ? undefined
@@ -683,7 +679,7 @@ export const MigrationTuiApp = ({
   );
 
   const scanSelectedSource = useCallback(
-    async (targetOverride?: MigrationTuiTarget) => {
+    async (targetOverride?: MigrateTarget) => {
       const target = targetOverride ?? dashboardStateRef.current.selectedTarget;
 
       if (target === undefined) {
@@ -717,7 +713,7 @@ export const MigrationTuiApp = ({
     setDetailTab("messages");
   }, []);
 
-  const openBreakLock = useCallback((rowOverride?: MigrationTuiRow) => {
+  const openBreakLock = useCallback((rowOverride?: MigrateDashboardRow) => {
     const row = rowOverride ?? dashboardStateRef.current.selectedRows[0];
 
     if (row?.status?.lock == null) {
@@ -783,7 +779,7 @@ export const MigrationTuiApp = ({
   );
 
   const executeOperation = useCallback(
-    async (operation: MigrationTuiPreparedOperation) => {
+    async (operation: MigratePreparedOperation) => {
       if (executingRef.current) {
         return;
       }
@@ -800,7 +796,7 @@ export const MigrationTuiApp = ({
       try {
         const reference = await runtime.start(operation);
         await refresh(
-          reference.lifecycle === "completed"
+          reference.status === "completed"
             ? `Run ${reference.runId} completed`
             : `Run ${reference.runId} started`
         );
@@ -895,9 +891,9 @@ export const MigrationTuiApp = ({
 
   const prepareOperation = useCallback(
     async (
-      action: MigrationTuiAction,
-      options: MigrationTuiPrepareOptions = {},
-      targetOverride?: MigrationTuiTarget
+      action: MigrateAction,
+      options: MigratePrepareOptions = {},
+      targetOverride?: MigrateTarget
     ) => {
       const target = targetOverride ?? dashboardStateRef.current.selectedTarget;
 
@@ -941,7 +937,7 @@ export const MigrationTuiApp = ({
   );
 
   const openSelectiveRun = useCallback(
-    (targetOverride?: MigrationTuiTarget) => {
+    (targetOverride?: MigrateTarget) => {
       const target = targetOverride ?? dashboardStateRef.current.selectedTarget;
 
       if (target?.kind !== "migration") {
@@ -1761,7 +1757,7 @@ export const MigrationTuiApp = ({
         }}
       >
         <text fg={colors.foreground}>Migrate</text>
-        <text fg={colors.dim}>{basename(runtime.configPath)}</text>
+        <text fg={colors.dim}>{runtime.environmentLabel}</text>
       </box>
       <MigrationDashboard
         actions={selectedActions}

@@ -2,28 +2,29 @@
 
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
+import { basename } from "node:path";
 import { NodeSocketServer } from "@effect/platform-node";
 import { runMain } from "@effect/platform-node/NodeRuntime";
-import { layer as layerNodeWorkerRunner } from "@effect/platform-node/NodeWorkerRunner";
 import { Effect, Layer, Schema } from "effect";
 import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
 import {
   layerProtocolSocketServer,
-  layerProtocolWorkerRunner,
   layer as layerRpcServer,
   Protocol as RpcServerProtocol,
 } from "effect/unstable/rpc/RpcServer";
 import { toMigrationDefinitionRegistryId } from "migrate-sdk";
 import {
-  MIGRATE_CAPABILITIES,
   MIGRATE_PROTOCOL_VERSION,
-  MigrateRpcs,
   type MigrateServerInfo,
+  MigrateStreamingRpcs,
 } from "migrate-sdk/protocol";
-import { MigrateServer, MigrateServerHandlers } from "migrate-sdk/server";
-import { loadConfiguredMigrationHost } from "../runtime.ts";
+import {
+  loadLocalMigrateServerRuntime,
+  MigrateServer,
+  MigrateStreamingServerHandlers,
+  makeRegistryMigrateServerBackend,
+} from "migrate-sdk/server";
 import { removeLocalMigrateServerEndpoint } from "./local-endpoint.ts";
-import { makeConfiguredMigrationServerBackend } from "./migration-backend.ts";
 import { waitForLocalMigrateServerIdle } from "./server-lifecycle.ts";
 
 const require = createRequire(import.meta.url);
@@ -34,7 +35,7 @@ const sdkPackage = require("migrate-sdk/package.json") as {
 interface ServerArguments {
   readonly configPath?: string;
   readonly cwd: string;
-  readonly socketPath?: string;
+  readonly socketPath: string;
 }
 
 class MigrateServerBootstrapError extends Schema.TaggedError<MigrateServerBootstrapError>()(
@@ -79,11 +80,14 @@ const parseArguments = (args: readonly string[]): ServerArguments => {
   if (cwd === undefined) {
     throw new Error("Migrate Server requires --cwd");
   }
+  if (socketPath === undefined) {
+    throw new Error("Migrate Server requires --socket");
+  }
 
   return {
     ...(configPath === undefined ? {} : { configPath }),
     cwd,
-    ...(socketPath === undefined ? {} : { socketPath }),
+    socketPath,
   };
 };
 
@@ -97,7 +101,7 @@ const main = Effect.scoped(
         }),
       try: () => parseArguments(process.argv.slice(2)),
     });
-    const runtime = yield* loadConfiguredMigrationHost({
+    const runtime = yield* loadLocalMigrateServerRuntime({
       ...(parsed.configPath === undefined
         ? {}
         : { configPath: parsed.configPath }),
@@ -126,42 +130,27 @@ const main = Effect.scoped(
           .digest("hex")}`
       );
     const serverInfo: MigrateServerInfo = {
-      capabilities: [...MIGRATE_CAPABILITIES],
-      configPath: runtime.configPath,
       environment: {
         id: `local:${parsed.cwd}`,
-        label: "Local",
+        label: basename(runtime.configPath),
       },
       protocolVersion: MIGRATE_PROTOCOL_VERSION,
       registryId,
-      runtime: { name: "node", version: process.versions.node },
       sdkVersion: sdkPackage.version,
     };
     const ServerApplication = MigrateServer.layer({
-      backend: makeConfiguredMigrationServerBackend(runtime),
+      backend: makeRegistryMigrateServerBackend(runtime),
       serverInfo,
     });
-    const Handlers = MigrateServerHandlers.pipe(
+    const Handlers = MigrateStreamingServerHandlers.pipe(
       Layer.provide(ServerApplication)
     );
-    if (parsed.socketPath === undefined) {
-      const workerServerLayer = layerRpcServer(MigrateRpcs, {
-        disableFatalDefects: true,
-      }).pipe(
-        Layer.provide(Handlers),
-        Layer.provide(layerProtocolWorkerRunner),
-        Layer.provide(layerNodeWorkerRunner)
-      );
-
-      return yield* Layer.launch(workerServerLayer);
-    }
-
     const socketPath = parsed.socketPath;
     const socketProtocolLayer = layerProtocolSocketServer.pipe(
       Layer.provide(NodeSocketServer.layer({ path: socketPath })),
       Layer.provide(layerNdjson)
     );
-    const socketServerLayer = layerRpcServer(MigrateRpcs, {
+    const socketServerLayer = layerRpcServer(MigrateStreamingRpcs, {
       disableFatalDefects: true,
     }).pipe(Layer.provide(Handlers), Layer.provideMerge(socketProtocolLayer));
     const serveUntilIdle = Effect.gen(function* () {

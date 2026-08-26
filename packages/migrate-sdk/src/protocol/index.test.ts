@@ -3,7 +3,6 @@ import { Schema } from "effect";
 import { MigrationMessage } from "../domain/message.ts";
 import {
   BreakLock,
-  CancelExecution,
   GetActiveRuns,
   GetDashboard,
   GetMessages,
@@ -13,17 +12,15 @@ import {
   MigrateAction,
   MigrateActiveRun,
   MigrateBreakLockResult,
-  MigrateCancellationResult,
-  MigrateCapability,
   MigrateDashboard,
   MigrateDependencyCheck,
   MigrateEnvironmentInfo,
-  MigrateExecutionId,
-  MigrateExecutionNotFoundError,
   MigrateExecutionOptions,
-  MigrateExecutionReference,
   MigrateExecutionState,
+  MigrateHttpRpcs,
   MigrateObservationEvent,
+  MigrateObservationLease,
+  MigrateObservationResumeToken,
   MigrateOperationError,
   MigrateOperationRequest,
   MigratePipelineConcurrency,
@@ -36,12 +33,14 @@ import {
   MigrateProtocolVersion,
   MigrateRegistryEntry,
   MigrateRegistryGroup,
+  MigrateRunStartResult,
   MigrateServerInfo,
   MigrateSourceIdentityHistoryEntry,
+  MigrateStreamingRpcs,
   MigrateTarget,
   NormalizeSourceIdentity,
-  ObserveExecution,
   ObserveRun,
+  ObserveRunLease,
   PrepareOperation,
   ScanSource,
   StartOperation,
@@ -115,6 +114,18 @@ const preparedOperationValue = {
       },
     },
   ],
+  request: {
+    action: "run",
+    options: {
+      execution: {
+        process: { concurrency: 4 },
+        rollback: { concurrency: "unbounded" },
+      },
+      sourceIdentities: ["article-1", "article-2"],
+      withDependencies: true,
+    },
+    target: { definitionId: "articles", kind: "migration" },
+  },
   sourceIdentities: ["article-1", "article-2"],
   target: { definitionId: "articles", kind: "migration" },
 };
@@ -131,7 +142,6 @@ const contractCases: readonly {
   readonly value: unknown;
 }[] = [
   { name: "protocol version", schema: MigrateProtocolVersion, value: 1 },
-  { name: "capability", schema: MigrateCapability, value: "dashboard" },
   {
     name: "environment",
     schema: MigrateEnvironmentInfo,
@@ -141,11 +151,9 @@ const contractCases: readonly {
     name: "server info",
     schema: MigrateServerInfo,
     value: {
-      capabilities: ["dashboard", "observe-execution"],
       environment: { id: "production" },
       protocolVersion: 1,
       registryId: "catalog",
-      runtime: { name: "node", version: "24.16.0" },
       sdkVersion: "0.6.0",
     },
   },
@@ -260,30 +268,31 @@ const contractCases: readonly {
       updatedAt: "2026-08-24T12:00:00.000Z",
     },
   },
-  { name: "execution id", schema: MigrateExecutionId, value: "execution-1" },
   {
     name: "starting state",
     schema: MigrateExecutionState,
     value: { definitionId: "articles", kind: "starting" },
   },
   {
-    name: "running state",
+    name: "server-owned running state",
     schema: MigrateExecutionState,
     value: {
       adapter: "inline",
       definitionId: "articles",
       kind: "running",
+      ownership: "server",
       runId: "run-1",
     },
   },
   {
-    name: "observing state",
+    name: "provider-owned running state",
     schema: MigrateExecutionState,
     value: {
       adapter: "workflow",
       definitionId: "articles",
       executionId: "workflow-1",
-      kind: "observing",
+      kind: "running",
+      ownership: "provider",
       runId: "run-1",
     },
   },
@@ -293,14 +302,11 @@ const contractCases: readonly {
     value: { definitionId: "articles", kind: "cancelling", runId: "run-1" },
   },
   {
-    name: "execution reference",
-    schema: MigrateExecutionReference,
+    name: "run start result",
+    schema: MigrateRunStartResult,
     value: {
-      adapter: "workflow",
-      executionId: "execution-1",
-      lifecycle: "detached",
-      providerExecutionId: "workflow-1",
       runId: "run-1",
+      status: "started",
     },
   },
   {
@@ -341,19 +347,23 @@ const contractCases: readonly {
     },
   },
   {
-    name: "idle cancellation",
-    schema: MigrateCancellationResult,
-    value: { kind: "idle" },
+    name: "observation resume token",
+    schema: MigrateObservationResumeToken,
+    value: "sha256:checkpoint",
   },
   {
-    name: "requested cancellation",
-    schema: MigrateCancellationResult,
-    value: { kind: "requested", message: "Cancelling" },
-  },
-  {
-    name: "detached cancellation",
-    schema: MigrateCancellationResult,
-    value: { kind: "detached", message: "Run continues" },
+    name: "observation lease",
+    schema: MigrateObservationLease,
+    value: {
+      events: [
+        {
+          resumeToken: "sha256:checkpoint",
+          event: { definitions: [], kind: "progress" },
+        },
+      ],
+      kind: "continuing",
+      nextResumeToken: "sha256:checkpoint",
+    },
   },
   {
     name: "break lock result",
@@ -377,15 +387,6 @@ const contractCases: readonly {
       acceptedFingerprint: "sha256:accepted",
       currentFingerprint: "sha256:current",
       message: "Plan changed",
-    },
-  },
-  {
-    name: "execution not found error",
-    schema: MigrateExecutionNotFoundError,
-    value: {
-      _tag: "MigrateExecutionNotFoundError",
-      executionId: "execution-1",
-      message: "Execution not found",
     },
   },
   {
@@ -501,19 +502,14 @@ const rpcPayloadCases: readonly {
     },
   },
   {
-    name: "ObserveExecution",
-    schema: ObserveExecution.payloadSchema,
-    value: { executionId: "execution-1" },
-  },
-  {
     name: "ObserveRun",
     schema: ObserveRun.payloadSchema,
     value: { runId: "run-1" },
   },
   {
-    name: "CancelExecution",
-    schema: CancelExecution.payloadSchema,
-    value: { executionId: "execution-1" },
+    name: "ObserveRunLease",
+    schema: ObserveRunLease.payloadSchema,
+    value: { after: "sha256:checkpoint", runId: "run-1" },
   },
   {
     name: "StopRun",
@@ -548,11 +544,9 @@ const rpcUnarySuccessCases: readonly {
     name: "GetServerInfo",
     schema: GetServerInfo.successSchema,
     value: {
-      capabilities: ["dashboard", "observe-execution"],
       environment: { id: "production" },
       protocolVersion: 1,
       registryId: "catalog",
-      runtime: { name: "node", version: "24.16.0" },
       sdkVersion: "0.6.0",
     },
   },
@@ -586,15 +580,9 @@ const rpcUnarySuccessCases: readonly {
     name: "StartOperation",
     schema: StartOperation.successSchema,
     value: {
-      executionId: "execution-1",
-      lifecycle: "attached",
       runId: "run-1",
+      status: "started",
     },
-  },
-  {
-    name: "CancelExecution",
-    schema: CancelExecution.successSchema,
-    value: { kind: "idle" },
   },
   {
     name: "StopRun",
@@ -625,13 +613,19 @@ const rpcErrorCases = [
   NormalizeSourceIdentity,
   PrepareOperation,
   StartOperation,
-  CancelExecution,
   StopRun,
   ScanSource,
   BreakLock,
 ] as const;
 
 describe("Migrate Protocol", () => {
+  it("keeps streaming observation off the bounded HTTP RPC surface", () => {
+    expect(MigrateHttpRpcs.requests.has("ObserveRun")).toBe(false);
+    expect(MigrateHttpRpcs.requests.has("ObserveRunLease")).toBe(true);
+    expect(MigrateStreamingRpcs.requests.has("ObserveRun")).toBe(true);
+    expect(MigrateStreamingRpcs.requests.has("ObserveRunLease")).toBe(false);
+  });
+
   for (const contract of contractCases) {
     it(`round-trips ${contract.name}`, () => {
       expect(roundTrip(contract.schema, contract.value)).toEqual(
@@ -714,6 +708,101 @@ describe("Migrate Protocol", () => {
     ).toThrow();
   });
 
+  it("rejects a terminal observation lease without a terminal event", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(MigrateObservationLease)({
+        events: [],
+        kind: "terminal",
+      })
+    ).toThrow();
+  });
+
+  it("accepts lifecycle state batched with terminal completion", () => {
+    expect(
+      Schema.decodeUnknownSync(MigrateObservationLease)({
+        event: {
+          resumeToken: "sha256:terminal",
+          event: {
+            kind: "terminal",
+            message: "Run completed",
+            outcome: "completed",
+            runId: "run-1",
+          },
+        },
+        events: [
+          {
+            resumeToken: "sha256:state",
+            event: {
+              kind: "state",
+              state: {
+                adapter: "workflow-sdk",
+                definitionId: "articles",
+                executionId: "workflow-run-1",
+                kind: "running",
+                ownership: "provider",
+                runId: "run-1",
+              },
+            },
+          },
+        ],
+        kind: "terminal",
+      })
+    ).toMatchObject({
+      events: [{ event: { kind: "state" } }],
+      kind: "terminal",
+    });
+  });
+
+  it("rejects a terminal event inside a continuing observation lease", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(MigrateObservationLease)({
+        events: [
+          {
+            resumeToken: "sha256:terminal",
+            event: {
+              kind: "terminal",
+              message: "Run completed",
+              outcome: "completed",
+              runId: "run-1",
+            },
+          },
+        ],
+        kind: "continuing",
+        nextResumeToken: "sha256:terminal",
+      })
+    ).toThrow();
+  });
+
+  it("rejects continuing observation events without a resume token", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(MigrateObservationLease)({
+        events: [
+          {
+            resumeToken: "sha256:checkpoint",
+            event: { definitions: [], kind: "progress" },
+          },
+        ],
+        kind: "continuing",
+      })
+    ).toThrow();
+  });
+
+  it("rejects an empty continuing observation lease", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(MigrateObservationLease)({
+        events: [],
+        kind: "continuing",
+        nextResumeToken: "sha256:checkpoint",
+      })
+    ).toThrow();
+  });
+
+  it("accepts an observation heartbeat without a resume token", () => {
+    expect(
+      Schema.decodeUnknownSync(MigrateObservationLease)({ kind: "heartbeat" })
+    ).toEqual({ kind: "heartbeat" });
+  });
+
   it("rejects invalid protocol concurrency", () => {
     expect(() =>
       Schema.decodeUnknownSync(MigratePreparedOperation)({
@@ -728,6 +817,11 @@ describe("Migrate Protocol", () => {
           withDependencies: false,
         },
         planRows: [],
+        request: {
+          action: "run",
+          options: { execution: { process: { concurrency: 0 } } },
+          target: { definitionId: "articles", kind: "migration" },
+        },
         target: { definitionId: "articles", kind: "migration" },
       })
     ).toThrow();
@@ -735,11 +829,9 @@ describe("Migrate Protocol", () => {
 
   it("decodes future protocol versions before compatibility negotiation", () => {
     const info = Schema.decodeUnknownSync(MigrateServerInfo)({
-      capabilities: ["dashboard"],
       environment: { id: "production", label: "Production" },
       protocolVersion: MIGRATE_PROTOCOL_VERSION + 1,
       registryId: "catalog",
-      runtime: { name: "node", version: "24.16.0" },
       sdkVersion: "0.6.0",
     });
 
@@ -751,11 +843,9 @@ describe("Migrate Protocol", () => {
       Schema.decodeUnknownSync(MigrateServerInfo, {
         onExcessProperty: "error",
       })({
-        capabilities: ["dashboard"],
         environment: { id: "production" },
         extra: true,
         protocolVersion: 1,
-        runtime: { name: "node", version: "24.16.0" },
         sdkVersion: "0.6.0",
       })
     ).toThrow();
