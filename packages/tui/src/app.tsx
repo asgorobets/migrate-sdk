@@ -2,20 +2,12 @@ import { basename } from "node:path";
 import { type KeyEvent, RGBA } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type {
-  ActiveMigrationRun,
   MigrationDefinitionStatus,
   MigrationExecutionOptions,
   MigrationRunId,
   PipelineExecutionConcurrency,
 } from "migrate-sdk";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BreakLockDialog } from "./components/break-lock-dialog.tsx";
 import {
   ExecutionSettingsDialog,
@@ -45,9 +37,9 @@ import {
   DialogDescription,
   DialogTitle,
 } from "./components/ui/dialog.tsx";
-import type { MigrationTuiExecutionState } from "./execution-controller.ts";
 import type {
   MigrationTuiAction,
+  MigrationTuiActiveRun,
   MigrationTuiMessage,
   MigrationTuiPreparedOperation,
   MigrationTuiPrepareOptions,
@@ -369,25 +361,6 @@ const PlanHierarchy = ({
   );
 };
 
-const executionStateLabel = (state: MigrationTuiExecutionState): string => {
-  switch (state.kind) {
-    case "cancelling":
-      return state.runId === undefined
-        ? "Exit requested; waiting for the run to start…"
-        : `Cancelling run ${state.runId}; waiting for active work to finish…`;
-    case "observing":
-      return `Run ${state.runId} is running…`;
-    case "running":
-      return `Run ${state.runId} is running…`;
-    case "starting":
-      return `Starting ${state.definitionId}…`;
-    default: {
-      const unhandled: never = state;
-      return unhandled;
-    }
-  }
-};
-
 const SafetyDialog = ({
   height,
   onCancel,
@@ -550,15 +523,10 @@ export const MigrationTuiApp = ({
   readonly runtime: MigrationTuiRuntime;
 }) => {
   const dimensions = useTerminalDimensions();
-  const executionState = useSyncExternalStore(
-    runtime.subscribeExecution,
-    runtime.getExecutionState,
-    runtime.getExecutionState
-  );
   const [rows, setRows] = useState(initialRows ?? runtime.rows);
-  const [activeRuns, setActiveRuns] = useState<readonly ActiveMigrationRun[]>(
-    []
-  );
+  const [activeRuns, setActiveRuns] = useState<
+    readonly MigrationTuiActiveRun[]
+  >([]);
   const [listTab, setListTab] = useState<MigrationListTab>("migrations");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [actionIndex, setActionIndex] = useState(0);
@@ -640,6 +608,13 @@ export const MigrationTuiApp = ({
       ? undefined
       : { definitionId: selectedRow.entry.id, kind: "migration" };
   }, [listTab, selectedGroup, selectedRow]);
+  const selectedActiveRun = useMemo(() => {
+    const matching = activeRuns.filter((run) =>
+      selectedRows.some((row) => row.status?.lock?.ownerRunId === run.runId)
+    );
+
+    return matching.length === 1 ? matching[0] : undefined;
+  }, [activeRuns, selectedRows]);
   const selectiveEntries = useMemo(
     () =>
       selectiveTarget === null
@@ -648,8 +623,7 @@ export const MigrationTuiApp = ({
           []),
     [selectiveEntriesByDefinition, selectiveTarget]
   );
-  const effectiveBusy =
-    executionState === undefined ? busy : executionStateLabel(executionState);
+  const effectiveBusy = busy;
   const dashboardStateRef = useRef({
     busy: effectiveBusy,
     selectedRows,
@@ -660,6 +634,13 @@ export const MigrationTuiApp = ({
     selectedIndex: messageIndex,
   });
   const executingRef = useRef(false);
+  const runObservationRef = useRef<
+    | {
+        readonly runId: MigrationRunId;
+        readonly token: symbol;
+      }
+    | undefined
+  >(undefined);
   const refreshRequestRef = useRef(0);
   const selectiveHistoryRequestRef = useRef(0);
   dashboardStateRef.current = {
@@ -671,10 +652,6 @@ export const MigrationTuiApp = ({
     count: messages.length,
     selectedIndex: messageIndex,
   };
-  const reattachedExecutionRef = useRef(
-    initialRows !== undefined && executionState !== undefined
-  );
-
   const refresh = useCallback(
     async (nextNotice = "Status reloaded") => {
       const requestId = refreshRequestRef.current + 1;
@@ -821,20 +798,12 @@ export const MigrationTuiApp = ({
       setError(null);
 
       try {
-        const result = await runtime.execute(operation, {
-          onProgress: updateLiveStatuses,
-          onProgressError: (cause) => {
-            setError(`Unable to refresh live status: ${errorMessage(cause)}`);
-          },
-          onObservationWarning: setNotice,
-        });
-
-        if (lifecycle.isExitRequested()) {
-          return;
-        }
-
-        setNotice(result.message);
-        await refresh();
+        const reference = await runtime.start(operation);
+        await refresh(
+          reference.lifecycle === "completed"
+            ? `Run ${reference.runId} completed`
+            : `Run ${reference.runId} started`
+        );
       } catch (cause) {
         if (lifecycle.isExitRequested()) {
           return;
@@ -846,25 +815,23 @@ export const MigrationTuiApp = ({
         lifecycle.executionSettled();
       }
     },
-    [
-      lifecycle,
-      refresh,
-      refreshAfterExecutionFailure,
-      runtime,
-      updateLiveStatuses,
-    ]
+    [lifecycle, refresh, refreshAfterExecutionFailure, runtime]
   );
 
   const observeActiveRun = useCallback(
     async (runId: MigrationRunId) => {
-      if (executingRef.current || lifecycle.isExitRequested()) {
+      if (lifecycle.isExitRequested()) {
         return;
       }
 
-      executingRef.current = true;
+      if (runObservationRef.current?.runId === runId) {
+        return;
+      }
+
+      runtime.detachRunObservation();
+      const token = Symbol("MigrationTuiRunObservation");
+      runObservationRef.current = { runId, token };
       setView("dashboard");
-      setNotice(null);
-      setBusy(`Attaching to run ${runId}…`);
       setError(null);
 
       try {
@@ -876,21 +843,28 @@ export const MigrationTuiApp = ({
           },
         });
 
-        if (lifecycle.isExitRequested()) {
+        if (
+          lifecycle.isExitRequested() ||
+          runObservationRef.current?.token !== token
+        ) {
           return;
         }
 
-        setNotice(result.message);
-        await refresh();
+        await refresh(result.message);
       } catch (cause) {
-        if (lifecycle.isExitRequested()) {
+        if (
+          lifecycle.isExitRequested() ||
+          runObservationRef.current?.token !== token
+        ) {
           return;
         }
 
         await refreshAfterExecutionFailure(cause);
       } finally {
-        executingRef.current = false;
-        lifecycle.executionSettled();
+        if (runObservationRef.current?.token === token) {
+          runObservationRef.current = undefined;
+          lifecycle.executionSettled();
+        }
       }
     },
     [
@@ -900,6 +874,23 @@ export const MigrationTuiApp = ({
       runtime,
       updateLiveStatuses,
     ]
+  );
+
+  const stopRun = useCallback(
+    async (runId: MigrationRunId) => {
+      setView("dashboard");
+      setBusy(`Stopping run ${runId}…`);
+      setError(null);
+
+      try {
+        const result = await runtime.stopRun(runId);
+        await refresh(result.message);
+      } catch (cause) {
+        setError(errorMessage(cause));
+        setBusy("");
+      }
+    },
+    [refresh, runtime]
   );
 
   const prepareOperation = useCallback(
@@ -1246,8 +1237,13 @@ export const MigrationTuiApp = ({
         return;
       }
 
-      if (option.view === "attach-run" && option.runId !== undefined) {
+      if (option.view === "view-run" && option.runId !== undefined) {
         startTask(observeActiveRun(option.runId));
+        return;
+      }
+
+      if (option.view === "stop-run" && option.runId !== undefined) {
+        startTask(stopRun(option.runId));
         return;
       }
 
@@ -1285,6 +1281,7 @@ export const MigrationTuiApp = ({
       prepareOperation,
       scanSelectedSource,
       startTask,
+      stopRun,
     ]
   );
 
@@ -1305,15 +1302,23 @@ export const MigrationTuiApp = ({
   }, [recoveryNotice, refresh, startTask]);
 
   useEffect(() => {
-    if (
-      reattachedExecutionRef.current &&
-      executionState === undefined &&
-      !lifecycle.isExitRequested()
-    ) {
-      reattachedExecutionRef.current = false;
-      startTask(refresh(recoveryNotice));
+    const runId = selectedActiveRun?.runId;
+
+    if (runId === undefined) {
+      runObservationRef.current = undefined;
+      runtime.detachRunObservation();
+      return;
     }
-  }, [executionState, lifecycle, recoveryNotice, refresh, startTask]);
+
+    startTask(observeActiveRun(runId));
+
+    return () => {
+      if (runObservationRef.current?.runId === runId) {
+        runObservationRef.current = undefined;
+      }
+      runtime.detachRunObservation(runId);
+    };
+  }, [observeActiveRun, runtime, selectedActiveRun?.runId, startTask]);
 
   useEffect(() => {
     if (view !== "selective-run") {
@@ -1797,9 +1802,7 @@ export const MigrationTuiApp = ({
         {effectiveBusy === "" ? null : (
           <text fg={colors.info}>{effectiveBusy}</text>
         )}
-        {error === null ? null : (
-          <text fg={colors.danger}>{error}</text>
-        )}
+        {error === null ? null : <text fg={colors.danger}>{error}</text>}
         {error !== null || notice === null ? null : (
           <text fg={colors.success}>{notice}</text>
         )}

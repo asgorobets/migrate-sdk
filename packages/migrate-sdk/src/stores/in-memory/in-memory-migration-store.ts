@@ -474,6 +474,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       definitionId: MigrationDefinitionId,
       ownerRunId: MigrationRunId
     ) {
+      const createdAt = yield* DateTime.nowAsDate;
       const current = state.definitionLocks.get(definitionId);
 
       if (current !== undefined) {
@@ -483,7 +484,6 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
         );
       }
 
-      const createdAt = yield* DateTime.nowAsDate;
       const lock: MigrationDefinitionLock = {
         createdAt,
         definitionId,

@@ -1,11 +1,11 @@
 import {
-  type ActiveMigrationRun,
   toMigrationDefinitionGroupId,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
   toMigrationRunId,
 } from "migrate-sdk";
 import { describe, expect, it } from "vitest";
+import type { MigrationTuiActiveRun } from "../runtime.ts";
 import {
   migrationTuiAvailableActions,
   migrationTuiPrimaryActions,
@@ -13,7 +13,7 @@ import {
 
 const definitionId = toMigrationDefinitionId("articles");
 const runId = toMigrationRunId("run-active");
-const activeRun: ActiveMigrationRun = {
+const activeRun: MigrationTuiActiveRun = {
   definitionIds: [definitionId],
   execution: {
     adapter: "workflow-sdk",
@@ -23,10 +23,11 @@ const activeRun: ActiveMigrationRun = {
   runId,
   startedAt: new Date("2026-08-25T12:00:00.000Z"),
   status: "running",
+  stopSupported: true,
 };
 
 describe("migration actions", () => {
-  it("offers attachment as the primary action for a reconnectable locked run", () => {
+  it("offers run focus and stopping for a server-owned locked run", () => {
     const actions = migrationTuiAvailableActions(
       { definitionId, kind: "migration" },
       [
@@ -57,15 +58,17 @@ describe("migration actions", () => {
     expect(actions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          id: "attach-run",
-          key: "a",
+          id: "view-run",
+          key: "v",
           runId,
         }),
+        expect.objectContaining({ id: "stop-run", key: "x", runId }),
         expect.objectContaining({ id: "break-lock" }),
       ])
     );
     expect(migrationTuiPrimaryActions(actions)).toEqual([
-      expect.objectContaining({ id: "attach-run" }),
+      expect.objectContaining({ id: "view-run" }),
+      expect.objectContaining({ id: "stop-run" }),
     ]);
   });
 
@@ -114,7 +117,7 @@ describe("migration actions", () => {
     );
 
     expect(actions).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: "attach-run" })])
+      expect.arrayContaining([expect.objectContaining({ id: "view-run" })])
     );
   });
 });

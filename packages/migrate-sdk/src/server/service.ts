@@ -6,7 +6,6 @@ import {
   FiberSet,
   Layer,
   Queue,
-  Ref,
   Schema,
   Stream,
 } from "effect";
@@ -31,6 +30,7 @@ import {
   MigratePlanFingerprint,
   type MigratePreparedOperation,
   MigrateProtocolError,
+  type MigrateRunStopResult,
   type MigrateServerInfo,
   type MigrateSourceIdentityHistoryEntry,
   type MigrateTarget,
@@ -81,6 +81,9 @@ export interface MigrateServerService {
     readonly acceptedFingerprint: MigratePreparedOperation["fingerprint"];
     readonly request: MigrateOperationRequest;
   }) => Effect.Effect<MigrateExecutionReference, MigrateProtocolError>;
+  readonly stopRun: (input: {
+    readonly runId: MigrationRunId;
+  }) => Effect.Effect<MigrateRunStopResult, MigrateProtocolError>;
 }
 
 export interface MigrateServerExecutionObserver {
@@ -98,6 +101,11 @@ export interface MigrateServerExecutionResult {
   readonly runId: MigrationRunId;
 }
 
+export interface MigrateServerExecutionHandle {
+  readonly result: Effect.Effect<MigrateServerExecutionResult, unknown>;
+  readonly stop: Effect.Effect<MigrateCancellationResult, unknown>;
+}
+
 export interface MigrateServerPreparedOperation<ExecutableOperation> {
   readonly executable: ExecutableOperation;
   readonly operation: Omit<MigratePreparedOperation, "fingerprint">;
@@ -107,14 +115,10 @@ export interface MigrateServerBackend<ExecutableOperation> {
   readonly breakLock: (
     lock: MigrationDefinitionLock
   ) => Effect.Effect<MigrateBreakLockResult, unknown>;
-  readonly cancelActiveExecution: Effect.Effect<
-    MigrateCancellationResult,
-    unknown
-  >;
   readonly executeOperation: (
     operation: ExecutableOperation,
     observer: MigrateServerExecutionObserver
-  ) => Effect.Effect<MigrateServerExecutionResult, unknown>;
+  ) => Effect.Effect<MigrateServerExecutionHandle, unknown>;
   readonly getActiveRuns: Effect.Effect<readonly MigrateActiveRun[], unknown>;
   readonly getDashboard: Effect.Effect<MigrateDashboard, unknown>;
   readonly getMessages: (
@@ -156,8 +160,12 @@ interface ExecutionListener {
 interface ExecutionRecord {
   closed: boolean;
   readonly events: MigrateObservationEvent[];
+  readonly executionId: MigrateExecutionId;
+  lifecycle?: MigrateExecutionReference["lifecycle"] | undefined;
   readonly listeners: Set<ExecutionListener>;
   observed: boolean;
+  runId?: MigrationRunId | undefined;
+  stop?: Effect.Effect<MigrateCancellationResult, unknown> | undefined;
 }
 
 const errorMessage = (cause: unknown): string => {
@@ -232,10 +240,37 @@ const fingerprint = (
 
 const makeMigrationServerService = <ExecutableOperation>(
   { backend, serverInfo }: MigrateServerInput<ExecutableOperation>,
-  runExecution: (effect: Effect.Effect<void>) => unknown,
-  activeExecutionId: Ref.Ref<MigrateExecutionId | undefined>
+  runExecution: (effect: Effect.Effect<void>) => unknown
 ): MigrateServerService => {
   const executions = new Map<string, ExecutionRecord>();
+  const executionsByRunId = new Map<string, ExecutionRecord>();
+
+  const removeExecution = (record: ExecutionRecord) => {
+    executions.delete(record.executionId);
+    if (record.runId !== undefined) {
+      executionsByRunId.delete(record.runId);
+    }
+  };
+
+  const registerRun = (
+    record: ExecutionRecord,
+    runId: MigrationRunId,
+    lifecycle: MigrateExecutionReference["lifecycle"]
+  ) => {
+    record.lifecycle = lifecycle;
+    record.runId = runId;
+    executionsByRunId.set(runId, record);
+  };
+
+  const stopSupported = (runId: MigrationRunId): boolean => {
+    const record = executionsByRunId.get(runId);
+    return record?.closed === false && record.lifecycle === "attached";
+  };
+
+  const decorateActiveRun = (run: MigrateActiveRun): MigrateActiveRun => ({
+    ...run,
+    stopSupported: stopSupported(run.runId),
+  });
 
   const publish = (record: ExecutionRecord, event: MigrateObservationEvent) => {
     record.events.push(event);
@@ -252,6 +287,43 @@ const makeMigrationServerService = <ExecutableOperation>(
       listener.end();
     }
     record.listeners.clear();
+  };
+
+  const observeRecord = (
+    record: ExecutionRecord
+  ): Stream.Stream<MigrateObservationEvent> => {
+    record.observed = true;
+
+    return Stream.callback<MigrateObservationEvent>((queue) =>
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          for (const event of record.events) {
+            Queue.offerUnsafe(queue, event);
+          }
+
+          if (record.closed) {
+            Queue.endUnsafe(queue);
+            return;
+          }
+
+          const listener: ExecutionListener = {
+            emit: (event) => Queue.offerUnsafe(queue, event),
+            end: () => Queue.endUnsafe(queue),
+          };
+          record.listeners.add(listener);
+          return listener;
+        }),
+        (listener) =>
+          Effect.sync(() => {
+            if (listener !== undefined) {
+              record.listeners.delete(listener);
+            }
+            if (record.closed) {
+              removeExecution(record);
+            }
+          })
+      )
+    );
   };
 
   const prepareExecutable = (
@@ -276,32 +348,52 @@ const makeMigrationServerService = <ExecutableOperation>(
       backend.breakLock(lock).pipe(Effect.mapError(operationError)),
     cancelExecution: ({ executionId }) =>
       Effect.gen(function* () {
-        const activeId = yield* Ref.get(activeExecutionId);
-        const requestedExecutionId = executionId ?? activeId;
+        const stoppable = [...executions.values()].filter(
+          (record) => !record.closed && record.stop !== undefined
+        );
+        let record: ExecutionRecord | undefined;
 
-        if (
-          requestedExecutionId !== undefined &&
-          !executions.has(requestedExecutionId)
-        ) {
+        if (executionId === undefined) {
+          record = stoppable.length === 1 ? stoppable[0] : undefined;
+        } else {
+          record = executions.get(executionId);
+        }
+
+        if (executionId !== undefined && record === undefined) {
           return yield* new MigrateExecutionNotFoundError({
-            executionId: requestedExecutionId,
-            message: `Execution was not found: ${requestedExecutionId}`,
+            executionId,
+            message: `Execution was not found: ${executionId}`,
+          });
+        }
+
+        if (executionId === undefined && stoppable.length > 1) {
+          return yield* new MigrateOperationError({
+            code: "operation-failed",
+            message: "Execution id is required when multiple runs are active",
           });
         }
 
         if (
-          requestedExecutionId !== undefined &&
-          requestedExecutionId !== activeId
+          record === undefined ||
+          record.closed ||
+          record.stop === undefined
         ) {
           return { kind: "idle" as const };
         }
 
-        return yield* backend.cancelActiveExecution.pipe(
-          Effect.mapError(operationError)
-        );
+        return yield* record.stop.pipe(Effect.mapError(operationError));
       }),
-    getDashboard: backend.getDashboard.pipe(Effect.mapError(operationError)),
-    getActiveRuns: backend.getActiveRuns.pipe(Effect.mapError(operationError)),
+    getDashboard: backend.getDashboard.pipe(
+      Effect.map((dashboard) => ({
+        ...dashboard,
+        activeRuns: dashboard.activeRuns.map(decorateActiveRun),
+      })),
+      Effect.mapError(operationError)
+    ),
+    getActiveRuns: backend.getActiveRuns.pipe(
+      Effect.map((runs) => runs.map(decorateActiveRun)),
+      Effect.mapError(operationError)
+    ),
     getMessages: ({ target }) =>
       backend.getMessages(target).pipe(Effect.mapError(operationError)),
     getServerInfo: Effect.succeed(serverInfo),
@@ -325,86 +417,63 @@ const makeMigrationServerService = <ExecutableOperation>(
         );
       }
 
-      record.observed = true;
+      return observeRecord(record);
+    },
+    observeRun: ({ runId }) => {
+      const owned = executionsByRunId.get(runId);
 
-      return Stream.callback<MigrateObservationEvent>((queue) =>
-        Effect.acquireRelease(
-          Effect.sync(() => {
-            for (const event of record.events) {
-              Queue.offerUnsafe(queue, event);
-            }
+      if (owned !== undefined) {
+        return observeRecord(owned);
+      }
 
-            if (record.closed) {
-              Queue.endUnsafe(queue);
-              return;
-            }
-
-            const listener: ExecutionListener = {
-              emit: (event) => Queue.offerUnsafe(queue, event),
-              end: () => Queue.endUnsafe(queue),
-            };
-            record.listeners.add(listener);
-            return listener;
-          }),
-          (listener) =>
-            Effect.sync(() => {
-              if (listener !== undefined) {
-                record.listeners.delete(listener);
-              }
-              if (record.closed) {
-                executions.delete(executionId);
-              }
+      return Stream.callback<MigrateObservationEvent, MigrateProtocolError>(
+        (queue) =>
+          backend
+            .observeRun(runId, {
+              onObservationWarning: (message) =>
+                Queue.offerUnsafe(queue, { kind: "warning", message }),
+              onProgress: ({ definitions }) =>
+                Queue.offerUnsafe(queue, { definitions, kind: "progress" }),
+              onProgressError: (cause) =>
+                Queue.offerUnsafe(queue, {
+                  kind: "warning",
+                  message: `Unable to refresh live status: ${errorMessage(cause)}`,
+                }),
+              onStateChange: (state) =>
+                Queue.offerUnsafe(queue, { kind: "state", state }),
             })
-        )
+            .pipe(
+              Effect.matchCause({
+                onFailure: (cause) =>
+                  Queue.failCauseUnsafe(
+                    queue,
+                    Cause.fail(
+                      operationError(Cause.squash(cause), "execution-failed")
+                    )
+                  ),
+                onSuccess: (result) => {
+                  Queue.offerUnsafe(
+                    queue,
+                    result.outcome === "detached"
+                      ? {
+                          kind: "detached",
+                          message: result.message,
+                          runId: result.runId,
+                        }
+                      : {
+                          kind: "terminal",
+                          message: result.message,
+                          outcome: result.outcome,
+                          runId: result.runId,
+                        }
+                  );
+                  Queue.endUnsafe(queue);
+                },
+              }),
+              Effect.forkScoped
+            )
       );
     },
-    observeRun: ({ runId }) =>
-      Stream.callback<MigrateObservationEvent, MigrateProtocolError>((queue) =>
-        backend
-          .observeRun(runId, {
-            onObservationWarning: (message) =>
-              Queue.offerUnsafe(queue, { kind: "warning", message }),
-            onProgress: ({ definitions }) =>
-              Queue.offerUnsafe(queue, { definitions, kind: "progress" }),
-            onProgressError: (cause) =>
-              Queue.offerUnsafe(queue, {
-                kind: "warning",
-                message: `Unable to refresh live status: ${errorMessage(cause)}`,
-              }),
-            onStateChange: (state) =>
-              Queue.offerUnsafe(queue, { kind: "state", state }),
-          })
-          .pipe(
-            Effect.matchCause({
-              onFailure: (cause) =>
-                Queue.failCauseUnsafe(
-                  queue,
-                  Cause.fail(
-                    operationError(Cause.squash(cause), "execution-failed")
-                  )
-                ),
-              onSuccess: (result) => {
-                Queue.offerUnsafe(
-                  queue,
-                  result.outcome === "detached"
-                    ? {
-                        kind: "detached",
-                        message: result.message,
-                        runId: result.runId,
-                      }
-                    : {
-                        kind: "terminal",
-                        message: result.message,
-                        outcome: result.outcome,
-                        runId: result.runId,
-                      }
-                );
-                Queue.endUnsafe(queue);
-              },
-            }),
-            Effect.forkScoped
-          )
-      ),
     prepareOperation: prepare,
     scanSource: ({ concurrency, target }) =>
       backend
@@ -429,23 +498,13 @@ const makeMigrationServerService = <ExecutableOperation>(
         }
 
         const executionId = yield* makeExecutionId;
-        const claimed = yield* Ref.modify(activeExecutionId, (activeId) =>
-          activeId === undefined ? [true, executionId] : [false, activeId]
-        );
-
-        if (!claimed) {
-          return yield* new MigrateOperationError({
-            code: "operation-failed",
-            message: "Another migration is already running",
-          });
-        }
-
         const started = yield* Deferred.make<
           MigrateExecutionReference,
           MigrateProtocolError
         >();
         const record: ExecutionRecord = {
           closed: false,
+          executionId,
           events: [],
           listeners: new Set(),
           observed: false,
@@ -461,7 +520,7 @@ const makeMigrationServerService = <ExecutableOperation>(
           }
         };
 
-        const execution = backend
+        const backendExecution = yield* backend
           .executeOperation(currentPreparedOperation.executable, {
             onObservationWarning: (message) =>
               publish(record, { kind: "warning", message }),
@@ -477,6 +536,7 @@ const makeMigrationServerService = <ExecutableOperation>(
 
               if (state.kind === "running") {
                 runId = state.runId;
+                registerRun(record, state.runId, "attached");
                 resolveStart({
                   adapter: state.adapter,
                   executionId,
@@ -485,6 +545,7 @@ const makeMigrationServerService = <ExecutableOperation>(
                 });
               } else if (state.kind === "observing") {
                 runId = state.runId;
+                registerRun(record, state.runId, "detached");
                 resolveStart({
                   adapter: state.adapter,
                   executionId,
@@ -496,70 +557,121 @@ const makeMigrationServerService = <ExecutableOperation>(
             },
           })
           .pipe(
-            Effect.matchCause({
-              onFailure: (cause) => {
-                const error = Cause.squash(cause);
-
-                if (reference === undefined || runId === undefined) {
-                  executions.delete(executionId);
-                  Deferred.doneUnsafe(
-                    started,
-                    Effect.fail(operationError(error, "execution-failed"))
-                  );
-                  return;
-                }
-
-                publish(record, {
-                  kind: "terminal",
-                  message: errorMessage(error),
-                  outcome: "failed",
-                  runId,
-                });
-                close(record);
-              },
-              onSuccess: (result) => {
-                runId = result.runId;
-                resolveStart({
-                  executionId,
-                  lifecycle: "completed",
-                  runId: result.runId,
-                });
-                publish(
-                  record,
-                  result.outcome === "detached"
-                    ? {
-                        kind: "detached",
-                        message: result.message,
-                        runId: result.runId,
-                      }
-                    : {
-                        kind: "terminal",
-                        message: result.message,
-                        outcome: result.outcome,
-                        runId: result.runId,
-                      }
-                );
-                close(record);
-              },
-            }),
-            Effect.ensuring(
-              Ref.update(activeExecutionId, (activeId) =>
-                activeId === executionId ? undefined : activeId
-              ).pipe(
-                Effect.andThen(
-                  Effect.sync(() => {
-                    if (record.observed && record.listeners.size === 0) {
-                      executions.delete(executionId);
-                    }
-                  })
-                )
-              )
-            )
+            Effect.tapError(() => Effect.sync(() => removeExecution(record))),
+            Effect.onInterrupt(() =>
+              Effect.sync(() => removeExecution(record))
+            ),
+            Effect.mapError(operationError)
           );
+        record.stop = backendExecution.stop;
+        const execution = backendExecution.result.pipe(
+          Effect.matchCause({
+            onFailure: (cause) => {
+              const error = Cause.squash(cause);
+
+              if (reference === undefined || runId === undefined) {
+                removeExecution(record);
+                Deferred.doneUnsafe(
+                  started,
+                  Effect.fail(operationError(error, "execution-failed"))
+                );
+                return;
+              }
+
+              publish(record, {
+                kind: "terminal",
+                message: errorMessage(error),
+                outcome: "failed",
+                runId,
+              });
+              close(record);
+            },
+            onSuccess: (result) => {
+              runId = result.runId;
+              if (record.runId === undefined) {
+                registerRun(record, result.runId, "completed");
+              }
+              resolveStart({
+                executionId,
+                lifecycle: "completed",
+                runId: result.runId,
+              });
+              publish(
+                record,
+                result.outcome === "detached"
+                  ? {
+                      kind: "detached",
+                      message: result.message,
+                      runId: result.runId,
+                    }
+                  : {
+                      kind: "terminal",
+                      message: result.message,
+                      outcome: result.outcome,
+                      runId: result.runId,
+                    }
+              );
+              close(record);
+            },
+          }),
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (record.observed && record.listeners.size === 0) {
+                removeExecution(record);
+              }
+            })
+          )
+        );
         runExecution(execution);
 
         return yield* Deferred.await(started);
       }),
+    stopRun: ({ runId }) =>
+      Effect.gen(function* () {
+        const record = executionsByRunId.get(runId);
+
+        if (
+          record !== undefined &&
+          record.closed === false &&
+          record.lifecycle === "attached" &&
+          record.stop !== undefined
+        ) {
+          const cancellation = yield* record.stop;
+
+          if (cancellation.kind === "requested") {
+            return { ...cancellation, runId };
+          }
+          if (cancellation.kind === "detached") {
+            return {
+              kind: "unsupported" as const,
+              message: `Run ${runId} cannot be stopped by this Migrate Server`,
+              runId,
+            };
+          }
+
+          return {
+            kind: "not-running" as const,
+            message: `Run ${runId} is not running`,
+            runId,
+          };
+        }
+
+        const activeRuns = yield* backend.getActiveRuns;
+
+        if (activeRuns.some((run) => run.runId === runId)) {
+          return {
+            kind: "unsupported" as const,
+            message: `Run ${runId} cannot be stopped by this Migrate Server`,
+            runId,
+          };
+        }
+
+        return {
+          kind: "not-running" as const,
+          message: `Run ${runId} is not running`,
+          runId,
+        };
+      }).pipe(Effect.mapError(operationError)),
   };
 };
 
@@ -572,10 +684,7 @@ export class MigrateServer extends Context.Service<
   ): Effect.Effect<MigrateServerService, never, Scope> =>
     Effect.gen(function* () {
       const runExecution = yield* FiberSet.makeRuntime<never, void, never>();
-      const activeExecutionId = yield* Ref.make<MigrateExecutionId | undefined>(
-        undefined
-      );
-      return makeMigrationServerService(input, runExecution, activeExecutionId);
+      return makeMigrationServerService(input, runExecution);
     });
 
   static readonly layer = <ExecutableOperation>(

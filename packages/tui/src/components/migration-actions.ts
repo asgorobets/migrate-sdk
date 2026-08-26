@@ -1,19 +1,27 @@
-import type { ActiveMigrationRun, MigrationRunId } from "migrate-sdk";
+import type { MigrationRunId } from "migrate-sdk";
 import type {
   MigrationTuiAction,
+  MigrationTuiActiveRun,
   MigrationTuiRow,
   MigrationTuiTarget,
 } from "../runtime.ts";
 
 export type MigrationTuiActionView =
-  | "attach-run"
+  | "view-run"
   | "break-lock"
   | "execution-settings"
   | "messages"
   | "scan"
-  | "selective-run";
+  | "selective-run"
+  | "stop-run";
 
-type MigrationTuiPrimarySlot = "attach" | "lock" | "retry" | "rollback" | "run";
+type MigrationTuiPrimarySlot =
+  | "attach"
+  | "lock"
+  | "retry"
+  | "rollback"
+  | "run"
+  | "stop";
 
 interface MigrationTuiPrimaryAction {
   readonly compactLabel: string;
@@ -39,33 +47,36 @@ type MigrationTuiOperationAction = {
   };
 }[MigrationTuiAction];
 
-type MigrationTuiNonAttachView = Exclude<MigrationTuiActionView, "attach-run">;
+type MigrationTuiNonRunView = Exclude<
+  MigrationTuiActionView,
+  "view-run" | "stop-run"
+>;
 
 type MigrationTuiViewAction = {
-  readonly [View in MigrationTuiNonAttachView]: MigrationTuiAvailableActionBase & {
+  readonly [View in MigrationTuiNonRunView]: MigrationTuiAvailableActionBase & {
     readonly action?: never;
     readonly id: View;
     readonly runId?: never;
     readonly view: View;
   };
-}[MigrationTuiNonAttachView];
+}[MigrationTuiNonRunView];
 
-type MigrationTuiAttachAction = MigrationTuiAvailableActionBase & {
+type MigrationTuiRunViewAction = MigrationTuiAvailableActionBase & {
   readonly action?: never;
-  readonly id: "attach-run";
+  readonly id: "view-run" | "stop-run";
   readonly runId: MigrationRunId;
-  readonly view: "attach-run";
+  readonly view: "view-run" | "stop-run";
 };
 
 export type MigrationTuiAvailableAction =
-  | MigrationTuiAttachAction
+  | MigrationTuiRunViewAction
   | MigrationTuiOperationAction
   | MigrationTuiViewAction;
 
 export const migrationTuiAvailableActions = (
   target: MigrationTuiTarget,
   rows: readonly MigrationTuiRow[],
-  activeRuns: readonly ActiveMigrationRun[] = []
+  activeRuns: readonly MigrationTuiActiveRun[] = []
 ): readonly MigrationTuiAvailableAction[] => {
   const isGroup = target.kind === "group";
   const noun = isGroup ? "group" : "migration";
@@ -87,30 +98,46 @@ export const migrationTuiAvailableActions = (
       shortcutLabel: "r run",
     },
   ];
-  const matchingActiveRuns = activeRuns.filter(
-    (run) =>
-      run.execution !== undefined &&
-      rows.some((row) => row.status?.lock?.ownerRunId === run.runId)
+  const matchingActiveRuns = activeRuns.filter((run) =>
+    rows.some((row) => row.status?.lock?.ownerRunId === run.runId)
   );
   const activeRun =
     matchingActiveRuns.length === 1 ? matchingActiveRuns[0] : undefined;
 
   if (activeRun !== undefined) {
     options.unshift({
-      description: `Follow live progress for run ${activeRun.runId}`,
-      id: "attach-run",
-      key: "a",
-      label: "Attach to run",
+      description: `View live progress for run ${activeRun.runId}`,
+      id: "view-run",
+      key: "v",
+      label: "View run",
       primary: {
-        compactLabel: "a Attach",
+        compactLabel: "v View run",
         intent: "primary",
-        label: "a Attach to run",
+        label: "v View run",
         slot: "attach",
       },
       runId: activeRun.runId,
-      shortcutLabel: "a attach",
-      view: "attach-run",
+      shortcutLabel: "v view run",
+      view: "view-run",
     });
+
+    if (activeRun.stopSupported === true) {
+      options.push({
+        description: `Request a safe stop for run ${activeRun.runId}`,
+        id: "stop-run",
+        key: "x",
+        label: "Stop run",
+        primary: {
+          compactLabel: "x Stop",
+          intent: "warning",
+          label: "x Stop run",
+          slot: "stop",
+        },
+        runId: activeRun.runId,
+        shortcutLabel: "x stop run",
+        view: "stop-run",
+      });
+    }
   }
 
   if (!isGroup) {
@@ -253,7 +280,8 @@ export const migrationTuiPrimaryActions = (
   const attach = actions.find((action) => action.primary?.slot === "attach");
 
   if (attach !== undefined) {
-    return [attach];
+    const stop = actions.find((action) => action.primary?.slot === "stop");
+    return stop === undefined ? [attach] : [attach, stop];
   }
 
   const breakLock = actions.find((action) => action.primary?.slot === "lock");

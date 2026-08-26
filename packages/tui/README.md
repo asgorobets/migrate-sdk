@@ -85,7 +85,8 @@ between migration and group tabs, `m` for errors and messages, `r` to run the se
 `e` to run selected source identities, `f` to retry failed items, `b` to
 rollback, `s` to run a Source Inventory Scan for the current selection and its
 required dependencies, `R` to reload status, and `q` to quit. When applicable, `t`
-retries skipped items, `a` attaches to a reconnectable active run, and `u` opens
+retries skipped items, `v` focuses a running migration, `x` requests a safe stop
+for a run owned by the connected Migrate Server, and `u` opens
 the guarded break-lock confirmation. Use
 Page Up and Page Down to scroll the overview while the arrow keys continue to
 select migrations. The Messages tab displays a bounded list with the current
@@ -108,20 +109,25 @@ covers adapters that cannot publish checkpoints. When an execution adapter suppo
 TUI also waits through its Execution Adapter identity. If that observation
 channel is unavailable, the TUI reports the fallback and continues following
 durable run state. Execution Adapter failure or cancellation is reconciled against
-durable terminal state before it is reported. `q`, Ctrl+C,
-SIGINT, SIGTERM, and SIGHUP cancel active local work and wait for it to finish
-before closing. A second Ctrl+C, or a five-second graceful-shutdown timeout,
-always restores the terminal and exits. Runs already handed to a background
-Execution Adapter continue after the TUI closes; the TUI stops observing them
-locally but does not claim to cancel that work.
+durable terminal state before it is reported. `q`, Ctrl+C, SIGINT, SIGTERM, and
+SIGHUP end the current observation and close the TUI without stopping the run.
+The local Node Migrate Server owns each run independently and remains available
+while any run is active, so a later TUI session can reconnect by Migration Run
+id. Non-overlapping migrations can run concurrently; plans that include an
+already-running definition are rejected by its Migration Definition Lock. The
+server exits after the final client disconnects when no run remains active. A
+second Ctrl+C, or a five-second graceful-shutdown timeout, always restores the
+terminal and exits.
 
 The server discovers active runs from non-terminal durable run state whose run
 id still owns a Migration Definition Lock. When that state includes an
-Execution Adapter identity, Attach to run follows the Reconnectable Migration
+Execution Adapter identity, View run follows the Reconnectable Migration
 Run's existing checkpoints and terminal result by Migration Run id. Closing
-that observation leaves the Reconnectable Migration Run active. Protocol
-version 2 does not expose provider-neutral cancellation by Migration Run id;
-Break lock removes stale lock ownership but does not cancel provider work.
+that observation leaves the Reconnectable Migration Run active. The current
+protocol can stop an inline run owned by the connected Migrate Server.
+Provider-owned runs report stopping as unsupported until their Execution
+Adapter implements cancellation. Break lock removes stale lock ownership but
+does not cancel provider work.
 
 If React or the terminal renderer fails unexpectedly, the TUI destroys the
 failed renderer, reloads durable migration state, and creates one fresh UI

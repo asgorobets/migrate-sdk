@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, Exit } from "effect";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { runSupersededMigrationRunScenario } from "migrate-sdk/testing";
 import {
@@ -15,6 +15,8 @@ import {
   MigrationStore,
   validateMigrationDefinitionRunOutcomes,
 } from "./migration-store.ts";
+
+const CONCURRENT_LOCK_OWNER_PATTERN = /^run-(first|second)$/;
 
 describe("MigrationStore definition outcomes", () => {
   it.effect(
@@ -92,6 +94,33 @@ describe("MigrationStore definition outcomes", () => {
       );
       expect(yield* store.getLatestRunState(articlesId)).toEqual(
         expect.objectContaining({ runId, status: "running" })
+      );
+    }).pipe(Effect.provide(InMemoryMigrationStore.layer()))
+  );
+});
+
+describe("MigrationStore definition locks", () => {
+  it.effect("grants only one concurrent owner", () =>
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const definitionId = toMigrationDefinitionId("articles");
+      const firstRunId = toMigrationRunId("run-first");
+      const secondRunId = toMigrationRunId("run-second");
+      const attempts = yield* Effect.all(
+        [
+          store.acquireDefinitionLock(definitionId, firstRunId),
+          store.acquireDefinitionLock(definitionId, secondRunId),
+        ].map(Effect.exit),
+        { concurrency: "unbounded" }
+      );
+
+      expect(attempts.filter(Exit.isSuccess)).toHaveLength(1);
+      expect(attempts.filter(Exit.isFailure)).toHaveLength(1);
+      expect(yield* store.getDefinitionLock(definitionId)).toEqual(
+        expect.objectContaining({
+          definitionId,
+          ownerRunId: expect.stringMatching(CONCURRENT_LOCK_OWNER_PATTERN),
+        })
       );
     }).pipe(Effect.provide(InMemoryMigrationStore.layer()))
   );

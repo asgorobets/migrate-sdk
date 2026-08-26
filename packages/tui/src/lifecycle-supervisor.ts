@@ -1,4 +1,4 @@
-import type { MigrationTuiCancellationResult } from "./execution-controller.ts";
+import type { MigrationTuiCancellationResult } from "./execution.ts";
 import type { MigrationTuiRow, MigrationTuiSnapshot } from "./runtime.ts";
 import {
   type MigrationTuiShutdownController,
@@ -20,7 +20,7 @@ export interface MigrationTuiRenderSession {
 }
 
 interface MigrationTuiSupervisorRuntime {
-  readonly cancelActiveExecution: () => Promise<MigrationTuiCancellationResult>;
+  readonly detachForExit: () => Promise<MigrationTuiCancellationResult>;
   readonly refresh: () => Promise<MigrationTuiSnapshot>;
 }
 
@@ -111,7 +111,7 @@ export const makeMigrationTuiLifecycleSupervisor = (
   };
 
   const shutdown = makeMigrationTuiShutdownController({
-    cancelActiveExecution: options.runtime.cancelActiveExecution,
+    detachForExit: options.runtime.detachForExit,
     destroy: () => {
       finish(exitCode);
     },
@@ -154,7 +154,7 @@ export const makeMigrationTuiLifecycleSupervisor = (
       const message = errorMessage(cause);
       forceFinish(
         1,
-        `migrate-tui: unable to cancel the active migration (${message}); the terminal was restored`
+        `migrate-tui: unable to detach from the active migration (${message}); the terminal was restored`
       );
       throw cause;
     });

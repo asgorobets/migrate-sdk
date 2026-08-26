@@ -142,7 +142,8 @@ try {
     { definitionId: toMigrationDefinitionId("packaging-fixture"), kind: "migration" },
     "run"
   );
-  const result = await runtime.execute(operation);
+  const reference = await runtime.start(operation);
+  const result = await runtime.observeRun(reference.runId);
   const status = (await runtime.refresh()).rows[0]?.status;
 
   if (result.outcome !== "completed" || status?.durable.migrated !== 1) {

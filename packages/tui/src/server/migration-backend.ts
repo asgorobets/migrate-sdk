@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import type {
   MigrateDashboard,
   MigrateExecutionOptions,
@@ -10,35 +10,13 @@ import type {
   ConfiguredMigrationHost,
   MigrationTuiExecutablePreparedOperation,
   MigrationTuiPrepareOptions,
+  MigrationTuiSnapshot,
   MigrationTuiTarget,
 } from "../runtime.ts";
 
-class MigrationServerBackendError extends Schema.TaggedError<MigrationServerBackendError>()(
-  "MigrationServerBackendError",
-  {
-    cause: Schema.optional(Schema.Defect()),
-    message: Schema.String,
-  }
-) {}
-
-const errorMessage = (cause: unknown): string =>
-  cause instanceof Error ? cause.message : String(cause);
-
-const fromPromise = <Value>(
-  evaluate: (signal: AbortSignal) => Promise<Value>
-): Effect.Effect<Value, MigrationServerBackendError> =>
-  Effect.tryPromise({
-    catch: (cause) =>
-      new MigrationServerBackendError({
-        cause,
-        message: errorMessage(cause),
-      }),
-    try: evaluate,
-  });
-
 const dashboard = (
   runtime: ConfiguredMigrationHost,
-  snapshot: Awaited<ReturnType<ConfiguredMigrationHost["refresh"]>>
+  snapshot: MigrationTuiSnapshot
 ): MigrateDashboard => ({
   activeRuns: snapshot.activeRuns,
   groups: runtime.groups,
@@ -139,42 +117,36 @@ const runtimePrepareOptions = (
 export const makeConfiguredMigrationServerBackend = (
   runtime: ConfiguredMigrationHost
 ): MigrateServerBackend<MigrationTuiExecutablePreparedOperation> => ({
-  breakLock: (lock) => fromPromise(() => runtime.breakLock(lock)),
-  cancelActiveExecution: fromPromise(runtime.cancelActiveExecution),
+  breakLock: runtime.breakLock,
   executeOperation: (operation, observer) =>
-    fromPromise(() => runtime.execute(operation, observer)),
-  getActiveRuns: fromPromise(runtime.listActiveRuns),
-  getDashboard: fromPromise(runtime.refresh).pipe(
+    runtime.startExecution(operation, observer),
+  getActiveRuns: runtime.listActiveRuns,
+  getDashboard: runtime.refresh.pipe(
     Effect.map((snapshot) => dashboard(runtime, snapshot))
   ),
-  getMessages: (target) =>
-    fromPromise(() => runtime.listMessages(target as MigrationTuiTarget)),
-  getSourceIdentityHistory: (definitionId) =>
-    fromPromise(() => runtime.listSourceIdentityHistory(definitionId)),
+  getMessages: (target) => runtime.listMessages(target as MigrationTuiTarget),
+  getSourceIdentityHistory: runtime.listSourceIdentityHistory,
   normalizeSourceIdentity: (definitionId, sourceIdentity) =>
-    fromPromise(() =>
-      runtime.normalizeSourceIdentity(definitionId, sourceIdentity)
-    ),
-  observeRun: (runId, observer) =>
-    fromPromise((signal) => runtime.observeRun(runId, { ...observer, signal })),
+    runtime.normalizeSourceIdentity(definitionId, sourceIdentity),
+  observeRun: (runId, observer) => runtime.observeRun(runId, observer),
   prepareOperation: (input) =>
-    fromPromise(() =>
-      runtime.prepare(
+    runtime
+      .prepare(
         input.target as MigrationTuiTarget,
         input.action,
         runtimePrepareOptions(input.options)
       )
-    ).pipe(
-      Effect.map((executable) => ({
-        executable,
-        operation: projectOperation(executable),
-      }))
-    ),
+      .pipe(
+        Effect.map((executable) => ({
+          executable,
+          operation: projectOperation(executable),
+        }))
+      ),
   scanSource: ({ concurrency, target }) =>
-    fromPromise(() =>
-      runtime.scanSource(
+    runtime
+      .scanSource(
         target as MigrationTuiTarget,
         concurrency === undefined ? {} : { concurrency }
       )
-    ).pipe(Effect.map((snapshot) => dashboard(runtime, snapshot))),
+      .pipe(Effect.map((snapshot) => dashboard(runtime, snapshot))),
 });

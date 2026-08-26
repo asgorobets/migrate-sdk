@@ -1,19 +1,21 @@
 import { Effect, Stream } from "effect";
 import type { MigrationDefinitionLock, MigrationRunId } from "migrate-sdk";
 import type {
-  MigrateExecutionId,
+  MigrateExecutionReference,
   MigrateExecutionState,
   MigrateObservationEvent,
   MigratePrepareOptions,
   MigrateTarget,
 } from "migrate-sdk/protocol";
 import type {
+  MigrationTuiCancellationResult,
   MigrationTuiExecutionResult,
   MigrationTuiExecutionState,
-} from "../execution-controller.ts";
+} from "../execution.ts";
 import type {
   LoadMigrationTuiInput,
   MigrationTuiExecuteOptions,
+  MigrationTuiPreparedOperation,
   MigrationTuiRow,
   MigrationTuiRuntime,
   MigrationTuiSnapshot,
@@ -24,7 +26,7 @@ import { connectLocalMigrateServer } from "./local-client.ts";
 const toProtocolTarget = (target: MigrationTuiTarget): MigrateTarget => target;
 
 const operationOptions = (
-  operation: Parameters<MigrationTuiRuntime["execute"]>[0]
+  operation: MigrationTuiPreparedOperation
 ): MigratePrepareOptions => ({
   ...(operation.plan.execution === undefined
     ? {}
@@ -104,25 +106,13 @@ export const makeMigrationTuiRuntime = async (
       throw cause;
     }
   );
-  let executionState: MigrationTuiExecutionState | undefined;
-  let activeExecutionId: MigrateExecutionId | undefined;
   let activeRunObservation:
-    | { readonly controller: AbortController; readonly runId: MigrationRunId }
+    | {
+        readonly controller: AbortController;
+        readonly runId: MigrationRunId;
+        readonly token: symbol;
+      }
     | undefined;
-  const executionListeners = new Set<
-    (state: MigrationTuiExecutionState | undefined) => void
-  >();
-
-  const publishExecutionState = (
-    state: MigrationTuiExecutionState | undefined
-  ) => {
-    executionState = state;
-
-    for (const listener of executionListeners) {
-      listener(state);
-    }
-  };
-
   const snapshot = (dashboard: {
     readonly activeRuns: MigrationTuiSnapshot["activeRuns"];
     readonly rows:
@@ -150,43 +140,37 @@ export const makeMigrationTuiRuntime = async (
         }
       | undefined;
 
-    try {
-      await runPromise(
-        stream.pipe(
-          Stream.runForEach((event) =>
-            Effect.sync(() => {
-              switch (event.kind) {
-                case "progress":
-                  options?.onProgress?.({ definitions: event.definitions });
-                  break;
-                case "state": {
-                  const state = toTuiExecutionState(event.state);
-                  publishExecutionState(state);
-                  options?.onStateChange?.(state);
-                  break;
-                }
-                case "detached":
-                  completion = event;
-                  break;
-                case "terminal":
-                  completion = event;
-                  break;
-                case "warning":
-                  options?.onObservationWarning?.(event.message);
-                  break;
-                default: {
-                  const unhandled: never = event;
-                  return unhandled;
-                }
+    await runPromise(
+      stream.pipe(
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            switch (event.kind) {
+              case "progress":
+                options?.onProgress?.({ definitions: event.definitions });
+                break;
+              case "state": {
+                options?.onStateChange?.(toTuiExecutionState(event.state));
+                break;
               }
-            })
-          )
-        ),
-        signal === undefined ? undefined : { signal }
-      );
-    } finally {
-      publishExecutionState(undefined);
-    }
+              case "detached":
+                completion = event;
+                break;
+              case "terminal":
+                completion = event;
+                break;
+              case "warning":
+                options?.onObservationWarning?.(event.message);
+                break;
+              default: {
+                const unhandled: never = event;
+                return unhandled;
+              }
+            }
+          })
+        )
+      ),
+      signal === undefined ? undefined : { signal }
+    );
 
     if (completion === undefined) {
       throw new Error(
@@ -212,56 +196,55 @@ export const makeMigrationTuiRuntime = async (
     };
   };
 
+  const startOperation = (
+    operation: MigrationTuiPreparedOperation
+  ): Promise<MigrateExecutionReference> =>
+    runPromise(
+      client.StartOperation({
+        acceptedFingerprint: operation.fingerprint,
+        request: {
+          action: operation.action,
+          options: operationOptions(operation),
+          target: operation.target,
+        },
+      })
+    );
+
+  const detachRunObservation = (runId?: MigrationRunId): boolean => {
+    const active = activeRunObservation;
+
+    if (
+      active === undefined ||
+      (runId !== undefined && active.runId !== runId)
+    ) {
+      return false;
+    }
+
+    activeRunObservation = undefined;
+    active.controller.abort();
+    return true;
+  };
+
+  const detachForExit = (): Promise<MigrationTuiCancellationResult> => {
+    if (activeRunObservation !== undefined) {
+      const { runId } = activeRunObservation;
+      detachRunObservation(runId);
+      return Promise.resolve({
+        kind: "detached",
+        message: `Run ${runId} will continue after Migrate closes…`,
+      });
+    }
+
+    return Promise.resolve({ kind: "idle" });
+  };
+
   return {
     breakLock: (lock: MigrationDefinitionLock) =>
       runPromise(client.BreakLock({ lock })),
-    cancelActiveExecution: () => {
-      if (activeRunObservation !== undefined) {
-        const { controller, runId } = activeRunObservation;
-        controller.abort();
-        return Promise.resolve({
-          kind: "detached" as const,
-          message: `Run ${runId} will continue in the background after this screen closes…`,
-        });
-      }
-
-      return runPromise(
-        client.CancelExecution(
-          activeExecutionId === undefined
-            ? {}
-            : { executionId: activeExecutionId }
-        )
-      );
-    },
     configPath: serverInfo.configPath ?? "Migrate Server",
+    detachForExit,
+    detachRunObservation,
     dispose: connection.dispose,
-    execute: async (operation, options) => {
-      const reference = await runPromise(
-        client.StartOperation({
-          acceptedFingerprint: operation.fingerprint,
-          request: {
-            action: operation.action,
-            options: operationOptions(operation),
-            target: operation.target,
-          },
-        })
-      );
-      activeExecutionId = reference.executionId;
-
-      try {
-        return await consumeObservation(
-          client.ObserveExecution({ executionId: reference.executionId }),
-          reference.runId,
-          options
-        );
-      } catch (cause) {
-        options?.onProgressError?.(cause);
-        throw cause;
-      } finally {
-        activeExecutionId = undefined;
-      }
-    },
-    getExecutionState: () => executionState,
     groups: initialDashboard.groups,
     listActiveRuns: () => runPromise(client.GetActiveRuns()),
     listMessages: (target) =>
@@ -273,15 +256,11 @@ export const makeMigrationTuiRuntime = async (
         client.NormalizeSourceIdentity({ definitionId, sourceIdentity })
       ),
     observeRun: async (runId, options) => {
-      if (
-        activeExecutionId !== undefined ||
-        activeRunObservation !== undefined
-      ) {
-        throw new Error("Another migration is already running");
-      }
+      detachRunObservation();
 
       const controller = new AbortController();
-      activeRunObservation = { controller, runId };
+      const token = Symbol("MigrationTuiRunObservation");
+      activeRunObservation = { controller, runId, token };
 
       try {
         return await consumeObservation(
@@ -302,7 +281,7 @@ export const makeMigrationTuiRuntime = async (
         options?.onProgressError?.(cause);
         throw cause;
       } finally {
-        if (activeRunObservation?.controller === controller) {
+        if (activeRunObservation?.token === token) {
           activeRunObservation = undefined;
         }
       }
@@ -326,9 +305,7 @@ export const makeMigrationTuiRuntime = async (
           target: toProtocolTarget(target),
         })
       ).then(snapshot),
-    subscribeExecution: (listener) => {
-      executionListeners.add(listener);
-      return () => executionListeners.delete(listener);
-    },
+    start: startOperation,
+    stopRun: (runId) => runPromise(client.StopRun({ runId })),
   };
 };

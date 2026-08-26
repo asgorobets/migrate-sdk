@@ -65,7 +65,8 @@ version, SDK version, and supported capabilities so that the client can detect
 incompatibility before offering an action.
 
 The first local connection uses a Node Migrate Server process started by
-the TUI. The Bun renderer communicates with that process over IPC, while the
+the TUI. The Bun renderer communicates with that process over a reconnectable
+local Effect RPC socket, while the
 Node process loads the same local configuration and SDK package that the CLI
 would load. The npm launcher remains responsible for locating and passing the
 user's Node executable. This preserves the existing Node authoring contract
@@ -100,14 +101,23 @@ state with timely checkpoint updates. Observation is reconnectable where the
 server supports it. Ending an observation stops only that observer; cancelling
 a detached run requires an explicit cancellation operation.
 
-Protocol version 2 does not define provider-neutral cancellation by Migration
-Run id. Its `CancelExecution` operation is limited to work owned by the current
-Migrate Server process; when that work is an attached observation, cancellation
-ends the observation only. Run-id cancellation is deferred until Execution
-Adapters expose a capability that can distinguish unsupported cancellation,
-accepted cancellation, and durable terminal cancellation. Breaking a Migration
-Definition Lock is recovery metadata management and never claims to cancel the
-provider execution.
+The Migrate Protocol separates observation from control. Ending an observation
+or closing a client never stops a Migration Run. `StopRun` addresses one
+Migration Run id and reports requested, not-running, or unsupported. The local
+server can stop inline work it owns; provider-owned work remains unsupported
+until its Execution Adapter exposes provider-neutral cancellation. Breaking a
+Migration Definition Lock is recovery metadata management and never claims to
+cancel the provider execution.
+
+The local Node server is connection-independent while it owns active work. It
+accepts a later client on the same local socket and exits after all clients have
+disconnected and no active Migration Run remains. It owns an independent
+execution and cancellation handle for each started run. Non-overlapping plans
+can therefore run concurrently; Migration Definition Locks remain the
+authoritative conflict mechanism for plans whose definition sets overlap. This
+gives inline local runs the same client-detachment semantics as remote
+persistent servers without turning a renderer process into the execution
+owner.
 
 The controlled local and remote implementations may use Effect RPC to derive
 clients and handlers from the schema-backed contract, including streaming
@@ -134,6 +144,9 @@ services used by the CLI rather than reimplementing migration behavior.
 
 - Existing Node migrations can be operated through the Bun-rendered TUI without
   changing the customer's migration runtime.
+- Closing the TUI ends observation only; local inline work remains owned by the
+  reconnectable Node Migrate Server until it reaches a terminal state or a
+  client explicitly requests a stop.
 - Remote operation requires only credentials for the Migrate Server; resource
   and provider credentials remain in the target environment.
 - Local IPC, SSH, and HTTPS clients can share one operation and event model.

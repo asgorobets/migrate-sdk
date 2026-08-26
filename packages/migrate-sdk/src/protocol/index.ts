@@ -12,7 +12,7 @@ import { MigrationMessage } from "../domain/message.ts";
 import { activeMigrationRunHasObservationDefinition } from "../domain/run.ts";
 import { MigrationDefinitionStatus } from "../domain/status.ts";
 
-export const MIGRATE_PROTOCOL_VERSION = 2;
+export const MIGRATE_PROTOCOL_VERSION = 1;
 
 const PositiveInteger = Schema.Finite.check(Schema.isInt()).check(
   Schema.isGreaterThan(0)
@@ -34,6 +34,7 @@ export const MIGRATE_CAPABILITIES = [
   "scan-source",
   "source-identity-history",
   "start-operation",
+  "stop-run",
 ] as const;
 
 export const MigrateCapability = Schema.Literals(MIGRATE_CAPABILITIES);
@@ -81,6 +82,7 @@ export const MigrateActiveRun = Schema.Struct({
   runId: MigrationRunId,
   startedAt: Schema.DateFromString,
   status: Schema.Literals(["queued", "running"]),
+  stopSupported: Schema.Boolean,
 }).check(
   Schema.makeFilter(activeMigrationRunHasObservationDefinition, {
     message: "Observation definition must belong to the Active Migration Run",
@@ -287,6 +289,25 @@ export const MigrateCancellationResult = Schema.Union([
 ]);
 export type MigrateCancellationResult = typeof MigrateCancellationResult.Type;
 
+export const MigrateRunStopResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("requested"),
+    message: Schema.String,
+    runId: MigrationRunId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("not-running"),
+    message: Schema.String,
+    runId: MigrationRunId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unsupported"),
+    message: Schema.String,
+    runId: MigrationRunId,
+  }),
+]);
+export type MigrateRunStopResult = typeof MigrateRunStopResult.Type;
+
 export const MigrateBreakLockResult = Schema.Struct({
   definitionId: MigrationDefinitionId,
   kind: Schema.Literals(["already-clear", "cleared"]),
@@ -410,6 +431,12 @@ export class CancelExecution extends makeRpc("CancelExecution", {
   success: MigrateCancellationResult,
 }) {}
 
+export class StopRun extends makeRpc("StopRun", {
+  error: MigrateProtocolError,
+  payload: { runId: MigrationRunId },
+  success: MigrateRunStopResult,
+}) {}
+
 export class ScanSource extends makeRpc("ScanSource", {
   error: MigrateProtocolError,
   payload: {
@@ -437,6 +464,7 @@ export const MigrateRpcs = makeRpcGroup(
   ObserveExecution,
   ObserveRun,
   CancelExecution,
+  StopRun,
   ScanSource,
   BreakLock
 );

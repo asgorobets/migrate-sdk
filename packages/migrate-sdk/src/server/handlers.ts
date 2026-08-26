@@ -7,6 +7,7 @@ export {
   type MigratePrepareOperationInput,
   MigrateServer,
   type MigrateServerBackend,
+  type MigrateServerExecutionHandle,
   type MigrateServerExecutionObserver,
   type MigrateServerExecutionResult,
   type MigrateServerInput,
@@ -32,6 +33,7 @@ export const MigrateServerHandlers = MigrateRpcs.toLayer(
       PrepareOperation: server.prepareOperation,
       ScanSource: server.scanSource,
       StartOperation: server.startOperation,
+      StopRun: server.stopRun,
     });
   })
 );

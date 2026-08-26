@@ -36,28 +36,28 @@ describe("Migration TUI shutdown controller", () => {
 
   it("destroys an idle TUI exactly once", async () => {
     const destroy = vi.fn();
-    const cancelActiveExecution = vi.fn(() =>
+    const detachForExit = vi.fn(() =>
       Promise.resolve({ kind: "idle" as const })
     );
     const controller = makeMigrationTuiShutdownController({
-      cancelActiveExecution,
+      detachForExit,
       destroy,
     });
 
     await Promise.all([controller.requestExit(), controller.requestExit()]);
     controller.executionSettled();
 
-    expect(cancelActiveExecution).toHaveBeenCalledOnce();
+    expect(detachForExit).toHaveBeenCalledOnce();
     expect(destroy).toHaveBeenCalledOnce();
   });
 
-  it("waits for active execution to settle before destroying the TUI", async () => {
+  it("waits for active observation to detach before destroying the TUI", async () => {
     const destroy = vi.fn();
     const controller = makeMigrationTuiShutdownController({
-      cancelActiveExecution: () =>
+      detachForExit: () =>
         Promise.resolve({
           kind: "requested" as const,
-          message: "Cancelling; waiting for active work to finish…",
+          message: "Detaching from the active run…",
         }),
       destroy,
     });
@@ -72,23 +72,23 @@ describe("Migration TUI shutdown controller", () => {
     expect(destroy).toHaveBeenCalledOnce();
   });
 
-  it("allows shutdown to be retried when cancellation fails", async () => {
+  it("allows shutdown to be retried when detaching fails", async () => {
     const destroy = vi.fn();
-    const cancelActiveExecution = vi
+    const detachForExit = vi
       .fn<() => Promise<{ readonly kind: "idle" }>>()
-      .mockRejectedValueOnce(new Error("cancel failed"))
+      .mockRejectedValueOnce(new Error("detach failed"))
       .mockResolvedValueOnce({ kind: "idle" });
     const controller = makeMigrationTuiShutdownController({
-      cancelActiveExecution,
+      detachForExit,
       destroy,
     });
 
-    await expect(controller.requestExit()).rejects.toThrow("cancel failed");
+    await expect(controller.requestExit()).rejects.toThrow("detach failed");
     expect(controller.isExitRequested()).toBe(false);
 
     await controller.requestExit();
 
-    expect(cancelActiveExecution).toHaveBeenCalledTimes(2);
+    expect(detachForExit).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledOnce();
   });
 });

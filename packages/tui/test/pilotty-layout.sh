@@ -67,6 +67,7 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
 "${PILOTTY_BIN}" spawn \
   --name "${SESSION}" \
   --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${SESSION}" \
   node bin/migrate-tui.js --config examples/migrate.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 30000 \
@@ -154,6 +155,7 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
 "${PILOTTY_BIN}" spawn \
   --name "${BUTTON_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${BUTTON_SESSION}" \
   node bin/migrate-tui.js --config examples/migrate.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${BUTTON_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${BUTTON_SESSION}" -t 30000 \
@@ -173,13 +175,14 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
 "${PILOTTY_BIN}" spawn \
   --name "${LIVE_PROGRESS_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${LIVE_PROGRESS_SESSION}" \
   node bin/migrate-tui.js --config examples/live-progress.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${LIVE_PROGRESS_SESSION}" 120 30 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
 "${PILOTTY_BIN}" key -s "${LIVE_PROGRESS_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 5000 \
-  "is running" >/dev/null
+  "x Stop run" >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 5000 --regex \
   "[123] migrated" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${LIVE_PROGRESS_SESSION}" \
@@ -192,7 +195,8 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${CATALOG_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_SQLITE_CATALOG_DELAY_MS=5 node bin/migrate-tui.js \
+  env MIGRATE_TUI_SERVER_IDENTITY="${CATALOG_SESSION}" \
+  MIGRATE_SQLITE_CATALOG_DELAY_MS=5 node bin/migrate-tui.js \
   --config ../migrate-sdk/examples/sqlite-catalog/migrate.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${CATALOG_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_SESSION}" -t 30000 \
@@ -206,7 +210,7 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
   --format text >"${ARTIFACT_DIR}/sqlite-catalog-initial.txt"
 "${PILOTTY_BIN}" key -s "${CATALOG_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_SESSION}" -t 10000 \
-  "is running" >/dev/null
+  "x Stop run" >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_SESSION}" -t 30000 --regex \
   "[1-9][0-9]* migrated" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${CATALOG_SESSION}" \
@@ -230,7 +234,8 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${CATALOG_STANDALONE_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_SQLITE_CATALOG_DIR="${CATALOG_STANDALONE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${CATALOG_STANDALONE_SESSION}" \
+  MIGRATE_SQLITE_CATALOG_DIR="${CATALOG_STANDALONE_DIR}" \
   MIGRATE_SQLITE_CATALOG_DELAY_MS=50 node bin/migrate-tui.js \
   --config ../migrate-sdk/examples/sqlite-catalog/migrate.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${CATALOG_STANDALONE_SESSION}" 120 36 >/dev/null
@@ -251,6 +256,7 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" c >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 5000 \
   "Concurrency settings" >/dev/null
+sleep 0.2
 "${PILOTTY_BIN}" type -s "${CATALOG_STANDALONE_SESSION}" "1" >/dev/null
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Ctrl+S >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 5000 \
@@ -258,7 +264,7 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Escape >/dev/null
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 10000 \
-  "is running" >/dev/null
+  "x Stop run" >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 30000 \
   "97 migrated" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${CATALOG_STANDALONE_SESSION}" \
@@ -281,6 +287,7 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${GROUP_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${GROUP_SESSION}" \
   node bin/migrate-tui.js --config examples/migrate.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${GROUP_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 30000 \
@@ -355,6 +362,7 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${DEPENDENCY_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${DEPENDENCY_SESSION}" \
   node bin/migrate-tui.js --config examples/dependency-preflight.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${DEPENDENCY_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${DEPENDENCY_SESSION}" -t 30000 \
@@ -384,6 +392,7 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${FORCE_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${FORCE_SESSION}" \
   node bin/migrate-tui.js --config examples/dependency-preflight.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${FORCE_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${FORCE_SESSION}" -t 30000 \
@@ -403,6 +412,7 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${HIERARCHY_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${HIERARCHY_SESSION}" \
   node bin/migrate-tui.js \
   --config examples/transitive-dependency.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${HIERARCHY_SESSION}" 120 36 >/dev/null
@@ -419,6 +429,7 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${LARGE_HIERARCHY_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${LARGE_HIERARCHY_SESSION}" \
   node bin/migrate-tui.js --config examples/large-rollback.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${LARGE_HIERARCHY_SESSION}" 72 24 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LARGE_HIERARCHY_SESSION}" -t 30000 \
@@ -441,6 +452,7 @@ done
 "${PILOTTY_BIN}" spawn \
   --name "${SELECTIVE_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${SELECTIVE_SESSION}" \
   node bin/migrate-tui.js --config examples/migrate.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${SELECTIVE_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 30000 \
@@ -483,6 +495,7 @@ done
 "${PILOTTY_BIN}" spawn \
   --name "${SOURCE_STATUS_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${SOURCE_STATUS_SESSION}" \
   node bin/migrate-tui.js --config examples/source-status.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${SOURCE_STATUS_SESSION}" 120 30 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SOURCE_STATUS_SESSION}" -t 30000 \
@@ -520,6 +533,7 @@ rg -q "Rollback" "${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${LOCK_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${LOCK_SESSION}" \
   node bin/migrate-tui.js --config examples/locked.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${LOCK_SESSION}" 120 30 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LOCK_SESSION}" -t 30000 \
@@ -546,20 +560,19 @@ rg -q "Rollback" "${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${CANCELLATION_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
+  env MIGRATE_TUI_SERVER_IDENTITY="${CANCELLATION_SESSION}" \
   node bin/migrate-tui.js --config examples/cancellation.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${CANCELLATION_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CANCELLATION_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
 "${PILOTTY_BIN}" key -s "${CANCELLATION_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CANCELLATION_SESSION}" -t 5000 \
-  "is running" >/dev/null
-"${PILOTTY_BIN}" key -s "${CANCELLATION_SESSION}" q >/dev/null
-"${PILOTTY_BIN}" wait-for -s "${CANCELLATION_SESSION}" -t 5000 \
-  "waiting for active work to finish" >/dev/null
+  "x Stop run" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${CANCELLATION_SESSION}" \
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/cancellation-drain.txt"
+"${PILOTTY_BIN}" key -s "${CANCELLATION_SESSION}" q >/dev/null
 
 for _ in {1..50}; do
   "${PILOTTY_BIN}" status -s "${CANCELLATION_SESSION}" \
@@ -647,8 +660,8 @@ assert_contains \
   "compact details display the All actions menu"
 assert_contains \
   "${ARTIFACT_DIR}/compact.txt" \
-  "Status reloaded" \
-  "compact notice remains readable"
+  "Run run-" \
+  "compact run-start notice remains readable"
 assert_contains \
   "${ARTIFACT_DIR}/rollback-confirmation.txt" \
   "Confirm rollback" \
@@ -783,7 +796,7 @@ assert_contains \
   "SQLite catalog exposes its complete migration group"
 assert_contains \
   "${ARTIFACT_DIR}/sqlite-catalog-progress.txt" \
-  "is running" \
+  "x Stop run" \
   "SQLite catalog execution remains observable while it runs"
 assert_matches \
   "${ARTIFACT_DIR}/sqlite-catalog-progress.txt" \
@@ -819,16 +832,16 @@ assert_contains \
   "standalone books execution reports its first committed cursor window"
 assert_contains \
   "${ARTIFACT_DIR}/sqlite-catalog-standalone-progress.txt" \
-  "is running" \
-  "standalone books progress remains attached through the Node IPC server"
+  "x Stop run" \
+  "standalone books progress exposes explicit run control"
 assert_contains \
   "${ARTIFACT_DIR}/sqlite-catalog-running-navigation.txt" \
   "No item history" \
   "keyboard navigation changes the selected migration during execution"
 assert_contains \
   "${ARTIFACT_DIR}/sqlite-catalog-running-navigation.txt" \
-  "is running" \
-  "keyboard navigation does not detach the active execution"
+  "◉ books" \
+  "keyboard navigation detaches observation without stopping the active run"
 assert_contains \
   "${ARTIFACT_DIR}/sqlite-catalog-standalone-completed.txt" \
   "480 migrated" \
@@ -1027,12 +1040,12 @@ assert_contains \
   "wide details display the latest durable message"
 assert_contains \
   "${ARTIFACT_DIR}/cancellation-drain.txt" \
-  "waiting for active work to finish" \
-  "active execution visibly finishes cancellation before quit"
+  "x Stop run" \
+  "active run exposes an explicit stop action before client exit"
 assert_contains \
   "${ARTIFACT_DIR}/cancellation-status.json" \
   '"state": "exited"' \
-  "attached execution exits after active work drains"
+  "TUI exits after detaching from active work"
 
 if ((failed != 0)); then
   echo "" >&2

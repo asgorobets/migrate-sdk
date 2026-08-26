@@ -298,12 +298,16 @@ Bootstrap travels through process arguments and the inherited environment. It
 is limited to `cwd` and optional `configPath`; credentials are not copied into
 the application protocol.
 
-### `execution-controller.ts`
+### Effect-native execution ownership
 
-The existing execution controller is now server-owned, where its direct SDK
-`start`, `handle.wait`, and `handle.cancel` branches retain the real execution
-handles. The client adapter uses `StartOperation`, `ObserveExecution`, and
-`CancelExecution` and owns only the observation stream and UI-facing state.
+The configured migration host exposes configuration loading, discovery,
+planning, status, messages, source scans, execution, and observation as Effects.
+It retains real execution handles on the server without interpreting SDK work
+through Promises. The client adapter uses `StartOperation`,
+`ObserveExecution`, and `CancelExecution` and owns only the observation stream
+and UI-facing state. Promise interpretation is limited to that client and
+process boundary; there is no shared UI execution controller between the
+layers.
 
 Closing the observation stream does not implicitly request cancellation. A
 detached run continues in its execution provider and is reported as detached to

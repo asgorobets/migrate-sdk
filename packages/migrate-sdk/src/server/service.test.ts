@@ -3,6 +3,7 @@ import { Deferred, Effect, Fiber, Stream } from "effect";
 import { MigrationDefinitionId, MigrationRunId } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import {
+  MIGRATE_PROTOCOL_VERSION,
   type MigrateActiveRun,
   MigratePlanChangedError,
   type MigratePreparedOperation,
@@ -11,11 +12,14 @@ import {
 import {
   MigrateServer,
   type MigrateServerBackend,
+  type MigrateServerExecutionHandle,
   type MigrateServerExecutionObserver,
+  type MigrateServerExecutionResult,
 } from "./service.ts";
 
 const articlesId = MigrationDefinitionId.make("articles");
 const runId = MigrationRunId.make("run-1");
+const secondRunId = MigrationRunId.make("run-2");
 const activeRun: MigrateActiveRun = {
   definitionIds: [articlesId],
   execution: {
@@ -26,6 +30,7 @@ const activeRun: MigrateActiveRun = {
   runId,
   startedAt: new Date("2026-08-25T12:00:00.000Z"),
   status: "running",
+  stopSupported: false,
 };
 
 const serverInfo: MigrateServerInfo = {
@@ -38,7 +43,7 @@ const serverInfo: MigrateServerInfo = {
   ],
   configPath: "/workspace/migrate.config.ts",
   environment: { id: "local:/workspace", label: "Local" },
-  protocolVersion: 2,
+  protocolVersion: MIGRATE_PROTOCOL_VERSION,
   runtime: { name: "node", version: "24.16.0" },
   sdkVersion: "0.1.0",
 };
@@ -70,8 +75,13 @@ const preparedOperation = (
   },
 });
 
+const executionHandle = (
+  result: Effect.Effect<MigrateServerExecutionResult, unknown>,
+  stop: MigrateServerExecutionHandle["stop"] = Effect.succeed({ kind: "idle" })
+): Effect.Effect<MigrateServerExecutionHandle> =>
+  Effect.succeed({ result, stop });
+
 const makeBackend = (input?: {
-  readonly cancelActiveExecution?: MigrateServerBackend<FakeExecutableOperation>["cancelActiveExecution"];
   readonly executeOperation?: MigrateServerBackend<FakeExecutableOperation>["executeOperation"];
   readonly getActiveRuns?: MigrateServerBackend<FakeExecutableOperation>["getActiveRuns"];
   readonly observeRun?: MigrateServerBackend<FakeExecutableOperation>["observeRun"];
@@ -82,16 +92,16 @@ const makeBackend = (input?: {
       definitionId: lock.definitionId,
       kind: "cleared",
     }),
-  cancelActiveExecution:
-    input?.cancelActiveExecution ?? Effect.succeed({ kind: "idle" }),
   executeOperation:
     input?.executeOperation ??
     (() =>
-      Effect.succeed({
-        message: `Run ${runId} succeeded`,
-        outcome: "completed",
-        runId,
-      })),
+      executionHandle(
+        Effect.succeed({
+          message: `Run ${runId} succeeded`,
+          outcome: "completed",
+          runId,
+        })
+      )),
   getActiveRuns: input?.getActiveRuns ?? Effect.succeed([]),
   getDashboard: Effect.succeed({
     activeRuns: [],
@@ -169,13 +179,8 @@ describe("Migrate Server", () => {
     Effect.gen(function* () {
       const observationStarted = yield* Deferred.make<void>();
       const observationEnded = yield* Deferred.make<void>();
-      let cancellationRequests = 0;
       const server = yield* makeServer(
         makeBackend({
-          cancelActiveExecution: Effect.sync(() => {
-            cancellationRequests += 1;
-            return { kind: "idle" as const };
-          }),
           getActiveRuns: Effect.succeed([activeRun]),
           observeRun: () =>
             Effect.acquireUseRelease(
@@ -193,7 +198,6 @@ describe("Migrate Server", () => {
       yield* Fiber.interrupt(observation);
       yield* Deferred.await(observationEnded);
 
-      expect(cancellationRequests).toBe(0);
       expect(yield* server.getActiveRuns).toEqual([activeRun]);
     })
   );
@@ -214,12 +218,14 @@ describe("Migrate Server", () => {
                 kind: "running",
                 runId,
               });
-              return Deferred.await(terminal).pipe(
-                Effect.as({
-                  message: `Run ${runId} succeeded`,
-                  outcome: "completed" as const,
-                  runId,
-                })
+              return executionHandle(
+                Deferred.await(terminal).pipe(
+                  Effect.as({
+                    message: `Run ${runId} succeeded`,
+                    outcome: "completed" as const,
+                    runId,
+                  })
+                )
               );
             },
           })
@@ -268,6 +274,196 @@ describe("Migrate Server", () => {
       })
   );
 
+  it.effect("interrupts owned execution fibers when its scope closes", () =>
+    Effect.gen(function* () {
+      const interrupted = yield* Deferred.make<void>();
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const server = yield* makeServer(
+            makeBackend({
+              executeOperation: (_operation, observer) =>
+                executionHandle(
+                  Effect.sync(() =>
+                    observer.onStateChange({
+                      adapter: "inline",
+                      definitionId: articlesId,
+                      kind: "running",
+                      runId,
+                    })
+                  ).pipe(
+                    Effect.andThen(Effect.never),
+                    Effect.onInterrupt(() =>
+                      Deferred.succeed(interrupted, undefined)
+                    )
+                  )
+                ),
+            })
+          );
+          const request = {
+            action: "run" as const,
+            options: {},
+            target: { definitionId: articlesId, kind: "migration" as const },
+          };
+          const operation = yield* server.prepareOperation(request);
+
+          yield* server.startOperation({
+            acceptedFingerprint: operation.fingerprint,
+            request,
+          });
+        })
+      );
+
+      yield* Deferred.await(interrupted);
+    })
+  );
+
+  it.effect(
+    "observes a server-owned inline execution by run id without invoking durable observation",
+    () =>
+      Effect.gen(function* () {
+        const terminal = yield* Deferred.make<void>();
+        let durableObservationRequests = 0;
+        const server = yield* makeServer(
+          makeBackend({
+            executeOperation: (_operation, observer) => {
+              observer.onStateChange({
+                adapter: "inline",
+                definitionId: articlesId,
+                kind: "running",
+                runId,
+              });
+              return executionHandle(
+                Deferred.await(terminal).pipe(
+                  Effect.as({
+                    message: `Run ${runId} succeeded`,
+                    outcome: "completed" as const,
+                    runId,
+                  })
+                )
+              );
+            },
+            observeRun: () => {
+              durableObservationRequests += 1;
+              return Effect.die("Durable observation must not be used");
+            },
+          })
+        );
+        const request = {
+          action: "run" as const,
+          options: {},
+          target: { definitionId: articlesId, kind: "migration" as const },
+        };
+        const operation = yield* server.prepareOperation(request);
+        yield* server.startOperation({
+          acceptedFingerprint: operation.fingerprint,
+          request,
+        });
+        const observation = yield* server
+          .observeRun({ runId })
+          .pipe(Stream.runCollect, Effect.forkChild);
+
+        yield* Deferred.succeed(terminal, undefined);
+
+        expect(yield* Fiber.join(observation)).toEqual([
+          {
+            kind: "state",
+            state: {
+              adapter: "inline",
+              definitionId: articlesId,
+              kind: "running",
+              runId,
+            },
+          },
+          {
+            kind: "terminal",
+            message: `Run ${runId} succeeded`,
+            outcome: "completed",
+            runId,
+          },
+        ]);
+        expect(durableObservationRequests).toBe(0);
+      })
+  );
+
+  it.effect("stops only the requested server-owned run", () =>
+    Effect.gen(function* () {
+      const terminal = yield* Deferred.make<void>();
+      let cancellationRequests = 0;
+      const server = yield* makeServer(
+        makeBackend({
+          executeOperation: (_operation, observer) => {
+            observer.onStateChange({
+              adapter: "inline",
+              definitionId: articlesId,
+              kind: "running",
+              runId,
+            });
+            return executionHandle(
+              Deferred.await(terminal).pipe(
+                Effect.as({
+                  message: `Run ${runId} succeeded`,
+                  outcome: "completed" as const,
+                  runId,
+                })
+              ),
+              Effect.sync(() => {
+                cancellationRequests += 1;
+                return {
+                  kind: "requested" as const,
+                  message: `Cancelling run ${runId}`,
+                };
+              })
+            );
+          },
+        })
+      );
+      const request = {
+        action: "run" as const,
+        options: {},
+        target: { definitionId: articlesId, kind: "migration" as const },
+      };
+      const operation = yield* server.prepareOperation(request);
+      yield* server.startOperation({
+        acceptedFingerprint: operation.fingerprint,
+        request,
+      });
+
+      const another = yield* server.stopRun({
+        runId: MigrationRunId.make("another-run"),
+      });
+      expect(another).toEqual({
+        kind: "not-running",
+        message: "Run another-run is not running",
+        runId: "another-run",
+      });
+      expect(cancellationRequests).toBe(0);
+      const stopped = yield* server.stopRun({ runId });
+      expect(stopped).toEqual({
+        kind: "requested",
+        message: `Cancelling run ${runId}`,
+        runId,
+      });
+      expect(cancellationRequests).toBe(1);
+      yield* Deferred.succeed(terminal, undefined);
+    })
+  );
+
+  it.effect("reports provider-owned run cancellation as unsupported", () =>
+    Effect.gen(function* () {
+      const server = yield* makeServer(
+        makeBackend({ getActiveRuns: Effect.succeed([activeRun]) })
+      );
+
+      const stopped = yield* server.stopRun({ runId });
+      expect(stopped).toEqual({
+        kind: "unsupported",
+        message: `Run ${runId} cannot be stopped by this Migrate Server`,
+        runId,
+      });
+    })
+  );
+
   it.effect(
     "closes a detached observation without reporting the run as terminal",
     () =>
@@ -283,11 +479,13 @@ describe("Migrate Server", () => {
                 runId,
               });
 
-              return Effect.succeed({
-                message: `Run ${runId} continues in the background`,
-                outcome: "detached" as const,
-                runId,
-              });
+              return executionHandle(
+                Effect.succeed({
+                  message: `Run ${runId} continues in the background`,
+                  outcome: "detached" as const,
+                  runId,
+                })
+              );
             },
           })
         );
@@ -360,77 +558,77 @@ describe("Migrate Server", () => {
       })
   );
 
-  it.effect(
-    "rejects a concurrent start without losing cancellation of the active execution",
-    () =>
-      Effect.gen(function* () {
-        const terminal = yield* Deferred.make<void>();
-        let cancellationRequests = 0;
-        let executionAttempts = 0;
-        const server = yield* makeServer(
-          makeBackend({
-            cancelActiveExecution: Effect.sync(() => {
-              cancellationRequests += 1;
-              return {
-                kind: "requested" as const,
-                message: `Cancelling run ${runId}`,
-              };
-            }),
-            executeOperation: (_operation, observer) => {
-              executionAttempts += 1;
+  it.effect("owns concurrent executions independently", () =>
+    Effect.gen(function* () {
+      const firstTerminal = yield* Deferred.make<void>();
+      const secondTerminal = yield* Deferred.make<void>();
+      const cancellationRequests = new Map<MigrationRunId, number>();
+      let executionAttempts = 0;
+      const server = yield* makeServer(
+        makeBackend({
+          executeOperation: (_operation, observer) => {
+            executionAttempts += 1;
+            const currentRunId = executionAttempts === 1 ? runId : secondRunId;
+            const terminal =
+              executionAttempts === 1 ? firstTerminal : secondTerminal;
 
-              if (executionAttempts > 1) {
-                return Effect.fail("Another migration is already running");
-              }
-
-              observer.onStateChange({
-                adapter: "inline",
-                definitionId: articlesId,
-                kind: "running",
-                runId,
-              });
-              return Deferred.await(terminal).pipe(
+            observer.onStateChange({
+              adapter: "inline",
+              definitionId: articlesId,
+              kind: "running",
+              runId: currentRunId,
+            });
+            return executionHandle(
+              Deferred.await(terminal).pipe(
                 Effect.as({
-                  message: `Run ${runId} succeeded`,
+                  message: `Run ${currentRunId} succeeded`,
                   outcome: "completed" as const,
-                  runId,
+                  runId: currentRunId,
                 })
-              );
-            },
-          })
-        );
-        const request = {
-          action: "run" as const,
-          options: {},
-          target: { definitionId: articlesId, kind: "migration" as const },
-        };
-        const operation = yield* server.prepareOperation(request);
-        const active = yield* server.startOperation({
-          acceptedFingerprint: operation.fingerprint,
-          request,
-        });
+              ),
+              Effect.sync(() => {
+                cancellationRequests.set(
+                  currentRunId,
+                  (cancellationRequests.get(currentRunId) ?? 0) + 1
+                );
+                return {
+                  kind: "requested" as const,
+                  message: `Cancelling run ${currentRunId}`,
+                };
+              })
+            );
+          },
+        })
+      );
+      const request = {
+        action: "run" as const,
+        options: {},
+        target: { definitionId: articlesId, kind: "migration" as const },
+      };
+      const operation = yield* server.prepareOperation(request);
+      const first = yield* server.startOperation({
+        acceptedFingerprint: operation.fingerprint,
+        request,
+      });
+      const second = yield* server.startOperation({
+        acceptedFingerprint: operation.fingerprint,
+        request,
+      });
 
-        const concurrentStartError = yield* Effect.flip(
-          server.startOperation({
-            acceptedFingerprint: operation.fingerprint,
-            request,
-          })
-        );
+      expect(first.runId).toBe(runId);
+      expect(second.runId).toBe(secondRunId);
+      expect(second.executionId).not.toBe(first.executionId);
+      expect(executionAttempts).toBe(2);
+      expect(yield* server.stopRun({ runId })).toEqual({
+        kind: "requested",
+        message: `Cancelling run ${runId}`,
+        runId,
+      });
+      expect(cancellationRequests.get(runId)).toBe(1);
+      expect(cancellationRequests.get(secondRunId)).toBeUndefined();
 
-        expect(concurrentStartError).toMatchObject({
-          code: "operation-failed",
-          message: "Another migration is already running",
-        });
-        expect(executionAttempts).toBe(1);
-        expect(
-          yield* server.cancelExecution({ executionId: active.executionId })
-        ).toEqual({
-          kind: "requested",
-          message: `Cancelling run ${runId}`,
-        });
-        expect(cancellationRequests).toBe(1);
-
-        yield* Deferred.succeed(terminal, undefined);
-      })
+      yield* Deferred.succeed(firstTerminal, undefined);
+      yield* Deferred.succeed(secondTerminal, undefined);
+    })
   );
 });

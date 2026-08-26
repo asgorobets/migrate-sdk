@@ -3,6 +3,7 @@ import { Effect, Layer, Schema, Stream } from "effect";
 import { makeClient } from "effect/unstable/rpc/RpcTest";
 import { MigrationRunId } from "../domain/ids.ts";
 import {
+  MIGRATE_PROTOCOL_VERSION,
   MigrateActiveRun,
   MigrateDashboard,
   MigrateExecutionId,
@@ -15,7 +16,7 @@ const info = Schema.decodeUnknownSync(MigrateServerInfo)({
   capabilities: ["dashboard", "observe-execution"],
   configPath: "/workspace/migrate.config.ts",
   environment: { id: "test" },
-  protocolVersion: 2,
+  protocolVersion: MIGRATE_PROTOCOL_VERSION,
   registryId: "catalog",
   runtime: { name: "node", version: "24.16.0" },
   sdkVersion: "0.6.0",
@@ -45,6 +46,7 @@ const activeRuns = Schema.decodeUnknownSync(Schema.Array(MigrateActiveRun))([
     runId: "run-1",
     startedAt: "2026-08-25T12:00:00.000Z",
     status: "running",
+    stopSupported: false,
   },
 ]);
 
@@ -89,6 +91,12 @@ const serverLayer = Layer.succeed(
     prepareOperation: () => Effect.die("not used"),
     scanSource: () => Effect.succeed(dashboard),
     startOperation: () => Effect.die("not used"),
+    stopRun: ({ runId }) =>
+      Effect.succeed({
+        kind: "requested" as const,
+        message: `Stopping run ${runId}`,
+        runId,
+      }),
   })
 );
 

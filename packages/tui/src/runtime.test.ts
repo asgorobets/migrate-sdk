@@ -1,12 +1,23 @@
 import { fileURLToPath } from "node:url";
+import { Effect, Fiber } from "effect";
 import {
+  type MigrationRunId,
   toMigrationDefinitionGroupId,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
 } from "migrate-sdk";
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { liveProgressProviderObservations } from "../examples/live-progress-fixture.ts";
-import { loadConfiguredMigrationHost } from "./runtime.ts";
+import {
+  resetScopedExecutableState,
+  scopedExecutableState,
+} from "../test/fixtures/scoped-executable-support.ts";
+import {
+  type ConfiguredMigrationHost,
+  loadConfiguredMigrationHost as loadConfiguredMigrationHostEffect,
+  type MigrationTuiExecutablePreparedOperation,
+  type MigrationTuiExecuteOptions,
+} from "./runtime.ts";
 
 const packageDirectory = fileURLToPath(new URL("..", import.meta.url));
 const authorsId = toMigrationDefinitionId("authors");
@@ -14,6 +25,53 @@ const articlesId = toMigrationDefinitionId("articles");
 const assetsId = toMigrationDefinitionId("assets");
 const contentGroupId = toMigrationDefinitionGroupId("content");
 const succeededRunPattern = /^Run .+ succeeded$/;
+type ConfiguredObserver = NonNullable<
+  Parameters<ConfiguredMigrationHost["observeRun"]>[1]
+>;
+
+expectTypeOf<
+  "signal" extends keyof ConfiguredObserver ? true : false
+>().toEqualTypeOf<false>();
+
+const loadConfiguredMigrationHost = async (
+  ...args: Parameters<typeof loadConfiguredMigrationHostEffect>
+) => {
+  const host = await Effect.runPromise(
+    Effect.scoped(loadConfiguredMigrationHostEffect(...args))
+  );
+
+  return {
+    ...host,
+    breakLock: (lock: Parameters<typeof host.breakLock>[0]) =>
+      Effect.runPromise(host.breakLock(lock)),
+    listActiveRuns: () => Effect.runPromise(host.listActiveRuns),
+    listMessages: (...input: Parameters<typeof host.listMessages>) =>
+      Effect.runPromise(host.listMessages(...input)),
+    listSourceIdentityHistory: (
+      ...input: Parameters<typeof host.listSourceIdentityHistory>
+    ) => Effect.runPromise(host.listSourceIdentityHistory(...input)),
+    normalizeSourceIdentity: (
+      ...input: Parameters<typeof host.normalizeSourceIdentity>
+    ) => Effect.runPromise(host.normalizeSourceIdentity(...input)),
+    prepare: (...input: Parameters<typeof host.prepare>) =>
+      Effect.runPromise(host.prepare(...input)),
+    refresh: () => Effect.runPromise(host.refresh),
+    scanSource: (...input: Parameters<typeof host.scanSource>) =>
+      Effect.runPromise(host.scanSource(...input)),
+  };
+};
+
+const executeConfiguredMigration = async (
+  runtime: Pick<ConfiguredMigrationHost, "startExecution">,
+  operation: MigrationTuiExecutablePreparedOperation,
+  options?: MigrationTuiExecuteOptions
+) => {
+  const execution = await Effect.runPromise(
+    runtime.startExecution(operation, options)
+  );
+
+  return Effect.runPromise(execution.result);
+};
 
 describe("Migration TUI server runtime", () => {
   const liveProgressCases = [
@@ -58,6 +116,45 @@ describe("Migration TUI server runtime", () => {
     ]);
   });
 
+  it("keeps a configured Migration Executable alive for the host scope", async () => {
+    resetScopedExecutableState();
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const host = yield* loadConfiguredMigrationHostEffect({
+            configPath: "test/fixtures/scoped-executable.config.ts",
+            cwd: packageDirectory,
+          });
+
+          expect(scopedExecutableState()).toEqual({
+            acquisitions: 1,
+            releases: 0,
+          });
+
+          const operation = yield* host.prepare(
+            {
+              definitionId: toMigrationDefinitionId(
+                "scoped-executable-fixture"
+              ),
+              kind: "migration",
+            },
+            "run"
+          );
+          const execution = yield* host.startExecution(operation);
+          const result = yield* execution.result;
+
+          expect(result.outcome).toBe("completed");
+        })
+      )
+    );
+
+    expect(scopedExecutableState()).toEqual({
+      acquisitions: 1,
+      releases: 1,
+    });
+  });
+
   it("prepares an executable SDK plan before executing it", async () => {
     const runtime = await loadConfiguredMigrationHost({
       configPath: "examples/migrate.config.ts",
@@ -80,7 +177,9 @@ describe("Migration TUI server runtime", () => {
       },
     });
 
-    await expect(runtime.execute(operation)).resolves.toEqual({
+    await expect(
+      executeConfiguredMigration(runtime, operation)
+    ).resolves.toEqual({
       message: expect.stringMatching(succeededRunPattern),
       outcome: "completed",
       runId: expect.any(String),
@@ -91,6 +190,41 @@ describe("Migration TUI server runtime", () => {
     expect(articles?.status?.durable.failed).toBe(0);
     expect(articles?.status?.durable.migrated).toBe(2);
   });
+
+  it("drains attached SDK work when the execution fiber is interrupted", async () => {
+    const runtime = await loadConfiguredMigrationHost({
+      configPath: "examples/cancellation.config.ts",
+      cwd: packageDirectory,
+    });
+    const operation = await runtime.prepare(
+      {
+        definitionId: toMigrationDefinitionId("cancellable"),
+        kind: "migration",
+      },
+      "run"
+    );
+    const running = Promise.withResolvers<void>();
+    const execution = await Effect.runPromise(
+      runtime.startExecution(operation, {
+        onStateChange: (state) => {
+          if (state.kind === "running") {
+            running.resolve();
+          }
+        },
+      })
+    );
+
+    const fiber = Effect.runFork(execution.result);
+    await running.promise;
+
+    expect(runtime.hasActiveExecutions()).toBe(true);
+    await Effect.runPromise(Fiber.interrupt(fiber));
+
+    expect(runtime.hasActiveExecutions()).toBe(false);
+    expect((await runtime.refresh()).rows[0]?.status?.lastRun?.status).toBe(
+      "cancelled"
+    );
+  }, 10_000);
 
   for (const testCase of liveProgressCases) {
     it(`publishes live durable counts during ${testCase.label} execution`, async () => {
@@ -112,7 +246,7 @@ describe("Migration TUI server runtime", () => {
       const migratedCounts: number[] = [];
       const observationWarnings: string[] = [];
       let sawIntermediateProgressWhileRunning = false;
-      const execution = runtime.execute(operation, {
+      const execution = executeConfiguredMigration(runtime, operation, {
         onProgress: ({ definitions }) => {
           const status = definitions.find(
             (definition) => definition.definitionId === "live-progress"
@@ -159,7 +293,7 @@ describe("Migration TUI server runtime", () => {
       },
       "run"
     );
-    await runtime.execute(prerequisite);
+    await executeConfiguredMigration(runtime, prerequisite);
     const operation = await runtime.prepare(
       {
         definitionId: toMigrationDefinitionId("live-progress"),
@@ -172,7 +306,7 @@ describe("Migration TUI server runtime", () => {
 
     expect(operation.plan.executionDefinitionIds).toEqual(["live-progress"]);
 
-    await runtime.execute(operation, {
+    await executeConfiguredMigration(runtime, operation, {
       onProgress: ({ definitions }) => {
         const status = definitions.find(
           (definition) => definition.definitionId === "live-progress"
@@ -206,46 +340,59 @@ describe("Migration TUI server runtime", () => {
       "run"
     );
     const observing = Promise.withResolvers<void>();
-    const firstObservation = runtime.execute(operation, {
-      onStateChange: (state) => {
-        if (state.kind === "observing") {
-          observing.resolve();
-        }
-      },
-    });
+    let detachedRunId: MigrationRunId | undefined;
+    const execution = await Effect.runPromise(
+      runtime.startExecution(operation, {
+        onStateChange: (state) => {
+          if (state.kind === "observing") {
+            detachedRunId = state.runId;
+            observing.resolve();
+          }
+        },
+      })
+    );
+    const firstObservation = Effect.runFork(execution.result);
 
     await observing.promise;
-    await expect(runtime.cancelActiveExecution()).resolves.toMatchObject({
+    await expect(Effect.runPromise(execution.stop)).resolves.toMatchObject({
       kind: "detached",
     });
-    const detached = await firstObservation;
+    await Effect.runPromise(Fiber.interrupt(firstObservation));
+
+    if (detachedRunId === undefined) {
+      throw new Error("Expected a detached Migration Run id");
+    }
+
     const activeRuns = await runtime.listActiveRuns();
 
-    expect(detached).toMatchObject({ outcome: "detached" });
     expect(activeRuns).toEqual([
       expect.objectContaining({
         definitionIds: ["live-progress"],
         execution: {
           adapter: "test-detached",
-          executionId: `detached-${detached.runId}`,
+          executionId: `detached-${detachedRunId}`,
         },
-        runId: detached.runId,
+        runId: detachedRunId,
         status: "running",
       }),
     ]);
-    await expect(runtime.observeRun(detached.runId)).resolves.toEqual({
-      message: `Run ${detached.runId} succeeded`,
+    await expect(
+      Effect.runPromise(runtime.observeRun(detachedRunId))
+    ).resolves.toEqual({
+      message: `Run ${detachedRunId} succeeded`,
       outcome: "completed",
-      runId: detached.runId,
+      runId: detachedRunId,
     });
-    await expect(runtime.observeRun(detached.runId)).resolves.toEqual({
-      message: `Run ${detached.runId} succeeded`,
+    await expect(
+      Effect.runPromise(runtime.observeRun(detachedRunId))
+    ).resolves.toEqual({
+      message: `Run ${detachedRunId} succeeded`,
       outcome: "completed",
-      runId: detached.runId,
+      runId: detachedRunId,
     });
     expect(liveProgressProviderObservations).toEqual([
-      `detached-${detached.runId}`,
-      `detached-${detached.runId}`,
+      `detached-${detachedRunId}`,
+      `detached-${detachedRunId}`,
     ]);
   });
 

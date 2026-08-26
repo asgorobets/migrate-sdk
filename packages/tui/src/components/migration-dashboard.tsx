@@ -1507,7 +1507,7 @@ export const MigrationDashboard = ({
           wrapMode="none"
         />
         <text
-          content={`${utilityShortcuts.join(" · ")} · R ${wide ? "reload status" : "reload"} · ${busy === "" ? "q quit" : "q cancel + quit"}`}
+          content={`${utilityShortcuts.join(" · ")} · R ${wide ? "reload status" : "reload"} · q quit`}
           fg={migrationColors.dim}
           wrapMode="none"
         />

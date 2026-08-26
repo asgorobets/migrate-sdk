@@ -1,9 +1,11 @@
+import { unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
+import { NodeSocketServer } from "@effect/platform-node";
 import { runMain } from "@effect/platform-node/NodeRuntime";
-import { layer as layerNodeWorkerRunner } from "@effect/platform-node/NodeWorkerRunner";
 import { Effect, Layer, Stream } from "effect";
+import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
 import {
-  layerProtocolWorkerRunner,
+  layerProtocolSocketServer,
   layer as layerRpcServer,
 } from "effect/unstable/rpc/RpcServer";
 import {
@@ -18,8 +20,16 @@ const require = createRequire(import.meta.url);
 const sdkPackage = require("migrate-sdk/package.json") as {
   readonly version: string;
 };
-const configIndex = process.argv.indexOf("--config");
-const variant = configIndex === -1 ? "protocol" : process.argv[configIndex + 1];
+const socketIndex = process.argv.indexOf("--socket");
+const socketPath = process.argv[socketIndex + 1];
+const variantIndex = process.argv.indexOf("--variant");
+const variant =
+  variantIndex === -1 ? "protocol" : process.argv[variantIndex + 1];
+
+if (socketIndex === -1 || socketPath === undefined) {
+  throw new Error("Socket server fixture requires --socket");
+}
+
 const baseInfo: MigrateServerInfo = {
   capabilities: [...MIGRATE_CAPABILITIES],
   environment: { id: "test" },
@@ -28,22 +38,10 @@ const baseInfo: MigrateServerInfo = {
   runtime: { name: "node", version: process.versions.node },
   sdkVersion: sdkPackage.version,
 };
-const makeServerInfo = (): MigrateServerInfo => {
-  switch (variant) {
-    case "malformed":
-      return {
-        ...baseInfo,
-        environment: undefined,
-      } as unknown as MigrateServerInfo;
-    case "capabilities":
-      return { ...baseInfo, capabilities: ["dashboard"] };
-    case "sdk":
-      return { ...baseInfo, sdkVersion: "999.0.0" };
-    default:
-      return { ...baseInfo, protocolVersion: MIGRATE_PROTOCOL_VERSION + 1 };
-  }
-};
-const serverInfo = makeServerInfo();
+const serverInfo: MigrateServerInfo =
+  variant === "malformed"
+    ? ({ ...baseInfo, environment: undefined } as unknown as MigrateServerInfo)
+    : { ...baseInfo, protocolVersion: MIGRATE_PROTOCOL_VERSION + 1 };
 const unused = () => Effect.die("not used");
 const ServerApplication = Layer.succeed(
   MigrateServer,
@@ -64,12 +62,27 @@ const ServerApplication = Layer.succeed(
     stopRun: unused,
   })
 );
-const Server = layerRpcServer(MigrateRpcs, {
+const socketProtocolLayer = layerProtocolSocketServer.pipe(
+  Layer.provide(NodeSocketServer.layer({ path: socketPath })),
+  Layer.provide(layerNdjson)
+);
+const serverLayer = layerRpcServer(MigrateRpcs, {
   disableFatalDefects: true,
 }).pipe(
   Layer.provide(MigrateServerHandlers.pipe(Layer.provide(ServerApplication))),
-  Layer.provide(layerProtocolWorkerRunner),
-  Layer.provide(layerNodeWorkerRunner)
+  Layer.provideMerge(socketProtocolLayer)
 );
+const removeSocket = Effect.sync(() => {
+  try {
+    unlinkSync(socketPath);
+  } catch (cause) {
+    if (
+      !(cause instanceof Error && "code" in cause) ||
+      (cause as NodeJS.ErrnoException).code !== "ENOENT"
+    ) {
+      throw cause;
+    }
+  }
+});
 
-runMain(Layer.launch(Server));
+runMain(Layer.launch(serverLayer).pipe(Effect.ensuring(removeSocket)));

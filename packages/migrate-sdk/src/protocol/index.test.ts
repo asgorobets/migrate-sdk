@@ -45,6 +45,7 @@ import {
   PrepareOperation,
   ScanSource,
   StartOperation,
+  StopRun,
 } from "./index.ts";
 
 type ServiceFreeSchema = Schema.ConstraintDecoder<unknown> &
@@ -162,6 +163,7 @@ const contractCases: readonly {
       runId: "run-1",
       startedAt: "2026-08-25T12:00:00.000Z",
       status: "running",
+      stopSupported: false,
     },
   },
   {
@@ -514,6 +516,11 @@ const rpcPayloadCases: readonly {
     value: { executionId: "execution-1" },
   },
   {
+    name: "StopRun",
+    schema: StopRun.payloadSchema,
+    value: { runId: "run-1" },
+  },
+  {
     name: "ScanSource",
     schema: ScanSource.payloadSchema,
     value: { concurrency: 4, target: operationRequestValue.target },
@@ -590,6 +597,15 @@ const rpcUnarySuccessCases: readonly {
     value: { kind: "idle" },
   },
   {
+    name: "StopRun",
+    schema: StopRun.successSchema,
+    value: {
+      kind: "requested",
+      message: "Stopping run run-1",
+      runId: "run-1",
+    },
+  },
+  {
     name: "ScanSource",
     schema: ScanSource.successSchema,
     value: dashboardValue,
@@ -610,6 +626,7 @@ const rpcErrorCases = [
   PrepareOperation,
   StartOperation,
   CancelExecution,
+  StopRun,
   ScanSource,
   BreakLock,
 ] as const;
@@ -656,7 +673,7 @@ describe("Migrate Protocol", () => {
 
     expect(encoded).toEqual(preparedOperationValue);
     expect("definitions" in prepared.plan).toBe(false);
-    expect(MIGRATE_PROTOCOL_VERSION).toBe(2);
+    expect(MIGRATE_PROTOCOL_VERSION).toBe(1);
   });
 
   it("rejects an active run without any definitions", () => {
@@ -667,6 +684,7 @@ describe("Migrate Protocol", () => {
         runId: "run-empty",
         startedAt: "2026-08-25T12:00:00.000Z",
         status: "running",
+        stopSupported: false,
       })
     ).toThrow();
   });
@@ -677,6 +695,19 @@ describe("Migrate Protocol", () => {
         definitionIds: ["articles"],
         observationDefinitionId: "authors",
         runId: "run-invalid-anchor",
+        startedAt: "2026-08-25T12:00:00.000Z",
+        status: "running",
+        stopSupported: false,
+      })
+    ).toThrow();
+  });
+
+  it("rejects an active run without explicit stop support", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(MigrateActiveRun)({
+        definitionIds: ["articles"],
+        observationDefinitionId: "articles",
+        runId: "run-missing-stop-support",
         startedAt: "2026-08-25T12:00:00.000Z",
         status: "running",
       })

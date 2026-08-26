@@ -5,10 +5,11 @@ export type {
   MigrationTuiCancellationResult,
   MigrationTuiExecutionResult,
   MigrationTuiExecutionState,
-} from "./execution-controller.ts";
+} from "./execution.ts";
 export type {
   LoadMigrationTuiInput,
   MigrationTuiAction,
+  MigrationTuiActiveRun,
   MigrationTuiBreakLockResult,
   MigrationTuiDependencyCheck,
   MigrationTuiExecuteOptions,

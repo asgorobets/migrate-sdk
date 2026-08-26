@@ -30,7 +30,7 @@ describe("Migration TUI lifecycle supervisor", () => {
       },
       forceExit: vi.fn(),
       runtime: {
-        cancelActiveExecution: () => Promise.resolve({ kind: "idle" }),
+        detachForExit: () => Promise.resolve({ kind: "idle" }),
         refresh: vi.fn(() => Promise.resolve(snapshot)),
       },
       setExitCode: (code) => exitCodes.push(code),
@@ -66,7 +66,7 @@ describe("Migration TUI lifecycle supervisor", () => {
       readonly kind: "requested";
       readonly message: string;
     }>();
-    const cancelActiveExecution = vi.fn(() => cancellation.promise);
+    const detachForExit = vi.fn(() => cancellation.promise);
     const destroy = vi.fn();
     const forceExit = vi.fn();
     let sessionInput: MigrationTuiRenderSessionInput | undefined;
@@ -77,7 +77,7 @@ describe("Migration TUI lifecycle supervisor", () => {
       },
       forceExit,
       runtime: {
-        cancelActiveExecution,
+        detachForExit,
         refresh: () =>
           Promise.resolve({
             activeRuns: [],
@@ -95,7 +95,7 @@ describe("Migration TUI lifecycle supervisor", () => {
 
     await supervisor.start();
     sessionInput?.onControlC();
-    await waitFor(() => cancelActiveExecution.mock.calls.length === 1);
+    await waitFor(() => detachForExit.mock.calls.length === 1);
 
     expect(destroy).not.toHaveBeenCalled();
 
@@ -123,7 +123,7 @@ describe("Migration TUI lifecycle supervisor", () => {
       forceExit,
       forceExitTimeoutMs: 1,
       runtime: {
-        cancelActiveExecution: () => new Promise(() => undefined),
+        detachForExit: () => new Promise(() => undefined),
         refresh: () =>
           Promise.resolve({
             activeRuns: [],
