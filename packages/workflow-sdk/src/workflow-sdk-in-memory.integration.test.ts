@@ -1,14 +1,12 @@
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import {
   MigrationExecutable,
   type MigrationExecutableProgressCheckpoint,
 } from "migrate-sdk";
 import { expect, test } from "vitest";
-import { getRun, start } from "workflow/api";
+import { getRun } from "workflow/api";
 import { getWorld } from "workflow/runtime";
-import type { WorkflowSdkMigrationRunEnvelope } from "./migration-execution-workflow.ts";
 import { workflowSdkMigrationProgressStreamNamespace } from "./migration-progress.ts";
-import type { WorkflowSdkMigrationRollbackEnvelope } from "./migration-rollback-workflow.ts";
 import {
   beginMigrationRunStep,
   completeMigrationRunStep,
@@ -25,12 +23,20 @@ import {
   setInMemoryMigrationTestSourceItemCount,
 } from "./test-fixtures/in-memory-migration.steps.ts";
 import { inMemoryMigrationTestWorkflow } from "./test-fixtures/in-memory-migration.workflow.ts";
-import { inMemoryRollbackTestWorkflow } from "./test-fixtures/in-memory-rollback.workflow.ts";
-import type { WorkflowSdkMigrationWorkflow } from "./workflow-sdk-migration-executable.ts";
+import {
+  WorkflowSdkClient,
+  type WorkflowSdkMigrationWorkflow,
+} from "./workflow-sdk-client.ts";
 import { WorkflowSdkMigrationExecutable } from "./workflow-sdk-migration-executable.ts";
 
-const runWorkflow =
-  inMemoryMigrationTestWorkflow as WorkflowSdkMigrationWorkflow;
+const runWorkflow: WorkflowSdkMigrationWorkflow = inMemoryMigrationTestWorkflow;
+
+const makeWorkflowSdkMigrationExecutableLayer = (
+  workflow: WorkflowSdkMigrationWorkflow
+) =>
+  WorkflowSdkMigrationExecutable.layer({ workflow }).pipe(
+    Layer.provide(WorkflowSdkClient.layer)
+  );
 
 const startInMemoryMigrationRun = async (
   rollbackOrphans = false,
@@ -47,16 +53,7 @@ const startInMemoryMigrationRun = async (
   );
   const executable = await Effect.runPromise(
     MigrationExecutable.pipe(
-      Effect.provide(
-        WorkflowSdkMigrationExecutable.layer({
-          start: (workflow, args) =>
-            start(
-              workflow as typeof inMemoryMigrationTestWorkflow,
-              args as unknown as [WorkflowSdkMigrationRunEnvelope]
-            ),
-          workflow: runWorkflow,
-        })
-      )
+      Effect.provide(makeWorkflowSdkMigrationExecutableLayer(runWorkflow))
     )
   );
   const started = await Effect.runPromise(executable.startRun(plan));
@@ -81,8 +78,6 @@ const startInMemoryMigrationRun = async (
 
 test("Workflow SDK executes a real in-memory migration run and rollback", async () => {
   resetInMemoryMigrationTestState();
-  const rollbackWorkflow =
-    inMemoryRollbackTestWorkflow as WorkflowSdkMigrationWorkflow;
 
   const plan = await Effect.runPromise(
     inMemoryMigrationTestRegistry.executable().planRun({
@@ -91,16 +86,7 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
   );
   const started = await Effect.runPromise(
     MigrationExecutable.startRun(plan).pipe(
-      Effect.provide(
-        WorkflowSdkMigrationExecutable.layer({
-          start: (workflow, args) =>
-            start(
-              workflow as typeof inMemoryMigrationTestWorkflow,
-              args as unknown as [WorkflowSdkMigrationRunEnvelope]
-            ),
-          workflow: runWorkflow,
-        })
-      )
+      Effect.provide(makeWorkflowSdkMigrationExecutableLayer(runWorkflow))
     )
   );
 
@@ -183,16 +169,7 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
   );
   const rollbackOrphansStarted = await Effect.runPromise(
     MigrationExecutable.startRun(rollbackOrphansPlan).pipe(
-      Effect.provide(
-        WorkflowSdkMigrationExecutable.layer({
-          start: (workflow, args) =>
-            start(
-              workflow as typeof inMemoryMigrationTestWorkflow,
-              args as unknown as [WorkflowSdkMigrationRunEnvelope]
-            ),
-          workflow: runWorkflow,
-        })
-      )
+      Effect.provide(makeWorkflowSdkMigrationExecutableLayer(runWorkflow))
     )
   );
 
@@ -252,16 +229,7 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
   );
   const rollbackStarted = await Effect.runPromise(
     MigrationExecutable.startRollback(rollbackPlan).pipe(
-      Effect.provide(
-        WorkflowSdkMigrationExecutable.layer({
-          start: (workflow, args) =>
-            start(
-              workflow as typeof inMemoryRollbackTestWorkflow,
-              args as unknown as [WorkflowSdkMigrationRollbackEnvelope]
-            ),
-          workflow: rollbackWorkflow,
-        })
-      )
+      Effect.provide(makeWorkflowSdkMigrationExecutableLayer(runWorkflow))
     )
   );
 
@@ -279,7 +247,7 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
   }
 
   const rollbackRun =
-    getRun<Awaited<ReturnType<typeof inMemoryRollbackTestWorkflow>>>(
+    getRun<Awaited<ReturnType<typeof inMemoryMigrationTestWorkflow>>>(
       rollbackExecutionId
     );
   const rollbackResult = await rollbackRun.returnValue;

@@ -7,12 +7,21 @@ export {
   WorkflowSdkMigrationExecutableObservationError,
   WorkflowSdkMigrationExecutableStartError,
 } from "./workflow-sdk-migration-executable.ts";
+export {
+  WorkflowSdkClient,
+  WorkflowSdkClientError,
+} from "./workflow-sdk-client.ts";
+export type { WorkflowSdkMigrationExecutableLayerOptions } from "./workflow-sdk-migration-executable.ts";
 export type {
-  WorkflowSdkGetRun,
-  WorkflowSdkMigrationExecutableLayerOptions,
+  WorkflowSdkClientService,
+  WorkflowSdkClientStartInput,
   WorkflowSdkMigrationWorkflow,
   WorkflowSdkRun,
-  WorkflowSdkStart,
   WorkflowSdkStartOptions,
   WorkflowSdkWorkflowMetadata,
-} from "./workflow-sdk-migration-executable.ts";
+} from "./workflow-sdk-client.ts";
+export type {
+  WorkflowSdkMigrationExecutionEnvelope,
+  WorkflowSdkMigrationRollbackEnvelope,
+  WorkflowSdkMigrationRunEnvelope,
+} from "./migration-envelope.ts";

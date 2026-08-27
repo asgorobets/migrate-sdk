@@ -1,6 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +8,7 @@ import { Layer, ManagedRuntime } from "effect";
 import { layerProtocolSocket } from "effect/unstable/rpc/RpcClient";
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
+import { MIGRATE_SDK_VERSION } from "migrate-sdk";
 import { MigrateClient, type MigrateClientService } from "migrate-sdk/client";
 import type { MigrateServerInfo } from "migrate-sdk/protocol";
 import type { MigrateConnection } from "./connection.ts";
@@ -18,10 +18,6 @@ import {
   removeLocalMigrateServerEndpoint,
 } from "./local-endpoint.ts";
 
-const require = createRequire(import.meta.url);
-const sdkPackage = require("migrate-sdk/package.json") as {
-  readonly version: string;
-};
 const defaultStartupTimeoutMs = 10_000;
 
 export interface LocalMigrateConnectionInput {
@@ -99,7 +95,7 @@ export const localMigrateServerEndpoint = ({
     },
     {
       platform: process.platform,
-      sdkVersion: sdkPackage.version,
+      sdkVersion: MIGRATE_SDK_VERSION,
       ...(process.env.MIGRATE_TUI_SERVER_IDENTITY === undefined
         ? {}
         : {

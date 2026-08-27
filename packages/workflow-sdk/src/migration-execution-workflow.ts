@@ -1,86 +1,37 @@
-export interface WorkflowSdkMigrationDefinitionLock {
-  readonly definitionId: string;
-  readonly ownerRunId: string;
-  readonly token: string;
-}
+import type {
+  MigrationDefinitionRunSummary,
+  MigrationRunCursorWindowResult,
+  MigrationRunCursorWindowState,
+  MigrationRunRollbackOrphansPageResult,
+  MigrationRunRollbackOrphansState,
+  MigrationRunSummary,
+} from "migrate-sdk/core";
+import type { WorkflowSdkMigrationRunEnvelope } from "./migration-envelope.ts";
 
-export interface WorkflowSdkMigrationRunEnvelope {
-  readonly executionDefinitionIds: readonly string[];
-  readonly kind: "run";
-  readonly locks: readonly WorkflowSdkMigrationDefinitionLock[];
-  readonly registryId: string;
-  readonly request: unknown;
-  readonly runId: string;
-  readonly scopeDefinitionIds: readonly string[];
-}
+export type { WorkflowSdkMigrationRunEnvelope } from "./migration-envelope.ts";
 
-export interface WorkflowSdkMigrationDefinitionRunCounts {
-  readonly failed: number;
-  readonly migrated: number;
-  readonly needsUpdate: number;
-  readonly orphaned?: number;
-  readonly rollbackFailed?: number;
-  readonly rolledBack?: number;
-  readonly skipped: number;
-  readonly unchanged: number;
-}
+type WorkflowSdkMigrationDefinitionId =
+  WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number];
 
-export interface WorkflowSdkMigrationDefinitionRunSummary {
-  readonly counts: WorkflowSdkMigrationDefinitionRunCounts;
-  readonly definitionId: string;
-  readonly status: "failed" | "skipped" | "succeeded";
-}
+export type WorkflowSdkMigrationDefinitionRunCounts =
+  MigrationDefinitionRunSummary["counts"];
 
-export interface WorkflowSdkMigrationRunSummary {
-  readonly definitions: readonly WorkflowSdkMigrationDefinitionRunSummary[];
-  readonly finishedAt: Date;
-  readonly runId: string;
-  readonly startedAt: Date;
-  readonly status: "failed" | "succeeded";
-}
+export type WorkflowSdkMigrationDefinitionRunSummary =
+  MigrationDefinitionRunSummary;
 
-export interface WorkflowSdkMigrationRunCursorWindowState {
-  readonly counts: WorkflowSdkMigrationDefinitionRunCounts;
-  readonly excludedSourceIdentities: readonly string[];
-  readonly phase: "scan";
-}
+export type WorkflowSdkMigrationRunSummary = MigrationRunSummary;
 
-export interface WorkflowSdkMigrationRunRollbackOrphansState {
-  readonly afterIdentity?: string;
-  readonly orphaned: number;
-  readonly phase: "rollback";
-  readonly rollbackFailed: number;
-  readonly rolledBack: number;
-}
+export type WorkflowSdkMigrationRunCursorWindowState =
+  MigrationRunCursorWindowState;
+
+export type WorkflowSdkMigrationRunRollbackOrphansState =
+  MigrationRunRollbackOrphansState;
 
 export type WorkflowSdkMigrationRunRollbackOrphansPageResult =
-  | {
-      readonly kind: "cancelled";
-      readonly state: WorkflowSdkMigrationRunRollbackOrphansState;
-    }
-  | {
-      readonly kind: "continue";
-      readonly state: WorkflowSdkMigrationRunRollbackOrphansState;
-    }
-  | {
-      readonly kind: "completed";
-      readonly state: WorkflowSdkMigrationRunRollbackOrphansState;
-    };
+  MigrationRunRollbackOrphansPageResult;
 
 export type WorkflowSdkMigrationRunCursorWindowResult =
-  | {
-      readonly kind: "cancelled";
-      readonly state: WorkflowSdkMigrationRunCursorWindowState;
-    }
-  | {
-      readonly kind: "continue";
-      readonly state: WorkflowSdkMigrationRunCursorWindowState;
-    }
-  | {
-      readonly kind: "definition-completed";
-      readonly state: WorkflowSdkMigrationRunCursorWindowState;
-      readonly summary: WorkflowSdkMigrationDefinitionRunSummary;
-    };
+  MigrationRunCursorWindowResult;
 
 export interface WorkflowSdkMigrationRunSteps {
   readonly begin: (
@@ -91,13 +42,13 @@ export interface WorkflowSdkMigrationRunSteps {
     readonly envelope: WorkflowSdkMigrationRunEnvelope;
   }) => Promise<WorkflowSdkMigrationRunSummary>;
   readonly executeCursorWindow: (input: {
-    readonly definitionId: string;
+    readonly definitionId: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number];
     readonly envelope: WorkflowSdkMigrationRunEnvelope;
     readonly runId: WorkflowSdkMigrationRunEnvelope["runId"];
     readonly state: WorkflowSdkMigrationRunCursorWindowState;
   }) => Promise<WorkflowSdkMigrationRunCursorWindowResult>;
   readonly executeRollbackOrphansPage: (input: {
-    readonly definitionId: string;
+    readonly definitionId: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number];
     readonly envelope: WorkflowSdkMigrationRunEnvelope;
     readonly runId: WorkflowSdkMigrationRunEnvelope["runId"];
     readonly state: WorkflowSdkMigrationRunRollbackOrphansState;
@@ -106,7 +57,7 @@ export interface WorkflowSdkMigrationRunSteps {
     readonly definitions: WorkflowSdkMigrationRunSummary["definitions"];
     readonly envelope: WorkflowSdkMigrationRunEnvelope;
     readonly error: unknown;
-    readonly failedDefinitionId?: string;
+    readonly failedDefinitionId?: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number];
   }) => Promise<void>;
 }
 
@@ -146,7 +97,9 @@ const executeWorkflowRollbackOrphans = async ({
   readonly completedDefinitions: WorkflowSdkMigrationDefinitionRunSummary[];
   readonly definitions: WorkflowSdkMigrationDefinitionRunSummary[];
   readonly envelope: WorkflowSdkMigrationRunEnvelope;
-  readonly onActiveDefinition: (definitionId: string | undefined) => void;
+  readonly onActiveDefinition: (
+    definitionId: WorkflowSdkMigrationDefinitionId | undefined
+  ) => void;
   readonly steps: WorkflowSdkMigrationRunSteps;
 }): Promise<void> => {
   for (const definitionId of [...envelope.executionDefinitionIds].reverse()) {
@@ -197,7 +150,7 @@ export const runMigrationExecutionWorkflow = async (
 ): Promise<WorkflowSdkMigrationRunSummary> => {
   const definitions: WorkflowSdkMigrationDefinitionRunSummary[] = [];
   const completedDefinitions: WorkflowSdkMigrationDefinitionRunSummary[] = [];
-  let activeDefinitionId: string | undefined;
+  let activeDefinitionId: WorkflowSdkMigrationDefinitionId | undefined;
   let rollbackOrphans = false;
 
   try {

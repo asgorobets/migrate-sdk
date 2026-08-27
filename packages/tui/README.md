@@ -58,35 +58,55 @@ Transport and server hosts can integrate directly with the Effect services
 exported as `MigrateClient` from `migrate-sdk/client` and `MigrateServer` from
 `migrate-sdk/server`. The local TUI supplies a child-process transport and a
 Node bootstrap that discovers `migrate.config.*`. Remote hosts instead supply
-an already-imported registry and executable to the registry-backed server
-runtime; no config file is required.
+an already-imported registry and execution-adapter Layer to the registry-backed
+server; no config file is required.
 
 Remote hosts can expose the same server Layer as a Web-standard HTTP handler:
 
 ```ts
+import { Effect, Layer } from "effect";
 import {
-  makeMigrateServerHttpHandler,
-  makeRegistryMigrateServerBackend,
-  makeRegistryMigrateServerRuntime,
-  MigrateServer,
-} from "migrate-sdk/server";
+  HttpMiddleware,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
+import {
+  MigrateServerHttp,
+  RegistryMigrateServer,
+} from "migrate-sdk/server/http";
 
-const runtime = makeRegistryMigrateServerRuntime({ registry, executable });
-const backend = makeRegistryMigrateServerBackend(runtime);
-const remoteServer = makeMigrateServerHttpHandler(
-  MigrateServer.layer({ backend, serverInfo }),
-  {
-    authorize: (request) => verifyMigrateRequest(request),
-    path: "/api/rpc",
+const executableLayer = /* the selected execution-adapter Layer */;
+const serverLayer = RegistryMigrateServer.layer({
+  environment: {
+    id: "production",
+    label: "Production",
   },
+  registry,
+}).pipe(Layer.provide(executableLayer));
+const httpLayer = MigrateServerHttp.layer.pipe(Layer.provide(serverLayer));
+const authorize = HttpMiddleware.make((httpApp) =>
+  HttpServerRequest.HttpServerRequest.pipe(
+    Effect.flatMap((request) =>
+      verifyMigrateRequest(request)
+        ? httpApp
+        : Effect.succeed(
+            HttpServerResponse.text("Unauthorized", { status: 401 }),
+          ),
+    ),
+  ),
 );
+const remoteServer = MigrateServerHttp.toWebHandler(httpLayer, authorize);
 
 export const POST = (request: Request) => remoteServer.handler(request);
 ```
 
-`authorize` is application-owned so deployments can use their existing identity
-provider. Deployments where an authenticated reverse proxy enforces access can
-instead pass `authentication: "external"` explicitly. The HTTP handler uses
+The host route owns the public URL; the Migrate Server handler is routerless
+and does not need to know where it is mounted.
+
+Authorization is application-owned Effect HTTP middleware so deployments can
+use their existing identity provider without leaving the request fiber.
+Deployments where authenticated infrastructure already enforces access can omit
+the middleware when converting the fully composed Layer. The HTTP transport uses
 bounded observation leases: each response returns an opaque resume token and
 absolute progress snapshot, and the TUI reconnects from the last token. No
 function invocation or HTTP response owns the lifetime of a durable Migration

@@ -7,6 +7,9 @@
     "incremental": true,
     "noImplicitOverride": true,
     "noUnusedLocals": true,
+    "paths": {
+      "@fixtures/catalog": ["../../fixtures/catalog/fixture.ts"]
+    },
     "rootDir": "src",
     "outDir": "dist",
     "rewriteRelativeImportExtensions": true,

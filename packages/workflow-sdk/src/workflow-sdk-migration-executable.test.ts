@@ -14,23 +14,27 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
-import type { MigrationExecutionEnvelopeType } from "migrate-sdk/core";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
-import { Run, start as workflowStart } from "workflow/api";
+import { Run } from "workflow/api";
+import type { WorkflowSdkMigrationExecutionEnvelope } from "./migration-envelope.ts";
+import {
+  WorkflowSdkClient,
+  WorkflowSdkClientError,
+  type WorkflowSdkMigrationWorkflow,
+  type WorkflowSdkRun,
+  type WorkflowSdkStartOptions,
+  type WorkflowSdkWorkflowMetadata,
+} from "./workflow-sdk-client.ts";
 import {
   WorkflowSdkMigrationExecutable,
   WorkflowSdkMigrationExecutableAttachError,
+  type WorkflowSdkMigrationExecutableLayerOptions,
   WorkflowSdkMigrationExecutableObservationError,
   WorkflowSdkMigrationExecutableStartError,
-  type WorkflowSdkMigrationWorkflow,
-  type WorkflowSdkRun,
-  type WorkflowSdkStart,
-  type WorkflowSdkStartOptions,
-  type WorkflowSdkWorkflowMetadata,
 } from "./workflow-sdk-migration-executable.ts";
 
-type MigrationExecutionEnvelope = MigrationExecutionEnvelopeType;
+type MigrationExecutionEnvelope = WorkflowSdkMigrationExecutionEnvelope;
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -128,13 +132,47 @@ const makeProgressWorkflowRun = (
     },
   } as unknown as WorkflowSdkRun;
 };
-const assertWorkflowSdkStart = (_start: WorkflowSdkStart) => undefined;
-assertWorkflowSdkStart(workflowStart);
 type WorkflowSdkStartCall = [
   workflow: WorkflowSdkMigrationWorkflow | WorkflowSdkWorkflowMetadata,
   args: [MigrationExecutionEnvelope],
   options: WorkflowSdkStartOptions | undefined,
 ];
+type WorkflowSdkStart = (
+  ...args: WorkflowSdkStartCall
+) => Promise<WorkflowSdkRun>;
+
+interface WorkflowSdkMigrationExecutableTestLayerOptions
+  extends WorkflowSdkMigrationExecutableLayerOptions {
+  readonly getRun?: (executionId: string) => WorkflowSdkRun;
+  readonly start: WorkflowSdkStart;
+}
+
+const makeWorkflowSdkMigrationExecutableTestLayer = ({
+  getRun,
+  start,
+  ...options
+}: WorkflowSdkMigrationExecutableTestLayerOptions) =>
+  WorkflowSdkMigrationExecutable.layer(options).pipe(
+    Layer.provide(
+      Layer.succeed(WorkflowSdkClient, {
+        getRun: (executionId) =>
+          Effect.try({
+            try: () => getRun?.(executionId) ?? makeWorkflowRun(executionId),
+            catch: (cause) =>
+              new WorkflowSdkClientError({
+                cause,
+                operation: "get-run",
+              }),
+          }),
+        start: (input) =>
+          Effect.tryPromise({
+            try: () => start(input.workflow, [input.envelope], input.options),
+            catch: (cause) =>
+              new WorkflowSdkClientError({ cause, operation: "start" }),
+          }),
+      })
+    )
+  );
 
 const makeFixture = (
   input: {
@@ -228,7 +266,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
           const executionId = `wrun-observe-${testCase.outcome}`;
           const executable = yield* MigrationExecutable.pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 getRun: (runId) =>
                   makeObservedWorkflowRun(runId, testCase.outcome),
                 start: () => Promise.resolve(makeWorkflowRun("unused")),
@@ -279,7 +317,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         } as unknown as WorkflowSdkRun;
         const executable = yield* MigrationExecutable.pipe(
           Effect.provide(
-            WorkflowSdkMigrationExecutable.layer({
+            makeWorkflowSdkMigrationExecutableTestLayer({
               getRun: () => pendingRun,
               start: () => Promise.resolve(makeWorkflowRun("unused")),
               workflow: migrationExecutionWorkflow,
@@ -317,7 +355,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
       const readableOptions: unknown[] = [];
       const executable = yield* MigrationExecutable.pipe(
         Effect.provide(
-          WorkflowSdkMigrationExecutable.layer({
+          makeWorkflowSdkMigrationExecutableTestLayer({
             getRun: (runId) =>
               makeProgressWorkflowRun(runId, (options) =>
                 readableOptions.push(options)
@@ -391,7 +429,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         } as unknown as WorkflowSdkRun;
         const executable = yield* MigrationExecutable.pipe(
           Effect.provide(
-            WorkflowSdkMigrationExecutable.layer({
+            makeWorkflowSdkMigrationExecutableTestLayer({
               getRun: () => run,
               start: () => Promise.resolve(makeWorkflowRun("unused")),
               workflow: migrationExecutionWorkflow,
@@ -447,7 +485,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
       let getRunCalls = 0;
       const executable = yield* MigrationExecutable.pipe(
         Effect.provide(
-          WorkflowSdkMigrationExecutable.layer({
+          makeWorkflowSdkMigrationExecutableTestLayer({
             getRun: (runId) => {
               getRunCalls += 1;
               return makeObservedWorkflowRun(runId, "succeeded");
@@ -502,7 +540,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
 
         const result = yield* MigrationExecutable.startRun(plan).pipe(
           Effect.provide(
-            WorkflowSdkMigrationExecutable.layer({
+            makeWorkflowSdkMigrationExecutableTestLayer({
               start,
               workflow: migrationExecutionWorkflow,
               startOptions: {
@@ -572,7 +610,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
 
       const result = yield* MigrationExecutable.startRollback(plan).pipe(
         Effect.provide(
-          WorkflowSdkMigrationExecutable.layer({
+          makeWorkflowSdkMigrationExecutableTestLayer({
             start,
             workflow: migrationExecutionWorkflow,
           })
@@ -653,7 +691,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
 
       const result = yield* MigrationExecutable.startRollback(plan).pipe(
         Effect.provide(
-          WorkflowSdkMigrationExecutable.layer({
+          makeWorkflowSdkMigrationExecutableTestLayer({
             start,
             workflow: migrationExecutionWorkflow,
           })
@@ -720,7 +758,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -816,7 +854,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -878,7 +916,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRollback(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -913,7 +951,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -955,7 +993,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -995,7 +1033,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -1039,7 +1077,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -1082,7 +1120,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const { articlesId, registry, storeState } = makeFixture();
         const start: WorkflowSdkStart = () =>
           Promise.resolve(makeWorkflowRun("wrun_1"));
-        const layer = WorkflowSdkMigrationExecutable.layer({
+        const layer = makeWorkflowSdkMigrationExecutableTestLayer({
           start,
           workflow: migrationExecutionWorkflow,
         });

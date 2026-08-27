@@ -1,9 +1,10 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public entrypoint isolates the deployable HTTP host from local config discovery.
 
 export {
+  MigrateServerHttp,
+  type MigrateServerHttpApp,
   type MigrateServerHttpHandler,
-  type MigrateServerHttpHandlerOptions,
-  makeMigrateServerHttpHandler,
+  type MigrateServerHttpMiddleware,
 } from "./http.ts";
 export { makeRegistryMigrateServerBackend } from "./registry-backend.ts";
 export {
@@ -12,6 +13,10 @@ export {
   type RegistryMigrateServerRuntime,
   type RegistryMigrateServerRuntimeOptions,
 } from "./registry-runtime.ts";
+export {
+  RegistryMigrateServer,
+  type RegistryMigrateServerLayerOptions,
+} from "./registry-server.ts";
 export {
   MigrateServer,
   type MigrateServerBackend,

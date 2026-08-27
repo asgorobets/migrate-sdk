@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { createRequire } from "node:module";
 import { basename } from "node:path";
 import { NodeSocketServer } from "@effect/platform-node";
 import { runMain } from "@effect/platform-node/NodeRuntime";
@@ -13,11 +12,7 @@ import {
   Protocol as RpcServerProtocol,
 } from "effect/unstable/rpc/RpcServer";
 import { toMigrationDefinitionRegistryId } from "migrate-sdk";
-import {
-  MIGRATE_PROTOCOL_VERSION,
-  type MigrateServerInfo,
-  MigrateStreamingRpcs,
-} from "migrate-sdk/protocol";
+import { MigrateStreamingRpcs } from "migrate-sdk/protocol";
 import {
   loadLocalMigrateServerRuntime,
   MigrateServer,
@@ -26,11 +21,6 @@ import {
 } from "migrate-sdk/server";
 import { removeLocalMigrateServerEndpoint } from "./local-endpoint.ts";
 import { waitForLocalMigrateServerIdle } from "./server-lifecycle.ts";
-
-const require = createRequire(import.meta.url);
-const sdkPackage = require("migrate-sdk/package.json") as {
-  readonly version: string;
-};
 
 interface ServerArguments {
   readonly configPath?: string;
@@ -129,18 +119,13 @@ const main = Effect.scoped(
           )
           .digest("hex")}`
       );
-    const serverInfo: MigrateServerInfo = {
+    const ServerApplication = MigrateServer.layer({
+      backend: makeRegistryMigrateServerBackend(runtime),
       environment: {
         id: `local:${parsed.cwd}`,
         label: basename(runtime.configPath),
       },
-      protocolVersion: MIGRATE_PROTOCOL_VERSION,
       registryId,
-      sdkVersion: sdkPackage.version,
-    };
-    const ServerApplication = MigrateServer.layer({
-      backend: makeRegistryMigrateServerBackend(runtime),
-      serverInfo,
     });
     const Handlers = MigrateStreamingServerHandlers.pipe(
       Layer.provide(ServerApplication)

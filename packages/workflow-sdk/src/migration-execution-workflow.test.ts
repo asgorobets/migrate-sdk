@@ -1,3 +1,10 @@
+import {
+  toEncodedSourceIdentity,
+  toMigrationDefinitionId,
+  toMigrationDefinitionLockToken,
+  toMigrationDefinitionRegistryId,
+  toMigrationRunId,
+} from "migrate-sdk";
 import { describe, expect, it, vi } from "vitest";
 import {
   runMigrationExecutionWorkflow,
@@ -5,22 +12,26 @@ import {
   type WorkflowSdkMigrationRunSteps,
 } from "./migration-execution-workflow.ts";
 
+const definitionIds = (...ids: readonly string[]) =>
+  ids.map(toMigrationDefinitionId);
+
 const makeEnvelope = (): WorkflowSdkMigrationRunEnvelope => ({
-  executionDefinitionIds: ["articles"],
+  executionDefinitionIds: definitionIds("articles"),
   kind: "run",
   locks: [
     {
-      definitionId: "articles",
-      ownerRunId: "run-1",
-      token: "lock-1",
+      createdAt: new Date(0),
+      definitionId: toMigrationDefinitionId("articles"),
+      ownerRunId: toMigrationRunId("run-1"),
+      token: toMigrationDefinitionLockToken("lock-1"),
     },
   ],
-  registryId: "catalog",
+  registryId: toMigrationDefinitionRegistryId("catalog"),
   request: {
     definitionIds: ["articles"],
   },
-  runId: "run-1",
-  scopeDefinitionIds: ["articles"],
+  runId: toMigrationRunId("run-1"),
+  scopeDefinitionIds: definitionIds("articles"),
 });
 
 describe("runMigrationExecutionWorkflow", () => {
@@ -67,7 +78,7 @@ describe("runMigrationExecutionWorkflow", () => {
   it("reports completed and active definitions when a later scan fails", async () => {
     const envelope: WorkflowSdkMigrationRunEnvelope = {
       ...makeEnvelope(),
-      executionDefinitionIds: ["authors", "articles", "assets"],
+      executionDefinitionIds: definitionIds("authors", "articles", "assets"),
     };
     const sourceError = new Error("Article source is unavailable");
     const fail = vi.fn<WorkflowSdkMigrationRunSteps["fail"]>();
@@ -131,10 +142,12 @@ describe("runMigrationExecutionWorkflow", () => {
   it("finishes every scan before rolling back orphans in reverse order", async () => {
     const envelope: WorkflowSdkMigrationRunEnvelope = {
       ...makeEnvelope(),
-      executionDefinitionIds: ["assets", "articles"],
+      executionDefinitionIds: definitionIds("assets", "articles"),
     };
     const calls: string[] = [];
-    const definitionSummary = (definitionId: string) => ({
+    const definitionSummary = (
+      definitionId: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number]
+    ) => ({
       counts: {
         failed: 0,
         migrated: 0,
@@ -150,7 +163,7 @@ describe("runMigrationExecutionWorkflow", () => {
       complete: vi.fn(async ({ definitions }) => ({
         definitions,
         finishedAt: new Date(2),
-        runId: "run-1",
+        runId: toMigrationRunId("run-1"),
         startedAt: new Date(1),
         status: "succeeded" as const,
       })),
@@ -199,12 +212,14 @@ describe("runMigrationExecutionWorkflow", () => {
   it("reports only completed rollbacks when a later rollback fails", async () => {
     const envelope: WorkflowSdkMigrationRunEnvelope = {
       ...makeEnvelope(),
-      executionDefinitionIds: ["authors", "articles", "assets"],
+      executionDefinitionIds: definitionIds("authors", "articles", "assets"),
     };
     const rollbackError = new Error("article rollback unavailable");
     const fail = vi.fn<WorkflowSdkMigrationRunSteps["fail"]>();
     const rollbackCalls: string[] = [];
-    const definitionSummary = (definitionId: string) => ({
+    const definitionSummary = (
+      definitionId: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number]
+    ) => ({
       counts: {
         failed: 0,
         migrated: 0,
@@ -274,7 +289,7 @@ describe("runMigrationExecutionWorkflow", () => {
       complete: vi.fn(async ({ definitions }) => ({
         definitions,
         finishedAt: new Date(2),
-        runId: "run-1",
+        runId: toMigrationRunId("run-1"),
         startedAt: new Date(1),
         status: "succeeded" as const,
       })),
@@ -299,7 +314,7 @@ describe("runMigrationExecutionWorkflow", () => {
             skipped: 0,
             unchanged: 1,
           },
-          definitionId: "articles",
+          definitionId: toMigrationDefinitionId("articles"),
           status: "succeeded",
         },
       }),
@@ -310,7 +325,7 @@ describe("runMigrationExecutionWorkflow", () => {
               kind: "continue" as const,
               state: {
                 ...state,
-                afterIdentity: "article-100",
+                afterIdentity: toEncodedSourceIdentity("article-100"),
                 orphaned: 100,
                 rolledBack: 100,
               },
@@ -376,7 +391,7 @@ describe("runMigrationExecutionWorkflow", () => {
             skipped: 0,
             unchanged: 1,
           },
-          definitionId: "articles",
+          definitionId: toMigrationDefinitionId("articles"),
           status: "succeeded",
         },
       }),
@@ -402,7 +417,7 @@ describe("runMigrationExecutionWorkflow", () => {
       complete: vi.fn(async ({ definitions }) => ({
         definitions,
         finishedAt: new Date(2),
-        runId: "run-1",
+        runId: toMigrationRunId("run-1"),
         startedAt: new Date(1),
         status: "failed" as const,
       })),
@@ -427,7 +442,7 @@ describe("runMigrationExecutionWorkflow", () => {
             skipped: 0,
             unchanged: 0,
           },
-          definitionId: "articles",
+          definitionId: toMigrationDefinitionId("articles"),
           status: "failed",
         },
       }),
@@ -477,7 +492,7 @@ describe("runMigrationExecutionWorkflow", () => {
             skipped: 0,
             unchanged: 0,
           },
-          definitionId: "articles",
+          definitionId: toMigrationDefinitionId("articles"),
           status: "succeeded",
         },
       }),

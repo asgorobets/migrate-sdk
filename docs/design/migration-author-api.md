@@ -629,7 +629,7 @@ const program = registry
       WorkflowSdkMigrationExecutable.layer({
         workflow: runMigrationExecutionWorkflow,
         startOptions,
-      })
+      }).pipe(Layer.provide(WorkflowSdkClient.layer))
     )
   )
 ```
@@ -928,8 +928,9 @@ const plan = yield* registry.executable().planRun({ definitionIds: ["articles"] 
 ```
 
 Execution adapters may still have their own requirements. For Workflow SDK, the
-adapter should configure the workflow function and optional `start()` options,
-not queues, workers, or registry identity:
+adapter constructor configures the workflow function and optional start
+options. The `WorkflowSdkClient` layer supplies the operational dependency;
+neither module receives queues, workers, or registry identity:
 
 ```ts
 const result = yield* registry
@@ -941,7 +942,7 @@ const result = yield* registry
       WorkflowSdkMigrationExecutable.layer({
         workflow: runMigrationExecutionWorkflow,
         startOptions,
-      })
+      }).pipe(Layer.provide(WorkflowSdkClient.layer))
     )
   )
 ```
@@ -956,7 +957,7 @@ const executableLayer =
     ? WorkflowSdkMigrationExecutable.layer({
         workflow: runMigrationExecutionWorkflow,
         startOptions,
-      })
+      }).pipe(Layer.provide(WorkflowSdkClient.layer))
     : MigrationExecutable.inlineDefault
 
 const executionLayer = MigrationExecution.layer.pipe(

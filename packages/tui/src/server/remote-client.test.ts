@@ -1,6 +1,12 @@
 import { createServer, type Server } from "node:http";
-import { Effect, Stream } from "effect";
+import { Effect, Layer, Stream } from "effect";
 import {
+  HttpMiddleware,
+  HttpServerRequest,
+  HttpServerResponse,
+} from "effect/unstable/http";
+import {
+  MIGRATE_SDK_VERSION,
   MigrationDefinitionId,
   type MigrationDefinitionLock,
   MigrationRunId,
@@ -16,7 +22,7 @@ import {
 import {
   MigrateServer,
   type MigrateServerBackend,
-  makeMigrateServerHttpHandler,
+  MigrateServerHttp,
 } from "migrate-sdk/server";
 import { describe, expect, it } from "vitest";
 import { connectRemoteMigrateServer } from "./remote-client.ts";
@@ -59,12 +65,52 @@ const dashboard: MigrateDashboard = {
   ],
   scannedSource: false,
 };
-const serverInfo: MigrateServerInfo = {
+const serverIdentity = {
   environment: { id: "production", label: "Production" },
-  protocolVersion: MIGRATE_PROTOCOL_VERSION,
   registryId: toMigrationDefinitionRegistryId("catalog"),
-  sdkVersion: "0.5.0",
 };
+const serverInfo: MigrateServerInfo = {
+  ...serverIdentity,
+  protocolVersion: MIGRATE_PROTOCOL_VERSION,
+  sdkVersion: MIGRATE_SDK_VERSION,
+};
+
+const authorizationMiddleware = (
+  authorize: (
+    request: HttpServerRequest.HttpServerRequest
+  ) => Effect.Effect<boolean>
+) =>
+  HttpMiddleware.make((httpApp) =>
+    HttpServerRequest.HttpServerRequest.pipe(
+      Effect.flatMap((request) =>
+        authorize(request).pipe(
+          Effect.flatMap((authorized) =>
+            authorized
+              ? httpApp
+              : Effect.succeed(
+                  HttpServerResponse.text("Unauthorized", { status: 401 })
+                )
+          )
+        )
+      )
+    )
+  );
+
+const makeMigrateServerHttp = (serverLayer: Layer.Layer<MigrateServer>) =>
+  MigrateServerHttp.toWebHandler(
+    MigrateServerHttp.layer.pipe(Layer.provide(serverLayer))
+  );
+
+const makeAuthorizedMigrateServerHttp = (
+  serverLayer: Layer.Layer<MigrateServer>,
+  authorize: (
+    request: HttpServerRequest.HttpServerRequest
+  ) => Effect.Effect<boolean>
+) =>
+  MigrateServerHttp.toWebHandler(
+    MigrateServerHttp.layer.pipe(Layer.provide(serverLayer)),
+    authorizationMiddleware(authorize)
+  );
 
 const backend: MigrateServerBackend<FakeOperation> = {
   breakLock: (lock: MigrationDefinitionLock) =>
@@ -236,25 +282,11 @@ describe("remote Migrate Server connection", () => {
     ).rejects.toThrow("must use HTTPS");
   });
 
-  it("requires explicit HTTP authentication ownership", () => {
-    expect(() =>
-      makeMigrateServerHttpHandler(
-        MigrateServer.layer({ backend, serverInfo }),
-        { path: "/rpc" } as never
-      )
-    ).toThrow("authentication must be provided or delegated externally");
-  });
-
   it("connects the TUI runtime to a running localhost Migrate Server over HTTP", async () => {
-    const http = makeMigrateServerHttpHandler(
-      MigrateServer.layer({ backend, serverInfo }),
-      {
-        authorize: (request) =>
-          Effect.succeed(
-            request.headers.get("authorization") === "Bearer local-secret"
-          ),
-        path: "/rpc",
-      }
+    const http = makeAuthorizedMigrateServerHttp(
+      MigrateServer.layer({ backend, ...serverIdentity }),
+      (request) =>
+        Effect.succeed(request.headers.authorization === "Bearer local-secret")
     );
     let localhost:
       | { readonly server: Server; readonly url: string }
@@ -303,9 +335,8 @@ describe("remote Migrate Server connection", () => {
         return backend.prepareOperation(request);
       },
     };
-    const http = makeMigrateServerHttpHandler(
-      MigrateServer.layer({ backend: requestBackend, serverInfo }),
-      { authentication: "external", path: "/rpc" }
+    const http = makeMigrateServerHttp(
+      MigrateServer.layer({ backend: requestBackend, ...serverIdentity })
     );
     let localhost:
       | { readonly server: Server; readonly url: string }
@@ -358,13 +389,12 @@ describe("remote Migrate Server connection", () => {
       getRunProgress: () => Effect.sync(() => undefined),
       observeRun: () => Effect.never,
     };
-    const http = makeMigrateServerHttpHandler(
+    const http = makeMigrateServerHttp(
       MigrateServer.layer({
         backend: observationBackend,
         observationLeaseDuration: "20 seconds",
-        serverInfo,
-      }),
-      { authentication: "external", path: "/rpc" }
+        ...serverIdentity,
+      })
     );
     let localhost:
       | { readonly server: Server; readonly url: string }
@@ -403,17 +433,14 @@ describe("remote Migrate Server connection", () => {
     const authorizationHeaders: string[] = [];
     let observationRequests = 0;
     let transientStatusFailures = 0;
-    const http = makeMigrateServerHttpHandler(
-      MigrateServer.layer({ backend, serverInfo }),
-      {
-        authorize: (request) =>
-          Effect.sync(() => {
-            const authorization = request.headers.get("authorization") ?? "";
-            authorizationHeaders.push(authorization);
-            return authorization === "Bearer secret";
-          }),
-        path: "/rpc",
-      }
+    const http = makeAuthorizedMigrateServerHttp(
+      MigrateServer.layer({ backend, ...serverIdentity }),
+      (request) =>
+        Effect.sync(() => {
+          const authorization = request.headers.authorization ?? "";
+          authorizationHeaders.push(authorization);
+          return authorization === "Bearer secret";
+        })
     );
     const fetch = async (
       input: Parameters<typeof globalThis.fetch>[0],
@@ -478,16 +505,14 @@ describe("remote Migrate Server connection", () => {
       ...dashboard,
       activeRuns: [],
     };
-    const original = makeMigrateServerHttpHandler(
+    const original = makeMigrateServerHttp(
       MigrateServer.layer({
         backend: { ...backend, getDashboard: Effect.succeed(initialDashboard) },
-        serverInfo,
-      }),
-      { authentication: "external", path: "/rpc" }
+        ...serverIdentity,
+      })
     );
-    const replacement = makeMigrateServerHttpHandler(
-      MigrateServer.layer({ backend, serverInfo }),
-      { authentication: "external", path: "/rpc" }
+    const replacement = makeMigrateServerHttp(
+      MigrateServer.layer({ backend, ...serverIdentity })
     );
     let dashboardLeaseRequests = 0;
     const fetch = async (
@@ -532,9 +557,9 @@ describe("remote Migrate Server connection", () => {
   });
 
   it("rejects a remote connection when authorization fails", async () => {
-    const http = makeMigrateServerHttpHandler(
-      MigrateServer.layer({ backend, serverInfo }),
-      { authorize: () => Effect.succeed(false), path: "/rpc" }
+    const http = makeAuthorizedMigrateServerHttp(
+      MigrateServer.layer({ backend, ...serverIdentity }),
+      () => Effect.succeed(false)
     );
 
     try {
@@ -550,13 +575,21 @@ describe("remote Migrate Server connection", () => {
   });
 
   it("rejects a remote server with a different SDK version", async () => {
-    const http = makeMigrateServerHttpHandler(
-      MigrateServer.layer({
-        backend,
-        serverInfo: { ...serverInfo, sdkVersion: "999.0.0" },
-      }),
-      { authentication: "external", path: "/rpc" }
+    const mismatchedServerLayer = Layer.effect(
+      MigrateServer,
+      MigrateServer.make({ backend, ...serverIdentity }).pipe(
+        Effect.map((server) =>
+          MigrateServer.of({
+            ...server,
+            getServerInfo: Effect.succeed({
+              ...serverInfo,
+              sdkVersion: "999.0.0",
+            }),
+          })
+        )
+      )
     );
+    const http = makeMigrateServerHttp(mismatchedServerLayer);
 
     try {
       await expect(

@@ -202,7 +202,10 @@ The invocation object that starts a rollback run from the SDK, CLI, or another h
 The runtime strategy that executes migration definitions inline or starts them through a durable workflow provider.
 
 **Workflow SDK Execution Adapter**:
-An execution adapter that starts a Workflow SDK run from a migration execution envelope.
+An execution adapter that starts a Workflow SDK run from a Workflow SDK Migration Execution Envelope.
+
+**Workflow SDK Migration Execution Envelope**:
+A Migration Execution Envelope that carries the complete acquired Migration Definition Lock set transferred to the provider-owned workflow execution.
 
 **Effect Workflow Execution Adapter**:
 An execution adapter that starts an Effect workflow from a migration execution envelope.

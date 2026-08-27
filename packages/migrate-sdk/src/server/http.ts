@@ -1,83 +1,114 @@
-import { Effect, Layer } from "effect";
-import { HttpRouter } from "effect/unstable/http";
-import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
+import { Context, Effect, Layer, type Scope } from "effect";
 import {
-  layerProtocolHttp,
-  layer as layerRpcServer,
-} from "effect/unstable/rpc/RpcServer";
+  HttpEffect,
+  type HttpMiddleware,
+  type HttpServerRequest,
+  type HttpServerResponse,
+} from "effect/unstable/http";
+import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
+import { toHttpEffect } from "effect/unstable/rpc/RpcServer";
 import { MigrateHttpRpcs } from "../protocol/index.ts";
 import { MigrateHttpServerHandlers } from "./handlers.ts";
 import type { MigrateServer } from "./service.ts";
 
-interface MigrateServerHttpHandlerBaseOptions {
-  readonly path: `/${string}`;
+export type MigrateServerHttpApp = Effect.Effect<
+  HttpServerResponse.HttpServerResponse,
+  never,
+  Scope.Scope | HttpServerRequest.HttpServerRequest
+>;
+
+export type MigrateServerHttpMiddleware<
+  Error = never,
+  Requirements = Scope.Scope | HttpServerRequest.HttpServerRequest,
+> = HttpMiddleware.HttpMiddleware.Applied<
+  Effect.Effect<HttpServerResponse.HttpServerResponse, Error, Requirements>,
+  never,
+  Scope.Scope | HttpServerRequest.HttpServerRequest
+>;
+
+export interface MigrateServerHttpHandler<Requirements = never> {
+  readonly dispose: () => Promise<void>;
+  readonly handler: [Requirements] extends [never]
+    ? (request: Request, context?: Context.Context<never>) => Promise<Response>
+    : (
+        request: Request,
+        context: Context.Context<Requirements>
+      ) => Promise<Response>;
 }
 
-export type MigrateServerHttpHandlerOptions =
-  MigrateServerHttpHandlerBaseOptions &
-    (
-      | {
-          readonly authentication: "external";
-          readonly authorize?: never;
-        }
-      | {
-          readonly authentication?: never;
-          readonly authorize: (request: Request) => Effect.Effect<boolean>;
-        }
-    );
+function toWebHandler<Provided, LayerError>(
+  layer: Layer.Layer<MigrateServerHttp | Provided, LayerError>
+): MigrateServerHttpHandler;
+function toWebHandler<
+  Provided,
+  LayerError,
+  MiddlewareError,
+  MiddlewareRequirements,
+  HandlerRequirements = Exclude<
+    MiddlewareRequirements,
+    | MigrateServerHttp
+    | Provided
+    | Scope.Scope
+    | HttpServerRequest.HttpServerRequest
+  >,
+>(
+  layer: Layer.Layer<MigrateServerHttp | Provided, LayerError>,
+  middleware: MigrateServerHttpMiddleware<
+    MiddlewareError,
+    MiddlewareRequirements
+  >
+): MigrateServerHttpHandler<HandlerRequirements>;
+function toWebHandler<
+  Provided,
+  LayerError,
+  MiddlewareError,
+  MiddlewareRequirements,
+>(
+  layer: Layer.Layer<MigrateServerHttp | Provided, LayerError>,
+  middleware?: MigrateServerHttpMiddleware<
+    MiddlewareError,
+    MiddlewareRequirements
+  >
+) {
+  if (middleware === undefined) {
+    return HttpEffect.toWebHandlerLayerWith(layer, {
+      toHandler: (context) =>
+        Effect.succeed(Context.get(context, MigrateServerHttp)),
+    });
+  }
 
-export interface MigrateServerHttpHandler {
-  readonly dispose: () => Promise<void>;
-  readonly handler: (request: Request) => Promise<Response>;
+  return HttpEffect.toWebHandlerLayerWith(layer, {
+    toHandler: (context) =>
+      Effect.succeed(middleware(Context.get(context, MigrateServerHttp))),
+  });
 }
 
 /**
- * Exposes a Migrate Server through Effect RPC's Web-standard HTTP transport.
- * Authentication remains application-owned so deployments can use their
- * existing identity provider without exposing resource credentials to clients.
+ * Routerless Effect HTTP application that serves the Migrate RPC protocol.
+ * The host composes transport middleware around this application and converts
+ * the fully provided Layer to a Web handler at its framework boundary.
  */
-export const makeMigrateServerHttpHandler = <Error>(
-  serverLayer: Layer.Layer<MigrateServer, Error>,
-  options: MigrateServerHttpHandlerOptions
-): MigrateServerHttpHandler => {
-  const { path } = options;
-
-  if (
-    options.authentication !== "external" &&
-    options.authorize === undefined
-  ) {
-    throw new Error(
-      "Migrate Server HTTP authentication must be provided or delegated externally"
+export class MigrateServerHttp extends Context.Service<
+  MigrateServerHttp,
+  MigrateServerHttpApp
+>()("@migrate-sdk/server/MigrateServerHttp") {
+  static readonly make: Effect.Effect<
+    MigrateServerHttpApp,
+    never,
+    MigrateServer | Scope.Scope
+  > = Effect.gen(function* () {
+    const rpcContext = yield* Layer.build(
+      Layer.merge(MigrateHttpServerHandlers, layerNdjson)
     );
-  }
 
-  const protocolLayer = layerProtocolHttp({ path });
-  const rpcLayer = layerRpcServer(MigrateHttpRpcs, {
-    disableTracing: true,
-    spanPrefix: "MigrateServer",
-  }).pipe(
-    Layer.provide(MigrateHttpServerHandlers),
-    Layer.provide(protocolLayer),
-    Layer.provide(layerNdjson),
-    Layer.provide(serverLayer)
-  );
-  const webHandler = HttpRouter.toWebHandler(rpcLayer, {
-    disableLogger: true,
+    return yield* toHttpEffect(MigrateHttpRpcs, {
+      disableTracing: true,
+      spanPrefix: "MigrateServer",
+    }).pipe(Effect.provide(rpcContext));
   });
 
-  if (options.authentication === "external") {
-    return webHandler;
-  }
+  static readonly layer: Layer.Layer<MigrateServerHttp, never, MigrateServer> =
+    Layer.effect(MigrateServerHttp, MigrateServerHttp.make);
 
-  const authorize = options.authorize;
-
-  return {
-    dispose: webHandler.dispose,
-    handler: (request) =>
-      Effect.runPromise(authorize(request)).then((authorized) =>
-        authorized
-          ? webHandler.handler(request)
-          : new Response("Unauthorized", { status: 401 })
-      ),
-  };
-};
+  static readonly toWebHandler = toWebHandler;
+}

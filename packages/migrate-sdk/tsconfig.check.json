@@ -6,6 +6,7 @@
     "incremental": false,
     "noEmit": true,
     "paths": {
+      "@fixtures/catalog": ["../../fixtures/catalog/fixture.ts"],
       "migrate-sdk": ["./src/index.ts"],
       "migrate-sdk/client": ["./src/client/index.ts"],
       "migrate-sdk/cli": ["./src/cli/index.ts"],
@@ -28,7 +29,7 @@
       "migrate-sdk/stores/sql": ["./src/stores/sql/index.ts"],
       "migrate-sdk/testing": ["./src/testing.ts"]
     },
-    "rootDir": "."
+    "rootDir": "../.."
   },
   "exclude": ["node_modules", "dist"],
   "include": [

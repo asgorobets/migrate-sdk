@@ -1,15 +1,10 @@
-import { createRequire } from "node:module";
 import type { Effect } from "effect";
+import { MIGRATE_SDK_VERSION } from "migrate-sdk";
 import type { MigrateClientService } from "migrate-sdk/client";
 import {
   MIGRATE_PROTOCOL_VERSION,
   type MigrateServerInfo,
 } from "migrate-sdk/protocol";
-
-const require = createRequire(import.meta.url);
-const sdkPackage = require("migrate-sdk/package.json") as {
-  readonly version: string;
-};
 
 export interface MigrateConnection {
   readonly client: MigrateClientService;
@@ -29,9 +24,9 @@ export const validateMigrateServerInfo = (
       `Migrate Protocol version ${serverInfo.protocolVersion} is not supported; expected ${MIGRATE_PROTOCOL_VERSION}`
     );
   }
-  if (serverInfo.sdkVersion !== sdkPackage.version) {
+  if (serverInfo.sdkVersion !== MIGRATE_SDK_VERSION) {
     throw new Error(
-      `Migrate SDK version ${serverInfo.sdkVersion} is not supported; expected ${sdkPackage.version}`
+      `Migrate SDK version ${serverInfo.sdkVersion} is not supported; expected ${MIGRATE_SDK_VERSION}`
     );
   }
 };

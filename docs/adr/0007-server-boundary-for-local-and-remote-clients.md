@@ -181,12 +181,23 @@ concatenates bounded observation leases into the same client-facing stream.
 Their internal Effect RPC groups expose only the observation operation valid for
 that transport, so an HTTPS caller cannot open the local unbounded stream.
 
+The server implementation derives its advertised Migrate Protocol and SDK
+versions. Hosts provide deployment environment metadata, and low-level backend
+adapters may provide a registry identity. The registry-backed server constructor
+derives that identity from its registry, so host code cannot advertise a
+registry or protocol that differs from the server it actually constructed.
+
 The SDK exposes one logical `MigrateClient` service with streaming and HTTP
-Layer constructors, plus `MigrateServer.make` / `MigrateServer.layer`.
-Transports provide the RPC protocol required by the appropriate client Layer,
-while server hosts provide the registry-bound backend required by the server
-Layer. Tests use those same interfaces for Migrate Protocol, service,
-transport, and packaging behavior.
+Layer constructors, plus `MigrateServer.make` / `MigrateServer.layer`. A remote
+host provides its `MigrationExecutable` Layer to `RegistryMigrateServer.layer`,
+then provides the resulting server to `MigrateServerHttp.layer`. The HTTP Layer
+constructs the routerless RPC application; application-owned Effect HTTP
+middleware supplies authentication and other transport policies in the same
+request fiber. Only the framework route converts the fully composed application
+with `MigrateServerHttp.toWebHandler`. Transports provide the RPC protocol
+required by the appropriate client Layer, while server hosts provide the
+registry-bound backend required by the server Layer. Tests use those same
+interfaces for Migrate Protocol, service, transport, and packaging behavior.
 Renderer-only component tests may adapt the registry-backed migration server
 runtime in process; the IPC and Pilotty suites remain responsible for verifying
 the process and protocol boundary.

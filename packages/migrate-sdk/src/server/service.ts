@@ -15,17 +15,23 @@ import {
   Stream,
 } from "effect";
 import type { Scope } from "effect/Scope";
-import { MigrationDefinitionId, type MigrationRunId } from "../domain/ids.ts";
+import {
+  MigrationDefinitionId,
+  type MigrationDefinitionRegistryId,
+  type MigrationRunId,
+} from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type { MigrationMessage } from "../domain/message.ts";
 import type { MigrationDefinitionStatus } from "../domain/status.ts";
 import {
+  MIGRATE_PROTOCOL_VERSION,
   type MigrateActiveRun,
   type MigrateBreakLockResult,
   MigrateDashboard,
   type MigrateDashboardLease,
   MigrateDashboardResumeToken,
   type MigrateDashboardSnapshot,
+  type MigrateEnvironmentInfo,
   type MigrateExecutionState,
   type MigrateObservationContinuingEvent,
   MigrateObservationEvent,
@@ -43,6 +49,7 @@ import {
   type MigrateSourceIdentityHistoryEntry,
   type MigrateTarget,
 } from "../protocol/index.ts";
+import { MIGRATE_SDK_VERSION } from "../version.ts";
 
 export type MigratePrepareOperationInput = MigrateOperationRequest;
 
@@ -188,8 +195,9 @@ export interface MigrateServerInput<ExecutableOperation> {
   readonly backend: MigrateServerBackend<ExecutableOperation>;
   readonly dashboardFallbackInterval?: Duration.Input | undefined;
   readonly dashboardProjectionInterval?: Duration.Input | undefined;
+  readonly environment: MigrateEnvironmentInfo;
   readonly observationLeaseDuration?: Duration.Input | undefined;
-  readonly serverInfo: MigrateServerInfo;
+  readonly registryId?: MigrationDefinitionRegistryId | undefined;
 }
 
 interface ExecutionListener {
@@ -528,13 +536,20 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
     backend,
     dashboardFallbackInterval = "5 seconds",
     dashboardProjectionInterval = "1 second",
+    environment,
     observationLeaseDuration = "20 seconds",
-    serverInfo,
+    registryId,
   }: MigrateServerInput<ExecutableOperation>,
   runExecution: (effect: Effect.Effect<void>) => unknown,
   dashboardInvalidations: Queue.Queue<void>,
   dashboardReadSemaphore: Semaphore.Semaphore
 ): Effect.Effect<MigrateServerService, never, Scope> => {
+  const serverInfo: MigrateServerInfo = {
+    environment,
+    protocolVersion: MIGRATE_PROTOCOL_VERSION,
+    ...(registryId === undefined ? {} : { registryId }),
+    sdkVersion: MIGRATE_SDK_VERSION,
+  };
   const executionsByRunId = new Map<string, ExecutionRecord>();
   const invalidateDashboardUnsafe = () => {
     Queue.offerUnsafe(dashboardInvalidations, undefined);

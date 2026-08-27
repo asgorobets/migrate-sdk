@@ -720,15 +720,17 @@ package/export exposes `defineMigrationCliConfig`.
 ```ts
 // migrate.config.ts
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
-import { WorkflowSdkMigrationExecutable } from "@migrate-sdk/workflow-sdk";
-import { start } from "workflow/api";
+import {
+  WorkflowSdkClient,
+  WorkflowSdkMigrationExecutable,
+} from "@migrate-sdk/workflow-sdk";
+import { Layer } from "effect";
 import { migrations } from "./src/migrations.ts";
 import { runMigrationExecutionWorkflow } from "./src/workflows.ts";
 
 const executableLayer = WorkflowSdkMigrationExecutable.layer({
   workflow: runMigrationExecutionWorkflow,
-  start,
-});
+}).pipe(Layer.provide(WorkflowSdkClient.layer));
 
 export default defineMigrationCliConfig({
   executableLayer,

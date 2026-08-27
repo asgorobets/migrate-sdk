@@ -1,6 +1,8 @@
 // biome-ignore-all assist/source/organizeImports: Public SDK entrypoint is grouped by domain for readability.
 // biome-ignore-all lint/performance/noBarrelFile: Public package entrypoint intentionally re-exports the SDK surface.
 
+export { MIGRATE_SDK_VERSION } from "./version.ts";
+
 export type {
   AnySelfContainedMigrationDefinition,
   ConfiguredSource,

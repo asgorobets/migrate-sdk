@@ -1,11 +1,14 @@
 import {
   runMigrationExecutionWorkflow,
-  type WorkflowSdkMigrationRunEnvelope,
+  runMigrationRollbackWorkflow,
+  type WorkflowSdkMigrationExecutionEnvelope,
+  type WorkflowSdkMigrationRollbackSummary,
   type WorkflowSdkMigrationRunSummary,
 } from "@migrate-sdk/workflow-sdk/workflow";
 import {
   beginMigrationRunStep,
   completeMigrationRunStep,
+  executeMigrationRollbackStep,
   executeMigrationRunCursorWindowStep,
   executeMigrationRunRollbackOrphansPageStep,
   failMigrationRunStep,
@@ -13,7 +16,7 @@ import {
 } from "./in-memory-migration.steps.ts";
 
 export async function inMemoryMigrationTestWorkflow(
-  envelope: WorkflowSdkMigrationRunEnvelope
+  envelope: WorkflowSdkMigrationExecutionEnvelope
 ): Promise<{
   readonly snapshot: {
     readonly definitionLockCount: number;
@@ -23,17 +26,25 @@ export async function inMemoryMigrationTestWorkflow(
     readonly rollbackCallCount: number;
     readonly sourceCursorCommitCount: number;
   };
-  readonly summary: WorkflowSdkMigrationRunSummary;
+  readonly summary:
+    | WorkflowSdkMigrationRunSummary
+    | WorkflowSdkMigrationRollbackSummary;
 }> {
   "use workflow";
 
-  const summary = await runMigrationExecutionWorkflow(envelope, {
-    begin: beginMigrationRunStep,
-    complete: completeMigrationRunStep,
-    executeCursorWindow: executeMigrationRunCursorWindowStep,
-    executeRollbackOrphansPage: executeMigrationRunRollbackOrphansPageStep,
-    fail: failMigrationRunStep,
-  });
+  const summary =
+    envelope.kind === "rollback"
+      ? await runMigrationRollbackWorkflow(envelope, {
+          execute: executeMigrationRollbackStep,
+        })
+      : await runMigrationExecutionWorkflow(envelope, {
+          begin: beginMigrationRunStep,
+          complete: completeMigrationRunStep,
+          executeCursorWindow: executeMigrationRunCursorWindowStep,
+          executeRollbackOrphansPage:
+            executeMigrationRunRollbackOrphansPageStep,
+          fail: failMigrationRunStep,
+        });
   const snapshot = await inspectMigrationStoreStep();
 
   return {

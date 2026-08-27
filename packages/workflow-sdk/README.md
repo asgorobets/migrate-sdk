@@ -7,19 +7,20 @@ runs on swappable worlds: Vercel, local, Postgres, Redis, and other providers.
 Vercel is a deployment/world choice, not the migration adapter boundary.
 
 ```ts
-import { start } from "workflow/api";
-import { WorkflowSdkMigrationExecutable } from "@migrate-sdk/workflow-sdk";
-import { Effect } from "effect";
+import {
+  WorkflowSdkClient,
+  WorkflowSdkMigrationExecutable,
+} from "@migrate-sdk/workflow-sdk";
+import { Effect, Layer } from "effect";
 import { MigrationExecutable } from "migrate-sdk";
 import { migrationExecutionWorkflow } from "./workflows/migration-execution";
 
 const executableLayer = WorkflowSdkMigrationExecutable.layer({
-  start,
   workflow: migrationExecutionWorkflow,
   startOptions: {
     deploymentId: "latest",
   },
-});
+}).pipe(Layer.provide(WorkflowSdkClient.layer));
 
 const result = await Effect.runPromise(
   MigrationExecutable.startRun(plan).pipe(Effect.provide(executableLayer))

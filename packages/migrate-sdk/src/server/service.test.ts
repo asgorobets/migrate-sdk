@@ -8,13 +8,11 @@ import {
 } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import {
-  MIGRATE_PROTOCOL_VERSION,
   type MigrateActiveRun,
   type MigrateDashboard,
   type MigrateDashboardSnapshot,
   MigratePlanChangedError,
   type MigratePreparedOperation,
-  type MigrateServerInfo,
 } from "../protocol/index.ts";
 import {
   MigrateServer,
@@ -59,10 +57,8 @@ const runProgress = (
   >[0]["definitions"]
 ) => ({ definitions, observationDefinitionId: articlesId });
 
-const serverInfo: MigrateServerInfo = {
+const serverIdentity = {
   environment: { id: "local:/workspace", label: "Local" },
-  protocolVersion: MIGRATE_PROTOCOL_VERSION,
-  sdkVersion: "0.1.0",
 };
 
 interface FakeExecutableOperation {
@@ -162,7 +158,7 @@ const makeBackend = (input?: {
 });
 
 const makeServer = (backend: MigrateServerBackend<FakeExecutableOperation>) =>
-  MigrateServer.make({ backend, serverInfo });
+  MigrateServer.make({ backend, ...serverIdentity });
 
 describe("Migrate Server", () => {
   it.effect(
@@ -707,7 +703,7 @@ describe("Migrate Server", () => {
       const server = yield* MigrateServer.make({
         backend: makeBackend({ observeRun: () => Effect.never }),
         observationLeaseDuration: "1 second",
-        serverInfo,
+        ...serverIdentity,
       });
       const lease = yield* server
         .observeRunLease({ runId })
@@ -1265,7 +1261,7 @@ describe("Migrate Server", () => {
           }),
           dashboardFallbackInterval: "1 hour",
           dashboardProjectionInterval: "1 second",
-          serverInfo,
+          ...serverIdentity,
         });
         const snapshotsFiber = yield* server.observeDashboard({}).pipe(
           Stream.tap(() => Deferred.succeed(initialSnapshot, undefined)),
@@ -1316,7 +1312,7 @@ describe("Migrate Server", () => {
             };
           }),
         }),
-        serverInfo,
+        ...serverIdentity,
       });
 
       const snapshots = yield* Effect.all(
@@ -1354,7 +1350,7 @@ describe("Migrate Server", () => {
           }),
           dashboardFallbackInterval: "1 hour",
           dashboardProjectionInterval: "1 second",
-          serverInfo,
+          ...serverIdentity,
         });
         const snapshotsFiber = yield* server.observeDashboard({}).pipe(
           Stream.tap(() => Deferred.succeed(initialSnapshot, undefined)),
@@ -1423,7 +1419,7 @@ describe("Migrate Server", () => {
           }),
           dashboardFallbackInterval: "1 hour",
           dashboardProjectionInterval: "1 second",
-          serverInfo,
+          ...serverIdentity,
         });
         const snapshotsFiber = yield* server.observeDashboard({}).pipe(
           Stream.tap(() => Deferred.succeed(initialSnapshot, undefined)),
@@ -1473,7 +1469,7 @@ describe("Migrate Server", () => {
             getDashboard: Effect.sync(() => dashboard),
           }),
           dashboardFallbackInterval: "5 seconds",
-          serverInfo,
+          ...serverIdentity,
         });
         const snapshotsFiber = yield* server.observeDashboard({}).pipe(
           Stream.tap(() => Deferred.succeed(initialSnapshot, undefined)),
@@ -1523,7 +1519,7 @@ describe("Migrate Server", () => {
           },
         }),
         dashboardFallbackInterval: "5 seconds",
-        serverInfo,
+        ...serverIdentity,
       });
       const snapshotsFiber = yield* server.observeDashboard({}).pipe(
         Stream.tap(() => Deferred.succeed(initialSnapshot, undefined)),
@@ -1577,7 +1573,7 @@ describe("Migrate Server", () => {
         }),
         dashboardFallbackInterval: "1 hour",
         dashboardProjectionInterval: "1 second",
-        serverInfo,
+        ...serverIdentity,
       });
       let receivedSnapshots = 0;
       const snapshotsFiber = yield* server.observeDashboard({}).pipe(
@@ -1637,7 +1633,7 @@ describe("Migrate Server", () => {
           }),
           dashboardFallbackInterval: "1 hour",
           dashboardProjectionInterval: "1 second",
-          serverInfo,
+          ...serverIdentity,
         });
         const keeper = yield* server.observeDashboard({}).pipe(
           Stream.runForEach((snapshot) => Queue.offer(projected, snapshot)),
@@ -1740,7 +1736,7 @@ describe("Migrate Server", () => {
         backend: makeBackend(),
         dashboardFallbackInterval: "1 second",
         observationLeaseDuration: "5 seconds",
-        serverInfo,
+        ...serverIdentity,
       });
       const initial = yield* server.observeDashboardLease({});
 
