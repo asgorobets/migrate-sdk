@@ -1,0 +1,16 @@
+name: migrate-sdk-workflow-sdk-example
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: migrate_workflow
+      POSTGRES_PASSWORD: migrate_workflow
+      POSTGRES_USER: migrate_workflow
+    ports:
+      - "127.0.0.1:55433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U migrate_workflow -d migrate_workflow"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

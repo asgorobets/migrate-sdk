@@ -17,7 +17,26 @@ import {
 import { defineMigrationCliConfig } from "migrate-sdk/cli";
 import { CsvIdentity, CsvSource } from "migrate-sdk/sources/csv";
 import { SqlMigrationStore } from "migrate-sdk/stores/sql";
-import { CatalogBookSourceRow } from "./catalog-data.ts";
+
+const CatalogBookSourceRow = Schema.Struct({
+  author_id: Schema.String,
+  canonical_author_id: Schema.String,
+  canonical_publication_year: Schema.String,
+  disposition: Schema.Literals([
+    "fail-reference",
+    "invalid",
+    "migrate",
+    "skip",
+  ]),
+  id: Schema.String,
+  isbn: Schema.String,
+  publication_year: Schema.String,
+  publisher_id: Schema.String,
+  source_version: Schema.String,
+  subject_id: Schema.String,
+  title: Schema.String,
+  wikidata_work_id: Schema.String,
+});
 
 const fixtureDirectory = fileURLToPath(new URL(".", import.meta.url));
 const tablePrefix = "catalog_demo";

@@ -1,8 +1,14 @@
 packages:
   - "apps/*"
+  - "examples/*"
   - "packages/*"
 allowBuilds:
+  "@swc/core": true
   bun: true
+  cbor-extract: true
+  esbuild: true
+  msgpackr-extract: true
+  sharp: true
 catalog:
   "@effect/language-service": ^0.86.2
   "@effect/platform-node": 4.0.0-rc.111

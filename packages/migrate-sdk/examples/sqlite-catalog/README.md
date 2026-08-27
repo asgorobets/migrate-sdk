@@ -4,9 +4,12 @@ This fixture provides a persistent catalog migration with real CC0 Wikidata
 book metadata, deterministic scale, known failures and skips, durable SQLite
 state, SQL destination writes, and reversible migrations.
 
+Its source rows come from the [repository-local checked-in catalog
+seed](../../../../fixtures/catalog/books.csv) shared with remote
+execution examples.
+
 Normal setup and execution are offline. No API key is required. The checked-in
-snapshot was downloaded from the public Wikidata SPARQL endpoint and can be
-refreshed separately when provenance should be updated.
+snapshot was downloaded from the public Wikidata SPARQL endpoint.
 
 ## Set up the fixture
 
@@ -94,16 +97,3 @@ source membership; it does not schedule version updates.
 All four migrations support rollback. Group rollback follows the reverse
 dependency order so Books are removed before their referenced Authors,
 Publishers, and Subjects.
-
-## Refresh the Wikidata snapshot
-
-The public endpoint does not require an API key:
-
-```sh
-pnpm --filter migrate-sdk demo:sqlite-catalog:fetch
-```
-
-After refreshing, update `provenance.json` with the new retrieval date, record
-count, query SHA-256, and snapshot SHA-256. Acquisition is intentionally
-separate from setup so demos remain reproducible and do not depend on network
-availability.

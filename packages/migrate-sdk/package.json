@@ -149,7 +149,6 @@
     "dev:document-source": "pnpm run build && tsx examples/dev.ts document-source",
     "dev:file-store": "pnpm run build && tsx examples/dev.ts file-store",
     "dev:nested-article": "pnpm run build && tsx examples/dev.ts nested-article",
-    "demo:sqlite-catalog:fetch": "bash examples/sqlite-catalog/fetch-wikidata.sh",
     "demo:sqlite-catalog:setup": "tsx examples/sqlite-catalog/setup.ts",
     "demo:sqlite-catalog:mutate": "tsx examples/sqlite-catalog/mutate.ts",
     "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",

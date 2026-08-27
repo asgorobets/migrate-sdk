@@ -1,0 +1,20 @@
+{
+  "extends": "@repo/typescript-config/nextjs.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "plugins": [{ "name": "next" }, { "name": "workflow" }],
+    "paths": {
+      "@/*": ["./src/*"],
+      "@fixtures/catalog": ["../../fixtures/catalog/fixture.ts"]
+    }
+  },
+  "include": [
+    "next-env.d.ts",
+    "**/*.ts",
+    "**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": ["node_modules"]
+}

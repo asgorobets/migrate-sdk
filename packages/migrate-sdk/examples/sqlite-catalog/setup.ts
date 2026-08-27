@@ -3,18 +3,14 @@
 /** @effect-diagnostics globalDate:skip-file */
 /** @effect-diagnostics globalConsole:skip-file */
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { SqliteClient } from "@effect/sql-sqlite-node";
+import { encodeCatalogCsv, loadCatalogFixture } from "@fixtures/catalog";
 import { Effect } from "effect";
 import { SqlMigrationStore } from "migrate-sdk/stores/sql";
-import {
-  buildCatalogFixtureSources,
-  encodeCatalogCsv,
-  parseWikidataBookSeeds,
-} from "./catalog-data.ts";
 import {
   markCatalogFixtureDirectory,
   prepareCatalogFixtureDirectory,
@@ -50,13 +46,9 @@ const sourceDirectory = join(dataDirectory, "sources");
 await mkdir(sourceDirectory, { recursive: true });
 await markCatalogFixtureDirectory(dataDirectory);
 
-const snapshotPath = join(fixtureDirectory, "wikidata-books.csv");
-const snapshot = await readFile(snapshotPath, "utf8");
-const seeds = parseWikidataBookSeeds(snapshot);
-const sources = buildCatalogFixtureSources(
-  seeds,
-  scaleRows[scale as keyof typeof scaleRows]
-);
+const { seedCount, snapshot, sources } = await loadCatalogFixture({
+  bookCount: scaleRows[scale as keyof typeof scaleRows],
+});
 
 await Promise.all([
   writeFile(
@@ -125,7 +117,7 @@ const manifest = {
   counts: sources.counts,
   generatedAt: new Date().toISOString(),
   scale,
-  seedRows: seeds.length,
+  seedRows: seedCount,
   snapshotSha256: createHash("sha256").update(snapshot).digest("hex"),
   source: "https://query.wikidata.org/sparql",
   sourceLicense: "CC0-1.0",

@@ -1,10 +1,8 @@
-import { Schema } from "effect";
-import { describe, expect, it } from "vitest";
 import {
   buildCatalogFixtureSources,
-  CatalogBookSourceRow,
   parseWikidataBookSeeds,
-} from "./catalog-data.ts";
+} from "@fixtures/catalog";
+import { describe, expect, it } from "vitest";
 
 const snapshot = `work,workLabel,author,authorLabel,publisher,publisherLabel,publicationDate,isbn
 http://www.wikidata.org/entity/Q1,Book One,http://www.wikidata.org/entity/Q2,Author One,http://www.wikidata.org/entity/Q3,Publisher One,2001-01-01T00:00:00Z,978-1
@@ -12,7 +10,7 @@ http://www.wikidata.org/entity/Q1,Book One,http://www.wikidata.org/entity/Q4,Aut
 http://www.wikidata.org/entity/Q5,Q5,http://www.wikidata.org/entity/Q6,Author Three,http://www.wikidata.org/entity/Q7,Publisher Two,,
 `;
 
-describe("SQLite catalog fixture data", () => {
+describe("shared catalog fixture data", () => {
   it("normalizes a Wikidata CSV snapshot into one seed per work", () => {
     expect(parseWikidataBookSeeds(snapshot)).toEqual([
       {
@@ -66,22 +64,26 @@ describe("SQLite catalog fixture data", () => {
     );
   });
 
-  it("rejects unknown book dispositions", () => {
-    expect(() =>
-      Schema.decodeUnknownSync(CatalogBookSourceRow)({
-        author_id: "Q2",
-        canonical_author_id: "Q2",
-        canonical_publication_year: "2001",
-        disposition: "unexpected",
-        id: "Q1-edition-0001",
-        isbn: "978-1",
-        publication_year: "2001",
-        publisher_id: "Q3",
-        source_version: "1",
-        subject_id: "subject-01",
-        title: "Book One",
-        wikidata_work_id: "Q1",
-      })
-    ).toThrow();
+  it("can preserve the catalog while making every row migratable", () => {
+    const sources = buildCatalogFixtureSources(
+      parseWikidataBookSeeds(snapshot),
+      262,
+      { outcomes: "all-migrate" }
+    );
+
+    expect(sources.counts).toEqual({
+      failedReferences: 0,
+      invalid: 0,
+      migrated: 262,
+      skipped: 0,
+    });
+    expect(
+      sources.books.every(
+        (book) =>
+          book.disposition === "migrate" &&
+          book.author_id === book.canonical_author_id &&
+          book.publication_year === book.canonical_publication_year
+      )
+    ).toBe(true);
   });
 });

@@ -1,6 +1,7 @@
 {
   "name": "@migrate-sdk/monorepo",
   "private": true,
+  "type": "module",
   "repository": {
     "type": "git",
     "url": "https://github.com/asgorobets/migrate-sdk"
@@ -26,7 +27,9 @@
     "@biomejs/biome": "^2.4.11",
     "@changesets/cli": "^3.0.1",
     "@effect/tsgo": "0.18.1",
+    "@types/papaparse": "^5.5.2",
     "@typescript/native": "npm:typescript@7.0.2",
+    "papaparse": "^5.5.3",
     "turbo": "^2.9.16",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "ultracite": "7.8.3"

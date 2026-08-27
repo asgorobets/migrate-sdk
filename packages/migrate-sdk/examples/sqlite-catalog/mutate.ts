@@ -4,8 +4,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { type CatalogBookRow, encodeCatalogCsv } from "@fixtures/catalog";
 import Papa from "papaparse";
-import { type CatalogBookRow, encodeCatalogCsv } from "./catalog-data.ts";
 
 const fixtureDirectory = fileURLToPath(new URL(".", import.meta.url));
 const dataDirectory =

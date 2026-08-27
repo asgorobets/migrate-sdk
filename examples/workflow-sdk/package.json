@@ -1,0 +1,39 @@
+{
+  "name": "@migrate-sdk/workflow-sdk-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm run build:server && next build --webpack",
+    "build:server": "pnpm --filter migrate-sdk build && pnpm --filter @migrate-sdk/workflow-sdk build",
+    "check-types": "pnpm run build:server && next typegen && tsc --noEmit",
+    "db:down": "docker compose down",
+    "db:setup": "pnpm --filter migrate-sdk build && tsx scripts/setup-database.ts",
+    "db:up": "docker compose up -d --wait postgres",
+    "dev": "pnpm run build:server && next dev --port 3100",
+    "start": "next start --port 3100",
+    "test": "pnpm run build:server && vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect/sql-pg": "catalog:",
+    "@migrate-sdk/workflow-sdk": "workspace:*",
+    "effect": "catalog:",
+    "migrate-sdk": "workspace:*",
+    "next": "16.2.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "workflow": "^4.5.0"
+  },
+  "devDependencies": {
+    "@effect/language-service": "catalog:",
+    "@next/env": "16.2.0",
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "^24.13.1",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "tsx": "^4.22.4",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "vitest": "^4.1.8"
+  }
+}
