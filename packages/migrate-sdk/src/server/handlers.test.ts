@@ -6,6 +6,7 @@ import {
   MIGRATE_PROTOCOL_VERSION,
   MigrateActiveRun,
   MigrateDashboard,
+  MigrateDashboardResumeToken,
   MigrateHttpRpcs,
   MigrateObservationResumeToken,
   MigrateServerInfo,
@@ -51,17 +52,28 @@ const activeRuns = Schema.decodeUnknownSync(Schema.Array(MigrateActiveRun))([
   },
 ]);
 
+const dashboardSnapshot = {
+  dashboard,
+  resumeToken: MigrateDashboardResumeToken.make("sha256:dashboard"),
+};
+
 const serverLayer = Layer.succeed(
   MigrateServer,
   MigrateServer.of({
     breakLock: () => Effect.die("not used"),
     getActiveRuns: Effect.succeed(activeRuns),
-    getDashboard: Effect.succeed(dashboard),
+    getDashboard: Effect.succeed(dashboardSnapshot),
     getMessages: () => Effect.succeed([]),
     getServerInfo: Effect.succeed(info),
     getSourceIdentityHistory: () => Effect.succeed([]),
     normalizeSourceIdentity: ({ sourceIdentity }) =>
       Effect.succeed(sourceIdentity),
+    observeDashboard: () => Stream.succeed(dashboardSnapshot),
+    observeDashboardLease: () =>
+      Effect.succeed({
+        kind: "snapshot" as const,
+        snapshot: dashboardSnapshot,
+      }),
     observeRun: () =>
       Stream.fromIterable([
         {
@@ -106,6 +118,9 @@ const program = Effect.gen(function* () {
   const serverInfo = yield* client.GetServerInfo();
   const currentDashboard = yield* client.GetDashboard();
   const currentActiveRuns = yield* client.GetActiveRuns();
+  const dashboardSnapshots = yield* client
+    .ObserveDashboard({})
+    .pipe(Stream.runCollect);
   const runEvents = yield* client
     .ObserveRun({ runId: MigrationRunId.make("run-1") })
     .pipe(Stream.runCollect);
@@ -113,6 +128,7 @@ const program = Effect.gen(function* () {
   return {
     currentActiveRuns,
     currentDashboard,
+    dashboardSnapshots: [...dashboardSnapshots],
     runEvents: [...runEvents],
     serverInfo,
   };
@@ -125,9 +141,12 @@ const program = Effect.gen(function* () {
 const httpProgram = Effect.gen(function* () {
   const client = yield* makeClient(MigrateHttpRpcs);
 
-  return yield* client.ObserveRunLease({
+  const dashboardLease = yield* client.ObserveDashboardLease({});
+  const runLease = yield* client.ObserveRunLease({
     runId: MigrationRunId.make("run-1"),
   });
+
+  return { dashboardLease, runLease };
 }).pipe(
   Effect.provide(MigrateHttpServerHandlers.pipe(Layer.provide(serverLayer)))
 );
@@ -136,10 +155,11 @@ describe("Migrate Server RPC handlers", () => {
   it.effect("serves unary and streaming operations through the protocol", () =>
     Effect.gen(function* () {
       const result = yield* program;
-      const runLease = yield* httpProgram;
+      const { dashboardLease, runLease } = yield* httpProgram;
 
       expect(result.serverInfo).toEqual(info);
-      expect(result.currentDashboard).toEqual(dashboard);
+      expect(result.currentDashboard).toEqual(dashboardSnapshot);
+      expect(result.dashboardSnapshots).toEqual([dashboardSnapshot]);
       expect(result.currentActiveRuns).toEqual(activeRuns);
       expect(result.runEvents).toEqual([
         { definitions: [], kind: "progress" },
@@ -162,6 +182,10 @@ describe("Migrate Server RPC handlers", () => {
         },
         events: [],
         kind: "terminal",
+      });
+      expect(dashboardLease).toEqual({
+        kind: "snapshot",
+        snapshot: dashboardSnapshot,
       });
     })
   );

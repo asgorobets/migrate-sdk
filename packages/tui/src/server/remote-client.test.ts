@@ -445,7 +445,12 @@ describe("remote Migrate Server connection", () => {
       });
       expect(
         await connection.runPromise(connection.client.GetDashboard())
-      ).toEqual(dashboard);
+      ).toMatchObject({ dashboard });
+      const dashboardSnapshots = await connection.runPromise(
+        connection.client
+          .observeDashboard({})
+          .pipe(Stream.take(1), Stream.runCollect)
+      );
 
       const events = await connection.runPromise(
         connection.client.observeRun({ runId }).pipe(Stream.runCollect)
@@ -456,12 +461,73 @@ describe("remote Migrate Server connection", () => {
         "state",
         "terminal",
       ]);
+      expect(dashboardSnapshots.map((snapshot) => snapshot.dashboard)).toEqual([
+        dashboard,
+      ]);
       expect(authorizationHeaders).not.toContain("");
       expect(authorizationHeaders).toContain("Bearer secret");
       expect(transientStatusFailures).toBe(1);
     } finally {
       await connection.dispose();
       await http.dispose();
+    }
+  });
+
+  it("resumes dashboard observation against a fresh HTTP server instance", async () => {
+    const initialDashboard: MigrateDashboard = {
+      ...dashboard,
+      activeRuns: [],
+    };
+    const original = makeMigrateServerHttpHandler(
+      MigrateServer.layer({
+        backend: { ...backend, getDashboard: Effect.succeed(initialDashboard) },
+        serverInfo,
+      }),
+      { authentication: "external", path: "/rpc" }
+    );
+    const replacement = makeMigrateServerHttpHandler(
+      MigrateServer.layer({ backend, serverInfo }),
+      { authentication: "external", path: "/rpc" }
+    );
+    let dashboardLeaseRequests = 0;
+    const fetch = async (
+      input: Parameters<typeof globalThis.fetch>[0],
+      init?: Parameters<typeof globalThis.fetch>[1]
+    ) => {
+      const request = new Request(input, init);
+      const body = await request.clone().text();
+
+      if (body.includes("ObserveDashboardLease")) {
+        dashboardLeaseRequests += 1;
+
+        return dashboardLeaseRequests === 1
+          ? original.handler(request)
+          : replacement.handler(request);
+      }
+
+      return original.handler(request);
+    };
+    const connection = await connectRemoteMigrateServer({
+      fetch,
+      url: "https://migrate.example/rpc",
+    });
+
+    try {
+      const snapshots = await connection.runPromise(
+        connection.client
+          .observeDashboard({})
+          .pipe(Stream.take(2), Stream.runCollect)
+      );
+
+      expect(snapshots.map((snapshot) => snapshot.dashboard)).toEqual([
+        initialDashboard,
+        dashboard,
+      ]);
+      expect(dashboardLeaseRequests).toBe(2);
+    } finally {
+      await connection.dispose();
+      await original.dispose();
+      await replacement.dispose();
     }
   });
 

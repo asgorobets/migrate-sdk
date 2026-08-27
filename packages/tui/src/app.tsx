@@ -1,7 +1,6 @@
 import { type KeyEvent, RGBA } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type {
-  MigrationDefinitionStatus,
   MigrationExecutionOptions,
   MigrationMessage,
   MigrationRunId,
@@ -9,7 +8,6 @@ import type {
 } from "migrate-sdk";
 import type {
   MigrateAction,
-  MigrateActiveRun,
   MigrateDashboardRow,
   MigratePreparedOperation,
   MigratePrepareOptions,
@@ -48,6 +46,7 @@ import {
 } from "./components/ui/dialog.tsx";
 import type { MigrationTuiRuntime } from "./runtime.ts";
 import type { MigrationTuiShutdownController } from "./shutdown-controller.ts";
+import { useDashboardObservation } from "./use-dashboard-observation.ts";
 
 type View =
   | "actions"
@@ -522,8 +521,9 @@ export const MigrationTuiApp = ({
   readonly runtime: MigrationTuiRuntime;
 }) => {
   const dimensions = useTerminalDimensions();
-  const [rows, setRows] = useState(initialRows ?? runtime.rows);
-  const [activeRuns, setActiveRuns] = useState<readonly MigrateActiveRun[]>([]);
+  const [sourceScanStatuses, setSourceScanStatuses] = useState<
+    ReadonlyMap<string, NonNullable<MigrateDashboardRow["status"]>>
+  >(() => new Map());
   const [listTab, setListTab] = useState<MigrationListTab>("migrations");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [actionIndex, setActionIndex] = useState(0);
@@ -573,6 +573,44 @@ export const MigrationTuiApp = ({
     });
   const [executionSettingsInputReady, setExecutionSettingsInputReady] =
     useState(false);
+  const clearSourceScanStatuses = useCallback(
+    () => setSourceScanStatuses(new Map()),
+    []
+  );
+  const { activeRuns, durableRows, refresh } = useDashboardObservation({
+    clearSourceScanStatuses,
+    initialRows,
+    recoveryNotice,
+    runtime,
+    setBusy,
+    setError,
+    setNotice,
+  });
+  const rows = useMemo(
+    () =>
+      durableRows.map((row) => {
+        const sourceScanStatus = sourceScanStatuses.get(row.entry.id);
+
+        if (sourceScanStatus === undefined) {
+          return row;
+        }
+        if (row.status === undefined) {
+          return { ...row, status: sourceScanStatus };
+        }
+
+        return {
+          ...row,
+          status: {
+            ...row.status,
+            ...(sourceScanStatus.source === undefined
+              ? {}
+              : { source: sourceScanStatus.source }),
+            warnings: sourceScanStatus.warnings,
+          },
+        };
+      }),
+    [durableRows, sourceScanStatuses]
+  );
   const selectedRow = rows[selectedIndex] ?? rows[0];
   const selectedGroup = runtime.groups[selectedIndex] ?? runtime.groups[0];
   const selectedGroupRows = useMemo(() => {
@@ -637,7 +675,6 @@ export const MigrationTuiApp = ({
       }
     | undefined
   >(undefined);
-  const refreshRequestRef = useRef(0);
   const selectiveHistoryRequestRef = useRef(0);
   dashboardStateRef.current = {
     busy: effectiveBusy,
@@ -648,36 +685,6 @@ export const MigrationTuiApp = ({
     count: messages.length,
     selectedIndex: messageIndex,
   };
-  const refresh = useCallback(
-    async (nextNotice = "Status reloaded") => {
-      const requestId = refreshRequestRef.current + 1;
-      refreshRequestRef.current = requestId;
-      setBusy("Reloading status…");
-      setError(null);
-
-      try {
-        const snapshot = await runtime.refresh();
-
-        if (requestId !== refreshRequestRef.current) {
-          return;
-        }
-
-        setRows(snapshot.rows);
-        setActiveRuns(snapshot.activeRuns);
-        setNotice(nextNotice);
-      } catch (cause) {
-        if (requestId === refreshRequestRef.current) {
-          setError(errorMessage(cause));
-        }
-      } finally {
-        if (requestId === refreshRequestRef.current) {
-          setBusy("");
-        }
-      }
-    },
-    [runtime]
-  );
-
   const scanSelectedSource = useCallback(
     async (targetOverride?: MigrateTarget) => {
       const target = targetOverride ?? dashboardStateRef.current.selectedTarget;
@@ -695,8 +702,13 @@ export const MigrationTuiApp = ({
             ? {}
             : { concurrency: executionSettings.sourceInventoryScan }),
         });
-        setRows(snapshot.rows);
-        setActiveRuns(snapshot.activeRuns);
+        setSourceScanStatuses(
+          new Map(
+            snapshot.rows.flatMap((row) =>
+              row.status === undefined ? [] : [[row.entry.id, row.status]]
+            )
+          )
+        );
         setNotice(`Source Inventory Scan complete for ${targetLabel(target)}`);
       } catch (cause) {
         setError(errorMessage(cause));
@@ -729,43 +741,6 @@ export const MigrationTuiApp = ({
     task.catch((cause: unknown) => setError(errorMessage(cause)));
   }, []);
 
-  const updateLiveStatuses = useCallback(
-    ({
-      definitions,
-    }: {
-      readonly definitions: readonly MigrationDefinitionStatus[];
-    }) => {
-      const statuses = new Map(
-        definitions.map((status) => [status.definitionId, status])
-      );
-
-      setRows((current) =>
-        current.map((row) => {
-          const status = statuses.get(row.entry.id);
-
-          if (status === undefined) {
-            return row;
-          }
-
-          return {
-            ...row,
-            status:
-              row.status === undefined
-                ? status
-                : {
-                    ...row.status,
-                    durable: status.durable,
-                    lastRun: status.lastRun,
-                    lock: status.lock,
-                  },
-          };
-        })
-      );
-      setError(null);
-    },
-    []
-  );
-
   const refreshAfterExecutionFailure = useCallback(
     async (cause: unknown) => {
       const executionError = errorMessage(cause);
@@ -787,6 +762,7 @@ export const MigrationTuiApp = ({
       executingRef.current = true;
       setView("dashboard");
       setPendingOperation(null);
+      setSourceScanStatuses(new Map());
       setNotice(null);
       setBusy(
         `${actionCopy[operation.action].progress} ${targetLabel(operation.target)}…`
@@ -795,11 +771,12 @@ export const MigrationTuiApp = ({
 
       try {
         const reference = await runtime.start(operation);
-        await refresh(
+        setNotice(
           reference.status === "completed"
             ? `Run ${reference.runId} completed`
             : `Run ${reference.runId} started`
         );
+        setBusy("");
       } catch (cause) {
         if (lifecycle.isExitRequested()) {
           return;
@@ -811,7 +788,7 @@ export const MigrationTuiApp = ({
         lifecycle.executionSettled();
       }
     },
-    [lifecycle, refresh, refreshAfterExecutionFailure, runtime]
+    [lifecycle, refreshAfterExecutionFailure, runtime]
   );
 
   const observeActiveRun = useCallback(
@@ -833,7 +810,6 @@ export const MigrationTuiApp = ({
       try {
         const result = await runtime.observeRun(runId, {
           onObservationWarning: setNotice,
-          onProgress: updateLiveStatuses,
           onProgressError: (cause) => {
             setError(`Unable to refresh live status: ${errorMessage(cause)}`);
           },
@@ -846,7 +822,7 @@ export const MigrationTuiApp = ({
           return;
         }
 
-        await refresh(result.message);
+        setNotice(result.message);
       } catch (cause) {
         if (
           lifecycle.isExitRequested() ||
@@ -863,13 +839,7 @@ export const MigrationTuiApp = ({
         }
       }
     },
-    [
-      lifecycle,
-      refresh,
-      refreshAfterExecutionFailure,
-      runtime,
-      updateLiveStatuses,
-    ]
+    [lifecycle, refreshAfterExecutionFailure, runtime]
   );
 
   const stopRun = useCallback(
@@ -880,13 +850,14 @@ export const MigrationTuiApp = ({
 
       try {
         const result = await runtime.stopRun(runId);
-        await refresh(result.message);
+        setNotice(result.message);
+        setBusy("");
       } catch (cause) {
         setError(errorMessage(cause));
         setBusy("");
       }
     },
-    [refresh, runtime]
+    [runtime]
   );
 
   const prepareOperation = useCallback(
@@ -1294,10 +1265,6 @@ export const MigrationTuiApp = ({
   );
 
   useEffect(() => {
-    startTask(refresh(recoveryNotice ?? "Status reloaded"));
-  }, [recoveryNotice, refresh, startTask]);
-
-  useEffect(() => {
     const runId = selectedActiveRun?.runId;
 
     if (runId === undefined) {
@@ -1402,17 +1369,17 @@ export const MigrationTuiApp = ({
       }
 
       const result = await runtime.breakLock(lock);
-      await refresh();
       setNotice(
         result.kind === "already-clear"
           ? `${row.entry.id} no longer has an active lock`
           : `Lock cleared for ${row.entry.id}`
       );
+      setBusy("");
     } catch (cause) {
       setError(errorMessage(cause));
       setBusy("");
     }
-  }, [pendingLockRow, refresh, runtime]);
+  }, [pendingLockRow, runtime]);
 
   const handleBreakLockKey = useCallback(
     (key: KeyEvent) => {

@@ -37,6 +37,7 @@ export const MigrateStreamingServerHandlers = MigrateStreamingRpcs.toLayer(
 
     return MigrateStreamingRpcs.of({
       ...controlHandlers(server),
+      ObserveDashboard: server.observeDashboard,
       ObserveRun: server.observeRun,
     });
   })
@@ -48,6 +49,7 @@ export const MigrateHttpServerHandlers = MigrateHttpRpcs.toLayer(
 
     return MigrateHttpRpcs.of({
       ...controlHandlers(server),
+      ObserveDashboardLease: server.observeDashboardLease,
       ObserveRunLease: server.observeRunLease,
     });
   })

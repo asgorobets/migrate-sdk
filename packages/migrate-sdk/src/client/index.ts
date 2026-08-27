@@ -15,6 +15,8 @@ import { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import type { Rpcs } from "effect/unstable/rpc/RpcGroup";
 import type { MigrationRunId } from "../domain/ids.ts";
 import {
+  type MigrateDashboardResumeToken,
+  type MigrateDashboardSnapshot,
   MigrateHttpRpcs,
   type MigrateObservationEvent,
   type MigrateObservationResumeToken,
@@ -30,9 +32,18 @@ type MigrateHttpRpcClient = RpcClient<
   Rpcs<typeof MigrateHttpRpcs>,
   RpcClientError
 >;
-type MigrateControlRpcClient = Omit<MigrateStreamingRpcClient, "ObserveRun">;
+type MigrateControlRpcClient = Omit<
+  MigrateStreamingRpcClient,
+  "ObserveDashboard" | "ObserveRun"
+>;
 
 export type MigrateClientService = MigrateControlRpcClient & {
+  readonly observeDashboard: (input: {
+    readonly after?: MigrateDashboardResumeToken | undefined;
+  }) => Stream.Stream<
+    MigrateDashboardSnapshot,
+    MigrateProtocolError | RpcClientError
+  >;
   readonly observeRun: (input: {
     readonly runId: MigrationRunId;
   }) => Stream.Stream<
@@ -43,6 +54,7 @@ export type MigrateClientService = MigrateControlRpcClient & {
 
 const clientService = (
   client: MigrateControlRpcClient,
+  observeDashboard: MigrateClientService["observeDashboard"],
   observeRun: MigrateClientService["observeRun"]
 ): MigrateClientService => ({
   BreakLock: client.BreakLock,
@@ -56,6 +68,7 @@ const clientService = (
   ScanSource: client.ScanSource,
   StartOperation: client.StartOperation,
   StopRun: client.StopRun,
+  observeDashboard,
   observeRun,
 });
 
@@ -134,15 +147,56 @@ const leasedObservation = (
         )
   );
 
+const leasedDashboardObservation = (
+  client: MigrateHttpRpcClient,
+  after?: MigrateDashboardResumeToken
+): Stream.Stream<
+  MigrateDashboardSnapshot,
+  MigrateProtocolError | RpcClientError
+> =>
+  Stream.paginate({ resumeToken: after }, ({ resumeToken }) =>
+    client
+      .ObserveDashboardLease(
+        resumeToken === undefined ? {} : { after: resumeToken }
+      )
+      .pipe(
+        Effect.retry({
+          schedule: Schedule.spaced("1 second"),
+          while: retryableHttpObservationFailure,
+        }),
+        Effect.map((lease) =>
+          lease.kind === "heartbeat"
+            ? ([
+                [] as readonly MigrateDashboardSnapshot[],
+                Option.some({ resumeToken }),
+              ] as const)
+            : ([
+                [lease.snapshot] as readonly MigrateDashboardSnapshot[],
+                Option.some({
+                  resumeToken: lease.snapshot.resumeToken,
+                }),
+              ] as const)
+        )
+      )
+  );
+
 const makeStreamingClient = makeRpcClient(MigrateStreamingRpcs).pipe(
   Effect.map((client) =>
-    clientService(client, ({ runId }) => client.ObserveRun({ runId }))
+    clientService(
+      client,
+      (input) => client.ObserveDashboard(input),
+      ({ runId }) => client.ObserveRun({ runId })
+    )
   )
 );
 
 const makeHttpClient = makeRpcClient(MigrateHttpRpcs).pipe(
   Effect.map((client) =>
-    clientService(client, ({ runId }) => leasedObservation(client, runId))
+    clientService(
+      client,
+      ({ after }) => leasedDashboardObservation(client, after),
+      ({ runId }) => leasedObservation(client, runId)
+    )
   )
 );
 

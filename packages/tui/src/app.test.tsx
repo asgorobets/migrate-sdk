@@ -11,9 +11,10 @@ import {
   toMigrationDefinitionLockToken,
   toMigrationRunId,
 } from "migrate-sdk";
-import type {
-  MigrateRunStartResult,
-  MigrateSourceIdentityHistoryEntry,
+import {
+  MigrateDashboardResumeToken,
+  type MigrateRunStartResult,
+  type MigrateSourceIdentityHistoryEntry,
 } from "migrate-sdk/protocol";
 import {
   loadLocalMigrateServerRuntime,
@@ -26,8 +27,10 @@ import { MigrationTuiApp as MigrationTuiAppView } from "./app.tsx";
 import type { MigrationTuiExecutionResult } from "./execution.ts";
 import { MigrationTuiRenderErrorBoundary } from "./render-session.tsx";
 import type {
+  MigrationTuiDashboardObservationOptions,
   MigrationTuiExecuteOptions,
   MigrationTuiRuntime,
+  MigrationTuiSnapshot,
 } from "./runtime.ts";
 
 const actEnvironment = globalThis as typeof globalThis & {
@@ -89,7 +92,35 @@ const makeInProcessMigrationTuiRuntime = async (
     observer?: MigrationTuiExecuteOptions | undefined;
     readonly result: Promise<MigrationTuiExecutionResult>;
   }
+  interface DashboardObserver {
+    lastResumeToken?: MigrationTuiSnapshot["resumeToken"] | undefined;
+    readonly onSnapshot: MigrationTuiDashboardObservationOptions["onSnapshot"];
+    readonly runtime: MigrationTuiRuntime;
+  }
   const executions = new Map<MigrationRunId, InProcessExecution>();
+  const dashboardObservers = new Set<DashboardObserver>();
+  const refreshSnapshot = async (): Promise<MigrationTuiSnapshot> => {
+    const snapshot = await Effect.runPromise(server.refresh);
+
+    return {
+      ...snapshot,
+      resumeToken: MigrateDashboardResumeToken.make(
+        `test:${JSON.stringify(snapshot)}`
+      ),
+    };
+  };
+  const publishDashboard = async (): Promise<void> => {
+    await Promise.all(
+      [...dashboardObservers].map(async (observer) => {
+        const snapshot = await observer.runtime.refresh();
+
+        if (observer.lastResumeToken !== snapshot.resumeToken) {
+          observer.lastResumeToken = snapshot.resumeToken;
+          observer.onSnapshot(snapshot);
+        }
+      })
+    );
+  };
   const detachRunObservation = (runId?: MigrationRunId): boolean => {
     if (
       activeObservation === undefined ||
@@ -106,7 +137,11 @@ const makeInProcessMigrationTuiRuntime = async (
 
   return {
     ...server,
-    breakLock: (lock) => Effect.runPromise(server.breakLock(lock)),
+    breakLock: async (lock) => {
+      const result = await Effect.runPromise(server.breakLock(lock));
+      await publishDashboard();
+      return result;
+    },
     environmentLabel: basename(server.configPath),
     detachForExit: () => {
       const runId = activeObservation?.runId;
@@ -128,6 +163,35 @@ const makeInProcessMigrationTuiRuntime = async (
       Effect.runPromise(
         server.normalizeSourceIdentity(definitionId, sourceIdentity)
       ),
+    async observeDashboard(
+      this: MigrationTuiRuntime,
+      { after, onSnapshot, signal }: MigrationTuiDashboardObservationOptions
+    ) {
+      const observer: DashboardObserver = {
+        lastResumeToken: after,
+        onSnapshot,
+        runtime: this,
+      };
+      dashboardObservers.add(observer);
+
+      try {
+        const snapshot = await this.refresh();
+        if (snapshot.resumeToken !== observer.lastResumeToken) {
+          observer.lastResumeToken = snapshot.resumeToken;
+          onSnapshot(snapshot);
+        }
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted === true) {
+            resolve();
+            return;
+          }
+
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+      } finally {
+        dashboardObservers.delete(observer);
+      }
+    },
     observeRun: async (runId, options) => {
       detachRunObservation();
       const controller = new AbortController();
@@ -182,7 +246,7 @@ const makeInProcessMigrationTuiRuntime = async (
       Effect.runPromise(
         server.prepare(...input)
       )) as unknown as MigrationTuiRuntime["prepare"],
-    refresh: () => Effect.runPromise(server.refresh),
+    refresh: refreshSnapshot,
     scanSource: (target, options) =>
       Effect.runPromise(server.scanSource(target, options)),
     start: async (operation) => {
@@ -192,13 +256,20 @@ const makeInProcessMigrationTuiRuntime = async (
         server.startExecution(
           operation as unknown as Parameters<typeof server.startExecution>[0],
           {
+            onDashboardInvalidation: () => {
+              publishDashboard().catch(() => undefined);
+            },
             onObservationWarning: (message) =>
               record?.observer?.onObservationWarning?.(message),
-            onProgress: (progress) => record?.observer?.onProgress?.(progress),
+            onProgress: (progress) => {
+              record?.observer?.onProgress?.(progress);
+              publishDashboard().catch(() => undefined);
+            },
             onProgressError: (cause) =>
               record?.observer?.onProgressError?.(cause),
             onStateChange: (state) => {
               record?.observer?.onStateChange?.(state);
+              publishDashboard().catch(() => undefined);
               if (state.kind === "running") {
                 if (record !== undefined) {
                   executions.set(state.runId, record);
@@ -225,6 +296,7 @@ const makeInProcessMigrationTuiRuntime = async (
               executions.delete(runId);
             }
           }
+          publishDashboard().catch(() => undefined);
         });
 
       return started.promise;
@@ -369,6 +441,94 @@ describe("MigrationTuiApp", () => {
           )
         ).toBe(true);
         expect(refresh).toHaveBeenCalledOnce();
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "applies a manual durable refresh before restarting dashboard observation",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const durable = await baseRuntime.refresh();
+      const rowWithStatus = durable.rows.find(
+        (row) => row.status !== undefined
+      );
+      if (rowWithStatus?.status === undefined) {
+        throw new Error("Expected a dashboard row with durable status");
+      }
+      const withMigratedCount = (migrated: number): MigrationTuiSnapshot => ({
+        ...durable,
+        resumeToken: MigrateDashboardResumeToken.make(
+          `test:migrated:${migrated}`
+        ),
+        rows: durable.rows.map((row) =>
+          row.entry.id === rowWithStatus.entry.id && row.status !== undefined
+            ? {
+                ...row,
+                status: {
+                  ...row.status,
+                  durable: { ...row.status.durable, migrated },
+                },
+              }
+            : row
+        ),
+      });
+      const stale = withMigratedCount(1);
+      const fresh = withMigratedCount(37);
+      const observeDashboard = vi.fn<MigrationTuiRuntime["observeDashboard"]>(
+        async ({ after, onSnapshot, signal }) => {
+          if (after === undefined) {
+            onSnapshot(stale);
+          }
+
+          await new Promise<void>((resolve) => {
+            if (signal?.aborted === true) {
+              resolve();
+              return;
+            }
+
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
+      );
+      const refresh = vi.fn(() => Promise.resolve(fresh));
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        observeDashboard,
+        refresh,
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("1 migrated")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("r", { shift: true }));
+
+        expect(
+          await settle(
+            setup.renderOnce,
+            () =>
+              setup.captureCharFrame().includes("37 migrated") &&
+              observeDashboard.mock.calls.length === 2
+          )
+        ).toBe(true);
+        expect(refresh).toHaveBeenCalledOnce();
+        expect(observeDashboard.mock.calls[1]?.[0].after).toBe(
+          fresh.resumeToken
+        );
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
@@ -987,7 +1147,9 @@ describe("MigrationTuiApp", () => {
             }
       );
       const observation = Promise.withResolvers<never>();
-      const observeRun = vi.fn(() => observation.promise);
+      const observeRun = vi.fn<MigrationTuiRuntime["observeRun"]>(
+        () => observation.promise
+      );
       const detachRunObservation = vi.fn((_runId?: typeof runId) => true);
       const runtime: MigrationTuiRuntime = {
         ...baseRuntime,
@@ -1019,6 +1181,7 @@ describe("MigrationTuiApp", () => {
           await settle(setup.renderOnce, () => observeRun.mock.calls.length > 0)
         ).toBe(true);
         expect(observeRun).toHaveBeenCalledWith(runId, expect.any(Object));
+        expect(observeRun.mock.calls[0]?.[1]?.onProgress).toBeUndefined();
 
         act(() => setup.mockInput.pressKey("j"));
 
@@ -1036,64 +1199,67 @@ describe("MigrationTuiApp", () => {
     }
   );
 
-  itWithOpenTui("replaces active-run actions after a source scan", async () => {
-    const baseRuntime = await makeInProcessMigrationTuiRuntime({
-      configPath: serverFixturePath("locked.config.ts"),
-      cwd: new URL("..", import.meta.url).pathname,
-    });
-    const definitionId = toMigrationDefinitionId("locked-migration");
-    const runId = toMigrationRunId("run-stuck");
-    const durable = await baseRuntime.refresh();
-    const runtime: MigrationTuiRuntime = {
-      ...baseRuntime,
-      refresh: async () => ({
-        ...durable,
-        activeRuns: [
-          {
-            definitionIds: [definitionId],
-            execution: {
-              adapter: "workflow-sdk",
-              executionId: "workflow-stuck",
+  itWithOpenTui(
+    "keeps durable active-run actions after a source scan",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("locked.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const definitionId = toMigrationDefinitionId("locked-migration");
+      const runId = toMigrationRunId("run-stuck");
+      const durable = await baseRuntime.refresh();
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        refresh: async () => ({
+          ...durable,
+          activeRuns: [
+            {
+              definitionIds: [definitionId],
+              execution: {
+                adapter: "workflow-sdk",
+                executionId: "workflow-stuck",
+              },
+              observationDefinitionId: definitionId,
+              runId,
+              startedAt: new Date("2026-08-25T12:00:00.000Z"),
+              status: "running" as const,
+              stopSupported: true,
             },
-            observationDefinitionId: definitionId,
-            runId,
-            startedAt: new Date("2026-08-25T12:00:00.000Z"),
-            status: "running" as const,
-            stopSupported: true,
-          },
-        ],
-      }),
-      scanSource: async () => ({
-        ...durable,
-        activeRuns: [],
-        scannedSource: true,
-      }),
-    };
-    const setup = await createTestRenderer({ height: 30, width: 120 });
-    const root = createRoot(setup.renderer);
+          ],
+        }),
+        scanSource: async () => ({
+          ...durable,
+          activeRuns: [],
+          scannedSource: true,
+        }),
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
 
-    act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
 
-    try {
-      expect(
-        await settle(setup.renderOnce, () =>
-          setup.captureCharFrame().includes("v View run")
-        )
-      ).toBe(true);
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("v View run")
+          )
+        ).toBe(true);
 
-      act(() => setup.mockInput.pressKey("s"));
+        act(() => setup.mockInput.pressKey("s"));
 
-      expect(
-        await settle(setup.renderOnce, () =>
-          setup.captureCharFrame().includes("Source Inventory Scan complete")
-        )
-      ).toBe(true);
-      expect(setup.captureCharFrame()).not.toContain("v View run");
-    } finally {
-      act(() => root.unmount());
-      setup.renderer.destroy();
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Source Inventory Scan complete")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain("v View run");
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
     }
-  });
+  );
 
   itWithOpenTui(
     "reloads durable status after a reconnectable run fails",
@@ -1116,13 +1282,38 @@ describe("MigrationTuiApp", () => {
         stopSupported: true,
       };
       const durable = await baseRuntime.refresh();
-      const refresh = vi
-        .fn<MigrationTuiRuntime["refresh"]>()
-        .mockResolvedValueOnce({ ...durable, activeRuns: [activeRun] })
-        .mockResolvedValueOnce({ ...durable, activeRuns: [] });
+      let onDashboardSnapshot:
+        | MigrationTuiDashboardObservationOptions["onSnapshot"]
+        | undefined;
+      let dashboardObservationCalls = 0;
+      let refreshCalls = 0;
+      const refresh = vi.fn<MigrationTuiRuntime["refresh"]>(
+        (): Promise<MigrationTuiSnapshot> => {
+          refreshCalls += 1;
+          const snapshot =
+            refreshCalls === 1
+              ? { ...durable, activeRuns: [activeRun] }
+              : { ...durable, activeRuns: [] };
+
+          if (refreshCalls > 1) {
+            onDashboardSnapshot?.(snapshot);
+          }
+
+          return Promise.resolve(snapshot);
+        }
+      );
       const runtime: MigrationTuiRuntime = {
         ...baseRuntime,
         refresh,
+        observeDashboard: async ({ onSnapshot, signal }) => {
+          dashboardObservationCalls += 1;
+          onDashboardSnapshot = onSnapshot;
+          onSnapshot(await refresh());
+
+          await new Promise<void>((resolve) =>
+            signal?.addEventListener("abort", () => resolve(), { once: true })
+          );
+        },
         observeRun: vi.fn(() =>
           Promise.reject(new Error(`Run ${runId} failed`))
         ),
@@ -1145,10 +1336,11 @@ describe("MigrationTuiApp", () => {
           await settle(
             setup.renderOnce,
             () =>
-              refresh.mock.calls.length === 2 &&
+              refresh.mock.calls.length === 3 &&
               setup.captureCharFrame().includes(`Run ${runId} failed`)
           )
         ).toBe(true);
+        expect(dashboardObservationCalls).toBe(2);
         expect(setup.captureCharFrame()).not.toContain("v View run");
       } finally {
         act(() => root.unmount());

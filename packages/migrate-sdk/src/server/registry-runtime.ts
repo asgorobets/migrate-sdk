@@ -231,6 +231,10 @@ export interface RegistryMigrateServerRuntime {
     operation: ExecutableMigrationOperation,
     observer?: RegistryMigrateServerExecutionObserver
   ) => Effect.Effect<MigrateServerExecutionHandle>;
+  readonly watchDashboardRun: (
+    run: MigrateActiveRun,
+    invalidate: Effect.Effect<void>
+  ) => Effect.Effect<void, unknown>;
 }
 
 export interface RegistryMigrateServerRuntimeOptions {
@@ -864,6 +868,9 @@ export const makeRegistryMigrateServerRuntime = (
     options?: RegistryMigrateServerExecutionObserver
   ) => {
     const definitionIdSet = new Set(definitionIds);
+    const invalidateDashboard = Effect.sync(() =>
+      options?.onDashboardInvalidation?.()
+    );
     const publish = (
       requestedDefinitionIds: readonly MigrationDefinitionId[]
     ): Effect.Effect<void> =>
@@ -885,16 +892,24 @@ export const makeRegistryMigrateServerRuntime = (
     const layer = Layer.merge(
       Layer.succeed(MigrationProgress, {
         emit: (event) =>
-          event.kind === "source-cursor-window-completed" ||
-          event.kind === "definition-completed"
-            ? publishDefinition(event.definitionId)
-            : Effect.void,
+          invalidateDashboard.pipe(
+            Effect.andThen(
+              event.kind === "source-cursor-window-completed" ||
+                event.kind === "definition-completed"
+                ? publishDefinition(event.definitionId)
+                : Effect.void
+            )
+          ),
       }),
       Layer.succeed(RollbackProgress, {
         emit: (event) =>
-          event.kind === "definition-completed"
-            ? publishDefinition(event.definitionId)
-            : Effect.void,
+          invalidateDashboard.pipe(
+            Effect.andThen(
+              event.kind === "definition-completed"
+                ? publishDefinition(event.definitionId)
+                : Effect.void
+            )
+          ),
       })
     );
     const startFallback =
@@ -1037,6 +1052,23 @@ export const makeRegistryMigrateServerRuntime = (
         return executionResultFromRunState(terminal);
       })
     );
+
+  const watchDashboardRun = (
+    run: MigrateActiveRun,
+    invalidate: Effect.Effect<void>
+  ): Effect.Effect<void, unknown> => {
+    const execution = run.execution;
+    const waitForExecution = executable.waitForExecution;
+
+    if (execution === undefined || waitForExecution === undefined) {
+      return Effect.never;
+    }
+
+    return waitForExecution(execution, {
+      onProgressCheckpoint: (checkpoint) =>
+        checkpoint.runId === run.runId ? invalidate : Effect.void,
+    }).pipe(Effect.asVoid, Effect.ensuring(invalidate));
+  };
 
   const startExecution = (
     operation: ExecutableMigrationOperation,
@@ -1269,5 +1301,6 @@ export const makeRegistryMigrateServerRuntime = (
     rows,
     scanSource,
     startExecution,
+    watchDashboardRun,
   };
 };

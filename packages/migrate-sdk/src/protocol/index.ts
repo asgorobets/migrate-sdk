@@ -139,6 +139,29 @@ export const MigrateDashboard = Schema.Struct({
 });
 export type MigrateDashboard = typeof MigrateDashboard.Type;
 
+export const MigrateDashboardResumeToken = Schema.NonEmptyString.pipe(
+  Schema.brand("MigrateDashboardResumeToken")
+);
+export type MigrateDashboardResumeToken =
+  typeof MigrateDashboardResumeToken.Type;
+
+export const MigrateDashboardSnapshot = Schema.Struct({
+  dashboard: MigrateDashboard,
+  resumeToken: MigrateDashboardResumeToken,
+});
+export type MigrateDashboardSnapshot = typeof MigrateDashboardSnapshot.Type;
+
+export const MigrateDashboardLease = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("heartbeat"),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("snapshot"),
+    snapshot: MigrateDashboardSnapshot,
+  }),
+]);
+export type MigrateDashboardLease = typeof MigrateDashboardLease.Type;
+
 export const MigrateDependencyCheck = Schema.Struct({
   dependencyId: MigrationDefinitionId,
   requiredByDefinitionId: MigrationDefinitionId,
@@ -356,7 +379,7 @@ export class GetServerInfo extends makeRpc("GetServerInfo", {
 
 export class GetDashboard extends makeRpc("GetDashboard", {
   error: MigrateProtocolError,
-  success: MigrateDashboard,
+  success: MigrateDashboardSnapshot,
 }) {}
 
 export class GetActiveRuns extends makeRpc("GetActiveRuns", {
@@ -417,6 +440,23 @@ export class ObserveRun extends makeRpc("ObserveRun", {
   success: MigrateObservationEvent,
 }) {}
 
+export class ObserveDashboard extends makeRpc("ObserveDashboard", {
+  error: MigrateProtocolError,
+  payload: {
+    after: Schema.optional(MigrateDashboardResumeToken),
+  },
+  stream: true,
+  success: MigrateDashboardSnapshot,
+}) {}
+
+export class ObserveDashboardLease extends makeRpc("ObserveDashboardLease", {
+  error: MigrateProtocolError,
+  payload: {
+    after: Schema.optional(MigrateDashboardResumeToken),
+  },
+  success: MigrateDashboardLease,
+}) {}
+
 export class ObserveRunLease extends makeRpc("ObserveRunLease", {
   error: MigrateProtocolError,
   payload: {
@@ -462,7 +502,13 @@ const MigrateControlRpcs = makeRpcGroup(
 );
 
 /** RPC surface used by connection-oriented transports such as local IPC. */
-export const MigrateStreamingRpcs = MigrateControlRpcs.add(ObserveRun);
+export const MigrateStreamingRpcs = MigrateControlRpcs.add(
+  ObserveDashboard,
+  ObserveRun
+);
 
 /** RPC surface used by bounded request/response transports such as HTTPS. */
-export const MigrateHttpRpcs = MigrateControlRpcs.add(ObserveRunLease);
+export const MigrateHttpRpcs = MigrateControlRpcs.add(
+  ObserveDashboardLease,
+  ObserveRunLease
+);

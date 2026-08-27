@@ -7,6 +7,7 @@ import type {
   MigrateAction,
   MigrateActiveRun,
   MigrateBreakLockResult,
+  MigrateDashboardResumeToken,
   MigrateDashboardRow,
   MigrateExecutionState,
   MigratePreparedOperation,
@@ -25,9 +26,15 @@ export interface MigrationTuiScanSourceOptions {
 
 export interface MigrationTuiSnapshot {
   readonly activeRuns: readonly MigrateActiveRun[];
+  readonly resumeToken: MigrateDashboardResumeToken;
   readonly rows: readonly MigrateDashboardRow[];
   readonly scannedSource: boolean;
 }
+
+export type MigrationTuiSourceScanSnapshot = Omit<
+  MigrationTuiSnapshot,
+  "resumeToken"
+>;
 
 export interface MigrationTuiExecuteOptions {
   readonly onObservationWarning?: (message: string) => void;
@@ -36,6 +43,12 @@ export interface MigrationTuiExecuteOptions {
   }) => void;
   readonly onProgressError?: (cause: unknown) => void;
   readonly onStateChange?: (state: MigrateExecutionState) => void;
+  readonly signal?: AbortSignal;
+}
+
+export interface MigrationTuiDashboardObservationOptions {
+  readonly after?: MigrateDashboardResumeToken | undefined;
+  readonly onSnapshot: (snapshot: MigrationTuiSnapshot) => void;
   readonly signal?: AbortSignal;
 }
 
@@ -63,6 +76,9 @@ export interface MigrationTuiRuntime {
     definitionId: MigrateDashboardRow["entry"]["id"],
     sourceIdentity: string
   ) => Promise<string>;
+  readonly observeDashboard: (
+    options: MigrationTuiDashboardObservationOptions
+  ) => Promise<void>;
   readonly observeRun: (
     runId: MigrationRunId,
     options?: MigrationTuiExecuteOptions
@@ -77,7 +93,7 @@ export interface MigrationTuiRuntime {
   readonly scanSource: (
     target: MigrateTarget,
     options?: MigrationTuiScanSourceOptions
-  ) => Promise<MigrationTuiSnapshot>;
+  ) => Promise<MigrationTuiSourceScanSnapshot>;
   readonly start: (
     operation: MigratePreparedOperation
   ) => Promise<MigrateRunStartResult>;

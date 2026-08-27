@@ -1,3 +1,4 @@
+import { MigrateDashboardResumeToken } from "migrate-sdk/protocol";
 import { describe, expect, it, vi } from "vitest";
 import {
   type MigrationTuiRenderSessionInput,
@@ -18,6 +19,7 @@ describe("Migration TUI lifecycle supervisor", () => {
     const errors: string[] = [];
     const snapshot: MigrationTuiSnapshot = {
       activeRuns: [],
+      resumeToken: MigrateDashboardResumeToken.make("test:snapshot"),
       rows,
       scannedSource: false,
     };
@@ -81,6 +83,7 @@ describe("Migration TUI lifecycle supervisor", () => {
         refresh: () =>
           Promise.resolve({
             activeRuns: [],
+            resumeToken: MigrateDashboardResumeToken.make("test:snapshot"),
             rows: [],
             scannedSource: false as const,
           }),
@@ -127,6 +130,7 @@ describe("Migration TUI lifecycle supervisor", () => {
         refresh: () =>
           Promise.resolve({
             activeRuns: [],
+            resumeToken: MigrateDashboardResumeToken.make("test:snapshot"),
             rows: [],
             scannedSource: false as const,
           }),

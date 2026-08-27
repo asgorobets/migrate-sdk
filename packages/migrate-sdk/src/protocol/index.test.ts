@@ -13,6 +13,9 @@ import {
   MigrateActiveRun,
   MigrateBreakLockResult,
   MigrateDashboard,
+  MigrateDashboardLease,
+  MigrateDashboardResumeToken,
+  MigrateDashboardSnapshot,
   MigrateDependencyCheck,
   MigrateEnvironmentInfo,
   MigrateExecutionOptions,
@@ -39,6 +42,8 @@ import {
   MigrateStreamingRpcs,
   MigrateTarget,
   NormalizeSourceIdentity,
+  ObserveDashboard,
+  ObserveDashboardLease,
   ObserveRun,
   ObserveRunLease,
   PrepareOperation,
@@ -235,6 +240,30 @@ const contractCases: readonly {
     name: "dashboard",
     schema: MigrateDashboard,
     value: dashboardValue,
+  },
+  {
+    name: "dashboard resume token",
+    schema: MigrateDashboardResumeToken,
+    value: "sha256:dashboard",
+  },
+  {
+    name: "dashboard snapshot",
+    schema: MigrateDashboardSnapshot,
+    value: {
+      dashboard: dashboardValue,
+      resumeToken: "sha256:dashboard",
+    },
+  },
+  {
+    name: "dashboard observation lease",
+    schema: MigrateDashboardLease,
+    value: {
+      kind: "snapshot",
+      snapshot: {
+        dashboard: dashboardValue,
+        resumeToken: "sha256:dashboard",
+      },
+    },
   },
   {
     name: "dependency check",
@@ -507,6 +536,16 @@ const rpcPayloadCases: readonly {
     value: { runId: "run-1" },
   },
   {
+    name: "ObserveDashboard",
+    schema: ObserveDashboard.payloadSchema,
+    value: { after: "sha256:dashboard" },
+  },
+  {
+    name: "ObserveDashboardLease",
+    schema: ObserveDashboardLease.payloadSchema,
+    value: { after: "sha256:dashboard" },
+  },
+  {
     name: "ObserveRunLease",
     schema: ObserveRunLease.payloadSchema,
     value: { after: "sha256:checkpoint", runId: "run-1" },
@@ -553,7 +592,21 @@ const rpcUnarySuccessCases: readonly {
   {
     name: "GetDashboard",
     schema: GetDashboard.successSchema,
-    value: dashboardValue,
+    value: {
+      dashboard: dashboardValue,
+      resumeToken: "sha256:dashboard",
+    },
+  },
+  {
+    name: "ObserveDashboardLease",
+    schema: ObserveDashboardLease.successSchema,
+    value: {
+      kind: "snapshot",
+      snapshot: {
+        dashboard: dashboardValue,
+        resumeToken: "sha256:dashboard",
+      },
+    },
   },
   {
     name: "GetActiveRuns",
@@ -608,6 +661,7 @@ const rpcUnarySuccessCases: readonly {
 const rpcErrorCases = [
   GetActiveRuns,
   GetDashboard,
+  ObserveDashboardLease,
   GetMessages,
   GetSourceIdentityHistory,
   NormalizeSourceIdentity,
@@ -620,8 +674,14 @@ const rpcErrorCases = [
 
 describe("Migrate Protocol", () => {
   it("keeps streaming observation off the bounded HTTP RPC surface", () => {
+    expect(MigrateHttpRpcs.requests.has("ObserveDashboard")).toBe(false);
+    expect(MigrateHttpRpcs.requests.has("ObserveDashboardLease")).toBe(true);
     expect(MigrateHttpRpcs.requests.has("ObserveRun")).toBe(false);
     expect(MigrateHttpRpcs.requests.has("ObserveRunLease")).toBe(true);
+    expect(MigrateStreamingRpcs.requests.has("ObserveDashboard")).toBe(true);
+    expect(MigrateStreamingRpcs.requests.has("ObserveDashboardLease")).toBe(
+      false
+    );
     expect(MigrateStreamingRpcs.requests.has("ObserveRun")).toBe(true);
     expect(MigrateStreamingRpcs.requests.has("ObserveRunLease")).toBe(false);
   });

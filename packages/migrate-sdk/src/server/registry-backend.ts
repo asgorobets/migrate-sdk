@@ -101,6 +101,7 @@ export const makeRegistryMigrateServerBackend = (
     runtime.normalizeSourceIdentity(definitionId, sourceIdentity),
   observeRun: (runId, observer, observationDefinitionId) =>
     runtime.observeRun(runId, observer, observationDefinitionId),
+  watchDashboardRun: runtime.watchDashboardRun,
   prepareOperation: (input) =>
     runtime
       .prepare(input.target, input.action, runtimePrepareOptions(input.options))

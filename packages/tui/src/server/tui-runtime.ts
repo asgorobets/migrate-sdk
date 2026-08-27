@@ -2,6 +2,7 @@ import { Effect, Stream } from "effect";
 import type { MigrationDefinitionLock, MigrationRunId } from "migrate-sdk";
 import type {
   MigrateDashboard,
+  MigrateDashboardSnapshot,
   MigrateObservationEvent,
   MigratePreparedOperation,
   MigrateRunStartResult,
@@ -9,6 +10,7 @@ import type {
 import type { MigrationTuiExecutionResult } from "../execution.ts";
 import type {
   LoadMigrationTuiInput,
+  MigrationTuiDashboardObservationOptions,
   MigrationTuiDetachResult,
   MigrationTuiExecuteOptions,
   MigrationTuiRuntime,
@@ -38,12 +40,19 @@ export const makeMigrationTuiRuntime = async (
         readonly token: symbol;
       }
     | undefined;
-  const snapshot = (
+  const sourceScanSnapshot = (
     dashboard: Pick<MigrateDashboard, "activeRuns" | "rows" | "scannedSource">
-  ): MigrationTuiSnapshot => ({
+  ) => ({
     activeRuns: dashboard.activeRuns,
     rows: dashboard.rows,
     scannedSource: dashboard.scannedSource,
+  });
+  const snapshot = ({
+    dashboard,
+    resumeToken,
+  }: MigrateDashboardSnapshot): MigrationTuiSnapshot => ({
+    ...sourceScanSnapshot(dashboard),
+    resumeToken,
   });
 
   const consumeObservation = async <ObservationError>(
@@ -162,7 +171,7 @@ export const makeMigrationTuiRuntime = async (
     detachForExit,
     detachRunObservation,
     dispose: connection.dispose,
-    groups: initialDashboard.groups,
+    groups: initialDashboard.dashboard.groups,
     listActiveRuns: () => runPromise(client.GetActiveRuns()),
     listMessages: (target) => runPromise(client.GetMessages({ target })),
     listSourceIdentityHistory: (definitionId) =>
@@ -170,6 +179,21 @@ export const makeMigrationTuiRuntime = async (
     normalizeSourceIdentity: (definitionId, sourceIdentity) =>
       runPromise(
         client.NormalizeSourceIdentity({ definitionId, sourceIdentity })
+      ),
+    observeDashboard: ({
+      after,
+      onSnapshot,
+      signal,
+    }: MigrationTuiDashboardObservationOptions) =>
+      runPromise(
+        client
+          .observeDashboard(after === undefined ? {} : { after })
+          .pipe(
+            Stream.runForEach((dashboardSnapshot) =>
+              Effect.sync(() => onSnapshot(snapshot(dashboardSnapshot)))
+            )
+          ),
+        signal === undefined ? undefined : { signal }
       ),
     observeRun: async (runId, options) => {
       detachRunObservation();
@@ -215,7 +239,7 @@ export const makeMigrationTuiRuntime = async (
         })
       ),
     refresh: () => runPromise(client.GetDashboard()).then(snapshot),
-    rows: initialDashboard.rows,
+    rows: initialDashboard.dashboard.rows,
     scanSource: (target, options = {}) =>
       runPromise(
         client.ScanSource({
@@ -224,7 +248,7 @@ export const makeMigrationTuiRuntime = async (
             : { concurrency: options.concurrency }),
           target,
         })
-      ).then(snapshot),
+      ).then(sourceScanSnapshot),
     start: startOperation,
     stopRun: (runId) => runPromise(client.StopRun({ runId })),
   };

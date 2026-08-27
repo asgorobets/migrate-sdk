@@ -117,6 +117,34 @@ directly.
 Transient lifecycle states and warnings are delivered with the next progress or
 completion checkpoint and do not independently advance the resume position.
 
+Whole-dashboard observation follows the same transport split. Connection-based
+clients consume `ObserveDashboard` as a stream of complete
+`MigrateDashboardSnapshot` envelopes containing both the dashboard and its
+opaque content fingerprint. `GetDashboard` returns the same envelope. HTTPS
+clients concatenate unary `ObserveDashboardLease` requests, passing the
+fingerprint into the next lease. A lease returns the first changed complete
+snapshot or a heartbeat when its bounded execution window expires. A fresh
+serverless invocation reconstructs the dashboard from the registry and
+Migration Stores before waiting, so neither client identity nor server process
+memory is required for resumption.
+
+Execution events are private invalidation signals, not competing dashboard
+payloads. Inline item progress, lifecycle changes, provider checkpoints,
+successful controls, and a subscriber-scoped fallback mark the server's
+dashboard projection dirty. The server coalesces those signals, performs only
+one durable projection read at a time, and multicasts the resulting absolute
+snapshots. Each subscriber suppresses identical fingerprints after discarding
+any shared projection that predates its subscription. The fallback remains
+active while a dashboard subscriber exists even when the previous snapshot has
+no active runs; otherwise a run started by cron or another host could not be
+discovered without a process-local signal.
+
+Focused `ObserveRun` remains separate. It supplies run-specific warnings,
+messages, lifecycle, and terminal detail, but it does not update aggregate
+dashboard rows. Client navigation and source-inventory results are also not
+server observation state: the TUI retains selection locally and overlays
+`ScanSource` results over subsequently streamed durable rows.
+
 Attaching to provider events within a lease is an optional latency optimization.
 A serverless function, deployment, or network connection may end between any
 two leases; the next invocation reconstructs observation from the durable
@@ -196,6 +224,11 @@ infrastructure-only commands may remain outside that interface.
   status.
 - Remote clients can compose bounded HTTP observation leases into a continuous
   interface without keeping a serverless invocation alive for the run duration.
+- Dashboard clients receive complete durable snapshots for every migration;
+  changing TUI selection affects only optional focused observation and never
+  interrupts aggregate freshness.
+- Inline and provider progress can wake one shared dashboard projection without
+  exposing provider event formats or making clients poll every second.
 - The boundary extracts serializable server requests and handlers from the
   in-process server runtime without rewriting the migration engine or changing
   the existing Execution Adapter interface.
