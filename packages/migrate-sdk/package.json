@@ -63,6 +63,12 @@
       "source": "./src/server/index.ts",
       "import": "./dist/server/index.js"
     },
+    "./server/http": {
+      "types": "./dist/server/http-host.d.ts",
+      "bun": "./src/server/http-host.ts",
+      "source": "./src/server/http-host.ts",
+      "import": "./dist/server/http-host.js"
+    },
     "./destinations/in-memory": {
       "types": "./dist/destinations/in-memory/index.d.ts",
       "bun": "./src/destinations/in-memory/index.ts",
