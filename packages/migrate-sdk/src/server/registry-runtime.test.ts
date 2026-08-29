@@ -27,6 +27,80 @@ describe("registry migration server runtime", () => {
   });
 
   it.effect(
+    "reports server-owned execution failures independently of durable failed items",
+    () => {
+      const definitionId = toMigrationDefinitionId("executor-failure");
+      const runId = toMigrationRunId("run-executor-failure");
+      const failure = new Error("Executor process crashed");
+      const storeLayer = InMemoryMigrationStore.layer(
+        InMemoryMigrationStore.makeState()
+      );
+      const identity = SourceIdentity.make({
+        id: "registry-server-executor-failure@v1",
+        schema: SourceIdentity.key("id", Schema.NonEmptyString),
+      });
+      const definition = MigrationDefinition.make({
+        id: definitionId,
+        process: () => Effect.void,
+        source: Source.make({
+          cursorSchema: Schema.Struct({ offset: Schema.Int }),
+          identity,
+          lookupStrategy: "direct",
+          read: () => Effect.succeed({ items: [] }),
+          readByIdentity: () => Effect.succeed(null),
+          sourceSchema: Schema.Struct({ title: Schema.String }),
+        }),
+        store: storeLayer,
+      });
+      const terminalState = {
+        definitionIds: [definitionId],
+        finishedAt: new Date("2026-08-29T12:00:01.000Z"),
+        runId,
+        startedAt: new Date("2026-08-29T12:00:00.000Z"),
+        status: "failed" as const,
+      };
+      const runtime = makeRegistryMigrateServerRuntime({
+        executable: {
+          ...MigrationExecutable.inlineService,
+          startRun: () =>
+            Effect.succeed({
+              execution: { adapter: "test-inline" },
+              handle: {
+                cancel: Effect.succeed(terminalState),
+                get: Effect.succeed(terminalState),
+                runId,
+                wait: Effect.succeed({
+                  cause: failure,
+                  kind: "execution-failed" as const,
+                  state: terminalState,
+                }),
+              },
+              kind: "started" as const,
+              runId,
+            }),
+        },
+        registry: MigrationDefinitionRegistry.make({
+          definitions: [definition],
+        }),
+      });
+
+      return Effect.gen(function* () {
+        const operation = yield* runtime.prepare(
+          { definitionIds: [definitionId], kind: "definitions" },
+          "run"
+        );
+        const execution = yield* runtime.startExecution(operation);
+
+        expect(yield* execution.result).toEqual({
+          message: failure.message,
+          outcome: "failed",
+          runId,
+        });
+      });
+    }
+  );
+
+  it.effect(
     "requests cancellation through durable run state without execution memory",
     () =>
       Effect.gen(function* () {

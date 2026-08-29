@@ -38,10 +38,12 @@ import {
   MigrateRegistryEntry,
   MigrateRegistryGroup,
   MigrateRunStartResult,
+  MigrateSelection,
   MigrateServerInfo,
   MigrateSourceIdentityHistoryEntry,
   MigrateStreamingRpcs,
   MigrateTarget,
+  MigrateTerminalSummary,
   NormalizeSourceIdentity,
   ObserveDashboard,
   ObserveDashboardLease,
@@ -88,7 +90,12 @@ const dashboardValue = {
 const operationRequestValue = {
   action: "run",
   options: { withDependencies: true },
-  target: { definitionId: "articles", kind: "migration" },
+  selection: { definitionIds: ["articles"], kind: "definitions" },
+};
+
+const dashboardTargetValue = {
+  definitionId: "articles",
+  kind: "migration",
 };
 
 const preparedOperationValue = {
@@ -108,6 +115,22 @@ const preparedOperationValue = {
       rollback: { concurrency: "unbounded" },
     },
     executionDefinitionIds: ["authors", "articles"],
+    executionPolicy: [
+      {
+        definitionId: "authors",
+        discovery: "full",
+        processConcurrency: 4,
+        rollbackConcurrency: "unbounded",
+      },
+      {
+        definitionId: "articles",
+        discovery: "incremental",
+        processConcurrency: 4,
+        rollbackConcurrency: "unbounded",
+      },
+    ],
+    includedDefinitionIds: ["authors", "articles"],
+    notices: [],
     requestedDefinitionIds: ["articles"],
     withDependencies: true,
   },
@@ -130,10 +153,10 @@ const preparedOperationValue = {
       sourceIdentities: ["article-1", "article-2"],
       withDependencies: true,
     },
-    target: { definitionId: "articles", kind: "migration" },
+    selection: { definitionIds: ["articles"], kind: "definitions" },
   },
+  selection: { definitionIds: ["articles"], kind: "definitions" },
   sourceIdentities: ["article-1", "article-2"],
-  target: { definitionId: "articles", kind: "migration" },
 };
 
 const protocolErrorValue = {
@@ -188,6 +211,21 @@ const contractCases: readonly {
   {
     name: "group target",
     schema: MigrateTarget,
+    value: { groupId: "content", kind: "group" },
+  },
+  {
+    name: "all migration selection",
+    schema: MigrateSelection,
+    value: { kind: "all" },
+  },
+  {
+    name: "definition migration selection",
+    schema: MigrateSelection,
+    value: { definitionIds: ["articles", "authors"], kind: "definitions" },
+  },
+  {
+    name: "group migration selection",
+    schema: MigrateSelection,
     value: { groupId: "content", kind: "group" },
   },
   {
@@ -285,7 +323,11 @@ const contractCases: readonly {
     schema: MigratePlanProjection,
     value: {
       executionDefinitionIds: ["authors", "articles"],
+      executionPolicy: [],
+      includedDefinitionIds: ["authors", "articles"],
+      notices: [],
       requestedDefinitionIds: ["articles"],
+      rescan: true,
       withDependencies: true,
     },
   },
@@ -367,13 +409,48 @@ const contractCases: readonly {
     },
   },
   {
+    name: "run terminal summary",
+    schema: MigrateTerminalSummary,
+    value: {
+      definitions: [
+        {
+          counts: {
+            failed: 1,
+            migrated: 3,
+            needsUpdate: 2,
+            orphaned: 2,
+            rollbackFailed: 1,
+            rolledBack: 1,
+            skipped: 0,
+            unchanged: 4,
+          },
+          definitionId: "articles",
+          status: "failed",
+        },
+      ],
+      finishedAt: "2026-08-29T12:01:00.000Z",
+      kind: "run",
+      runId: "run-1",
+      startedAt: "2026-08-29T12:00:00.000Z",
+      status: "failed",
+    },
+  },
+  {
     name: "terminal observation",
     schema: MigrateObservationEvent,
     value: {
       kind: "terminal",
-      message: "Run cancelled",
-      outcome: "cancelled",
+      message: "Run failed",
+      outcome: "completed",
       runId: "run-1",
+      summary: {
+        definitions: [],
+        finishedAt: "2026-08-29T12:01:00.000Z",
+        kind: "run",
+        runId: "run-1",
+        startedAt: "2026-08-29T12:00:00.000Z",
+        status: "failed",
+      },
     },
   },
   {
@@ -426,6 +503,24 @@ const contractCases: readonly {
       _tag: "MigrateOperationError",
       code: "execution-failed",
       message: "Execution failed",
+    },
+  },
+  {
+    name: "unknown definition protocol error",
+    schema: MigrateProtocolError,
+    value: {
+      _tag: "MigrationDefinitionRegistryUnknownDefinitionError",
+      definitionId: "missing",
+      message: "Migration was not found",
+    },
+  },
+  {
+    name: "unknown group protocol error",
+    schema: MigrateProtocolError,
+    value: {
+      _tag: "MigrationDefinitionRegistryUnknownGroupError",
+      group: "missing-group",
+      message: "Migration group was not found",
     },
   },
   {
@@ -506,7 +601,7 @@ const rpcPayloadCases: readonly {
   {
     name: "GetMessages",
     schema: GetMessages.payloadSchema,
-    value: { target: operationRequestValue.target },
+    value: { target: dashboardTargetValue },
   },
   {
     name: "GetSourceIdentityHistory",
@@ -559,7 +654,7 @@ const rpcPayloadCases: readonly {
   {
     name: "ScanSource",
     schema: ScanSource.payloadSchema,
-    value: { concurrency: 4, target: operationRequestValue.target },
+    value: { concurrency: 4, target: dashboardTargetValue },
   },
   {
     name: "BreakLock",
@@ -874,6 +969,9 @@ describe("Migrate Protocol", () => {
         plan: {
           execution: { process: { concurrency: 0 } },
           executionDefinitionIds: ["articles"],
+          executionPolicy: [],
+          includedDefinitionIds: ["articles"],
+          notices: [],
           requestedDefinitionIds: ["articles"],
           withDependencies: false,
         },
@@ -881,9 +979,9 @@ describe("Migrate Protocol", () => {
         request: {
           action: "run",
           options: { execution: { process: { concurrency: 0 } } },
-          target: { definitionId: "articles", kind: "migration" },
+          selection: { definitionIds: ["articles"], kind: "definitions" },
         },
-        target: { definitionId: "articles", kind: "migration" },
+        selection: { definitionIds: ["articles"], kind: "definitions" },
       })
     ).toThrow();
   });

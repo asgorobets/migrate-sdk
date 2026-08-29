@@ -1,4 +1,4 @@
-import { Deferred, Effect, Layer, Option, Ref, Schema } from "effect";
+import { Deferred, Effect, Fiber, Layer, Option, Ref, Schema } from "effect";
 import {
   type ActiveMigrationRun,
   type AnySelfContainedMigrationDefinition,
@@ -13,6 +13,7 @@ import {
   type MigrationDefinitionRegistryId,
   type MigrationDefinitionRegistryStatusReport,
   type MigrationDefinitionStatus,
+  type MigrationExecutableObservationResult,
   type MigrationExecutableProgressCheckpoint,
   type MigrationExecutableService,
   type MigrationExecutionOptions,
@@ -39,9 +40,11 @@ import type {
   MigrateDefinitionSourceItemTotal,
   MigrateDependencyCheck,
   MigrateExecutionState,
+  MigrateSelection,
   MigrateSourceIdentityHistoryEntry,
   MigrateSourceItemTotal,
   MigrateTarget,
+  MigrateTerminalSummary,
 } from "../protocol/index.ts";
 import { MigrationDefinitionSource } from "../services/migration-definition-source.ts";
 import {
@@ -100,11 +103,47 @@ const executionResultFromRunState = (
 
   if (state.status === "cancelled") {
     outcome = "cancelled";
-  } else if (state.status === "failed" || state.status === "start-failed") {
+  } else if (state.status === "start-failed") {
     outcome = "failed";
   }
 
   return { message, outcome, runId: state.runId };
+};
+
+const projectTerminalSummary = (
+  summary: MigrationRunSummary | RollbackRunSummary
+): MigrateTerminalSummary =>
+  "kind" in summary ? summary : { ...summary, kind: "run" };
+
+const executionResultFromSummary = (
+  summary: MigrationRunSummary | RollbackRunSummary
+): MigrateServerExecutionResult => ({
+  message: `Run ${summary.runId} ${summary.status}`,
+  outcome: summary.status === "cancelled" ? "cancelled" : "completed",
+  runId: summary.runId,
+  summary: projectTerminalSummary(summary),
+});
+
+interface DetachedRunTerminal {
+  readonly executionFailure?: unknown;
+  readonly state: MigrationRunState;
+  readonly summary?: MigrationRunSummary | RollbackRunSummary;
+}
+
+const executionResultFromDetachedTerminal = (
+  terminal: DetachedRunTerminal
+): MigrateServerExecutionResult => {
+  if (terminal.executionFailure !== undefined) {
+    return {
+      message: causeMessage(terminal.executionFailure),
+      outcome: "failed",
+      runId: terminal.state.runId,
+    };
+  }
+
+  return terminal.summary === undefined
+    ? executionResultFromRunState(terminal.state)
+    : executionResultFromSummary(terminal.summary);
 };
 
 class RegistryMigrateServerError extends Schema.TaggedError<RegistryMigrateServerError>()(
@@ -164,8 +203,8 @@ export type ExecutableMigrationOperation =
         readonly AnySelfContainedMigrationDefinition[]
       >;
       readonly planRows: readonly MigrateDashboardRow[];
+      readonly selection: MigrateSelection;
       readonly sourceIdentities?: readonly string[];
-      readonly target: MigrateTarget;
     }
   | {
       readonly action: "rollback";
@@ -173,7 +212,8 @@ export type ExecutableMigrationOperation =
       readonly observationDefinitionId: MigrationDefinitionId;
       readonly plan: MigrationDefinitionExecutableRollbackPlan;
       readonly planRows: readonly MigrateDashboardRow[];
-      readonly target: MigrateTarget;
+      readonly selection: MigrateSelection;
+      readonly sourceIdentities?: readonly string[];
     };
 
 export interface MigrateServerScanOptions {
@@ -183,6 +223,7 @@ export interface MigrateServerScanOptions {
 export interface MigrateServerPrepareOptions {
   readonly execution?: MigrationExecutionOptions;
   readonly force?: boolean;
+  readonly rollbackOrphans?: boolean;
   readonly sourceIdentities?: readonly string[];
   readonly withDependencies?: boolean;
 }
@@ -245,7 +286,7 @@ export interface RegistryMigrateServerRuntime {
     observationDefinitionId?: MigrationDefinitionId
   ) => Effect.Effect<MigrateServerExecutionResult, unknown>;
   readonly prepare: (
-    target: MigrateTarget,
+    selection: MigrateSelection,
     action: MigrateAction,
     options?: MigrateServerPrepareOptions
   ) => Effect.Effect<ExecutableMigrationOperation, unknown>;
@@ -470,7 +511,7 @@ export const makeRegistryMigrateServerRuntime = (
     ) => Effect.Effect<void>;
     readonly onProviderObservationError?: (cause: unknown) => void;
     readonly runId: MigrationRunId;
-  }): Effect.Effect<MigrationRunState, unknown> => {
+  }): Effect.Effect<DetachedRunTerminal, unknown> => {
     const definition = Option.getOrUndefined(registry.get(definitionId));
 
     if (definition === undefined) {
@@ -492,7 +533,7 @@ export const makeRegistryMigrateServerRuntime = (
         pollIntervalMs: terminalPollIntervalMs,
         readRunState,
         runId,
-      });
+      }).pipe(Effect.map((state) => ({ state })));
       const providerObservation = executable.waitForExecution?.(execution, {
         ...(onProgressCheckpoint === undefined
           ? {}
@@ -508,44 +549,115 @@ export const makeRegistryMigrateServerRuntime = (
         return yield* durableObservation;
       }
 
-      const providerGuard = providerObservation.pipe(
-        Effect.flatMap((result) => {
-          if (result.kind === "succeeded") {
-            return Effect.never;
-          }
+      const enrichDurableTerminal = (
+        state: MigrationRunState,
+        result: MigrationExecutableObservationResult
+      ): Effect.Effect<DetachedRunTerminal> => {
+        if (result.kind === "failed") {
+          return Effect.succeed({
+            executionFailure:
+              result.cause ??
+              new Error(`Provider execution ${execution.executionId} failed`),
+            state,
+          });
+        }
 
-          return Effect.sleep(providerSettlementGraceMs).pipe(
-            Effect.andThen(readRunState),
-            Effect.flatMap((state) => {
-              if (
-                state !== null &&
-                state.runId === runId &&
-                isTerminalRunState(state)
-              ) {
-                return Effect.succeed(state);
-              }
-
-              return Effect.fail(
-                new RegistryMigrateServerProviderObservationError({
-                  message: `Provider execution ${execution.executionId} ${result.kind} before run ${runId} reached durable terminal state`,
-                  ...(result.kind === "failed" && result.cause !== undefined
-                    ? { cause: result.cause }
-                    : {}),
-                })
-              );
-            })
-          );
-        }),
-        Effect.catch((cause) =>
-          Schema.is(RegistryMigrateServerProviderObservationError)(cause)
-            ? Effect.fail(cause)
-            : Effect.sync(() => onProviderObservationError?.(cause)).pipe(
-                Effect.andThen(Effect.never)
+        if (
+          result.kind === "succeeded" &&
+          result.summary !== undefined &&
+          result.summary.runId !== runId
+        ) {
+          return Effect.sync(() =>
+            onProviderObservationError?.(
+              new Error(
+                `Provider execution ${execution.executionId} returned summary for run ${result.summary?.runId}`
               )
+            )
+          ).pipe(Effect.as({ state }));
+        }
+
+        return Effect.succeed({
+          state,
+          ...(result.kind === "succeeded" && result.summary !== undefined
+            ? { summary: result.summary }
+            : {}),
+        });
+      };
+      const observedProvider = providerObservation.pipe(
+        Effect.match({
+          onFailure: (cause) => ({ cause, kind: "unavailable" as const }),
+          onSuccess: (result) => ({ kind: "observed" as const, result }),
+        })
+      );
+      const providerFiber = yield* observedProvider.pipe(Effect.forkChild);
+      const first = yield* Effect.raceFirst(
+        durableObservation.pipe(
+          Effect.map((terminal) => ({ kind: "durable" as const, terminal }))
+        ),
+        Fiber.join(providerFiber).pipe(
+          Effect.map((provider) => ({ kind: "provider" as const, provider }))
         )
       );
 
-      return yield* Effect.raceFirst(durableObservation, providerGuard);
+      if (first.kind === "durable") {
+        const provider = yield* Fiber.join(providerFiber).pipe(
+          Effect.timeoutOption(providerSettlementGraceMs)
+        );
+
+        if (Option.isNone(provider)) {
+          return first.terminal;
+        }
+
+        const providerResult = provider.value;
+
+        if (providerResult.kind === "unavailable") {
+          yield* Effect.sync(() =>
+            onProviderObservationError?.(providerResult.cause)
+          );
+          return first.terminal;
+        }
+
+        return yield* enrichDurableTerminal(
+          first.terminal.state,
+          providerResult.result
+        );
+      }
+
+      const providerResult = first.provider;
+
+      if (providerResult.kind === "unavailable") {
+        yield* Effect.sync(() =>
+          onProviderObservationError?.(providerResult.cause)
+        );
+        return yield* durableObservation;
+      }
+
+      if (providerResult.result.kind === "succeeded") {
+        const terminal = yield* durableObservation;
+        return yield* enrichDurableTerminal(
+          terminal.state,
+          providerResult.result
+        );
+      }
+
+      yield* Effect.sleep(providerSettlementGraceMs);
+      const state = yield* readRunState;
+
+      if (
+        state !== null &&
+        state.runId === runId &&
+        isTerminalRunState(state)
+      ) {
+        return yield* enrichDurableTerminal(state, providerResult.result);
+      }
+
+      return yield* new RegistryMigrateServerProviderObservationError({
+        message: `Provider execution ${execution.executionId} ${providerResult.result.kind} before run ${runId} reached durable terminal state`,
+        ...(providerResult.result.kind === "failed" &&
+        providerResult.result.cause !== undefined
+          ? { cause: providerResult.result.cause }
+          : {}),
+      });
     }).pipe(Effect.provide(definition.store));
 
     return observe;
@@ -823,32 +935,43 @@ export const makeRegistryMigrateServerRuntime = (
     });
 
   const prepareRollback = (
-    target: MigrateTarget,
+    selection: MigrateSelection,
     options: MigrateServerPrepareOptions
   ): Effect.Effect<ExecutableMigrationOperation, unknown> =>
     Effect.gen(function* () {
       const withDependencies =
-        options.withDependencies ?? target.kind === "migration";
-      const plan = yield* target.kind === "group"
-        ? registry.executable().planRollback({
-            ...(options.execution === undefined
-              ? {}
-              : { execution: options.execution }),
-            group: target.groupId,
-            ...(options.force === undefined ? {} : { force: options.force }),
-            withDependencies,
-          })
-        : registry.executable().planRollback({
-            definitionIds: [target.definitionId],
-            ...(options.execution === undefined
-              ? {}
-              : { execution: options.execution }),
-            ...(options.force === undefined ? {} : { force: options.force }),
-            withDependencies,
-          });
+        options.withDependencies ??
+        (selection.kind === "definitions" &&
+          selection.definitionIds.length === 1);
+      const commonOptions = {
+        ...(options.execution === undefined
+          ? {}
+          : { execution: options.execution }),
+        ...(options.force === undefined ? {} : { force: options.force }),
+        ...(options.sourceIdentities === undefined
+          ? {}
+          : { sourceIdentities: options.sourceIdentities }),
+        withDependencies,
+      };
+      let plan: MigrationDefinitionExecutableRollbackPlan;
+
+      if (selection.kind === "all") {
+        plan = yield* registry
+          .executable()
+          .planRollback({ all: true, ...commonOptions });
+      } else if (selection.kind === "group") {
+        plan = yield* registry
+          .executable()
+          .planRollback({ group: selection.groupId, ...commonOptions });
+      } else {
+        plan = yield* registry.executable().planRollback({
+          definitionIds: selection.definitionIds,
+          ...commonOptions,
+        });
+      }
       const observationDefinitionId =
-        target.kind === "migration"
-          ? target.definitionId
+        selection.kind === "definitions" && selection.definitionIds.length === 1
+          ? selection.definitionIds[0]
           : plan.executionDefinitionIds[0];
 
       if (observationDefinitionId === undefined) {
@@ -865,12 +988,15 @@ export const makeRegistryMigrateServerRuntime = (
         observationDefinitionId,
         plan,
         planRows,
-        target,
+        selection,
+        ...(plan.target === undefined
+          ? {}
+          : { sourceIdentities: plan.target.sourceIdentities }),
       };
     });
 
   const planRun = (
-    target: MigrateTarget,
+    selection: MigrateSelection,
     action: MigrateRunAction,
     options: MigrateServerPrepareOptions
   ) => {
@@ -886,6 +1012,7 @@ export const makeRegistryMigrateServerRuntime = (
         : {}),
       ...(action === "rescan" ? { rescan: true } : {}),
       ...(action === "update" ? { update: true } : {}),
+      ...(options.rollbackOrphans === true ? { rollbackOrphans: true } : {}),
       ...(options.sourceIdentities === undefined
         ? {}
         : { sourceIdentities: options.sourceIdentities }),
@@ -896,15 +1023,20 @@ export const makeRegistryMigrateServerRuntime = (
       ...runOptions,
     };
 
-    return target.kind === "group"
-      ? registry.executable().planRun({
-          group: target.groupId,
-          ...commonOptions,
-        })
-      : registry.executable().planRun({
-          definitionIds: [target.definitionId],
-          ...commonOptions,
-        });
+    if (selection.kind === "all") {
+      return registry.executable().planRun({ all: true, ...commonOptions });
+    }
+
+    if (selection.kind === "group") {
+      return registry
+        .executable()
+        .planRun({ group: selection.groupId, ...commonOptions });
+    }
+
+    return registry.executable().planRun({
+      definitionIds: selection.definitionIds,
+      ...commonOptions,
+    });
   };
 
   const dependencyChecksFor = (
@@ -930,24 +1062,25 @@ export const makeRegistryMigrateServerRuntime = (
     );
 
   const prepareRun = (
-    target: MigrateTarget,
+    selection: MigrateSelection,
     action: MigrateRunAction,
     options: MigrateServerPrepareOptions
   ): Effect.Effect<ExecutableMigrationOperation, unknown> =>
     Effect.gen(function* () {
       if (
         options.sourceIdentities !== undefined &&
-        target.kind !== "migration"
+        (selection.kind !== "definitions" ||
+          selection.definitionIds.length !== 1)
       ) {
         return yield* new RegistryMigrateServerExecutionError({
           message: "Select one migration to run specific source identities",
         });
       }
 
-      const plan = yield* planRun(target, action, options);
+      const plan = yield* planRun(selection, action, options);
       const observationDefinitionId =
-        target.kind === "migration"
-          ? target.definitionId
+        selection.kind === "definitions" && selection.definitionIds.length === 1
+          ? selection.definitionIds[0]
           : plan.executionDefinitionIds[0];
 
       if (observationDefinitionId === undefined) {
@@ -967,21 +1100,21 @@ export const makeRegistryMigrateServerRuntime = (
         observationDefinitionId,
         plan,
         planRows,
-        ...(options.sourceIdentities === undefined
+        ...(plan.target === undefined
           ? {}
-          : { sourceIdentities: options.sourceIdentities }),
-        target,
+          : { sourceIdentities: plan.target.sourceIdentities }),
+        selection,
       };
     });
 
   const prepare = (
-    target: MigrateTarget,
+    selection: MigrateSelection,
     action: MigrateAction,
     options: MigrateServerPrepareOptions = {}
   ): Effect.Effect<ExecutableMigrationOperation, unknown> =>
     action === "rollback"
-      ? prepareRollback(target, options)
-      : prepareRun(target, action, options);
+      ? prepareRollback(selection, options)
+      : prepareRun(selection, action, options);
 
   const makeExecutionProgress = (
     definitionIds: readonly MigrationDefinitionId[],
@@ -1176,7 +1309,7 @@ export const makeRegistryMigrateServerRuntime = (
 
         yield* progress.publish(activeRun.definitionIds);
 
-        return executionResultFromRunState(terminal);
+        return executionResultFromDetachedTerminal(terminal);
       })
     );
 
@@ -1248,11 +1381,7 @@ export const makeRegistryMigrateServerRuntime = (
 
           if (started.kind === "completed") {
             yield* progress.publish(definitionIds);
-            return {
-              message: `Run ${started.runId} ${started.summary.status}`,
-              outcome: "completed" as const,
-              runId: started.runId,
-            };
+            return executionResultFromSummary(started.summary);
           }
 
           if (started.handle !== undefined) {
@@ -1298,15 +1427,13 @@ export const makeRegistryMigrateServerRuntime = (
                     runId: terminal.state.runId,
                   };
                 case "execution-failed":
-                  return executionResultFromRunState(
-                    terminal.state,
-                    causeMessage(terminal.cause)
-                  );
+                  return {
+                    message: causeMessage(terminal.cause),
+                    outcome: "failed" as const,
+                    runId: terminal.state.runId,
+                  };
                 case "finished":
-                  return executionResultFromRunState(
-                    terminal.state,
-                    `Run ${terminal.state.runId} ${terminal.summary.status}`
-                  );
+                  return executionResultFromSummary(terminal.summary);
                 default: {
                   const unhandled: never = terminal;
                   return unhandled;
@@ -1350,7 +1477,7 @@ export const makeRegistryMigrateServerRuntime = (
 
           yield* progress.publish(definitionIds);
 
-          return executionResultFromRunState(terminal);
+          return executionResultFromDetachedTerminal(terminal);
         })
       );
 

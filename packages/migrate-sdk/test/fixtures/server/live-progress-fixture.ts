@@ -203,7 +203,10 @@ const makeDetachedExecutableLayer = (observationFails: boolean) =>
           case "execution-failed":
             return { cause: terminal.cause, kind: "failed" as const };
           case "finished":
-            return { kind: "succeeded" as const };
+            return {
+              kind: "succeeded" as const,
+              summary: terminal.summary,
+            };
           default: {
             const unhandled: never = terminal;
             return unhandled;

@@ -180,11 +180,21 @@ export const remoteMigrateServerBackend: MigrateServerBackend<RemoteMigrateServe
           observationDefinitionId: remoteMigrateDefinitionId,
           plan: {
             executionDefinitionIds: [remoteMigrateDefinitionId],
+            executionPolicy: [
+              {
+                definitionId: remoteMigrateDefinitionId,
+                discovery: "full",
+                processConcurrency: 1,
+                rollbackConcurrency: 1,
+              },
+            ],
+            includedDefinitionIds: [remoteMigrateDefinitionId],
+            notices: [],
             requestedDefinitionIds: [remoteMigrateDefinitionId],
             withDependencies: request.options.withDependencies ?? false,
           },
           planRows: remoteMigrateDashboard.rows,
-          target: request.target,
+          selection: request.selection,
         },
       }),
     scanSource: () => Effect.succeed(remoteMigrateDashboard),

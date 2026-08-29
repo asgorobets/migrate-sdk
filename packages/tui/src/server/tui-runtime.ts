@@ -248,12 +248,12 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
         }
       }
     },
-    prepare: (target, action, options = {}) =>
+    prepare: (selection, action, options = {}) =>
       runPromise(
         client.PrepareOperation({
           action,
           options,
-          target,
+          selection,
         })
       ),
     refresh: () => runPromise(client.GetDashboard()).then(snapshot),

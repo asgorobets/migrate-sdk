@@ -11,12 +11,12 @@ import {
   type MigrationProgressCounts,
   type MigrationRunId,
   MigrationRunId as MigrationRunIdSchema,
-  type MigrationRunSummary,
+  MigrationRunSummary,
   MigrationRuntimeError,
   MigrationStore,
   MigrationStoreError,
   type RollbackPreflightError,
-  type RollbackRunSummary,
+  RollbackRunSummary,
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "migrate-sdk";
@@ -168,7 +168,20 @@ const observeWorkflowTerminal = (
   const readTerminalReturnValue = Effect.tryPromise({
     try: () => run.returnValue,
     catch: observationError,
-  });
+  }).pipe(
+    Effect.flatMap((value) =>
+      Schema.decodeUnknownEffect(
+        Schema.Union([
+          MigrationRunSummary,
+          RollbackRunSummary,
+          Schema.Struct({
+            summary: Schema.Union([MigrationRunSummary, RollbackRunSummary]),
+          }),
+        ])
+      )(value).pipe(Effect.mapError(observationError))
+    ),
+    Effect.map((value) => ("summary" in value ? value.summary : value))
+  );
 
   return Effect.gen(function* () {
     let status = yield* readStatus;
@@ -189,13 +202,16 @@ const observeWorkflowTerminal = (
             cause: error.cause,
             kind: "failed" as const,
           }),
-          onSuccess: () => ({ kind: "succeeded" as const }),
+          onSuccess: (summary) => ({
+            kind: "succeeded" as const,
+            summary,
+          }),
         })
       );
     }
 
-    yield* readTerminalReturnValue;
-    return { kind: "succeeded" as const };
+    const summary = yield* readTerminalReturnValue;
+    return { kind: "succeeded" as const, summary };
   });
 };
 

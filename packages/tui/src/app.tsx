@@ -11,6 +11,7 @@ import type {
   MigrateDashboardRow,
   MigratePreparedOperation,
   MigratePrepareOptions,
+  MigrateSelection,
   MigrateSourceIdentityHistoryEntry,
   MigrateTarget,
 } from "migrate-sdk/protocol";
@@ -99,6 +100,26 @@ const errorMessage = (cause: unknown): string => {
 
 const targetLabel = (target: MigrateTarget): string =>
   target.kind === "group" ? target.groupId : target.definitionId;
+
+const selectionFromTarget = (target: MigrateTarget): MigrateSelection =>
+  target.kind === "group"
+    ? { groupId: target.groupId, kind: "group" }
+    : { definitionIds: [target.definitionId], kind: "definitions" };
+
+const selectionLabel = (selection: MigrateSelection): string => {
+  switch (selection.kind) {
+    case "all":
+      return "all migrations";
+    case "definitions":
+      return selection.definitionIds.join(", ");
+    case "group":
+      return selection.groupId;
+    default: {
+      const unhandled: never = selection;
+      return unhandled;
+    }
+  }
+};
 
 const actionCopy = {
   rescan: {
@@ -238,7 +259,7 @@ const planHierarchyItems = (
   ].sort((left, right) => executionPosition(left) - executionPosition(right));
   const items: PlanHierarchyItem[] = [];
   const visited = new Set<MigrateDashboardRow["entry"]["id"]>();
-  const groupDepth = operation.target.kind === "group" ? 1 : 0;
+  const groupDepth = operation.selection.kind === "group" ? 1 : 0;
 
   const visit = (
     id: MigrateDashboardRow["entry"]["id"],
@@ -311,7 +332,7 @@ const PlanHierarchy = ({
   readonly operation: MigratePreparedOperation;
 }) => {
   const items = planHierarchyItems(operation);
-  const hasGroupRoot = operation.target.kind === "group";
+  const hasGroupRoot = operation.selection.kind === "group";
 
   return (
     <box
@@ -324,7 +345,9 @@ const PlanHierarchy = ({
     >
       {hasGroupRoot ? (
         <box style={{ flexDirection: "row", flexShrink: 0, height: 1 }}>
-          <text fg={colors.foreground}>{targetLabel(operation.target)}</text>
+          <text fg={colors.foreground}>
+            {selectionLabel(operation.selection)}
+          </text>
           <box style={{ flexGrow: 1 }} />
           <text fg={colors.dim}>GROUP</text>
         </box>
@@ -384,7 +407,7 @@ const SafetyDialog = ({
   const dialogWidth = Math.max(1, Math.min(76, width - (compact ? 8 : 4)));
   const hierarchyItems = planHierarchyItems(operation);
   const hierarchyRows =
-    hierarchyItems.length + (operation.target.kind === "group" ? 1 : 0);
+    hierarchyItems.length + (operation.selection.kind === "group" ? 1 : 0);
   const dialogHeight = Math.max(
     1,
     Math.min(Math.max(11, hierarchyRows + 9), height - 4)
@@ -438,8 +461,8 @@ const SafetyDialog = ({
         <DialogDescription
           content={
             rollback
-              ? `${targetLabel(operation.target)} · Step numbers show rollback execution order.`
-              : `${targetLabel(operation.target)} · Some required dependencies have not succeeded.`
+              ? `${selectionLabel(operation.selection)} · Step numbers show rollback execution order.`
+              : `${selectionLabel(operation.selection)} · Some required dependencies have not succeeded.`
           }
           wrapMode="none"
         />
@@ -815,7 +838,7 @@ export const MigrationTuiApp = ({
       setSourceScanStatuses(new Map());
       setNotice(null);
       setBusy(
-        `${actionCopy[operation.action].progress} ${targetLabel(operation.target)}…`
+        `${actionCopy[operation.action].progress} ${selectionLabel(operation.selection)}…`
       );
       setError(null);
 
@@ -914,22 +937,27 @@ export const MigrationTuiApp = ({
     async (
       action: MigrateAction,
       options: MigratePrepareOptions = {},
-      targetOverride?: MigrateTarget
+      selectionOverride?: MigrateSelection
     ) => {
-      const target = targetOverride ?? dashboardStateRef.current.selectedTarget;
+      const selectedTarget = dashboardStateRef.current.selectedTarget;
+      const selection =
+        selectionOverride ??
+        (selectedTarget === undefined
+          ? undefined
+          : selectionFromTarget(selectedTarget));
 
-      if (target === undefined || lifecycle.isExitRequested()) {
+      if (selection === undefined || lifecycle.isExitRequested()) {
         return;
       }
 
       setPendingOperation(null);
       setView("dashboard");
-      setBusy(`${actionCopy[action].preparing} ${targetLabel(target)}…`);
+      setBusy(`${actionCopy[action].preparing} ${selectionLabel(selection)}…`);
       setError(null);
 
       try {
         const execution = migrationExecutionOptions(executionSettings);
-        const operation = await runtime.prepare(target, action, {
+        const operation = await runtime.prepare(selection, action, {
           ...options,
           ...(execution === undefined ? {} : { execution }),
         });
@@ -1029,7 +1057,11 @@ export const MigrationTuiApp = ({
     }
 
     startTask(
-      prepareOperation("run", { sourceIdentities: selectiveEntries }, target)
+      prepareOperation(
+        "run",
+        { sourceIdentities: selectiveEntries },
+        selectionFromTarget(target)
+      )
     );
   }, [prepareOperation, selectiveEntries, selectiveTarget, startTask]);
 
@@ -1438,7 +1470,7 @@ export const MigrationTuiApp = ({
                 : { sourceIdentities: operation.sourceIdentities }),
               withDependencies: true,
             },
-            operation.target
+            operation.selection
           )
         );
       } else if (
@@ -1456,7 +1488,7 @@ export const MigrationTuiApp = ({
                 : { sourceIdentities: operation.sourceIdentities }),
               withDependencies: false,
             },
-            operation.target
+            operation.selection
           )
         );
       }
@@ -1816,7 +1848,7 @@ export const MigrationTuiApp = ({
                         }),
                     withDependencies: false,
                   },
-                  pendingOperation.target
+                  pendingOperation.selection
                 )
               );
             }
@@ -1834,7 +1866,7 @@ export const MigrationTuiApp = ({
                         }),
                     withDependencies: true,
                   },
-                  pendingOperation.target
+                  pendingOperation.selection
                 )
               );
             }

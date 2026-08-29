@@ -46,17 +46,17 @@ export {
 } from "./domain/registry.ts";
 export type { MigrationDefinitionRegistryPlanningError } from "./domain/registry.ts";
 
-export type {
+export {
   MigrationDefinitionRunOutcome,
   MigrationDefinitionRunState,
   MigrationDefinitionRunStatus,
   MigrationDefinitionRunSummary,
   MigrationRunStatus,
   MigrationRunSummary,
-  RollbackOrphansCounts,
+  mergeRollbackOrphansCounts,
 } from "./domain/run.ts";
-export { mergeRollbackOrphansCounts } from "./domain/run.ts";
-export type { RollbackRunSummary } from "./domain/rollback.ts";
+export type { RollbackOrphansCounts } from "./domain/run.ts";
+export { RollbackRunSummary } from "./domain/rollback.ts";
 export type {
   MigrationProgressCounts,
   MigrationProgressEvent,

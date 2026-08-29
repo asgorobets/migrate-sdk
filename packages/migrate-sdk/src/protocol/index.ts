@@ -9,6 +9,13 @@ import {
 } from "../domain/ids.ts";
 import { MigrationDefinitionLock } from "../domain/lock.ts";
 import { MigrationMessage } from "../domain/message.ts";
+import {
+  MigrationDefinitionPlanNotice,
+  MigrationDefinitionRegistryInvalidSelectionError,
+  MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
+  MigrationDefinitionRegistryUnknownDefinitionError,
+  MigrationDefinitionRegistryUnknownGroupError,
+} from "../domain/registry.ts";
 import { activeMigrationRunHasObservationDefinition } from "../domain/run.ts";
 import { MigrationDefinitionStatus } from "../domain/status.ts";
 
@@ -77,6 +84,21 @@ export const MigrateTarget = Schema.Union([
 ]);
 export type MigrateTarget = typeof MigrateTarget.Type;
 
+export const MigrateSelection = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("all"),
+  }),
+  Schema.Struct({
+    definitionIds: Schema.NonEmptyArray(MigrationDefinitionId),
+    kind: Schema.Literal("definitions"),
+  }),
+  Schema.Struct({
+    groupId: MigrationDefinitionGroupId,
+    kind: Schema.Literal("group"),
+  }),
+]);
+export type MigrateSelection = typeof MigrateSelection.Type;
+
 export const MigratePipelineConcurrency = Schema.Union([
   PositiveInteger,
   Schema.Literal("unbounded"),
@@ -96,6 +118,7 @@ export type MigrateExecutionOptions = typeof MigrateExecutionOptions.Type;
 export const MigratePrepareOptions = Schema.Struct({
   execution: Schema.optional(MigrateExecutionOptions),
   force: Schema.optional(Schema.Boolean),
+  rollbackOrphans: Schema.optional(Schema.Boolean),
   sourceIdentities: Schema.optional(Schema.Array(Schema.String)),
   withDependencies: Schema.optional(Schema.Boolean),
 });
@@ -104,7 +127,7 @@ export type MigratePrepareOptions = typeof MigratePrepareOptions.Type;
 export const MigrateOperationRequest = Schema.Struct({
   action: MigrateAction,
   options: MigratePrepareOptions,
-  target: MigrateTarget,
+  selection: MigrateSelection,
 });
 export type MigrateOperationRequest = typeof MigrateOperationRequest.Type;
 
@@ -178,11 +201,24 @@ export type MigratePlanFingerprint = typeof MigratePlanFingerprint.Type;
 export const MigratePlanProjection = Schema.Struct({
   execution: Schema.optional(MigrateExecutionOptions),
   executionDefinitionIds: Schema.Array(MigrationDefinitionId),
+  executionPolicy: Schema.Array(
+    Schema.Struct({
+      definitionId: MigrationDefinitionId,
+      discovery: Schema.optional(Schema.Literals(["full", "incremental"])),
+      processConcurrency: MigratePipelineConcurrency,
+      rollbackConcurrency: MigratePipelineConcurrency,
+    })
+  ),
   force: Schema.optional(Schema.Boolean),
+  includedDefinitionIds: Schema.Array(MigrationDefinitionId),
+  notices: Schema.Array(MigrationDefinitionPlanNotice),
   requestedDefinitionIds: Schema.Union([
     Schema.Literal("all"),
     Schema.Array(MigrationDefinitionId),
   ]),
+  requestedGroup: Schema.optional(MigrationDefinitionGroupId),
+  rescan: Schema.optional(Schema.Boolean),
+  rollbackOrphans: Schema.optional(Schema.Boolean),
   withDependencies: Schema.Boolean,
 });
 export type MigratePlanProjection = typeof MigratePlanProjection.Type;
@@ -195,8 +231,8 @@ export const MigratePreparedOperation = Schema.Struct({
   plan: MigratePlanProjection,
   planRows: Schema.Array(MigrateDashboardRow),
   request: MigrateOperationRequest,
+  selection: MigrateSelection,
   sourceIdentities: Schema.optional(Schema.Array(Schema.String)),
-  target: MigrateTarget,
 });
 export type MigratePreparedOperation = typeof MigratePreparedOperation.Type;
 
@@ -290,11 +326,61 @@ const MigrateDetachedObservationEvent = Schema.Struct({
   runId: MigrationRunId,
 });
 
+const MigrateSummaryCount = Schema.Finite.check(Schema.isInt()).check(
+  Schema.isGreaterThanOrEqualTo(0)
+);
+
+const MigrateRunTerminalDefinitionSummary = Schema.Struct({
+  counts: Schema.Struct({
+    failed: MigrateSummaryCount,
+    migrated: MigrateSummaryCount,
+    needsUpdate: MigrateSummaryCount,
+    orphaned: Schema.optional(MigrateSummaryCount),
+    rollbackFailed: Schema.optional(MigrateSummaryCount),
+    rolledBack: Schema.optional(MigrateSummaryCount),
+    skipped: MigrateSummaryCount,
+    unchanged: MigrateSummaryCount,
+  }),
+  definitionId: MigrationDefinitionId,
+  status: Schema.Literals(["succeeded", "failed", "skipped"]),
+});
+
+const MigrateRollbackTerminalDefinitionSummary = Schema.Struct({
+  counts: Schema.Struct({
+    failed: MigrateSummaryCount,
+    rolledBack: MigrateSummaryCount,
+    skipped: MigrateSummaryCount,
+  }),
+  definitionId: MigrationDefinitionId,
+  status: Schema.Literals(["succeeded", "failed"]),
+});
+
+export const MigrateTerminalSummary = Schema.Union([
+  Schema.Struct({
+    definitions: Schema.Array(MigrateRunTerminalDefinitionSummary),
+    finishedAt: Schema.DateFromString,
+    kind: Schema.Literal("run"),
+    runId: MigrationRunId,
+    startedAt: Schema.DateFromString,
+    status: Schema.Literals(["succeeded", "failed", "cancelled"]),
+  }),
+  Schema.Struct({
+    definitions: Schema.Array(MigrateRollbackTerminalDefinitionSummary),
+    finishedAt: Schema.DateFromString,
+    kind: Schema.Literal("rollback"),
+    runId: MigrationRunId,
+    startedAt: Schema.DateFromString,
+    status: Schema.Literals(["succeeded", "failed", "cancelled"]),
+  }),
+]);
+export type MigrateTerminalSummary = typeof MigrateTerminalSummary.Type;
+
 const MigrateTerminalObservationEvent = Schema.Struct({
   kind: Schema.Literal("terminal"),
   message: Schema.String,
   outcome: Schema.Literals(["cancelled", "completed", "failed"]),
   runId: MigrationRunId,
+  summary: Schema.optional(MigrateTerminalSummary),
 });
 
 const MigrateStateObservationEvent = Schema.Struct({
@@ -404,6 +490,10 @@ export class MigratePlanChangedError extends Schema.TaggedError<MigratePlanChang
 ) {}
 
 export const MigrateProtocolError = Schema.Union([
+  MigrationDefinitionRegistryInvalidSelectionError,
+  MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
+  MigrationDefinitionRegistryUnknownDefinitionError,
+  MigrationDefinitionRegistryUnknownGroupError,
   MigrateOperationError,
   MigratePlanChangedError,
 ]);
@@ -463,7 +553,7 @@ export class PrepareOperation extends makeRpc("PrepareOperation", {
   payload: {
     action: MigrateAction,
     options: MigratePrepareOptions,
-    target: MigrateTarget,
+    selection: MigrateSelection,
   },
   success: MigratePreparedOperation,
 }) {}

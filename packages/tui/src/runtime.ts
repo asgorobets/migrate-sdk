@@ -17,6 +17,7 @@ import type {
   MigrateRegistryGroup,
   MigrateRunStartResult,
   MigrateRunStopResult,
+  MigrateSelection,
   MigrateSourceIdentityHistoryEntry,
   MigrateTarget,
 } from "migrate-sdk/protocol";
@@ -89,7 +90,7 @@ export interface MigrationTuiRuntime {
     options?: MigrationTuiExecuteOptions
   ) => Promise<MigrationTuiExecutionResult>;
   readonly prepare: (
-    target: MigrateTarget,
+    selection: MigrateSelection,
     action: MigrateAction,
     options?: MigratePrepareOptions
   ) => Promise<MigratePreparedOperation>;

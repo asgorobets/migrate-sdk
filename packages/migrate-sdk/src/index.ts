@@ -156,16 +156,16 @@ export {
   MigrationDefinitionRunOutcome,
   MigrationDefinitionRunState,
   MigrationDefinitionRunStatus,
+  MigrationDefinitionRunSummary,
   MigrationRunState,
   MigrationRunStatus,
+  MigrationRunSummary,
 } from "./domain/run.ts";
 export type {
   ExecutionStartResult,
   MigrationExecutionHandle,
-  MigrationDefinitionRunSummary,
   MigrationRunHandle,
   MigrationRunHandleState,
-  MigrationRunSummary,
   MigrationRunTerminalResult,
   MigrationRunTerminalState,
 } from "./domain/run.ts";

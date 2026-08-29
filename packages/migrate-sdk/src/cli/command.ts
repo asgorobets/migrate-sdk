@@ -3,6 +3,7 @@ import {
   Effect,
   Fiber,
   Option,
+  Redacted,
   Runtime,
   Schema,
   Semaphore,
@@ -11,12 +12,10 @@ import {
 import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
 import type { SqlClient } from "effect/unstable/sql";
 import type { AnySelfContainedMigrationDefinition } from "../domain/definition.ts";
-import type {
-  MigrationExecutionOptions,
-  PipelineExecutionConcurrency,
-} from "../domain/execution.ts";
+import type { PipelineExecutionConcurrency } from "../domain/execution.ts";
 import {
   type MigrationDefinitionId,
+  toMigrationDefinitionGroupId,
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "../domain/ids.ts";
@@ -25,23 +24,16 @@ import type {
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryMessagesError,
   MigrationDefinitionRegistryPlanningError,
-  MigrationDefinitionRegistryRollbackInput,
-  MigrationDefinitionRegistryRunInput,
   MigrationDefinitionRegistrySelectionInput,
   MigrationDefinitionRegistryStatusError,
   MigrationDefinitionRegistryStatusInput,
 } from "../domain/registry.ts";
 import type {
-  ExecutionStartResult,
-  MigrationRunHandle,
-  MigrationRunTerminalResult,
-} from "../domain/run.ts";
-import { MigrationExecutable } from "../services/migration-executable.ts";
-import {
-  MigrationExecution,
-  type MigrationExecutionRollbackError,
-  type MigrationExecutionRunError,
-} from "../services/migration-execution.ts";
+  MigrateAction,
+  MigrateOperationRequest,
+  MigratePreparedOperation,
+  MigrateSelection,
+} from "../protocol/index.ts";
 import { MigrationStore } from "../services/migration-store.ts";
 import { SqlMigrationStore } from "../stores/sql/sql-migration-store.ts";
 import type { SqlMigrationStoreSchemaPlan } from "../stores/sql/sql-migration-store-schema.ts";
@@ -52,26 +44,22 @@ import {
 } from "./config-loader.ts";
 import type { ActiveMigrationCliInterrupts } from "./interrupts.ts";
 import {
-  type CliProgressMode,
-  makeCliProgressLayer,
-  makeCliRollbackProgressLayer,
-} from "./progress.ts";
+  type CliObservationProgressMode,
+  type CliObservationProgressRenderer,
+  makeCliObservationProgressRenderer,
+} from "./observation-progress.ts";
 import {
   renderActiveMigrationRuns,
   renderConfigLoadError,
   renderMessagesReport,
   renderMigrationObservationEvent,
   renderPlanningError,
+  renderPreparedOperationDependencyFailure,
+  renderPreparedOperationPlan,
+  renderPreparedOperationWarnings,
   renderRegistryGraph,
   renderRegistryList,
-  renderRollbackPlan,
-  renderRollbackStartResult,
-  renderRollbackSummary,
-  renderRunDiscoveryWarnings,
-  renderRunPlan,
-  renderRunStartResult,
   renderRunStopResult,
-  renderRunSummary,
   renderRuntimeError,
   renderSqlMigrationStoreSchemaPlan,
   renderStatusReport,
@@ -102,117 +90,7 @@ const useColor = Effect.map(
   (runtime) => runtime.useColor === true
 );
 
-const waitForCancelledRun = <Summary>(
-  handle: MigrationRunHandle<Summary>,
-  interrupts: ActiveMigrationCliInterrupts,
-  label: "migration" | "rollback"
-): Effect.Effect<MigrationRunTerminalResult<Summary>> =>
-  Effect.suspend(() =>
-    Effect.raceFirst(
-      handle.wait.pipe(
-        Effect.map((result) => ({ kind: "terminal" as const, result }))
-      ),
-      interrupts.wait.pipe(Effect.as({ kind: "interrupt" as const }))
-    ).pipe(
-      Effect.flatMap((event) => {
-        if (event.kind === "terminal") {
-          return Effect.succeed(event.result);
-        }
-
-        return Effect.raceFirst(
-          handle.wait.pipe(
-            Effect.map((result) => ({ kind: "terminal" as const, result }))
-          ),
-          interrupts.confirmUnsafeExit.pipe(
-            Effect.map((confirmed) => ({
-              confirmed,
-              kind: "confirmed" as const,
-            }))
-          )
-        ).pipe(
-          Effect.flatMap((confirmation) => {
-            if (confirmation.kind === "terminal") {
-              return Effect.succeed(confirmation.result);
-            }
-
-            if (!confirmation.confirmed) {
-              return Console.error(
-                `Unsafe shutdown declined; continuing to drain active ${label} work.`
-              ).pipe(
-                Effect.andThen(waitForCancelledRun(handle, interrupts, label))
-              );
-            }
-
-            return Console.error(
-              "Unsafe shutdown confirmed. Destination changes may not have matching migration state; forcing exit."
-            ).pipe(Effect.andThen(interrupts.forceExit));
-          })
-        );
-      })
-    )
-  );
-
-const waitForRunWithInterrupts = <Summary>(
-  handle: MigrationRunHandle<Summary>,
-  interrupts: ActiveMigrationCliInterrupts,
-  label: "migration" | "rollback"
-): Effect.Effect<MigrationRunTerminalResult<Summary>> =>
-  Effect.gen(function* () {
-    const first = yield* Effect.raceFirst(
-      handle.wait.pipe(
-        Effect.map((result) => ({ kind: "terminal" as const, result }))
-      ),
-      interrupts.wait.pipe(Effect.as({ kind: "interrupt" as const }))
-    );
-
-    if (first.kind === "terminal") {
-      return first.result;
-    }
-
-    yield* Console.error(
-      `Cancellation requested; draining active ${label} work. Press Ctrl+C again to review unsafe shutdown consequences.`
-    );
-    yield* handle.cancel;
-
-    return yield* waitForCancelledRun(handle, interrupts, label);
-  });
-
-export const waitForRun = <Summary>(
-  handle: MigrationRunHandle<Summary>,
-  runtime: typeof MigrationCliRuntime.Service,
-  label: "migration" | "rollback"
-): Effect.Effect<MigrationRunTerminalResult<Summary>> =>
-  runtime.interrupts === undefined
-    ? handle.wait
-    : runtime.interrupts.withInterrupts((interrupts) =>
-        waitForRunWithInterrupts(handle, interrupts, label)
-      );
-
-export const startAndWaitForRun = <Summary, Error, Requirements>(
-  start: Effect.Effect<ExecutionStartResult<Summary>, Error, Requirements>,
-  runtime: typeof MigrationCliRuntime.Service,
-  label: "migration" | "rollback"
-): Effect.Effect<
-  ExecutionStartResult<Summary> | MigrationRunTerminalResult<Summary>,
-  Error,
-  Requirements
-> =>
-  Effect.flatMap(
-    start,
-    (
-      result
-    ): Effect.Effect<
-      ExecutionStartResult<Summary> | MigrationRunTerminalResult<Summary>
-    > =>
-      result.kind === "started" && result.handle !== undefined
-        ? waitForRun(result.handle, runtime, label)
-        : Effect.succeed(result)
-  );
-
-const renderTerminalState = (
-  result: MigrationRunTerminalResult<unknown>,
-  label: "Rollback" | "Run"
-): string => `${label} ${result.state.status}\nRun id ${result.state.runId}`;
+type CliProgressMode = CliObservationProgressMode;
 
 const renderStoredFailure = (failure: unknown): string => {
   if (
@@ -284,35 +162,6 @@ export const failCancelledCliMessage = (
     )
   );
 
-interface ExecutionOutcomeRenderer<Summary> {
-  readonly label: "Rollback" | "Run";
-  readonly renderStart: (result: ExecutionStartResult<Summary>) => string;
-  readonly renderSummary: (summary: Summary) => string;
-}
-
-const reportExecutionOutcome = <Summary>(
-  result: ExecutionStartResult<Summary> | MigrationRunTerminalResult<Summary>,
-  renderer: ExecutionOutcomeRenderer<Summary>
-): Effect.Effect<void, CliError.UserError> => {
-  switch (result.kind) {
-    case "completed":
-    case "started":
-      return Console.log(renderer.renderStart(result));
-    case "execution-failed":
-      return failReportedCliMessage(renderStoredFailure(result.cause));
-    case "cancelled":
-      return failCancelledCliMessage(
-        renderTerminalState(result, renderer.label)
-      );
-    case "finished":
-      return Console.log(renderer.renderSummary(result.summary));
-    default: {
-      const unhandledResult: never = result;
-      return unhandledResult;
-    }
-  }
-};
-
 const loadConfiguredConfig = Effect.gen(function* () {
   const root = yield* migrateBaseCommand;
   const runtime = yield* MigrationCliRuntime;
@@ -343,6 +192,7 @@ const loadConfiguredRegistry = Effect.map(
 
 interface CliMigrateConnection {
   readonly connection: MigrationCliServerConnection;
+  readonly listActiveRuns: string;
   readonly observeAgain: (runId: string) => string;
   readonly observeAgainLabel: string;
 }
@@ -376,6 +226,10 @@ const acquireCliMigrateConnection = (
     const configPath = Option.getOrUndefined(root.config);
     const serverUrl = Option.getOrUndefined(root.server);
     const commandShell = runtime.commandShell ?? "posix";
+    const migrateServerToken =
+      runtime.migrateServerToken === undefined
+        ? undefined
+        : Redacted.value(runtime.migrateServerToken).trim();
     let sharedFlags = "";
 
     if (serverUrl !== undefined) {
@@ -413,9 +267,9 @@ const acquireCliMigrateConnection = (
             }
           : {
               kind: "remote",
-              ...(runtime.migrateServerToken === undefined
+              ...(migrateServerToken === undefined || migrateServerToken === ""
                 ? {}
-                : { bearerToken: runtime.migrateServerToken }),
+                : { bearerToken: migrateServerToken }),
               url: serverUrl,
             }
       )
@@ -436,6 +290,7 @@ const acquireCliMigrateConnection = (
 
     return {
       connection,
+      listActiveRuns: `migrate${sharedFlags} runs list`,
       observeAgain,
       observeAgainLabel,
     } satisfies CliMigrateConnection;
@@ -633,21 +488,6 @@ type CliExecutableRegistry = MigrationDefinitionRegistry<
 const toCliExecutableRegistry = (
   registry: MigrationDefinitionRegistry
 ): CliExecutableRegistry => registry as CliExecutableRegistry;
-
-const makeConfiguredExecution = (config: MigrationCliConfig) => {
-  const registry = toCliExecutableRegistry(config.registry);
-
-  return config.executableLayer === undefined
-    ? Effect.succeed(MigrationExecution.make({ registry }))
-    : Effect.gen(function* () {
-        const executable = yield* MigrationExecutable;
-
-        return MigrationExecution.make({
-          registry,
-          executable,
-        });
-      }).pipe(Effect.provide(config.executableLayer));
-};
 
 const hasRegisteredDefinition = (
   registry: MigrationDefinitionRegistry,
@@ -868,45 +708,53 @@ const makeRegistrySelectionInput = (
       };
 };
 
-const makeRunPlanInput = (
-  input: CliRegistrySelectionInput & {
-    readonly execution?: MigrationExecutionOptions;
-    readonly force: boolean;
-    readonly mode?: "failed" | "skipped";
-    readonly rescan: boolean;
-    readonly rollbackOrphans: boolean;
-    readonly sourceIdentities?: readonly string[];
-    readonly update: boolean;
-  }
-): MigrationDefinitionRegistryRunInput =>
-  ({
-    ...makeRegistrySelectionInput(input),
-    ...(input.execution === undefined ? {} : { execution: input.execution }),
-    ...(input.force ? { force: true as const } : {}),
-    ...(input.mode === undefined ? {} : { mode: { kind: input.mode } }),
-    ...(input.rescan ? { rescan: true as const } : {}),
-    ...(input.rollbackOrphans ? { rollbackOrphans: true as const } : {}),
-    ...(input.sourceIdentities === undefined
-      ? {}
-      : { sourceIdentities: input.sourceIdentities }),
-    ...(input.update ? { update: true as const } : {}),
-  }) as MigrationDefinitionRegistryRunInput;
+const makeMigrateSelection = (
+  input: Pick<CliRegistrySelectionInput, "all" | "definitionIds" | "group">
+): Effect.Effect<MigrateSelection, CliError.UserError> => {
+  const selectedKinds =
+    Number(input.all) +
+    Number(input.definitionIds.length > 0) +
+    Number(input.group !== undefined);
 
-const makeRollbackPlanInput = (
-  input: CliRegistrySelectionInput & {
-    readonly execution?: MigrationExecutionOptions;
-    readonly force: boolean;
-    readonly sourceIdentities?: readonly string[];
+  if (selectedKinds === 0) {
+    return failReportedCliMessage(
+      "Select migrations with definition IDs, --group, or --all"
+    );
   }
-): MigrationDefinitionRegistryRollbackInput =>
-  ({
-    ...makeRegistrySelectionInput(input),
-    ...(input.execution === undefined ? {} : { execution: input.execution }),
-    ...(input.force ? { force: true as const } : {}),
-    ...(input.sourceIdentities === undefined
-      ? {}
-      : { sourceIdentities: input.sourceIdentities }),
-  }) as MigrationDefinitionRegistryRollbackInput;
+
+  if (selectedKinds > 1) {
+    return failReportedCliMessage(
+      "Choose only one migration selection: definition IDs, --group, or --all"
+    );
+  }
+
+  if (input.all) {
+    return Effect.succeed({ kind: "all" });
+  }
+
+  if (input.group !== undefined) {
+    return Effect.succeed({
+      groupId: toMigrationDefinitionGroupId(input.group),
+      kind: "group",
+    });
+  }
+
+  const [firstDefinitionId, ...remainingDefinitionIds] = input.definitionIds;
+
+  if (firstDefinitionId === undefined) {
+    return failReportedCliMessage(
+      "Select migrations with definition IDs, --group, or --all"
+    );
+  }
+
+  return Effect.succeed({
+    definitionIds: [
+      toMigrationDefinitionId(firstDefinitionId),
+      ...remainingDefinitionIds.map(toMigrationDefinitionId),
+    ],
+    kind: "definitions",
+  });
+};
 
 const makeStatusInput = (
   input: CliRegistrySelectionInput & {
@@ -923,12 +771,12 @@ const makeStatusInput = (
   }) as MigrationDefinitionRegistryStatusInput;
 
 const isPlanningError = (
-  error:
-    | MigrationDefinitionRegistryMessagesError
-    | MigrationExecutionRollbackError
-    | MigrationExecutionRunError
-    | MigrationDefinitionRegistryStatusError
+  error: unknown
 ): error is MigrationDefinitionRegistryPlanningError => {
+  if (typeof error !== "object" || error === null || !("_tag" in error)) {
+    return false;
+  }
+
   switch (error._tag) {
     case "MigrationDefinitionRegistryInvalidSelectionError":
     case "MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError":
@@ -939,48 +787,6 @@ const isPlanningError = (
       return false;
   }
 };
-
-const renderRunCommandError = (
-  error: MigrationExecutionRunError,
-  input: {
-    readonly definitionIds: readonly string[];
-    readonly group?: string;
-    readonly hasTarget: boolean;
-    readonly mode?: "failed" | "skipped";
-    readonly rescan: boolean;
-    readonly rollbackOrphans: boolean;
-    readonly update: boolean;
-  }
-): string =>
-  isPlanningError(error)
-    ? renderPlanningError(error, {
-        command: "run",
-        definitionIds: input.definitionIds,
-        ...(input.group === undefined ? {} : { group: input.group }),
-        hasTarget: input.hasTarget,
-        ...(input.mode === undefined ? {} : { mode: input.mode }),
-        rescan: input.rescan,
-        rollbackOrphans: input.rollbackOrphans,
-        update: input.update,
-      })
-    : renderRuntimeError(error);
-
-const renderRollbackCommandError = (
-  error: MigrationExecutionRollbackError,
-  input: {
-    readonly definitionIds: readonly string[];
-    readonly group?: string;
-    readonly hasTarget: boolean;
-  }
-): string =>
-  isPlanningError(error)
-    ? renderPlanningError(error, {
-        command: "rollback",
-        definitionIds: input.definitionIds,
-        ...(input.group === undefined ? {} : { group: input.group }),
-        hasTarget: input.hasTarget,
-      })
-    : renderRuntimeError(error);
 
 const renderStatusCommandError = (
   error: MigrationDefinitionRegistryStatusError,
@@ -1175,8 +981,9 @@ const consumeMigrationRunObservation = (
   observeAgain: (runId: string) => string,
   observeAgainLabel: string,
   terminalSection: Semaphore.Semaphore,
-  markObservationFinished: () => void
-): Effect.Effect<void, CliError.UserError> => {
+  markObservationFinished: () => void,
+  progress: CliObservationProgressRenderer
+): Effect.Effect<void, CliError.UserError, MigrationCliRuntime> => {
   let completion:
     | Extract<
         Parameters<typeof renderMigrationObservationEvent>[0],
@@ -1184,82 +991,105 @@ const consumeMigrationRunObservation = (
       >
     | undefined;
 
-  return connection.observeRun(runId).pipe(
-    Stream.runForEach((event) => {
-      if (event.kind === "detached" || event.kind === "terminal") {
-        return terminalSection.withPermit(
-          Effect.sync(() => {
-            completion = event;
-            markObservationFinished();
-          })
-        );
-      }
+  return Effect.gen(function* () {
+    const runtime = yield* MigrationCliRuntime;
 
-      const message = renderMigrationObservationEvent(event);
-      return event.kind === "warning"
-        ? Console.error(message)
-        : Console.log(message);
-    }),
-    Effect.catch((cause) =>
-      terminalSection.withPermit(
-        Effect.sync(markObservationFinished).pipe(
+    const consume = connection.observeRun(runId).pipe(
+      Stream.runForEach((event) => {
+        if (event.kind === "detached" || event.kind === "terminal") {
+          return terminalSection.withPermit(
+            progress.cleanup.pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  completion = event;
+                  markObservationFinished();
+                })
+              )
+            )
+          );
+        }
+
+        if (event.kind === "progress") {
+          return progress.render(event);
+        }
+
+        const message = renderMigrationObservationEvent(event, {
+          colors: runtime.useColor === true,
+        });
+        return progress.cleanup.pipe(
           Effect.andThen(
-            failReportedCliMessage(
-              renderObservationRecovery(
-                runId,
-                observeAgain,
-                observeAgainLabel,
-                `Observation ended before reaching a terminal state: ${renderStoredFailure(cause)}`
+            event.kind === "warning"
+              ? Console.error(message)
+              : Console.log(message)
+          )
+        );
+      }),
+      Effect.catch((cause) =>
+        terminalSection.withPermit(
+          progress.cleanup.pipe(
+            Effect.andThen(Effect.sync(markObservationFinished)),
+            Effect.andThen(
+              failReportedCliMessage(
+                renderObservationRecovery(
+                  runId,
+                  observeAgain,
+                  observeAgainLabel,
+                  `Observation ended before reaching a terminal state: ${renderStoredFailure(cause)}`
+                )
               )
             )
           )
         )
-      )
-    ),
-    Effect.flatMap(() =>
-      terminalSection.withPermit(
-        Effect.gen(function* () {
-          if (completion === undefined) {
-            markObservationFinished();
-            return yield* failReportedCliMessage(
-              renderObservationRecovery(
-                runId,
-                observeAgain,
-                observeAgainLabel,
-                "Observation ended before reaching a terminal state."
-              )
-            );
-          }
-
-          const message = renderMigrationObservationEvent(completion);
-
-          if (completion.kind === "detached") {
-            return yield* Console.log(
-              renderObservationRecovery(
-                completion.runId,
-                observeAgain,
-                observeAgainLabel,
-                completion.message
-              )
-            );
-          }
-
-          switch (completion.outcome) {
-            case "completed":
-              return yield* Console.log(message);
-            case "cancelled":
-              return yield* failCancelledCliMessage(message);
-            case "failed":
-              return yield* failReportedCliMessage(message);
-            default: {
-              const unhandled: never = completion.outcome;
-              return unhandled;
+      ),
+      Effect.flatMap(() =>
+        terminalSection.withPermit(
+          Effect.gen(function* () {
+            if (completion === undefined) {
+              markObservationFinished();
+              return yield* failReportedCliMessage(
+                renderObservationRecovery(
+                  runId,
+                  observeAgain,
+                  observeAgainLabel,
+                  "Observation ended before reaching a terminal state."
+                )
+              );
             }
-          }
-        })
+
+            const message = renderMigrationObservationEvent(completion, {
+              colors: runtime.useColor === true,
+            });
+
+            if (completion.kind === "detached") {
+              return yield* Console.log(
+                renderObservationRecovery(
+                  completion.runId,
+                  observeAgain,
+                  observeAgainLabel,
+                  completion.message
+                )
+              );
+            }
+
+            switch (completion.outcome) {
+              case "completed":
+                return yield* Console.log(message);
+              case "cancelled":
+                return yield* failCancelledCliMessage(message);
+              case "failed":
+                return yield* failReportedCliMessage(message);
+              default: {
+                const unhandled: never = completion.outcome;
+                return unhandled;
+              }
+            }
+          })
+        )
       )
-    )
-  );
+    );
+
+    return yield* consume.pipe(Effect.ensuring(progress.cleanup));
+  });
 };
 
 const stopObservedMigrationRun = (
@@ -1386,13 +1216,20 @@ const applyMigrationRunObservationInterrupt = <
   );
 };
 
-const observeMigrationRun = (
+const observeMigrationRunWithInterrupts = (
   cliConnection: CliMigrateConnection,
-  runId: ReturnType<typeof toMigrationRunId>
+  runId: ReturnType<typeof toMigrationRunId>,
+  progressMode: CliProgressMode,
+  interrupts?: ActiveMigrationCliInterrupts,
+  initialInterrupt = false
 ): Effect.Effect<void, CliError.CliError, MigrationCliRuntime> =>
   Effect.gen(function* () {
     const runtime = yield* MigrationCliRuntime;
     const terminalSection = yield* Semaphore.make(1);
+    const progress = yield* makeCliObservationProgressRenderer(
+      progressMode,
+      runtime
+    );
     let observationFinished = false;
     const observation = consumeMigrationRunObservation(
       cliConnection.connection,
@@ -1402,74 +1239,77 @@ const observeMigrationRun = (
       terminalSection,
       () => {
         observationFinished = true;
-      }
+      },
+      progress
     );
 
-    if (runtime.interrupts === undefined) {
+    if (interrupts === undefined) {
       return yield* observation;
     }
 
-    return yield* runtime.interrupts.withInterrupts((interrupts) =>
-      Effect.gen(function* () {
-        const observationFiber = yield* observation.pipe(Effect.forkChild);
-        let stopRequested = false;
+    const observationFiber = yield* observation.pipe(Effect.forkChild);
+    let stopRequested = false;
+    let pendingInterrupt = initialInterrupt;
 
-        while (true) {
-          const next = yield* Effect.raceFirst(
-            Fiber.join(observationFiber).pipe(
-              Effect.as({ kind: "completed" as const })
-            ),
-            interrupts.wait.pipe(Effect.as({ kind: "interrupt" as const }))
-          );
+    while (true) {
+      if (!pendingInterrupt) {
+        const next = yield* Effect.raceFirst(
+          Fiber.join(observationFiber).pipe(
+            Effect.as({ kind: "completed" as const })
+          ),
+          interrupts.wait.pipe(Effect.as({ kind: "interrupt" as const }))
+        );
 
-          if (next.kind === "completed") {
-            return;
-          }
-
-          const decisionOrCompletion: MigrationRunObservationDecisionResult =
-            yield* Effect.raceFirst(
-              Fiber.join(observationFiber).pipe(
-                Effect.as({ kind: "completed" as const })
-              ),
-              chooseMigrationRunObservationInterrupt(
-                runtime,
-                runId,
-                stopRequested
-              ).pipe(
-                Effect.map((decision) => ({
-                  decision,
-                  kind: "decision" as const,
-                }))
-              )
-            );
-
-          if (decisionOrCompletion.kind === "completed") {
-            return;
-          }
-
-          const control: MigrationRunObservationControlResult =
-            yield* applyMigrationRunObservationInterrupt(
-              decisionOrCompletion.decision,
-              observationFiber,
-              cliConnection,
-              runId,
-              terminalSection,
-              () => observationFinished,
-              stopRequested
-            );
-
-          if (control.kind === "completed") {
-            return yield* Fiber.join(observationFiber);
-          }
-
-          if (control.kind === "detached") {
-            return;
-          }
-
-          stopRequested = control.stopRequested;
+        if (next.kind === "completed") {
+          return;
         }
-      })
-    );
+      }
+      pendingInterrupt = false;
+      yield* progress.pause;
+
+      const decisionOrCompletion: MigrationRunObservationDecisionResult =
+        yield* Effect.raceFirst(
+          Fiber.join(observationFiber).pipe(
+            Effect.as({ kind: "completed" as const })
+          ),
+          chooseMigrationRunObservationInterrupt(
+            runtime,
+            runId,
+            stopRequested
+          ).pipe(
+            Effect.map((decision) => ({
+              decision,
+              kind: "decision" as const,
+            }))
+          )
+        );
+
+      if (decisionOrCompletion.kind === "completed") {
+        return;
+      }
+
+      const control: MigrationRunObservationControlResult =
+        yield* applyMigrationRunObservationInterrupt(
+          decisionOrCompletion.decision,
+          observationFiber,
+          cliConnection,
+          runId,
+          terminalSection,
+          () => observationFinished,
+          stopRequested
+        );
+
+      if (control.kind === "completed") {
+        return yield* Fiber.join(observationFiber);
+      }
+
+      if (control.kind === "detached") {
+        return;
+      }
+
+      yield* progress.resume;
+      stopRequested = control.stopRequested;
+    }
   }).pipe(
     Effect.catch((error) =>
       CliError.isCliError(error)
@@ -1484,6 +1324,188 @@ const observeMigrationRun = (
           )
     )
   );
+
+const observeMigrationRun = (
+  cliConnection: CliMigrateConnection,
+  runId: ReturnType<typeof toMigrationRunId>,
+  progressMode: CliProgressMode = "log"
+): Effect.Effect<void, CliError.CliError, MigrationCliRuntime> =>
+  Effect.gen(function* () {
+    const runtime = yield* MigrationCliRuntime;
+
+    if (runtime.interrupts === undefined) {
+      return yield* observeMigrationRunWithInterrupts(
+        cliConnection,
+        runId,
+        progressMode
+      );
+    }
+
+    return yield* runtime.interrupts.withInterrupts((interrupts) =>
+      observeMigrationRunWithInterrupts(
+        cliConnection,
+        runId,
+        progressMode,
+        interrupts
+      )
+    );
+  });
+
+const startPreparedOperationWithInterrupts = (
+  cliConnection: CliMigrateConnection,
+  operation: MigratePreparedOperation,
+  progressMode: CliProgressMode,
+  interrupts?: ActiveMigrationCliInterrupts
+): Effect.Effect<void, unknown, MigrationCliRuntime> =>
+  Effect.gen(function* () {
+    const start = cliConnection.connection.startOperation({
+      acceptedFingerprint: operation.fingerprint,
+      request: operation.request,
+    });
+
+    if (interrupts === undefined) {
+      const reference = yield* start;
+      return yield* observeMigrationRunWithInterrupts(
+        cliConnection,
+        reference.runId,
+        progressMode
+      );
+    }
+
+    const startFiber = yield* start.pipe(Effect.forkChild);
+    const first = yield* Effect.raceFirst(
+      Fiber.join(startFiber).pipe(
+        Effect.map((reference) => ({ kind: "started" as const, reference }))
+      ),
+      interrupts.wait.pipe(Effect.as({ kind: "interrupt" as const }))
+    );
+
+    if (first.kind === "started") {
+      return yield* observeMigrationRunWithInterrupts(
+        cliConnection,
+        first.reference.runId,
+        progressMode,
+        interrupts
+      );
+    }
+
+    const runtime = yield* MigrationCliRuntime;
+    const acknowledgement = yield* Effect.raceFirst(
+      Fiber.join(startFiber).pipe(
+        Effect.map((reference) => ({ kind: "started" as const, reference }))
+      ),
+      interrupts.wait.pipe(Effect.as({ kind: "interrupted" as const }))
+    ).pipe(
+      Effect.timeoutOption(runtime.startAcknowledgementTimeoutMs ?? 10_000),
+      Effect.catch((cause) =>
+        failReportedCliMessage(
+          [
+            "The start acknowledgement failed after Ctrl+C; the Migration Run may still have started.",
+            `List active runs: ${cliConnection.listActiveRuns}`,
+            renderStoredFailure(cause),
+          ].join("\n")
+        )
+      )
+    );
+
+    if (
+      Option.isNone(acknowledgement) ||
+      acknowledgement.value.kind === "interrupted"
+    ) {
+      return yield* failReportedCliMessage(
+        [
+          "The start acknowledgement is still unknown after Ctrl+C; the Migration Run may have started.",
+          `List active runs: ${cliConnection.listActiveRuns}`,
+        ].join("\n")
+      );
+    }
+
+    const reference = acknowledgement.value.reference;
+
+    return yield* observeMigrationRunWithInterrupts(
+      cliConnection,
+      reference.runId,
+      progressMode,
+      interrupts,
+      true
+    );
+  });
+
+const startPreparedOperation = (
+  cliConnection: CliMigrateConnection,
+  operation: MigratePreparedOperation,
+  progressMode: CliProgressMode
+): Effect.Effect<void, CliError.CliError, MigrationCliRuntime> =>
+  Effect.gen(function* () {
+    if (
+      operation.plan.force !== true &&
+      operation.dependencyChecks.some((dependency) => !dependency.satisfied)
+    ) {
+      return yield* failReportedCliMessage(
+        renderPreparedOperationDependencyFailure(operation)
+      );
+    }
+
+    const runtime = yield* MigrationCliRuntime;
+    const execute = (interrupts?: ActiveMigrationCliInterrupts) =>
+      startPreparedOperationWithInterrupts(
+        cliConnection,
+        operation,
+        progressMode,
+        interrupts
+      );
+
+    return yield* runtime.interrupts === undefined
+      ? execute()
+      : runtime.interrupts.withInterrupts(execute);
+  }).pipe(
+    Effect.catch((error) =>
+      CliError.isCliError(error)
+        ? Effect.fail(error)
+        : failReportedCliMessage(renderStoredFailure(error))
+    )
+  );
+
+const prepareCliOperation = (
+  connection: MigrationCliServerConnection,
+  request: MigrateOperationRequest
+): Effect.Effect<MigratePreparedOperation, CliError.UserError> => {
+  const renderError = (cause: unknown): string => {
+    if (!isPlanningError(cause)) {
+      return renderStoredFailure(cause);
+    }
+
+    let mode: "failed" | "skipped" | undefined;
+
+    if (request.action === "retry-failed") {
+      mode = "failed";
+    } else if (request.action === "retry-skipped") {
+      mode = "skipped";
+    }
+
+    return renderPlanningError(cause, {
+      command: request.action === "rollback" ? "rollback" : "run",
+      definitionIds:
+        request.selection.kind === "definitions"
+          ? request.selection.definitionIds
+          : [],
+      ...(request.selection.kind === "group"
+        ? { group: request.selection.groupId }
+        : {}),
+      hasTarget: request.options.sourceIdentities !== undefined,
+      ...(mode === undefined ? {} : { mode }),
+      ...(request.action === "rescan" ? { rescan: true } : {}),
+      ...(request.options.rollbackOrphans === true
+        ? { rollbackOrphans: true }
+        : {}),
+      ...(request.action === "update" ? { update: true } : {}),
+    });
+  };
+
+  return connection
+    .prepareOperation(request)
+    .pipe(Effect.catch((cause) => failReportedCliMessage(renderError(cause))));
+};
 
 const runsListCommand = Command.make("list", {}, () =>
   withCliMigrateConnection(({ connection }) =>
@@ -1564,27 +1586,25 @@ const runCommand = Command.make(
   },
   (input) =>
     Effect.gen(function* () {
-      if (input.failed && input.skipped) {
+      const requestedActions = [
+        input.failed,
+        input.skipped,
+        input.rescan,
+        input.update,
+      ].filter(Boolean).length;
+
+      if (requestedActions > 1) {
         return yield* failReportedCliMessage(
-          "Run planning cannot combine --failed and --skipped"
+          "Choose only one run mode: --failed, --skipped, --rescan, or --update"
         );
       }
 
-      const loadedConfig = yield* loadConfiguredConfig;
-      const registry = loadedConfig.registry;
       const groupInput = Option.getOrUndefined(input.group);
       const idsInput = Option.getOrUndefined(input.id);
       const sourceIdentities =
         idsInput === undefined || idsInput.length === 0
           ? undefined
           : yield* parseSourceIdentityTargets(idsInput);
-      let mode: "failed" | "skipped" | undefined;
-
-      if (input.failed) {
-        mode = "failed";
-      } else if (input.skipped) {
-        mode = "skipped";
-      }
       const concurrencyInput = Option.getOrUndefined(input.concurrency);
       const executionOptions =
         concurrencyInput === undefined
@@ -1607,101 +1627,66 @@ const runCommand = Command.make(
                   }
                 : {}),
             };
-      const runInput = makeRunPlanInput({
+      const selection = yield* makeMigrateSelection({
         all: input.all,
         definitionIds: input.definitions,
-        ...(executionOptions === undefined
-          ? {}
-          : { execution: executionOptions }),
-        force: input.force,
         ...(groupInput === undefined ? {} : { group: groupInput }),
-        ...(mode === undefined ? {} : { mode }),
-        rescan: input.rescan,
-        rollbackOrphans: input.rollbackOrphans,
-        ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
-        update: input.update,
-        withDependencies: input.withDependencies,
       });
+      let action: MigrateAction = "run";
 
-      if (input.plan) {
-        const plan = yield* registry.planRun(runInput).pipe(
-          Effect.catch((error) =>
-            failReportedCliMessage(
-              renderPlanningError(error, {
-                command: "run",
-                definitionIds: input.definitions,
-                ...(groupInput === undefined ? {} : { group: groupInput }),
-                hasTarget: sourceIdentities !== undefined,
-                ...(mode === undefined ? {} : { mode }),
-                rescan: input.rescan,
-                rollbackOrphans: input.rollbackOrphans,
-                update: input.update,
-              })
-            )
-          )
-        );
-
-        yield* Console.log(
-          renderRunPlan(plan, {
-            colors: yield* useColor,
-            ...(mode === undefined ? {} : { mode }),
-          })
-        );
-        return;
+      if (input.failed) {
+        action = "retry-failed";
+      } else if (input.skipped) {
+        action = "retry-skipped";
+      } else if (input.rescan) {
+        action = "rescan";
+      } else if (input.update) {
+        action = "update";
       }
+      const request: MigrateOperationRequest = {
+        action,
+        options: {
+          ...(executionOptions === undefined
+            ? {}
+            : { execution: executionOptions }),
+          ...(input.force ? { force: true } : {}),
+          ...(input.rollbackOrphans ? { rollbackOrphans: true } : {}),
+          ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
+          withDependencies: input.withDependencies,
+        },
+        selection,
+      };
 
-      const runPlan = yield* registry.planRun(runInput).pipe(
-        Effect.catch((error) =>
-          failReportedCliMessage(
-            renderRunCommandError(error, {
-              definitionIds: input.definitions,
-              ...(groupInput === undefined ? {} : { group: groupInput }),
-              hasTarget: sourceIdentities !== undefined,
-              ...(mode === undefined ? {} : { mode }),
-              rescan: input.rescan,
-              rollbackOrphans: input.rollbackOrphans,
-              update: input.update,
-            })
-          )
-        )
+      yield* withCliMigrateConnection((cliConnection) =>
+        Effect.gen(function* () {
+          const operation = yield* prepareCliOperation(
+            cliConnection.connection,
+            request
+          );
+          const colors = yield* useColor;
+
+          if (input.plan) {
+            yield* Console.log(
+              renderPreparedOperationPlan(operation, { colors })
+            );
+            return;
+          }
+
+          const warnings = renderPreparedOperationWarnings(operation, {
+            colors,
+          });
+
+          if (warnings !== "") {
+            yield* Console.log(warnings);
+          }
+
+          yield* startPreparedOperation(
+            cliConnection,
+            operation,
+            input.progress
+          );
+        })
       );
-      const colors = yield* useColor;
-      const discoveryWarnings = renderRunDiscoveryWarnings(runPlan, {
-        colors,
-      });
-
-      if (discoveryWarnings !== "") {
-        yield* Console.log(discoveryWarnings);
-      }
-
-      const runtime = yield* MigrationCliRuntime;
-      const configuredExecution = yield* makeConfiguredExecution(loadedConfig);
-      const result = yield* startAndWaitForRun(
-        configuredExecution.run(runInput),
-        runtime,
-        "migration"
-      ).pipe(
-        Effect.provide(makeCliProgressLayer(input.progress, runtime)),
-        Effect.catch((error) =>
-          failReportedCliMessage(
-            renderRunCommandError(error, {
-              definitionIds: input.definitions,
-              ...(groupInput === undefined ? {} : { group: groupInput }),
-              hasTarget: sourceIdentities !== undefined,
-              ...(mode === undefined ? {} : { mode }),
-              rescan: input.rescan,
-              rollbackOrphans: input.rollbackOrphans,
-              update: input.update,
-            })
-          )
-        )
-      );
-
-      yield* reportExecutionOutcome(result, {
-        label: "Run",
-        renderStart: (start) => renderRunStartResult(start, { colors }),
-        renderSummary: (summary) => renderRunSummary(summary, { colors }),
-      });
     })
 ).pipe(Command.withDescription("Plan or run Migration Definitions"));
 
@@ -1720,8 +1705,6 @@ const rollbackCommand = Command.make(
   },
   (input) =>
     Effect.gen(function* () {
-      const loadedConfig = yield* loadConfiguredConfig;
-      const registry = loadedConfig.registry;
       const groupInput = Option.getOrUndefined(input.group);
       const idsInput = Option.getOrUndefined(input.id);
       const sourceIdentities =
@@ -1740,63 +1723,47 @@ const rollbackCommand = Command.make(
                 ),
               },
             };
-      const rollbackInput = makeRollbackPlanInput({
+      const selection = yield* makeMigrateSelection({
         all: input.all,
         definitionIds: input.definitions,
-        ...(executionOptions === undefined
-          ? {}
-          : { execution: executionOptions }),
-        force: input.force,
         ...(groupInput === undefined ? {} : { group: groupInput }),
-        ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
-        withDependencies: input.withDependencies,
       });
+      const request: MigrateOperationRequest = {
+        action: "rollback",
+        options: {
+          ...(executionOptions === undefined
+            ? {}
+            : { execution: executionOptions }),
+          ...(input.force ? { force: true } : {}),
+          ...(sourceIdentities === undefined ? {} : { sourceIdentities }),
+          withDependencies: input.withDependencies,
+        },
+        selection,
+      };
 
-      if (input.plan) {
-        const plan = yield* registry.planRollback(rollbackInput).pipe(
-          Effect.catch((error) =>
-            failReportedCliMessage(
-              renderPlanningError(error, {
-                command: "rollback",
-                definitionIds: input.definitions,
-                ...(groupInput === undefined ? {} : { group: groupInput }),
-                hasTarget: sourceIdentities !== undefined,
+      yield* withCliMigrateConnection((cliConnection) =>
+        Effect.gen(function* () {
+          const operation = yield* prepareCliOperation(
+            cliConnection.connection,
+            request
+          );
+
+          if (input.plan) {
+            yield* Console.log(
+              renderPreparedOperationPlan(operation, {
+                colors: yield* useColor,
               })
-            )
-          )
-        );
+            );
+            return;
+          }
 
-        yield* Console.log(
-          renderRollbackPlan(plan, { colors: yield* useColor })
-        );
-        return;
-      }
-
-      const runtime = yield* MigrationCliRuntime;
-      const configuredExecution = yield* makeConfiguredExecution(loadedConfig);
-      const result = yield* startAndWaitForRun(
-        configuredExecution.rollback(rollbackInput),
-        runtime,
-        "rollback"
-      ).pipe(
-        Effect.provide(makeCliRollbackProgressLayer(input.progress, runtime)),
-        Effect.catch((error) =>
-          failReportedCliMessage(
-            renderRollbackCommandError(error, {
-              definitionIds: input.definitions,
-              ...(groupInput === undefined ? {} : { group: groupInput }),
-              hasTarget: sourceIdentities !== undefined,
-            })
-          )
-        )
+          yield* startPreparedOperation(
+            cliConnection,
+            operation,
+            input.progress
+          );
+        })
       );
-
-      const colors = yield* useColor;
-      yield* reportExecutionOutcome(result, {
-        label: "Rollback",
-        renderStart: (start) => renderRollbackStartResult(start, { colors }),
-        renderSummary: (summary) => renderRollbackSummary(summary, { colors }),
-      });
     })
 ).pipe(Command.withDescription("Plan or rollback Migration Definitions"));
 

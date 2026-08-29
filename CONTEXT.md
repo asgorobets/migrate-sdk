@@ -235,6 +235,12 @@ The versioned, schema-backed contract of requests, results, events, and errors e
 **Migrate Connection**:
 The configured path by which a Migrate Client reaches a Migrate Server. It selects a server target and access method, not an Execution Adapter.
 
+**Migrate Operation Selection**:
+The serializable scope of a run or rollback operation: all registered migration definitions, a non-empty explicit definition set, or one migration definition group.
+
+**Migrate Dashboard Target**:
+The single migration definition or migration definition group currently addressed for navigation, messages, or source scanning. It is distinct from a Migrate Operation Selection.
+
 **Migration Reference Lookup**:
 A process capability for reading migrated tracking state or destination references from migration item states.
 
@@ -405,6 +411,7 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Migration Definition Registry** may be authored directly or initialized from previously compiled **Migration Definitions**.
 - A **Migrate Server** runs in the environment that owns its authoritative **Migration Definition Registry** and required runtime capabilities.
 - A **Migrate Client** selects a **Migrate Server** through a **Migrate Connection**; it does not select the server's **Execution Adapter**.
+- A **Migrate Operation Selection** is distinct from a **Migrate Dashboard Target** so CLI operations can select all definitions or several explicit definitions without widening dashboard navigation APIs.
 - A **Migrate Protocol** carries serializable domain requests, results, events, and errors; it does not carry executable plans, Effects, Layers, or migration definitions.
 - Closing a **Migrate Client** observation does not cancel a **Migration Run**; the **Migrate Protocol** models stopping as a separate explicit operation that durably changes an active run to `cancelling` through its **Migration Store**.
 - An **Active Migration Run** is discovered from non-terminal **Migration Run State** whose run id matches a current **Migration Definition Lock** owner.

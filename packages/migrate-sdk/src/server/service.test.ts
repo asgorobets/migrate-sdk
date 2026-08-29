@@ -2,11 +2,16 @@ import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Option, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import {
+  MigrationDefinitionGroupId,
   MigrationDefinitionId,
   MigrationDefinitionLockToken,
   MigrationRunId,
 } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
+import {
+  MigrationDefinitionRegistryUnknownDefinitionError,
+  MigrationDefinitionRegistryUnknownGroupError,
+} from "../domain/registry.ts";
 import {
   type MigrateActiveRun,
   type MigrateDashboard,
@@ -80,11 +85,21 @@ const preparedOperation = (
       executionDefinitionIds: executionDefinitionIds.map((definitionId) =>
         MigrationDefinitionId.make(definitionId)
       ),
+      executionPolicy: executionDefinitionIds.map((definitionId) => ({
+        definitionId: MigrationDefinitionId.make(definitionId),
+        discovery: "full" as const,
+        processConcurrency: 1,
+        rollbackConcurrency: 1,
+      })),
+      includedDefinitionIds: executionDefinitionIds.map((definitionId) =>
+        MigrationDefinitionId.make(definitionId)
+      ),
+      notices: [],
       requestedDefinitionIds: [articlesId],
       withDependencies: false,
     },
     planRows: [],
-    target: { definitionId: articlesId, kind: "migration" },
+    selection: { definitionIds: [articlesId], kind: "definitions" },
   },
 });
 
@@ -165,6 +180,38 @@ const makeServer = (backend: MigrateServerBackend<FakeExecutableOperation>) =>
   MigrateServer.make({ backend, ...serverIdentity });
 
 describe("Migrate Server", () => {
+  it.effect("preserves typed operation planning errors", () =>
+    Effect.gen(function* () {
+      const errors = [
+        new MigrationDefinitionRegistryUnknownDefinitionError({
+          definitionId: MigrationDefinitionId.make("missing"),
+          message: "Migration was not found",
+        }),
+        new MigrationDefinitionRegistryUnknownGroupError({
+          group: MigrationDefinitionGroupId.make("missing-group"),
+          message: "Migration group was not found",
+        }),
+      ] as const;
+
+      for (const planningError of errors) {
+        const server = yield* makeServer(
+          makeBackend({
+            prepareOperation: () => Effect.fail(planningError),
+          })
+        );
+        const error = yield* server
+          .prepareOperation({
+            action: "run",
+            options: {},
+            selection: { kind: "all" },
+          })
+          .pipe(Effect.flip);
+
+        expect(error).toEqual(planningError);
+      }
+    })
+  );
+
   it.effect(
     "discovers and observes an active run without the transient execution map",
     () =>
@@ -179,6 +226,26 @@ describe("Migrate Server", () => {
               message: `Run ${runId} succeeded`,
               outcome: "completed" as const,
               runId,
+              summary: {
+                definitions: [
+                  {
+                    counts: {
+                      failed: 0,
+                      migrated: 1,
+                      needsUpdate: 0,
+                      skipped: 0,
+                      unchanged: 0,
+                    },
+                    definitionId: articlesId,
+                    status: "succeeded" as const,
+                  },
+                ],
+                finishedAt: new Date("2026-08-29T12:01:00.000Z"),
+                kind: "run" as const,
+                runId,
+                startedAt: new Date("2026-08-29T12:00:00.000Z"),
+                status: "succeeded" as const,
+              },
             });
           },
         });
@@ -199,6 +266,10 @@ describe("Migrate Server", () => {
             message: `Run ${runId} succeeded`,
             outcome: "completed",
             runId,
+            summary: expect.objectContaining({
+              kind: "run",
+              status: "succeeded",
+            }),
           },
         ]);
       })
@@ -411,7 +482,10 @@ describe("Migrate Server", () => {
         const request = {
           action: "run" as const,
           options: {},
-          target: { definitionId: articlesId, kind: "migration" as const },
+          selection: {
+            definitionIds: [articlesId] as const,
+            kind: "definitions" as const,
+          },
         };
         const operation = yield* server.prepareOperation(request);
         yield* server.startOperation({
@@ -778,7 +852,10 @@ describe("Migrate Server", () => {
         const request = {
           action: "run" as const,
           options: {},
-          target: { definitionId: articlesId, kind: "migration" as const },
+          selection: {
+            definitionIds: [articlesId] as const,
+            kind: "definitions" as const,
+          },
         };
         const operation = yield* server.prepareOperation(request);
         const reference = yield* server.startOperation({
@@ -846,7 +923,10 @@ describe("Migrate Server", () => {
           const request = {
             action: "run" as const,
             options: {},
-            target: { definitionId: articlesId, kind: "migration" as const },
+            selection: {
+              definitionIds: [articlesId] as const,
+              kind: "definitions" as const,
+            },
           };
           const operation = yield* server.prepareOperation(request);
 
@@ -896,7 +976,10 @@ describe("Migrate Server", () => {
         const request = {
           action: "run" as const,
           options: {},
-          target: { definitionId: articlesId, kind: "migration" as const },
+          selection: {
+            definitionIds: [articlesId] as const,
+            kind: "definitions" as const,
+          },
         };
         const operation = yield* server.prepareOperation(request);
         yield* server.startOperation({
@@ -966,7 +1049,10 @@ describe("Migrate Server", () => {
       const request = {
         action: "run" as const,
         options: {},
-        target: { definitionId: articlesId, kind: "migration" as const },
+        selection: {
+          definitionIds: [articlesId] as const,
+          kind: "definitions" as const,
+        },
       };
       const operation = yield* server.prepareOperation(request);
       const reference = yield* server.startOperation({
@@ -1026,7 +1112,10 @@ describe("Migrate Server", () => {
       const request = {
         action: "run" as const,
         options: {},
-        target: { definitionId: articlesId, kind: "migration" as const },
+        selection: {
+          definitionIds: [articlesId] as const,
+          kind: "definitions" as const,
+        },
       };
       const operation = yield* server.prepareOperation(request);
       yield* server.startOperation({
@@ -1124,7 +1213,10 @@ describe("Migrate Server", () => {
         const request = {
           action: "run" as const,
           options: {},
-          target: { definitionId: articlesId, kind: "migration" as const },
+          selection: {
+            definitionIds: [articlesId] as const,
+            kind: "definitions" as const,
+          },
         };
         const operation = yield* server.prepareOperation(request);
         const reference = yield* server.startOperation({
@@ -1191,7 +1283,10 @@ describe("Migrate Server", () => {
       const request = {
         action: "run" as const,
         options: {},
-        target: { definitionId: articlesId, kind: "migration" as const },
+        selection: {
+          definitionIds: [articlesId] as const,
+          kind: "definitions" as const,
+        },
       };
       const operation = yield* server.prepareOperation(request);
       yield* server.startOperation({
@@ -1245,7 +1340,10 @@ describe("Migrate Server", () => {
         const request = {
           action: "run" as const,
           options: {},
-          target: { definitionId: articlesId, kind: "migration" as const },
+          selection: {
+            definitionIds: [articlesId] as const,
+            kind: "definitions" as const,
+          },
         };
         const operation = yield* server.prepareOperation(request);
 
@@ -1305,7 +1403,10 @@ describe("Migrate Server", () => {
       const request = {
         action: "run" as const,
         options: {},
-        target: { definitionId: articlesId, kind: "migration" as const },
+        selection: {
+          definitionIds: [articlesId] as const,
+          kind: "definitions" as const,
+        },
       };
       const operation = yield* server.prepareOperation(request);
       const first = yield* server.startOperation({

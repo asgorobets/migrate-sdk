@@ -15,6 +15,7 @@ import {
   type RegistryMigrateServerRuntime,
 } from "migrate-sdk/server";
 import { describe, expect, it } from "vitest";
+import { makeRegistryMigrateServerBackend } from "./registry-backend.ts";
 
 const serverFixtureUrl = new URL(
   "../../test/fixtures/server/",
@@ -145,10 +146,10 @@ describe("Local Migrate Server runtime", () => {
 
           const operation = yield* runtime.prepare(
             {
-              definitionId: toMigrationDefinitionId(
-                "scoped-executable-fixture"
-              ),
-              kind: "migration",
+              definitionIds: [
+                toMigrationDefinitionId("scoped-executable-fixture"),
+              ],
+              kind: "definitions",
             },
             "run"
           );
@@ -172,7 +173,7 @@ describe("Local Migrate Server runtime", () => {
       cwd: fixtureDirectory,
     });
     const operation = await runtime.prepare(
-      { definitionId: articlesId, kind: "migration" },
+      { definitionIds: [articlesId], kind: "definitions" },
       "retry-failed"
     );
 
@@ -188,13 +189,14 @@ describe("Local Migrate Server runtime", () => {
       },
     });
 
-    await expect(executeRegistryMigration(runtime, operation)).resolves.toEqual(
-      {
-        message: expect.stringMatching(succeededRunPattern),
-        outcome: "completed",
-        runId: expect.any(String),
-      }
-    );
+    await expect(
+      executeRegistryMigration(runtime, operation)
+    ).resolves.toMatchObject({
+      message: expect.stringMatching(succeededRunPattern),
+      outcome: "completed",
+      runId: expect.any(String),
+      summary: { kind: "run", status: "succeeded" },
+    });
     const snapshot = await runtime.refresh();
     const articles = snapshot.rows.find((row) => row.entry.id === articlesId);
 
@@ -209,8 +211,8 @@ describe("Local Migrate Server runtime", () => {
     });
     const operation = await runtime.prepare(
       {
-        definitionId: toMigrationDefinitionId("cancellable"),
-        kind: "migration",
+        definitionIds: [toMigrationDefinitionId("cancellable")],
+        kind: "definitions",
       },
       "run"
     );
@@ -250,8 +252,8 @@ describe("Local Migrate Server runtime", () => {
       });
       const operation = await runtime.prepare(
         {
-          definitionId: toMigrationDefinitionId("live-progress"),
-          kind: "migration",
+          definitionIds: [toMigrationDefinitionId("live-progress")],
+          kind: "definitions",
         },
         "run"
       );
@@ -280,11 +282,19 @@ describe("Local Migrate Server runtime", () => {
         },
       });
 
-      await expect(execution).resolves.toEqual({
+      const result = await execution;
+
+      expect(result).toMatchObject({
         message: expect.stringMatching(succeededRunPattern),
         outcome: "completed",
         runId: expect.any(String),
       });
+
+      if (testCase.label === "detached durable") {
+        expect(result).toMatchObject({
+          summary: { kind: "run", status: "succeeded" },
+        });
+      }
 
       expect(executionOwnerships).toContain(testCase.ownership);
       expect(sawIntermediateProgressWhileRunning).toBe(true);
@@ -323,16 +333,16 @@ describe("Local Migrate Server runtime", () => {
     });
     const prerequisite = await runtime.prepare(
       {
-        definitionId: toMigrationDefinitionId("live-progress-prerequisite"),
-        kind: "migration",
+        definitionIds: [toMigrationDefinitionId("live-progress-prerequisite")],
+        kind: "definitions",
       },
       "run"
     );
     await executeRegistryMigration(runtime, prerequisite);
     const operation = await runtime.prepare(
       {
-        definitionId: toMigrationDefinitionId("live-progress"),
-        kind: "migration",
+        definitionIds: [toMigrationDefinitionId("live-progress")],
+        kind: "definitions",
       },
       "run"
     );
@@ -371,8 +381,8 @@ describe("Local Migrate Server runtime", () => {
     });
     const operation = await runtime.prepare(
       {
-        definitionId: toMigrationDefinitionId("live-progress"),
-        kind: "migration",
+        definitionIds: [toMigrationDefinitionId("live-progress")],
+        kind: "definitions",
       },
       "run"
     );
@@ -435,11 +445,10 @@ describe("Local Migrate Server runtime", () => {
     });
     expect(liveProgressProviderObservations).toEqual([
       `detached-${detachedRunId}`,
-      `detached-${detachedRunId}`,
     ]);
   });
 
-  it("returns a failed terminal outcome for a durably completed run", async () => {
+  it("treats a durably completed run with failed items as completed execution", async () => {
     const runtime = await loadLocalMigrateServerRuntime({
       configPath: "failed-run.config.ts",
       cwd: fixtureDirectory,
@@ -456,7 +465,7 @@ describe("Local Migrate Server runtime", () => {
     await expect(Effect.runPromise(runtime.observeRun(runId))).resolves.toEqual(
       {
         message: `Run ${runId} failed`,
-        outcome: "failed",
+        outcome: "completed",
         runId,
       }
     );
@@ -468,7 +477,7 @@ describe("Local Migrate Server runtime", () => {
       cwd: fixtureDirectory,
     });
     const operation = await runtime.prepare(
-      { definitionId: assetsId, kind: "migration" },
+      { definitionIds: [assetsId], kind: "definitions" },
       "retry-skipped"
     );
 
@@ -573,17 +582,26 @@ describe("Local Migrate Server runtime", () => {
     });
   });
 
-  it("prepares multiple source identities from durable item history", async () => {
+  it("prepares run and rollback source identities from durable item history", async () => {
     const runtime = await loadLocalMigrateServerRuntime({
       configPath: "migrate.config.ts",
       cwd: fixtureDirectory,
     });
     const history = await runtime.listSourceIdentityHistory(articlesId);
-    const sourceIdentities = history.map((entry) => entry.sourceIdentity);
+    const sourceIdentities = [
+      "article%2Dwelcome",
+      "article-welcome",
+      "article-effect",
+    ];
     const operation = await runtime.prepare(
-      { definitionId: articlesId, kind: "migration" },
+      { definitionIds: [articlesId], kind: "definitions" },
       "run",
       { sourceIdentities }
+    );
+    const rollbackOperation = await runtime.prepare(
+      { definitionIds: [articlesId], kind: "definitions" },
+      "rollback",
+      { sourceIdentities, withDependencies: false }
     );
 
     expect(history).toEqual(
@@ -603,6 +621,22 @@ describe("Local Migrate Server runtime", () => {
     ).resolves.toBe("article-welcome");
     expect(operation).toMatchObject({
       action: "run",
+      plan: {
+        notices: [
+          expect.objectContaining({
+            _tag: "MigrationDefinitionDuplicateSourceIdentityTargetIgnored",
+            sourceIdentity: "article-welcome",
+          }),
+        ],
+        target: {
+          definitionId: articlesId,
+          sourceIdentities: ["article-welcome", "article-effect"],
+        },
+      },
+      sourceIdentities: ["article-welcome", "article-effect"],
+    });
+    expect(rollbackOperation).toMatchObject({
+      action: "rollback",
       plan: {
         target: {
           definitionId: articlesId,
@@ -645,7 +679,7 @@ describe("Local Migrate Server runtime", () => {
       cwd: fixtureDirectory,
     });
     const operation = await runtime.prepare(
-      { definitionId: authorsId, kind: "migration" },
+      { definitionIds: [authorsId], kind: "definitions" },
       "rollback"
     );
 
@@ -667,7 +701,10 @@ describe("Local Migrate Server runtime", () => {
       configPath: "dependency-preflight.config.ts",
       cwd: fixtureDirectory,
     });
-    const target = { definitionId: articlesId, kind: "migration" } as const;
+    const target = {
+      definitionIds: [articlesId],
+      kind: "definitions",
+    } as const;
     const selectedOnly = await runtime.prepare(target, "run");
     const expanded = await runtime.prepare(target, "run", {
       withDependencies: true,
@@ -727,8 +764,79 @@ describe("Local Migrate Server runtime", () => {
         requestedGroup: contentGroupId,
         withDependencies: false,
       },
-      target: { groupId: contentGroupId, kind: "group" },
+      selection: { groupId: contentGroupId, kind: "group" },
     });
+  });
+
+  it("prepares all and explicit multi-definition protocol selections", async () => {
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "migrate.config.ts",
+      cwd: fixtureDirectory,
+    });
+    const all = await runtime.prepare({ kind: "all" }, "run");
+    const rollbackOrphans = await runtime.prepare(
+      { definitionIds: [articlesId], kind: "definitions" },
+      "run",
+      { rollbackOrphans: true }
+    );
+    const rollback = await runtime.prepare(
+      {
+        definitionIds: [authorsId, articlesId],
+        kind: "definitions",
+      },
+      "rollback"
+    );
+
+    expect(all).toMatchObject({
+      plan: {
+        executionDefinitionIds: ["authors", "assets", "articles"],
+        requestedDefinitionIds: "all",
+      },
+      selection: { kind: "all" },
+    });
+    expect(rollbackOrphans).toMatchObject({
+      plan: { rescan: true, rollbackOrphans: true },
+    });
+    expect(rollback).toMatchObject({
+      plan: {
+        executionDefinitionIds: ["articles", "authors"],
+        requestedDefinitionIds: ["authors", "articles"],
+      },
+      selection: {
+        definitionIds: ["authors", "articles"],
+        kind: "definitions",
+      },
+    });
+  });
+
+  it("projects the effective rollback-orphans rescan to clients", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* loadLocalMigrateServerRuntimeEffect({
+            configPath: "migrate.config.ts",
+            cwd: fixtureDirectory,
+          });
+          const backend = makeRegistryMigrateServerBackend(runtime);
+          const prepared = yield* backend.prepareOperation({
+            action: "run",
+            options: {
+              rollbackOrphans: true,
+              withDependencies: false,
+            },
+            selection: {
+              definitionIds: [articlesId],
+              kind: "definitions",
+            },
+          });
+
+          expect(prepared.operation.plan).toMatchObject({
+            rescan: true,
+            rollbackOrphans: true,
+          });
+        })
+      )
+    );
   });
 
   it("applies session concurrency to run, rollback, and Source Inventory Scan requests", async () => {

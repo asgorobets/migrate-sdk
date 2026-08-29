@@ -11,19 +11,14 @@ import type {
   MigrationDefinitionRegistryPlanningError,
   MigrationDefinitionRegistrySelectionReport,
   MigrationDefinitionRegistryStatusReport,
-  MigrationDefinitionRollbackPlan,
-  MigrationDefinitionRunPlan,
 } from "../domain/registry.ts";
-import type { RollbackRunSummary } from "../domain/rollback.ts";
-import type {
-  ExecutionStartResult,
-  MigrationExecutionHandle,
-  MigrationRunSummary,
-} from "../domain/run.ts";
 import type {
   MigrateActiveRun,
   MigrateObservationEvent,
+  MigratePlanProjection,
+  MigratePreparedOperation,
   MigrateRunStopResult,
+  MigrateTerminalSummary,
 } from "../protocol/index.ts";
 import type { SqlMigrationStoreSchemaPlan } from "../stores/sql/sql-migration-store-schema.ts";
 
@@ -234,7 +229,9 @@ export const renderMigrationObservationEvent = (
     case "detached":
       return `${event.message}\nRun id ${event.runId}`;
     case "terminal":
-      return `${event.message}\nRun id ${event.runId}`;
+      return event.summary === undefined
+        ? `${event.message}\nRun id ${event.runId}`
+        : renderMigrationTerminalSummary(event.summary, options);
     default: {
       const unhandled: never = event;
       return unhandled;
@@ -405,9 +402,7 @@ export const renderRegistryGraph = (
 };
 
 const renderRequestedDefinitionIdsInline = (
-  requestedDefinitionIds:
-    | MigrationDefinitionRunPlan["requestedDefinitionIds"]
-    | MigrationDefinitionRollbackPlan["requestedDefinitionIds"]
+  requestedDefinitionIds: MigratePlanProjection["requestedDefinitionIds"]
 ): string =>
   requestedDefinitionIds === "all"
     ? "all"
@@ -437,101 +432,6 @@ const renderExecutionOrderTable = (
 
 const renderConcurrency = (value: number | "unbounded"): string =>
   value === "unbounded" ? value : String(value);
-
-const runPlanSourceDiscovery = (
-  plan: MigrationDefinitionRunPlan,
-  definitionId: MigrationDefinitionId
-): "full" | "incremental" =>
-  plan.definitions.find((definition) => definition.id === definitionId)?.source
-    .discovery ?? "full";
-
-const renderRunExecutionPolicyTable = (
-  plan: MigrationDefinitionRunPlan,
-  options: RenderOptions
-): readonly string[] =>
-  plan.executionPolicy.length === 0
-    ? [dim("No definitions.", options)]
-    : renderTable(
-        [
-          {
-            align: "right",
-            header: "#",
-            render: (_policy, index) => String(index + 1),
-          },
-          {
-            header: "Migration ID",
-            render: (policy) => policy.definitionId,
-          },
-          {
-            header: "Discovery",
-            render: (policy) =>
-              runPlanSourceDiscovery(plan, policy.definitionId),
-          },
-          {
-            align: "right",
-            header: "Process Concurrency",
-            render: (policy) => renderConcurrency(policy.processConcurrency),
-          },
-        ],
-        plan.executionPolicy,
-        options
-      );
-
-const renderRequiredDependencyPreflightTable = (
-  plan: MigrationDefinitionRunPlan,
-  options: RenderOptions
-): readonly string[] => {
-  const preflight = plan.requiredDependencyPreflight ?? [];
-
-  return preflight.length === 0
-    ? [dim("No omitted required dependencies.", options)]
-    : renderTable(
-        [
-          {
-            align: "right",
-            header: "#",
-            render: (_edge, index) => String(index + 1),
-          },
-          {
-            header: "Migration ID",
-            render: (edge) => edge.toDefinitionId,
-          },
-          {
-            header: "Required By",
-            render: (edge) => edge.fromDefinitionId,
-          },
-        ],
-        preflight,
-        options
-      );
-};
-
-const renderRollbackExecutionPolicyTable = (
-  plan: MigrationDefinitionRollbackPlan,
-  options: RenderOptions
-): readonly string[] =>
-  plan.executionPolicy.length === 0
-    ? [dim("No definitions.", options)]
-    : renderTable(
-        [
-          {
-            align: "right",
-            header: "#",
-            render: (_policy, index) => String(index + 1),
-          },
-          {
-            header: "Migration ID",
-            render: (policy) => policy.definitionId,
-          },
-          {
-            align: "right",
-            header: "Rollback Concurrency",
-            render: (policy) => renderConcurrency(policy.rollbackConcurrency),
-          },
-        ],
-        plan.executionPolicy,
-        options
-      );
 
 const renderPlanNotice = (notice: MigrationDefinitionPlanNotice): string => {
   switch (notice._tag) {
@@ -572,26 +472,6 @@ const incrementalDiscoveryWarning = (
     ? `${definitionId} uses incremental source discovery. This run starts from the beginning and will retain the new high-water cursor for later runs.`
     : `${definitionId} uses incremental source discovery. Once a cursor is saved, changes at or before it will not be discovered. Pass --rescan to scan from the beginning.`;
 
-const runDiscoveryWarningLines = (
-  plan: MigrationDefinitionRunPlan
-): readonly string[] => {
-  const traversesSourceCursor =
-    plan.target === undefined &&
-    (plan.mode === undefined || plan.mode.kind === "normal");
-
-  if (!traversesSourceCursor) {
-    return [];
-  }
-
-  const restartsFromBeginning = plan.rescan === true || plan.update === true;
-
-  return plan.definitions
-    .filter((definition) => definition.source.discovery === "incremental")
-    .map((definition) =>
-      incrementalDiscoveryWarning(definition.id, restartsFromBeginning)
-    );
-};
-
 function renderWarningSection(
   warnings: readonly string[],
   options: RenderOptions,
@@ -608,24 +488,13 @@ function renderWarningSection(
   ];
 }
 
-export const renderRunDiscoveryWarnings = (
-  plan: MigrationDefinitionRunPlan,
-  options: RenderOptions = {}
-): string => {
-  const warnings = runDiscoveryWarningLines(plan);
-
-  return renderWarningSection(warnings, options, false).join("\n");
-};
-
 const renderPlanScope = (
   input: {
     readonly force?: boolean;
     readonly includedDefinitionIds: readonly MigrationDefinitionId[];
     readonly mode?: "failed" | "skipped";
     readonly requestedGroup?: MigrationDefinitionGroupId;
-    readonly requestedDefinitionIds:
-      | MigrationDefinitionRunPlan["requestedDefinitionIds"]
-      | MigrationDefinitionRollbackPlan["requestedDefinitionIds"];
+    readonly requestedDefinitionIds: MigratePlanProjection["requestedDefinitionIds"];
     readonly rescan?: boolean;
     readonly rollbackOrphans?: boolean;
     readonly sourceIdentities?: readonly string[];
@@ -649,310 +518,219 @@ const renderPlanScope = (
     : [`Target source identities ${input.sourceIdentities.join(", ")}`]),
 ];
 
-export const renderRunPlan = (
-  plan: MigrationDefinitionRunPlan,
-  options: {
-    readonly colors?: boolean;
-    readonly mode?: "failed" | "skipped";
-  } = {}
-): string =>
-  [
-    bold("Run Plan", options),
-    "",
-    ...renderPlanScope(
-      {
-        ...(plan.force === undefined ? {} : { force: plan.force }),
-        includedDefinitionIds: plan.includedDefinitionIds,
-        ...(plan.requestedGroup === undefined
-          ? {}
-          : { requestedGroup: plan.requestedGroup }),
-        ...(options.mode === undefined ? {} : { mode: options.mode }),
-        requestedDefinitionIds: plan.requestedDefinitionIds,
-        ...(plan.rescan === undefined ? {} : { rescan: plan.rescan }),
-        ...(plan.rollbackOrphans === undefined
-          ? {}
-          : { rollbackOrphans: plan.rollbackOrphans }),
-        ...(plan.target === undefined
-          ? {}
-          : { sourceIdentities: plan.target.sourceIdentities }),
-        ...(plan.update === undefined ? {} : { update: plan.update }),
-      },
-      options
-    ),
-    "",
-    bold("Execution Order", options),
-    ...renderExecutionOrderTable(plan.executionDefinitionIds, options),
-    "",
-    bold("Dependency Preflight", options),
-    ...renderRequiredDependencyPreflightTable(plan, options),
-    "",
-    bold("Execution Policy", options),
-    ...renderRunExecutionPolicyTable(plan, options),
-    ...renderNoticeSection(plan.notices, options),
-    ...renderWarningSection(runDiscoveryWarningLines(plan), options),
-  ].join("\n");
-
-export const renderRollbackPlan = (
-  plan: MigrationDefinitionRollbackPlan,
-  options: RenderOptions = {}
-): string =>
-  [
-    bold("Rollback Plan", options),
-    "",
-    ...renderPlanScope(
-      {
-        ...(plan.force === undefined ? {} : { force: plan.force }),
-        includedDefinitionIds: plan.includedDefinitionIds,
-        ...(plan.requestedGroup === undefined
-          ? {}
-          : { requestedGroup: plan.requestedGroup }),
-        requestedDefinitionIds: plan.requestedDefinitionIds,
-        ...(plan.target === undefined
-          ? {}
-          : { sourceIdentities: plan.target.sourceIdentities }),
-      },
-      options
-    ),
-    "",
-    bold("Execution Order", options),
-    ...renderExecutionOrderTable(plan.executionDefinitionIds, options),
-    "",
-    bold("Execution Policy", options),
-    ...renderRollbackExecutionPolicyTable(plan, options),
-    ...renderNoticeSection(plan.notices, options),
-  ].join("\n");
-
-const styleCompletionStatus = (
-  value: string,
-  status: "cancelled" | "failed" | "skipped" | "succeeded",
-  options: RenderOptions
-): string => {
-  switch (status) {
-    case "cancelled":
-      return yellow(value, options);
-    case "failed":
-      return red(value, options);
-    case "skipped":
-      return dim(value, options);
-    case "succeeded":
-      return green(value, options);
-    default: {
-      const exhaustive: never = status;
-      return exhaustive;
-    }
+const projectedRunDiscoveryWarningLines = (
+  operation: MigratePreparedOperation
+): readonly string[] => {
+  if (
+    operation.action === "rollback" ||
+    operation.action === "retry-failed" ||
+    operation.action === "retry-skipped" ||
+    operation.sourceIdentities !== undefined
+  ) {
+    return [];
   }
+
+  const restartsFromBeginning =
+    operation.plan.rescan === true || operation.action === "update";
+
+  return operation.plan.executionPolicy
+    .filter((policy) => policy.discovery === "incremental")
+    .map((policy) =>
+      incrementalDiscoveryWarning(policy.definitionId, restartsFromBeginning)
+    );
 };
 
-const styleRunSummaryStatus = (
-  value: string,
-  definition: MigrationRunSummary["definitions"][number],
-  options: RenderOptions
-): string => styleCompletionStatus(value, definition.status, options);
+export const renderPreparedOperationWarnings = (
+  operation: MigratePreparedOperation,
+  options: RenderOptions = {}
+): string =>
+  renderWarningSection(
+    projectedRunDiscoveryWarningLines(operation),
+    options,
+    false
+  ).join("\n");
 
-const styleRollbackSummaryStatus = (
-  value: string,
-  definition: RollbackRunSummary["definitions"][number],
-  options: RenderOptions
-): string => styleCompletionStatus(value, definition.status, options);
+export const renderPreparedOperationDependencyFailure = (
+  operation: MigratePreparedOperation
+): string => {
+  const failures = operation.dependencyChecks.filter(
+    (dependency) => !dependency.satisfied
+  );
 
-const renderRunSummaryTable = (
-  summary: MigrationRunSummary,
+  return [
+    "Migration Definition required dependency state is not satisfied",
+    ...failures.map((dependency) => {
+      const state = dependency.row?.status;
+      let reason: string;
+
+      if (state?.lastRun === null || state === undefined) {
+        reason = `${dependency.dependencyId} has no completed Migration Run State`;
+      } else if (state.durable.failed > 0) {
+        reason = `${dependency.dependencyId} has failed Migration Item State (failed=${state.durable.failed})`;
+      } else {
+        reason = `${dependency.dependencyId} latest run is ${state.lastRun.status}`;
+      }
+
+      return `${dependency.requiredByDefinitionId} requires ${dependency.dependencyId}, but ${reason}.`;
+    }),
+    `Run ${[...new Set(failures.map((failure) => failure.dependencyId))].join(
+      ", "
+    )} without failures, rerun with --with-dependencies, or use --force.`,
+  ].join("\n");
+};
+
+type PreparedExecutionPolicy =
+  MigratePreparedOperation["plan"]["executionPolicy"][number];
+
+const executionPolicyIdentityColumns: readonly TableColumn<PreparedExecutionPolicy>[] =
+  [
+    {
+      align: "right",
+      header: "#",
+      render: (_policy, index) => String(index + 1),
+    },
+    {
+      header: "Migration ID",
+      render: (policy) => policy.definitionId,
+    },
+  ];
+
+const renderRunExecutionPolicy = (
+  executionPolicy: readonly PreparedExecutionPolicy[],
   options: RenderOptions
 ): readonly string[] =>
   renderTable(
     [
+      ...executionPolicyIdentityColumns,
       {
-        align: "right",
-        header: "#",
-        render: (_definition, index) => String(index + 1),
-      },
-      {
-        header: "Migration ID",
-        render: (definition) => definition.definitionId,
-      },
-      {
-        header: "Status",
-        render: (definition) => definition.status,
-        style: styleRunSummaryStatus,
+        header: "Discovery",
+        render: (policy) => policy.discovery ?? "full",
       },
       {
         align: "right",
-        header: "Migrated",
-        render: (definition) => String(definition.counts.migrated),
+        header: "Process Concurrency",
+        render: (policy) => renderConcurrency(policy.processConcurrency),
       },
-      {
-        align: "right",
-        header: "Unchanged",
-        render: (definition) => String(definition.counts.unchanged),
-      },
-      {
-        align: "right",
-        header: "Skipped",
-        render: (definition) => String(definition.counts.skipped),
-      },
-      {
-        align: "right",
-        header: "Failed",
-        render: (definition) => String(definition.counts.failed),
-        style: stylePositiveCount(
-          (definition) => definition.counts.failed,
-          red
-        ),
-      },
-      {
-        align: "right",
-        header: "Needs Update",
-        render: (definition) => String(definition.counts.needsUpdate),
-        style: stylePositiveCount(
-          (definition) => definition.counts.needsUpdate,
-          yellow
-        ),
-      },
-      ...(summary.definitions.some(
-        (definition) => definition.counts.orphaned !== undefined
-      )
-        ? [
-            {
-              align: "right" as const,
-              header: "Orphaned",
-              render: (
-                definition: MigrationRunSummary["definitions"][number]
-              ) => String(definition.counts.orphaned ?? 0),
-            },
-            {
-              align: "right" as const,
-              header: "Rolled Back",
-              render: (
-                definition: MigrationRunSummary["definitions"][number]
-              ) => String(definition.counts.rolledBack ?? 0),
-            },
-            {
-              align: "right" as const,
-              header: "Rollback Failed",
-              render: (
-                definition: MigrationRunSummary["definitions"][number]
-              ) => String(definition.counts.rollbackFailed ?? 0),
-              style: stylePositiveCount(
-                (definition: MigrationRunSummary["definitions"][number]) =>
-                  definition.counts.rollbackFailed ?? 0,
-                red
-              ),
-            },
-          ]
-        : []),
     ],
-    summary.definitions,
+    executionPolicy,
     options
   );
 
-const renderRollbackSummaryTable = (
-  summary: RollbackRunSummary,
+const renderRollbackExecutionPolicy = (
+  executionPolicy: readonly PreparedExecutionPolicy[],
   options: RenderOptions
 ): readonly string[] =>
   renderTable(
     [
+      ...executionPolicyIdentityColumns,
       {
         align: "right",
-        header: "#",
-        render: (_definition, index) => String(index + 1),
-      },
-      {
-        header: "Migration ID",
-        render: (definition) => definition.definitionId,
-      },
-      {
-        header: "Status",
-        render: (definition) => definition.status,
-        style: styleRollbackSummaryStatus,
-      },
-      {
-        align: "right",
-        header: "Rolled Back",
-        render: (definition) => String(definition.counts.rolledBack),
-      },
-      {
-        align: "right",
-        header: "Skipped",
-        render: (definition) => String(definition.counts.skipped),
-      },
-      {
-        align: "right",
-        header: "Failed",
-        render: (definition) => String(definition.counts.failed),
-        style: stylePositiveCount(
-          (definition) => definition.counts.failed,
-          red
-        ),
+        header: "Rollback Concurrency",
+        render: (policy) => renderConcurrency(policy.rollbackConcurrency),
       },
     ],
-    summary.definitions,
+    executionPolicy,
     options
   );
 
-export const renderRunSummary = (
-  summary: MigrationRunSummary,
-  options: RenderOptions = {}
-): string =>
-  [
-    `${bold("Run Completed", options)} ${styleCompletionStatus(
-      summary.status,
-      summary.status,
-      options
-    )}`,
-    `Run id  ${summary.runId}`,
+const renderPreparedDependencyChecks = (
+  operation: MigratePreparedOperation,
+  options: RenderOptions
+): readonly string[] => {
+  if (operation.action === "rollback") {
+    return [];
+  }
+
+  return [
     "",
-    bold("Definitions", options),
-    ...renderRunSummaryTable(summary, options),
-  ].join("\n");
+    bold("Dependency Preflight", options),
+    ...(operation.dependencyChecks.length === 0
+      ? [dim("No omitted required dependencies.", options)]
+      : renderTable(
+          [
+            {
+              align: "right",
+              header: "#",
+              render: (_check, index) => String(index + 1),
+            },
+            {
+              header: "Migration ID",
+              render: (check) => check.dependencyId,
+            },
+            {
+              header: "Required By",
+              render: (check) => check.requiredByDefinitionId,
+            },
+          ],
+          operation.dependencyChecks,
+          options
+        )),
+  ];
+};
 
-export const renderRollbackSummary = (
-  summary: RollbackRunSummary,
+export const renderPreparedOperationPlan = (
+  operation: MigratePreparedOperation,
   options: RenderOptions = {}
-): string =>
-  [
-    `${bold("Rollback Completed", options)} ${styleCompletionStatus(
-      summary.status,
-      summary.status,
-      options
-    )}`,
-    `Run id  ${summary.runId}`,
+): string => {
+  const rollback = operation.action === "rollback";
+  let mode: "failed" | "skipped" | undefined;
+
+  if (operation.action === "retry-failed") {
+    mode = "failed";
+  } else if (operation.action === "retry-skipped") {
+    mode = "skipped";
+  }
+  const executionPolicy = operation.plan.executionPolicy;
+  const policyTable = rollback
+    ? renderRollbackExecutionPolicy(executionPolicy, options)
+    : renderRunExecutionPolicy(executionPolicy, options);
+
+  return [
+    bold(rollback ? "Rollback Plan" : "Run Plan", options),
     "",
-    bold("Definitions", options),
-    ...renderRollbackSummaryTable(summary, options),
+    ...renderPlanScope(
+      {
+        ...(operation.plan.force === undefined
+          ? {}
+          : { force: operation.plan.force }),
+        includedDefinitionIds: operation.plan.includedDefinitionIds,
+        ...(mode === undefined ? {} : { mode }),
+        requestedDefinitionIds: operation.plan.requestedDefinitionIds,
+        ...(operation.plan.requestedGroup === undefined
+          ? {}
+          : { requestedGroup: operation.plan.requestedGroup }),
+        ...(operation.plan.rescan === undefined
+          ? {}
+          : { rescan: operation.plan.rescan }),
+        ...(operation.plan.rollbackOrphans === undefined
+          ? {}
+          : { rollbackOrphans: operation.plan.rollbackOrphans }),
+        ...(operation.sourceIdentities === undefined
+          ? {}
+          : { sourceIdentities: operation.sourceIdentities }),
+        ...(operation.action === "update" ? { update: true } : {}),
+      },
+      options
+    ),
+    "",
+    bold("Execution Order", options),
+    ...renderExecutionOrderTable(
+      operation.plan.executionDefinitionIds,
+      options
+    ),
+    ...renderPreparedDependencyChecks(operation, options),
+    "",
+    bold("Execution Policy", options),
+    ...(executionPolicy.length === 0
+      ? [dim("No definitions.", options)]
+      : policyTable),
+    ...renderNoticeSection(operation.plan.notices, options),
+    ...renderWarningSection(
+      projectedRunDiscoveryWarningLines(operation),
+      options
+    ),
   ].join("\n");
-
-const renderExecutionHandle = (
-  execution: MigrationExecutionHandle
-): readonly string[] => [
-  `Adapter ${execution.adapter}`,
-  ...(execution.executionId === undefined
-    ? []
-    : [`Execution id ${execution.executionId}`]),
-];
-
-export const renderRunStartResult = (
-  result: ExecutionStartResult<MigrationRunSummary>,
-  options: RenderOptions = {}
-): string =>
-  result.kind === "completed"
-    ? renderRunSummary(result.summary, options)
-    : [
-        bold("Run Started", options),
-        `Run id ${result.runId}`,
-        ...renderExecutionHandle(result.execution),
-      ].join("\n");
-
-export const renderRollbackStartResult = (
-  result: ExecutionStartResult<RollbackRunSummary>,
-  options: RenderOptions = {}
-): string =>
-  result.kind === "completed"
-    ? renderRollbackSummary(result.summary, options)
-    : [
-        bold("Rollback Started", options),
-        `Run id ${result.runId}`,
-        ...renderExecutionHandle(result.execution),
-      ].join("\n");
+};
 
 type StatusDefinition =
   MigrationDefinitionRegistryStatusReport["definitions"][number];
@@ -1084,6 +862,194 @@ const stylePositiveCount =
   ) =>
   (value: string, row: Row, options: RenderOptions): string =>
     getValue(row) > 0 ? style(value, options) : value;
+
+const styleCompletionStatus = (
+  value: string,
+  status: "cancelled" | "failed" | "skipped" | "succeeded",
+  options: RenderOptions
+): string => {
+  switch (status) {
+    case "cancelled":
+      return yellow(value, options);
+    case "failed":
+      return red(value, options);
+    case "skipped":
+      return dim(value, options);
+    case "succeeded":
+      return green(value, options);
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+};
+
+type MigrateRunTerminalSummary = Extract<
+  MigrateTerminalSummary,
+  { readonly kind: "run" }
+>;
+type MigrateRollbackTerminalSummary = Extract<
+  MigrateTerminalSummary,
+  { readonly kind: "rollback" }
+>;
+
+const renderRunTerminalSummaryTable = (
+  summary: MigrateRunTerminalSummary,
+  options: RenderOptions
+): readonly string[] =>
+  renderTable(
+    [
+      {
+        align: "right",
+        header: "#",
+        render: (_definition, index) => String(index + 1),
+      },
+      {
+        header: "Migration ID",
+        render: (definition) => definition.definitionId,
+      },
+      {
+        header: "Status",
+        render: (definition) => definition.status,
+        style: (value, definition, renderOptions) =>
+          styleCompletionStatus(value, definition.status, renderOptions),
+      },
+      {
+        align: "right",
+        header: "Migrated",
+        render: (definition) => String(definition.counts.migrated),
+      },
+      {
+        align: "right",
+        header: "Unchanged",
+        render: (definition) => String(definition.counts.unchanged),
+      },
+      {
+        align: "right",
+        header: "Skipped",
+        render: (definition) => String(definition.counts.skipped),
+      },
+      {
+        align: "right",
+        header: "Failed",
+        render: (definition) => String(definition.counts.failed),
+        style: stylePositiveCount(
+          (definition) => definition.counts.failed,
+          red
+        ),
+      },
+      {
+        align: "right",
+        header: "Needs Update",
+        render: (definition) => String(definition.counts.needsUpdate),
+        style: stylePositiveCount(
+          (definition) => definition.counts.needsUpdate,
+          yellow
+        ),
+      },
+      ...(summary.definitions.some(
+        (definition) => definition.counts.orphaned !== undefined
+      )
+        ? [
+            {
+              align: "right" as const,
+              header: "Orphaned",
+              render: (
+                definition: MigrateRunTerminalSummary["definitions"][number]
+              ) => String(definition.counts.orphaned ?? 0),
+            },
+            {
+              align: "right" as const,
+              header: "Rolled Back",
+              render: (
+                definition: MigrateRunTerminalSummary["definitions"][number]
+              ) => String(definition.counts.rolledBack ?? 0),
+            },
+            {
+              align: "right" as const,
+              header: "Rollback Failed",
+              render: (
+                definition: MigrateRunTerminalSummary["definitions"][number]
+              ) => String(definition.counts.rollbackFailed ?? 0),
+              style: stylePositiveCount(
+                (
+                  definition: MigrateRunTerminalSummary["definitions"][number]
+                ) => definition.counts.rollbackFailed ?? 0,
+                red
+              ),
+            },
+          ]
+        : []),
+    ],
+    summary.definitions,
+    options
+  );
+
+const renderRollbackTerminalSummaryTable = (
+  summary: MigrateRollbackTerminalSummary,
+  options: RenderOptions
+): readonly string[] =>
+  renderTable(
+    [
+      {
+        align: "right",
+        header: "#",
+        render: (_definition, index) => String(index + 1),
+      },
+      {
+        header: "Migration ID",
+        render: (definition) => definition.definitionId,
+      },
+      {
+        header: "Status",
+        render: (definition) => definition.status,
+        style: (value, definition, renderOptions) =>
+          styleCompletionStatus(value, definition.status, renderOptions),
+      },
+      {
+        align: "right",
+        header: "Rolled Back",
+        render: (definition) => String(definition.counts.rolledBack),
+      },
+      {
+        align: "right",
+        header: "Skipped",
+        render: (definition) => String(definition.counts.skipped),
+      },
+      {
+        align: "right",
+        header: "Failed",
+        render: (definition) => String(definition.counts.failed),
+        style: stylePositiveCount(
+          (definition) => definition.counts.failed,
+          red
+        ),
+      },
+    ],
+    summary.definitions,
+    options
+  );
+
+export function renderMigrationTerminalSummary(
+  summary: MigrateTerminalSummary,
+  options: RenderOptions = {}
+): string {
+  const rollback = summary.kind === "rollback";
+
+  return [
+    `${bold(rollback ? "Rollback Completed" : "Run Completed", options)} ${styleCompletionStatus(
+      summary.status,
+      summary.status,
+      options
+    )}`,
+    `Run id  ${summary.runId}`,
+    "",
+    bold("Definitions", options),
+    ...(rollback
+      ? renderRollbackTerminalSummaryTable(summary, options)
+      : renderRunTerminalSummaryTable(summary, options)),
+  ].join("\n");
+}
 
 const durableStatusColumns = [
   {

@@ -30,6 +30,14 @@ const projectOperation = (
   operation: ExecutableMigrationOperation
 ): Omit<MigratePreparedOperation, "fingerprint" | "request"> => {
   const execution = operation.plan.execution;
+  const discoveryByDefinitionId = new Map(
+    operation.action === "rollback"
+      ? []
+      : operation.plan.definitions.map((definition) => [
+          definition.id,
+          definition.source.discovery,
+        ])
+  );
 
   return {
     action: operation.action,
@@ -38,10 +46,30 @@ const projectOperation = (
     plan: {
       ...(execution === undefined ? {} : { execution }),
       executionDefinitionIds: operation.plan.executionDefinitionIds,
+      executionPolicy: operation.plan.executionPolicy.map((policy) => ({
+        definitionId: policy.definitionId,
+        ...(operation.action === "rollback"
+          ? {}
+          : { discovery: discoveryByDefinitionId.get(policy.definitionId) }),
+        processConcurrency: policy.processConcurrency,
+        rollbackConcurrency: policy.rollbackConcurrency,
+      })),
       ...(operation.plan.force === undefined
         ? {}
         : { force: operation.plan.force }),
+      includedDefinitionIds: operation.plan.includedDefinitionIds,
+      notices: operation.plan.notices,
       requestedDefinitionIds: operation.plan.requestedDefinitionIds,
+      ...(operation.plan.requestedGroup === undefined
+        ? {}
+        : { requestedGroup: operation.plan.requestedGroup }),
+      ...(!("rescan" in operation.plan) || operation.plan.rescan === undefined
+        ? {}
+        : { rescan: operation.plan.rescan }),
+      ...(!("rollbackOrphans" in operation.plan) ||
+      operation.plan.rollbackOrphans === undefined
+        ? {}
+        : { rollbackOrphans: operation.plan.rollbackOrphans }),
       withDependencies: operation.plan.withDependencies,
     },
     planRows: operation.planRows,
@@ -49,7 +77,7 @@ const projectOperation = (
     operation.sourceIdentities === undefined
       ? {}
       : { sourceIdentities: operation.sourceIdentities }),
-    target: operation.target,
+    selection: operation.selection,
   };
 };
 
@@ -60,6 +88,9 @@ const runtimePrepareOptions = (
     ? {}
     : { execution: runtimeExecutionOptions(options.execution) }),
   ...(options.force === undefined ? {} : { force: options.force }),
+  ...(options.rollbackOrphans === undefined
+    ? {}
+    : { rollbackOrphans: options.rollbackOrphans }),
   ...(options.sourceIdentities === undefined
     ? {}
     : { sourceIdentities: options.sourceIdentities }),
@@ -105,7 +136,11 @@ export const makeRegistryMigrateServerBackend = (
   watchDashboardRun: runtime.watchDashboardRun,
   prepareOperation: (input) =>
     runtime
-      .prepare(input.target, input.action, runtimePrepareOptions(input.options))
+      .prepare(
+        input.selection,
+        input.action,
+        runtimePrepareOptions(input.options)
+      )
       .pipe(
         Effect.map((executable) => ({
           executable,

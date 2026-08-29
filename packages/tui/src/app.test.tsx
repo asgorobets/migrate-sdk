@@ -1036,8 +1036,10 @@ describe("MigrationTuiApp", () => {
       });
       const prerequisite = await runtime.prepare(
         {
-          definitionId: toMigrationDefinitionId("live-progress-prerequisite"),
-          kind: "migration",
+          definitionIds: [
+            toMigrationDefinitionId("live-progress-prerequisite"),
+          ],
+          kind: "definitions",
         },
         "run"
       );

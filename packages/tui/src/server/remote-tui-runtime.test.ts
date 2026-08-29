@@ -173,7 +173,7 @@ describe("remote TUI runtime", () => {
 
       try {
         const operation = await runtime.prepare(
-          { definitionId, kind: "migration" },
+          { definitionIds: [definitionId], kind: "definitions" },
           "run",
           options
         );
@@ -182,7 +182,7 @@ describe("remote TUI runtime", () => {
         const expectedRequest: MigrateOperationRequest = {
           action: "run",
           options,
-          target: { definitionId, kind: "migration" },
+          selection: { definitionIds: [definitionId], kind: "definitions" },
         };
         expect(operation.request).toEqual(expectedRequest);
         expect(preparedRequests).toEqual([expectedRequest, expectedRequest]);

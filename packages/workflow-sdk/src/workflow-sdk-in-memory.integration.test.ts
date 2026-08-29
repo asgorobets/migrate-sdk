@@ -368,7 +368,13 @@ test("Workflow SDK streams committed cursor-window checkpoints during a detached
     )
   );
 
-  expect(observed).toEqual({ kind: "succeeded" });
+  expect(observed).toEqual({
+    kind: "succeeded",
+    summary: expect.objectContaining({
+      runId: execution.started.runId,
+      status: "succeeded",
+    }),
+  });
   const progressStream = execution.run.getReadable({
     namespace: workflowSdkMigrationProgressStreamNamespace,
   });

@@ -1,16 +1,37 @@
 import { layer as nodeServicesLayer } from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Layer, Queue, Stdio, Stream } from "effect";
+import {
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Queue,
+  Redacted,
+  Stdio,
+  Stream,
+} from "effect";
 import { pretty as prettyCause } from "effect/Cause";
 import { isFailure, isSuccess } from "effect/Exit";
-import { TestConsole } from "effect/testing";
+import { TestClock, TestConsole } from "effect/testing";
 import { CliOutput, Command } from "effect/unstable/cli";
 import type { MigrateServerConnectionInput } from "../client/node/index.ts";
-import { toMigrationDefinitionId, toMigrationRunId } from "../domain/ids.ts";
+import {
+  toMigrationDefinitionGroupId,
+  toMigrationDefinitionId,
+  toMigrationRunId,
+} from "../domain/ids.ts";
+import {
+  MigrationDefinitionRegistryUnknownDefinitionError,
+  MigrationDefinitionRegistryUnknownGroupError,
+} from "../domain/registry.ts";
 import type {
   MigrateActiveRun,
   MigrateObservationEvent,
+  MigrateOperationRequest,
+  MigratePreparedOperation,
+  MigrateTerminalSummary,
 } from "../protocol/index.ts";
+import { MigratePlanFingerprint } from "../protocol/index.ts";
 import { migrateCommand } from "./command.ts";
 import type { ActiveMigrationCliInterrupts } from "./interrupts.ts";
 import {
@@ -32,6 +53,92 @@ const activeRun: MigrateActiveRun = {
   stopSupported: true,
 };
 
+const runTerminalSummary = (
+  status: "succeeded" | "failed" = "succeeded"
+): Extract<MigrateTerminalSummary, { readonly kind: "run" }> => ({
+  definitions: [
+    {
+      counts: {
+        failed: status === "failed" ? 1 : 0,
+        migrated: 3,
+        needsUpdate: 1,
+        orphaned: 2,
+        rollbackFailed: 1,
+        rolledBack: 1,
+        skipped: 2,
+        unchanged: 4,
+      },
+      definitionId,
+      status,
+    },
+  ],
+  finishedAt: new Date("2026-08-29T12:01:00.000Z"),
+  kind: "run",
+  runId,
+  startedAt: new Date("2026-08-29T12:00:00.000Z"),
+  status,
+});
+
+const preparedOperation = (
+  request: MigrateOperationRequest
+): MigratePreparedOperation => {
+  let requestedDefinitionIds: "all" | readonly (typeof definitionId)[] = [
+    definitionId,
+  ];
+
+  if (request.selection.kind === "all") {
+    requestedDefinitionIds = "all";
+  } else if (request.selection.kind === "definitions") {
+    requestedDefinitionIds = request.selection.definitionIds;
+  }
+
+  return {
+    action: request.action,
+    dependencyChecks: [],
+    fingerprint: MigratePlanFingerprint.make("sha256:cli-operation"),
+    observationDefinitionId: definitionId,
+    plan: {
+      ...(request.options.execution === undefined
+        ? {}
+        : { execution: request.options.execution }),
+      executionDefinitionIds: [definitionId],
+      executionPolicy: [
+        {
+          definitionId,
+          discovery: "full",
+          processConcurrency:
+            request.options.execution?.process?.concurrency ?? 1,
+          rollbackConcurrency:
+            request.options.execution?.rollback?.concurrency ?? 1,
+        },
+      ],
+      ...(request.options.force === undefined
+        ? {}
+        : { force: request.options.force }),
+      includedDefinitionIds: [definitionId],
+      notices: [],
+      requestedDefinitionIds,
+      ...(request.selection.kind === "group"
+        ? { requestedGroup: request.selection.groupId }
+        : {}),
+      ...(request.action === "rescan" ||
+      request.options.rollbackOrphans === true
+        ? { rescan: true }
+        : {}),
+      ...(request.options.rollbackOrphans === undefined
+        ? {}
+        : { rollbackOrphans: request.options.rollbackOrphans }),
+      withDependencies: request.options.withDependencies ?? false,
+    },
+    planRows: [],
+    request,
+    selection: request.selection,
+    ...(request.options.sourceIdentities === undefined
+      ? {}
+      : { sourceIdentities: request.options.sourceIdentities }),
+  };
+};
+
 const makeConnection = (
   overrides: Partial<MigrationCliServerConnection> = {},
   onDispose: () => void = () => undefined
@@ -42,6 +149,8 @@ const makeConnection = (
   },
   getActiveRuns: Effect.succeed([]),
   observeRun: () => Stream.die("Unexpected run observation"),
+  prepareOperation: () => Effect.die("Unexpected operation preparation"),
+  startOperation: () => Effect.die("Unexpected operation start"),
   stopRun: (requestedRunId) =>
     Effect.succeed({
       kind: "requested" as const,
@@ -88,6 +197,44 @@ const interruptRuntime = (
 });
 
 describe("migrate runs", () => {
+  it.effect("renders typed remote planning errors with their identifiers", () =>
+    Effect.gen(function* () {
+      const cases = [
+        {
+          args: ["run", "missing", "--plan"],
+          error: new MigrationDefinitionRegistryUnknownDefinitionError({
+            definitionId: toMigrationDefinitionId("missing"),
+            message: "Migration was not found",
+          }),
+          expected: "Migration was not found: missing",
+        },
+        {
+          args: ["run", "--group", "missing-group", "--plan"],
+          error: new MigrationDefinitionRegistryUnknownGroupError({
+            group: toMigrationDefinitionGroupId("missing-group"),
+            message: "Migration group was not found",
+          }),
+          expected: "Migration group was not found: missing-group",
+        },
+      ] as const;
+
+      for (const testCase of cases) {
+        const result = yield* runCli(testCase.args, {
+          connectMigrateServer: () =>
+            Effect.succeed(
+              makeConnection({
+                prepareOperation: () => Effect.fail(testCase.error),
+              })
+            ),
+          cwd: "/workspace",
+        });
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain(testCase.expected);
+      }
+    })
+  );
+
   it.effect("lists active remote runs through the shared connection", () =>
     Effect.gen(function* () {
       let connectionInput: MigrateServerConnectionInput | undefined;
@@ -106,7 +253,7 @@ describe("migrate runs", () => {
             return Effect.succeed(connection);
           },
           cwd: "/workspace",
-          migrateServerToken: "secret",
+          migrateServerToken: Redacted.make("secret"),
         }
       );
 
@@ -152,6 +299,7 @@ describe("migrate runs", () => {
               message: `Run ${runId} succeeded`,
               outcome: "completed" as const,
               runId,
+              summary: runTerminalSummary(),
             },
           ]),
       });
@@ -164,7 +312,71 @@ describe("migrate runs", () => {
       expect(result.stderr).toBe("");
       expect(result.stdout).toContain("Progress");
       expect(result.stdout).toContain("articles");
-      expect(result.stdout).toContain(`Run ${runId} succeeded`);
+      expect(result.stdout).toContain("Run Completed succeeded");
+    })
+  );
+
+  it.effect(
+    "renders a completed failed-item summary without failing the CLI command",
+    () =>
+      Effect.gen(function* () {
+        const connection = makeConnection({
+          observeRun: () =>
+            Stream.make({
+              kind: "terminal" as const,
+              message: `Run ${runId} failed`,
+              outcome: "completed" as const,
+              runId,
+              summary: runTerminalSummary("failed"),
+            }),
+        });
+        const result = yield* runCli(["runs", "observe", runId], {
+          connectMigrateServer: () => Effect.succeed(connection),
+          cwd: "/workspace",
+        });
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr).toBe("");
+        expect(result.stdout).toContain("Run Completed failed");
+        expect(result.stdout).toContain("Orphaned");
+        expect(result.stdout).toContain("Rolled Back");
+        expect(result.stdout).toContain("Rollback Failed");
+      })
+  );
+
+  it.effect("renders rollback terminal summaries", () =>
+    Effect.gen(function* () {
+      const connection = makeConnection({
+        observeRun: () =>
+          Stream.make({
+            kind: "terminal" as const,
+            message: `Run ${runId} succeeded`,
+            outcome: "completed" as const,
+            runId,
+            summary: {
+              definitions: [
+                {
+                  counts: { failed: 0, rolledBack: 2, skipped: 1 },
+                  definitionId,
+                  status: "succeeded" as const,
+                },
+              ],
+              finishedAt: new Date("2026-08-29T12:01:00.000Z"),
+              kind: "rollback" as const,
+              runId,
+              startedAt: new Date("2026-08-29T12:00:00.000Z"),
+              status: "succeeded" as const,
+            },
+          }),
+      });
+      const result = yield* runCli(["runs", "observe", runId], {
+        connectMigrateServer: () => Effect.succeed(connection),
+        cwd: "/workspace",
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Rollback Completed succeeded");
+      expect(result.stdout).toContain("Rolled Back");
     })
   );
 
@@ -474,6 +686,110 @@ describe("migrate runs", () => {
   );
 
   it.effect(
+    "pauses interactive progress while the interrupt prompt is open",
+    () =>
+      Effect.gen(function* () {
+        const interrupts = yield* Queue.unbounded<void>();
+        const observationStarted = yield* Deferred.make<void>();
+        const promptOpened = yield* Deferred.make<void>();
+        const promptChoice = yield* Deferred.make<
+          "continue" | "detach" | "stop"
+        >();
+        const nextProgress = yield* Deferred.make<MigrateObservationEvent>();
+        const terminalEvent =
+          yield* Deferred.make<
+            Extract<MigrateObservationEvent, { readonly kind: "terminal" }>
+          >();
+        const writes: string[] = [];
+        const progressEvent = (
+          migrated: number
+        ): Extract<MigrateObservationEvent, { readonly kind: "progress" }> => ({
+          definitions: [
+            {
+              definitionId,
+              discovery: "full",
+              durable: {
+                failed: 0,
+                migrated,
+                needsUpdate: 0,
+                skipped: 0,
+              },
+              lastRun: null,
+              lock: null,
+              warnings: [],
+            },
+          ],
+          kind: "progress",
+        });
+        const connection = makeConnection({
+          observeRun: () =>
+            Stream.fromEffect(
+              Deferred.succeed(observationStarted, undefined).pipe(
+                Effect.as(progressEvent(1))
+              )
+            ).pipe(
+              Stream.concat(Stream.fromEffect(Deferred.await(nextProgress))),
+              Stream.concat(Stream.fromEffect(Deferred.await(terminalEvent)))
+            ),
+          prepareOperation: (request) =>
+            Effect.succeed(preparedOperation(request)),
+          startOperation: () =>
+            Effect.succeed({ runId, status: "started" as const }),
+        });
+        const resultFiber = yield* runCli(
+          ["run", "articles"],
+          interruptRuntime(
+            connection,
+            {
+              confirmUnsafeExit: Effect.succeed(false),
+              forceExit: Effect.never,
+              wait: Queue.take(interrupts),
+            },
+            {
+              chooseRunObservationInterrupt: () =>
+                Deferred.succeed(promptOpened, undefined).pipe(
+                  Effect.andThen(Deferred.await(promptChoice))
+                ),
+              stdoutColumns: 120,
+              stdoutIsTTY: true,
+              writeProgress: (chunk) =>
+                Effect.sync(() => {
+                  writes.push(chunk);
+                }),
+            }
+          )
+        ).pipe(Effect.forkChild);
+
+        yield* Deferred.await(observationStarted);
+        yield* Queue.offer(interrupts, undefined);
+        yield* Deferred.await(promptOpened);
+        const writesWhilePromptOpened = writes.length;
+
+        yield* Deferred.succeed(nextProgress, progressEvent(2));
+        yield* Effect.yieldNow;
+        expect(writes).toHaveLength(writesWhilePromptOpened);
+
+        yield* Deferred.succeed(promptChoice, "continue");
+        while (writes.length === writesWhilePromptOpened) {
+          yield* Effect.yieldNow;
+        }
+
+        yield* Deferred.succeed(terminalEvent, {
+          kind: "terminal",
+          message: `Run ${runId} succeeded`,
+          outcome: "completed",
+          runId,
+          summary: runTerminalSummary(),
+        });
+        const result = yield* Fiber.join(resultFiber);
+
+        expect(result.exitCode).toBe(0);
+        expect(writes.length).toBeGreaterThan(writesWhilePromptOpened);
+        expect(result.stdout).toContain("Run Completed succeeded");
+      })
+  );
+
+  it.effect(
     "requests safe stop and observes the run until it is cancelled",
     () =>
       Effect.gen(function* () {
@@ -593,5 +909,543 @@ describe("migrate runs", () => {
         `Observe again: migrate runs observe '${runId}'`
       );
     })
+  );
+
+  it.effect(
+    "prepares, starts, and observes a remote run through one client",
+    () =>
+      Effect.gen(function* () {
+        const requests: MigrateOperationRequest[] = [];
+        let startedOperation:
+          | Parameters<MigrationCliServerConnection["startOperation"]>[0]
+          | undefined;
+        const connection = makeConnection({
+          observeRun: () =>
+            Stream.fromIterable([
+              {
+                definitions: [
+                  {
+                    definitionId,
+                    discovery: "full" as const,
+                    durable: {
+                      failed: 0,
+                      migrated: 1,
+                      needsUpdate: 0,
+                      skipped: 0,
+                    },
+                    lastRun: null,
+                    lock: null,
+                    warnings: [],
+                  },
+                ],
+                kind: "progress" as const,
+              },
+              {
+                kind: "terminal" as const,
+                message: `Run ${runId} succeeded`,
+                outcome: "completed" as const,
+                runId,
+              },
+            ]),
+          prepareOperation: (request) => {
+            requests.push(request);
+            return Effect.succeed(preparedOperation(request));
+          },
+          startOperation: (operation) => {
+            startedOperation = operation;
+            return Effect.succeed({ runId, status: "started" as const });
+          },
+        });
+        const result = yield* runCli(
+          [
+            "run",
+            "articles",
+            "authors",
+            "--server",
+            "https://migrate.example/api/migrate",
+            "--concurrency",
+            "3",
+            "--rollback-orphans",
+            "--progress",
+            "log",
+            "--with-dependencies",
+          ],
+          {
+            connectMigrateServer: () => Effect.succeed(connection),
+            cwd: "/workspace",
+          }
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stderr).toBe("");
+        expect(requests).toEqual([
+          {
+            action: "run",
+            options: {
+              execution: {
+                process: { concurrency: 3 },
+                rollback: { concurrency: 3 },
+              },
+              rollbackOrphans: true,
+              withDependencies: true,
+            },
+            selection: {
+              definitionIds: [
+                toMigrationDefinitionId("articles"),
+                toMigrationDefinitionId("authors"),
+              ],
+              kind: "definitions",
+            },
+          },
+        ]);
+        expect(startedOperation).toEqual({
+          acceptedFingerprint: MigratePlanFingerprint.make(
+            "sha256:cli-operation"
+          ),
+          request: requests[0],
+        });
+        expect(result.stdout).toContain("Progress");
+        expect(result.stdout).toContain(`Run ${runId} succeeded`);
+      })
+  );
+
+  it.effect("maps run modes and selections into protocol requests", () =>
+    Effect.gen(function* () {
+      const requests: MigrateOperationRequest[] = [];
+      const connection = makeConnection({
+        prepareOperation: (request) => {
+          requests.push(request);
+          return Effect.succeed(preparedOperation(request));
+        },
+      });
+      const runtime = {
+        connectMigrateServer: () => Effect.succeed(connection),
+        cwd: "/workspace",
+      };
+
+      for (const args of [
+        ["run", "articles", "--failed", "--plan"],
+        ["run", "articles", "--skipped", "--plan"],
+        ["run", "--group", "content", "--rescan", "--plan"],
+        ["run", "--all", "--update", "--plan"],
+      ] as const) {
+        const result = yield* runCli(args, runtime);
+        expect(result.exitCode).toBe(0);
+      }
+
+      expect(requests).toEqual([
+        {
+          action: "retry-failed",
+          options: { withDependencies: false },
+          selection: {
+            definitionIds: [definitionId],
+            kind: "definitions",
+          },
+        },
+        {
+          action: "retry-skipped",
+          options: { withDependencies: false },
+          selection: {
+            definitionIds: [definitionId],
+            kind: "definitions",
+          },
+        },
+        {
+          action: "rescan",
+          options: { withDependencies: false },
+          selection: {
+            groupId: toMigrationDefinitionGroupId("content"),
+            kind: "group",
+          },
+        },
+        {
+          action: "update",
+          options: { withDependencies: false },
+          selection: { kind: "all" },
+        },
+      ]);
+    })
+  );
+
+  it.effect(
+    "rejects omitted and mixed operation selections before connecting",
+    () =>
+      Effect.gen(function* () {
+        let connectionAttempts = 0;
+        const runtime = {
+          connectMigrateServer: () => {
+            connectionAttempts += 1;
+            return Effect.succeed(makeConnection());
+          },
+          cwd: "/workspace",
+        };
+        const omitted = yield* runCli(["run", "--plan"], runtime);
+        const mixed = yield* runCli(
+          ["rollback", "articles", "--all", "--plan"],
+          runtime
+        );
+
+        expect(omitted.exitCode).toBe(1);
+        expect(omitted.stderr).toContain(
+          "Select migrations with definition IDs, --group, or --all"
+        );
+        expect(mixed.exitCode).toBe(1);
+        expect(mixed.stderr).toContain(
+          "Choose only one migration selection: definition IDs, --group, or --all"
+        );
+        expect(connectionAttempts).toBe(0);
+      })
+  );
+
+  it.effect("plans an all-definition rollback without starting it", () =>
+    Effect.gen(function* () {
+      const requests: MigrateOperationRequest[] = [];
+      let startCalls = 0;
+      const connection = makeConnection({
+        prepareOperation: (request) => {
+          requests.push(request);
+          return Effect.succeed(preparedOperation(request));
+        },
+        startOperation: () => {
+          startCalls += 1;
+          return Effect.succeed({ runId, status: "started" as const });
+        },
+      });
+      const result = yield* runCli(["rollback", "--all", "--plan"], {
+        connectMigrateServer: () => Effect.succeed(connection),
+        cwd: "/workspace",
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(requests).toEqual([
+        {
+          action: "rollback",
+          options: { withDependencies: false },
+          selection: { kind: "all" },
+        },
+      ]);
+      expect(startCalls).toBe(0);
+      expect(result.stdout).toContain("Rollback Plan");
+      expect(result.stdout).toContain("Requested  all");
+    })
+  );
+
+  it.effect("renders rollback-orphans as an effective rescan", () =>
+    Effect.gen(function* () {
+      const connection = makeConnection({
+        prepareOperation: (request) => {
+          const operation = preparedOperation(request);
+          return Effect.succeed({
+            ...operation,
+            plan: {
+              ...operation.plan,
+              executionPolicy: operation.plan.executionPolicy.map((policy) => ({
+                ...policy,
+                discovery: "incremental" as const,
+              })),
+            },
+          });
+        },
+      });
+      const result = yield* runCli(
+        ["run", "articles", "--rollback-orphans", "--plan"],
+        {
+          connectMigrateServer: () => Effect.succeed(connection),
+          cwd: "/workspace",
+        }
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Rescan     yes");
+      expect(result.stdout).toContain("starts from the beginning");
+      expect(result.stdout).not.toContain("Pass --rescan");
+    })
+  );
+
+  it.effect("reports dependency recovery before starting an invalid plan", () =>
+    Effect.gen(function* () {
+      let startCalls = 0;
+      const connection = makeConnection({
+        prepareOperation: (request) => {
+          const operation = preparedOperation(request);
+          return Effect.succeed({
+            ...operation,
+            dependencyChecks: [
+              {
+                dependencyId: toMigrationDefinitionId("authors"),
+                requiredByDefinitionId: definitionId,
+                satisfied: false,
+              },
+            ],
+          });
+        },
+        startOperation: () => {
+          startCalls += 1;
+          return Effect.succeed({ runId, status: "started" as const });
+        },
+      });
+      const result = yield* runCli(["run", "articles"], {
+        connectMigrateServer: () => Effect.succeed(connection),
+        cwd: "/workspace",
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(startCalls).toBe(0);
+      expect(result.stderr).toContain(
+        "Migration Definition required dependency state is not satisfied"
+      );
+      expect(result.stderr).toContain("articles requires authors");
+      expect(result.stderr).toContain("--with-dependencies");
+      expect(result.stderr).toContain("--force");
+    })
+  );
+
+  it.effect("passes rollback source identities through preparation", () =>
+    Effect.gen(function* () {
+      const requests: MigrateOperationRequest[] = [];
+      const connection = makeConnection({
+        prepareOperation: (request) => {
+          requests.push(request);
+          return Effect.succeed(preparedOperation(request));
+        },
+      });
+      const result = yield* runCli(
+        [
+          "rollback",
+          "articles",
+          "--id",
+          "article%3A1",
+          "--id",
+          "article%3A2",
+          "--plan",
+        ],
+        {
+          connectMigrateServer: () => Effect.succeed(connection),
+          cwd: "/workspace",
+        }
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(requests).toEqual([
+        {
+          action: "rollback",
+          options: {
+            sourceIdentities: ["article%3A1", "article%3A2"],
+            withDependencies: false,
+          },
+          selection: {
+            definitionIds: [definitionId],
+            kind: "definitions",
+          },
+        },
+      ]);
+    })
+  );
+
+  it.effect("suppresses only progress snapshots in none mode", () =>
+    Effect.gen(function* () {
+      const connection = makeConnection({
+        observeRun: () =>
+          Stream.fromIterable([
+            { definitions: [], kind: "progress" as const },
+            {
+              kind: "terminal" as const,
+              message: `Run ${runId} succeeded`,
+              outcome: "completed" as const,
+              runId,
+              summary: runTerminalSummary(),
+            },
+          ]),
+        prepareOperation: (request) =>
+          Effect.succeed(preparedOperation(request)),
+        startOperation: () =>
+          Effect.succeed({ runId, status: "started" as const }),
+      });
+      const result = yield* runCli(["run", "articles", "--progress", "none"], {
+        connectMigrateServer: () => Effect.succeed(connection),
+        cwd: "/workspace",
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).not.toContain("Progress");
+      expect(result.stdout).toContain("Run Completed succeeded");
+    })
+  );
+
+  it.effect("redraws auto progress in place on an interactive terminal", () =>
+    Effect.gen(function* () {
+      const writes: string[] = [];
+      const progressEvent: Extract<
+        MigrateObservationEvent,
+        { readonly kind: "progress" }
+      > = {
+        definitions: [
+          {
+            definitionId,
+            discovery: "full" as const,
+            durable: {
+              failed: 0,
+              migrated: 1,
+              needsUpdate: 0,
+              skipped: 0,
+            },
+            lastRun: null,
+            lock: null,
+            warnings: [],
+          },
+        ],
+        kind: "progress" as const,
+      };
+      const connection = makeConnection({
+        observeRun: () =>
+          Stream.fromIterable([
+            progressEvent,
+            {
+              ...progressEvent,
+              definitions: [
+                {
+                  definitionId,
+                  discovery: "full" as const,
+                  durable: {
+                    failed: 0,
+                    migrated: 2,
+                    needsUpdate: 0,
+                    skipped: 0,
+                  },
+                  lastRun: null,
+                  lock: null,
+                  warnings: [],
+                },
+              ],
+            },
+            {
+              kind: "terminal" as const,
+              message: `Run ${runId} succeeded`,
+              outcome: "completed" as const,
+              runId,
+              summary: runTerminalSummary(),
+            },
+          ]),
+        prepareOperation: (request) =>
+          Effect.succeed(preparedOperation(request)),
+        startOperation: () =>
+          Effect.succeed({ runId, status: "started" as const }),
+      });
+      const result = yield* runCli(["run", "articles"], {
+        connectMigrateServer: () => Effect.succeed(connection),
+        cwd: "/workspace",
+        stdoutColumns: 120,
+        stdoutIsTTY: true,
+        writeProgress: (chunk) =>
+          Effect.sync(() => {
+            writes.push(chunk);
+          }),
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).not.toContain("Progress");
+      expect(result.stdout).toContain("Run Completed succeeded");
+      expect(writes.join("")).toContain("Progress");
+      expect(writes.join("")).toContain("\u001B[2K");
+      expect(writes.join("")).toContain("Migrated");
+    })
+  );
+
+  it.effect(
+    "waits for a run id before applying an interrupt during start",
+    () =>
+      Effect.gen(function* () {
+        const interrupts = yield* Queue.unbounded<void>();
+        const startCalled = yield* Deferred.make<void>();
+        const startResult = yield* Deferred.make<{
+          readonly runId: typeof runId;
+          readonly status: "started";
+        }>();
+        let startInterrupted = false;
+        const connection = makeConnection({
+          observeRun: () => Stream.never,
+          prepareOperation: (request) =>
+            Effect.succeed(preparedOperation(request)),
+          startOperation: () =>
+            Deferred.succeed(startCalled, undefined).pipe(
+              Effect.andThen(Deferred.await(startResult)),
+              Effect.onInterrupt(() =>
+                Effect.sync(() => {
+                  startInterrupted = true;
+                })
+              )
+            ),
+        });
+        const resultFiber = yield* runCli(
+          ["run", "articles"],
+          interruptRuntime(
+            connection,
+            {
+              confirmUnsafeExit: Effect.succeed(false),
+              forceExit: Effect.never,
+              wait: Queue.take(interrupts),
+            },
+            { chooseRunObservationInterrupt: () => Effect.succeed("detach") }
+          )
+        ).pipe(Effect.forkChild);
+
+        yield* Deferred.await(startCalled);
+        yield* Queue.offer(interrupts, undefined);
+        yield* Deferred.succeed(startResult, {
+          runId,
+          status: "started" as const,
+        });
+        const result = yield* Fiber.join(resultFiber);
+
+        expect(startInterrupted).toBe(false);
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain("Observation detached");
+        expect(result.stdout).toContain(`Run id ${runId}`);
+        expect(result.stdout).toContain(
+          `Observe again: migrate runs observe '${runId}'`
+        );
+      })
+  );
+
+  it.effect(
+    "stops waiting for an unknown start acknowledgement after the grace period",
+    () =>
+      Effect.gen(function* () {
+        const interrupts = yield* Queue.unbounded<void>();
+        const startCalled = yield* Deferred.make<void>();
+        const connection = makeConnection({
+          prepareOperation: (request) =>
+            Effect.succeed(preparedOperation(request)),
+          startOperation: () =>
+            Deferred.succeed(startCalled, undefined).pipe(
+              Effect.andThen(Effect.never)
+            ),
+        });
+        const resultFiber = yield* runCli(
+          ["run", "articles"],
+          interruptRuntime(
+            connection,
+            {
+              confirmUnsafeExit: Effect.succeed(false),
+              forceExit: Effect.never,
+              wait: Queue.take(interrupts),
+            },
+            { startAcknowledgementTimeoutMs: 1000 }
+          )
+        ).pipe(Effect.forkChild);
+
+        yield* Deferred.await(startCalled);
+        yield* Queue.offer(interrupts, undefined);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(1000);
+        const result = yield* Fiber.join(resultFiber);
+
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain(
+          "The start acknowledgement is still unknown after Ctrl+C"
+        );
+        expect(result.stderr).toContain("List active runs: migrate runs list");
+        expect(result.stderr).not.toContain("Stopping");
+      })
   );
 });

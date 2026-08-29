@@ -50,6 +50,7 @@ import {
   type MigrateServerInfo,
   type MigrateSourceIdentityHistoryEntry,
   type MigrateTarget,
+  type MigrateTerminalSummary,
 } from "../protocol/index.ts";
 import { MIGRATE_SDK_VERSION } from "../version.ts";
 
@@ -130,6 +131,7 @@ export interface MigrateServerExecutionResult {
   readonly message: string;
   readonly outcome: "cancelled" | "completed" | "detached" | "failed";
   readonly runId: MigrationRunId;
+  readonly summary?: MigrateTerminalSummary;
 }
 
 export interface MigrateServerRunProgress {
@@ -311,8 +313,8 @@ const fingerprintInput = (
     satisfied: check.satisfied,
   })),
   plan: operation.plan,
+  selection: operation.selection,
   sourceIdentities: operation.sourceIdentities,
-  target: operation.target,
 });
 
 const bytesToHex = (bytes: Uint8Array): string =>
@@ -782,6 +784,9 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
                       message: result.message,
                       outcome: result.outcome,
                       runId: result.runId,
+                      ...(result.summary === undefined
+                        ? {}
+                        : { summary: result.summary }),
                     }
               );
               Queue.endUnsafe(queue);
@@ -1430,6 +1435,9 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
                       message: result.message,
                       outcome: result.outcome,
                       runId: result.runId,
+                      ...(result.summary === undefined
+                        ? {}
+                        : { summary: result.summary }),
                     }
               );
               close(record);

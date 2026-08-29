@@ -5,6 +5,7 @@ import {
   Layer,
   Option,
   Path,
+  type Redacted,
   Schema,
   type Stream,
   Terminal,
@@ -19,6 +20,9 @@ import type { MigrationRunId } from "../domain/ids.ts";
 import type {
   MigrateActiveRun,
   MigrateObservationEvent,
+  MigrateOperationRequest,
+  MigratePreparedOperation,
+  MigrateRunStartResult,
   MigrateRunStopResult,
 } from "../protocol/index.ts";
 import type { SqlMigrationStoreSchemaPlan } from "../stores/sql/sql-migration-store-schema.ts";
@@ -48,6 +52,13 @@ export interface MigrationCliServerConnection {
   readonly observeRun: (
     runId: MigrationRunId
   ) => Stream.Stream<MigrateObservationEvent, unknown>;
+  readonly prepareOperation: (
+    request: MigrateOperationRequest
+  ) => Effect.Effect<MigratePreparedOperation, unknown>;
+  readonly startOperation: (input: {
+    readonly acceptedFingerprint: MigratePreparedOperation["fingerprint"];
+    readonly request: MigrateOperationRequest;
+  }) => Effect.Effect<MigrateRunStartResult, unknown>;
   readonly stopRun: (
     runId: MigrationRunId
   ) => Effect.Effect<MigrateRunStopResult, unknown>;
@@ -67,7 +78,8 @@ export interface MigrationCliRuntimeShape {
   ) => Effect.Effect<MigrationCliServerConnection, MigrationCliConnectionError>;
   readonly cwd: string;
   readonly interrupts?: MigrationCliInterruptController;
-  readonly migrateServerToken?: string;
+  readonly migrateServerToken?: Redacted.Redacted<string>;
+  readonly startAcknowledgementTimeoutMs?: number;
   readonly stdoutColumns?: number;
   readonly stdoutIsTTY?: boolean;
   readonly useColor?: boolean;
@@ -85,16 +97,14 @@ export class MigrationCliRuntime extends Service<
       const forceColor = yield* Config.option(Config.string("FORCE_COLOR"));
       const noColor = yield* Config.option(Config.string("NO_COLOR"));
       const migrateServerToken = yield* Config.option(
-        Config.string("MIGRATE_SERVER_TOKEN")
+        Config.redacted("MIGRATE_SERVER_TOKEN")
       );
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const terminal = yield* Terminal.Terminal;
       const forceColorValue = Option.getOrUndefined(forceColor);
-      const migrateServerTokenValue =
-        Option.getOrUndefined(migrateServerToken)?.trim();
+      const migrateServerTokenValue = Option.getOrUndefined(migrateServerToken);
       const stdoutColumns = process.stdout.columns;
-
       return {
         chooseRunObservationInterrupt: (runId, { stopRequested }) =>
           Prompt.select({
@@ -155,6 +165,10 @@ export class MigrationCliRuntime extends Service<
               getActiveRuns: connection.client.GetActiveRuns(),
               observeRun: (runId: MigrationRunId) =>
                 connection.client.observeRun({ runId }),
+              prepareOperation: (request) =>
+                connection.client.PrepareOperation(request),
+              startOperation: (input) =>
+                connection.client.StartOperation(input),
               stopRun: (runId: MigrationRunId) =>
                 connection.client.StopRun({ runId }),
             }))
@@ -175,8 +189,7 @@ export class MigrationCliRuntime extends Service<
         }),
         ...(stdoutColumns === undefined ? {} : { stdoutColumns }),
         stdoutIsTTY: process.stdout.isTTY === true && Option.isNone(ci),
-        ...(migrateServerTokenValue === undefined ||
-        migrateServerTokenValue === ""
+        ...(migrateServerTokenValue === undefined
           ? {}
           : { migrateServerToken: migrateServerTokenValue }),
         useColor:

@@ -263,13 +263,15 @@ observe it again. Stopping is never inferred from losing a client or receiving
 a process signal. A second Ctrl+C while a stopped run is draining may detach,
 but it does not hard-cancel provider execution.
 
-Existing `migrate run` and `migrate rollback` commands move to the same server
-boundary only after the protocol can represent their complete selection and
-execution options. In particular, operation selection must distinguish all
-definitions, a non-empty explicit definition set, and a group. A client that is
-interrupted after dispatch but before receiving `StartOperation` must not claim
-that no run exists; once its outcome is unknown, active-run discovery is the
-recovery path.
+`migrate run` and `migrate rollback` use the same server boundary. Protocol
+operation selection distinguishes all definitions, a non-empty explicit
+definition set, and a group; it remains separate from the single dashboard
+target used for navigation, messages, and source scans. Both commands prepare a
+serializable plan, accept its fingerprint, start it, and observe the returned
+Migration Run id through `MigrateClient`. A client interrupted after dispatch
+but before receiving `StartOperation` waits for the Run ID before applying its
+detach or stop decision. If acknowledgement fails and dispatch outcome is
+unknown, active-run discovery is the recovery path.
 
 ## Consequences
 
@@ -284,6 +286,8 @@ recovery path.
 - Remote operation requires only credentials for the Migrate Server; resource
   and provider credentials remain in the target environment.
 - Local IPC, SSH, and HTTPS clients can share one operation and event model.
+- CLI operation commands no longer construct `MigrationExecution`, provide
+  CLI-specific execution progress services, or wait on in-process run handles.
 - Execution providers remain replaceable behind Migration Executable instead of
   becoming TUI integrations.
 - The TUI and server negotiate protocol and SDK compatibility and exchange

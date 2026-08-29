@@ -77,6 +77,7 @@ export type MigrationExecutableObservationResult =
     }
   | {
       readonly kind: "succeeded";
+      readonly summary?: MigrationRunSummary | RollbackRunSummary;
     };
 
 export interface MigrationExecutableService {

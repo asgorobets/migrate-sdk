@@ -292,6 +292,33 @@ export interface MigrationDefinitionRunSummary
   };
 }
 
+const MigrationRunSummaryCount = Schema.Finite.check(Schema.isInt()).check(
+  Schema.isGreaterThanOrEqualTo(0)
+);
+
+export const MigrationDefinitionRunSummary = Schema.Struct({
+  counts: Schema.Struct({
+    failed: MigrationRunSummaryCount,
+    migrated: MigrationRunSummaryCount,
+    needsUpdate: MigrationRunSummaryCount,
+    orphaned: Schema.optionalKey(MigrationRunSummaryCount),
+    rollbackFailed: Schema.optionalKey(MigrationRunSummaryCount),
+    rolledBack: Schema.optionalKey(MigrationRunSummaryCount),
+    skipped: MigrationRunSummaryCount,
+    unchanged: MigrationRunSummaryCount,
+  }),
+  definitionId: MigrationDefinitionIdSchema,
+  status: Schema.Literals(["succeeded", "failed", "skipped"]),
+});
+
+export const MigrationRunSummary = Schema.Struct({
+  definitions: Schema.Array(MigrationDefinitionRunSummary),
+  finishedAt: Schema.Date,
+  runId: MigrationRunId,
+  startedAt: Schema.Date,
+  status: Schema.Literals(["succeeded", "failed", "cancelled"]),
+});
+
 export interface RollbackOrphansCounts {
   readonly orphaned: number;
   readonly rollbackFailed: number;

@@ -1,6 +1,6 @@
 # CLI Migration Run Observation and Control
 
-Status: ready-for-agent
+Status: ready-for-human
 
 ## Problem
 
@@ -16,7 +16,7 @@ the local machine.
 
 ## Current Implementation
 
-The first two slices are implemented:
+All five implementation slices are complete:
 
 - Migrate SDK owns `migrate-sdk/client/node`, including local socket startup,
   the reconnectable Node server host, remote HTTPS construction, authentication
@@ -27,11 +27,18 @@ The first two slices are implemented:
 - `runs observe` offers detach, safe stop, or continued observation in an
   interactive terminal. A non-interactive interrupt detaches without calling
   `StopRun` and prints the observe-again command.
-
-Existing `migrate run` and `migrate rollback` still use direct
-`MigrationExecution` and their legacy attached-handle interrupt behavior. The
-next slice is the operation-selection protocol needed to preserve all current
-CLI selection and execution modes before those commands move to the server.
+- `migrate run` and `migrate rollback` use `PrepareOperation`, fingerprinted
+  `StartOperation`, and `MigrateClient.observeRun` for both local and remote
+  execution. Their protocol-level operation selection supports all migrations,
+  a non-empty definition set, or one group.
+- The CLI no longer constructs `MigrationExecution`, provides execution
+  progress layers, or waits on an in-process execution handle. Absolute server
+  progress snapshots and terminal events are the only operation observation
+  path.
+- An interrupt while `StartOperation` is awaiting acknowledgement does not
+  interrupt dispatch. The CLI waits for the Run ID before applying the normal
+  detach/stop/continue choice; an unknown acknowledgement outcome points to
+  `migrate runs list`.
 
 ## Vocabulary
 
@@ -107,8 +114,7 @@ serverless invocation to reconstruct observation.
 
 ## Starting Operations
 
-After the lifecycle commands are in place, `migrate run` and
-`migrate rollback` move from direct `MigrationExecution` calls to:
+`migrate run` and `migrate rollback` use this lifecycle:
 
 1. Connect to the selected Migrate Server.
 2. `PrepareOperation` and render its serializable plan.
