@@ -3,7 +3,6 @@ import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type {
   MigrationDefinitionId,
   MigrationExecutionOptions,
-  MigrationMessage,
   MigrationRunId,
   PipelineExecutionConcurrency,
 } from "migrate-sdk";
@@ -48,6 +47,7 @@ import {
 import type { MigrationTuiRuntime } from "./runtime.ts";
 import type { MigrationTuiShutdownController } from "./shutdown-controller.ts";
 import { useDashboardObservation } from "./use-dashboard-observation.ts";
+import { useMigrationMessages } from "./use-migration-messages.ts";
 import { useSourceItemTotals } from "./use-source-item-totals.ts";
 
 type View =
@@ -535,9 +535,7 @@ export const MigrationTuiApp = ({
   const [pendingLockRow, setPendingLockRow] =
     useState<MigrateDashboardRow | null>(null);
   const [detailTab, setDetailTab] = useState<MigrationDetailTab>("overview");
-  const [messages, setMessages] = useState<readonly MigrationMessage[]>([]);
   const [messageIndex, setMessageIndex] = useState(0);
-  const [messagesLoading, setMessagesLoading] = useState(false);
   const [busy, setBusy] = useState(
     initialRows === undefined ? "Loading status…" : ""
   );
@@ -646,6 +644,11 @@ export const MigrationTuiApp = ({
       ? undefined
       : { definitionId: selectedDefinitionId, kind: "migration" };
   }, [listTab, selectedDefinitionId, selectedGroupId]);
+  const { loading: messagesLoading, messages } = useMigrationMessages({
+    runtime,
+    setError,
+    target: selectedTarget,
+  });
   const selectedSourceItemDefinitionIds = useMemo<
     readonly MigrationDefinitionId[]
   >(() => {
@@ -1349,40 +1352,10 @@ export const MigrationTuiApp = ({
   }, [view]);
 
   useEffect(() => {
-    setMessageIndex(0);
-
-    if (selectedTarget === undefined) {
-      setMessages([]);
-      setMessagesLoading(false);
-      return;
+    if (selectedTarget !== undefined) {
+      setMessageIndex(0);
     }
-
-    let active = true;
-    setMessages([]);
-    setMessagesLoading(true);
-
-    runtime
-      .listMessages(selectedTarget)
-      .then((nextMessages) => {
-        if (active) {
-          setMessages(nextMessages);
-        }
-      })
-      .catch((cause: unknown) => {
-        if (active) {
-          setError(errorMessage(cause));
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setMessagesLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [runtime, selectedTarget]);
+  }, [selectedTarget]);
 
   const cancelConfirmation = useCallback(() => {
     setPendingOperation(null);

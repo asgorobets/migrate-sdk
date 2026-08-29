@@ -33,6 +33,7 @@ import type {
   MigrationTuiRuntime,
   MigrationTuiSnapshot,
 } from "./runtime.ts";
+import { useMigrationMessages } from "./use-migration-messages.ts";
 
 const actEnvironment = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT: boolean | undefined;
@@ -1199,6 +1200,182 @@ describe("MigrationTuiApp", () => {
             setup.captureCharFrame().includes("Message 1 of 40")
           )
         ).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "reuses loaded messages when returning to a migration",
+    async () => {
+      const authorsId = toMigrationDefinitionId("authors");
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const redundantRequest =
+        Promise.withResolvers<readonly MigrationMessage[]>();
+      const listMessages = vi.fn(
+        (target: Parameters<MigrationTuiRuntime["listMessages"]>[0]) => {
+          const requestsForTarget = listMessages.mock.calls.filter(
+            ([candidate]) => {
+              if (
+                candidate.kind === "migration" &&
+                target.kind === "migration"
+              ) {
+                return candidate.definitionId === target.definitionId;
+              }
+              if (candidate.kind === "group" && target.kind === "group") {
+                return candidate.groupId === target.groupId;
+              }
+
+              return false;
+            }
+          );
+
+          return requestsForTarget.length > 1
+            ? redundantRequest.promise
+            : Promise.resolve([]);
+        }
+      );
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        listMessages,
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(
+            setup.renderOnce,
+            () =>
+              listMessages.mock.calls.length === 1 &&
+              setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("j"));
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => listMessages.mock.calls.length === 2
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("k"));
+        await act(async () => {
+          await setup.renderOnce();
+          await new Promise<void>((resolve) => setTimeout(resolve, 10));
+          await setup.renderOnce();
+        });
+
+        expect(listMessages).toHaveBeenCalledTimes(3);
+
+        act(() => setup.mockInput.pressKey("m"));
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).toContain("No messages.");
+        expect(setup.captureCharFrame()).not.toContain("Loading messages…");
+
+        redundantRequest.resolve([
+          {
+            definitionId: authorsId,
+            kind: "skip-reason",
+            message: "New source message",
+            runId: messageRunId,
+            severity: "info",
+            sourceIdentity: toEncodedSourceIdentity("source-new"),
+            updatedAt: new Date("2026-08-29T12:00:00.000Z"),
+          },
+        ]);
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("New source message")
+          )
+        ).toBe(true);
+      } finally {
+        redundantRequest.resolve([]);
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "never returns messages from the previous migration during navigation",
+    async () => {
+      const authorsTarget = {
+        definitionId: toMigrationDefinitionId("authors"),
+        kind: "migration",
+      } as const;
+      const articlesTarget = {
+        definitionId: toMigrationDefinitionId("articles"),
+        kind: "migration",
+      } as const;
+      const message = (
+        target: typeof authorsTarget | typeof articlesTarget
+      ): MigrationMessage => ({
+        definitionId: target.definitionId,
+        kind: "skip-reason",
+        message: `${target.definitionId} message`,
+        runId: messageRunId,
+        severity: "info",
+        sourceIdentity: toEncodedSourceIdentity(`${target.definitionId}-1`),
+        updatedAt: new Date("2026-08-29T12:00:00.000Z"),
+      });
+      const listMessages = vi.fn(
+        (target: typeof authorsTarget | typeof articlesTarget) =>
+          Promise.resolve([message(target)])
+      );
+      const runtime = { listMessages };
+      const setError = vi.fn();
+      const snapshots: Array<{
+        readonly loading: boolean;
+        readonly messages: readonly MigrationMessage[];
+        readonly target: string;
+      }> = [];
+      const MessageSnapshot = ({
+        target,
+      }: {
+        readonly target: typeof authorsTarget | typeof articlesTarget;
+      }) => {
+        const snapshot = useMigrationMessages({ runtime, setError, target });
+        snapshots.push({ ...snapshot, target: target.definitionId });
+        return <box />;
+      };
+      const setup = await createTestRenderer({ height: 5, width: 40 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MessageSnapshot target={authorsTarget} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            snapshots.some(
+              (snapshot) =>
+                snapshot.target === authorsTarget.definitionId &&
+                snapshot.messages[0]?.message === "authors message"
+            )
+          )
+        ).toBe(true);
+
+        snapshots.length = 0;
+        act(() => root.render(<MessageSnapshot target={articlesTarget} />));
+
+        expect(snapshots[0]).toMatchObject({
+          loading: true,
+          messages: [],
+          target: articlesTarget.definitionId,
+        });
+        expect(
+          snapshots[0]?.messages.some(
+            (candidate) => candidate.definitionId === authorsTarget.definitionId
+          )
+        ).toBe(false);
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
