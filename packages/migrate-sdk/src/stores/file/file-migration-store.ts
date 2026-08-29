@@ -38,9 +38,11 @@ import {
 } from "../../domain/status.ts";
 import {
   canReplaceLatestMigrationDefinitionRun,
+  isActiveMigrationRunStatus,
   type MigrationDefinitionRunOutcomeMap,
   MigrationStore,
   migrationDefinitionRunStatus,
+  resolveMigrationRunTransition,
   validateMigrationDefinitionRunOutcomes,
   validateMigrationRunDefinitionIds,
 } from "../../services/migration-store.ts";
@@ -80,6 +82,7 @@ const PersistedMigrationRunState = Schema.Struct({
   status: Schema.Literals([
     "queued",
     "running",
+    "cancelling",
     "cancelled",
     "succeeded",
     "failed",
@@ -851,6 +854,29 @@ const makeLayerWithoutPlatform = (
         return acquireAt(0);
       };
 
+      const transitionedRunState = (input: {
+        readonly current: MigrationRunState | undefined;
+        readonly definitionIds: readonly MigrationDefinitionId[];
+        readonly requestedStatus: MigrationRunState["status"];
+        readonly runId: MigrationRunId;
+        readonly startedAt: Date;
+      }): MigrationRunState => {
+        const transition = resolveMigrationRunTransition(
+          input.current?.status,
+          input.requestedStatus
+        );
+
+        return input.current !== undefined && !transition.accepted
+          ? input.current
+          : {
+              ...(input.current ?? {}),
+              runId: input.runId,
+              definitionIds: input.definitionIds,
+              status: transition.status ?? input.requestedStatus,
+              startedAt: input.current?.startedAt ?? input.startedAt,
+            };
+      };
+
       const writeRunState = (
         runId: MigrationRunId,
         definitionIds: readonly MigrationDefinitionId[],
@@ -898,14 +924,13 @@ const makeLayerWithoutPlatform = (
                   )
                 : undefined);
 
-            const runState: MigrationRunState = {
-              ...(currentRunState ?? {}),
+            const runState = transitionedRunState({
+              current: currentRunState,
               runId,
               definitionIds,
-              status,
-              startedAt:
-                currentRunState?.startedAt ?? (yield* DateTime.nowAsDate),
-            };
+              requestedStatus: status,
+              startedAt: yield* DateTime.nowAsDate,
+            });
 
             yield* writeRunRecord(runState, projectionPredecessors);
 
@@ -947,7 +972,7 @@ const makeLayerWithoutPlatform = (
                   recordKind: "latest-run-state",
                   state: {
                     ...runState,
-                    definitionStatus: status,
+                    definitionStatus: runState.status,
                   },
                 }
               );
@@ -971,6 +996,48 @@ const makeLayerWithoutPlatform = (
         ) => writeRunState(runId, definitionIds, "queued")
       );
 
+      const updateCurrentLatestRunProjections = (
+        runId: MigrationRunId,
+        definitionIds: readonly MigrationDefinitionId[],
+        updated: MigrationRunState,
+        definitionOutcomes?: MigrationDefinitionRunOutcomeMap
+      ) =>
+        Effect.forEach(
+          definitionIds,
+          (definitionId) =>
+            Effect.gen(function* () {
+              const latest = yield* readRecordOptional(
+                fs,
+                paths.latestRunState(definitionId),
+                LatestRunStateRecord
+              );
+
+              if (latest?.state.runId !== runId) {
+                return;
+              }
+
+              yield* writeRecordAtomic(
+                fs,
+                path,
+                paths.latestRunState(definitionId),
+                LatestRunStateRecord,
+                {
+                  formatVersion,
+                  recordKind: "latest-run-state",
+                  state: {
+                    ...updated,
+                    definitionStatus: migrationDefinitionRunStatus(
+                      definitionId,
+                      updated.status,
+                      definitionOutcomes
+                    ),
+                  },
+                }
+              );
+            }),
+          { discard: true }
+        );
+
       const updateLatestRunState = (
         runId: MigrationRunId,
         definitionIds: readonly MigrationDefinitionId[],
@@ -978,6 +1045,8 @@ const makeLayerWithoutPlatform = (
           readonly execution?: MigrationExecutionHandle;
           readonly definitionOutcomes?: MigrationDefinitionRunOutcomeMap;
           readonly finish?: boolean;
+          readonly cancelIfRequested?: boolean;
+          readonly onlyIfActive?: boolean;
           readonly status?: MigrationRunState["status"];
         }
       ) =>
@@ -998,57 +1067,46 @@ const makeLayerWithoutPlatform = (
               currentRecord.state;
             yield* validateMigrationRunDefinitionIds(current, definitionIds);
 
+            if (
+              input.onlyIfActive === true &&
+              !isActiveMigrationRunStatus(current.status)
+            ) {
+              return current;
+            }
+
             const finishedAt =
               input.finish === true
                 ? (current.finishedAt ?? (yield* DateTime.nowAsDate))
                 : undefined;
+            const transition = resolveMigrationRunTransition(
+              current.status,
+              input.status,
+              { cancelIfRequested: input.cancelIfRequested }
+            );
+
+            if (!transition.accepted) {
+              return current;
+            }
+
+            const status = transition.status;
             const updated: MigrationRunState = {
               ...current,
-              ...(input.status === undefined ? {} : { status: input.status }),
+              ...(status === undefined ? {} : { status }),
               ...(input.execution === undefined
                 ? {}
                 : { execution: input.execution }),
               ...(finishedAt === undefined ? {} : { finishedAt }),
             };
-            const currentProjectionDefinitionIds: MigrationDefinitionId[] = [];
-
-            for (const definitionId of definitionIds) {
-              const latest = yield* readRecordOptional(
-                fs,
-                paths.latestRunState(definitionId),
-                LatestRunStateRecord
-              );
-
-              if (latest?.state.runId === runId) {
-                currentProjectionDefinitionIds.push(definitionId);
-              }
-            }
-
             yield* writeRunRecord(
               updated,
               currentRecord.projectionPredecessors
             );
-
-            for (const definitionId of currentProjectionDefinitionIds) {
-              yield* writeRecordAtomic(
-                fs,
-                path,
-                paths.latestRunState(definitionId),
-                LatestRunStateRecord,
-                {
-                  formatVersion,
-                  recordKind: "latest-run-state",
-                  state: {
-                    ...updated,
-                    definitionStatus: migrationDefinitionRunStatus(
-                      definitionId,
-                      updated.status,
-                      input.definitionOutcomes
-                    ),
-                  },
-                }
-              );
-            }
+            yield* updateCurrentLatestRunProjections(
+              runId,
+              definitionIds,
+              updated,
+              input.definitionOutcomes
+            );
 
             return updated;
           })
@@ -1067,6 +1125,7 @@ const makeLayerWithoutPlatform = (
             );
 
           return yield* updateLatestRunState(runId, definitionIds, {
+            cancelIfRequested: true,
             definitionOutcomes: outcomeByDefinitionId,
             finish: true,
             status: "succeeded",
@@ -1100,6 +1159,19 @@ const makeLayerWithoutPlatform = (
           updateLatestRunState(runId, definitionIds, {
             finish: true,
             status: "cancelled",
+          })
+      );
+
+      const requestRunCancellation = Effect.fn(
+        "FileMigrationStore.requestRunCancellation"
+      )(
+        (
+          runId: MigrationRunId,
+          definitionIds: readonly MigrationDefinitionId[]
+        ) =>
+          updateLatestRunState(runId, definitionIds, {
+            onlyIfActive: true,
+            status: "cancelling",
           })
       );
 
@@ -1255,6 +1327,7 @@ const makeLayerWithoutPlatform = (
         attachRunExecution,
         markRunStartFailed,
         markRunCancelled,
+        requestRunCancellation,
         completeRun,
         failRun,
         acquireDefinitionLock,

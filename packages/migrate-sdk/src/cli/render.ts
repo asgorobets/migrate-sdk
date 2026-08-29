@@ -863,7 +863,10 @@ const definitionState = (definition: StatusDefinition): DefinitionState => {
     return "failed";
   }
 
-  if (definition.lastRun?.status === "running") {
+  if (
+    definition.lastRun?.status === "running" ||
+    definition.lastRun?.status === "cancelling"
+  ) {
     return "warning";
   }
 
@@ -928,6 +931,7 @@ const styleLatestStatus = (
     case "failed":
       return red(value, options);
     case "running":
+    case "cancelling":
       return yellow(value, options);
     default:
       return dim(value, options);

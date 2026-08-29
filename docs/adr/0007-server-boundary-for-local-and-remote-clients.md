@@ -168,11 +168,26 @@ observation.
 
 The Migrate Protocol separates observation from control. Ending an observation
 or closing a client never stops a Migration Run. `StopRun` addresses one
-Migration Run id and reports requested, not-running, or unsupported. The local
-server can stop inline work it owns; provider-owned work remains unsupported
-until its Execution Adapter exposes provider-neutral cancellation. Breaking a
-Migration Definition Lock is recovery metadata management and never claims to
-cancel the provider execution.
+Migration Run id and reports requested, not-running, or unsupported. For an
+active registry-backed run, the Migrate Server writes `cancelling` to the
+run's shared Migration Store before acknowledging the request. The execution
+checks that durable state at scheduling boundaries, stops accepting new work,
+drains work already in flight, persists terminal `cancelled` state, and only
+then releases Migration Definition Locks. A short cached read interval bounds
+remote-store traffic rather than adding one read per migrated item. Store
+transitions serialize or use optimistic concurrency so an acknowledged stop
+cannot be overwritten by stale completion, and terminal Migration Run States
+remain absorbing under late or replayed lifecycle writes.
+
+Provider hard cancellation is deliberately not the normal stop mechanism.
+Current Workflow SDK cancellation can prevent workflow cleanup code from
+running, which would leave the Migration Run and its locks inconsistent. The
+Workflow SDK adapter instead receives the stop through the same durable store
+used by its steps and completes its provider workflow with a cancelled
+Migration Run summary. A step that never returns cannot be interrupted by this
+cooperative protocol; its run remains `cancelling` until the step returns or an
+operator performs explicit recovery. Breaking a Migration Definition Lock is
+recovery metadata management and never claims to cancel provider execution.
 
 The local Node server is connection-independent while it owns active work. It
 accepts a later client on the same local socket and exits after all clients have
@@ -229,6 +244,9 @@ infrastructure-only commands may remain outside that interface.
 - Closing the TUI ends observation only; local inline work remains owned by the
   reconnectable Node Migrate Server until it reaches a terminal state or a
   client explicitly requests a stop.
+- Stop requests survive Migrate Server and serverless invocation turnover
+  because `cancelling` is authoritative Migration Run State, not process-local
+  server state.
 - Remote operation requires only credentials for the Migrate Server; resource
   and provider credentials remain in the target environment.
 - Local IPC, SSH, and HTTPS clients can share one operation and event model.

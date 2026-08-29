@@ -33,9 +33,11 @@ import {
 import type { MigrationItemState } from "../../domain/state.ts";
 import { emptyMigrationItemStateSummary } from "../../domain/status.ts";
 import {
+  isActiveMigrationRunStatus,
   type MigrationDefinitionRunOutcomeMap,
   MigrationStore,
   migrationDefinitionRunStatus,
+  resolveMigrationRunTransition,
   validateMigrationDefinitionRunOutcomes,
   validateMigrationRunDefinitionIds,
 } from "../../services/migration-store.ts";
@@ -82,6 +84,7 @@ const SqlRunRow = Schema.Struct({
   status: Schema.Literals([
     "queued",
     "running",
+    "cancelling",
     "cancelled",
     "succeeded",
     "failed",
@@ -106,6 +109,48 @@ const storeError = (message: string, cause?: unknown): MigrationStoreError =>
     message,
     ...(cause === undefined ? {} : { cause }),
   });
+
+interface SqlMigrationRunStateUpdate {
+  readonly cancelIfRequested?: boolean;
+  readonly definitionOutcomes?: MigrationDefinitionRunOutcomeMap;
+  readonly execution?: MigrationExecutionHandle;
+  readonly finish?: boolean;
+  readonly onlyIfActive?: boolean;
+  readonly status?: MigrationRunState["status"];
+}
+
+const resolveSqlMigrationRunStateUpdate = (
+  current: MigrationRunState,
+  input: SqlMigrationRunStateUpdate,
+  finishedAt: Date | undefined
+): { readonly accepted: boolean; readonly state: MigrationRunState } => {
+  if (
+    input.onlyIfActive === true &&
+    !isActiveMigrationRunStatus(current.status)
+  ) {
+    return { accepted: false, state: current };
+  }
+
+  const transition = resolveMigrationRunTransition(
+    current.status,
+    input.status,
+    { cancelIfRequested: input.cancelIfRequested }
+  );
+
+  if (!transition.accepted) {
+    return { accepted: false, state: current };
+  }
+
+  return {
+    accepted: true,
+    state: {
+      ...current,
+      ...(input.execution === undefined ? {} : { execution: input.execution }),
+      ...(finishedAt === undefined ? {} : { finishedAt }),
+      ...(transition.status === undefined ? {} : { status: transition.status }),
+    },
+  };
+};
 
 const lockOwnershipError = (
   lock: MigrationDefinitionLock,
@@ -731,6 +776,19 @@ const makeLayer = (
           })
         );
 
+      const lockRunStateForTransition = (
+        runId: MigrationRunIdType
+      ): Effect.Effect<void, MigrationStoreError> =>
+        runSql(
+          "lock Migration Run State transition",
+          sql`
+            UPDATE ${runs}
+            SET status = status
+            WHERE run_key = ${sqlKey(runId)}
+              AND run_id = ${runId}
+          `
+        ).pipe(Effect.asVoid);
+
       const writeRunState = (
         runId: MigrationRunIdType,
         definitionIds: readonly MigrationDefinitionIdType[],
@@ -739,13 +797,29 @@ const makeLayer = (
         withTransaction(
           "write Migration Run State",
           Effect.gen(function* () {
+            yield* lockRunStateForTransition(runId);
             const current = (yield* readRunState("run-id", runId))?.runState;
+
+            if (current !== undefined) {
+              yield* validateMigrationRunDefinitionIds(current, definitionIds);
+            }
+
+            const transition = resolveMigrationRunTransition(
+              current?.status,
+              status
+            );
+
+            if (current !== undefined && !transition.accepted) {
+              return current;
+            }
+
+            const nextStatus = transition.status ?? status;
             const runState: MigrationRunState = {
               ...(current ?? {}),
               definitionIds,
               runId,
               startedAt: current?.startedAt ?? (yield* DateTime.nowAsDate),
-              status,
+              status: nextStatus,
             };
 
             yield* upsertRunRecord(runState);
@@ -784,7 +858,7 @@ const makeLayer = (
                     ${sqlKey(definitionId)},
                     ${definitionId},
                     ${position},
-                    ${status}
+                    ${nextStatus}
                   )
                 `
               );
@@ -819,16 +893,12 @@ const makeLayer = (
       const updateRunState = (
         runId: MigrationRunIdType,
         definitionIds: readonly MigrationDefinitionIdType[],
-        input: {
-          readonly execution?: MigrationExecutionHandle;
-          readonly definitionOutcomes?: MigrationDefinitionRunOutcomeMap;
-          readonly finish?: boolean;
-          readonly status?: MigrationRunState["status"];
-        }
+        input: SqlMigrationRunStateUpdate
       ): Effect.Effect<MigrationRunState, MigrationStoreError> =>
         withTransaction(
           "update Migration Run State",
           Effect.gen(function* () {
+            yield* lockRunStateForTransition(runId);
             const current = (yield* readRunState("run-id", runId))?.runState;
 
             if (current === undefined) {
@@ -838,15 +908,20 @@ const makeLayer = (
             yield* validateMigrationRunDefinitionIds(current, definitionIds);
 
             const finishedAt =
-              input.finish === true ? yield* DateTime.nowAsDate : undefined;
-            const updated: MigrationRunState = {
-              ...current,
-              ...(input.execution === undefined
-                ? {}
-                : { execution: input.execution }),
-              ...(finishedAt === undefined ? {} : { finishedAt }),
-              ...(input.status === undefined ? {} : { status: input.status }),
-            };
+              input.finish === true
+                ? (current.finishedAt ?? (yield* DateTime.nowAsDate))
+                : undefined;
+            const update = resolveSqlMigrationRunStateUpdate(
+              current,
+              input,
+              finishedAt
+            );
+
+            if (!update.accepted) {
+              return current;
+            }
+
+            const updated = update.state;
 
             yield* upsertRunRecord(updated);
 
@@ -858,7 +933,7 @@ const makeLayer = (
                     UPDATE ${runDefinitions}
                     SET definition_status = ${migrationDefinitionRunStatus(
                       definitionId,
-                      input.status,
+                      updated.status,
                       input.definitionOutcomes
                     )}
                     WHERE run_key = ${sqlKey(runId)}
@@ -908,6 +983,19 @@ const makeLayer = (
           })
       );
 
+      const requestRunCancellation = Effect.fn(
+        "SqlMigrationStore.requestRunCancellation"
+      )(
+        (
+          runId: MigrationRunIdType,
+          definitionIds: readonly MigrationDefinitionIdType[]
+        ) =>
+          updateRunState(runId, definitionIds, {
+            onlyIfActive: true,
+            status: "cancelling",
+          })
+      );
+
       const completeRun = Effect.fn("SqlMigrationStore.completeRun")(function* (
         runId: MigrationRunIdType,
         definitionIds: readonly MigrationDefinitionIdType[],
@@ -920,6 +1008,7 @@ const makeLayer = (
           );
 
         return yield* updateRunState(runId, definitionIds, {
+          cancelIfRequested: true,
           definitionOutcomes: outcomeByDefinitionId,
           finish: true,
           status: "succeeded",
@@ -1091,6 +1180,7 @@ const makeLayer = (
         attachRunExecution,
         markRunStartFailed,
         markRunCancelled,
+        requestRunCancellation,
         completeRun,
         failRun,
         acquireDefinitionLock,

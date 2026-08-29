@@ -116,4 +116,5 @@ export const makeRegistryMigrateServerBackend = (
     runtime
       .scanSource(target, concurrency === undefined ? {} : { concurrency })
       .pipe(Effect.map((snapshot) => dashboard(runtime, snapshot))),
+  stopRun: runtime.stopRun,
 });

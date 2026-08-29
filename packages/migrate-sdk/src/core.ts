@@ -107,6 +107,7 @@ export type {
 export { MigrationRunStepExecutor } from "./services/migration-run-step-executor.ts";
 export type { MigrationRunStepExecutorService } from "./services/migration-run-step-executor.ts";
 export type {
+  MigrationRunCancellationInput,
   MigrationRunCompletionInput,
   MigrationRunDefinitionCursorWindowInput,
   MigrationRunCursorWindowResult,

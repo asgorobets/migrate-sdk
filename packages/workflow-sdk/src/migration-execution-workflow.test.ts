@@ -34,15 +34,25 @@ const makeEnvelope = (): WorkflowSdkMigrationRunEnvelope => ({
   scopeDefinitionIds: definitionIds("articles"),
 });
 
+const cancelMigrationRun: WorkflowSdkMigrationRunSteps["cancel"] = async ({
+  definitions,
+  envelope,
+}) => ({
+  definitions,
+  finishedAt: new Date(2),
+  runId: envelope.runId,
+  startedAt: new Date(1),
+  status: "cancelled",
+});
+
 describe("runMigrationExecutionWorkflow", () => {
   it("does not start rollback orphans after a cancelled scan", async () => {
-    const cancellation = new Error(
-      "Migration run was cancelled while scanning articles"
-    );
+    const cancel = vi.fn(cancelMigrationRun);
     const executeRollbackOrphansPage = vi.fn();
     const fail = vi.fn<WorkflowSdkMigrationRunSteps["fail"]>();
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      cancel,
       complete: vi.fn(),
       executeCursorWindow: vi.fn().mockResolvedValue({
         kind: "cancelled",
@@ -64,15 +74,13 @@ describe("runMigrationExecutionWorkflow", () => {
 
     await expect(
       runMigrationExecutionWorkflow(makeEnvelope(), steps)
-    ).rejects.toEqual(cancellation);
+    ).resolves.toEqual(expect.objectContaining({ status: "cancelled" }));
     expect(executeRollbackOrphansPage).not.toHaveBeenCalled();
-    expect(fail).toHaveBeenCalledOnce();
-    expect(fail).toHaveBeenCalledWith(
-      expect.objectContaining({
-        definitions: [],
-        failedDefinitionId: "articles",
-      })
-    );
+    expect(cancel).toHaveBeenCalledWith({
+      definitions: [],
+      envelope: makeEnvelope(),
+    });
+    expect(fail).not.toHaveBeenCalled();
   });
 
   it("reports completed and active definitions when a later scan fails", async () => {
@@ -115,6 +123,7 @@ describe("runMigrationExecutionWorkflow", () => {
     });
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: false }),
+      cancel: vi.fn(cancelMigrationRun),
       complete: vi.fn(),
       executeCursorWindow,
       executeRollbackOrphansPage: vi.fn(),
@@ -160,6 +169,7 @@ describe("runMigrationExecutionWorkflow", () => {
     });
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      cancel: vi.fn(cancelMigrationRun),
       complete: vi.fn(async ({ definitions }) => ({
         definitions,
         finishedAt: new Date(2),
@@ -232,6 +242,7 @@ describe("runMigrationExecutionWorkflow", () => {
     });
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      cancel: vi.fn(cancelMigrationRun),
       complete: vi.fn(),
       executeCursorWindow: vi.fn(({ definitionId }) => {
         const summary = definitionSummary(definitionId);
@@ -286,6 +297,7 @@ describe("runMigrationExecutionWorkflow", () => {
     const pageStates: unknown[] = [];
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      cancel: vi.fn(cancelMigrationRun),
       complete: vi.fn(async ({ definitions }) => ({
         definitions,
         finishedAt: new Date(2),
@@ -365,10 +377,12 @@ describe("runMigrationExecutionWorkflow", () => {
   });
 
   it("does not complete after rollback-orphan cancellation", async () => {
+    const cancel = vi.fn(cancelMigrationRun);
     const complete = vi.fn<WorkflowSdkMigrationRunSteps["complete"]>();
     const fail = vi.fn<WorkflowSdkMigrationRunSteps["fail"]>();
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      cancel,
       complete,
       executeCursorWindow: vi.fn().mockResolvedValue({
         kind: "definition-completed",
@@ -403,17 +417,17 @@ describe("runMigrationExecutionWorkflow", () => {
 
     await expect(
       runMigrationExecutionWorkflow(makeEnvelope(), steps)
-    ).rejects.toThrow(
-      "Migration run was cancelled while rolling back orphans for articles"
-    );
+    ).resolves.toEqual(expect.objectContaining({ status: "cancelled" }));
+    expect(cancel).toHaveBeenCalledOnce();
     expect(complete).not.toHaveBeenCalled();
-    expect(fail).toHaveBeenCalledOnce();
+    expect(fail).not.toHaveBeenCalled();
   });
 
   it("reports zero rollback-orphans counts when a scan fails", async () => {
     const executeRollbackOrphansPage = vi.fn();
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      cancel: vi.fn(cancelMigrationRun),
       complete: vi.fn(async ({ definitions }) => ({
         definitions,
         finishedAt: new Date(2),
@@ -470,6 +484,7 @@ describe("runMigrationExecutionWorkflow", () => {
     const fail = vi.fn<WorkflowSdkMigrationRunSteps["fail"]>();
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: false }),
+      cancel: vi.fn(cancelMigrationRun),
       complete: vi.fn().mockRejectedValue(completionError),
       executeCursorWindow: vi.fn().mockResolvedValue({
         kind: "definition-completed",

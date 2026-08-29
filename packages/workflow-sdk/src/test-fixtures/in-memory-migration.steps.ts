@@ -1,5 +1,6 @@
 import {
   beginMigrationRunExecutionEnvelope,
+  cancelMigrationRunExecutionEnvelope,
   completeMigrationRunExecutionEnvelope,
   executeMigrationRollbackExecutionEnvelope,
   executeMigrationRunCursorWindow,
@@ -274,6 +275,20 @@ export async function completeMigrationRunStep(input: {
   );
 }
 
+export async function cancelMigrationRunStep(input: {
+  readonly definitions: WorkflowSdkMigrationRunSummary["definitions"];
+  readonly envelope: WorkflowSdkMigrationRunEnvelope;
+}): Promise<WorkflowSdkMigrationRunSummary> {
+  "use step";
+
+  return await runEffect(
+    cancelMigrationRunExecutionEnvelope({
+      definitions: input.definitions,
+      envelope: input.envelope,
+    })
+  );
+}
+
 export async function failMigrationRunStep(input: {
   readonly definitions: WorkflowSdkMigrationRunSummary["definitions"];
   readonly envelope: WorkflowSdkMigrationRunEnvelope;
@@ -295,6 +310,7 @@ export async function failMigrationRunStep(input: {
 }
 
 disableWorkflowRetries(beginMigrationRunStep);
+disableWorkflowRetries(cancelMigrationRunStep);
 disableWorkflowRetries(executeMigrationRunCursorWindowStep);
 disableWorkflowRetries(executeMigrationRunRollbackOrphansPageStep);
 disableWorkflowRetries(completeMigrationRunStep);

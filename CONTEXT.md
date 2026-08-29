@@ -154,7 +154,10 @@ A future catalog of plugin factories for compiling migration specs into migratio
 One execution attempt of one or more migration definitions.
 
 **Migration Run State**:
-The durable state for one migration run.
+The durable state for one migration run. `cancelling` is a non-terminal state:
+the run still owns its locks while execution drains already-started work and
+stops scheduling new work. Terminal Migration Run States are absorbing under
+late or replayed lifecycle writes.
 
 **Active Migration Run**:
 A non-terminal migration run whose run id still owns at least one Migration Definition Lock.
@@ -171,8 +174,7 @@ A run-scoped capability for observing and cooperatively cancelling work owned by
 the current execution host.
 
 **Migration Run Handle State**:
-The current host's in-memory view of an attached migration run. It may be
-`cancelling` before terminal cancellation is persisted as Migration Run State.
+The current host's in-memory view of an attached migration run.
 
 **Migration Run Summary**:
 The structured result returned after a migration run completes or fails.
@@ -393,7 +395,7 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Migrate Server** runs in the environment that owns its authoritative **Migration Definition Registry** and required runtime capabilities.
 - A **Migrate Client** selects a **Migrate Server** through a **Migrate Connection**; it does not select the server's **Execution Adapter**.
 - A **Migrate Protocol** carries serializable domain requests, results, events, and errors; it does not carry executable plans, Effects, Layers, or migration definitions.
-- Closing a **Migrate Client** observation does not cancel a **Migration Run**; the **Migrate Protocol** models stopping as a separate explicit operation and reports provider-owned cancellation as unsupported when the **Execution Adapter** cannot perform it.
+- Closing a **Migrate Client** observation does not cancel a **Migration Run**; the **Migrate Protocol** models stopping as a separate explicit operation that durably changes an active run to `cancelling` through its **Migration Store**.
 - An **Active Migration Run** is discovered from non-terminal **Migration Run State** whose run id matches a current **Migration Definition Lock** owner.
 - An **Active Migration Run** retains a lock-owning **Migration Definition** as its durable observation anchor, even when another definition from the same run has been unlocked and run again.
 - A terminal **Migration Run** with a remaining **Migration Definition Lock** is lock-recovery work, not an **Active Migration Run**.
@@ -405,6 +407,9 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - Ending observation of a **Reconnectable Migration Run** ends only that observation and leaves the **Migration Run** active.
 - A **Migration Run Observation** is client-scoped; changing the focused run or closing a **Migrate Client** ends the observation without stopping the **Migration Run**.
 - Stopping a **Migration Run** is an explicit run-scoped operation and is distinct from ending a **Migration Run Observation** or breaking a **Migration Definition Lock**.
+- A `cancelling` **Migration Run** remains active and keeps its **Migration Definition Locks** until execution stops scheduling work, drains already-started work, persists terminal `cancelled` state, and releases the locks.
+- Durable cancellation is observed at execution scheduling boundaries and may use a short cached read interval to avoid one remote **Migration Store** request per migrated item.
+- Hard cancellation by an **Execution Adapter** is not the normal stop path because it cannot guarantee migration finalization or lock release; a non-returning provider step can therefore leave a cooperative stop in `cancelling` until that step returns or an operator performs recovery.
 - A **Migrate Server** may own multiple concurrent **Migration Runs**; each run has independent observation and cancellation, while overlapping definition sets are rejected through **Migration Definition Locks**.
 - An **Executable Migration Definition Registry** validates that planned definitions have all runtime service requirements provided.
 - An **Executable Migration Definition Registry** relies on Effect requirements for static executability and uses **Migration Definition Registry Executable Error** for dynamic runtime diagnostics.

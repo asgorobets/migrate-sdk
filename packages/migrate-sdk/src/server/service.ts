@@ -194,6 +194,11 @@ export interface MigrateServerBackend<ExecutableOperation> {
     readonly concurrency?: number | undefined;
     readonly target: MigrateTarget;
   }) => Effect.Effect<MigrateDashboard, unknown>;
+  readonly stopRun?:
+    | ((
+        runId: MigrationRunId
+      ) => Effect.Effect<MigrateServerExecutionStopResult, unknown>)
+    | undefined;
   readonly watchDashboardRun?:
     | ((
         run: MigrateActiveRun,
@@ -593,7 +598,7 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
 
   const decorateActiveRun = (run: MigrateActiveRun): MigrateActiveRun => ({
     ...run,
-    stopSupported: stopSupported(run.runId),
+    stopSupported: run.stopSupported || stopSupported(run.runId),
   });
 
   const publish = (record: ExecutionRecord, event: MigrateObservationEvent) => {
@@ -607,6 +612,28 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
     for (const listener of record.listeners) {
       listener.emit(event, index);
     }
+  };
+
+  const publishProviderCancellation = (
+    record: ExecutionRecord | undefined,
+    runId: MigrationRunId
+  ) => {
+    if (
+      record === undefined ||
+      record.closed ||
+      record.ownership !== "provider"
+    ) {
+      return;
+    }
+
+    publish(record, {
+      kind: "state",
+      state: {
+        definitionId: record.observationDefinitionId,
+        kind: "cancelling",
+        runId,
+      },
+    });
   };
 
   const close = (record: ExecutionRecord) => {
@@ -1427,6 +1454,28 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
           const cancellation = yield* record.stop;
 
           if (cancellation.kind === "requested") {
+            return { ...cancellation, runId };
+          }
+          if (cancellation.kind === "provider-owned") {
+            return {
+              kind: "unsupported" as const,
+              message: `Run ${runId} cannot be stopped by this Migrate Server`,
+              runId,
+            };
+          }
+
+          return {
+            kind: "not-running" as const,
+            message: `Run ${runId} is not running`,
+            runId,
+          };
+        }
+
+        if (backend.stopRun !== undefined) {
+          const cancellation = yield* backend.stopRun(runId);
+
+          if (cancellation.kind === "requested") {
+            publishProviderCancellation(record, runId);
             return { ...cancellation, runId };
           }
           if (cancellation.kind === "provider-owned") {

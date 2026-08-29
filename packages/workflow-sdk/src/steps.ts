@@ -249,6 +249,29 @@ export const completeMigrationRunExecutionEnvelope = (input: {
     });
   });
 
+export const cancelMigrationRunExecutionEnvelope = (input: {
+  readonly definitions: MigrationRunSummary["definitions"];
+  readonly envelope: MigrationRunExecutionEnvelopeType;
+}): Effect.Effect<
+  MigrationRunSummary,
+  WorkflowSdkMigrationRunStepError,
+  WorkflowSdkMigrationRunStepRequirements
+> =>
+  Effect.gen(function* () {
+    const { job, lease } = yield* resolveRunJob(input.envelope);
+    const firstDefinition = job.plan.definitions[0];
+
+    if (firstDefinition === undefined) {
+      return yield* unsupportedRunPlanError(input.envelope);
+    }
+
+    return yield* MigrationRunStepExecutor.cancel({
+      definitions: input.definitions,
+      lease,
+      storeLayer: firstDefinition.store,
+    });
+  });
+
 export const failMigrationRunExecutionEnvelope = (input: {
   readonly definitions: MigrationRunSummary["definitions"];
   readonly envelope: MigrationRunExecutionEnvelopeType;

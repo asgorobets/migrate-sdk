@@ -6,7 +6,7 @@ import {
   makeRecordingCustomObjectApiRoot,
   type RecordedCustomObjectRequest,
 } from "@migrate-sdk/commercetools/testing";
-import { Data, Effect, Layer, Schema } from "effect";
+import { Data, Effect, Fiber, Layer, Schema } from "effect";
 import {
   DestinationChangeDescriptorId,
   type MigrationRunState,
@@ -123,6 +123,26 @@ const customObjectValue = (request: RecordedCustomObjectRequest): unknown => {
   }
 
   return;
+};
+
+const customObjectRunStatus = (
+  request: RecordedCustomObjectRequest
+): string | undefined => {
+  const value = customObjectValue(request);
+
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("state" in value) ||
+    typeof value.state !== "object" ||
+    value.state === null ||
+    !("status" in value.state) ||
+    typeof value.state.status !== "string"
+  ) {
+    return;
+  }
+
+  return value.state.status;
 };
 
 const customObjectQueryRequests = (
@@ -2146,6 +2166,101 @@ describe("CommercetoolsMigrationStore", () => {
       });
     }).pipe(Effect.provide(makeStoreLayer(recording)));
   });
+
+  it.effect("persists a durable cancellation request until completion", () => {
+    const recording = makeRecordingCustomObjectApiRoot();
+    const runId = toMigrationRunId("run-cancelling");
+    const definitionIds = [definitionId] as const;
+
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+
+      yield* store.queueRun(runId, definitionIds);
+      const requested = yield* store.requestRunCancellation(
+        runId,
+        definitionIds
+      );
+      const begun = yield* store.beginRun(runId, definitionIds);
+      const cancelled = yield* store.completeRun(runId, definitionIds, [
+        { definitionId, status: "succeeded" },
+      ]);
+      const lateQueue = yield* store.queueRun(runId, definitionIds);
+      const lateBegin = yield* store.beginRun(runId, definitionIds);
+      const latest = yield* store.getLatestRunState(definitionId);
+
+      expect(requested.status).toBe("cancelling");
+      expect(begun.status).toBe("cancelling");
+      expect(cancelled).toEqual(
+        expect.objectContaining({ runId, status: "cancelled" })
+      );
+      expect(lateQueue).toEqual(cancelled);
+      expect(lateBegin).toEqual(cancelled);
+      expect(latest).toEqual(
+        expect.objectContaining({ runId, status: "cancelled" })
+      );
+    }).pipe(Effect.provide(makeStoreLayer(recording)));
+  });
+
+  it.effect(
+    "keeps an acknowledged cancellation when completion writes concurrently",
+    () => {
+      const runId = toMigrationRunId("run-concurrent-cancellation");
+      const definitionIds = [definitionId] as const;
+      let blockCompletionWrite = false;
+      let signalCompletionWrite: () => void = () => undefined;
+      const completionWriteReached = new Promise<void>((resolve) => {
+        signalCompletionWrite = resolve;
+      });
+      let releaseCompletionWrite: () => void = () => undefined;
+      const completionWriteReleased = new Promise<void>((resolve) => {
+        releaseCompletionWrite = resolve;
+      });
+      const recording = makeRecordingCustomObjectApiRoot({
+        beforeRequest: async (request) => {
+          if (
+            blockCompletionWrite &&
+            request.method === "POST" &&
+            customObjectKey(request) === runStateKey(runId) &&
+            customObjectRunStatus(request) === "succeeded"
+          ) {
+            signalCompletionWrite();
+            await completionWriteReleased;
+          }
+        },
+      });
+
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        yield* store.queueRun(runId, definitionIds);
+        yield* store.beginRun(runId, definitionIds);
+        blockCompletionWrite = true;
+
+        const completionFiber = yield* store
+          .completeRun(runId, definitionIds, [
+            { definitionId, status: "succeeded" },
+          ])
+          .pipe(Effect.forkChild);
+
+        yield* Effect.promise(() => completionWriteReached);
+        const requestedExit = yield* store
+          .requestRunCancellation(runId, definitionIds)
+          .pipe(Effect.exit);
+        releaseCompletionWrite();
+        const requested = yield* requestedExit;
+        const completed = yield* Fiber.join(completionFiber);
+
+        expect(requested.status).toBe("cancelling");
+        expect(completed.status).toBe("cancelled");
+        expect(yield* store.getRunState(runId)).toEqual(
+          expect.objectContaining({ runId, status: "cancelled" })
+        );
+        expect(yield* store.getLatestRunState(definitionId)).toEqual(
+          expect.objectContaining({ runId, status: "cancelled" })
+        );
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
 
   it.effect(
     "completes a shared run after one definition starts a newer run",

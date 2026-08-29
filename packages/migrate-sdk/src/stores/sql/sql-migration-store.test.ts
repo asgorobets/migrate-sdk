@@ -369,7 +369,7 @@ describe("SqlMigrationStore", () => {
   );
 
   it.effect(
-    "keeps shared run lifecycle state consistent across definitions",
+    "keeps durable cancellation state consistent across definitions",
     () =>
       Effect.gen(function* () {
         const store = yield* MigrationStore;
@@ -385,14 +385,34 @@ describe("SqlMigrationStore", () => {
 
         yield* store.queueRun(runId, definitionIds);
         yield* store.attachRunExecution(runId, definitionIds, execution);
-        const cancelled = yield* store.markRunCancelled(runId, definitionIds);
+        const requested = yield* store.requestRunCancellation(
+          runId,
+          definitionIds
+        );
+        const begun = yield* store.beginRun(runId, definitionIds);
+        const cancelled = yield* store.completeRun(
+          runId,
+          definitionIds,
+          definitionIds.map((definitionId) => ({
+            definitionId,
+            status: "succeeded" as const,
+          }))
+        );
+        const lateQueue = yield* store.queueRun(runId, definitionIds);
+        const lateBegin = yield* store.beginRun(runId, definitionIds);
         const states = yield* Effect.forEach(definitionIds, (definitionId) =>
           store.getLatestRunState(definitionId)
         );
 
+        expect(requested).toEqual(
+          expect.objectContaining({ execution, runId, status: "cancelling" })
+        );
+        expect(begun.status).toBe("cancelling");
         expect(cancelled).toEqual(
           expect.objectContaining({ execution, runId, status: "cancelled" })
         );
+        expect(lateQueue).toEqual(cancelled);
+        expect(lateBegin).toEqual(cancelled);
         expect(cancelled.finishedAt).toBeInstanceOf(Date);
         expect(states).toEqual(
           definitionIds.map((definitionId) => ({
@@ -401,6 +421,39 @@ describe("SqlMigrationStore", () => {
             runStatus: "cancelled",
           }))
         );
+      }).pipe(Effect.provide(sqlStoreLayer))
+  );
+
+  it.effect(
+    "keeps concurrent cancellation and completion transitions monotonic",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const definitionId = toMigrationDefinitionId("concurrent-cancellation");
+        const definitionIds = [definitionId] as const;
+        const runId = toMigrationRunId("run-concurrent-cancellation-sql");
+
+        yield* store.queueRun(runId, definitionIds);
+        yield* store.beginRun(runId, definitionIds);
+        const [requested, completed] = yield* Effect.all(
+          [
+            store.requestRunCancellation(runId, definitionIds),
+            store.completeRun(runId, definitionIds, [
+              { definitionId, status: "succeeded" },
+            ]),
+          ] as const,
+          { concurrency: "unbounded" }
+        );
+        const finalState = yield* store.getRunState(runId);
+
+        if (requested.status === "cancelling") {
+          expect(completed.status).toBe("cancelled");
+          expect(finalState?.status).toBe("cancelled");
+        } else {
+          expect(requested.status).toBe("succeeded");
+          expect(completed.status).toBe("succeeded");
+          expect(finalState?.status).toBe("succeeded");
+        }
       }).pipe(Effect.provide(sqlStoreLayer))
   );
 

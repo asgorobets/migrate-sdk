@@ -101,7 +101,77 @@ export const migrationDefinitionRunStatus = (
   runStatus: MigrationRunState["status"],
   outcomes?: MigrationDefinitionRunOutcomeMap
 ): MigrationDefinitionRunState["status"] =>
-  outcomes?.get(definitionId) ?? runStatus;
+  runStatus === "cancelling" || runStatus === "cancelled"
+    ? runStatus
+    : (outcomes?.get(definitionId) ?? runStatus);
+
+export const isActiveMigrationRunStatus = (
+  status: MigrationRunState["status"]
+): boolean =>
+  status === "queued" || status === "running" || status === "cancelling";
+
+export interface MigrationRunTransitionDecision {
+  /** Whether the requested write may update or repair the persisted state. */
+  readonly accepted: boolean;
+  readonly status: MigrationRunState["status"] | undefined;
+}
+
+const isTerminalMigrationRunStatus = (
+  status: MigrationRunState["status"]
+): boolean => !isActiveMigrationRunStatus(status);
+
+export const resolveMigrationRunTransition = (
+  currentStatus: MigrationRunState["status"] | undefined,
+  requestedStatus: MigrationRunState["status"] | undefined,
+  options: { readonly cancelIfRequested?: boolean | undefined } = {}
+): MigrationRunTransitionDecision => {
+  if (currentStatus === undefined) {
+    return { accepted: true, status: requestedStatus };
+  }
+
+  if (isTerminalMigrationRunStatus(currentStatus)) {
+    const replaysCancelledCompletion =
+      currentStatus === "cancelled" &&
+      requestedStatus === "succeeded" &&
+      options.cancelIfRequested === true;
+
+    return {
+      accepted: requestedStatus === currentStatus || replaysCancelledCompletion,
+      status: currentStatus,
+    };
+  }
+
+  if (currentStatus === "running") {
+    if (requestedStatus === "queued" || requestedStatus === "start-failed") {
+      return { accepted: false, status: currentStatus };
+    }
+
+    return {
+      accepted: true,
+      status: requestedStatus ?? currentStatus,
+    };
+  }
+
+  if (currentStatus === "cancelling") {
+    if (requestedStatus === "succeeded" && options.cancelIfRequested === true) {
+      return { accepted: true, status: "cancelled" };
+    }
+
+    if (
+      requestedStatus === undefined ||
+      requestedStatus === "queued" ||
+      requestedStatus === "running" ||
+      requestedStatus === "cancelling"
+    ) {
+      return { accepted: true, status: currentStatus };
+    }
+  }
+
+  return {
+    accepted: true,
+    status: requestedStatus ?? currentStatus,
+  };
+};
 
 export const validateMigrationRunDefinitionIds = (
   runState: MigrationRunState,
@@ -230,6 +300,16 @@ export class MigrationStore extends Service<
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
     readonly markRunCancelled: (
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[]
+    ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
+
+    /**
+     * Durably requests cooperative cancellation without releasing the run's
+     * locks. Execution observes this state at safe scheduling boundaries and
+     * owns the terminal cancelled transition.
+     */
+    readonly requestRunCancellation: (
       runId: MigrationRunId,
       definitionIds: readonly MigrationDefinitionId[]
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;

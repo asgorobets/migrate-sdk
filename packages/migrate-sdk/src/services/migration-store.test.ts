@@ -20,6 +20,48 @@ const CONCURRENT_LOCK_OWNER_PATTERN = /^run-(first|second)$/;
 
 describe("MigrationStore definition outcomes", () => {
   it.effect(
+    "keeps cancellation durable through start and successful completion races",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const definitionId = toMigrationDefinitionId("durable-stop");
+        const runId = toMigrationRunId("run-durable-stop");
+
+        yield* store.queueRun(runId, [definitionId]);
+        const requested = yield* store.requestRunCancellation(runId, [
+          definitionId,
+        ]);
+        const begun = yield* store.beginRun(runId, [definitionId]);
+        const completed = yield* store.completeRun(
+          runId,
+          [definitionId],
+          [{ definitionId, status: "succeeded" }]
+        );
+        const repeated = yield* store.requestRunCancellation(runId, [
+          definitionId,
+        ]);
+        const lateQueue = yield* store.queueRun(runId, [definitionId]);
+        const lateBegin = yield* store.beginRun(runId, [definitionId]);
+        const lateFailure = yield* store.failRun(
+          runId,
+          [definitionId],
+          [{ definitionId, status: "failed" }]
+        );
+
+        expect(requested.status).toBe("cancelling");
+        expect(begun.status).toBe("cancelling");
+        expect(completed.status).toBe("cancelled");
+        expect(repeated).toEqual(completed);
+        expect(lateQueue).toEqual(completed);
+        expect(lateBegin).toEqual(completed);
+        expect(lateFailure).toEqual(completed);
+        expect(yield* store.getLatestRunState(definitionId)).toEqual(
+          expect.objectContaining({ runId, status: "cancelled" })
+        );
+      }).pipe(Effect.provide(InMemoryMigrationStore.layer()))
+  );
+
+  it.effect(
     "completes a shared run after one definition starts a newer run",
     () =>
       Effect.gen(function* () {

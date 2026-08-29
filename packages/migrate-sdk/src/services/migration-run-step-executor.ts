@@ -8,6 +8,7 @@ import type { MigrationRunState, MigrationRunSummary } from "../domain/run.ts";
 import type { TrackingRecordContract } from "../domain/tracking.ts";
 import {
   type MigrationRunBeginInput,
+  type MigrationRunCancellationInput,
   type MigrationRunCompletionInput,
   type MigrationRunCursorWindowResult,
   type MigrationRunDefinitionCursorWindowInput,
@@ -23,6 +24,10 @@ export interface MigrationRunStepExecutorService {
   readonly begin: (
     input: MigrationRunBeginInput
   ) => Effect.Effect<MigrationRunState, RunMigrationError>;
+
+  readonly cancel: (
+    input: MigrationRunCancellationInput
+  ) => Effect.Effect<MigrationRunSummary, RunMigrationError>;
 
   readonly complete: (
     input: MigrationRunCompletionInput
@@ -76,6 +81,7 @@ const makeMigrationRunStepExecutor = (
   executor: MigrationRunExecutorService
 ): MigrationRunStepExecutorService => ({
   begin: executor.begin,
+  cancel: executor.cancel,
   complete: executor.complete,
   executeCursorWindow: executor.executeCursorWindow,
   executeRollbackOrphansPage: executor.executeRollbackOrphansPage,
@@ -89,6 +95,11 @@ export class MigrationRunStepExecutor extends Service<
   static readonly begin = (input: MigrationRunBeginInput) =>
     Effect.flatMap(MigrationRunStepExecutor, (executor) =>
       executor.begin(input)
+    );
+
+  static readonly cancel = (input: MigrationRunCancellationInput) =>
+    Effect.flatMap(MigrationRunStepExecutor, (executor) =>
+      executor.cancel(input)
     );
 
   static readonly complete = (input: MigrationRunCompletionInput) =>

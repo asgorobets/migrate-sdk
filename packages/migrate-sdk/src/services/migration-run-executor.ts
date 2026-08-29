@@ -423,12 +423,15 @@ const retryCommittedTerminalRunTransition = (
   store: typeof MigrationStore.Service,
   runId: MigrationRunId,
   expectedStatus: "cancelled" | "failed" | "succeeded",
-  transition: Effect.Effect<MigrationRunState, MigrationStoreError>
+  transition: Effect.Effect<MigrationRunState, MigrationStoreError>,
+  cancellationMayWin = false
 ): Effect.Effect<MigrationRunState, MigrationStoreError> =>
   retryCommittedRunTransition(runId, {
     confirmationMessage: "Unable to confirm Migration Run terminal state",
     isCommitted: (committed) =>
-      committed.status === expectedStatus && committed.finishedAt !== undefined,
+      (committed.status === expectedStatus ||
+        (cancellationMayWin && committed.status === "cancelled")) &&
+      committed.finishedAt !== undefined,
     read: store.getRunState(runId),
     repairMessage:
       "Unable to repair latest Migration Definition Run State projections",
@@ -436,7 +439,7 @@ const retryCommittedTerminalRunTransition = (
   });
 
 interface MigrationRunSchedulingControl {
-  readonly canSchedule: Effect.Effect<boolean>;
+  readonly canSchedule: Effect.Effect<boolean, MigrationStoreError>;
 }
 
 const CurrentMigrationRunSchedulingControl =
@@ -451,6 +454,44 @@ const canScheduleRunWork = Effect.flatMap(
   CurrentMigrationRunSchedulingControl,
   (control) => control.canSchedule
 );
+
+const durableCancellationPollInterval = "1 second";
+
+const withDurableRunScheduling = <A, E, R>(
+  store: typeof MigrationStore.Service,
+  runId: MigrationRunId,
+  effect: Effect.Effect<A, E, R>
+): Effect.Effect<A, E | MigrationStoreError, R> =>
+  Effect.gen(function* () {
+    const parent = yield* CurrentMigrationRunSchedulingControl;
+    const durableCanSchedule = yield* Effect.cachedWithTTL(
+      store.getRunState(runId).pipe(
+        Effect.flatMap((state) =>
+          state === null
+            ? Effect.fail(
+                new MigrationStoreError({
+                  message: `Migration run was not found: ${runId}`,
+                })
+              )
+            : Effect.succeed(
+                state.status === "queued" || state.status === "running"
+              )
+        )
+      ),
+      durableCancellationPollInterval
+    );
+    const control: MigrationRunSchedulingControl = {
+      canSchedule: parent.canSchedule.pipe(
+        Effect.flatMap((canSchedule) =>
+          canSchedule ? durableCanSchedule : Effect.succeed(false)
+        )
+      ),
+    };
+
+    return yield* effect.pipe(
+      Effect.provideService(CurrentMigrationRunSchedulingControl, control)
+    );
+  });
 
 const lockDefinitionIds = (
   definitionIds: readonly MigrationDefinitionId[]
@@ -652,6 +693,9 @@ export interface MigrationRunCompletionInput {
   readonly storeLayer: Layer.Layer<MigrationStore, MigrationStoreError>;
 }
 
+export interface MigrationRunCancellationInput
+  extends MigrationRunCompletionInput {}
+
 export interface MigrationRunRollbackOrphansState
   extends RollbackOrphansCounts {
   readonly afterIdentity?: EncodedSourceIdentity;
@@ -715,7 +759,10 @@ const beginMigrationRunExecution = (
     yield* validateMigrationContracts(store, input.definitions);
     const runState = yield* store.beginRun(input.lease.runId, definitionIds);
 
-    if (input.rescan === true || input.rollbackOrphans === true) {
+    if (
+      runState.status === "running" &&
+      (input.rescan === true || input.rollbackOrphans === true)
+    ) {
       yield* Effect.forEach(
         definitionIds,
         (definitionId) => store.deleteSourceCursor(definitionId),
@@ -723,19 +770,26 @@ const beginMigrationRunExecution = (
       );
     }
 
-    yield* MigrationProgress.emit({
-      definitionIds,
-      kind: "run-started",
-      runId: runState.runId,
-    });
+    if (runState.status === "running") {
+      yield* MigrationProgress.emit({
+        definitionIds,
+        kind: "run-started",
+        runId: runState.runId,
+      });
+    }
 
     return runState;
   }).pipe(Effect.provide(firstDefinition.store));
 };
 
-const completeMigrationRunExecution = (
-  input: MigrationRunCompletionInput
-): Effect.Effect<MigrationRunSummary, RunMigrationError> => {
+const finalizeMigrationRunExecutionState = (
+  input: Pick<MigrationRunCompletionInput, "lease" | "storeLayer">,
+  options: {
+    readonly transition: (
+      store: typeof MigrationStore.Service
+    ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
+  }
+): Effect.Effect<MigrationRunState, RunMigrationError> => {
   const definitionIds = input.lease.scopeDefinitionIds;
 
   return Effect.gen(function* () {
@@ -746,25 +800,100 @@ const completeMigrationRunExecution = (
       input.lease,
       definitionIds
     );
-    const status = runStatusForDefinitions(input.definitions);
-    const completedRunExit = yield* Effect.exit(
-      status === "failed"
-        ? store.failRun(input.lease.runId, definitionIds, input.definitions)
-        : store.completeRun(input.lease.runId, definitionIds, input.definitions)
-    );
+    const finalizedRunExit = yield* Effect.exit(options.transition(store));
 
-    if (Exit.isSuccess(completedRunExit)) {
-      yield* MigrationProgress.emit({
+    yield* releaseDefinitionLocks(store, input.lease.locks, finalizedRunExit);
+
+    return yield* finalizedRunExit;
+  }).pipe(Effect.provide(input.storeLayer));
+};
+
+const assertMigrationRunFinalStatus = (
+  state: MigrationRunState,
+  expectedStatuses: readonly MigrationRunSummary["status"][]
+): Effect.Effect<MigrationRunSummary["status"], MigrationStoreError> => {
+  if (
+    (state.status === "cancelled" ||
+      state.status === "failed" ||
+      state.status === "succeeded") &&
+    expectedStatuses.includes(state.status)
+  ) {
+    return Effect.succeed(state.status);
+  }
+
+  return Effect.fail(
+    new MigrationStoreError({
+      message:
+        "Migration Run finalization conflicts with its authoritative durable state",
+      cause: {
+        actualStatus: state.status,
+        expectedStatuses,
+        runId: state.runId,
+      },
+    })
+  );
+};
+
+const emitMigrationRunTerminalProgress = (
+  state: MigrationRunState,
+  definitionIds: readonly MigrationDefinitionId[],
+  options: { readonly failure?: { readonly error: unknown } } = {}
+): Effect.Effect<void> => {
+  switch (state.status) {
+    case "cancelled":
+      return MigrationProgress.emit({
+        definitionIds,
+        kind: "run-cancelled",
+        runId: state.runId,
+      });
+    case "failed":
+      return options.failure === undefined
+        ? MigrationProgress.emit({
+            definitionIds,
+            kind: "run-completed",
+            runId: state.runId,
+            status: "failed",
+          })
+        : MigrationProgress.emit({
+            definitionIds,
+            error: options.failure.error,
+            kind: "run-failed",
+            runId: state.runId,
+          });
+    case "succeeded":
+      return MigrationProgress.emit({
         definitionIds,
         kind: "run-completed",
-        runId: input.lease.runId,
-        status,
+        runId: state.runId,
+        status: "succeeded",
       });
-    }
+    default:
+      return Effect.void;
+  }
+};
 
-    yield* releaseDefinitionLocks(store, input.lease.locks, completedRunExit);
+const completeMigrationRunExecution = (
+  input: MigrationRunCompletionInput
+): Effect.Effect<MigrationRunSummary, RunMigrationError> => {
+  const definitionIds = input.lease.scopeDefinitionIds;
+  const requestedStatus = runStatusForDefinitions(input.definitions);
 
-    const completedRun = yield* completedRunExit;
+  return Effect.gen(function* () {
+    const completedRun = yield* finalizeMigrationRunExecutionState(input, {
+      transition: (store) =>
+        requestedStatus === "failed"
+          ? store.failRun(input.lease.runId, definitionIds, input.definitions)
+          : store.completeRun(
+              input.lease.runId,
+              definitionIds,
+              input.definitions
+            ),
+    });
+    const status = yield* assertMigrationRunFinalStatus(
+      completedRun,
+      requestedStatus === "succeeded" ? ["succeeded", "cancelled"] : ["failed"]
+    );
+    yield* emitMigrationRunTerminalProgress(completedRun, definitionIds);
 
     return {
       definitions: input.definitions,
@@ -773,7 +902,32 @@ const completeMigrationRunExecution = (
       startedAt: completedRun.startedAt,
       status,
     };
-  }).pipe(Effect.provide(input.storeLayer));
+  });
+};
+
+const cancelMigrationRunExecution = (
+  input: MigrationRunCancellationInput
+): Effect.Effect<MigrationRunSummary, RunMigrationError> => {
+  const definitionIds = input.lease.scopeDefinitionIds;
+
+  return Effect.gen(function* () {
+    const cancelledRun = yield* finalizeMigrationRunExecutionState(input, {
+      transition: (store) =>
+        store.markRunCancelled(input.lease.runId, definitionIds),
+    });
+    const status = yield* assertMigrationRunFinalStatus(cancelledRun, [
+      "cancelled",
+    ]);
+    yield* emitMigrationRunTerminalProgress(cancelledRun, definitionIds);
+
+    return {
+      definitions: input.definitions,
+      finishedAt: cancelledRun.finishedAt ?? (yield* DateTime.nowAsDate),
+      runId: cancelledRun.runId,
+      startedAt: cancelledRun.startedAt,
+      status,
+    };
+  });
 };
 
 const failMigrationRunExecution = (
@@ -782,25 +936,19 @@ const failMigrationRunExecution = (
   const definitionIds = input.definitionIds ?? input.lease.scopeDefinitionIds;
 
   return Effect.gen(function* () {
-    const store = yield* MigrationStore;
-
-    yield* assertCurrentMigrationRunExecutionLease(
-      store,
-      input.lease,
-      definitionIds
-    );
-    yield* MigrationProgress.emit({
-      definitionIds,
-      error: input.error,
-      kind: "run-failed",
-      runId: input.lease.runId,
+    const failedRun = yield* finalizeMigrationRunExecutionState(input, {
+      transition: (store) =>
+        store.failRun(
+          input.lease.runId,
+          definitionIds,
+          input.definitionOutcomes
+        ),
     });
-    const failedRunExit = yield* Effect.exit(
-      store.failRun(input.lease.runId, definitionIds, input.definitionOutcomes)
-    );
-    yield* releaseDefinitionLocks(store, input.lease.locks, failedRunExit);
-    yield* failedRunExit;
-  }).pipe(Effect.provide(input.storeLayer));
+    yield* assertMigrationRunFinalStatus(failedRun, ["failed"]);
+    yield* emitMigrationRunTerminalProgress(failedRun, definitionIds, {
+      failure: { error: input.error },
+    });
+  });
 };
 
 const executeMigrationRun = <A, E, R = never>(
@@ -861,7 +1009,8 @@ const executeMigrationRun = <A, E, R = never>(
     const begin = Effect.gen(function* () {
       const runState = yield* retryCommittedRunTransition(runId, {
         confirmationMessage: "Unable to confirm Migration Run start state",
-        isCommitted: (committed) => committed.status === "running",
+        isCommitted: (committed) =>
+          committed.status === "running" || committed.status === "cancelling",
         onCommitted: () => {
           runStatePersisted = true;
         },
@@ -871,11 +1020,13 @@ const executeMigrationRun = <A, E, R = never>(
         transition: store.beginRun(runId, definitionIds),
       });
       runStatePersisted = true;
-      yield* MigrationProgress.emit({
-        definitionIds,
-        kind: "run-started",
-        runId: runState.runId,
-      });
+      if (runState.status === "running") {
+        yield* MigrationProgress.emit({
+          definitionIds,
+          kind: "run-started",
+          runId: runState.runId,
+        });
+      }
       return runState;
     });
     const finalizeStartedRun = (
@@ -918,8 +1069,23 @@ const executeMigrationRun = <A, E, R = never>(
                 runState.runId,
                 definitionIds,
                 bodyResult.definitionOutcomes
-              )
+              ),
+          bodyResult.status === "succeeded"
         );
+        if (completedRun.status === "cancelled") {
+          yield* MigrationProgress.emit({
+            definitionIds,
+            kind: "run-cancelled",
+            runId: runState.runId,
+          });
+
+          return {
+            ...bodyResult,
+            status: "cancelled" as const,
+            completedRun,
+            runState,
+          };
+        }
         yield* MigrationProgress.emit({
           definitionIds,
           kind: "run-completed",
@@ -934,7 +1100,11 @@ const executeMigrationRun = <A, E, R = never>(
         };
       });
     const executeBody = (runState: MigrationRunState) =>
-      body(runState.runId).pipe(
+      withDurableRunScheduling(
+        store,
+        runState.runId,
+        body(runState.runId)
+      ).pipe(
         Effect.catch(failExecution),
         Effect.flatMap((bodyResult) => finalizeStartedRun(runState, bodyResult))
       );
@@ -2955,8 +3125,16 @@ const runMigrationDefinitionCursorWindow = <
   SourceRequirements
 > => {
   const program = Effect.gen(function* () {
-    const source = yield* MigrationDefinitionSource.get(definition);
     const store = yield* MigrationStore;
+
+    if (!(yield* canScheduleRunWork)) {
+      return {
+        kind: "cancelled" as const,
+        state: input.state,
+      };
+    }
+
+    const source = yield* MigrationDefinitionSource.get(definition);
     const processConcurrency = resolvePipelineExecutionOptions(
       processExecution,
       definition.execution?.process,
@@ -3124,19 +3302,23 @@ const executeMigrationRunDefinitionCursorWindow = <
       return yield* lockOwnerMismatchError(input.lease);
     }
 
-    return yield* withStubRunScope(
-      {
-        definitionIds: input.definitionIds,
-        runId: input.runId,
-        store,
-      },
-      (stubRunScope) =>
-        runMigrationDefinitionCursorWindow(
-          definition,
-          input,
-          stubRunScope.createStubReference,
-          processExecution
-        )
+    return yield* withDurableRunScheduling(
+      store,
+      input.runId,
+      withStubRunScope(
+        {
+          definitionIds: input.definitionIds,
+          runId: input.runId,
+          store,
+        },
+        (stubRunScope) =>
+          runMigrationDefinitionCursorWindow(
+            definition,
+            input,
+            stubRunScope.createStubReference,
+            processExecution
+          )
+      )
     );
   }).pipe(Effect.provide(definition.store));
 
@@ -3159,12 +3341,16 @@ const executeMigrationRunDefinitionRollbackOrphansPage = (
       return yield* lockOwnerMismatchError(input.lease);
     }
 
-    return yield* rollbackOrphansPage(
-      definition,
-      input.runId,
+    return yield* withDurableRunScheduling(
       store,
-      input.state,
-      rollbackExecution
+      input.runId,
+      rollbackOrphansPage(
+        definition,
+        input.runId,
+        store,
+        input.state,
+        rollbackExecution
+      )
     );
   }).pipe(Effect.provide(definition.store));
 
@@ -4305,6 +4491,10 @@ export interface MigrationRunExecutorService {
     input: MigrationRunBeginInput
   ) => Effect.Effect<MigrationRunState, RunMigrationError>;
 
+  readonly cancel: (
+    input: MigrationRunCancellationInput
+  ) => Effect.Effect<MigrationRunSummary, RunMigrationError>;
+
   readonly complete: (
     input: MigrationRunCompletionInput
   ) => Effect.Effect<MigrationRunSummary, RunMigrationError>;
@@ -4376,6 +4566,9 @@ const migrationRunExecutor: MigrationRunExecutorService = {
   begin: Effect.fn("MigrationRunExecutor.begin")((input) =>
     beginMigrationRunExecution(input)
   ),
+  cancel: Effect.fn("MigrationRunExecutor.cancel")((input) =>
+    cancelMigrationRunExecution(input)
+  ),
   complete: Effect.fn("MigrationRunExecutor.complete")((input) =>
     completeMigrationRunExecution(input)
   ),
@@ -4413,6 +4606,9 @@ export class MigrationRunExecutor extends Service<
 >()("@migrate-sdk/MigrationRunExecutor") {
   static readonly begin = (input: MigrationRunBeginInput) =>
     Effect.flatMap(MigrationRunExecutor, (executor) => executor.begin(input));
+
+  static readonly cancel = (input: MigrationRunCancellationInput) =>
+    Effect.flatMap(MigrationRunExecutor, (executor) => executor.cancel(input));
 
   static readonly complete = (input: MigrationRunCompletionInput) =>
     Effect.flatMap(MigrationRunExecutor, (executor) =>

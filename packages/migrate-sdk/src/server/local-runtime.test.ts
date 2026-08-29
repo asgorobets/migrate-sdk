@@ -392,7 +392,7 @@ describe("Local Migrate Server runtime", () => {
 
     await Effect.runPromise(Deferred.await(observing));
     await expect(Effect.runPromise(execution.stop)).resolves.toMatchObject({
-      kind: "provider-owned",
+      kind: "requested",
     });
     await Effect.runPromise(Fiber.interrupt(firstObservation));
 
@@ -410,7 +410,7 @@ describe("Local Migrate Server runtime", () => {
           executionId: `detached-${detachedRunId}`,
         },
         runId: detachedRunId,
-        status: "running",
+        status: "cancelling",
       }),
     ]);
     await expect(
@@ -422,15 +422,15 @@ describe("Local Migrate Server runtime", () => {
     await expect(
       Effect.runPromise(runtime.observeRun(detachedRunId))
     ).resolves.toEqual({
-      message: `Run ${detachedRunId} succeeded`,
-      outcome: "completed",
+      message: `Run ${detachedRunId} cancelled`,
+      outcome: "cancelled",
       runId: detachedRunId,
     });
     await expect(
       Effect.runPromise(runtime.observeRun(detachedRunId))
     ).resolves.toEqual({
-      message: `Run ${detachedRunId} succeeded`,
-      outcome: "completed",
+      message: `Run ${detachedRunId} cancelled`,
+      outcome: "cancelled",
       runId: detachedRunId,
     });
     expect(liveProgressProviderObservations).toEqual([

@@ -2,6 +2,7 @@
 
 export type {
   MigrationRunBeginInput,
+  MigrationRunCancellationInput,
   MigrationRunCompletionInput,
   MigrationRunCursorWindowInput,
   MigrationRunCursorWindowResult,

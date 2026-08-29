@@ -260,6 +260,9 @@ export interface RegistryMigrateServerRuntime {
     operation: ExecutableMigrationOperation,
     observer?: RegistryMigrateServerExecutionObserver
   ) => Effect.Effect<MigrateServerExecutionHandle>;
+  readonly stopRun: (
+    runId: MigrationRunId
+  ) => Effect.Effect<MigrateServerExecutionStopResult, unknown>;
   readonly watchDashboardRun: (
     run: MigrateActiveRun,
     invalidate: Effect.Effect<void>
@@ -645,9 +648,9 @@ export const makeRegistryMigrateServerRuntime = (
       return { definitionId: expectedLock.definitionId, kind };
     });
 
-  const withoutServerStop = (run: ActiveMigrationRun): MigrateActiveRun => ({
+  const withDurableStop = (run: ActiveMigrationRun): MigrateActiveRun => ({
     ...run,
-    stopSupported: false,
+    stopSupported: true,
   });
 
   const readSnapshot = (
@@ -658,7 +661,7 @@ export const makeRegistryMigrateServerRuntime = (
       const initial = yield* Effect.all({
         activeRuns: registry
           .activeRuns()
-          .pipe(Effect.map((runs) => runs.map(withoutServerStop))),
+          .pipe(Effect.map((runs) => runs.map(withDurableStop))),
         durableReport: registry.status({
           all: true,
           scanSource: false,
@@ -714,7 +717,44 @@ export const makeRegistryMigrateServerRuntime = (
 
   const listActiveRunsEffect = registry
     .activeRuns()
-    .pipe(Effect.map((runs) => runs.map(withoutServerStop)));
+    .pipe(Effect.map((runs) => runs.map(withDurableStop)));
+
+  const stopRun = (
+    runId: MigrationRunId
+  ): Effect.Effect<MigrateServerExecutionStopResult, unknown> =>
+    Effect.gen(function* () {
+      const activeRun = (yield* listActiveRunsEffect).find(
+        (candidate) => candidate.runId === runId
+      );
+
+      if (activeRun === undefined) {
+        return { kind: "idle" as const };
+      }
+
+      const definition = Option.getOrUndefined(
+        registry.get(activeRun.observationDefinitionId)
+      );
+
+      if (definition === undefined) {
+        return yield* new RegistryMigrateServerExecutionError({
+          message: `Migration was not found: ${activeRun.observationDefinitionId}`,
+        });
+      }
+
+      const state = yield* MigrationStore.pipe(
+        Effect.flatMap((store) =>
+          store.requestRunCancellation(runId, activeRun.definitionIds)
+        ),
+        Effect.provide(definition.store)
+      );
+
+      return state.status === "cancelling"
+        ? {
+            kind: "requested" as const,
+            message: `Cancelling run ${runId}; waiting for active work to finish…`,
+          }
+        : { kind: "idle" as const };
+    });
 
   const scanSource = (
     target: MigrateTarget,
@@ -1059,8 +1099,7 @@ export const makeRegistryMigrateServerRuntime = (
       );
 
       return {
-        activeRun:
-          activeRun === null ? undefined : withoutServerStop(activeRun),
+        activeRun: activeRun === null ? undefined : withDurableStop(activeRun),
         state,
       };
     });
@@ -1104,14 +1143,22 @@ export const makeRegistryMigrateServerRuntime = (
           options
         );
         yield* Effect.sync(() =>
-          options?.onStateChange?.({
-            adapter: execution.adapter,
-            definitionId: activeRun.observationDefinitionId,
-            executionId: execution.executionId,
-            kind: "running",
-            ownership: "provider",
-            runId,
-          })
+          options?.onStateChange?.(
+            activeRun.status === "cancelling"
+              ? {
+                  definitionId: activeRun.observationDefinitionId,
+                  kind: "cancelling",
+                  runId,
+                }
+              : {
+                  adapter: execution.adapter,
+                  definitionId: activeRun.observationDefinitionId,
+                  executionId: execution.executionId,
+                  kind: "running",
+                  ownership: "provider",
+                  runId,
+                }
+          )
         );
         yield* progress.startFallback;
 
@@ -1155,7 +1202,7 @@ export const makeRegistryMigrateServerRuntime = (
     options?: RegistryMigrateServerExecutionObserver
   ): Effect.Effect<MigrateServerExecutionHandle> =>
     Effect.gen(function* () {
-      const stopRequested = yield* Deferred.make<void>();
+      const stopRequested = yield* Deferred.make<boolean>();
       const phase = yield* Ref.make<MigrateServerExecutionPhase>({
         kind: "starting",
       });
@@ -1224,6 +1271,9 @@ export const makeRegistryMigrateServerRuntime = (
                 runId: started.runId,
               });
               yield* Deferred.await(stopRequested).pipe(
+                Effect.flatMap((alreadyPersisted) =>
+                  alreadyPersisted ? Effect.void : stopRun(started.runId)
+                ),
                 Effect.andThen(
                   notifyState({
                     definitionId: operation.observationDefinitionId,
@@ -1281,6 +1331,9 @@ export const makeRegistryMigrateServerRuntime = (
             ownership: "provider",
             runId: started.runId,
           });
+          if (yield* Deferred.isDone(stopRequested)) {
+            yield* stopRun(started.runId);
+          }
           yield* progress.startFallback;
 
           const terminal = yield* observeDetachedRunEffect({
@@ -1315,41 +1368,40 @@ export const makeRegistryMigrateServerRuntime = (
           )
         )
       );
-      const stop: Effect.Effect<MigrateServerExecutionStopResult> = Ref.get(
-        phase
-      ).pipe(
-        Effect.flatMap(
-          (current): Effect.Effect<MigrateServerExecutionStopResult> => {
-            switch (current.kind) {
-              case "server-owned":
-                return Deferred.succeed(stopRequested, undefined).pipe(
-                  Effect.as({
-                    kind: "requested" as const,
-                    message: `Cancelling run ${current.runId}; waiting for active work to finish…`,
-                  })
-                );
-              case "provider-owned":
-                return Effect.succeed({
-                  kind: "provider-owned" as const,
-                  message: `Run ${current.runId} is owned by its execution provider and will continue in the background`,
-                });
-              case "starting":
-                return Deferred.succeed(stopRequested, undefined).pipe(
-                  Effect.as({
-                    kind: "requested" as const,
-                    message: "Exit requested; waiting for the run to start…",
-                  })
-                );
-              case "terminal":
-                return Effect.succeed({ kind: "idle" as const });
-              default: {
-                const unhandled: never = current;
-                return unhandled;
+      const stop: Effect.Effect<MigrateServerExecutionStopResult, unknown> =
+        Ref.get(phase).pipe(
+          Effect.flatMap(
+            (
+              current
+            ): Effect.Effect<MigrateServerExecutionStopResult, unknown> => {
+              switch (current.kind) {
+                case "server-owned":
+                  return stopRun(current.runId).pipe(
+                    Effect.tap((cancellation) =>
+                      cancellation.kind === "requested"
+                        ? Deferred.succeed(stopRequested, true)
+                        : Effect.void
+                    )
+                  );
+                case "provider-owned":
+                  return stopRun(current.runId);
+                case "starting":
+                  return Deferred.succeed(stopRequested, false).pipe(
+                    Effect.as({
+                      kind: "requested" as const,
+                      message: "Exit requested; waiting for the run to start…",
+                    })
+                  );
+                case "terminal":
+                  return Effect.succeed({ kind: "idle" as const });
+                default: {
+                  const unhandled: never = current;
+                  return unhandled;
+                }
               }
             }
-          }
-        )
-      );
+          )
+        );
 
       return { result, stop };
     });
@@ -1382,6 +1434,7 @@ export const makeRegistryMigrateServerRuntime = (
     rows,
     scanSource,
     startExecution,
+    stopRun,
     watchDashboardRun,
   };
 };

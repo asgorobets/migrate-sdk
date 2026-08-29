@@ -56,7 +56,7 @@ export const MigrateActiveRun = Schema.Struct({
   observationDefinitionId: MigrationDefinitionId,
   runId: MigrationRunId,
   startedAt: Schema.DateFromString,
-  status: Schema.Literals(["queued", "running"]),
+  status: Schema.Literals(["queued", "running", "cancelling"]),
   stopSupported: Schema.Boolean,
 }).check(
   Schema.makeFilter(activeMigrationRunHasObservationDefinition, {

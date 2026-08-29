@@ -1969,6 +1969,44 @@ describe("FileMigrationStore", () => {
     )
   );
 
+  it.effect("persists a durable cancellation request until completion", () =>
+    withTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("articles");
+        const runId = toMigrationRunId("run-cancelling-file");
+
+        yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+          yield* store.queueRun(runId, [definitionId]);
+          const requested = yield* store.requestRunCancellation(runId, [
+            definitionId,
+          ]);
+
+          expect(requested.status).toBe("cancelling");
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+
+        yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+          const begun = yield* store.beginRun(runId, [definitionId]);
+          const cancelled = yield* store.completeRun(
+            runId,
+            [definitionId],
+            [{ definitionId, status: "succeeded" }]
+          );
+          const lateQueue = yield* store.queueRun(runId, [definitionId]);
+          const lateBegin = yield* store.beginRun(runId, [definitionId]);
+
+          expect(begun.status).toBe("cancelling");
+          expect(cancelled).toEqual(
+            expect.objectContaining({ runId, status: "cancelled" })
+          );
+          expect(lateQueue).toEqual(cancelled);
+          expect(lateBegin).toEqual(cancelled);
+        }).pipe(Effect.provide(fileStoreLayer(directory)));
+      })
+    )
+  );
+
   it.effect("uses persisted skipped item state in skipped mode", () =>
     withTempDirectory((directory) =>
       Effect.gen(function* () {

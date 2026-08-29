@@ -7,6 +7,7 @@ import {
 } from "@migrate-sdk/workflow-sdk/workflow";
 import {
   beginMigrationRunStep,
+  cancelMigrationRunStep,
   completeMigrationRunStep,
   executeMigrationRollbackStep,
   executeMigrationRunCursorWindowStep,
@@ -39,6 +40,7 @@ export async function inMemoryMigrationTestWorkflow(
         })
       : await runMigrationExecutionWorkflow(envelope, {
           begin: beginMigrationRunStep,
+          cancel: cancelMigrationRunStep,
           complete: completeMigrationRunStep,
           executeCursorWindow: executeMigrationRunCursorWindowStep,
           executeRollbackOrphansPage:

@@ -26,8 +26,10 @@ import { makeMigrationDefinitionRunState } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import { summarizeMigrationItemStates } from "../../domain/status.ts";
 import {
+  isActiveMigrationRunStatus,
   MigrationStore,
   migrationDefinitionRunStatus,
+  resolveMigrationRunTransition,
   validateMigrationDefinitionRunOutcomes,
   validateMigrationRunDefinitionIds,
 } from "../../services/migration-store.ts";
@@ -293,19 +295,36 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       status: MigrationRunState["status"]
     ) =>
       Effect.gen(function* () {
-        const current = definitionIds
-          .map((definitionId) => state.latestRunStates.get(definitionId))
-          .find((runState) => runState?.runId === runId);
+        const startedAt = yield* DateTime.nowAsDate;
+        const current = state.runStates.get(runId);
+
+        if (current !== undefined) {
+          yield* validateMigrationRunDefinitionIds(current, definitionIds);
+        }
+
+        const transition = resolveMigrationRunTransition(
+          current?.status,
+          status
+        );
+
+        if (current !== undefined && !transition.accepted) {
+          return current;
+        }
+
         const runState: MigrationRunState = {
           ...(current ?? {}),
           runId,
           definitionIds,
-          status,
-          startedAt: current?.startedAt ?? (yield* DateTime.nowAsDate),
+          status: transition.status ?? status,
+          startedAt: current?.startedAt ?? startedAt,
         };
 
         for (const definitionId of definitionIds) {
-          state.latestRunStates.set(definitionId, runState);
+          const latest = state.latestRunStates.get(definitionId);
+
+          if (current === undefined || latest?.runId === runId) {
+            state.latestRunStates.set(definitionId, runState);
+          }
         }
         state.runStates.set(runId, runState);
 
@@ -334,6 +353,15 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       execution: MigrationExecutionHandle
     ) {
       const current = yield* readRunStateForUpdate(state, runId, definitionIds);
+      const transition = resolveMigrationRunTransition(
+        current.status,
+        undefined
+      );
+
+      if (!transition.accepted) {
+        return current;
+      }
+
       const updated: MigrationRunState = {
         ...current,
         ...(execution === undefined ? {} : { execution }),
@@ -351,12 +379,21 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       runId: MigrationRunId,
       definitionIds: readonly MigrationDefinitionId[]
     ) {
-      const current = yield* readRunStateForUpdate(state, runId, definitionIds);
       const finishedAt = yield* DateTime.nowAsDate;
+      const current = yield* readRunStateForUpdate(state, runId, definitionIds);
+      const transition = resolveMigrationRunTransition(
+        current.status,
+        "start-failed"
+      );
+
+      if (!transition.accepted) {
+        return current;
+      }
+
       const failed: MigrationRunState = {
         ...current,
-        status: "start-failed",
-        finishedAt,
+        status: transition.status ?? "start-failed",
+        finishedAt: current.finishedAt ?? finishedAt,
       };
 
       updateCurrentLatestRunStates(state, runId, definitionIds, () => failed);
@@ -376,16 +413,26 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
             definitionIds,
             definitionOutcomes
           );
+        const finishedAt = yield* DateTime.nowAsDate;
         const current = yield* readRunStateForUpdate(
           state,
           runId,
           definitionIds
         );
-        const finishedAt = yield* DateTime.nowAsDate;
+        const transition = resolveMigrationRunTransition(
+          current.status,
+          "succeeded",
+          { cancelIfRequested: true }
+        );
+
+        if (!transition.accepted) {
+          return current;
+        }
+
         const completed: MigrationRunState = {
           ...current,
-          status: "succeeded",
-          finishedAt,
+          status: transition.status ?? "succeeded",
+          finishedAt: current.finishedAt ?? finishedAt,
         };
 
         updateCurrentLatestRunStates(
@@ -417,12 +464,21 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
           definitionIds,
           definitionOutcomes
         );
-      const current = yield* readRunStateForUpdate(state, runId, definitionIds);
       const finishedAt = yield* DateTime.nowAsDate;
+      const current = yield* readRunStateForUpdate(state, runId, definitionIds);
+      const transition = resolveMigrationRunTransition(
+        current.status,
+        "failed"
+      );
+
+      if (!transition.accepted) {
+        return current;
+      }
+
       const failed: MigrationRunState = {
         ...current,
-        status: "failed",
-        finishedAt,
+        status: transition.status ?? "failed",
+        finishedAt: current.finishedAt ?? finishedAt,
       };
 
       updateCurrentLatestRunStates(
@@ -449,12 +505,21 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       runId: MigrationRunId,
       definitionIds: readonly MigrationDefinitionId[]
     ) {
-      const current = yield* readRunStateForUpdate(state, runId, definitionIds);
       const finishedAt = yield* DateTime.nowAsDate;
+      const current = yield* readRunStateForUpdate(state, runId, definitionIds);
+      const transition = resolveMigrationRunTransition(
+        current.status,
+        "cancelled"
+      );
+
+      if (!transition.accepted) {
+        return current;
+      }
+
       const cancelled: MigrationRunState = {
         ...current,
-        status: "cancelled",
-        finishedAt,
+        status: transition.status ?? "cancelled",
+        finishedAt: current.finishedAt ?? finishedAt,
       };
 
       updateCurrentLatestRunStates(
@@ -466,6 +531,34 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       state.runStates.set(runId, cancelled);
 
       return cancelled;
+    });
+
+    const requestRunCancellation = Effect.fn(
+      "InMemoryMigrationStore.requestRunCancellation"
+    )(function* (
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[]
+    ) {
+      const current = yield* readRunStateForUpdate(state, runId, definitionIds);
+
+      if (!isActiveMigrationRunStatus(current.status)) {
+        return current;
+      }
+
+      const cancelling: MigrationRunState = {
+        ...current,
+        status: "cancelling",
+      };
+
+      updateCurrentLatestRunStates(
+        state,
+        runId,
+        definitionIds,
+        () => cancelling
+      );
+      state.runStates.set(runId, cancelling);
+
+      return cancelling;
     });
 
     const acquireDefinitionLock = Effect.fn(
@@ -583,6 +676,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       attachRunExecution,
       markRunStartFailed,
       markRunCancelled,
+      requestRunCancellation,
       completeRun,
       failRun,
       acquireDefinitionLock,

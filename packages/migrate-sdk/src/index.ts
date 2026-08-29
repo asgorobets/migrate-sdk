@@ -350,8 +350,10 @@ export type {
 } from "./services/migration-definition-registry-catalog.ts";
 export {
   canReplaceLatestMigrationDefinitionRun,
+  isActiveMigrationRunStatus,
   MigrationStore,
   migrationDefinitionRunStatus,
+  resolveMigrationRunTransition,
   validateMigrationDefinitionRunOutcomes,
   validateMigrationRunDefinitionIds,
 } from "./services/migration-store.ts";

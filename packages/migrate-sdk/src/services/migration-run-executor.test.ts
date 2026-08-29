@@ -1,13 +1,19 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, type Layer, Schema } from "effect";
-import { expectTypeOf } from "vitest";
+import { Effect, Layer, Schema } from "effect";
 import {
   type ConfiguredSource,
   MigrationDefinition,
-  type MigrationStore,
+  type MigrationDefinitionRunSummary,
+  type MigrationProgressEvent,
+  MigrationStore,
   type MigrationStoreError,
   TrackingRecordContract,
+  toMigrationDefinitionId,
+  toMigrationRunId,
 } from "migrate-sdk";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
+import { expectTypeOf } from "vitest";
+import { MigrationProgress } from "./migration-progress.ts";
 import {
   type MigrationRunDefinitionCursorWindowInput,
   MigrationRunExecutor,
@@ -29,6 +35,56 @@ const store = {} as Layer.Layer<MigrationStore, MigrationStoreError>;
 const articleTracking = TrackingRecordContract.make({
   id: "article-tracking",
   schema: ArticleTrackingRecord,
+});
+
+const runSummary = (
+  status: MigrationDefinitionRunSummary["status"]
+): MigrationDefinitionRunSummary => ({
+  counts: {
+    failed: status === "failed" ? 1 : 0,
+    migrated: status === "succeeded" ? 1 : 0,
+    needsUpdate: 0,
+    skipped: 0,
+    unchanged: 0,
+  },
+  definitionId: toMigrationDefinitionId("articles"),
+  status,
+});
+
+const makeSucceededRunWithRetainedLock = Effect.fn(function* () {
+  const definitionId = toMigrationDefinitionId("articles");
+  const runId = toMigrationRunId("terminal-replay");
+  const storeState = InMemoryMigrationStore.makeState();
+  const storeLayer = InMemoryMigrationStore.layer(storeState);
+  const lock = yield* Effect.gen(function* () {
+    const migrationStore = yield* MigrationStore;
+    const acquiredLock = yield* migrationStore.acquireDefinitionLock(
+      definitionId,
+      runId
+    );
+
+    yield* migrationStore.queueRun(runId, [definitionId]);
+    yield* migrationStore.beginRun(runId, [definitionId]);
+    yield* migrationStore.completeRun(
+      runId,
+      [definitionId],
+      [runSummary("succeeded")]
+    );
+
+    return acquiredLock;
+  }).pipe(Effect.provide(storeLayer));
+
+  return {
+    definitionId,
+    lease: {
+      locks: [lock],
+      runId,
+      scopeDefinitionIds: [definitionId],
+    },
+    runId,
+    storeLayer,
+    storeState,
+  };
 });
 
 describe("MigrationRunExecutor", () => {
@@ -59,4 +115,94 @@ describe("MigrationRunExecutor", () => {
     expect(executorEffect).toBeDefined();
     expect(stepExecutorEffect).toBeDefined();
   });
+
+  it.effect(
+    "rejects cancellation after succeeded persistence while releasing retained locks",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeSucceededRunWithRetainedLock();
+        const events: MigrationProgressEvent[] = [];
+        const progressLayer = Layer.succeed(MigrationProgress, {
+          emit: (event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+        });
+
+        const error = yield* Effect.flip(
+          MigrationRunExecutor.cancel({
+            definitions: [runSummary("succeeded")],
+            lease: fixture.lease,
+            storeLayer: fixture.storeLayer,
+          }).pipe(
+            Effect.provide(
+              Layer.merge(MigrationRunExecutor.layer, progressLayer)
+            )
+          )
+        );
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationStoreError",
+            cause: {
+              actualStatus: "succeeded",
+              expectedStatuses: ["cancelled"],
+              runId: fixture.runId,
+            },
+            message:
+              "Migration Run finalization conflicts with its authoritative durable state",
+          })
+        );
+        expect(fixture.storeState.runStates.get(fixture.runId)?.status).toBe(
+          "succeeded"
+        );
+        expect(fixture.storeState.definitionLocks.size).toBe(0);
+        expect(events).toEqual([]);
+      })
+  );
+
+  it.effect(
+    "rejects failed completion after succeeded persistence while releasing retained locks",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeSucceededRunWithRetainedLock();
+        const events: MigrationProgressEvent[] = [];
+        const progressLayer = Layer.succeed(MigrationProgress, {
+          emit: (event) =>
+            Effect.sync(() => {
+              events.push(event);
+            }),
+        });
+
+        const error = yield* Effect.flip(
+          MigrationRunExecutor.complete({
+            definitions: [runSummary("failed")],
+            lease: fixture.lease,
+            storeLayer: fixture.storeLayer,
+          }).pipe(
+            Effect.provide(
+              Layer.merge(MigrationRunExecutor.layer, progressLayer)
+            )
+          )
+        );
+
+        expect(error).toEqual(
+          expect.objectContaining({
+            _tag: "MigrationStoreError",
+            cause: {
+              actualStatus: "succeeded",
+              expectedStatuses: ["failed"],
+              runId: fixture.runId,
+            },
+            message:
+              "Migration Run finalization conflicts with its authoritative durable state",
+          })
+        );
+        expect(fixture.storeState.runStates.get(fixture.runId)?.status).toBe(
+          "succeeded"
+        );
+        expect(fixture.storeState.definitionLocks.size).toBe(0);
+        expect(events).toEqual([]);
+      })
+  );
 });

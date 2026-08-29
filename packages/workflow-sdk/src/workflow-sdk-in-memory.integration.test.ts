@@ -2,13 +2,17 @@ import { Effect, Layer } from "effect";
 import {
   MigrationExecutable,
   type MigrationExecutableProgressCheckpoint,
+  MigrationStore,
+  toMigrationDefinitionId,
 } from "migrate-sdk";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { expect, test } from "vitest";
 import { getRun } from "workflow/api";
 import { getWorld } from "workflow/runtime";
 import { workflowSdkMigrationProgressStreamNamespace } from "./migration-progress.ts";
 import {
   beginMigrationRunStep,
+  cancelMigrationRunStep,
   completeMigrationRunStep,
   executeMigrationRollbackStep,
   executeMigrationRunCursorWindowStep,
@@ -149,6 +153,7 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
   ]);
   const migrationExecutionSteps = [
     beginMigrationRunStep,
+    cancelMigrationRunStep,
     executeMigrationRunCursorWindowStep,
     executeMigrationRunRollbackOrphansPageStep,
     completeMigrationRunStep,
@@ -157,7 +162,7 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
     readonly maxRetries?: number;
   })[];
   expect(migrationExecutionSteps.map((step) => step.maxRetries)).toEqual([
-    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0,
   ]);
 
   removeInMemoryMigrationTestSourceItem("article-100");
@@ -306,6 +311,38 @@ test("Workflow SDK applies planned Process Pipeline concurrency inside cursor-wi
   await execution.run.returnValue;
 
   expect(inMemoryMigrationTestProcessConcurrency()).toBe(3);
+});
+
+test("Workflow SDK observes a durable cancellation request between cursor-window steps", async () => {
+  resetInMemoryMigrationTestState();
+  setInMemoryMigrationTestSourceItemCount(1000);
+  const execution = await startInMemoryMigrationRun();
+  const store = await Effect.runPromise(
+    MigrationStore.pipe(
+      Effect.provide(
+        InMemoryMigrationStore.layer(inMemoryMigrationTestStoreState)
+      )
+    )
+  );
+
+  const requested = await Effect.runPromise(
+    store.requestRunCancellation(execution.started.runId, [
+      toMigrationDefinitionId("articles"),
+    ])
+  );
+
+  expect(requested.status).toBe("cancelling");
+  const result = await execution.run.returnValue;
+
+  expect(result.summary.status).toBe("cancelled");
+  expect(result.snapshot.latestRunStatus).toBe("cancelled");
+  expect(await execution.run.status).toBe("completed");
+  expect(
+    inMemoryMigrationTestStoreState.runStates.get(execution.started.runId)
+      ?.status
+  ).toBe("cancelled");
+  expect(inMemoryMigrationTestStoreState.definitionLocks.size).toBe(0);
+  expect(inMemoryMigrationTestStoreState.itemStates.size).toBeLessThan(1000);
 });
 
 test("Workflow SDK streams committed cursor-window checkpoints during a detached run", async () => {

@@ -1,5 +1,6 @@
 import {
   beginMigrationRunExecutionEnvelope,
+  cancelMigrationRunExecutionEnvelope,
   completeMigrationRunExecutionEnvelope,
   executeMigrationRollbackExecutionEnvelope,
   executeMigrationRunCursorWindow,
@@ -94,6 +95,20 @@ export async function completeMigrationRunStep(input: {
 
   return await runEffect(
     completeMigrationRunExecutionEnvelope({
+      definitions: input.definitions,
+      envelope: input.envelope,
+    })
+  );
+}
+
+export async function cancelMigrationRunStep(input: {
+  readonly definitions: WorkflowSdkMigrationRunSummary["definitions"];
+  readonly envelope: WorkflowSdkMigrationRunEnvelope;
+}): Promise<WorkflowSdkMigrationRunSummary> {
+  "use step";
+
+  return await runEffect(
+    cancelMigrationRunExecutionEnvelope({
       definitions: input.definitions,
       envelope: input.envelope,
     })

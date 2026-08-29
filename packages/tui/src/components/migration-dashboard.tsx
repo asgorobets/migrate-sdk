@@ -72,6 +72,9 @@ const statusLabel = (row: {
   if (status === undefined) {
     return "loading";
   }
+  if (status.lastRun?.status === "cancelling") {
+    return "cancelling";
+  }
   if (status.lock !== null) {
     return "running";
   }
@@ -97,6 +100,7 @@ const statusColor = (label: string): string => {
     case "warning":
       return migrationColors.warning;
     case "queued":
+    case "cancelling":
     case "running":
       return migrationColors.info;
     case "succeeded":
@@ -114,6 +118,8 @@ const statusIcon = (label: string): string => {
       return "!";
     case "running":
       return "◉";
+    case "cancelling":
+      return "◌";
     case "succeeded":
       return "✓";
     case "loading":

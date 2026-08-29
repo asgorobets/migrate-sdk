@@ -112,6 +112,7 @@ export const makeRunRequest = <
 export const MigrationRunStatus = Schema.Literals([
   "queued",
   "running",
+  "cancelling",
   "cancelled",
   "succeeded",
   "failed",
@@ -122,6 +123,7 @@ export type MigrationRunStatus = typeof MigrationRunStatus.Type;
 export const MigrationDefinitionRunStatus = Schema.Literals([
   "queued",
   "running",
+  "cancelling",
   "cancelled",
   "succeeded",
   "failed",
@@ -164,7 +166,7 @@ export const ActiveMigrationRun = Schema.Struct({
   observationDefinitionId: MigrationDefinitionIdSchema,
   runId: MigrationRunId,
   startedAt: Schema.Date,
-  status: Schema.Literals(["queued", "running"]),
+  status: Schema.Literals(["queued", "running", "cancelling"]),
 }).check(
   Schema.makeFilter(activeMigrationRunHasObservationDefinition, {
     message: "Observation definition must belong to the Active Migration Run",
@@ -181,7 +183,9 @@ export const activeMigrationRunFromState = (
   if (
     firstDefinitionId === undefined ||
     !state.definitionIds.includes(observationDefinitionId) ||
-    (state.status !== "queued" && state.status !== "running")
+    (state.status !== "queued" &&
+      state.status !== "running" &&
+      state.status !== "cancelling")
   ) {
     return null;
   }
@@ -249,7 +253,7 @@ export const makeMigrationRunState = (
 
 export interface MigrationRunHandleState
   extends Omit<MigrationRunState, "status"> {
-  readonly status: MigrationRunState["status"] | "cancelling";
+  readonly status: MigrationRunState["status"];
 }
 
 export type MigrationRunTerminalState = MigrationRunState & {

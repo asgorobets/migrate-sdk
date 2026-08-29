@@ -103,6 +103,7 @@ const makeBackend = (input?: {
   readonly getSourceItemTotals?: MigrateServerBackend<FakeExecutableOperation>["getSourceItemTotals"];
   readonly observeRun?: MigrateServerBackend<FakeExecutableOperation>["observeRun"];
   readonly prepareOperation?: MigrateServerBackend<FakeExecutableOperation>["prepareOperation"];
+  readonly stopRun?: MigrateServerBackend<FakeExecutableOperation>["stopRun"];
   readonly watchDashboardRun?: MigrateServerBackend<FakeExecutableOperation>["watchDashboardRun"];
 }): MigrateServerBackend<FakeExecutableOperation> => ({
   breakLock:
@@ -154,6 +155,7 @@ const makeBackend = (input?: {
       rows: [],
       scannedSource: true,
     }),
+  ...(input?.stopRun === undefined ? {} : { stopRun: input.stopRun }),
   ...(input?.watchDashboardRun === undefined
     ? {}
     : { watchDashboardRun: input.watchDashboardRun }),
@@ -1067,6 +1069,36 @@ describe("Migrate Server", () => {
     })
   );
 
+  it.effect("delegates durable provider cancellation to the backend", () =>
+    Effect.gen(function* () {
+      const server = yield* makeServer(
+        makeBackend({
+          getActiveRuns: Effect.succeed([
+            { ...activeRun, stopSupported: true },
+          ]),
+          stopRun: (requestedRunId) =>
+            Effect.succeed(
+              requestedRunId === runId
+                ? {
+                    kind: "requested" as const,
+                    message: `Cancelling run ${requestedRunId}`,
+                  }
+                : { kind: "idle" as const }
+            ),
+        })
+      );
+
+      expect(yield* server.getActiveRuns).toEqual([
+        expect.objectContaining({ runId, stopSupported: true }),
+      ]);
+      expect(yield* server.stopRun({ runId })).toEqual({
+        kind: "requested",
+        message: `Cancelling run ${runId}`,
+        runId,
+      });
+    })
+  );
+
   it.effect(
     "closes a detached observation without reporting the run as terminal",
     () =>
@@ -1130,6 +1162,67 @@ describe("Migrate Server", () => {
           },
         ]);
       })
+  );
+
+  it.effect("publishes durable provider cancellation to live observers", () =>
+    Effect.gen(function* () {
+      const terminal = yield* Deferred.make<MigrateServerExecutionResult>();
+      const server = yield* makeServer(
+        makeBackend({
+          executeOperation: (_operation, observer) => {
+            observer.onStateChange({
+              adapter: "workflow",
+              definitionId: articlesId,
+              executionId: "workflow-1",
+              kind: "running",
+              ownership: "provider",
+              runId,
+            });
+
+            return executionHandle(Deferred.await(terminal));
+          },
+          stopRun: () =>
+            Effect.succeed({
+              kind: "requested" as const,
+              message: `Cancelling run ${runId}`,
+            }),
+        })
+      );
+      const request = {
+        action: "run" as const,
+        options: {},
+        target: { definitionId: articlesId, kind: "migration" as const },
+      };
+      const operation = yield* server.prepareOperation(request);
+      yield* server.startOperation({
+        acceptedFingerprint: operation.fingerprint,
+        request,
+      });
+      const observation = yield* server
+        .observeRun({ runId })
+        .pipe(Stream.runCollect, Effect.forkChild);
+
+      yield* Effect.yieldNow;
+      expect(yield* server.stopRun({ runId })).toEqual({
+        kind: "requested",
+        message: `Cancelling run ${runId}`,
+        runId,
+      });
+      yield* Deferred.succeed(terminal, {
+        message: `Run ${runId} cancelled`,
+        outcome: "cancelled" as const,
+        runId,
+      });
+
+      expect(yield* Fiber.join(observation)).toContainEqual({
+        kind: "state",
+        state: {
+          definitionId: articlesId,
+          kind: "cancelling",
+          runId,
+        },
+      });
+    })
   );
 
   it.effect(

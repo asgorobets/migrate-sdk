@@ -37,6 +37,10 @@ export interface WorkflowSdkMigrationRunSteps {
   readonly begin: (
     envelope: WorkflowSdkMigrationRunEnvelope
   ) => Promise<{ readonly rollbackOrphans: boolean }>;
+  readonly cancel: (input: {
+    readonly definitions: WorkflowSdkMigrationRunSummary["definitions"];
+    readonly envelope: WorkflowSdkMigrationRunEnvelope;
+  }) => Promise<WorkflowSdkMigrationRunSummary>;
   readonly complete: (input: {
     readonly definitions: WorkflowSdkMigrationRunSummary["definitions"];
     readonly envelope: WorkflowSdkMigrationRunEnvelope;
@@ -101,7 +105,7 @@ const executeWorkflowRollbackOrphans = async ({
     definitionId: WorkflowSdkMigrationDefinitionId | undefined
   ) => void;
   readonly steps: WorkflowSdkMigrationRunSteps;
-}): Promise<void> => {
+}): Promise<boolean> => {
   for (const definitionId of [...envelope.executionDefinitionIds].reverse()) {
     onActiveDefinition(definitionId);
     let rollbackState: WorkflowSdkMigrationRunRollbackOrphansState = {
@@ -121,9 +125,7 @@ const executeWorkflowRollbackOrphans = async ({
       rollbackState = rollback.state;
 
       if (rollback.kind === "cancelled") {
-        throw new Error(
-          `Migration run was cancelled while rolling back orphans for ${definitionId}`
-        );
+        return true;
       }
       if (rollback.kind === "completed") {
         break;
@@ -142,6 +144,8 @@ const executeWorkflowRollbackOrphans = async ({
     }
     onActiveDefinition(undefined);
   }
+
+  return false;
 };
 
 export const runMigrationExecutionWorkflow = async (
@@ -172,9 +176,10 @@ export const runMigrationExecutionWorkflow = async (
         state = result.state;
 
         if (result.kind === "cancelled") {
-          throw new Error(
-            `Migration run was cancelled while scanning ${definitionId}`
-          );
+          return await steps.cancel({
+            definitions: completedDefinitions,
+            envelope,
+          });
         }
 
         if (result.kind === "definition-completed") {
@@ -205,7 +210,7 @@ export const runMigrationExecutionWorkflow = async (
       rollbackOrphans &&
       definitions.every((definition) => definition.status === "succeeded")
     ) {
-      await executeWorkflowRollbackOrphans({
+      const cancelled = await executeWorkflowRollbackOrphans({
         completedDefinitions,
         definitions,
         envelope,
@@ -214,6 +219,13 @@ export const runMigrationExecutionWorkflow = async (
         },
         steps,
       });
+
+      if (cancelled) {
+        return await steps.cancel({
+          definitions: completedDefinitions,
+          envelope,
+        });
+      }
     }
   } catch (error) {
     await steps.fail({
