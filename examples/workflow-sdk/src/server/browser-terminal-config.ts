@@ -37,6 +37,9 @@ export function parseBrowserTerminalMigrationServerUrl(
       "MIGRATE_SERVER_PUBLIC_URL cannot contain credentials, a query, or a fragment"
     );
   }
+  if (!url.pathname.endsWith("/")) {
+    url.pathname = `${url.pathname}/`;
+  }
   return url;
 }
 

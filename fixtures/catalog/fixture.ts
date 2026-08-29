@@ -257,15 +257,22 @@ export interface LoadedCatalogFixture {
   readonly sources: CatalogFixtureSources;
 }
 
+export const loadCatalogFixtureFromSnapshot = (
+  snapshot: string,
+  options: LoadCatalogFixtureOptions
+): LoadedCatalogFixture => {
+  const seeds = parseWikidataBookSeeds(snapshot);
+
+  return {
+    seedCount: seeds.length,
+    snapshot,
+    sources: buildCatalogFixtureSources(seeds, options.bookCount, options),
+  };
+};
+
 export const loadCatalogFixture = (
   options: LoadCatalogFixtureOptions
 ): Promise<LoadedCatalogFixture> =>
-  readFile(new URL("./books.csv", import.meta.url), "utf8").then((snapshot) => {
-    const seeds = parseWikidataBookSeeds(snapshot);
-
-    return {
-      seedCount: seeds.length,
-      snapshot,
-      sources: buildCatalogFixtureSources(seeds, options.bookCount, options),
-    };
-  });
+  readFile(new URL("./books.csv", import.meta.url), "utf8").then((snapshot) =>
+    loadCatalogFixtureFromSnapshot(snapshot, options)
+  );

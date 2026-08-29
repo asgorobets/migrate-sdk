@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import { isAuthorizedMigrationRequest } from "@/server/auth";
 import { setupDemoDatabase } from "@/server/demo-database";
 import { MigrateServerAccess } from "@/server/migrate-server-access";
+import catalogFixtureSnapshot from "../../../../../../../fixtures/catalog/books.csv?raw";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -18,6 +19,7 @@ export const POST = async (request: Request): Promise<Response> => {
 
   try {
     const counts = await setupDemoDatabase({
+      catalogSnapshot: catalogFixtureSnapshot,
       reset: new URL(request.url).searchParams.get("reset") === "true",
     });
 

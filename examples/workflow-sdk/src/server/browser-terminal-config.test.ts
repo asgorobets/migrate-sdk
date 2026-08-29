@@ -10,12 +10,13 @@ import {
 } from "./migrate-server-access";
 
 describe("browser terminal migration server URL", () => {
-  it("accepts an application-owned HTTPS endpoint", () => {
-    expect(
-      parseBrowserTerminalMigrationServerUrl(
-        "https://workflow.example.com/api/migrate"
-      ).href
-    ).toBe("https://workflow.example.com/api/migrate");
+  it.each([
+    "https://workflow.example.com/api/migrate",
+    "https://workflow.example.com/api/migrate/",
+  ])("normalizes the RPC endpoint for Effect's trailing-slash requests: %s", (value) => {
+    expect(parseBrowserTerminalMigrationServerUrl(value).href).toBe(
+      "https://workflow.example.com/api/migrate/"
+    );
   });
 
   it.each([
@@ -54,7 +55,7 @@ describe("BrowserTerminalConfig", () => {
 
     expect(config.migrateServerToken).toBe("migrate-secret");
     expect(config.migrationServerUrl.href).toBe(
-      "https://workflow.example.com/api/migrate"
+      "https://workflow.example.com/api/migrate/"
     );
     expect(config.snapshotId).toBe("snap_example");
   });

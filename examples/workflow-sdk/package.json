@@ -10,7 +10,7 @@
     "db:down": "docker compose down",
     "db:setup": "pnpm --filter migrate-sdk build && tsx scripts/setup-database.ts",
     "db:up": "docker compose up -d --wait postgres",
-    "dev": "pnpm run build:server && next dev --port 3100",
+    "dev": "pnpm run build:server && next dev --webpack --port 3100",
     "sandbox:snapshot": "tsx src/sandbox/create-tui-snapshot.ts",
     "start": "next start --port 3100",
     "test": "pnpm run build:server && vitest run --passWithNoTests"

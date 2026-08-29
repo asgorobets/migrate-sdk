@@ -1,4 +1,7 @@
-import { loadCatalogFixture } from "@fixtures/catalog";
+import {
+  loadCatalogFixture,
+  loadCatalogFixtureFromSnapshot,
+} from "@fixtures/catalog";
 import { Effect } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import { SqlMigrationStore } from "migrate-sdk/stores/sql";
@@ -34,20 +37,27 @@ const resetDemoDatabase = Effect.gen(function* () {
   `);
 });
 
-const createAndSeedDemoTables = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const fixture = yield* Effect.promise(() =>
-    loadCatalogFixture({ bookCount: 240, outcomes: "all-migrate" })
-  );
+const createAndSeedDemoTables = (catalogSnapshot?: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const fixtureOptions = {
+      bookCount: 240,
+      outcomes: "all-migrate" as const,
+    };
+    const fixture = yield* catalogSnapshot === undefined
+      ? Effect.promise(() => loadCatalogFixture(fixtureOptions))
+      : Effect.sync(() =>
+          loadCatalogFixtureFromSnapshot(catalogSnapshot, fixtureOptions)
+        );
 
-  yield* sql`
+    yield* sql`
     CREATE TABLE IF NOT EXISTS demo_authors_source (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       source_version INTEGER NOT NULL
     )
   `;
-  yield* sql`
+    yield* sql`
     CREATE TABLE IF NOT EXISTS demo_books_source (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -55,7 +65,7 @@ const createAndSeedDemoTables = Effect.gen(function* () {
       source_version INTEGER NOT NULL
     )
   `;
-  yield* sql`
+    yield* sql`
     CREATE TABLE IF NOT EXISTS demo_authors_destination (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -63,7 +73,7 @@ const createAndSeedDemoTables = Effect.gen(function* () {
       migrated_at TIMESTAMPTZ NOT NULL
     )
   `;
-  yield* sql`
+    yield* sql`
     CREATE TABLE IF NOT EXISTS demo_books_destination (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -73,7 +83,7 @@ const createAndSeedDemoTables = Effect.gen(function* () {
     )
   `;
 
-  yield* sql`
+    yield* sql`
     INSERT INTO demo_authors_source ${sql.insert(
       fixture.sources.authors.map((author) => ({
         id: author.id,
@@ -85,7 +95,7 @@ const createAndSeedDemoTables = Effect.gen(function* () {
       name = excluded.name,
       source_version = excluded.source_version
   `;
-  yield* sql`
+    yield* sql`
     INSERT INTO demo_books_source ${sql.insert(
       fixture.sources.books.map((book) => ({
         author_id: book.author_id,
@@ -99,7 +109,7 @@ const createAndSeedDemoTables = Effect.gen(function* () {
       author_id = excluded.author_id,
       source_version = excluded.source_version
   `;
-});
+  });
 
 const installMigrationStoreSchema = Effect.gen(function* () {
   const plan = yield* SqlMigrationStore.planSchema({
@@ -126,14 +136,17 @@ const demoDatabaseCounts = Effect.gen(function* () {
   } satisfies DemoDatabaseCounts;
 });
 
-export const setupDemoDatabase = (options: { readonly reset: boolean }) =>
+export const setupDemoDatabase = (options: {
+  readonly catalogSnapshot?: string;
+  readonly reset: boolean;
+}) =>
   Effect.runPromise(
     Effect.gen(function* () {
       if (options.reset) {
         yield* resetDemoDatabase;
       }
 
-      yield* createAndSeedDemoTables;
+      yield* createAndSeedDemoTables(options.catalogSnapshot);
       yield* installMigrationStoreSchema;
 
       return yield* demoDatabaseCounts;
