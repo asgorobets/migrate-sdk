@@ -84,7 +84,10 @@ try {
   await run("git", ["checkout", "--detach", "FETCH_HEAD"]);
   await run("test", ["-f", "pnpm-workspace.yaml"]);
   const pnpmVersion = await readPinnedPnpmVersion();
-  const pnpmEnvironment = { PNPM_HOME: TUI_SANDBOX_PNPM_HOME };
+  const pnpmEnvironment = {
+    PNPM_HOME: TUI_SANDBOX_PNPM_HOME,
+    SHELL: "/bin/bash",
+  };
   await run("npx", ["--yes", "get-pnpm", pnpmVersion], {
     env: pnpmEnvironment,
   });
