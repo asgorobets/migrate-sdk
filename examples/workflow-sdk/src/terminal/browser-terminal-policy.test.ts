@@ -71,6 +71,23 @@ describe("browser terminal timeout policy", () => {
     ).toEqual({ kind: "unchanged" });
   });
 
+  it("does not request a sub-second timeout extension", () => {
+    expect(
+      sandboxHeartbeatDecision({
+        expiresAtMs: SANDBOX_IDLE_TIMEOUT_MS - 999,
+        nowMs: 0,
+        sessionStartedAtMs: 0,
+      })
+    ).toEqual({ kind: "unchanged" });
+    expect(
+      sandboxHeartbeatDecision({
+        expiresAtMs: SANDBOX_IDLE_TIMEOUT_MS - 1000,
+        nowMs: 0,
+        sessionStartedAtMs: 0,
+      })
+    ).toEqual({ durationMs: 1000, kind: "extend" });
+  });
+
   it("never extends a session past its absolute lifetime", () => {
     const nowMs = SANDBOX_MAX_SESSION_MS - 30_000;
     expect(

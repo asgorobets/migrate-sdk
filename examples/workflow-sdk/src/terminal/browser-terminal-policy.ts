@@ -2,6 +2,7 @@ export const BROWSER_TERMINAL_HEARTBEAT_INTERVAL_MS = 30 * 1000;
 export const BROWSER_TERMINAL_INACTIVITY_MS = 3 * 60 * 1000;
 export const SANDBOX_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 export const SANDBOX_MAX_SESSION_MS = 30 * 60 * 1000;
+const SANDBOX_MIN_TIMEOUT_EXTENSION_MS = 1000;
 
 export type BrowserTerminalHeartbeatAction = "pause" | "renew" | "skip";
 
@@ -42,7 +43,7 @@ export const sandboxHeartbeatDecision = (input: {
     maximumExpiresAtMs
   );
   const durationMs = targetExpiresAtMs - input.expiresAtMs;
-  return durationMs > 0
+  return durationMs >= SANDBOX_MIN_TIMEOUT_EXTENSION_MS
     ? { durationMs, kind: "extend" }
     : { kind: "unchanged" };
 };
