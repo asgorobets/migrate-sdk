@@ -100,6 +100,7 @@ const makeBackend = (input?: {
   readonly getActiveRuns?: MigrateServerBackend<FakeExecutableOperation>["getActiveRuns"];
   readonly getDashboard?: MigrateServerBackend<FakeExecutableOperation>["getDashboard"];
   readonly getRunProgress?: MigrateServerBackend<FakeExecutableOperation>["getRunProgress"];
+  readonly getSourceItemTotals?: MigrateServerBackend<FakeExecutableOperation>["getSourceItemTotals"];
   readonly observeRun?: MigrateServerBackend<FakeExecutableOperation>["observeRun"];
   readonly prepareOperation?: MigrateServerBackend<FakeExecutableOperation>["prepareOperation"];
   readonly watchDashboardRun?: MigrateServerBackend<FakeExecutableOperation>["watchDashboardRun"];
@@ -133,6 +134,7 @@ const makeBackend = (input?: {
   getMessages: () => Effect.succeed([]),
   getRunProgress: input?.getRunProgress ?? (() => Effect.sync(() => undefined)),
   getSourceIdentityHistory: () => Effect.succeed([]),
+  getSourceItemTotals: input?.getSourceItemTotals ?? (() => Effect.succeed([])),
   normalizeSourceIdentity: (_definitionId, sourceIdentity) =>
     Effect.succeed(sourceIdentity),
   observeRun:

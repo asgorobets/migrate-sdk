@@ -1,12 +1,16 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
 import type {
+  MigrationDefinitionId,
   MigrationDefinitionRegistryGroup,
   MigrationDefinitionSourceStatus,
   MigrationMessage,
   MigrationStatusWarning,
 } from "migrate-sdk";
-import type { MigrateDashboardRow } from "migrate-sdk/protocol";
+import type {
+  MigrateDashboardRow,
+  MigrateSourceItemTotal,
+} from "migrate-sdk/protocol";
 import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
 import {
@@ -19,6 +23,11 @@ import {
   migrationMessageMarker,
 } from "./migration-message.ts";
 import { MigrationMessages } from "./migration-messages.tsx";
+import {
+  aggregateSourceItemTotals,
+  type MigrationProgressCounts,
+  migrationProgressBarModel,
+} from "./migration-progress-bar.ts";
 import { Badge, type BadgeIntent } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import { Checkbox } from "./ui/checkbox.tsx";
@@ -159,6 +168,20 @@ const aggregateCounts = (rows: readonly MigrateDashboardRow[]): DurableCounts =>
     { failed: 0, migrated: 0, needsUpdate: 0, skipped: 0 }
   );
 
+const sourceItemTotalForRows = (
+  rows: readonly MigrateDashboardRow[],
+  sourceItemTotals: ReadonlyMap<MigrationDefinitionId, MigrateSourceItemTotal>
+): MigrateSourceItemTotal | undefined =>
+  aggregateSourceItemTotals(
+    rows.map((row) => {
+      const scannedSource = row.status?.source;
+
+      return scannedSource === undefined
+        ? sourceItemTotals.get(row.entry.id)
+        : { count: scannedSource.total, kind: "known" };
+    })
+  );
+
 const sourceInventory = (
   rows: readonly MigrateDashboardRow[]
 ): SourceInventory | undefined => {
@@ -275,14 +298,33 @@ const lastRunLabel = (row: MigrateDashboardRow): string => {
   return `${lastRun.status} · ${formatDate(lastRun.finishedAt ?? lastRun.startedAt)}`;
 };
 
-const ProgressBar = ({ counts }: { readonly counts: DurableCounts }) => {
-  const segments = [
-    { color: migrationColors.success, count: counts.migrated },
-    { color: migrationColors.danger, count: counts.failed },
-    { color: migrationColors.dim, count: counts.skipped },
-    { color: migrationColors.warning, count: counts.needsUpdate },
-  ];
-  const populated = segments.filter((segment) => segment.count > 0);
+const progressSegmentColor = (
+  kind: ReturnType<typeof migrationProgressBarModel>["segments"][number]["kind"]
+): string => {
+  switch (kind) {
+    case "failed":
+      return migrationColors.danger;
+    case "migrated":
+      return migrationColors.success;
+    case "needs-update":
+      return migrationColors.warning;
+    case "skipped":
+      return migrationColors.dim;
+    default: {
+      const exhaustive: never = kind;
+      return exhaustive;
+    }
+  }
+};
+
+const ProgressBar = ({
+  counts,
+  sourceItemTotal,
+}: {
+  readonly counts: MigrationProgressCounts;
+  readonly sourceItemTotal?: MigrateSourceItemTotal | undefined;
+}) => {
+  const model = migrationProgressBarModel(counts, sourceItemTotal);
 
   return (
     <box
@@ -294,10 +336,10 @@ const ProgressBar = ({ counts }: { readonly counts: DurableCounts }) => {
         width: "100%",
       }}
     >
-      {populated.map((segment) => (
+      {model.segments.map((segment) => (
         <box
-          backgroundColor={segment.color}
-          key={segment.color}
+          backgroundColor={progressSegmentColor(segment.kind)}
+          key={segment.kind}
           style={{
             flexBasis: 0,
             flexGrow: segment.count,
@@ -307,9 +349,43 @@ const ProgressBar = ({ counts }: { readonly counts: DurableCounts }) => {
           }}
         />
       ))}
+      {model.remaining > 0 ? (
+        <box
+          backgroundColor={migrationColors.border}
+          style={{
+            flexBasis: 0,
+            flexGrow: model.remaining,
+            flexShrink: 1,
+            height: 1,
+          }}
+        />
+      ) : null}
     </box>
   );
 };
+
+const ProgressHeading = ({
+  counts,
+  sourceItemTotal,
+}: {
+  readonly counts: MigrationProgressCounts;
+  readonly sourceItemTotal?: MigrateSourceItemTotal | undefined;
+}) => (
+  <box
+    style={{
+      flexDirection: "row",
+      flexShrink: 0,
+      height: 1,
+      justifyContent: "space-between",
+      width: "100%",
+    }}
+  >
+    <text fg={migrationColors.foreground}>Items</text>
+    <text fg={migrationColors.dim}>
+      {migrationProgressBarModel(counts, sourceItemTotal).label}
+    </text>
+  </box>
+);
 
 const migrationRowHeight = 2;
 
@@ -539,7 +615,11 @@ const GroupList = ({
   );
 };
 
-const CountsRow = ({ counts }: { readonly counts: DurableCounts }) => (
+const CountsRow = ({
+  counts,
+}: {
+  readonly counts: MigrationProgressCounts;
+}) => (
   <box
     style={{
       flexDirection: "row",
@@ -880,6 +960,7 @@ const Overview = ({
   messagesLoading,
   row,
   rows,
+  sourceItemTotal,
 }: {
   readonly active: boolean;
   readonly compact: boolean;
@@ -887,38 +968,41 @@ const Overview = ({
   readonly messagesLoading: boolean;
   readonly row: MigrateDashboardRow;
   readonly rows: readonly MigrateDashboardRow[];
-}) => (
-  <OverviewViewport active={active}>
-    <box style={{ flexShrink: 0, height: 1 }}>
-      <text fg={migrationColors.foreground}>Items</text>
-    </box>
-    <ProgressBar counts={durableCounts(row)} />
-    <CountsRow counts={durableCounts(row)} />
-    <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
-      <text fg={migrationColors.foreground}>Source inventory</text>
-    </box>
-    <SourceInventorySummary compact={compact} rows={[row]} />
-    <LockDetails row={row} />
-    <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
-      <text fg={migrationColors.foreground}>Capabilities</text>
-    </box>
-    <Capabilities row={row} />
-    <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
-      <text fg={migrationColors.foreground}>Dependencies</text>
-    </box>
-    <Dependencies compact={compact} row={row} rows={rows} />
-    {compact ? null : (
-      <box style={{ flexShrink: 0, height: 1, marginTop: 1 }}>
-        <text fg={migrationColors.foreground}>Latest message</text>
+  readonly sourceItemTotal?: MigrateSourceItemTotal | undefined;
+}) => {
+  const counts = durableCounts(row);
+
+  return (
+    <OverviewViewport active={active}>
+      <ProgressHeading counts={counts} sourceItemTotal={sourceItemTotal} />
+      <ProgressBar counts={counts} sourceItemTotal={sourceItemTotal} />
+      <CountsRow counts={counts} />
+      <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
+        <text fg={migrationColors.foreground}>Source inventory</text>
       </box>
-    )}
-    <LatestMessage
-      compact={compact}
-      loading={messagesLoading}
-      messages={messages}
-    />
-  </OverviewViewport>
-);
+      <SourceInventorySummary compact={compact} rows={[row]} />
+      <LockDetails row={row} />
+      <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
+        <text fg={migrationColors.foreground}>Capabilities</text>
+      </box>
+      <Capabilities row={row} />
+      <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
+        <text fg={migrationColors.foreground}>Dependencies</text>
+      </box>
+      <Dependencies compact={compact} row={row} rows={rows} />
+      {compact ? null : (
+        <box style={{ flexShrink: 0, height: 1, marginTop: 1 }}>
+          <text fg={migrationColors.foreground}>Latest message</text>
+        </box>
+      )}
+      <LatestMessage
+        compact={compact}
+        loading={messagesLoading}
+        messages={messages}
+      />
+    </OverviewViewport>
+  );
+};
 
 const GroupOverview = ({
   active,
@@ -926,21 +1010,21 @@ const GroupOverview = ({
   messages,
   messagesLoading,
   rows,
+  sourceItemTotal,
 }: {
   readonly active: boolean;
   readonly compact: boolean;
   readonly messages: readonly MigrationMessage[];
   readonly messagesLoading: boolean;
   readonly rows: readonly MigrateDashboardRow[];
+  readonly sourceItemTotal?: MigrateSourceItemTotal | undefined;
 }) => {
   const counts = aggregateCounts(rows);
 
   return (
     <OverviewViewport active={active}>
-      <box style={{ flexShrink: 0, height: 1 }}>
-        <text fg={migrationColors.foreground}>Items</text>
-      </box>
-      <ProgressBar counts={counts} />
+      <ProgressHeading counts={counts} sourceItemTotal={sourceItemTotal} />
+      <ProgressBar counts={counts} sourceItemTotal={sourceItemTotal} />
       <CountsRow counts={counts} />
       <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
         <text fg={migrationColors.foreground}>Source inventory</text>
@@ -1047,6 +1131,7 @@ const GroupDetailPane = ({
   onSelectAction,
   onTabChange,
   rows,
+  sourceItemTotal,
 }: {
   readonly activeTab: MigrationDetailTab;
   readonly actions: readonly MigrationTuiAvailableAction[];
@@ -1061,6 +1146,7 @@ const GroupDetailPane = ({
   readonly onSelectAction: (action: MigrationTuiAvailableAction) => void;
   readonly onTabChange: (tab: MigrationDetailTab) => void;
   readonly rows: readonly MigrateDashboardRow[];
+  readonly sourceItemTotal?: MigrateSourceItemTotal | undefined;
 }) => {
   const label = groupStatusLabel(rows);
 
@@ -1118,6 +1204,7 @@ const GroupDetailPane = ({
             messages={messages}
             messagesLoading={messagesLoading}
             rows={rows}
+            sourceItemTotal={sourceItemTotal}
           />
         </TabsContent>
         <TabsContent
@@ -1181,6 +1268,7 @@ const DetailPane = ({
   onTabChange,
   row,
   rows,
+  sourceItemTotal,
 }: {
   readonly activeTab: MigrationDetailTab;
   readonly actions: readonly MigrationTuiAvailableAction[];
@@ -1195,6 +1283,7 @@ const DetailPane = ({
   readonly onTabChange: (tab: MigrationDetailTab) => void;
   readonly row: MigrateDashboardRow;
   readonly rows: readonly MigrateDashboardRow[];
+  readonly sourceItemTotal?: MigrateSourceItemTotal | undefined;
 }) => {
   const label = statusLabel(row);
 
@@ -1253,6 +1342,7 @@ const DetailPane = ({
             messagesLoading={messagesLoading}
             row={row}
             rows={rows}
+            sourceItemTotal={sourceItemTotal}
           />
         </TabsContent>
         <TabsContent
@@ -1319,6 +1409,7 @@ export const MigrationDashboard = ({
   onTabChange,
   rows,
   selectedIndex,
+  sourceItemTotals,
   terminalWidth,
 }: {
   readonly activeTab: MigrationDetailTab;
@@ -1338,11 +1429,23 @@ export const MigrationDashboard = ({
   readonly onTabChange: (tab: MigrationDetailTab) => void;
   readonly rows: readonly MigrateDashboardRow[];
   readonly selectedIndex: number;
+  readonly sourceItemTotals: ReadonlyMap<
+    MigrationDefinitionId,
+    MigrateSourceItemTotal
+  >;
   readonly terminalWidth: number;
 }) => {
   const row = rows[selectedIndex] ?? rows[0];
   const group = groups[selectedIndex] ?? groups[0];
   const groupRows = group === undefined ? [] : rowsForGroup(group, rows);
+  const groupSourceItemTotal = sourceItemTotalForRows(
+    groupRows,
+    sourceItemTotals
+  );
+  const rowSourceItemTotal =
+    row === undefined
+      ? undefined
+      : sourceItemTotalForRows([row], sourceItemTotals);
   const visibleCount = listTab === "groups" ? groups.length : rows.length;
   const wide = terminalWidth >= 92;
   const listHeight = wide
@@ -1382,6 +1485,7 @@ export const MigrationDashboard = ({
         onSelectAction={onSelectAction}
         onTabChange={onTabChange}
         rows={groupRows}
+        sourceItemTotal={groupSourceItemTotal}
       />
     );
   } else if (row !== undefined) {
@@ -1400,6 +1504,7 @@ export const MigrationDashboard = ({
         onTabChange={onTabChange}
         row={row}
         rows={rows}
+        sourceItemTotal={rowSourceItemTotal}
       />
     );
   }

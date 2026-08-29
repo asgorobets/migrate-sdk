@@ -97,6 +97,7 @@ export const makeRegistryMigrateServerBackend = (
   getMessages: (target) => runtime.listMessages(target),
   getRunProgress: runtime.getRunProgress,
   getSourceIdentityHistory: runtime.listSourceIdentityHistory,
+  getSourceItemTotals: runtime.getSourceItemTotals,
   normalizeSourceIdentity: (definitionId, sourceIdentity) =>
     runtime.normalizeSourceIdentity(definitionId, sourceIdentity),
   observeRun: (runId, observer, observationDefinitionId) =>

@@ -145,6 +145,20 @@ dashboard rows. Client navigation and source-inventory results are also not
 server observation state: the TUI retains selection locally and overlays
 `ScanSource` results over subsequently streamed durable rows.
 
+`GetSourceItemTotals` is a lightweight absolute source read for an explicit
+non-empty set of Migration Definition ids. It calls each selected Source's optional `countTotal`
+operation once and returns a schema-backed known count, lower bound, or
+sanitized unknown reason. It does not scan Migration Item State, participate in
+`ObserveRun`, or run on every dashboard projection. Clients may request it when
+selection changes and cache the per-definition results as another local
+overlay; reconnecting clients can reconstruct the same totals without server
+process memory or an active Migration Run. The TUI maps migration and group
+selections to definitions, debounces navigation, requests only definitions
+without an exact scan or cached count, deduplicates in-flight reads per
+definition, and invalidates that cache on an explicit status reload. An exact
+Source Inventory Scan result takes precedence and suppresses the redundant count
+request while it remains available.
+
 Attaching to provider events within a lease is an optional latency optimization.
 A serverless function, deployment, or network connection may end between any
 two leases; the next invocation reconstructs observation from the durable

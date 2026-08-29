@@ -31,6 +31,8 @@ import {
   type MigrateDashboardLease,
   MigrateDashboardResumeToken,
   type MigrateDashboardSnapshot,
+  type MigrateDefinitionIds,
+  type MigrateDefinitionSourceItemTotal,
   type MigrateEnvironmentInfo,
   type MigrateExecutionState,
   type MigrateObservationContinuingEvent,
@@ -73,6 +75,12 @@ export interface MigrateServerService {
     readonly definitionId: MigrationDefinitionId;
   }) => Effect.Effect<
     readonly MigrateSourceIdentityHistoryEntry[],
+    MigrateProtocolError
+  >;
+  readonly getSourceItemTotals: (input: {
+    readonly definitionIds: MigrateDefinitionIds;
+  }) => Effect.Effect<
+    readonly MigrateDefinitionSourceItemTotal[],
     MigrateProtocolError
   >;
   readonly normalizeSourceIdentity: (input: {
@@ -164,6 +172,9 @@ export interface MigrateServerBackend<ExecutableOperation> {
   readonly getSourceIdentityHistory: (
     definitionId: MigrationDefinitionId
   ) => Effect.Effect<readonly MigrateSourceIdentityHistoryEntry[], unknown>;
+  readonly getSourceItemTotals: (
+    definitionIds: MigrateDefinitionIds
+  ) => Effect.Effect<readonly MigrateDefinitionSourceItemTotal[], unknown>;
   readonly normalizeSourceIdentity: (
     definitionId: MigrationDefinitionId,
     sourceIdentity: string
@@ -707,7 +718,10 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
             onObservationWarning: (message) =>
               Queue.offerUnsafe(queue, { kind: "warning", message }),
             onProgress: ({ definitions }) =>
-              Queue.offerUnsafe(queue, { definitions, kind: "progress" }),
+              Queue.offerUnsafe(queue, {
+                definitions,
+                kind: "progress",
+              }),
             onProgressError: (cause) =>
               Queue.offerUnsafe(queue, {
                 kind: "warning",
@@ -1256,6 +1270,10 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
     getSourceIdentityHistory: ({ definitionId }) =>
       backend
         .getSourceIdentityHistory(definitionId)
+        .pipe(Effect.mapError(operationError)),
+    getSourceItemTotals: ({ definitionIds }) =>
+      backend
+        .getSourceItemTotals(definitionIds)
         .pipe(Effect.mapError(operationError)),
     normalizeSourceIdentity: ({ definitionId, sourceIdentity }) =>
       backend

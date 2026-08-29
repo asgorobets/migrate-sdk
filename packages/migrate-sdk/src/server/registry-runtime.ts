@@ -28,17 +28,22 @@ import {
   type RollbackRunSummary,
   SourceIdentity,
   type SourceIdentitySnapshotKey,
+  type SourceItemTotal,
 } from "../index.ts";
 import type {
   MigrateAction,
   MigrateActiveRun,
   MigrateBreakLockResult,
   MigrateDashboardRow,
+  MigrateDefinitionIds,
+  MigrateDefinitionSourceItemTotal,
   MigrateDependencyCheck,
   MigrateExecutionState,
   MigrateSourceIdentityHistoryEntry,
+  MigrateSourceItemTotal,
   MigrateTarget,
 } from "../protocol/index.ts";
+import { MigrationDefinitionSource } from "../services/migration-definition-source.ts";
 import {
   isTerminalRunState,
   waitForDurableRunState,
@@ -127,6 +132,27 @@ const causeMessage = (cause: unknown): string => {
   return String(cause);
 };
 
+const migrateSourceItemTotalValue = (
+  total: SourceItemTotal
+): MigrateSourceItemTotal => {
+  switch (total.kind) {
+    case "known":
+      return { count: total.count, kind: total.kind };
+    case "lower-bound":
+      return {
+        kind: total.kind,
+        minimum: total.minimum,
+        reason: total.reason,
+      };
+    case "unknown":
+      return { kind: total.kind, reason: total.reason };
+    default: {
+      const exhaustive: never = total;
+      return exhaustive;
+    }
+  }
+};
+
 type MigrateRunAction = Exclude<MigrateAction, "rollback">;
 
 export type ExecutableMigrationOperation =
@@ -197,6 +223,9 @@ export interface RegistryMigrateServerRuntime {
     | undefined,
     unknown
   >;
+  readonly getSourceItemTotals: (
+    definitionIds: MigrateDefinitionIds
+  ) => Effect.Effect<readonly MigrateDefinitionSourceItemTotal[], unknown>;
   readonly groups: readonly MigrationDefinitionRegistryGroup[];
   readonly hasActiveExecutions: () => boolean;
   readonly listActiveRuns: Effect.Effect<readonly MigrateActiveRun[], unknown>;
@@ -290,6 +319,9 @@ export const makeRegistryMigrateServerRuntime = (
   const registry = input.registry;
   const entries = registry.list();
   const groups = registry.groups();
+  const definitionsById = new Map(
+    registry.definitions().map((definition) => [definition.id, definition])
+  );
   const registryId = Option.getOrUndefined(registry.id());
   const executable = input.executable;
   const rows = entries.map((entry) => ({ entry }));
@@ -689,6 +721,54 @@ export const makeRegistryMigrateServerRuntime = (
     options: MigrateServerScanOptions = {}
   ): Effect.Effect<MigrateServerSnapshot, unknown> =>
     readSnapshot(target, options);
+
+  const countDefinitionSourceItems = (
+    definition: AnySelfContainedMigrationDefinition
+  ): Effect.Effect<MigrateDefinitionSourceItemTotal> => {
+    const count = Effect.gen(function* () {
+      const source = yield* MigrationDefinitionSource.get(definition);
+
+      if (source.countTotal === undefined) {
+        return {
+          kind: "unknown" as const,
+          reason: "unsupported" as const,
+        };
+      }
+
+      return migrateSourceItemTotalValue(yield* source.countTotal());
+    }).pipe(
+      Effect.provide(MigrationDefinitionSource.layer(definition)),
+      Effect.orElseSucceed(() => ({
+        kind: "unknown" as const,
+        reason: "failed" as const,
+      }))
+    );
+
+    return count.pipe(
+      Effect.map((total) => ({ definitionId: definition.id, total }))
+    );
+  };
+
+  const getSourceItemTotals = (
+    definitionIds: MigrateDefinitionIds
+  ): Effect.Effect<readonly MigrateDefinitionSourceItemTotal[], unknown> =>
+    Effect.gen(function* () {
+      const definitions: AnySelfContainedMigrationDefinition[] = [];
+
+      for (const definitionId of new Set(definitionIds)) {
+        const definition = definitionsById.get(definitionId);
+
+        if (definition === undefined) {
+          return yield* new RegistryMigrateServerError({
+            message: `Migration was not found: ${definitionId}`,
+          });
+        }
+
+        definitions.push(definition);
+      }
+
+      return yield* Effect.forEach(definitions, countDefinitionSourceItems);
+    });
 
   const readPlanRows = (definitionIds: readonly MigrationDefinitionId[]) =>
     Effect.map(readRows, (statusRows) => {
@@ -1290,6 +1370,7 @@ export const makeRegistryMigrateServerRuntime = (
     groups,
     hasActiveExecutions: () => activeExecutions.size > 0,
     getRunProgress,
+    getSourceItemTotals,
     listActiveRuns: listActiveRunsEffect,
     listMessages,
     listSourceIdentityHistory,

@@ -1,9 +1,14 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Queue } from "effect";
+import { Deferred, Effect, Fiber, Layer, Queue, Schema } from "effect";
 import {
   emptyMigrationProgressCounts,
+  MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecutable,
+  MigrationStore,
+  MigrationStoreError,
+  Source,
+  SourceIdentity,
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "../index.ts";
@@ -19,6 +24,64 @@ describe("registry migration server runtime", () => {
     expect(runtime.rows).toEqual([]);
     expect(runtime.groups).toEqual([]);
   });
+
+  it.effect(
+    "validates requested definitions before counting a source or acquiring its store",
+    () => {
+      const definitionId = toMigrationDefinitionId("articles");
+      const missingDefinitionId = toMigrationDefinitionId("missing");
+      let countAttempts = 0;
+      const identity = SourceIdentity.make({
+        id: "registry-server-article@v1",
+        schema: SourceIdentity.key("id", Schema.NonEmptyString),
+      });
+      const definition = MigrationDefinition.make({
+        id: definitionId,
+        process: () => Effect.void,
+        source: Source.make({
+          countTotal: () =>
+            Effect.sync(() => {
+              countAttempts += 1;
+              return 2;
+            }),
+          cursorSchema: Schema.Struct({ offset: Schema.Int }),
+          identity,
+          lookupStrategy: "direct",
+          read: () => Effect.succeed({ items: [] }),
+          readByIdentity: () => Effect.succeed(null),
+          sourceSchema: Schema.Struct({ title: Schema.String }),
+        }),
+        store: Layer.effect(
+          MigrationStore,
+          Effect.fail(
+            new MigrationStoreError({ message: "Store must not be acquired" })
+          )
+        ),
+      });
+      const runtime = makeRegistryMigrateServerRuntime({
+        executable: MigrationExecutable.inlineService,
+        registry: MigrationDefinitionRegistry.make({
+          definitions: [definition],
+        }),
+      });
+
+      return Effect.gen(function* () {
+        expect(
+          yield* runtime.getSourceItemTotals([definitionId, definitionId])
+        ).toEqual([{ definitionId, total: { count: 2, kind: "known" } }]);
+        expect(countAttempts).toBe(1);
+
+        const error = yield* runtime
+          .getSourceItemTotals([definitionId, missingDefinitionId])
+          .pipe(Effect.flip);
+
+        expect(error).toMatchObject({
+          message: `Migration was not found: ${missingDefinitionId}`,
+        });
+        expect(countAttempts).toBe(1);
+      });
+    }
+  );
 
   it.effect(
     "uses provider checkpoints as dashboard invalidations without reading a migration store",

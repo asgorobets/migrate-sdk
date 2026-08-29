@@ -146,6 +146,10 @@ const backend: MigrateServerBackend<FakeOperation> = {
       observationDefinitionId: definitionId,
     }),
   getSourceIdentityHistory: () => Effect.succeed([]),
+  getSourceItemTotals: () =>
+    Effect.succeed([
+      { definitionId, total: { count: 4, kind: "known" as const } },
+    ]),
   normalizeSourceIdentity: (_definitionId, sourceIdentity) =>
     Effect.succeed(sourceIdentity),
   observeRun: (requestedRunId, observer) => {
@@ -311,6 +315,11 @@ describe("remote Migrate Server connection", () => {
           needsUpdate: 0,
           skipped: 1,
         });
+        await expect(
+          runtime.getSourceItemTotals([definitionId])
+        ).resolves.toEqual([
+          { definitionId, total: { count: 4, kind: "known" } },
+        ]);
         await expect(runtime.observeRun(runId)).resolves.toMatchObject({
           outcome: "completed",
           runId,

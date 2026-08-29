@@ -16,6 +16,7 @@ import {
   MigrateDashboardLease,
   MigrateDashboardResumeToken,
   MigrateDashboardSnapshot,
+  MigrateDefinitionSourceItemTotal,
   MigrateDependencyCheck,
   MigrateEnvironmentInfo,
   MigrateExecutionOptions,
@@ -909,5 +910,22 @@ describe("Migrate Protocol", () => {
         sdkVersion: "0.6.0",
       })
     ).toThrow();
+  });
+
+  it("does not serialize internal Source Item total diagnostics", () => {
+    expect(
+      roundTrip(MigrateDefinitionSourceItemTotal, {
+        definitionId: "articles",
+        total: {
+          cause: new Error("Authorization: Bearer secret"),
+          kind: "unknown",
+          message: "Authorization: Bearer secret",
+          reason: "failed",
+        },
+      })
+    ).toEqual({
+      definitionId: "articles",
+      total: { kind: "unknown", reason: "failed" },
+    });
   });
 });

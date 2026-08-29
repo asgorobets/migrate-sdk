@@ -176,6 +176,8 @@ export const makeMigrationTuiRuntime = async (
     listMessages: (target) => runPromise(client.GetMessages({ target })),
     listSourceIdentityHistory: (definitionId) =>
       runPromise(client.GetSourceIdentityHistory({ definitionId })),
+    getSourceItemTotals: (definitionIds) =>
+      runPromise(client.GetSourceItemTotals({ definitionIds })),
     normalizeSourceIdentity: (definitionId, sourceIdentity) =>
       runPromise(
         client.NormalizeSourceIdentity({ definitionId, sourceIdentity })

@@ -208,6 +208,42 @@ export const MigrateSourceIdentityHistoryEntry = Schema.Struct({
 export type MigrateSourceIdentityHistoryEntry =
   typeof MigrateSourceIdentityHistoryEntry.Type;
 
+const MigrateSourceItemTotalCount = Schema.Finite.check(Schema.isInt()).check(
+  Schema.isGreaterThanOrEqualTo(0)
+);
+
+export const MigrateSourceItemTotal = Schema.Union([
+  Schema.Struct({
+    count: MigrateSourceItemTotalCount,
+    kind: Schema.Literal("known"),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("lower-bound"),
+    minimum: MigrateSourceItemTotalCount,
+    reason: Schema.Literal("capped"),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unknown"),
+    reason: Schema.Literals([
+      "disabled",
+      "failed",
+      "too-expensive",
+      "unsupported",
+    ]),
+  }),
+]);
+export type MigrateSourceItemTotal = typeof MigrateSourceItemTotal.Type;
+
+export const MigrateDefinitionSourceItemTotal = Schema.Struct({
+  definitionId: MigrationDefinitionId,
+  total: MigrateSourceItemTotal,
+});
+export type MigrateDefinitionSourceItemTotal =
+  typeof MigrateDefinitionSourceItemTotal.Type;
+
+export const MigrateDefinitionIds = Schema.NonEmptyArray(MigrationDefinitionId);
+export type MigrateDefinitionIds = typeof MigrateDefinitionIds.Type;
+
 export const MigrateExecutionState = Schema.Union([
   Schema.Struct({
     definitionId: MigrationDefinitionId,
@@ -402,6 +438,14 @@ export class GetSourceIdentityHistory extends makeRpc(
   }
 ) {}
 
+export class GetSourceItemTotals extends makeRpc("GetSourceItemTotals", {
+  error: MigrateProtocolError,
+  payload: {
+    definitionIds: MigrateDefinitionIds,
+  },
+  success: Schema.Array(MigrateDefinitionSourceItemTotal),
+}) {}
+
 export class NormalizeSourceIdentity extends makeRpc(
   "NormalizeSourceIdentity",
   {
@@ -493,6 +537,7 @@ const MigrateControlRpcs = makeRpcGroup(
   GetActiveRuns,
   GetMessages,
   GetSourceIdentityHistory,
+  GetSourceItemTotals,
   NormalizeSourceIdentity,
   PrepareOperation,
   StartOperation,

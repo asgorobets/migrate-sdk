@@ -296,6 +296,24 @@ describe("Local Migrate Server runtime", () => {
     });
   }
 
+  it("reads Source Item totals without starting or observing a run", async () => {
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "live-progress.config.ts",
+      cwd: fixtureDirectory,
+    });
+
+    await expect(
+      Effect.runPromise(
+        runtime.getSourceItemTotals([toMigrationDefinitionId("live-progress")])
+      )
+    ).resolves.toEqual([
+      {
+        definitionId: "live-progress",
+        total: { count: 4, kind: "known" },
+      },
+    ]);
+  });
+
   it("publishes live durable counts when a dependent migration runs alone", async () => {
     const runtime = await loadLocalMigrateServerRuntime({
       configPath: "dependent-live-progress.config.ts",

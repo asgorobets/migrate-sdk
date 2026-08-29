@@ -24,6 +24,7 @@ const controlHandlers = (server: MigrateServerService) => ({
   GetMessages: server.getMessages,
   GetServerInfo: () => server.getServerInfo,
   GetSourceIdentityHistory: server.getSourceIdentityHistory,
+  GetSourceItemTotals: server.getSourceItemTotals,
   NormalizeSourceIdentity: server.normalizeSourceIdentity,
   PrepareOperation: server.prepareOperation,
   ScanSource: server.scanSource,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema, Stream } from "effect";
 import { makeClient } from "effect/unstable/rpc/RpcTest";
-import { MigrationRunId } from "../domain/ids.ts";
+import { MigrationDefinitionId, MigrationRunId } from "../domain/ids.ts";
 import {
   MIGRATE_PROTOCOL_VERSION,
   MigrateActiveRun,
@@ -66,6 +66,13 @@ const serverLayer = Layer.succeed(
     getMessages: () => Effect.succeed([]),
     getServerInfo: Effect.succeed(info),
     getSourceIdentityHistory: () => Effect.succeed([]),
+    getSourceItemTotals: () =>
+      Effect.succeed([
+        {
+          definitionId: MigrationDefinitionId.make("articles"),
+          total: { count: 42, kind: "known" as const },
+        },
+      ]),
     normalizeSourceIdentity: ({ sourceIdentity }) =>
       Effect.succeed(sourceIdentity),
     observeDashboard: () => Stream.succeed(dashboardSnapshot),
@@ -118,6 +125,9 @@ const program = Effect.gen(function* () {
   const serverInfo = yield* client.GetServerInfo();
   const currentDashboard = yield* client.GetDashboard();
   const currentActiveRuns = yield* client.GetActiveRuns();
+  const sourceItemTotals = yield* client.GetSourceItemTotals({
+    definitionIds: [MigrationDefinitionId.make("articles")],
+  });
   const dashboardSnapshots = yield* client
     .ObserveDashboard({})
     .pipe(Stream.runCollect);
@@ -131,6 +141,7 @@ const program = Effect.gen(function* () {
     dashboardSnapshots: [...dashboardSnapshots],
     runEvents: [...runEvents],
     serverInfo,
+    sourceItemTotals,
   };
 }).pipe(
   Effect.provide(
@@ -161,6 +172,12 @@ describe("Migrate Server RPC handlers", () => {
       expect(result.currentDashboard).toEqual(dashboardSnapshot);
       expect(result.dashboardSnapshots).toEqual([dashboardSnapshot]);
       expect(result.currentActiveRuns).toEqual(activeRuns);
+      expect(result.sourceItemTotals).toEqual([
+        {
+          definitionId: "articles",
+          total: { count: 42, kind: "known" },
+        },
+      ]);
       expect(result.runEvents).toEqual([
         { definitions: [], kind: "progress" },
         {

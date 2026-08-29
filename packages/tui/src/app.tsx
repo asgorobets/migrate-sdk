@@ -1,6 +1,7 @@
 import { type KeyEvent, RGBA } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import type {
+  MigrationDefinitionId,
   MigrationExecutionOptions,
   MigrationMessage,
   MigrationRunId,
@@ -47,6 +48,7 @@ import {
 import type { MigrationTuiRuntime } from "./runtime.ts";
 import type { MigrationTuiShutdownController } from "./shutdown-controller.ts";
 import { useDashboardObservation } from "./use-dashboard-observation.ts";
+import { useSourceItemTotals } from "./use-source-item-totals.ts";
 
 type View =
   | "actions"
@@ -613,6 +615,8 @@ export const MigrationTuiApp = ({
   );
   const selectedRow = rows[selectedIndex] ?? rows[0];
   const selectedGroup = runtime.groups[selectedIndex] ?? runtime.groups[0];
+  const selectedDefinitionId = selectedRow?.entry.id;
+  const selectedGroupId = selectedGroup?.id;
   const selectedGroupRows = useMemo(() => {
     if (selectedGroup === undefined) {
       return [];
@@ -633,15 +637,55 @@ export const MigrationTuiApp = ({
   }, [listTab, selectedGroupRows, selectedRow]);
   const selectedTarget = useMemo<MigrateTarget | undefined>(() => {
     if (listTab === "groups") {
-      return selectedGroup === undefined
+      return selectedGroupId === undefined
         ? undefined
-        : { groupId: selectedGroup.id, kind: "group" };
+        : { groupId: selectedGroupId, kind: "group" };
     }
 
-    return selectedRow === undefined
+    return selectedDefinitionId === undefined
       ? undefined
-      : { definitionId: selectedRow.entry.id, kind: "migration" };
-  }, [listTab, selectedGroup, selectedRow]);
+      : { definitionId: selectedDefinitionId, kind: "migration" };
+  }, [listTab, selectedDefinitionId, selectedGroupId]);
+  const selectedSourceItemDefinitionIds = useMemo<
+    readonly MigrationDefinitionId[]
+  >(() => {
+    if (selectedTarget === undefined) {
+      return [];
+    }
+    if (selectedTarget.kind === "migration") {
+      return [selectedTarget.definitionId];
+    }
+
+    return (
+      runtime.groups.find((group) => group.id === selectedTarget.groupId)
+        ?.definitionIds ?? []
+    );
+  }, [runtime, selectedTarget]);
+  const selectedExactSourceItemDefinitionIds = useMemo(
+    () =>
+      selectedRows.flatMap((row) =>
+        row.status?.source === undefined ? [] : [row.entry.id]
+      ),
+    [selectedRows]
+  );
+  const {
+    clear: clearSourceItemTotalCache,
+    failure: sourceItemTotalsFailure,
+    totals: sourceItemTotals,
+  } = useSourceItemTotals({
+    definitionIds: selectedSourceItemDefinitionIds,
+    exactDefinitionIds: selectedExactSourceItemDefinitionIds,
+    runtime,
+  });
+  const refreshDashboard = useCallback(async () => {
+    clearSourceItemTotalCache();
+    await refresh();
+  }, [clearSourceItemTotalCache, refresh]);
+  const sourceItemTotalsError =
+    sourceItemTotalsFailure === null
+      ? null
+      : `Unable to count source items: ${errorMessage(sourceItemTotalsFailure.cause)}`;
+  const displayedError = error ?? sourceItemTotalsError;
   const selectedActiveRun = useMemo(() => {
     const matching = activeRuns.filter((run) =>
       selectedRows.some((row) => row.status?.lock?.ownerRunId === run.runId)
@@ -1481,7 +1525,7 @@ export const MigrationTuiApp = ({
       }
 
       if (key.name === "r" && key.shift) {
-        startTask(refresh());
+        startTask(refreshDashboard());
         return;
       }
 
@@ -1496,7 +1540,7 @@ export const MigrationTuiApp = ({
         chooseOption(option);
       }
     },
-    [activeRuns, chooseOption, refresh, startTask]
+    [activeRuns, chooseOption, refreshDashboard, startTask]
   );
 
   const requestExit = useCallback(async () => {
@@ -1752,6 +1796,7 @@ export const MigrationTuiApp = ({
         onTabChange={setDetailTab}
         rows={rows}
         selectedIndex={selectedIndex}
+        sourceItemTotals={sourceItemTotals}
         terminalWidth={dimensions.width}
       />
       <box
@@ -1759,14 +1804,18 @@ export const MigrationTuiApp = ({
           flexDirection: "column",
           flexShrink: 0,
           height:
-            effectiveBusy !== "" && (error !== null || notice !== null) ? 2 : 1,
+            effectiveBusy !== "" && (displayedError !== null || notice !== null)
+              ? 2
+              : 1,
         }}
       >
         {effectiveBusy === "" ? null : (
           <text fg={colors.info}>{effectiveBusy}</text>
         )}
-        {error === null ? null : <text fg={colors.danger}>{error}</text>}
-        {error !== null || notice === null ? null : (
+        {displayedError === null ? null : (
+          <text fg={colors.danger}>{displayedError}</text>
+        )}
+        {displayedError !== null || notice === null ? null : (
           <text fg={colors.success}>{notice}</text>
         )}
       </box>

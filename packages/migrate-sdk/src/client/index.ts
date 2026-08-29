@@ -63,6 +63,7 @@ const clientService = (
   GetMessages: client.GetMessages,
   GetServerInfo: client.GetServerInfo,
   GetSourceIdentityHistory: client.GetSourceIdentityHistory,
+  GetSourceItemTotals: client.GetSourceItemTotals,
   NormalizeSourceIdentity: client.NormalizeSourceIdentity,
   PrepareOperation: client.PrepareOperation,
   ScanSource: client.ScanSource,

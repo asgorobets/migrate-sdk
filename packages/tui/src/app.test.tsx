@@ -13,6 +13,7 @@ import {
 } from "migrate-sdk";
 import {
   MigrateDashboardResumeToken,
+  type MigrateDefinitionSourceItemTotal,
   type MigrateRunStartResult,
   type MigrateSourceIdentityHistoryEntry,
 } from "migrate-sdk/protocol";
@@ -159,6 +160,8 @@ const makeInProcessMigrationTuiRuntime = async (
     listMessages: (target) => Effect.runPromise(server.listMessages(target)),
     listSourceIdentityHistory: (definitionId) =>
       Effect.runPromise(server.listSourceIdentityHistory(definitionId)),
+    getSourceItemTotals: (definitionIds) =>
+      Effect.runPromise(server.getSourceItemTotals(definitionIds)),
     normalizeSourceIdentity: (definitionId, sourceIdentity) =>
       Effect.runPromise(
         server.normalizeSourceIdentity(definitionId, sourceIdentity)
@@ -552,9 +555,12 @@ describe("MigrationTuiApp", () => {
 
       try {
         expect(
-          await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("Status reloaded")
-          )
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("Status reloaded") && frame.includes("0 / 4 · 0%")
+            );
+          })
         ).toBe(true);
 
         act(() => setup.mockInput.pressKey("r"));
@@ -566,7 +572,7 @@ describe("MigrationTuiApp", () => {
               frame.includes(`${count} migrated`)
             );
 
-            return hasIntermediateCount;
+            return hasIntermediateCount && frame.includes(" / 4 · ");
           })
         ).toBe(true);
         expect(
@@ -575,12 +581,442 @@ describe("MigrationTuiApp", () => {
             () => {
               const frame = setup.captureCharFrame();
               return (
-                frame.includes("4 migrated") && frame.includes("succeeded")
+                frame.includes("4 migrated") &&
+                frame.includes("4 / 4 · 100%") &&
+                frame.includes("succeeded")
               );
             },
             1500
           )
         ).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "debounces navigation and reuses source totals until an explicit reload",
+    async () => {
+      const authorsId = toMigrationDefinitionId("authors");
+      const articlesId = toMigrationDefinitionId("articles");
+      const assetsId = toMigrationDefinitionId("assets");
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const getSourceItemTotals = vi.fn(baseRuntime.getSourceItemTotals);
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        getSourceItemTotals,
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(
+            setup.renderOnce,
+            () =>
+              getSourceItemTotals.mock.calls.length === 1 &&
+              setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("j"));
+        await act(async () => setup.renderOnce());
+        act(() => setup.mockInput.pressKey("j"));
+
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => getSourceItemTotals.mock.calls.length === 2
+          )
+        ).toBe(true);
+        expect(
+          getSourceItemTotals.mock.calls.map(([definitionIds]) => definitionIds)
+        ).toEqual([[authorsId], [assetsId]]);
+
+        act(() => setup.mockInput.pressKey("k"));
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => getSourceItemTotals.mock.calls.length === 3
+          )
+        ).toBe(true);
+        expect(getSourceItemTotals.mock.calls[2]?.[0]).toEqual([articlesId]);
+
+        act(() => setup.mockInput.pressKey("k"));
+        await act(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 150));
+          await setup.renderOnce();
+        });
+        expect(getSourceItemTotals).toHaveBeenCalledTimes(3);
+
+        act(() => setup.mockInput.pressKey("r", { shift: true }));
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => getSourceItemTotals.mock.calls.length === 4
+          )
+        ).toBe(true);
+        expect(getSourceItemTotals.mock.calls[3]?.[0]).toEqual([authorsId]);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "does not restart the source-total debounce for unchanged live snapshots",
+    async () => {
+      const authorsId = toMigrationDefinitionId("authors");
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const initialSnapshot = await baseRuntime.refresh();
+      const getSourceItemTotals = vi.fn(baseRuntime.getSourceItemTotals);
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        getSourceItemTotals,
+        observeDashboard: ({ onSnapshot, signal }) =>
+          new Promise<void>((resolve) => {
+            let sequence = 0;
+            const publish = () => {
+              sequence += 1;
+              onSnapshot({
+                ...initialSnapshot,
+                resumeToken: MigrateDashboardResumeToken.make(
+                  `live-snapshot:${sequence}`
+                ),
+                rows: initialSnapshot.rows.map((row) => ({ ...row })),
+              });
+            };
+            const interval = setInterval(publish, 20);
+            const stop = () => {
+              clearInterval(interval);
+              resolve();
+            };
+
+            publish();
+            if (signal?.aborted === true) {
+              stop();
+            } else {
+              signal?.addEventListener("abort", stop, { once: true });
+            }
+          }),
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => getSourceItemTotals.mock.calls.length === 1
+          )
+        ).toBe(true);
+        expect(getSourceItemTotals.mock.calls[0]?.[0]).toEqual([authorsId]);
+
+        await act(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 150));
+          await setup.renderOnce();
+        });
+        expect(getSourceItemTotals).toHaveBeenCalledTimes(1);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "retires a source-total query error after a successful retry",
+    async () => {
+      const authorsId = toMigrationDefinitionId("authors");
+      const articlesId = toMigrationDefinitionId("articles");
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      let shouldFailAuthors = true;
+      const getSourceItemTotals = vi.fn(
+        (
+          definitionIds: Parameters<
+            MigrationTuiRuntime["getSourceItemTotals"]
+          >[0]
+        ) => {
+          if (definitionIds[0] === authorsId && shouldFailAuthors) {
+            shouldFailAuthors = false;
+            return Promise.reject(new Error("temporary total failure"));
+          }
+
+          return baseRuntime.getSourceItemTotals(definitionIds);
+        }
+      );
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        getSourceItemTotals,
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup
+              .captureCharFrame()
+              .includes("Unable to count source items: temporary total failure")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("j"));
+        expect(
+          await settle(
+            setup.renderOnce,
+            () =>
+              getSourceItemTotals.mock.calls.length === 2 &&
+              getSourceItemTotals.mock.calls[1]?.[0][0] === articlesId
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("k"));
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+
+            return (
+              getSourceItemTotals.mock.calls.length === 3 &&
+              frame.includes("1 / 2 · 50%") &&
+              !frame.includes("Unable to count source items")
+            );
+          })
+        ).toBe(true);
+        expect(getSourceItemTotals.mock.calls[2]?.[0]).toEqual([authorsId]);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "requests only uncached definitions when opening a group",
+    async () => {
+      const authorsId = toMigrationDefinitionId("authors");
+      const articlesId = toMigrationDefinitionId("articles");
+      const assetsId = toMigrationDefinitionId("assets");
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const getSourceItemTotals = vi.fn(baseRuntime.getSourceItemTotals);
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        getSourceItemTotals,
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => getSourceItemTotals.mock.calls.length === 1
+          )
+        ).toBe(true);
+        expect(getSourceItemTotals.mock.calls[0]?.[0]).toEqual([authorsId]);
+
+        act(() => setup.mockInput.pressKey("g"));
+
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => getSourceItemTotals.mock.calls.length === 2
+          )
+        ).toBe(true);
+        expect(getSourceItemTotals.mock.calls[1]?.[0]).toEqual([
+          articlesId,
+          assetsId,
+        ]);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "deduplicates in-flight totals across migration and group selections",
+    async () => {
+      const authorsId = toMigrationDefinitionId("authors");
+      const articlesId = toMigrationDefinitionId("articles");
+      const assetsId = toMigrationDefinitionId("assets");
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      let resolveAuthors:
+        | ((totals: readonly MigrateDefinitionSourceItemTotal[]) => void)
+        | undefined;
+      const authorsRequest = new Promise<
+        readonly MigrateDefinitionSourceItemTotal[]
+      >((resolve) => {
+        resolveAuthors = resolve;
+      });
+      let holdAuthorsRequest = true;
+      const getSourceItemTotals = vi.fn(
+        (
+          definitionIds: Parameters<
+            MigrationTuiRuntime["getSourceItemTotals"]
+          >[0]
+        ) => {
+          if (
+            holdAuthorsRequest &&
+            definitionIds.length === 1 &&
+            definitionIds[0] === authorsId
+          ) {
+            holdAuthorsRequest = false;
+            return authorsRequest;
+          }
+
+          return baseRuntime.getSourceItemTotals(definitionIds);
+        }
+      );
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        getSourceItemTotals,
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(
+            setup.renderOnce,
+            () =>
+              getSourceItemTotals.mock.calls.length === 1 &&
+              setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("g"));
+
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => getSourceItemTotals.mock.calls.length === 2
+          )
+        ).toBe(true);
+        expect(
+          getSourceItemTotals.mock.calls.map(([definitionIds]) => definitionIds)
+        ).toEqual([[authorsId], [articlesId, assetsId]]);
+
+        await act(async () => {
+          resolveAuthors?.([
+            {
+              definitionId: authorsId,
+              total: { count: 2, kind: "known" },
+            },
+          ]);
+          await setup.renderOnce();
+        });
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "combines an exact scan with cached counts for group progress",
+    async () => {
+      const authorsId = toMigrationDefinitionId("authors");
+      const articlesId = toMigrationDefinitionId("articles");
+      const assetsId = toMigrationDefinitionId("assets");
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const scanned = await baseRuntime.scanSource({
+        definitionId: authorsId,
+        kind: "migration",
+      });
+      const getSourceItemTotals = vi.fn(baseRuntime.getSourceItemTotals);
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        getSourceItemTotals,
+        observeDashboard: async ({ signal }) =>
+          await new Promise<void>((resolve) => {
+            if (signal?.aborted === true) {
+              resolve();
+              return;
+            }
+
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          }),
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() =>
+        root.render(
+          <MigrationTuiAppView
+            initialRows={scanned.rows}
+            lifecycle={{
+              executionSettled: () => false,
+              isExitRequested: () => false,
+              requestExit: runtime.detachForExit,
+            }}
+            runtime={runtime}
+          />
+        )
+      );
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("1 / 2 · 50%")
+          )
+        ).toBe(true);
+        await act(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 150));
+          await setup.renderOnce();
+        });
+        expect(getSourceItemTotals).not.toHaveBeenCalled();
+
+        act(() => setup.mockInput.pressKey("j"));
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => getSourceItemTotals.mock.calls.length === 1
+          )
+        ).toBe(true);
+        expect(getSourceItemTotals.mock.calls[0]?.[0]).toEqual([articlesId]);
+
+        act(() => setup.mockInput.pressKey("g"));
+        expect(
+          await settle(
+            setup.renderOnce,
+            () =>
+              getSourceItemTotals.mock.calls.length === 2 &&
+              setup.captureCharFrame().includes("4 / 5 · 80%")
+          )
+        ).toBe(true);
+        expect(getSourceItemTotals.mock.calls[1]?.[0]).toEqual([assetsId]);
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
@@ -947,6 +1383,67 @@ describe("MigrationTuiApp", () => {
           definitionId: toMigrationDefinitionId("products"),
           kind: "migration",
         });
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "does not count a selected source with an exact inventory scan",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("source-status.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const target = {
+        definitionId: toMigrationDefinitionId("products"),
+        kind: "migration" as const,
+      };
+      const scanned = await baseRuntime.scanSource(target);
+      const getSourceItemTotals = vi.fn(baseRuntime.getSourceItemTotals);
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        getSourceItemTotals,
+        observeDashboard: async ({ signal }) =>
+          await new Promise<void>((resolve) => {
+            if (signal?.aborted === true) {
+              resolve();
+              return;
+            }
+
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          }),
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() =>
+        root.render(
+          <MigrationTuiAppView
+            initialRows={scanned.rows}
+            lifecycle={{
+              executionSettled: () => false,
+              isExitRequested: () => false,
+              requestExit: runtime.detachForExit,
+            }}
+            runtime={runtime}
+          />
+        )
+      );
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("3 total")
+          )
+        ).toBe(true);
+        await act(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 150));
+          await setup.renderOnce();
+        });
+        expect(getSourceItemTotals).not.toHaveBeenCalled();
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();

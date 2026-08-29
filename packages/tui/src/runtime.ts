@@ -9,6 +9,8 @@ import type {
   MigrateBreakLockResult,
   MigrateDashboardResumeToken,
   MigrateDashboardRow,
+  MigrateDefinitionIds,
+  MigrateDefinitionSourceItemTotal,
   MigrateExecutionState,
   MigratePreparedOperation,
   MigratePrepareOptions,
@@ -64,6 +66,9 @@ export interface MigrationTuiRuntime {
   readonly detachRunObservation: (runId?: MigrationRunId) => boolean;
   readonly dispose?: (() => Promise<void>) | undefined;
   readonly environmentLabel: string;
+  readonly getSourceItemTotals: (
+    definitionIds: MigrateDefinitionIds
+  ) => Promise<readonly MigrateDefinitionSourceItemTotal[]>;
   readonly groups: readonly MigrateRegistryGroup[];
   readonly listActiveRuns: () => Promise<readonly MigrateActiveRun[]>;
   readonly listMessages: (
