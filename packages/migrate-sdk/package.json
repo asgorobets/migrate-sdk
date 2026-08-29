@@ -33,6 +33,18 @@
       "source": "./src/client/index.ts",
       "import": "./dist/client/index.js"
     },
+    "./client/node": {
+      "types": "./dist/client/node/index.d.ts",
+      "bun": "./src/client/node/index.ts",
+      "source": "./src/client/node/index.ts",
+      "import": "./dist/client/node/index.js"
+    },
+    "./client/node/testing": {
+      "types": "./dist/client/node/testing.d.ts",
+      "bun": "./src/client/node/testing.ts",
+      "source": "./src/client/node/testing.ts",
+      "import": "./dist/client/node/testing.js"
+    },
     "./cli": {
       "types": "./dist/cli/index.d.ts",
       "bun": "./src/cli/index.ts",

@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
-import { waitForLocalMigrateServerIdle } from "./server-lifecycle.ts";
+import { waitForLocalMigrateServerIdle } from "./local-server-lifecycle.ts";
 
 const waitFor = async (predicate: () => boolean): Promise<void> => {
   const deadline = Date.now() + 1000;

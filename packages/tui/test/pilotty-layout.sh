@@ -24,9 +24,37 @@ CATALOG_SESSION="migrate-tui-sqlite-catalog"
 CATALOG_STANDALONE_SESSION="migrate-tui-sqlite-catalog-standalone"
 
 mkdir -p "${ARTIFACT_DIR}"
-PILOTTY_SOCKET_DIR="/tmp/migrate-tui-pilotty-socket-$$"
+PILOTTY_SOCKET_DIR="/tmp/mt-$$"
 export PILOTTY_SOCKET_DIR
-mkdir -p "${PILOTTY_SOCKET_DIR}"
+SESSION_TMP="${PILOTTY_SOCKET_DIR}/01"
+BUTTON_TMP="${PILOTTY_SOCKET_DIR}/02"
+CANCELLATION_TMP="${PILOTTY_SOCKET_DIR}/03"
+GROUP_TMP="${PILOTTY_SOCKET_DIR}/04"
+DEPENDENCY_TMP="${PILOTTY_SOCKET_DIR}/05"
+FORCE_TMP="${PILOTTY_SOCKET_DIR}/06"
+HIERARCHY_TMP="${PILOTTY_SOCKET_DIR}/07"
+LARGE_HIERARCHY_TMP="${PILOTTY_SOCKET_DIR}/08"
+SELECTIVE_TMP="${PILOTTY_SOCKET_DIR}/09"
+SOURCE_STATUS_TMP="${PILOTTY_SOCKET_DIR}/10"
+LOCK_TMP="${PILOTTY_SOCKET_DIR}/11"
+LIVE_PROGRESS_TMP="${PILOTTY_SOCKET_DIR}/12"
+CATALOG_TMP="${PILOTTY_SOCKET_DIR}/13"
+CATALOG_STANDALONE_TMP="${PILOTTY_SOCKET_DIR}/14"
+mkdir -p \
+  "${SESSION_TMP}" \
+  "${BUTTON_TMP}" \
+  "${CANCELLATION_TMP}" \
+  "${GROUP_TMP}" \
+  "${DEPENDENCY_TMP}" \
+  "${FORCE_TMP}" \
+  "${HIERARCHY_TMP}" \
+  "${LARGE_HIERARCHY_TMP}" \
+  "${SELECTIVE_TMP}" \
+  "${SOURCE_STATUS_TMP}" \
+  "${LOCK_TMP}" \
+  "${LIVE_PROGRESS_TMP}" \
+  "${CATALOG_TMP}" \
+  "${CATALOG_STANDALONE_TMP}"
 
 cleanup() {
   "${PILOTTY_BIN}" key -s "${SESSION}" q >/dev/null 2>&1 || true
@@ -67,7 +95,7 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
 "${PILOTTY_BIN}" spawn \
   --name "${SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${SESSION}" \
+  env TMPDIR="${SESSION_TMP}" \
   node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/migrate.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 30000 \
@@ -155,7 +183,7 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
 "${PILOTTY_BIN}" spawn \
   --name "${BUTTON_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${BUTTON_SESSION}" \
+  env TMPDIR="${BUTTON_TMP}" \
   node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/migrate.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${BUTTON_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${BUTTON_SESSION}" -t 30000 \
@@ -175,7 +203,7 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
 "${PILOTTY_BIN}" spawn \
   --name "${LIVE_PROGRESS_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${LIVE_PROGRESS_SESSION}" \
+  env TMPDIR="${LIVE_PROGRESS_TMP}" \
   node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/live-progress.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${LIVE_PROGRESS_SESSION}" 120 30 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 30000 \
@@ -195,7 +223,7 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${CATALOG_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${CATALOG_SESSION}" \
+  env TMPDIR="${CATALOG_TMP}" \
   MIGRATE_SQLITE_CATALOG_DELAY_MS=5 node bin/migrate-tui.js \
   --config ../migrate-sdk/examples/sqlite-catalog/migrate.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${CATALOG_SESSION}" 120 36 >/dev/null
@@ -234,7 +262,7 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${CATALOG_STANDALONE_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${CATALOG_STANDALONE_SESSION}" \
+  env TMPDIR="${CATALOG_STANDALONE_TMP}" \
   MIGRATE_SQLITE_CATALOG_DIR="${CATALOG_STANDALONE_DIR}" \
   MIGRATE_SQLITE_CATALOG_DELAY_MS=50 node bin/migrate-tui.js \
   --config ../migrate-sdk/examples/sqlite-catalog/migrate.config.ts >/dev/null
@@ -287,7 +315,7 @@ sleep 0.2
 "${PILOTTY_BIN}" spawn \
   --name "${GROUP_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${GROUP_SESSION}" \
+  env TMPDIR="${GROUP_TMP}" \
   node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/migrate.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${GROUP_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 30000 \
@@ -362,7 +390,7 @@ sleep 0.2
 "${PILOTTY_BIN}" spawn \
   --name "${DEPENDENCY_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${DEPENDENCY_SESSION}" \
+  env TMPDIR="${DEPENDENCY_TMP}" \
   node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/dependency-preflight.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${DEPENDENCY_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${DEPENDENCY_SESSION}" -t 30000 \
@@ -392,7 +420,7 @@ sleep 0.2
 "${PILOTTY_BIN}" spawn \
   --name "${FORCE_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${FORCE_SESSION}" \
+  env TMPDIR="${FORCE_TMP}" \
   node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/dependency-preflight.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${FORCE_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${FORCE_SESSION}" -t 30000 \
@@ -412,7 +440,7 @@ sleep 0.2
 "${PILOTTY_BIN}" spawn \
   --name "${HIERARCHY_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${HIERARCHY_SESSION}" \
+  env TMPDIR="${HIERARCHY_TMP}" \
   node bin/migrate-tui.js \
   --config examples/transitive-dependency.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${HIERARCHY_SESSION}" 120 36 >/dev/null
@@ -429,7 +457,7 @@ sleep 0.2
 "${PILOTTY_BIN}" spawn \
   --name "${LARGE_HIERARCHY_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${LARGE_HIERARCHY_SESSION}" \
+  env TMPDIR="${LARGE_HIERARCHY_TMP}" \
   node bin/migrate-tui.js --config examples/large-rollback.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${LARGE_HIERARCHY_SESSION}" 72 24 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LARGE_HIERARCHY_SESSION}" -t 30000 \
@@ -452,7 +480,7 @@ done
 "${PILOTTY_BIN}" spawn \
   --name "${SELECTIVE_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${SELECTIVE_SESSION}" \
+  env TMPDIR="${SELECTIVE_TMP}" \
   node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/migrate.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${SELECTIVE_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 30000 \
@@ -495,7 +523,7 @@ done
 "${PILOTTY_BIN}" spawn \
   --name "${SOURCE_STATUS_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${SOURCE_STATUS_SESSION}" \
+  env TMPDIR="${SOURCE_STATUS_TMP}" \
   node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/source-status.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${SOURCE_STATUS_SESSION}" 120 30 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SOURCE_STATUS_SESSION}" -t 30000 \
@@ -533,7 +561,7 @@ rg -q "Rollback" "${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${LOCK_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${LOCK_SESSION}" \
+  env TMPDIR="${LOCK_TMP}" \
   node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/locked.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${LOCK_SESSION}" 120 30 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LOCK_SESSION}" -t 30000 \
@@ -560,7 +588,7 @@ rg -q "Rollback" "${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
 "${PILOTTY_BIN}" spawn \
   --name "${CANCELLATION_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
-  env MIGRATE_TUI_SERVER_IDENTITY="${CANCELLATION_SESSION}" \
+  env TMPDIR="${CANCELLATION_TMP}" \
   node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/cancellation.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${CANCELLATION_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CANCELLATION_SESSION}" -t 30000 \

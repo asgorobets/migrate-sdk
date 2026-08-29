@@ -1,4 +1,13 @@
-import { Console, Effect, Option, Runtime, Schema } from "effect";
+import {
+  Console,
+  Effect,
+  Fiber,
+  Option,
+  Runtime,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
 import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
 import type { SqlClient } from "effect/unstable/sql";
 import type { AnySelfContainedMigrationDefinition } from "../domain/definition.ts";
@@ -9,6 +18,7 @@ import type {
 import {
   type MigrationDefinitionId,
   toMigrationDefinitionId,
+  toMigrationRunId,
 } from "../domain/ids.ts";
 import { MigrationMessage } from "../domain/message.ts";
 import type {
@@ -47,8 +57,10 @@ import {
   makeCliRollbackProgressLayer,
 } from "./progress.ts";
 import {
+  renderActiveMigrationRuns,
   renderConfigLoadError,
   renderMessagesReport,
+  renderMigrationObservationEvent,
   renderPlanningError,
   renderRegistryGraph,
   renderRegistryList,
@@ -58,20 +70,31 @@ import {
   renderRunDiscoveryWarnings,
   renderRunPlan,
   renderRunStartResult,
+  renderRunStopResult,
   renderRunSummary,
   renderRuntimeError,
   renderSqlMigrationStoreSchemaPlan,
   renderStatusReport,
 } from "./render.ts";
-import { MigrationCliRuntime } from "./runtime.ts";
+import {
+  MigrationCliConnectionError,
+  MigrationCliRuntime,
+  type MigrationCliServerConnection,
+  type MigrationRunObservationInterruptDecision,
+} from "./runtime.ts";
 
 const config = Flag.string("config").pipe(
   Flag.optional,
   Flag.withDescription("Path to a migrate.config.ts, .mts, .js, or .mjs file")
 );
 
+const server = Flag.string("server").pipe(
+  Flag.optional,
+  Flag.withDescription("URL of a remote Migrate Server")
+);
+
 const migrateBaseCommand = Command.make("migrate").pipe(
-  Command.withSharedFlags({ config })
+  Command.withSharedFlags({ config, server })
 );
 
 const useColor = Effect.map(
@@ -293,6 +316,14 @@ const reportExecutionOutcome = <Summary>(
 const loadConfiguredConfig = Effect.gen(function* () {
   const root = yield* migrateBaseCommand;
   const runtime = yield* MigrationCliRuntime;
+  const serverUrl = Option.getOrUndefined(root.server);
+
+  if (serverUrl !== undefined) {
+    return yield* failReportedCliMessage(
+      "--server is currently supported by migrate runs commands"
+    );
+  }
+
   const configPath = Option.getOrUndefined(root.config);
   const loadedConfig = yield* Effect.catch(
     loadMigrationCliConfig({
@@ -309,6 +340,134 @@ const loadConfiguredRegistry = Effect.map(
   loadConfiguredConfig,
   (loadedConfig) => loadedConfig.registry
 );
+
+interface CliMigrateConnection {
+  readonly connection: MigrationCliServerConnection;
+  readonly observeAgain: (runId: string) => string;
+  readonly observeAgainLabel: string;
+}
+
+const quoteCliArgument = (
+  value: string,
+  shell: "posix" | "powershell"
+): string =>
+  shell === "powershell"
+    ? `'${value.replaceAll("'", "''")}'`
+    : `'${value.replaceAll("'", `'\\''`)}'`;
+
+const renderObservationRecovery = (
+  runId: ReturnType<typeof toMigrationRunId>,
+  observeAgain: (runId: string) => string,
+  observeAgainLabel: string,
+  reason: string
+): string =>
+  [
+    reason,
+    `Run id ${runId}`,
+    `${observeAgainLabel}: ${observeAgain(runId)}`,
+  ].join("\n");
+
+const acquireCliMigrateConnection = (
+  recoveryRunId?: ReturnType<typeof toMigrationRunId>
+) =>
+  Effect.gen(function* () {
+    const root = yield* migrateBaseCommand;
+    const runtime = yield* MigrationCliRuntime;
+    const configPath = Option.getOrUndefined(root.config);
+    const serverUrl = Option.getOrUndefined(root.server);
+    const commandShell = runtime.commandShell ?? "posix";
+    let sharedFlags = "";
+
+    if (serverUrl !== undefined) {
+      sharedFlags = ` --server ${quoteCliArgument(serverUrl, commandShell)}`;
+    } else if (configPath !== undefined) {
+      sharedFlags = ` --config ${quoteCliArgument(configPath, commandShell)}`;
+    }
+
+    const observeAgain = (runId: string) =>
+      `migrate${sharedFlags} runs observe ${quoteCliArgument(runId, commandShell)}`;
+    const observeAgainLabel =
+      commandShell === "powershell"
+        ? "Observe again in PowerShell"
+        : "Observe again";
+
+    if (configPath !== undefined && serverUrl !== undefined) {
+      return yield* failReportedCliMessage(
+        "--config and --server cannot be used together"
+      );
+    }
+
+    if (runtime.connectMigrateServer === undefined) {
+      return yield* failReportedCliMessage(
+        "This CLI runtime cannot connect to a Migrate Server"
+      );
+    }
+
+    const connection = yield* runtime
+      .connectMigrateServer(
+        serverUrl === undefined
+          ? {
+              kind: "local",
+              ...(configPath === undefined ? {} : { configPath }),
+              cwd: runtime.cwd,
+            }
+          : {
+              kind: "remote",
+              ...(runtime.migrateServerToken === undefined
+                ? {}
+                : { bearerToken: runtime.migrateServerToken }),
+              url: serverUrl,
+            }
+      )
+      .pipe(
+        Effect.catch((cause) =>
+          failReportedCliMessage(
+            recoveryRunId === undefined
+              ? renderStoredFailure(cause)
+              : renderObservationRecovery(
+                  recoveryRunId,
+                  observeAgain,
+                  observeAgainLabel,
+                  renderStoredFailure(cause)
+                )
+          )
+        )
+      );
+
+    return {
+      connection,
+      observeAgain,
+      observeAgainLabel,
+    } satisfies CliMigrateConnection;
+  });
+
+const releaseCliMigrateConnection = ({
+  connection,
+}: CliMigrateConnection): Effect.Effect<void> =>
+  Effect.tryPromise({
+    catch: (cause) =>
+      new MigrationCliConnectionError({
+        cause,
+        message: cause instanceof Error ? cause.message : String(cause),
+      }),
+    try: () => connection.dispose(),
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("Unable to close the Migrate Server connection").pipe(
+        Effect.annotateLogs({ cause })
+      )
+    )
+  );
+
+const withCliMigrateConnection = <A, E, R>(
+  use: (connection: CliMigrateConnection) => Effect.Effect<A, E, R>,
+  recoveryRunId?: ReturnType<typeof toMigrationRunId>
+) =>
+  Effect.acquireUseRelease(
+    acquireCliMigrateConnection(recoveryRunId),
+    use,
+    releaseCliMigrateConnection
+  );
 
 const requireConfiguredSqlStore = (config: MigrationCliConfig) =>
   config.sqlStore === undefined
@@ -1006,6 +1165,385 @@ const unlockCommand = Command.make(
     })
 ).pipe(Command.withDescription("Break a Migration Definition lock"));
 
+const runIdArgument = Argument.string("run-id").pipe(
+  Argument.withDescription("Migration Run id")
+);
+
+const consumeMigrationRunObservation = (
+  connection: MigrationCliServerConnection,
+  runId: ReturnType<typeof toMigrationRunId>,
+  observeAgain: (runId: string) => string,
+  observeAgainLabel: string,
+  terminalSection: Semaphore.Semaphore,
+  markObservationFinished: () => void
+): Effect.Effect<void, CliError.UserError> => {
+  let completion:
+    | Extract<
+        Parameters<typeof renderMigrationObservationEvent>[0],
+        { readonly kind: "detached" | "terminal" }
+      >
+    | undefined;
+
+  return connection.observeRun(runId).pipe(
+    Stream.runForEach((event) => {
+      if (event.kind === "detached" || event.kind === "terminal") {
+        return terminalSection.withPermit(
+          Effect.sync(() => {
+            completion = event;
+            markObservationFinished();
+          })
+        );
+      }
+
+      const message = renderMigrationObservationEvent(event);
+      return event.kind === "warning"
+        ? Console.error(message)
+        : Console.log(message);
+    }),
+    Effect.catch((cause) =>
+      terminalSection.withPermit(
+        Effect.sync(markObservationFinished).pipe(
+          Effect.andThen(
+            failReportedCliMessage(
+              renderObservationRecovery(
+                runId,
+                observeAgain,
+                observeAgainLabel,
+                `Observation ended before reaching a terminal state: ${renderStoredFailure(cause)}`
+              )
+            )
+          )
+        )
+      )
+    ),
+    Effect.flatMap(() =>
+      terminalSection.withPermit(
+        Effect.gen(function* () {
+          if (completion === undefined) {
+            markObservationFinished();
+            return yield* failReportedCliMessage(
+              renderObservationRecovery(
+                runId,
+                observeAgain,
+                observeAgainLabel,
+                "Observation ended before reaching a terminal state."
+              )
+            );
+          }
+
+          const message = renderMigrationObservationEvent(completion);
+
+          if (completion.kind === "detached") {
+            return yield* Console.log(
+              renderObservationRecovery(
+                completion.runId,
+                observeAgain,
+                observeAgainLabel,
+                completion.message
+              )
+            );
+          }
+
+          switch (completion.outcome) {
+            case "completed":
+              return yield* Console.log(message);
+            case "cancelled":
+              return yield* failCancelledCliMessage(message);
+            case "failed":
+              return yield* failReportedCliMessage(message);
+            default: {
+              const unhandled: never = completion.outcome;
+              return unhandled;
+            }
+          }
+        })
+      )
+    )
+  );
+};
+
+const stopObservedMigrationRun = (
+  connection: MigrationCliServerConnection,
+  runId: ReturnType<typeof toMigrationRunId>,
+  terminalSection: Semaphore.Semaphore,
+  observationIsFinished: () => boolean
+) =>
+  terminalSection.withPermit(
+    Effect.gen(function* () {
+      if (observationIsFinished()) {
+        return Option.none();
+      }
+
+      const result = yield* connection.stopRun(runId);
+      yield* Console.log(
+        renderRunStopResult(result, { colors: yield* useColor })
+      );
+      return Option.some(result);
+    })
+  );
+
+const detachObservedMigrationRun = <ObservationResult, ObservationError>(
+  observationFiber: Fiber.Fiber<ObservationResult, ObservationError>,
+  runId: ReturnType<typeof toMigrationRunId>,
+  observeAgain: (runId: string) => string,
+  observeAgainLabel: string,
+  terminalSection: Semaphore.Semaphore,
+  observationIsFinished: () => boolean
+) =>
+  terminalSection.withPermit(
+    Effect.gen(function* () {
+      if (observationIsFinished()) {
+        return false;
+      }
+
+      yield* Fiber.interrupt(observationFiber);
+      yield* Console.log(
+        renderObservationRecovery(
+          runId,
+          observeAgain,
+          observeAgainLabel,
+          "Observation detached; the Migration Run continues."
+        )
+      );
+      return true;
+    })
+  );
+
+type MigrationRunObservationControlResult =
+  | { readonly kind: "completed" }
+  | { readonly kind: "detached" }
+  | { readonly kind: "observing"; readonly stopRequested: boolean };
+
+type MigrationRunObservationDecisionResult =
+  | { readonly kind: "completed" }
+  | {
+      readonly decision: MigrationRunObservationInterruptDecision;
+      readonly kind: "decision";
+    };
+
+const chooseMigrationRunObservationInterrupt = (
+  runtime: typeof MigrationCliRuntime.Service,
+  runId: ReturnType<typeof toMigrationRunId>,
+  stopRequested: boolean
+) =>
+  runtime.stdoutIsTTY === true &&
+  runtime.chooseRunObservationInterrupt !== undefined
+    ? runtime.chooseRunObservationInterrupt(runId, { stopRequested })
+    : Effect.succeed("detach" as const);
+
+const applyMigrationRunObservationInterrupt = <
+  ObservationResult,
+  ObservationError,
+>(
+  decision: "continue" | "detach" | "stop",
+  observationFiber: Fiber.Fiber<ObservationResult, ObservationError>,
+  cliConnection: CliMigrateConnection,
+  runId: ReturnType<typeof toMigrationRunId>,
+  terminalSection: Semaphore.Semaphore,
+  observationIsFinished: () => boolean,
+  stopRequested: boolean
+): Effect.Effect<
+  MigrationRunObservationControlResult,
+  unknown,
+  MigrationCliRuntime
+> => {
+  if (decision === "continue") {
+    return Effect.succeed({ kind: "observing", stopRequested });
+  }
+
+  if (decision === "stop") {
+    return stopObservedMigrationRun(
+      cliConnection.connection,
+      runId,
+      terminalSection,
+      observationIsFinished
+    ).pipe(
+      Effect.map(
+        (result): MigrationRunObservationControlResult =>
+          Option.isNone(result)
+            ? { kind: "completed" }
+            : {
+                kind: "observing",
+                stopRequested:
+                  stopRequested || result.value.kind === "requested",
+              }
+      )
+    );
+  }
+
+  return detachObservedMigrationRun(
+    observationFiber,
+    runId,
+    cliConnection.observeAgain,
+    cliConnection.observeAgainLabel,
+    terminalSection,
+    observationIsFinished
+  ).pipe(
+    Effect.map(
+      (detached): MigrationRunObservationControlResult =>
+        detached ? { kind: "detached" } : { kind: "completed" }
+    )
+  );
+};
+
+const observeMigrationRun = (
+  cliConnection: CliMigrateConnection,
+  runId: ReturnType<typeof toMigrationRunId>
+): Effect.Effect<void, CliError.CliError, MigrationCliRuntime> =>
+  Effect.gen(function* () {
+    const runtime = yield* MigrationCliRuntime;
+    const terminalSection = yield* Semaphore.make(1);
+    let observationFinished = false;
+    const observation = consumeMigrationRunObservation(
+      cliConnection.connection,
+      runId,
+      cliConnection.observeAgain,
+      cliConnection.observeAgainLabel,
+      terminalSection,
+      () => {
+        observationFinished = true;
+      }
+    );
+
+    if (runtime.interrupts === undefined) {
+      return yield* observation;
+    }
+
+    return yield* runtime.interrupts.withInterrupts((interrupts) =>
+      Effect.gen(function* () {
+        const observationFiber = yield* observation.pipe(Effect.forkChild);
+        let stopRequested = false;
+
+        while (true) {
+          const next = yield* Effect.raceFirst(
+            Fiber.join(observationFiber).pipe(
+              Effect.as({ kind: "completed" as const })
+            ),
+            interrupts.wait.pipe(Effect.as({ kind: "interrupt" as const }))
+          );
+
+          if (next.kind === "completed") {
+            return;
+          }
+
+          const decisionOrCompletion: MigrationRunObservationDecisionResult =
+            yield* Effect.raceFirst(
+              Fiber.join(observationFiber).pipe(
+                Effect.as({ kind: "completed" as const })
+              ),
+              chooseMigrationRunObservationInterrupt(
+                runtime,
+                runId,
+                stopRequested
+              ).pipe(
+                Effect.map((decision) => ({
+                  decision,
+                  kind: "decision" as const,
+                }))
+              )
+            );
+
+          if (decisionOrCompletion.kind === "completed") {
+            return;
+          }
+
+          const control: MigrationRunObservationControlResult =
+            yield* applyMigrationRunObservationInterrupt(
+              decisionOrCompletion.decision,
+              observationFiber,
+              cliConnection,
+              runId,
+              terminalSection,
+              () => observationFinished,
+              stopRequested
+            );
+
+          if (control.kind === "completed") {
+            return yield* Fiber.join(observationFiber);
+          }
+
+          if (control.kind === "detached") {
+            return;
+          }
+
+          stopRequested = control.stopRequested;
+        }
+      })
+    );
+  }).pipe(
+    Effect.catch((error) =>
+      CliError.isCliError(error)
+        ? Effect.fail(error)
+        : failReportedCliMessage(
+            renderObservationRecovery(
+              runId,
+              cliConnection.observeAgain,
+              cliConnection.observeAgainLabel,
+              `Observation ended before reaching a terminal state: ${renderStoredFailure(error)}`
+            )
+          )
+    )
+  );
+
+const runsListCommand = Command.make("list", {}, () =>
+  withCliMigrateConnection(({ connection }) =>
+    Effect.gen(function* () {
+      const activeRuns = yield* connection.getActiveRuns;
+      yield* Console.log(
+        renderActiveMigrationRuns(activeRuns, { colors: yield* useColor })
+      );
+    })
+  ).pipe(
+    Effect.catch((error) =>
+      CliError.isCliError(error)
+        ? Effect.fail(error)
+        : failReportedCliMessage(renderStoredFailure(error))
+    )
+  )
+).pipe(Command.withDescription("List active Migration Runs"));
+
+const runsObserveCommand = Command.make(
+  "observe",
+  { runId: runIdArgument },
+  ({ runId }) => {
+    const migrationRunId = toMigrationRunId(runId);
+
+    return withCliMigrateConnection(
+      (connection) => observeMigrationRun(connection, migrationRunId),
+      migrationRunId
+    );
+  }
+).pipe(Command.withDescription("Observe a Migration Run"));
+
+const runsStopCommand = Command.make(
+  "stop",
+  { runId: runIdArgument },
+  ({ runId }) =>
+    withCliMigrateConnection(({ connection }) =>
+      Effect.gen(function* () {
+        const result = yield* connection.stopRun(toMigrationRunId(runId));
+        yield* Console.log(
+          renderRunStopResult(result, { colors: yield* useColor })
+        );
+      })
+    ).pipe(
+      Effect.catch((error) =>
+        CliError.isCliError(error)
+          ? Effect.fail(error)
+          : failReportedCliMessage(renderStoredFailure(error))
+      )
+    )
+).pipe(Command.withDescription("Safely stop a Migration Run"));
+
+const runsCommand = Command.make("runs").pipe(
+  Command.withDescription("Observe and control Migration Runs"),
+  Command.withSubcommands([
+    runsListCommand,
+    runsObserveCommand,
+    runsStopCommand,
+  ])
+);
+
 const runCommand = Command.make(
   "run",
   {
@@ -1271,6 +1809,7 @@ export const migrateCommand = migrateBaseCommand.pipe(
     messagesCommand,
     storeCommand,
     unlockCommand,
+    runsCommand,
     runCommand,
     rollbackCommand,
   ])

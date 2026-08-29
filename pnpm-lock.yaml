@@ -273,9 +273,6 @@ importers:
 
   packages/tui:
     dependencies:
-      '@effect/platform-node':
-        specifier: 'catalog:'
-        version: 4.0.0-rc.111(effect@4.0.0-rc.111)(redis@6.2.1)
       '@opentui/core':
         specifier: 0.4.5
         version: 0.4.5(@typescript/typescript6@6.0.2)(web-tree-sitter@0.25.10)
@@ -292,6 +289,9 @@ importers:
         specifier: ^19.2.0
         version: 19.2.5
     devDependencies:
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.0-rc.111(effect@4.0.0-rc.111)(redis@6.2.1)
       '@effect/language-service':
         specifier: 'catalog:'
         version: 0.86.2

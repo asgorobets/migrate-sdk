@@ -166,6 +166,17 @@ A non-terminal migration run whose run id still owns at least one Migration Defi
 An Active Migration Run whose durable Migration Run State includes the Execution Adapter identity required for a new Migrate Server to observe it.
 _Avoid_: Attached run, server execution
 
+**Migration Run Observation**:
+A client-scoped stream of progress, lifecycle, warning, and terminal events for
+one Migration Run id. Ending or losing an observation does not change the
+Migration Run.
+
+**Detach Migration Run Observation**:
+End one client’s Migration Run Observation while leaving the Migration Run
+active. The same or another Migrate Client may observe the run again by its
+Migration Run id.
+_Avoid_: Pause run, detach run, resume run
+
 **Migration Definition Run State**:
 The durable state of one migration definition's participation in a migration run.
 
@@ -406,6 +417,7 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A non-transactional **Migration Store** persists authoritative **Migration Run State** before updating latest-definition projections. Retrying the same transition repairs projections that still reference that run without replacing a newer run.
 - Ending observation of a **Reconnectable Migration Run** ends only that observation and leaves the **Migration Run** active.
 - A **Migration Run Observation** is client-scoped; changing the focused run or closing a **Migrate Client** ends the observation without stopping the **Migration Run**.
+- Detaching a **Migration Run Observation** preserves the **Migration Run** id as the stable way to observe the run again; it does not pause execution.
 - Stopping a **Migration Run** is an explicit run-scoped operation and is distinct from ending a **Migration Run Observation** or breaking a **Migration Definition Lock**.
 - A `cancelling` **Migration Run** remains active and keeps its **Migration Definition Locks** until execution stops scheduling work, drains already-started work, persists terminal `cancelled` state, and releases the locks.
 - Durable cancellation is observed at execution scheduling boundaries and may use a short cached read interval to avoid one remote **Migration Store** request per migrated item.

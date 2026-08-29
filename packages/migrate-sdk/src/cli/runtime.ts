@@ -5,22 +5,69 @@ import {
   Layer,
   Option,
   Path,
+  Schema,
+  type Stream,
   Terminal,
 } from "effect";
 import { Service } from "effect/Context";
 import { Prompt } from "effect/unstable/cli";
+import {
+  connectMigrateServer,
+  type MigrateServerConnectionInput,
+} from "../client/node/index.ts";
+import type { MigrationRunId } from "../domain/ids.ts";
+import type {
+  MigrateActiveRun,
+  MigrateObservationEvent,
+  MigrateRunStopResult,
+} from "../protocol/index.ts";
 import type { SqlMigrationStoreSchemaPlan } from "../stores/sql/sql-migration-store-schema.ts";
 import {
   type MigrationCliInterruptController,
   makeMigrationCliInterruptController,
 } from "./interrupts.ts";
 
+export type MigrationRunObservationInterruptDecision =
+  | "continue"
+  | "detach"
+  | "stop";
+
+export type MigrationCliCommandShell = "posix" | "powershell";
+
+export class MigrationCliConnectionError extends Schema.TaggedError<MigrationCliConnectionError>()(
+  "MigrationCliConnectionError",
+  {
+    cause: Schema.Defect(),
+    message: Schema.String,
+  }
+) {}
+
+export interface MigrationCliServerConnection {
+  readonly dispose: () => Promise<void>;
+  readonly getActiveRuns: Effect.Effect<readonly MigrateActiveRun[], unknown>;
+  readonly observeRun: (
+    runId: MigrationRunId
+  ) => Stream.Stream<MigrateObservationEvent, unknown>;
+  readonly stopRun: (
+    runId: MigrationRunId
+  ) => Effect.Effect<MigrateRunStopResult, unknown>;
+}
+
 export interface MigrationCliRuntimeShape {
+  readonly chooseRunObservationInterrupt?: (
+    runId: MigrationRunId,
+    options: { readonly stopRequested: boolean }
+  ) => Effect.Effect<MigrationRunObservationInterruptDecision>;
+  readonly commandShell?: MigrationCliCommandShell;
   readonly confirmSchemaUpgrade?: (
     plan: SqlMigrationStoreSchemaPlan
   ) => Effect.Effect<boolean>;
+  readonly connectMigrateServer?: (
+    input: MigrateServerConnectionInput
+  ) => Effect.Effect<MigrationCliServerConnection, MigrationCliConnectionError>;
   readonly cwd: string;
   readonly interrupts?: MigrationCliInterruptController;
+  readonly migrateServerToken?: string;
   readonly stdoutColumns?: number;
   readonly stdoutIsTTY?: boolean;
   readonly useColor?: boolean;
@@ -37,13 +84,52 @@ export class MigrationCliRuntime extends Service<
       const ci = yield* Config.option(Config.string("CI"));
       const forceColor = yield* Config.option(Config.string("FORCE_COLOR"));
       const noColor = yield* Config.option(Config.string("NO_COLOR"));
+      const migrateServerToken = yield* Config.option(
+        Config.string("MIGRATE_SERVER_TOKEN")
+      );
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const terminal = yield* Terminal.Terminal;
       const forceColorValue = Option.getOrUndefined(forceColor);
+      const migrateServerTokenValue =
+        Option.getOrUndefined(migrateServerToken)?.trim();
       const stdoutColumns = process.stdout.columns;
 
       return {
+        chooseRunObservationInterrupt: (runId, { stopRequested }) =>
+          Prompt.select({
+            choices: [
+              {
+                description: "Leave the Migration Run active",
+                selected: true,
+                title: "Detach",
+                value: "detach" as const,
+              },
+              ...(stopRequested
+                ? []
+                : [
+                    {
+                      description:
+                        "Stop scheduling work, drain active items, and keep observing",
+                      title: "Stop safely",
+                      value: "stop" as const,
+                    },
+                  ]),
+              {
+                description: "Return to live progress",
+                title: "Continue observing",
+                value: "continue" as const,
+              },
+            ],
+            message: stopRequested
+              ? `Run ${runId} is draining. What should Migrate do?`
+              : `What should Migrate do with run ${runId}?`,
+          }).pipe(
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(Terminal.Terminal, terminal),
+            Effect.orElseSucceed(() => "detach" as const)
+          ),
         confirmSchemaUpgrade: (plan) =>
           Prompt.confirm({
             initial: false,
@@ -53,6 +139,25 @@ export class MigrationCliRuntime extends Service<
             Effect.provideService(Path.Path, path),
             Effect.provideService(Terminal.Terminal, terminal),
             Effect.orElseSucceed(() => false)
+          ),
+        commandShell: process.platform === "win32" ? "powershell" : "posix",
+        connectMigrateServer: (input) =>
+          Effect.tryPromise({
+            catch: (cause) =>
+              new MigrationCliConnectionError({
+                cause,
+                message: cause instanceof Error ? cause.message : String(cause),
+              }),
+            try: () => connectMigrateServer(input),
+          }).pipe(
+            Effect.map((connection) => ({
+              dispose: connection.dispose,
+              getActiveRuns: connection.client.GetActiveRuns(),
+              observeRun: (runId: MigrationRunId) =>
+                connection.client.observeRun({ runId }),
+              stopRun: (runId: MigrationRunId) =>
+                connection.client.StopRun({ runId }),
+            }))
           ),
         cwd: process.cwd(),
         interrupts: makeMigrationCliInterruptController({
@@ -70,6 +175,10 @@ export class MigrationCliRuntime extends Service<
         }),
         ...(stdoutColumns === undefined ? {} : { stdoutColumns }),
         stdoutIsTTY: process.stdout.isTTY === true && Option.isNone(ci),
+        ...(migrateServerTokenValue === undefined ||
+        migrateServerTokenValue === ""
+          ? {}
+          : { migrateServerToken: migrateServerTokenValue }),
         useColor:
           Option.isNone(noColor) &&
           forceColorValue !== "0" &&

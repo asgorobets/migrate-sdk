@@ -6,7 +6,7 @@ import {
 } from "effect/unstable/http";
 import { layerProtocolHttp } from "effect/unstable/rpc/RpcClient";
 import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
-import { MigrateClient } from "migrate-sdk/client";
+import { MigrateClient } from "../index.ts";
 import type { MigrateConnection } from "./connection.ts";
 import { validateMigrateServerInfo } from "./connection.ts";
 

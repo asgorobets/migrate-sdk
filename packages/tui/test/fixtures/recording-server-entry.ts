@@ -7,4 +7,4 @@ if (pidPath === undefined || pidPath === "") {
 }
 
 await writeFile(pidPath, String(process.pid), "utf8");
-await import("../../src/server/node-entry.ts");
+await import("../../../migrate-sdk/src/client/node/local-server-entry.ts");

@@ -11,16 +11,16 @@ import {
   layer as layerRpcServer,
   Protocol as RpcServerProtocol,
 } from "effect/unstable/rpc/RpcServer";
-import { toMigrationDefinitionRegistryId } from "migrate-sdk";
-import { MigrateStreamingRpcs } from "migrate-sdk/protocol";
+import { toMigrationDefinitionRegistryId } from "../../domain/ids.ts";
+import { MigrateStreamingRpcs } from "../../protocol/index.ts";
 import {
   loadLocalMigrateServerRuntime,
   MigrateServer,
   MigrateStreamingServerHandlers,
   makeRegistryMigrateServerBackend,
-} from "migrate-sdk/server";
+} from "../../server/index.ts";
 import { removeLocalMigrateServerEndpoint } from "./local-endpoint.ts";
-import { waitForLocalMigrateServerIdle } from "./server-lifecycle.ts";
+import { waitForLocalMigrateServerIdle } from "./local-server-lifecycle.ts";
 
 interface ServerArguments {
   readonly configPath?: string;

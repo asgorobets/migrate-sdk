@@ -1,5 +1,10 @@
 import { Effect, Stream } from "effect";
 import type { MigrationDefinitionLock, MigrationRunId } from "migrate-sdk";
+import {
+  connectLocalMigrateServer,
+  connectRemoteMigrateServer,
+  type MigrateConnection,
+} from "migrate-sdk/client/node";
 import type {
   MigrateDashboard,
   MigrateDashboardSnapshot,
@@ -16,16 +21,27 @@ import type {
   MigrationTuiRuntime,
   MigrationTuiSnapshot,
 } from "../runtime.ts";
-import { connectLocalMigrateServer } from "./local-client.ts";
-import { connectRemoteMigrateServer } from "./remote-client.ts";
 
-export const makeMigrationTuiRuntime = async (
-  input: LoadMigrationTuiInput
+type ConnectLocalMigrateServer = typeof connectLocalMigrateServer;
+
+/** @internal Test composition seam. Use makeMigrationTuiRuntime in production. */
+export const makeMigrationTuiRuntimeWithLocalConnection = async (
+  input: LoadMigrationTuiInput,
+  connectLocal: ConnectLocalMigrateServer
 ): Promise<MigrationTuiRuntime> => {
-  const connection =
-    input.server === undefined
-      ? await connectLocalMigrateServer(input)
-      : await connectRemoteMigrateServer(input.server);
+  let connection: MigrateConnection;
+
+  if (input.server === undefined) {
+    const nodeExecutable = process.env.MIGRATE_TUI_NODE_EXECUTABLE;
+    const localConnectionInput = {
+      ...input,
+      ...(nodeExecutable === undefined ? {} : { nodeExecutable }),
+    };
+
+    connection = await connectLocal(localConnectionInput);
+  } else {
+    connection = await connectRemoteMigrateServer(input.server);
+  }
   const { client, runPromise, serverInfo } = connection;
   const initialDashboard = await runPromise(client.GetDashboard()).catch(
     async (cause) => {
@@ -255,3 +271,8 @@ export const makeMigrationTuiRuntime = async (
     stopRun: (runId) => runPromise(client.StopRun({ runId })),
   };
 };
+
+export const makeMigrationTuiRuntime = (
+  input: LoadMigrationTuiInput
+): Promise<MigrationTuiRuntime> =>
+  makeMigrationTuiRuntimeWithLocalConnection(input, connectLocalMigrateServer);

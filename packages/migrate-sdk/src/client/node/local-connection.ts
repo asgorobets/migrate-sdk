@@ -8,9 +8,9 @@ import { Layer, ManagedRuntime } from "effect";
 import { layerProtocolSocket } from "effect/unstable/rpc/RpcClient";
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
-import { MIGRATE_SDK_VERSION } from "migrate-sdk";
-import { MigrateClient, type MigrateClientService } from "migrate-sdk/client";
-import type { MigrateServerInfo } from "migrate-sdk/protocol";
+import type { MigrateServerInfo } from "../../protocol/index.ts";
+import { MIGRATE_SDK_VERSION } from "../../version.ts";
+import { MigrateClient, type MigrateClientService } from "../index.ts";
 import type { MigrateConnection } from "./connection.ts";
 import { validateMigrateServerInfo } from "./connection.ts";
 import {
@@ -24,15 +24,19 @@ export interface LocalMigrateConnectionInput {
   readonly configPath?: string;
   readonly cwd: string;
   readonly nodeExecutable?: string;
+}
+
+export interface LocalMigrateServerBootstrapOptions {
   readonly serverEntry?: URL;
+  readonly serverIdentity?: string;
   readonly startupTimeoutMs?: number;
 }
 
 const defaultServerEntry = (): URL => {
-  const sourceEntry = new URL("./node-entry.ts", import.meta.url);
-  const compiledSibling = new URL("./node-entry.js", import.meta.url);
+  const sourceEntry = new URL("./local-server-entry.ts", import.meta.url);
+  const compiledSibling = new URL("./local-server-entry.js", import.meta.url);
   const compiledDistribution = new URL(
-    "../../dist/server/node-entry.js",
+    "../../../dist/client/node/local-server-entry.js",
     import.meta.url
   );
   const compiledEntries = [compiledSibling, compiledDistribution];
@@ -82,10 +86,10 @@ const isSocketTransportFailure = (cause: unknown): boolean =>
     cause.reason._tag === "SocketReadError" ||
     cause.reason._tag === "SocketWriteError");
 
-export const localMigrateServerEndpoint = ({
-  configPath,
-  cwd,
-}: Pick<LocalMigrateConnectionInput, "configPath" | "cwd">): string => {
+export const localMigrateServerEndpoint = (
+  { configPath, cwd }: LocalMigrateConnectionInput,
+  options: Pick<LocalMigrateServerBootstrapOptions, "serverIdentity"> = {}
+): string => {
   const user = typeof process.getuid === "function" ? process.getuid() : "user";
 
   return makeLocalMigrateServerEndpoint(
@@ -96,11 +100,9 @@ export const localMigrateServerEndpoint = ({
     {
       platform: process.platform,
       sdkVersion: MIGRATE_SDK_VERSION,
-      ...(process.env.MIGRATE_TUI_SERVER_IDENTITY === undefined
+      ...(options.serverIdentity === undefined
         ? {}
-        : {
-            serverIdentity: process.env.MIGRATE_TUI_SERVER_IDENTITY,
-          }),
+        : { serverIdentity: options.serverIdentity }),
       tempDirectory: tmpdir(),
       user,
     }
@@ -170,17 +172,23 @@ const terminateOwnedServer = async (child: ChildProcess): Promise<void> => {
   });
 };
 
-const connectPersistentMigrateServer = async ({
-  configPath,
-  cwd,
-  nodeExecutable = process.env.MIGRATE_TUI_NODE_EXECUTABLE ?? "node",
-  serverEntry = defaultServerEntry(),
-  startupTimeoutMs = defaultStartupTimeoutMs,
-}: LocalMigrateConnectionInput): Promise<MigrateConnection> => {
-  const socketPath = localMigrateServerEndpoint({
-    ...(configPath === undefined ? {} : { configPath }),
-    cwd,
-  });
+const connectPersistentMigrateServer = async (
+  { configPath, cwd, nodeExecutable = "node" }: LocalMigrateConnectionInput,
+  {
+    serverIdentity,
+    serverEntry = defaultServerEntry(),
+    startupTimeoutMs = defaultStartupTimeoutMs,
+  }: LocalMigrateServerBootstrapOptions = {}
+): Promise<MigrateConnection> => {
+  const socketPath = localMigrateServerEndpoint(
+    {
+      ...(configPath === undefined ? {} : { configPath }),
+      cwd,
+    },
+    {
+      ...(serverIdentity === undefined ? {} : { serverIdentity }),
+    }
+  );
 
   try {
     return await connectSocket(socketPath);
@@ -255,3 +263,8 @@ const connectPersistentMigrateServer = async ({
 export const connectLocalMigrateServer = (
   input: LocalMigrateConnectionInput
 ): Promise<MigrateConnection> => connectPersistentMigrateServer(input);
+
+export const connectLocalMigrateServerWithBootstrap = (
+  input: LocalMigrateConnectionInput,
+  options: LocalMigrateServerBootstrapOptions
+): Promise<MigrateConnection> => connectPersistentMigrateServer(input, options);

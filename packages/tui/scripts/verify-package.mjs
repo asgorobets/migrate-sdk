@@ -7,11 +7,7 @@ const packageJson = JSON.parse(
   await readFile(resolve(packageDirectory, "package.json"), "utf8")
 );
 
-const requiredFiles = [
-  "bin/migrate-tui.js",
-  "dist/bin.js",
-  "dist/server/node-entry.js",
-];
+const requiredFiles = ["bin/migrate-tui.js", "dist/bin.js"];
 
 for (const path of requiredFiles) {
   await access(resolve(packageDirectory, path), constants.R_OK);

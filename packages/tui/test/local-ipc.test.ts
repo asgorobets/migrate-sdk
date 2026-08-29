@@ -14,12 +14,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { toMigrationDefinitionId } from "migrate-sdk";
+import {
+  connectLocalMigrateServerForTesting,
+  localMigrateServerEndpoint,
+} from "migrate-sdk/client/node/testing";
 import { MIGRATE_PROTOCOL_VERSION } from "migrate-sdk/protocol";
 import { makeMigrationTuiRuntime } from "../src/index.ts";
-import {
-  connectLocalMigrateServer,
-  localMigrateServerEndpoint,
-} from "../src/server/local-client.ts";
+import { makeMigrationTuiRuntimeForTesting } from "./support/tui-runtime.ts";
 
 const LOCK_ERROR_PATTERN = /lock/i;
 const incompatibleProtocolMessage = `Migrate Protocol version ${MIGRATE_PROTOCOL_VERSION + 1} is not supported`;
@@ -478,11 +479,13 @@ test("reattaches through a fresh Node server using persistent run state", async 
 
   try {
     const configPath = resolve("test/fixtures/persistent-reconnect.config.ts");
-    firstRuntime = await makeMigrationTuiRuntime({
-      configPath,
-      cwd: process.cwd(),
-      serverEntry,
-    });
+    firstRuntime = await makeMigrationTuiRuntimeForTesting(
+      {
+        configPath,
+        cwd: process.cwd(),
+      },
+      { serverEntry }
+    );
     firstServerPid = await readProcessId(serverPidPath);
     const operation = await firstRuntime.prepare(
       {
@@ -502,11 +505,13 @@ test("reattaches through a fresh Node server using persistent run state", async 
     await terminateProcess(firstServerPid);
     await unlink(serverPidPath);
 
-    secondRuntime = await makeMigrationTuiRuntime({
-      configPath,
-      cwd: process.cwd(),
-      serverEntry,
-    });
+    secondRuntime = await makeMigrationTuiRuntimeForTesting(
+      {
+        configPath,
+        cwd: process.cwd(),
+      },
+      { serverEntry }
+    );
     secondServerPid = await readProcessId(serverPidPath);
     expect(secondServerPid).not.toBe(firstServerPid);
     expect(await secondRuntime.listActiveRuns()).toEqual([
@@ -571,7 +576,12 @@ test("Node server bootstrap failures exit unsuccessfully", () => {
   const result = spawnSync(
     process.env.MIGRATE_TUI_NODE_EXECUTABLE ?? "node",
     [
-      fileURLToPath(new URL("../src/server/node-entry.ts", import.meta.url)),
+      fileURLToPath(
+        new URL(
+          "../../migrate-sdk/src/client/node/local-server-entry.ts",
+          import.meta.url
+        )
+      ),
       "--cwd",
       process.cwd(),
       "--config",
@@ -590,11 +600,13 @@ test("Node server bootstrap failures exit unsuccessfully", () => {
 
 test("reports a local server startup timeout and releases the child", async () => {
   await expect(
-    connectLocalMigrateServer({
-      cwd: process.cwd(),
-      serverEntry: new URL("./fixtures/hanging-server.ts", import.meta.url),
-      startupTimeoutMs: 50,
-    })
+    connectLocalMigrateServerForTesting(
+      { cwd: process.cwd() },
+      {
+        serverEntry: new URL("./fixtures/hanging-server.ts", import.meta.url),
+        startupTimeoutMs: 50,
+      }
+    )
   ).rejects.toThrow("Unable to connect to the local Migrate Server");
 });
 
@@ -602,18 +614,22 @@ test("a persistent startup timeout terminates the server started by the launcher
   const directory = await mkdtemp(join(tmpdir(), "migrate-tui-timeout-"));
   const markerPath = join(directory, "server.pid");
   const previousMarker = process.env.MIGRATE_TUI_HANGING_CONFIG_MARKER;
-  const previousIdentity = process.env.MIGRATE_TUI_SERVER_IDENTITY;
+  const serverIdentity = randomUUID();
   process.env.MIGRATE_TUI_HANGING_CONFIG_MARKER = markerPath;
-  process.env.MIGRATE_TUI_SERVER_IDENTITY = randomUUID();
   let pid: number | undefined;
 
   try {
     await expect(
-      connectLocalMigrateServer({
-        configPath: resolve("test/fixtures/hanging-config.ts"),
-        cwd: process.cwd(),
-        startupTimeoutMs: 1000,
-      })
+      connectLocalMigrateServerForTesting(
+        {
+          configPath: resolve("test/fixtures/hanging-config.ts"),
+          cwd: process.cwd(),
+        },
+        {
+          serverIdentity,
+          startupTimeoutMs: 1000,
+        }
+      )
     ).rejects.toThrow("Unable to connect to the local Migrate Server");
     pid = Number(await readFile(markerPath, "utf8"));
 
@@ -628,34 +644,25 @@ test("a persistent startup timeout terminates the server started by the launcher
     } else {
       process.env.MIGRATE_TUI_HANGING_CONFIG_MARKER = previousMarker;
     }
-    if (previousIdentity === undefined) {
-      delete process.env.MIGRATE_TUI_SERVER_IDENTITY;
-    } else {
-      process.env.MIGRATE_TUI_SERVER_IDENTITY = previousIdentity;
-    }
     await rm(directory, { force: true, recursive: true });
   }
 }, 10_000);
 
 test("reports an invalid Node executable without crashing the TUI", async () => {
-  const previousIdentity = process.env.MIGRATE_TUI_SERVER_IDENTITY;
-  process.env.MIGRATE_TUI_SERVER_IDENTITY = randomUUID();
+  const serverIdentity = randomUUID();
 
-  try {
-    await expect(
-      connectLocalMigrateServer({
+  await expect(
+    connectLocalMigrateServerForTesting(
+      {
         cwd: process.cwd(),
         nodeExecutable: join(tmpdir(), `missing-node-${randomUUID()}`),
+      },
+      {
+        serverIdentity,
         startupTimeoutMs: 1000,
-      })
-    ).rejects.toThrow("Unable to connect to the local Migrate Server");
-  } finally {
-    if (previousIdentity === undefined) {
-      delete process.env.MIGRATE_TUI_SERVER_IDENTITY;
-    } else {
-      process.env.MIGRATE_TUI_SERVER_IDENTITY = previousIdentity;
-    }
-  }
+      }
+    )
+  ).rejects.toThrow("Unable to connect to the local Migrate Server");
 });
 
 const unixTest = process.platform === "win32" ? test.skip : test;
@@ -689,11 +696,10 @@ for (const variant of ["protocol", "malformed"] as const) {
       try {
         await waitForPath(socketPath, 3000);
         await expect(
-          connectLocalMigrateServer({
-            configPath,
-            cwd,
-            startupTimeoutMs: 1000,
-          })
+          connectLocalMigrateServerForTesting(
+            { configPath, cwd },
+            { startupTimeoutMs: 1000 }
+          )
         ).rejects.toThrow(
           variant === "protocol"
             ? incompatibleProtocolMessage
@@ -718,11 +724,13 @@ for (const variant of ["protocol", "malformed"] as const) {
 
 test("reports when the socket server exits during startup", async () => {
   await expect(
-    connectLocalMigrateServer({
-      cwd: process.cwd(),
-      serverEntry: new URL("./fixtures/crashing-server.ts", import.meta.url),
-      startupTimeoutMs: 2000,
-    })
+    connectLocalMigrateServerForTesting(
+      { cwd: process.cwd() },
+      {
+        serverEntry: new URL("./fixtures/crashing-server.ts", import.meta.url),
+        startupTimeoutMs: 2000,
+      }
+    )
   ).rejects.toThrow("exited before startup completed");
 });
 
@@ -732,11 +740,18 @@ test.each([
   ["malformed", "Unable to connect to the local Migrate Server"],
 ] as const)("rejects incompatible server info (%s)", async (configPath, message) => {
   await expect(
-    connectLocalMigrateServer({
-      ...(configPath === undefined ? {} : { configPath }),
-      cwd: process.cwd(),
-      serverEntry: new URL("./fixtures/socket-server-info.ts", import.meta.url),
-      startupTimeoutMs: 2000,
-    })
+    connectLocalMigrateServerForTesting(
+      {
+        ...(configPath === undefined ? {} : { configPath }),
+        cwd: process.cwd(),
+      },
+      {
+        serverEntry: new URL(
+          "./fixtures/socket-server-info.ts",
+          import.meta.url
+        ),
+        startupTimeoutMs: 2000,
+      }
+    )
   ).rejects.toThrow(message);
 });

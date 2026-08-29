@@ -20,6 +20,11 @@ import type {
   MigrationExecutionHandle,
   MigrationRunSummary,
 } from "../domain/run.ts";
+import type {
+  MigrateActiveRun,
+  MigrateObservationEvent,
+  MigrateRunStopResult,
+} from "../protocol/index.ts";
 import type { SqlMigrationStoreSchemaPlan } from "../stores/sql/sql-migration-store-schema.ts";
 
 interface RenderOptions {
@@ -126,6 +131,131 @@ const renderTable = <Row>(
 const renderDefinitionIdInlineList = (
   definitionIds: readonly MigrationDefinitionId[]
 ): string => (definitionIds.length === 0 ? "-" : definitionIds.join(", "));
+
+export const renderActiveMigrationRuns = (
+  runs: readonly MigrateActiveRun[],
+  options: RenderOptions = {}
+): string => {
+  if (runs.length === 0) {
+    return [bold("Active Migration Runs", options), "No active runs."].join(
+      "\n"
+    );
+  }
+
+  return [
+    bold("Active Migration Runs", options),
+    "",
+    ...renderTable(
+      [
+        {
+          header: "Run ID",
+          render: (run) => run.runId,
+        },
+        {
+          header: "Status",
+          render: (run) => run.status,
+          style: (value, run, renderOptions) =>
+            run.status === "cancelling"
+              ? yellow(value, renderOptions)
+              : cyan(value, renderOptions),
+        },
+        {
+          header: "Definitions",
+          render: (run) => run.definitionIds.join(", "),
+        },
+        {
+          header: "Adapter",
+          render: (run) => run.execution?.adapter ?? "inline",
+        },
+        {
+          header: "Started",
+          render: (run) => run.startedAt.toISOString(),
+        },
+        {
+          header: "Stop",
+          render: (run) => (run.stopSupported ? "supported" : "unsupported"),
+        },
+      ],
+      runs,
+      options
+    ),
+  ].join("\n");
+};
+
+export const renderMigrationObservationEvent = (
+  event: MigrateObservationEvent,
+  options: RenderOptions = {}
+): string => {
+  switch (event.kind) {
+    case "state":
+      return event.state.kind === "starting"
+        ? `Starting ${event.state.definitionId}`
+        : `${event.state.kind === "cancelling" ? yellow("Cancelling", options) : cyan("Running", options)} ${event.state.definitionId}`;
+    case "progress":
+      return [
+        bold("Progress", options),
+        ...renderTable(
+          [
+            {
+              header: "Migration ID",
+              render: (definition) => definition.definitionId,
+            },
+            {
+              align: "right",
+              header: "Migrated",
+              render: (definition) => String(definition.durable.migrated),
+            },
+            {
+              align: "right",
+              header: "Skipped",
+              render: (definition) => String(definition.durable.skipped),
+            },
+            {
+              align: "right",
+              header: "Needs Update",
+              render: (definition) => String(definition.durable.needsUpdate),
+            },
+            {
+              align: "right",
+              header: "Failed",
+              render: (definition) => String(definition.durable.failed),
+              style: (value, definition, renderOptions) =>
+                definition.durable.failed > 0
+                  ? red(value, renderOptions)
+                  : value,
+            },
+          ],
+          event.definitions,
+          options
+        ),
+      ].join("\n");
+    case "warning":
+      return `${yellow("Warning", options)} ${event.message}`;
+    case "detached":
+      return `${event.message}\nRun id ${event.runId}`;
+    case "terminal":
+      return `${event.message}\nRun id ${event.runId}`;
+    default: {
+      const unhandled: never = event;
+      return unhandled;
+    }
+  }
+};
+
+export const renderRunStopResult = (
+  result: MigrateRunStopResult,
+  options: RenderOptions = {}
+): string => {
+  let title = "Stop Unsupported";
+
+  if (result.kind === "requested") {
+    title = yellow("Stop Requested", options);
+  } else if (result.kind === "not-running") {
+    title = "Run Not Active";
+  }
+
+  return [title, `Run id ${result.runId}`, result.message].join("\n");
+};
 
 const formatRequiredDependencies = (
   dependencies: readonly MigrationDefinitionId[]

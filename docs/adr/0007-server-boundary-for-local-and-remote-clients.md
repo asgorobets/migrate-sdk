@@ -237,6 +237,40 @@ the Migrate Server interface: local commands may call it in-process, while
 remote commands use a Migrate Connection. Store schema and other
 infrastructure-only commands may remain outside that interface.
 
+The CLI adopts that seam incrementally through a shared Node Migrate Connection
+owned by Migrate SDK rather than by the TUI package. Both clients use the same
+local socket or remote HTTPS connection, version checks, authentication header,
+and logical `MigrateClient`; renderer concerns remain in the TUI. The first CLI
+surface over this connection is run lifecycle management:
+
+- `migrate runs list` discovers active Migration Runs.
+- `migrate runs observe <run-id>` observes one run until it is terminal or the
+  caller detaches.
+- `migrate runs stop <run-id>` explicitly requests durable cooperative
+  cancellation.
+
+`migrate list` continues to mean registered Migration Definitions. Remote CLI
+commands accept a Migrate Server URL and read its bearer token from
+`MIGRATE_SERVER_TOKEN`; secrets are not accepted as command-line flags. Local
+commands discover the local migration configuration and connect to the same
+reconnectable Node Migrate Server used by the TUI.
+
+While observing in an interactive terminal, the first Ctrl+C offers three
+distinct choices: detach the observation, stop safely and keep observing while
+work drains, or continue observing. Detach is the default. A non-interactive
+interrupt only detaches and prints the Migration Run id and the command that can
+observe it again. Stopping is never inferred from losing a client or receiving
+a process signal. A second Ctrl+C while a stopped run is draining may detach,
+but it does not hard-cancel provider execution.
+
+Existing `migrate run` and `migrate rollback` commands move to the same server
+boundary only after the protocol can represent their complete selection and
+execution options. In particular, operation selection must distinguish all
+definitions, a non-empty explicit definition set, and a group. A client that is
+interrupted after dispatch but before receiving `StartOperation` must not claim
+that no run exists; once its outcome is unknown, active-run discovery is the
+recovery path.
+
 ## Consequences
 
 - Existing Node migrations can be operated through the Bun-rendered TUI without
