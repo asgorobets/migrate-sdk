@@ -677,10 +677,13 @@ export const MigrationTuiApp = ({
     exactDefinitionIds: selectedExactSourceItemDefinitionIds,
     runtime,
   });
-  const refreshDashboard = useCallback(async () => {
-    clearSourceItemTotalCache();
-    await refresh();
-  }, [clearSourceItemTotalCache, refresh]);
+  const refreshDashboard = useCallback(
+    async (nextNotice?: string) => {
+      clearSourceItemTotalCache();
+      await refresh(nextNotice);
+    },
+    [clearSourceItemTotalCache, refresh]
+  );
   const sourceItemTotalsError =
     sourceItemTotalsFailure === null
       ? null
@@ -1407,23 +1410,21 @@ export const MigrationTuiApp = ({
       const lock = row.status?.lock;
 
       if (lock == null) {
-        setNotice(`${row.entry.id} no longer has an active lock`);
-        setBusy("");
+        await refreshDashboard(`${row.entry.id} no longer has an active lock`);
         return;
       }
 
       const result = await runtime.breakLock(lock);
-      setNotice(
+      await refreshDashboard(
         result.kind === "already-clear"
           ? `${row.entry.id} no longer has an active lock`
           : `Lock cleared for ${row.entry.id}`
       );
-      setBusy("");
     } catch (cause) {
       setError(errorMessage(cause));
       setBusy("");
     }
-  }, [pendingLockRow, runtime]);
+  }, [pendingLockRow, refreshDashboard, runtime]);
 
   const handleBreakLockKey = useCallback(
     (key: KeyEvent) => {
