@@ -1,9 +1,18 @@
 :root {
-  --background: #10120f;
-  --foreground: #f1f0e8;
-  --muted: #a5a89d;
-  --line: #30352d;
-  --signal: #b7ed67;
+  --background: #0d1117;
+  --danger: #ff7b72;
+  --foreground: #e6edf3;
+  --info: #58a6ff;
+  --line: #30363d;
+  --muted: #8b949e;
+  --selected: #1f6feb;
+  --success: #3fb950;
+  --surface: #161b22;
+  --warning: #d29922;
+  --font-mono:
+    ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono",
+    monospace;
+  color-scheme: dark;
 }
 
 html {
@@ -18,7 +27,7 @@ body {
 
 body {
   min-height: 100%;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-mono);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   color: var(--foreground);
@@ -34,4 +43,14 @@ body {
 a {
   color: inherit;
   text-decoration: none;
+}
+
+::selection {
+  color: var(--foreground);
+  background: var(--selected);
+}
+
+:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 3px;
 }

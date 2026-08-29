@@ -11,12 +11,17 @@
     "db:setup": "pnpm --filter migrate-sdk build && tsx scripts/setup-database.ts",
     "db:up": "docker compose up -d --wait postgres",
     "dev": "pnpm run build:server && next dev --port 3100",
+    "sandbox:snapshot": "tsx src/sandbox/create-tui-snapshot.ts",
     "start": "next start --port 3100",
     "test": "pnpm run build:server && vitest run --passWithNoTests"
   },
   "dependencies": {
     "@effect/sql-pg": "catalog:",
     "@migrate-sdk/workflow-sdk": "workspace:*",
+    "@vercel/sandbox": "3.1.0",
+    "@wterm/dom": "0.3.4",
+    "@wterm/ghostty": "0.3.4",
+    "@wterm/react": "0.3.4",
     "effect": "catalog:",
     "migrate-sdk": "workspace:*",
     "next": "16.2.0",

@@ -1,9 +1,11 @@
+import { Layer } from "effect";
 import { MigrateServerHttp } from "migrate-sdk/server/http";
 import { migrateServerAuthorizationMiddleware } from "@/server/auth";
 import { migrateServerHttpLayer } from "@/server/migrate-server";
+import { MigrateServerAccess } from "@/server/migrate-server-access";
 
 const migrateServerHttp = MigrateServerHttp.toWebHandler(
-  migrateServerHttpLayer,
+  Layer.merge(migrateServerHttpLayer, MigrateServerAccess.layer),
   migrateServerAuthorizationMiddleware
 );
 

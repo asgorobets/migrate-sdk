@@ -4,6 +4,7 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http";
+import { MigrateServerAccess } from "./migrate-server-access";
 
 const isAuthorizedBearerHeader = (
   authorization: string | undefined,
@@ -13,10 +14,16 @@ const isAuthorizedBearerHeader = (
   token.length > 0 &&
   authorization === `Bearer ${token}`;
 
-export const isAuthorizedMigrationRequest = (request: Request): boolean =>
-  isAuthorizedBearerHeader(
-    request.headers.get("authorization") ?? undefined,
-    process.env.MIGRATE_SERVER_TOKEN
+export const isAuthorizedMigrationRequest = (
+  request: Request
+): Effect.Effect<boolean, never, MigrateServerAccess> =>
+  MigrateServerAccess.pipe(
+    Effect.map(({ token }) =>
+      isAuthorizedBearerHeader(
+        request.headers.get("authorization") ?? undefined,
+        token
+      )
+    )
   );
 
 export const isAuthorizedCronRequest = (request: Request): boolean =>
@@ -27,16 +34,12 @@ export const isAuthorizedCronRequest = (request: Request): boolean =>
 
 export const migrateServerAuthorizationMiddleware = HttpMiddleware.make(
   (httpApp) =>
-    HttpServerRequest.HttpServerRequest.pipe(
-      Effect.flatMap((request) =>
-        isAuthorizedBearerHeader(
-          request.headers.authorization,
-          process.env.MIGRATE_SERVER_TOKEN
-        )
-          ? httpApp
-          : Effect.succeed(
-              HttpServerResponse.text("Unauthorized", { status: 401 })
-            )
-      )
-    )
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const { token } = yield* MigrateServerAccess;
+      if (!isAuthorizedBearerHeader(request.headers.authorization, token)) {
+        return HttpServerResponse.text("Unauthorized", { status: 401 });
+      }
+      return yield* httpApp;
+    })
 );

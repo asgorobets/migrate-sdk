@@ -1,44 +1,67 @@
+import { BrowserTerminal } from "./browser-terminal";
 import styles from "./page.module.css";
 
 export default function Home() {
   return (
     <main className={styles.page}>
-      <section className={styles.hero}>
+      <header className={styles.nav}>
+        <a className={styles.brand} href="#top">
+          Migrate
+        </a>
+        <span>workflow-sdk · browser demo</span>
+      </header>
+
+      <div className={styles.hero} id="top">
         <p className={styles.eyebrow}>
-          Migrate SDK · remote observation example
+          <span aria-hidden="true">$</span> migrate observe --server
+          workflow-sdk.demo
         </p>
-        <h1>Durable migrations, observed from a local terminal.</h1>
+        <h1>Try a durable migration from your browser</h1>
         <p className={styles.summary}>
-          This Next.js service exposes the migration-server protocol, dispatches
-          work through Vercel Workflow, and stores source data and migration
-          state in PostgreSQL. No local migrate config is involved.
+          The actual OpenTUI client starts below inside a shared Vercel Sandbox.
+          Run or roll back PostgreSQL migrations while Vercel Workflow owns the
+          durable execution.
         </p>
-      </section>
+        <div className={styles.runtimeLine}>
+          <span>[ wterm ]</span>
+          <span>[ libghostty ]</span>
+          <span>[ Vercel Sandbox ]</span>
+          <span>[ Vercel Workflow ]</span>
+        </div>
+      </div>
+
+      <BrowserTerminal />
 
       <section className={styles.grid}>
         <article>
-          <span>01</span>
-          <h2>Authors</h2>
-          <p>PostgreSQL source rows migrate in durable cursor windows.</p>
-        </article>
-        <article>
-          <span>02</span>
-          <h2>Books</h2>
-          <p>240 independent rows run beside authors on the TUI dashboard.</p>
-        </article>
-        <article>
-          <span>RPC</span>
-          <h2>Remote TUI</h2>
+          <span>01 / terminal</span>
+          <h2>The real TUI</h2>
           <p>
-            Point <code>migrate-tui --server</code> at <code>/api/migrate</code>{" "}
-            with a bearer token.
+            OpenTUI runs under Bun in Linux. The browser only renders its PTY
+            byte stream with libghostty.
+          </p>
+        </article>
+        <article>
+          <span>02 / execution</span>
+          <h2>Durable workflows</h2>
+          <p>
+            Authors and books migrate in durable cursor windows backed by
+            PostgreSQL and Vercel Workflow.
+          </p>
+        </article>
+        <article>
+          <span>03 / playground</span>
+          <h2>Shared and disposable</h2>
+          <p>
+            Every visitor gets their own TUI process in the same temporary
+            sandbox. Activity keeps it warm, with an absolute 30-minute limit.
           </p>
         </article>
       </section>
 
       <footer className={styles.footer}>
-        <a href="/api/health">Database health</a>
-        <span>Workflow execution remains provider-owned.</span>
+        <span>Migration execution remains provider-owned.</span>
+        <span>Terminal sessions are temporary; workflow runs are durable.</span>
       </footer>
     </main>
   );

@@ -1,11 +1,18 @@
+import { Effect } from "effect";
 import { isAuthorizedMigrationRequest } from "@/server/auth";
 import { setupDemoDatabase } from "@/server/demo-database";
+import { MigrateServerAccess } from "@/server/migrate-server-access";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
 export const POST = async (request: Request): Promise<Response> => {
-  if (!isAuthorizedMigrationRequest(request)) {
+  const authorized = await Effect.runPromise(
+    isAuthorizedMigrationRequest(request).pipe(
+      Effect.provide(MigrateServerAccess.layer)
+    )
+  );
+  if (!authorized) {
     return new Response("Unauthorized", { status: 401 });
   }
 
