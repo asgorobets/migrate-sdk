@@ -20,26 +20,25 @@ const repositoryRevision =
 const sandbox = await Sandbox.create({
   persistent: true,
   resources: { vcpus: 2 },
-  source: {
-    depth: 1,
-    revision: repositoryRevision,
-    type: "git",
-    url: repositoryUrl,
-  },
   tags: { purpose: "migrate-tui-snapshot" },
   timeout: SNAPSHOT_BUILD_TIMEOUT_MS,
 });
 
+interface RunOptions {
+  readonly cwd?: string;
+  readonly env?: Readonly<Record<string, string>>;
+}
+
 const run = async (
   command: string,
   args: readonly string[],
-  env: Readonly<Record<string, string>> = {}
+  options: RunOptions = {}
 ): Promise<void> => {
   const result = await sandbox.runCommand({
     args: [...args],
     cmd: command,
-    cwd: TUI_SANDBOX_WORKSPACE_CWD,
-    env: { ...env },
+    cwd: options.cwd ?? TUI_SANDBOX_WORKSPACE_CWD,
+    env: { ...options.env },
     stderr: process.stderr,
     stdout: process.stdout,
     timeoutMs: SNAPSHOT_BUILD_TIMEOUT_MS,
@@ -79,20 +78,26 @@ const readPinnedPnpmVersion = async (): Promise<string> => {
 };
 
 try {
+  await run("git", ["init", TUI_SANDBOX_WORKSPACE_CWD], { cwd: "/vercel" });
+  await run("git", ["remote", "add", "origin", repositoryUrl]);
+  await run("git", ["fetch", "--depth", "1", "origin", repositoryRevision]);
+  await run("git", ["checkout", "--detach", "FETCH_HEAD"]);
   await run("test", ["-f", "pnpm-workspace.yaml"]);
   const pnpmVersion = await readPinnedPnpmVersion();
   const pnpmEnvironment = { PNPM_HOME: TUI_SANDBOX_PNPM_HOME };
-  await run("npx", ["--yes", "get-pnpm", pnpmVersion], pnpmEnvironment);
-  await run(
-    TUI_SANDBOX_PNPM_PATH,
-    ["install", "--frozen-lockfile"],
-    pnpmEnvironment
-  );
-  await run(TUI_SANDBOX_PNPM_PATH, ["build-packages"], pnpmEnvironment);
+  await run("npx", ["--yes", "get-pnpm", pnpmVersion], {
+    env: pnpmEnvironment,
+  });
+  await run(TUI_SANDBOX_PNPM_PATH, ["install", "--frozen-lockfile"], {
+    env: pnpmEnvironment,
+  });
+  await run(TUI_SANDBOX_PNPM_PATH, ["build-packages"], {
+    env: pnpmEnvironment,
+  });
   await run(
     TUI_SANDBOX_PNPM_PATH,
     ["--filter", "@migrate-sdk/tui", "dev", "--", "--version"],
-    pnpmEnvironment
+    { env: pnpmEnvironment }
   );
 
   const snapshot = await sandbox.snapshot({
