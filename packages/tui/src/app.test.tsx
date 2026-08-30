@@ -12,6 +12,7 @@ import {
   toMigrationRunId,
 } from "migrate-sdk";
 import {
+  type MigrateActiveRun,
   MigrateDashboardResumeToken,
   type MigrateDefinitionSourceItemTotal,
   type MigrateRunStartResult,
@@ -533,6 +534,275 @@ describe("MigrationTuiApp", () => {
         expect(observeDashboard.mock.calls[1]?.[0].after).toBe(
           fresh.resumeToken
         );
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "accumulates navigable session activity and opens JSONL export",
+    async () => {
+      const runtime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("r", { shift: true }));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("l"));
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("Session activity") &&
+              frame.includes("3 RETAINED") &&
+              (frame.match(/Status reloaded/g)?.length ?? 0) >= 2 &&
+              frame.includes("Reloading status…")
+            );
+          })
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("HOME"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Event 1")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("END"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Event 3")
+          )
+        ).toBe(true);
+
+        act(() => setup.resize(72, 24));
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("Session activity") &&
+              frame.includes("e export JSONL") &&
+              frame.includes("Event 3")
+            );
+          })
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("e"));
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("Export session activity") &&
+              frame.includes("JSONL") &&
+              frame.includes("Existing files are not replaced")
+            );
+          })
+        ).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "records lifecycle changes for runs started outside this TUI",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const durable = await baseRuntime.refresh();
+      const definitionId = toMigrationDefinitionId("authors");
+      const runId = toMigrationRunId("run-external-authors");
+      const activeRun = {
+        definitionIds: [definitionId],
+        observationDefinitionId: definitionId,
+        runId,
+        startedAt: new Date("2026-08-29T12:00:00.000Z"),
+        status: "running",
+        stopSupported: true,
+      } satisfies MigrateActiveRun;
+      let publishSnapshot:
+        | MigrationTuiDashboardObservationOptions["onSnapshot"]
+        | undefined;
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        observeDashboard: async ({ onSnapshot, signal }) => {
+          publishSnapshot = onSnapshot;
+          onSnapshot({
+            ...durable,
+            resumeToken: MigrateDashboardResumeToken.make(
+              "session-activity:initial"
+            ),
+          });
+
+          await new Promise<void>((resolve) => {
+            if (signal?.aborted === true) {
+              resolve();
+              return;
+            }
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        },
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() =>
+          publishSnapshot?.({
+            ...durable,
+            activeRuns: [activeRun],
+            resumeToken: MigrateDashboardResumeToken.make(
+              "session-activity:running"
+            ),
+          })
+        );
+        act(() => setup.mockInput.pressKey("l"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup
+              .captureCharFrame()
+              .includes(`Run ${runId} running · ${definitionId}`)
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("↵ Close") &&
+              frame.includes(`Run ${runId} running · ${definitionId}`)
+            );
+          })
+        ).toBe(true);
+
+        act(() =>
+          publishSnapshot?.({
+            ...durable,
+            activeRuns: [],
+            resumeToken: MigrateDashboardResumeToken.make(
+              "session-activity:complete"
+            ),
+          })
+        );
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("↵ Close") &&
+              frame.includes(`Run ${runId} running · ${definitionId}`) &&
+              !frame.includes(
+                `Run ${runId} is no longer active · ${definitionId}`
+              )
+            );
+          })
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressEscape());
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup
+              .captureCharFrame()
+              .includes(`Run ${runId} is no longer active · ${definitionId}`)
+          )
+        ).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "expands and scrolls complete session activity messages",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const durable = await baseRuntime.refresh();
+      const diagnostic = [
+        "ACTIVITY-START",
+        ...Array.from({ length: 30 }, (_, index) => `Diagnostic line ${index}`),
+        "ACTIVITY-END",
+      ].join("\n");
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        observeDashboard: ({ onSnapshot }) => {
+          onSnapshot({
+            ...durable,
+            resumeToken: MigrateDashboardResumeToken.make(
+              "session-activity:long-error"
+            ),
+          });
+          return Promise.reject(new Error(diagnostic));
+        },
+      };
+      const setup = await createTestRenderer({ height: 24, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("ACTIVITY-START")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("l"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("↵ expand")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("Event 2") && frame.includes("ACTIVITY-START")
+            );
+          })
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("END"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("ACTIVITY-END")
+          )
+        ).toBe(true);
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
@@ -1728,15 +1998,15 @@ describe("MigrationTuiApp", () => {
       const runId = toMigrationRunId("run-stuck");
       const observeRun = vi.fn(() =>
         Promise.resolve({
-          message: `Run ${runId} succeeded`,
-          outcome: "completed" as const,
+          message: `Run ${runId} cancelled`,
+          outcome: "cancelled" as const,
           runId,
         })
       );
       const stopRun = vi.fn(() =>
         Promise.resolve({
-          kind: "requested" as const,
-          message: `Stopping run ${runId}`,
+          kind: "unsupported" as const,
+          message: `Run ${runId} cannot be stopped by this Migrate Server`,
           runId,
         })
       );
@@ -1778,11 +2048,42 @@ describe("MigrationTuiApp", () => {
           )
         ).toBe(true);
 
+        act(() => setup.mockInput.pressKey("l"));
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("WARNING") &&
+              frame.includes(`Run ${runId} cancelled`)
+            );
+          })
+        ).toBe(true);
+        act(() => setup.mockInput.pressEscape());
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("x Stop run")
+          )
+        ).toBe(true);
+
         act(() => setup.mockInput.pressKey("x"));
         expect(
           await settle(setup.renderOnce, () => stopRun.mock.calls.length > 0)
         ).toBe(true);
         expect(stopRun).toHaveBeenCalledWith(runId);
+
+        act(() => setup.mockInput.pressKey("l"));
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("WARNING") &&
+              frame.includes(
+                `Run ${runId} cannot be stopped by this Migrate Server`
+              )
+            );
+          })
+        ).toBe(true);
+        act(() => setup.mockInput.pressEscape());
 
         act(() => setup.mockInput.pressKey("v"));
         expect(

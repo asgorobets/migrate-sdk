@@ -1607,8 +1607,8 @@ export const MigrationDashboard = ({
         <text
           content={
             activeTab === "overview"
-              ? `↑↓ select · g ${wide ? "migrations/groups" : "view"} · ↵ ${wide ? "all actions" : "more"} · PgUp/PgDn details`
-              : `↑↓ select · g ${wide ? "migrations/groups" : "view"} · ↵ ${wide ? "all actions" : "more"}`
+              ? `↑↓ select · g ${wide ? "migrations/groups" : "view"} · l activity · ↵ ${wide ? "all actions" : "more"} · PgUp/PgDn details`
+              : `↑↓ select · g ${wide ? "migrations/groups" : "view"} · l activity · ↵ ${wide ? "all actions" : "more"}`
           }
           fg={migrationColors.info}
           wrapMode="none"

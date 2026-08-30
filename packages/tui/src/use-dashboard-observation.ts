@@ -3,15 +3,13 @@ import type {
   MigrateDashboardResumeToken,
   MigrateDashboardRow,
 } from "migrate-sdk/protocol";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { MigrationTuiRuntime, MigrationTuiSnapshot } from "./runtime.ts";
 import {
-  type Dispatch,
-  type SetStateAction,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from "react";
-import type { MigrationTuiRuntime } from "./runtime.ts";
+  observedRunActivity,
+  type SessionActivityInput,
+  type SessionRunActivitySnapshot,
+} from "./session-activity.ts";
 
 interface DashboardObservationState {
   readonly after?: MigrateDashboardResumeToken | undefined;
@@ -21,11 +19,12 @@ interface DashboardObservationState {
 interface UseDashboardObservationOptions {
   readonly clearSourceScanStatuses: () => void;
   readonly initialRows?: readonly MigrateDashboardRow[] | undefined;
+  readonly recordActivity: (activity: SessionActivityInput) => void;
   readonly recoveryNotice?: string | undefined;
   readonly runtime: MigrationTuiRuntime;
-  readonly setBusy: Dispatch<SetStateAction<string>>;
-  readonly setError: Dispatch<SetStateAction<string | null>>;
-  readonly setNotice: Dispatch<SetStateAction<string | null>>;
+  readonly setBusy: (message: string) => void;
+  readonly setError: (message: string | null) => void;
+  readonly setNotice: (message: string | null) => void;
 }
 
 interface DashboardObservation {
@@ -40,6 +39,7 @@ const errorMessage = (cause: unknown): string =>
 export const useDashboardObservation = ({
   clearSourceScanStatuses,
   initialRows,
+  recordActivity,
   recoveryNotice,
   runtime,
   setBusy,
@@ -54,8 +54,28 @@ export const useDashboardObservation = ({
   const generationRef = useRef(0);
   const observationPromiseRef = useRef<Promise<void> | undefined>(undefined);
   const refreshRequestRef = useRef(0);
+  const observedRunSnapshotRef = useRef<SessionRunActivitySnapshot | undefined>(
+    undefined
+  );
+  const observedRuntimeRef = useRef(runtime);
   const resumeTokenRef = useRef<MigrateDashboardResumeToken | undefined>(
     undefined
+  );
+  const applySnapshot = useCallback(
+    (snapshot: MigrationTuiSnapshot) => {
+      for (const activity of observedRunActivity(
+        observedRunSnapshotRef.current,
+        snapshot
+      )) {
+        recordActivity(activity);
+      }
+
+      observedRunSnapshotRef.current = snapshot;
+      resumeTokenRef.current = snapshot.resumeToken;
+      setDurableRows(snapshot.rows);
+      setActiveRuns(snapshot.activeRuns);
+    },
+    [recordActivity]
   );
 
   const refresh = useCallback(
@@ -78,9 +98,7 @@ export const useDashboardObservation = ({
           return;
         }
 
-        resumeTokenRef.current = snapshot.resumeToken;
-        setDurableRows(snapshot.rows);
-        setActiveRuns(snapshot.activeRuns);
+        applySnapshot(snapshot);
         clearSourceScanStatuses();
         setNotice(nextNotice);
       } catch (cause) {
@@ -99,8 +117,22 @@ export const useDashboardObservation = ({
         }
       }
     },
-    [clearSourceScanStatuses, runtime, setBusy, setError, setNotice]
+    [
+      applySnapshot,
+      clearSourceScanStatuses,
+      runtime,
+      setBusy,
+      setError,
+      setNotice,
+    ]
   );
+
+  useEffect(() => {
+    if (observedRuntimeRef.current !== runtime) {
+      observedRuntimeRef.current = runtime;
+      observedRunSnapshotRef.current = undefined;
+    }
+  }, [runtime]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -114,9 +146,7 @@ export const useDashboardObservation = ({
             return;
           }
 
-          resumeTokenRef.current = snapshot.resumeToken;
-          setDurableRows(snapshot.rows);
-          setActiveRuns(snapshot.activeRuns);
+          applySnapshot(snapshot);
 
           if (!receivedSnapshot) {
             setBusy("");
@@ -151,7 +181,15 @@ export const useDashboardObservation = ({
         observationPromiseRef.current = undefined;
       }
     };
-  }, [observationState, recoveryNotice, runtime, setBusy, setError, setNotice]);
+  }, [
+    applySnapshot,
+    observationState,
+    recoveryNotice,
+    runtime,
+    setBusy,
+    setError,
+    setNotice,
+  ]);
 
   return { activeRuns, durableRows, refresh };
 };

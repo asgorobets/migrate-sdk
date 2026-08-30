@@ -11,6 +11,7 @@ import type {
   MigrateDashboardRow,
   MigratePreparedOperation,
   MigratePrepareOptions,
+  MigrateRunStopResult,
   MigrateSelection,
   MigrateSourceIdentityHistoryEntry,
   MigrateTarget,
@@ -37,6 +38,10 @@ import {
   migrationStatusLabel,
 } from "./components/migration-dashboard.tsx";
 import { SelectiveRunDialog } from "./components/selective-run-dialog.tsx";
+import {
+  SessionActivityView,
+  type SessionActivityViewMode,
+} from "./components/session-activity-view.tsx";
 import { Badge } from "./components/ui/badge.tsx";
 import { Button } from "./components/ui/button.tsx";
 import {
@@ -45,7 +50,17 @@ import {
   DialogDescription,
   DialogTitle,
 } from "./components/ui/dialog.tsx";
+import type { MigrationTuiExecutionResult } from "./execution.ts";
+import { nextListSelection } from "./list-navigation.ts";
 import type { MigrationTuiRuntime } from "./runtime.ts";
+import {
+  appendSessionActivity,
+  defaultSessionActivityExportPath,
+  emptySessionActivity,
+  exportSessionActivity,
+  type SessionActivityEntry,
+  type SessionActivityKind,
+} from "./session-activity.ts";
 import type { MigrationTuiShutdownController } from "./shutdown-controller.ts";
 import { useDashboardObservation } from "./use-dashboard-observation.ts";
 import { useMigrationMessages } from "./use-migration-messages.ts";
@@ -53,6 +68,9 @@ import { useSourceItemTotals } from "./use-source-item-totals.ts";
 
 type View =
   | "actions"
+  | "activity"
+  | "activity-detail"
+  | "activity-export"
   | "break-lock"
   | "confirm"
   | "dashboard"
@@ -65,6 +83,119 @@ interface MigrationTuiExecutionSettings {
   readonly rollback?: PipelineExecutionConcurrency;
   readonly sourceInventoryScan?: number;
 }
+
+type NoticeTone = "notice" | "status" | "warning";
+
+interface SessionActivityKeyHandlerInput {
+  readonly count: number;
+  readonly index: number;
+  readonly onBack: () => void;
+  readonly onExpand: () => void;
+  readonly onExport: () => void;
+  readonly onSelectionChange: (index: number, following: boolean) => void;
+}
+
+const handleSessionActivityKey = (
+  key: KeyEvent,
+  input: SessionActivityKeyHandlerInput
+): void => {
+  if (key.name === "escape") {
+    key.preventDefault();
+    key.stopPropagation();
+    input.onBack();
+    return;
+  }
+  if (key.name === "e" && input.count > 0) {
+    key.preventDefault();
+    key.stopPropagation();
+    input.onExport();
+    return;
+  }
+  if ((key.name === "return" || key.name === "linefeed") && input.count > 0) {
+    key.preventDefault();
+    key.stopPropagation();
+    input.onExpand();
+    return;
+  }
+
+  const nextIndex = nextListSelection(key.name, input.index, input.count);
+
+  if (nextIndex === undefined) {
+    return;
+  }
+
+  key.preventDefault();
+  key.stopPropagation();
+  input.onSelectionChange(
+    nextIndex,
+    nextIndex === Math.max(0, input.count - 1)
+  );
+};
+
+const handleSessionActivityExportKey = (
+  key: KeyEvent,
+  inputReady: boolean,
+  onCancel: () => void,
+  onSave: () => void
+): void => {
+  if (!inputReady) {
+    return;
+  }
+
+  if (key.name === "escape") {
+    key.preventDefault();
+    key.stopPropagation();
+    onCancel();
+  } else if (key.ctrl && key.name === "s") {
+    key.preventDefault();
+    key.stopPropagation();
+    onSave();
+  }
+};
+
+const isSessionActivityView = (view: View): view is SessionActivityViewMode =>
+  view === "activity" ||
+  view === "activity-detail" ||
+  view === "activity-export";
+
+const stopResultPresentation = {
+  "not-running": { activityKind: "status", noticeTone: "status" },
+  requested: { activityKind: "notice", noticeTone: "notice" },
+  unsupported: { activityKind: "warning", noticeTone: "warning" },
+} as const satisfies Record<
+  MigrateRunStopResult["kind"],
+  {
+    readonly activityKind: SessionActivityKind;
+    readonly noticeTone: NoticeTone;
+  }
+>;
+
+const noticeColor = (tone: NoticeTone): string => {
+  switch (tone) {
+    case "notice":
+      return colors.success;
+    case "status":
+      return colors.info;
+    case "warning":
+      return colors.warning;
+    default: {
+      const unhandled: never = tone;
+      return unhandled;
+    }
+  }
+};
+
+const runObservationResultPresentation = {
+  cancelled: { activityKind: "warning", noticeTone: "warning" },
+  completed: { activityKind: "notice", noticeTone: "notice" },
+  detached: { activityKind: "status", noticeTone: "status" },
+} as const satisfies Record<
+  MigrationTuiExecutionResult["outcome"],
+  {
+    readonly activityKind: SessionActivityKind;
+    readonly noticeTone: NoticeTone;
+  }
+>;
 
 const pipelineConcurrencyDraft = (
   concurrency: PipelineExecutionConcurrency | undefined
@@ -559,11 +690,91 @@ export const MigrationTuiApp = ({
     useState<MigrateDashboardRow | null>(null);
   const [detailTab, setDetailTab] = useState<MigrationDetailTab>("overview");
   const [messageIndex, setMessageIndex] = useState(0);
-  const [busy, setBusy] = useState(
+  const [busy, setBusyState] = useState(
     initialRows === undefined ? "Loading status…" : ""
   );
-  const [notice, setNotice] = useState<string | null>(recoveryNotice ?? null);
-  const [error, setError] = useState<string | null>(null);
+  const [notice, setNoticeState] = useState<string | null>(
+    recoveryNotice ?? null
+  );
+  const [noticeTone, setNoticeTone] = useState<NoticeTone>("notice");
+  const [error, setErrorState] = useState<string | null>(null);
+  const [activity, setActivity] = useState(emptySessionActivity);
+  const [activityIndex, setActivityIndex] = useState(0);
+  const [activityDetailEntry, setActivityDetailEntry] =
+    useState<SessionActivityEntry | null>(null);
+  const [activityExportPath, setActivityExportPath] = useState("");
+  const [activityExportError, setActivityExportError] = useState<
+    string | undefined
+  >();
+  const [activityExportInputReady, setActivityExportInputReady] =
+    useState(false);
+  const [activityExportSaving, setActivityExportSaving] = useState(false);
+  const activityFollowingRef = useRef(true);
+  const activityOmittedRef = useRef(0);
+  const sourceItemTotalsActivityErrorRef = useRef<string | null>(null);
+  const appendActivity = useCallback(
+    (input: Parameters<typeof appendSessionActivity>[1]) =>
+      setActivity((current) => appendSessionActivity(current, input)),
+    []
+  );
+  const setBusy = useCallback(
+    (message: string) => {
+      setBusyState(message);
+      appendActivity({ kind: "status", message });
+    },
+    [appendActivity]
+  );
+  const setNotice = useCallback(
+    (message: string | null) => {
+      setNoticeState(message);
+      if (message !== null) {
+        setNoticeTone("notice");
+        appendActivity({ kind: "notice", message });
+      }
+    },
+    [appendActivity]
+  );
+  const setWarning = useCallback(
+    (message: string) => {
+      setNoticeState(message);
+      setNoticeTone("warning");
+      appendActivity({ kind: "warning", message });
+    },
+    [appendActivity]
+  );
+  const setStopResult = useCallback(
+    (result: MigrateRunStopResult) => {
+      const presentation = stopResultPresentation[result.kind];
+      setNoticeState(result.message);
+      setNoticeTone(presentation.noticeTone);
+      appendActivity({
+        kind: presentation.activityKind,
+        message: result.message,
+      });
+    },
+    [appendActivity]
+  );
+  const setRunObservationResult = useCallback(
+    (result: MigrationTuiExecutionResult) => {
+      const presentation = runObservationResultPresentation[result.outcome];
+      setNoticeState(result.message);
+      setNoticeTone(presentation.noticeTone);
+      appendActivity({
+        kind: presentation.activityKind,
+        message: result.message,
+      });
+    },
+    [appendActivity]
+  );
+  const setError = useCallback(
+    (message: string | null) => {
+      setErrorState(message);
+      if (message !== null) {
+        appendActivity({ kind: "error", message });
+      }
+    },
+    [appendActivity]
+  );
   const [selectiveTarget, setSelectiveTarget] = useState<Extract<
     MigrateTarget,
     { readonly kind: "migration" }
@@ -603,6 +814,7 @@ export const MigrationTuiApp = ({
   const { activeRuns, durableRows, refresh } = useDashboardObservation({
     clearSourceScanStatuses,
     initialRows,
+    recordActivity: appendActivity,
     recoveryNotice,
     runtime,
     setBusy,
@@ -789,7 +1001,13 @@ export const MigrationTuiApp = ({
         setBusy("");
       }
     },
-    [executionSettings.sourceInventoryScan, runtime]
+    [
+      executionSettings.sourceInventoryScan,
+      runtime,
+      setBusy,
+      setError,
+      setNotice,
+    ]
   );
 
   const openMessages = useCallback(() => {
@@ -798,21 +1016,27 @@ export const MigrationTuiApp = ({
     setDetailTab("messages");
   }, []);
 
-  const openBreakLock = useCallback((rowOverride?: MigrateDashboardRow) => {
-    const row = rowOverride ?? dashboardStateRef.current.selectedRows[0];
+  const openBreakLock = useCallback(
+    (rowOverride?: MigrateDashboardRow) => {
+      const row = rowOverride ?? dashboardStateRef.current.selectedRows[0];
 
-    if (row?.status?.lock == null) {
-      return;
-    }
+      if (row?.status?.lock == null) {
+        return;
+      }
 
-    setError(null);
-    setPendingLockRow(row);
-    setView("break-lock");
-  }, []);
+      setError(null);
+      setPendingLockRow(row);
+      setView("break-lock");
+    },
+    [setError]
+  );
 
-  const startTask = useCallback((task: Promise<unknown>) => {
-    task.catch((cause: unknown) => setError(errorMessage(cause)));
-  }, []);
+  const startTask = useCallback(
+    (task: Promise<unknown>) => {
+      task.catch((cause: unknown) => setError(errorMessage(cause)));
+    },
+    [setError]
+  );
 
   const refreshAfterExecutionFailure = useCallback(
     async (cause: unknown) => {
@@ -823,7 +1047,7 @@ export const MigrationTuiApp = ({
         setError(executionError);
       }
     },
-    [lifecycle, refresh]
+    [lifecycle, refresh, setError]
   );
 
   const executeOperation = useCallback(
@@ -861,7 +1085,14 @@ export const MigrationTuiApp = ({
         lifecycle.executionSettled();
       }
     },
-    [lifecycle, refreshAfterExecutionFailure, runtime]
+    [
+      lifecycle,
+      refreshAfterExecutionFailure,
+      runtime,
+      setBusy,
+      setError,
+      setNotice,
+    ]
   );
 
   const observeActiveRun = useCallback(
@@ -882,7 +1113,7 @@ export const MigrationTuiApp = ({
 
       try {
         const result = await runtime.observeRun(runId, {
-          onObservationWarning: setNotice,
+          onObservationWarning: setWarning,
           onProgressError: (cause) => {
             setError(`Unable to refresh live status: ${errorMessage(cause)}`);
           },
@@ -895,7 +1126,7 @@ export const MigrationTuiApp = ({
           return;
         }
 
-        setNotice(result.message);
+        setRunObservationResult(result);
       } catch (cause) {
         if (
           lifecycle.isExitRequested() ||
@@ -912,7 +1143,14 @@ export const MigrationTuiApp = ({
         }
       }
     },
-    [lifecycle, refreshAfterExecutionFailure, runtime]
+    [
+      lifecycle,
+      refreshAfterExecutionFailure,
+      runtime,
+      setError,
+      setRunObservationResult,
+      setWarning,
+    ]
   );
 
   const stopRun = useCallback(
@@ -923,14 +1161,14 @@ export const MigrationTuiApp = ({
 
       try {
         const result = await runtime.stopRun(runId);
-        setNotice(result.message);
+        setStopResult(result);
         setBusy("");
       } catch (cause) {
         setError(errorMessage(cause));
         setBusy("");
       }
     },
-    [runtime]
+    [runtime, setBusy, setError, setStopResult]
   );
 
   const prepareOperation = useCallback(
@@ -982,7 +1220,7 @@ export const MigrationTuiApp = ({
         setBusy("");
       }
     },
-    [executeOperation, executionSettings, lifecycle, runtime]
+    [executeOperation, executionSettings, lifecycle, runtime, setBusy, setError]
   );
 
   const openSelectiveRun = useCallback(
@@ -1029,7 +1267,7 @@ export const MigrationTuiApp = ({
           }
         });
     },
-    [runtime]
+    [runtime, setError]
   );
 
   const cancelSelectiveRun = useCallback(() => {
@@ -1250,7 +1488,7 @@ export const MigrationTuiApp = ({
     setExecutionSettingsInputReady(false);
     setNotice("Concurrency settings saved for this session");
     setView("actions");
-  }, [executionSettingsDrafts]);
+  }, [executionSettingsDrafts, setNotice]);
 
   const handleExecutionSettingsKey = useCallback(
     (key: KeyEvent) => {
@@ -1346,6 +1584,110 @@ export const MigrationTuiApp = ({
     [activeRuns, selectedRows, selectedTarget]
   );
 
+  const openActivity = useCallback(() => {
+    activityFollowingRef.current = true;
+    setActivityDetailEntry(null);
+    setActivityIndex(Math.max(0, activity.entries.length - 1));
+    setView("activity");
+  }, [activity.entries.length]);
+
+  const closeActivityDetail = useCallback(() => {
+    setActivityDetailEntry(null);
+    setView("activity");
+  }, []);
+
+  const openActivityExport = useCallback(() => {
+    setActivityExportPath(defaultSessionActivityExportPath());
+    setActivityExportError(undefined);
+    setActivityExportInputReady(false);
+    setActivityExportSaving(false);
+    setView("activity-export");
+  }, []);
+
+  const cancelActivityExport = useCallback(() => {
+    setActivityExportError(undefined);
+    setActivityExportInputReady(false);
+    setActivityExportSaving(false);
+    setView("activity");
+  }, []);
+
+  const saveActivityExport = useCallback(async () => {
+    if (activityExportSaving) {
+      return;
+    }
+
+    setActivityExportError(undefined);
+    setActivityExportSaving(true);
+
+    try {
+      const outputPath = await exportSessionActivity(
+        activity.entries,
+        activityExportPath
+      );
+      setActivityExportInputReady(false);
+      setView("activity");
+      setNotice(
+        `Exported ${activity.entries.length} session ${activity.entries.length === 1 ? "event" : "events"} to ${outputPath}`
+      );
+    } catch (cause) {
+      const message = errorMessage(cause);
+      setActivityExportError(message);
+      appendActivity({ kind: "error", message });
+    } finally {
+      setActivityExportSaving(false);
+    }
+  }, [
+    activity.entries,
+    activityExportPath,
+    activityExportSaving,
+    appendActivity,
+    setNotice,
+  ]);
+
+  const handleActivityKey = useCallback(
+    (key: KeyEvent) => {
+      handleSessionActivityKey(key, {
+        count: activity.entries.length,
+        index: activityIndex,
+        onBack: () => setView("dashboard"),
+        onExpand: () => {
+          const entry = activity.entries[activityIndex];
+
+          if (entry === undefined) {
+            return;
+          }
+
+          activityFollowingRef.current = false;
+          setActivityDetailEntry(entry);
+          setView("activity-detail");
+        },
+        onExport: openActivityExport,
+        onSelectionChange: (index, following) => {
+          activityFollowingRef.current = following;
+          setActivityIndex(index);
+        },
+      });
+    },
+    [activity.entries, activityIndex, openActivityExport]
+  );
+
+  const handleActivityExportKey = useCallback(
+    (key: KeyEvent) => {
+      handleSessionActivityExportKey(
+        key,
+        activityExportInputReady,
+        cancelActivityExport,
+        () => startTask(saveActivityExport())
+      );
+    },
+    [
+      activityExportInputReady,
+      cancelActivityExport,
+      saveActivityExport,
+      startTask,
+    ]
+  );
+
   useEffect(() => {
     const runId = selectedActiveRun?.runId;
 
@@ -1382,6 +1724,42 @@ export const MigrationTuiApp = ({
     const timer = setTimeout(() => setExecutionSettingsInputReady(true), 100);
     return () => clearTimeout(timer);
   }, [view]);
+
+  useEffect(() => {
+    if (view !== "activity-export") {
+      return;
+    }
+
+    const timer = setTimeout(() => setActivityExportInputReady(true), 100);
+    return () => clearTimeout(timer);
+  }, [view]);
+
+  useEffect(() => {
+    const previousOmitted = activityOmittedRef.current;
+    const omittedDelta = Math.max(0, activity.omitted - previousOmitted);
+    activityOmittedRef.current = activity.omitted;
+    const entries = activity.entries;
+    setActivityIndex((current) => {
+      if (activityFollowingRef.current) {
+        return Math.max(0, entries.length - 1);
+      }
+
+      return Math.min(
+        Math.max(0, current - omittedDelta),
+        Math.max(0, entries.length - 1)
+      );
+    });
+  }, [activity.entries, activity.omitted]);
+
+  useEffect(() => {
+    if (
+      sourceItemTotalsError !== null &&
+      sourceItemTotalsError !== sourceItemTotalsActivityErrorRef.current
+    ) {
+      appendActivity({ kind: "error", message: sourceItemTotalsError });
+    }
+    sourceItemTotalsActivityErrorRef.current = sourceItemTotalsError;
+  }, [appendActivity, sourceItemTotalsError]);
 
   useEffect(() => {
     if (selectedTarget !== undefined) {
@@ -1429,7 +1807,7 @@ export const MigrationTuiApp = ({
       setError(errorMessage(cause));
       setBusy("");
     }
-  }, [pendingLockRow, refreshDashboard, runtime]);
+  }, [pendingLockRow, refreshDashboard, runtime, setBusy, setError]);
 
   const handleBreakLockKey = useCallback(
     (key: KeyEvent) => {
@@ -1560,7 +1938,7 @@ export const MigrationTuiApp = ({
       setError(errorMessage(cause));
       setBusy("");
     }
-  }, [lifecycle]);
+  }, [lifecycle, setBusy, setError]);
 
   const changeListTab = useCallback(
     (nextTab: MigrationListTab) => {
@@ -1629,20 +2007,11 @@ export const MigrationTuiApp = ({
       return true;
     }
 
-    let nextIndex: number | undefined;
-    if (key.name === "up" || key.name === "k") {
-      nextIndex = state.selectedIndex - 1;
-    } else if (key.name === "down" || key.name === "j") {
-      nextIndex = state.selectedIndex + 1;
-    } else if (key.name === "pageup") {
-      nextIndex = state.selectedIndex - 10;
-    } else if (key.name === "pagedown") {
-      nextIndex = state.selectedIndex + 10;
-    } else if (key.name === "home") {
-      nextIndex = 0;
-    } else if (key.name === "end") {
-      nextIndex = state.count - 1;
-    }
+    const nextIndex = nextListSelection(
+      key.name,
+      state.selectedIndex,
+      state.count
+    );
 
     if (nextIndex === undefined) {
       return false;
@@ -1650,9 +2019,7 @@ export const MigrationTuiApp = ({
 
     key.preventDefault();
     key.stopPropagation();
-    setMessageIndex(
-      Math.min(Math.max(0, nextIndex), Math.max(0, state.count - 1))
-    );
+    setMessageIndex(nextIndex);
     return true;
   }, []);
 
@@ -1671,6 +2038,10 @@ export const MigrationTuiApp = ({
         key.name === "escape")
     ) {
       handleConfirmationKey(key);
+    } else if (view === "dashboard" && key.name === "l") {
+      key.preventDefault();
+      key.stopPropagation();
+      openActivity();
     } else if (
       view === "dashboard" &&
       detailTab === "messages" &&
@@ -1681,12 +2052,44 @@ export const MigrationTuiApp = ({
       handleExecutionSettingsKey(key);
     } else if (view === "selective-run") {
       handleSelectiveRunKey(key);
+    } else if (view === "activity-export") {
+      handleActivityExportKey(key);
+    } else if (view === "activity" && key.name !== "q") {
+      handleActivityKey(key);
     } else if (key.name === "q") {
       startTask(requestExit());
     } else if (view === "dashboard" && detailTab === "overview") {
       handleOverviewKey(key);
     }
   });
+
+  if (isSessionActivityView(view)) {
+    return (
+      <SessionActivityView
+        activity={activity}
+        detailEntry={activityDetailEntry}
+        environmentLabel={runtime.environmentLabel}
+        {...(activityExportError === undefined
+          ? {}
+          : { exportError: activityExportError })}
+        exportInputReady={activityExportInputReady}
+        exportPath={activityExportPath}
+        exportSaving={activityExportSaving}
+        height={dimensions.height}
+        mode={view}
+        onCancelExport={cancelActivityExport}
+        onCloseDetail={closeActivityDetail}
+        onExport={() => startTask(saveActivityExport())}
+        onExportKeyDown={handleActivityExportKey}
+        onExportPathChange={(path) => {
+          setActivityExportError(undefined);
+          setActivityExportPath(path);
+        }}
+        selectedIndex={activityIndex}
+        width={dimensions.width}
+      />
+    );
+  }
 
   if (selectedRow === undefined) {
     return (
@@ -1822,7 +2225,7 @@ export const MigrationTuiApp = ({
           <text fg={colors.danger}>{displayedError}</text>
         )}
         {displayedError !== null || notice === null ? null : (
-          <text fg={colors.success}>{notice}</text>
+          <text fg={noticeColor(noticeTone)}>{notice}</text>
         )}
       </box>
       {view === "confirm" && pendingOperation !== null ? (

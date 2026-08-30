@@ -180,6 +180,36 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
   --strict \
   --format text >"${ARTIFACT_DIR}/compact.txt"
 
+"${PILOTTY_BIN}" resize -s "${SESSION}" 120 30 >/dev/null
+"${PILOTTY_BIN}" key -s "${SESSION}" l >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "Session activity" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/session-activity.txt"
+rg -q "↵ expand · e export JSONL · esc back" \
+  "${ARTIFACT_DIR}/session-activity.txt"
+"${PILOTTY_BIN}" key -s "${SESSION}" Enter >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "↵ Close" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/session-activity-detail.txt"
+"${PILOTTY_BIN}" key -s "${SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" resize -s "${SESSION}" 72 24 >/dev/null
+sleep 0.2
+"${PILOTTY_BIN}" key -s "${SESSION}" e >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "Export session activity" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/session-activity-export-compact.txt"
+"${PILOTTY_BIN}" key -s "${SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" key -s "${SESSION}" Escape >/dev/null
+
 "${PILOTTY_BIN}" spawn \
   --name "${BUTTON_SESSION}" \
   --cwd "${PACKAGE_DIR}" \

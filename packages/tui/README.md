@@ -152,7 +152,8 @@ Concurrency settings and `g` to switch
 between migration and group tabs, `m` for errors and messages, `r` to run the selected migration or group,
 `e` to run selected source identities, `f` to retry failed items, `b` to
 rollback, `s` to run a Source Inventory Scan for the current selection and its
-required dependencies, `R` to reload status, and `q` to quit. When applicable, `t`
+required dependencies, `l` to open Session activity, `R` to reload status, and
+`q` to quit. When applicable, `t`
 retries skipped items, `v` focuses a running migration, `x` requests a safe stop
 for a run owned by the connected Migrate Server, and `u` opens
 the guarded break-lock confirmation. Use
@@ -162,6 +163,15 @@ message highlighted; use the arrow keys to move through it and `Enter` to open
 the complete message and structured details. For non-interactive inspection or
 export, use `migrate messages <migration>` or
 `migrate messages --all --json` from the same project.
+
+Session activity keeps the statuses, notices, warnings, and errors observed by
+the current TUI session in chronological order, including active-run lifecycle
+changes discovered through dashboard observation. Use the arrow keys, `j`/`k`,
+Page Up and Page Down, or Home and End to navigate. Press `Enter` to read and
+scroll the complete selected event, or `e` to export the retained entries as
+JSON Lines without replacing an existing file. Session activity is limited to
+the current TUI process; durable Migration Messages remain available through
+the Messages tab and CLI after the TUI closes.
 
 Runs start directly when their dependencies are ready. A group concurrency
 override controls item processing within each migration; migration definitions
