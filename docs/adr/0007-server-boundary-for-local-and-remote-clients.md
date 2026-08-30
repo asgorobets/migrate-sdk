@@ -78,11 +78,12 @@ without requiring customers to rewrite migrations for Bun.
 Local server code is immutable for the lifetime of a server process. Builds may
 provide `MIGRATE_SERVER_BUILD_ID`; it participates in local endpoint identity,
 so a changed build starts a new server generation while the previous generation
-drains active Migration Runs. Development reload integrations use the same
-generation boundary. They do not replace migration code underneath an active
-run. Because run discovery, observation, and cancellation are durable, a client
-connected to the new generation can still operate runs started by the previous
-generation.
+drains active Migration Runs. This identifies a packaged artifact; it is not a
+development revision and does not change when a customer edits local source.
+Local development instead uses the stable supervisor and immutable worker model
+defined in [ADR 0008](./0008-local-source-generations.md). That supervisor keeps
+run ownership explicit so a connected client can operate runs started by a
+draining source generation.
 
 Remote connections use the same logical Migrate Protocol:
 
