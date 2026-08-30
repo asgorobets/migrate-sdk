@@ -133,7 +133,7 @@ Next.js gets accurate invalidation because its bundler owns the import graph. Mi
 
 1. implement an explicit `Reload migration source` operation using immutable generations;
 2. add automatic watching once the loader can report the config's imported module set, with a broader project-source watch only as a documented fallback;
-3. keep build-artifact identity and local source-generation identity separate in the protocol and diagnostics.
+3. keep build-artifact identity and Local Source Generation identity separate in local connection state and diagnostics.
 
 ## Primary sources
 

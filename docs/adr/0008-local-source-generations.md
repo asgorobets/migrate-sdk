@@ -73,6 +73,35 @@ Migrate Protocol or the core SDK. Remote Migrate Servers use the same protocol,
 but their deployment platform is responsible for immutable deployment routing
 and source rollout.
 
+### Local development control
+
+The stable local IPC connection exposes two separate interfaces:
+
+- the complete `MigrateClient`, whose operations and schemas are identical for
+  local and remote Migrate Servers; and
+- Node-only local development control for reloading source and observing Local
+  Source Generation lifecycle events.
+
+The development control is part of the local Migrate Connection host, not an
+optional Migrate Server capability. It may use a separate local-only Effect RPC
+group on the same IPC transport, but it is not part of the versioned Migrate
+Protocol and is never required from an HTTPS or SSH server.
+
+The control interface provides one reload operation and a lifecycle event
+stream. Both automatic source watching and an explicit TUI reload action invoke
+the same reload operation. Its events distinguish:
+
+- a candidate generation beginning to load;
+- a candidate becoming the current Local Source Generation; and
+- a candidate failing, with an operator-facing diagnostic while the previous
+  generation remains current.
+
+After an activation event, the TUI invalidates registry-derived client state
+and restarts its dashboard observation through the unchanged `MigrateClient`.
+The TUI records activation or failure in its activity history. It does not
+restart, replace its Migrate Connection, or infer successful reload from a file
+event alone.
+
 ## Identity model
 
 The following identities remain distinct:
