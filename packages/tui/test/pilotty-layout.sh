@@ -494,7 +494,7 @@ sleep 0.2
   "Status reloaded" >/dev/null
 "${PILOTTY_BIN}" key -s "${LARGE_HIERARCHY_SESSION}" b >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LARGE_HIERARCHY_SESSION}" -t 5000 \
-  "↑↓ scroll · y rollback · n/esc cancel" >/dev/null
+  "↑↓ scroll · f force rollback · y rollback · n/esc cancel" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${LARGE_HIERARCHY_SESSION}" \
   --settle 150 \
   --strict \
@@ -742,7 +742,7 @@ assert_contains \
   "rollback hierarchy uses detail-panel dependency and status vocabulary"
 assert_contains \
   "${ARTIFACT_DIR}/rollback-confirmation.txt" \
-  "y rollback · n/esc cancel" \
+  "f force rollback · y rollback · n/esc cancel" \
   "rollback controls remain readable"
 assert_contains \
   "${ARTIFACT_DIR}/button-dashboard-after-run.txt" \
@@ -962,7 +962,7 @@ assert_contains \
   "rollback hierarchy preserves transitive dependency depth"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy.txt" \
-  "↑↓ scroll · y rollback · n/esc cancel" \
+  "↑↓ scroll · f force rollback · y rollback · n/esc cancel" \
   "large rollback hierarchy keeps its controls visible"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy-scrolled.txt" \
@@ -970,7 +970,7 @@ assert_contains \
   "large rollback hierarchy scrolls to its final entry"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy-scrolled.txt" \
-  "↑↓ scroll · y rollback · n/esc cancel" \
+  "↑↓ scroll · f force rollback · y rollback · n/esc cancel" \
   "large rollback hierarchy keeps controls fixed while scrolling"
 assert_contains \
   "${ARTIFACT_DIR}/selective-run-history.txt" \
