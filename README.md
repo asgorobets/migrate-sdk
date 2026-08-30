@@ -138,9 +138,8 @@ Built applications should set `MIGRATE_SERVER_BUILD_ID` to their immutable
 build identifier. A changed value starts a new server generation for new
 operations without replacing migration code underneath active runs from the
 previous generation. This value identifies a packaged artifact, not an edit to
-local source. Local development source revisions use supervised Node workers so
-the TUI can stay connected while existing runs remain pinned to the code that
-started them; see [ADR 0008](./docs/adr/0008-local-source-generations.md).
+local source. [ADR 0008](./docs/adr/0008-local-source-generations.md) defines
+the separate local source-generation model.
 
 ## Repository development
 
