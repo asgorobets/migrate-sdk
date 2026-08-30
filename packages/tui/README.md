@@ -41,11 +41,11 @@ point.
 
 Set `MIGRATE_SERVER_BUILD_ID` to the immutable identifier of the application
 build that contains the migration configuration. A changed build ID selects a
-new local Node server generation; the previous generation keeps running until
+separate local Node server endpoint; the previous endpoint keeps running until
 its active Migration Runs finish. This is deployment-skew identity, not a value
 to update after editing `migrate.config.ts`, and it does not reload local
 source. [`ADR 0008`](../../docs/adr/0008-local-source-generations.md) defines
-the separate local source-generation model. Without a build ID, local clients
+the separate Local Source Generation model. Without a build ID, local clients
 continue to reuse the server identified by the config path and Migrate SDK
 version.
 

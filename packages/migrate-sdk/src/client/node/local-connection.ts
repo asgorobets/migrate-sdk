@@ -23,8 +23,8 @@ const defaultStartupTimeoutMs = 10_000;
 export interface LocalMigrateConnectionInput {
   /**
    * Identifies the immutable application build loaded by the local server.
-   * Changing it starts a new server generation while the previous generation
-   * drains any active Migration Runs.
+   * Changing it selects a separate local server endpoint while the previous
+   * endpoint drains any active Migration Runs.
    */
   readonly buildId?: string;
   readonly configPath?: string;

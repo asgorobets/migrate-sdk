@@ -135,11 +135,11 @@ look up durable item state directly instead of traversing the source cursor.
 
 Local CLI and TUI clients reuse a Node Migrate Server for the selected config.
 Built applications should set `MIGRATE_SERVER_BUILD_ID` to their immutable
-build identifier. A changed value starts a new server generation for new
-operations without replacing migration code underneath active runs from the
-previous generation. This value identifies a packaged artifact, not an edit to
+build identifier. A changed value selects a separate local server endpoint for
+new operations without replacing migration code underneath active runs on the
+previous endpoint. This value identifies a packaged artifact, not an edit to
 local source. [ADR 0008](./docs/adr/0008-local-source-generations.md) defines
-the separate local source-generation model.
+the separate Local Source Generation model.
 
 ## Repository development
 

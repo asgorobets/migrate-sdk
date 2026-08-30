@@ -42,7 +42,7 @@ describe("local Migrate Server endpoint", () => {
     expect(endpoint).toMatch(WINDOWS_PIPE_NAME);
   });
 
-  it("uses the build id to isolate immutable server generations", () => {
+  it("uses the build id to isolate immutable application builds", () => {
     const input = { configPath: "migrate.config.ts", cwd: "/workspace" };
     const environment = {
       platform: "darwin" as const,

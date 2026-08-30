@@ -6,7 +6,7 @@ identity and lifecycle from an immutable application build.
 
 ## Status
 
-Accepted
+Accepted; implementation pending
 
 ## Context
 
@@ -81,9 +81,9 @@ The following identities remain distinct:
 | --- | --- | --- |
 | Migrate Protocol version | Wire compatibility | SDK release policy |
 | Migrate SDK version | Client/server package compatibility | Published package version |
-| Build id | Immutable packaged or deployed artifact | One artifact |
-| Local source generation | Successfully loaded local source revision | One Node worker |
-| Registry id | Identity of the registered migration catalog | Registry definition |
+| Migrate Server Build Id | Immutable packaged or deployed artifact | One artifact |
+| Local Source Generation | Successfully loaded local source revision | One Node worker |
+| Migration Definition Registry Id | Identity of the registered migration catalog | Registry definition |
 | Migration Run id | Durable execution identity and routing key | One run and its history |
 
 The local endpoint identity continues to include the optional build id. Source

@@ -11,7 +11,7 @@ Next.js development HMR and Vercel Skew Protection solve different problems:
 - `next dev` keeps a development session alive while a compiler-owned module graph changes. It applies ordinary source changes to the running development server where possible and restarts a supervised child process for changes that require a clean process.
 - Vercel Skew Protection routes framework-managed requests from an already-loaded client to the immutable deployment that originally served it. It does not hot-swap production code.
 
-The useful model for Migrate SDK is therefore not “use a build ID for every source edit.” Packaged deployments need an immutable build identity. Local development needs a stable supervisor plus reloadable, immutable server generations. A run remains pinned to the generation that started it, while new plans and runs use the latest successfully loaded generation.
+The useful model for Migrate SDK is therefore not “use a build ID for every source edit.” Packaged deployments need an immutable build identity. Local development needs a stable supervisor plus reloadable, immutable Local Source Generations. A run remains pinned to the generation that started it, while new plans and runs use the latest successfully loaded generation.
 
 ## How Next.js development mode works
 

@@ -235,6 +235,15 @@ The versioned, schema-backed contract of requests, results, events, and errors e
 **Migrate Connection**:
 The configured path by which a Migrate Client reaches a Migrate Server. It selects a server target and access method, not an Execution Adapter.
 
+**Migrate Server Build Id**:
+The immutable identity of a packaged or deployed Migrate Server artifact. It does not identify edits to local migration source.
+
+**Local Migrate Supervisor**:
+A stable local Migrate Connection host that keeps one logical Migrate Server reachable while Local Source Generations change or drain.
+
+**Local Source Generation**:
+An immutable, successfully loaded revision of a local migration configuration. New operations use the current generation while active Migration Runs remain associated with the generation that started them.
+
 **Migrate Operation Selection**:
 The serializable scope of a run or rollback operation: all registered migration definitions, a non-empty explicit definition set, or one migration definition group.
 

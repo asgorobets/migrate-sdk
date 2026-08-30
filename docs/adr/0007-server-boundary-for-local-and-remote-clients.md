@@ -10,7 +10,8 @@ destination, or workflow-provider access.
 
 ## Status
 
-Accepted
+Accepted; local development process topology amended by
+[ADR 0008](./0008-local-source-generations.md)
 
 ## Context
 
@@ -67,23 +68,26 @@ version, and SDK version so that the client can detect incompatibility before
 offering an action. Every compatible Migrate Server implements the complete
 Migrate Protocol; customer-facing operations are not negotiated individually.
 
-The first local connection uses a Node Migrate Server process started by
-the TUI. The Bun renderer communicates with that process over a reconnectable
-local Effect RPC socket, while the
-Node process loads the same local configuration and SDK package that the CLI
-would load. The npm launcher remains responsible for locating and passing the
-user's Node executable. This preserves the existing Node authoring contract
-without requiring customers to rewrite migrations for Bun.
+The currently implemented local connection uses a Node Migrate Server process
+started by the TUI. The Bun renderer communicates with that process over a
+reconnectable local Effect RPC socket, while the Node process loads the same
+local configuration and SDK package that the CLI would load. The npm launcher
+remains responsible for locating and passing the user's Node executable. This
+preserves the existing Node authoring contract without requiring customers to
+rewrite migrations for Bun.
 
 Local server code is immutable for the lifetime of a server process. Builds may
 provide `MIGRATE_SERVER_BUILD_ID`; it participates in local endpoint identity,
-so a changed build starts a new server generation while the previous generation
-drains active Migration Runs. This identifies a packaged artifact; it is not a
-development revision and does not change when a customer edits local source.
-Local development instead uses the stable supervisor and immutable worker model
-defined in [ADR 0008](./0008-local-source-generations.md). That supervisor keeps
-run ownership explicit so a connected client can operate runs started by a
-draining source generation.
+so a changed build selects a separate local endpoint while the previous
+endpoint drains active Migration Runs. This identifies a packaged artifact; it
+is not a development revision and does not change when a customer edits local
+source.
+
+[ADR 0008](./0008-local-source-generations.md) accepts a replacement local
+development topology: a stable Local Migrate Supervisor will own the public IPC
+endpoint and route to immutable Local Source Generation workers. That topology
+is not implemented yet. Until it is, the local connection continues to use the
+single server process described above and does not reload edited source.
 
 Remote connections use the same logical Migrate Protocol:
 
