@@ -169,7 +169,7 @@ const loadConfiguredConfig = Effect.gen(function* () {
 
   if (serverUrl !== undefined) {
     return yield* failReportedCliMessage(
-      "--server is currently supported by migrate runs commands"
+      "--server is currently supported by migrate run, rollback, and runs commands"
     );
   }
 
