@@ -13,6 +13,7 @@ export type MigrationTuiActionView =
   | "execution-settings"
   | "messages"
   | "scan"
+  | "selective-rollback"
   | "selective-run"
   | "stop-run";
 
@@ -217,32 +218,42 @@ export const migrationTuiAvailableActions = (
   );
 
   if (rows.length > 0 && rows.every((row) => row.entry.hasRollback)) {
-    options.push(
-      {
-        action: "rollback",
-        description: isGroup
-          ? "Rollback every migration in this group"
-          : "Rollback this migration and affected dependents in safe order",
-        id: "rollback",
-        key: "b",
-        label: isGroup ? "Rollback group" : "Rollback",
-        primary: {
-          compactLabel: "b Rollback",
-          intent: "neutral",
-          label: isGroup ? "b Rollback group" : "b Rollback",
-          slot: "rollback",
-        },
-        shortcutLabel: "b rollback",
+    options.push({
+      action: "rollback",
+      description: isGroup
+        ? "Rollback every migration in this group"
+        : "Rollback this migration and affected dependents in safe order",
+      id: "rollback",
+      key: "b",
+      label: isGroup ? "Rollback group" : "Rollback",
+      primary: {
+        compactLabel: "b Rollback",
+        intent: "neutral",
+        label: isGroup ? "b Rollback group" : "b Rollback",
+        slot: "rollback",
       },
-      {
-        action: "run",
-        description: `Rollback destination items no longer present in the ${noun} source inventory`,
-        id: "rollback-orphans",
+      shortcutLabel: "b rollback",
+    });
+
+    if (!isGroup) {
+      options.push({
+        description:
+          "Rollback specific source identities, including identities from history",
+        id: "selective-rollback",
         key: "",
-        label: "Rollback orphans",
-        options: { rollbackOrphans: true },
-      }
-    );
+        label: "Rollback selected entries",
+        view: "selective-rollback",
+      });
+    }
+
+    options.push({
+      action: "run",
+      description: `Rollback destination items no longer present in the ${noun} source inventory`,
+      id: "rollback-orphans",
+      key: "",
+      label: "Rollback orphans",
+      options: { rollbackOrphans: true },
+    });
   }
 
   if (!isGroup && rows[0]?.status?.lock != null) {

@@ -45,6 +45,7 @@ const countLabel = (
 ): string => `${count} ${count === 1 ? singular : plural}`;
 
 export interface SelectiveRunDialogProps {
+  readonly action: "rollback" | "run";
   readonly definitionId: MigrationDefinitionId;
   readonly draft: string;
   readonly entries: readonly string[];
@@ -58,14 +59,15 @@ export interface SelectiveRunDialogProps {
   readonly historyLoading: boolean;
   readonly inputReady: boolean;
   readonly onCancel: () => void;
+  readonly onConfirm: () => void;
   readonly onDraftChange: (value: string) => void;
   readonly onKeyDown: (key: KeyEvent) => void;
-  readonly onRun: () => void;
   readonly onSubmit: (value: string) => void;
   readonly width: number;
 }
 
 export const SelectiveRunDialog = ({
+  action,
   definitionId,
   draft,
   entries,
@@ -78,7 +80,7 @@ export const SelectiveRunDialog = ({
   onCancel,
   onDraftChange,
   onKeyDown,
-  onRun,
+  onConfirm,
   onSubmit,
   width,
 }: SelectiveRunDialogProps) => {
@@ -105,6 +107,7 @@ export const SelectiveRunDialog = ({
     1,
     Math.min(16 + visibleEntries.length + historyRows, height - 4)
   );
+  const actionLabel = action === "rollback" ? "Rollback" : "Run";
 
   useEffect(() => {
     if (inputReady) {
@@ -143,11 +146,11 @@ export const SelectiveRunDialog = ({
             width: "100%",
           }}
         >
-          <DialogTitle content="Run selected entries" />
+          <DialogTitle content={`${actionLabel} selected entries`} />
           <Badge intent="neutral" label="SOURCE IDS" />
         </box>
         <DialogDescription
-          content={`${definitionId} · Run only the source identities below.`}
+          content={`${definitionId} · ${actionLabel} only the source identities below.`}
           wrapMode="none"
         />
         <box style={{ flexShrink: 0, height: 1, marginTop: 1 }}>
@@ -255,9 +258,9 @@ export const SelectiveRunDialog = ({
         >
           <Button
             disabled={entries.length === 0}
-            intent="primary"
-            label={`↵ Run ${countLabel(entries.length, "entry", "entries")}`}
-            onPress={onRun}
+            intent={action === "rollback" ? "warning" : "primary"}
+            label={`↵ ${actionLabel} ${countLabel(entries.length, "entry", "entries")}`}
+            onPress={onConfirm}
           />
           <Button intent="neutral" label="esc Cancel" onPress={onCancel} />
         </box>

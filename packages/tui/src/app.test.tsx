@@ -2930,7 +2930,7 @@ describe("MigrationTuiApp", () => {
             setup.captureCharFrame().includes("All actions · authors")
           )
         ).toBe(true);
-        for (let index = 0; index < 5; index += 1) {
+        for (let index = 0; index < 6; index += 1) {
           act(() => setup.mockInput.pressArrow("down"));
         }
         act(() => setup.mockInput.pressEnter());
@@ -2948,6 +2948,76 @@ describe("MigrationTuiApp", () => {
           },
           "run",
           expect.objectContaining({ rollbackOrphans: true })
+        );
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "prepares selected source identities for rollback before confirmation",
+    async () => {
+      const runtime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const prepare = vi.spyOn(runtime, "prepare");
+      const setup = await createTestRenderer({ height: 36, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("All actions · authors")
+          )
+        ).toBe(true);
+        for (let index = 0; index < 5; index += 1) {
+          act(() => setup.mockInput.pressArrow("down"));
+        }
+        act(() => setup.mockInput.pressEnter());
+
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Rollback selected entries")
+          )
+        ).toBe(true);
+        await act(async () => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 120));
+        });
+        await act(async () => setup.renderOnce());
+        act(() => setup.mockInput.pressKey(" "));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("1 selected")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressEnter());
+
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Confirm rollback")
+        );
+        expect(setup.captureCharFrame()).toContain("Confirm rollback");
+        expect(prepare).toHaveBeenCalledWith(
+          {
+            definitionIds: [toMigrationDefinitionId("authors")],
+            kind: "definitions",
+          },
+          "rollback",
+          expect.objectContaining({
+            sourceIdentities: expect.arrayContaining([expect.any(String)]),
+            withDependencies: false,
+          })
         );
       } finally {
         act(() => root.unmount());

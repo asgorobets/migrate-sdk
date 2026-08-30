@@ -76,6 +76,7 @@ type View =
   | "dashboard"
   | "execution-settings"
   | "message-detail"
+  | "selective-rollback"
   | "selective-run";
 
 interface MigrationTuiExecutionSettings {
@@ -707,6 +708,9 @@ export const MigrationTuiApp = ({
     useState<MigratePreparedOperation | null>(null);
   const [pendingLockRow, setPendingLockRow] =
     useState<MigrateDashboardRow | null>(null);
+  const [selectiveAction, setSelectiveAction] = useState<"rollback" | "run">(
+    "run"
+  );
   const [detailTab, setDetailTab] = useState<MigrationDetailTab>("overview");
   const [messageIndex, setMessageIndex] = useState(0);
   const [busy, setBusyState] = useState(
@@ -1245,14 +1249,15 @@ export const MigrationTuiApp = ({
     [executeOperation, executionSettings, lifecycle, runtime, setBusy, setError]
   );
 
-  const openSelectiveRun = useCallback(
-    (targetOverride?: MigrateTarget) => {
+  const openSelectiveEntries = useCallback(
+    (action: "rollback" | "run", targetOverride?: MigrateTarget) => {
       const target = targetOverride ?? dashboardStateRef.current.selectedTarget;
 
       if (target?.kind !== "migration") {
         return;
       }
 
+      setSelectiveAction(action);
       setSelectiveTarget(target);
       setSelectiveDraft("");
       setSelectiveFeedback(undefined);
@@ -1261,7 +1266,7 @@ export const MigrationTuiApp = ({
       setSelectiveHistoryLoading(true);
       setSelectiveInputReady(false);
       setError(null);
-      setView("selective-run");
+      setView(action === "rollback" ? "selective-rollback" : "selective-run");
       const requestId = selectiveHistoryRequestRef.current + 1;
       selectiveHistoryRequestRef.current = requestId;
 
@@ -1301,7 +1306,7 @@ export const MigrationTuiApp = ({
     setView("dashboard");
   }, []);
 
-  const runSelectiveEntries = useCallback(() => {
+  const confirmSelectiveEntries = useCallback(() => {
     const target = selectiveTarget;
 
     if (target === null) {
@@ -1318,12 +1323,23 @@ export const MigrationTuiApp = ({
 
     startTask(
       prepareOperation(
-        "run",
-        { sourceIdentities: selectiveEntries },
+        selectiveAction,
+        {
+          sourceIdentities: selectiveEntries,
+          ...(selectiveAction === "rollback"
+            ? { withDependencies: false }
+            : {}),
+        },
         selectionFromTarget(target)
       )
     );
-  }, [prepareOperation, selectiveEntries, selectiveTarget, startTask]);
+  }, [
+    prepareOperation,
+    selectiveAction,
+    selectiveEntries,
+    selectiveTarget,
+    startTask,
+  ]);
 
   const submitSelectiveEntry = useCallback(
     async (value: string) => {
@@ -1335,7 +1351,7 @@ export const MigrationTuiApp = ({
       }
 
       if (sourceIdentity === "") {
-        runSelectiveEntries();
+        confirmSelectiveEntries();
         return;
       }
 
@@ -1371,7 +1387,7 @@ export const MigrationTuiApp = ({
         });
       }
     },
-    [runSelectiveEntries, runtime, selectiveEntries, selectiveTarget]
+    [confirmSelectiveEntries, runtime, selectiveEntries, selectiveTarget]
   );
 
   const toggleSelectiveHistoryEntry = useCallback(() => {
@@ -1567,8 +1583,13 @@ export const MigrationTuiApp = ({
         return;
       }
 
-      if (option.view === "selective-run") {
-        openSelectiveRun();
+      if (
+        option.view === "selective-run" ||
+        option.view === "selective-rollback"
+      ) {
+        openSelectiveEntries(
+          option.view === "selective-rollback" ? "rollback" : "run"
+        );
         return;
       }
 
@@ -1585,7 +1606,7 @@ export const MigrationTuiApp = ({
       openBreakLock,
       openExecutionSettings,
       openMessages,
-      openSelectiveRun,
+      openSelectiveEntries,
       observeActiveRun,
       prepareOperation,
       scanSelectedSource,
@@ -1730,7 +1751,7 @@ export const MigrationTuiApp = ({
   }, [observeActiveRun, runtime, selectedActiveRun?.runId, startTask]);
 
   useEffect(() => {
-    if (view !== "selective-run") {
+    if (view !== "selective-run" && view !== "selective-rollback") {
       return;
     }
 
@@ -2077,7 +2098,7 @@ export const MigrationTuiApp = ({
       return;
     } else if (view === "execution-settings") {
       handleExecutionSettingsKey(key);
-    } else if (view === "selective-run") {
+    } else if (view === "selective-run" || view === "selective-rollback") {
       handleSelectiveRunKey(key);
     } else if (view === "activity-export") {
       handleActivityExportKey(key);
@@ -2353,8 +2374,10 @@ export const MigrationTuiApp = ({
           width={dimensions.width}
         />
       ) : null}
-      {view === "selective-run" && selectiveTarget !== null ? (
+      {(view === "selective-run" || view === "selective-rollback") &&
+      selectiveTarget !== null ? (
         <SelectiveRunDialog
+          action={selectiveAction}
           definitionId={selectiveTarget.definitionId}
           draft={selectiveDraft}
           entries={selectiveEntries}
@@ -2367,9 +2390,9 @@ export const MigrationTuiApp = ({
           historyLoading={selectiveHistoryLoading}
           inputReady={selectiveInputReady}
           onCancel={cancelSelectiveRun}
+          onConfirm={confirmSelectiveEntries}
           onDraftChange={setSelectiveDraft}
           onKeyDown={handleSelectiveRunKey}
-          onRun={runSelectiveEntries}
           onSubmit={submitSelectiveEntry}
           width={dimensions.width}
         />

@@ -69,6 +69,11 @@ describe("migration actions", () => {
           id: "rollback-orphans",
           options: { rollbackOrphans: true },
         }),
+        expect.objectContaining({
+          id: "selective-rollback",
+          label: "Rollback selected entries",
+          view: "selective-rollback",
+        }),
       ])
     );
     expect(migrationTuiPrimaryActions(actions)).toEqual([
