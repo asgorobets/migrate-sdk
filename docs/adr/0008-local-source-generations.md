@@ -56,11 +56,11 @@ The supervisor presents one logical Migrate Server. Its routing rules are:
 
 | Operation | Route |
 | --- | --- |
-| Registry, status, messages, source reads, and planning | Current generation |
+| Registry, migration catalog status, messages, source reads, and planning | Current generation |
 | Start | Current generation, with normal plan-fingerprint validation |
-| Observe and stop | Generation that owns the Migration Run id |
-| Active runs | Union of current and draining generations, deduplicated by Migration Run id |
-| Dashboard | Current registry projection plus the union of active runs |
+| Observe, stop, and focused run progress | Generation that owns the Migration Run id |
+| Active-run catalog | Union of generation-owned active-run projections, deduplicated by Migration Run id |
+| Dashboard | Current migration catalog rows plus the active-run catalog; the two projections need not come from the same generation |
 
 If source changes between `PrepareOperation` and `StartOperation`, the current
 generation plans the original request again. A changed plan fingerprint is
@@ -101,6 +101,35 @@ and restarts its dashboard observation through the unchanged `MigrateClient`.
 The TUI records activation or failure in its activity history. It does not
 restart, replace its Migrate Connection, or infer successful reload from a file
 event alone.
+
+### Cross-generation dashboard ownership
+
+The migration catalog and active-run catalog are separate read models. Migration
+catalog rows describe only the current Local Source Generation. The supervisor
+must not overwrite one of those rows with status read through an older
+generation, even when an active run from that generation uses the same Migration
+Definition Id.
+
+For every locally started run, the supervisor retains an internal association
+between its Migration Run Id and owning Local Source Generation. The active-run
+catalog is the union of those generation-owned projections. Its public entries
+remain normal `MigrateActiveRun` values; generation identity is connection-host
+routing state and does not enter the Migrate Protocol.
+
+The TUI renders active runs independently from migration catalog rows:
+
+- a matching current migration row may indicate that it participates in the
+  run, but its catalog status remains the current generation's status;
+- selecting the run obtains its progress and terminal state from `ObserveRun`,
+  routed to the owning generation; and
+- a run whose Migration Definition was removed from the current registry
+  remains visible in the active-run catalog by its stored definition ids until
+  it becomes terminal.
+
+This separation also covers a source edit that changes a Migration Store or
+other runtime Layer. Current catalog inspection uses the new Layer, while the
+old run view continues to use its owning generation. The supervisor never
+pretends that state from those two environments is one migration status.
 
 ## Identity model
 
