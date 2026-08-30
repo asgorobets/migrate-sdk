@@ -78,6 +78,7 @@ export interface MigrationCliRuntimeShape {
   ) => Effect.Effect<MigrationCliServerConnection, MigrationCliConnectionError>;
   readonly cwd: string;
   readonly interrupts?: MigrationCliInterruptController;
+  readonly migrateServerBuildId?: string;
   readonly migrateServerToken?: Redacted.Redacted<string>;
   readonly startAcknowledgementTimeoutMs?: number;
   readonly stdoutColumns?: number;
@@ -99,11 +100,16 @@ export class MigrationCliRuntime extends Service<
       const migrateServerToken = yield* Config.option(
         Config.redacted("MIGRATE_SERVER_TOKEN")
       );
+      const migrateServerBuildId = yield* Config.option(
+        Config.string("MIGRATE_SERVER_BUILD_ID")
+      );
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const terminal = yield* Terminal.Terminal;
       const forceColorValue = Option.getOrUndefined(forceColor);
       const migrateServerTokenValue = Option.getOrUndefined(migrateServerToken);
+      const migrateServerBuildIdValue =
+        Option.getOrUndefined(migrateServerBuildId);
       const stdoutColumns = process.stdout.columns;
       return {
         chooseRunObservationInterrupt: (runId, { stopRequested }) =>
@@ -192,6 +198,9 @@ export class MigrationCliRuntime extends Service<
         ...(migrateServerTokenValue === undefined
           ? {}
           : { migrateServerToken: migrateServerTokenValue }),
+        ...(migrateServerBuildIdValue === undefined
+          ? {}
+          : { migrateServerBuildId: migrateServerBuildIdValue }),
         useColor:
           Option.isNone(noColor) &&
           forceColorValue !== "0" &&

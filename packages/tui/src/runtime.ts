@@ -107,6 +107,7 @@ export interface MigrationTuiRuntime {
 }
 
 export interface LoadLocalMigrationTuiInput {
+  readonly buildId?: string;
   readonly configPath?: string;
   readonly cwd: string;
   readonly server?: never;

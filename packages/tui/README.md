@@ -39,6 +39,15 @@ try {
 The package does not expose the in-process server runtime from its public entry
 point.
 
+Set `MIGRATE_SERVER_BUILD_ID` to the immutable identifier of the application
+build that contains the migration configuration. A changed build ID selects a
+new local Node server generation; the previous generation keeps running until
+its active Migration Runs finish. This also provides the safe boundary for
+development reload tooling: start new operations on a new generation instead
+of replacing migration code inside a running server. Without a build ID, local
+clients continue to reuse the server identified by the config path and Migrate
+SDK version.
+
 Connect to a deployed Migrate Server without loading a local migration config:
 
 ```sh

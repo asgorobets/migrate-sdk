@@ -262,6 +262,9 @@ const acquireCliMigrateConnection = (
         serverUrl === undefined
           ? {
               kind: "local",
+              ...(runtime.migrateServerBuildId === undefined
+                ? {}
+                : { buildId: runtime.migrateServerBuildId }),
               ...(configPath === undefined ? {} : { configPath }),
               cwd: runtime.cwd,
             }

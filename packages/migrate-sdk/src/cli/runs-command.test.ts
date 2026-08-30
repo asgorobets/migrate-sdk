@@ -271,6 +271,27 @@ describe("migrate runs", () => {
     })
   );
 
+  it.effect("selects the local server generation from the build id", () =>
+    Effect.gen(function* () {
+      let connectionInput: MigrateServerConnectionInput | undefined;
+      const result = yield* runCli(["runs", "list"], {
+        connectMigrateServer: (input) => {
+          connectionInput = input;
+          return Effect.succeed(makeConnection());
+        },
+        cwd: "/workspace",
+        migrateServerBuildId: "build-42",
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(connectionInput).toEqual({
+        buildId: "build-42",
+        cwd: "/workspace",
+        kind: "local",
+      });
+    })
+  );
+
   it.effect("observes progress through terminal completion", () =>
     Effect.gen(function* () {
       const connection = makeConnection({

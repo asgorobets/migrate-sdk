@@ -42,6 +42,33 @@ describe("local Migrate Server endpoint", () => {
     expect(endpoint).toMatch(WINDOWS_PIPE_NAME);
   });
 
+  it("uses the build id to isolate immutable server generations", () => {
+    const input = { configPath: "migrate.config.ts", cwd: "/workspace" };
+    const environment = {
+      platform: "darwin" as const,
+      sdkVersion: "1.2.3",
+      tempDirectory: "/tmp/migrate-test",
+      user: "501",
+    };
+
+    const first = makeLocalMigrateServerEndpoint(
+      { ...input, buildId: "build-1" },
+      environment
+    );
+    const replacement = makeLocalMigrateServerEndpoint(
+      { ...input, buildId: "build-2" },
+      environment
+    );
+
+    expect(replacement).not.toBe(first);
+    expect(
+      makeLocalMigrateServerEndpoint(
+        { ...input, buildId: "build-1" },
+        environment
+      )
+    ).toBe(first);
+  });
+
   it("does not unlink Windows named pipes", () => {
     const directory = mkdtempSync(join(tmpdir(), "migrate-endpoint-test-"));
     const endpoint = join(directory, "named-pipe-marker");

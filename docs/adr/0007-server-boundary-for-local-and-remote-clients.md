@@ -75,6 +75,15 @@ would load. The npm launcher remains responsible for locating and passing the
 user's Node executable. This preserves the existing Node authoring contract
 without requiring customers to rewrite migrations for Bun.
 
+Local server code is immutable for the lifetime of a server process. Builds may
+provide `MIGRATE_SERVER_BUILD_ID`; it participates in local endpoint identity,
+so a changed build starts a new server generation while the previous generation
+drains active Migration Runs. Development reload integrations use the same
+generation boundary. They do not replace migration code underneath an active
+run. Because run discovery, observation, and cancellation are durable, a client
+connected to the new generation can still operate runs started by the previous
+generation.
+
 Remote connections use the same logical Migrate Protocol:
 
 - SSH may start a Migrate Server in stdio mode for a connection-scoped session.

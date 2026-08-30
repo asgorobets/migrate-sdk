@@ -133,6 +133,12 @@ look up durable item state directly instead of traversing the source cursor.
   Bun while a package-supplied Node Migrate Server loads and executes local
   migration configs.
 
+Local CLI and TUI clients reuse a Node Migrate Server for the selected config.
+Built applications should set `MIGRATE_SERVER_BUILD_ID` to their immutable
+build identifier. A changed value starts a new server generation for new
+operations without replacing migration code underneath active runs from the
+previous generation.
+
 ## Repository development
 
 This repository uses pnpm and Turborepo. Node.js 24 is required.

@@ -29,6 +29,9 @@ const main = async () => {
   const runtime = await makeMigrationTuiRuntime(
     parsed.serverUrl === undefined
       ? {
+          ...(process.env.MIGRATE_SERVER_BUILD_ID === undefined
+            ? {}
+            : { buildId: process.env.MIGRATE_SERVER_BUILD_ID }),
           ...(parsed.configPath === undefined
             ? {}
             : { configPath: parsed.configPath }),

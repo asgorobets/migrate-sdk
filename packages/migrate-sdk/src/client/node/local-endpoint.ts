@@ -3,6 +3,7 @@ import { unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export interface LocalMigrateServerEndpointInput {
+  readonly buildId?: string;
   readonly configPath?: string;
   readonly cwd: string;
 }
@@ -16,10 +17,11 @@ export interface LocalMigrateServerEndpointEnvironment {
 }
 
 export const makeLocalMigrateServerEndpoint = (
-  { configPath, cwd }: LocalMigrateServerEndpointInput,
+  { buildId, configPath, cwd }: LocalMigrateServerEndpointInput,
   environment: LocalMigrateServerEndpointEnvironment
 ): string => {
   const identity = JSON.stringify({
+    buildId,
     configPath: configPath === undefined ? undefined : resolve(cwd, configPath),
     cwd: resolve(cwd),
     sdkVersion: environment.sdkVersion,

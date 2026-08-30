@@ -21,6 +21,12 @@ import {
 const defaultStartupTimeoutMs = 10_000;
 
 export interface LocalMigrateConnectionInput {
+  /**
+   * Identifies the immutable application build loaded by the local server.
+   * Changing it starts a new server generation while the previous generation
+   * drains any active Migration Runs.
+   */
+  readonly buildId?: string;
   readonly configPath?: string;
   readonly cwd: string;
   readonly nodeExecutable?: string;
@@ -87,13 +93,14 @@ const isSocketTransportFailure = (cause: unknown): boolean =>
     cause.reason._tag === "SocketWriteError");
 
 export const localMigrateServerEndpoint = (
-  { configPath, cwd }: LocalMigrateConnectionInput,
+  { buildId, configPath, cwd }: LocalMigrateConnectionInput,
   options: Pick<LocalMigrateServerBootstrapOptions, "serverIdentity"> = {}
 ): string => {
   const user = typeof process.getuid === "function" ? process.getuid() : "user";
 
   return makeLocalMigrateServerEndpoint(
     {
+      ...(buildId === undefined ? {} : { buildId }),
       ...(configPath === undefined ? {} : { configPath }),
       cwd,
     },
@@ -173,7 +180,12 @@ const terminateOwnedServer = async (child: ChildProcess): Promise<void> => {
 };
 
 const connectPersistentMigrateServer = async (
-  { configPath, cwd, nodeExecutable = "node" }: LocalMigrateConnectionInput,
+  {
+    buildId,
+    configPath,
+    cwd,
+    nodeExecutable = "node",
+  }: LocalMigrateConnectionInput,
   {
     serverIdentity,
     serverEntry = defaultServerEntry(),
@@ -182,6 +194,7 @@ const connectPersistentMigrateServer = async (
 ): Promise<MigrateConnection> => {
   const socketPath = localMigrateServerEndpoint(
     {
+      ...(buildId === undefined ? {} : { buildId }),
       ...(configPath === undefined ? {} : { configPath }),
       cwd,
     },
