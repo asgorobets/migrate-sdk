@@ -144,7 +144,7 @@ const runtime = await makeMigrationTuiRuntime({
 
 try {
   const operation = await runtime.prepare(
-    { definitionId: toMigrationDefinitionId("packaging-fixture"), kind: "migration" },
+    { definitionIds: [toMigrationDefinitionId("packaging-fixture")], kind: "definitions" },
     "run"
   );
   const reference = await runtime.start(operation);

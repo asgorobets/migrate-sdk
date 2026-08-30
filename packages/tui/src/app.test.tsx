@@ -1599,9 +1599,9 @@ describe("MigrationTuiApp", () => {
         sourceIdentity: toEncodedSourceIdentity(`${target.definitionId}-1`),
         updatedAt: new Date("2026-08-29T12:00:00.000Z"),
       });
-      const listMessages = vi.fn(
-        (target: typeof authorsTarget | typeof articlesTarget) =>
-          Promise.resolve([message(target)])
+      const listMessages: MigrationTuiRuntime["listMessages"] = vi.fn(
+        (target) =>
+          Promise.resolve(target.kind === "migration" ? [message(target)] : [])
       );
       const runtime = { listMessages };
       const setError = vi.fn();

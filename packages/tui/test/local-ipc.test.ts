@@ -159,8 +159,8 @@ test("Bun operates a Node-only migration through local Effect RPC", async () => 
 
     const operation = await runtime.prepare(
       {
-        definitionId: toMigrationDefinitionId("packaging-fixture"),
-        kind: "migration",
+        definitionIds: [toMigrationDefinitionId("packaging-fixture")],
+        kind: "definitions",
       },
       "run"
     );
@@ -182,8 +182,8 @@ test("live observation does not block dashboard reads or explicit cancellation",
   try {
     const operation = await runtime.prepare(
       {
-        definitionId: toMigrationDefinitionId("cancellable"),
-        kind: "migration",
+        definitionIds: [toMigrationDefinitionId("cancellable")],
+        kind: "definitions",
       },
       "run"
     );
@@ -218,8 +218,8 @@ test("an inline run survives client exit and is observed by a fresh TUI", async 
     });
     const operation = await firstRuntime.prepare(
       {
-        definitionId: toMigrationDefinitionId("cancellable"),
-        kind: "migration",
+        definitionIds: [toMigrationDefinitionId("cancellable")],
+        kind: "definitions",
       },
       "run"
     );
@@ -273,15 +273,15 @@ test("reconnects to concurrent runs and stops only the selected run", async () =
     const [authorsOperation, booksOperation] = await Promise.all([
       firstRuntime.prepare(
         {
-          definitionId: toMigrationDefinitionId("authors"),
-          kind: "migration",
+          definitionIds: [toMigrationDefinitionId("authors")],
+          kind: "definitions",
         },
         "run"
       ),
       firstRuntime.prepare(
         {
-          definitionId: toMigrationDefinitionId("books"),
-          kind: "migration",
+          definitionIds: [toMigrationDefinitionId("books")],
+          kind: "definitions",
         },
         "run"
       ),
@@ -345,8 +345,8 @@ test("definition locks reject an overlapping run without stopping its owner", as
 
   try {
     const target = {
-      definitionId: toMigrationDefinitionId("locked"),
-      kind: "migration" as const,
+      definitionIds: [toMigrationDefinitionId("locked")],
+      kind: "definitions" as const,
     };
     const firstRun = await runtime.start(await runtime.prepare(target, "run"));
     const overlappingOperation = await runtime.prepare(target, "run");
@@ -382,8 +382,8 @@ test("stops a selected server-owned run by migration run id", async () => {
   try {
     const operation = await runtime.prepare(
       {
-        definitionId: toMigrationDefinitionId("cancellable"),
-        kind: "migration",
+        definitionIds: [toMigrationDefinitionId("cancellable")],
+        kind: "definitions",
       },
       "run"
     );
@@ -413,8 +413,8 @@ test("reattaches to a detached run through the public run id", async () => {
   try {
     const operation = await runtime.prepare(
       {
-        definitionId: toMigrationDefinitionId("live-progress"),
-        kind: "migration",
+        definitionIds: [toMigrationDefinitionId("live-progress")],
+        kind: "definitions",
       },
       "run"
     );
@@ -489,8 +489,8 @@ test("reattaches through a fresh Node server using persistent run state", async 
     firstServerPid = await readProcessId(serverPidPath);
     const operation = await firstRuntime.prepare(
       {
-        definitionId: toMigrationDefinitionId("persistent-reconnect"),
-        kind: "migration",
+        definitionIds: [toMigrationDefinitionId("persistent-reconnect")],
+        kind: "definitions",
       },
       "run"
     );
