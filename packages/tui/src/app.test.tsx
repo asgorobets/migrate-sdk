@@ -3019,6 +3019,27 @@ describe("MigrationTuiApp", () => {
             withDependencies: false,
           })
         );
+        const targetedRollbackOptions = prepare.mock.calls.at(-1)?.[2];
+
+        if (targetedRollbackOptions === undefined) {
+          throw new Error("Expected targeted rollback options");
+        }
+
+        act(() => setup.mockInput.pressKey("f"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Confirm forced rollback")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain("y Force rollback");
+        expect(prepare).toHaveBeenLastCalledWith(
+          {
+            definitionIds: [toMigrationDefinitionId("authors")],
+            kind: "definitions",
+          },
+          "rollback",
+          { ...targetedRollbackOptions, force: true }
+        );
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
@@ -3066,6 +3087,58 @@ describe("MigrationTuiApp", () => {
   );
 
   itWithOpenTui(
+    "requires a second confirmation before forcing a rollback",
+    async () => {
+      const runtime = await makeInProcessMigrationTuiRuntime({
+        configPath: "examples/transitive-dependency.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const prepare = vi.spyOn(runtime, "prepare");
+      const setup = await createTestRenderer({ height: 36, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressKey("b"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("f Force rollback")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("f"));
+
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Confirm forced rollback")
+          )
+        ).toBe(true);
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain("Dependent migration state checks");
+        expect(frame).toContain("y Force rollback");
+        expect(frame).not.toContain("f Force rollback");
+        expect(prepare).toHaveBeenLastCalledWith(
+          {
+            definitionIds: [toMigrationDefinitionId("authors")],
+            kind: "definitions",
+          },
+          "rollback",
+          expect.objectContaining({ force: true })
+        );
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
     "keeps rollback controls fixed while a large hierarchy scrolls",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
@@ -3090,7 +3163,9 @@ describe("MigrationTuiApp", () => {
             const frame = setup.captureCharFrame();
             return (
               frame.includes("Confirm rollback") &&
-              frame.includes("↑↓ scroll · y rollback · n/esc cancel")
+              frame.includes(
+                "↑↓ scroll · f force rollback · y rollback · n/esc cancel"
+              )
             );
           })
         ).toBe(true);
@@ -3104,7 +3179,7 @@ describe("MigrationTuiApp", () => {
         }
         expect(setup.captureCharFrame()).toContain("migration-02 step 17");
         expect(setup.captureCharFrame()).toContain(
-          "↑↓ scroll · y rollback · n/esc cancel"
+          "↑↓ scroll · f force rollback · y rollback · n/esc cancel"
         );
       } finally {
         act(() => root.unmount());

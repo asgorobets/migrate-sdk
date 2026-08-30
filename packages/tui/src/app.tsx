@@ -314,6 +314,19 @@ const preparedOperationCopy = (operation: MigratePreparedOperation) =>
       }
     : actionCopy[operation.action];
 
+const forcedRollbackOptions = (
+  operation: MigratePreparedOperation
+): MigratePrepareOptions => ({
+  ...(operation.plan.execution === undefined
+    ? {}
+    : { execution: operation.plan.execution }),
+  force: true,
+  ...(operation.sourceIdentities === undefined
+    ? {}
+    : { sourceIdentities: operation.sourceIdentities }),
+  withDependencies: operation.plan.withDependencies,
+});
+
 type PlanHierarchyRow = MigratePreparedOperation["planRows"][number];
 
 interface PlanHierarchyItem {
@@ -563,15 +576,31 @@ const SafetyDialog = ({
   const rollback = operation.action === "rollback";
   const rollbackOrphans = operationRollsBackOrphans(operation);
   const destructive = rollback || rollbackOrphans;
+  const forcedRollback = rollback && operation.plan.force === true;
   let title = "Required dependencies not ready";
   let description = `${selectionLabel(operation.selection)} · Some required dependencies have not succeeded.`;
+  let badgeLabel = "ACTION REQUIRED";
+  let confirmationButtonLabel = "";
+  let destructiveShortcut = "";
 
   if (rollback) {
-    title = "Confirm rollback";
-    description = `${selectionLabel(operation.selection)} · Step numbers show rollback execution order.`;
+    title = forcedRollback ? "Confirm forced rollback" : "Confirm rollback";
+    description = forcedRollback
+      ? `${selectionLabel(operation.selection)} · Dependent migration state checks will be bypassed. Step numbers show rollback order.`
+      : `${selectionLabel(operation.selection)} · Step numbers show rollback execution order.`;
+    badgeLabel = forcedRollback ? "FORCED" : "DESTRUCTIVE";
+    confirmationButtonLabel = forcedRollback
+      ? "y Force rollback"
+      : "y Rollback";
+    destructiveShortcut = forcedRollback
+      ? "y force rollback"
+      : "f force rollback · y rollback";
   } else if (rollbackOrphans) {
     title = "Confirm orphan rollback";
     description = `${selectionLabel(operation.selection)} · Destination items missing from the latest source inventory will be rolled back.`;
+    badgeLabel = "DESTRUCTIVE";
+    confirmationButtonLabel = "y Rollback orphans";
+    destructiveShortcut = "y rollback orphans";
   }
 
   return (
@@ -609,7 +638,7 @@ const SafetyDialog = ({
           <DialogTitle content={title} />
           <Badge
             intent={destructive ? "danger" : "warning"}
-            label={destructive ? "DESTRUCTIVE" : "ACTION REQUIRED"}
+            label={badgeLabel}
           />
         </box>
         <DialogDescription content={description} wrapMode="none" />
@@ -644,11 +673,20 @@ const SafetyDialog = ({
           }}
         >
           {destructive ? (
-            <Button
-              intent="warning"
-              label={rollbackOrphans ? "y Rollback orphans" : "y Rollback"}
-              onPress={onConfirm}
-            />
+            <>
+              <Button
+                intent="warning"
+                label={confirmationButtonLabel}
+                onPress={onConfirm}
+              />
+              {rollback && !forcedRollback ? (
+                <Button
+                  intent="warning"
+                  label="f Force rollback"
+                  onPress={onForce}
+                />
+              ) : null}
+            </>
           ) : (
             <>
               <Button
@@ -676,7 +714,7 @@ const SafetyDialog = ({
           <text fg={colors.dim}>
             {hierarchyScrollable ? "↑↓ scroll · " : ""}
             {destructive
-              ? `${rollbackOrphans ? "y rollback orphans" : "y rollback"} · n/esc cancel`
+              ? `${destructiveShortcut} · n/esc cancel`
               : "i include · f force · n/esc cancel"}
           </text>
         </box>
@@ -1884,6 +1922,19 @@ export const MigrationTuiApp = ({
         startTask(executeOperation(operation));
       } else if (
         operation !== null &&
+        operation.action === "rollback" &&
+        operation.plan.force !== true &&
+        key.name === "f"
+      ) {
+        startTask(
+          prepareOperation(
+            operation.action,
+            forcedRollbackOptions(operation),
+            operation.selection
+          )
+        );
+      } else if (
+        operation !== null &&
         operation.action !== "rollback" &&
         key.name === "i"
       ) {
@@ -2289,7 +2340,18 @@ export const MigrationTuiApp = ({
             }
           }}
           onForce={() => {
-            if (pendingOperation.action !== "rollback") {
+            if (
+              pendingOperation.action === "rollback" &&
+              pendingOperation.plan.force !== true
+            ) {
+              startTask(
+                prepareOperation(
+                  pendingOperation.action,
+                  forcedRollbackOptions(pendingOperation),
+                  pendingOperation.selection
+                )
+              );
+            } else if (pendingOperation.action !== "rollback") {
               startTask(
                 prepareOperation(
                   pendingOperation.action,
