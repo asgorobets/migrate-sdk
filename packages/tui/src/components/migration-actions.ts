@@ -3,6 +3,7 @@ import type {
   MigrateAction,
   MigrateActiveRun,
   MigrateDashboardRow,
+  MigratePrepareOptions,
   MigrateTarget,
 } from "migrate-sdk/protocol";
 
@@ -38,14 +39,27 @@ interface MigrationTuiAvailableActionBase {
   readonly shortcutLabel?: string;
 }
 
-type MigrationTuiOperationAction = {
+type MigrationTuiStandardOperationAction = {
   readonly [Action in MigrateAction]: MigrationTuiAvailableActionBase & {
     readonly action: Action;
     readonly id: Action;
+    readonly options?: MigratePrepareOptions;
     readonly runId?: never;
     readonly view?: never;
   };
 }[MigrateAction];
+
+type MigrationTuiRollbackOrphansAction = MigrationTuiAvailableActionBase & {
+  readonly action: "run";
+  readonly id: "rollback-orphans";
+  readonly options: MigratePrepareOptions & { readonly rollbackOrphans: true };
+  readonly runId?: never;
+  readonly view?: never;
+};
+
+type MigrationTuiOperationAction =
+  | MigrationTuiRollbackOrphansAction
+  | MigrationTuiStandardOperationAction;
 
 type MigrationTuiNonRunView = Exclude<
   MigrationTuiActionView,
@@ -203,22 +217,32 @@ export const migrationTuiAvailableActions = (
   );
 
   if (rows.length > 0 && rows.every((row) => row.entry.hasRollback)) {
-    options.push({
-      action: "rollback",
-      description: isGroup
-        ? "Rollback every migration in this group"
-        : "Rollback this migration and affected dependents in safe order",
-      id: "rollback",
-      key: "b",
-      label: isGroup ? "Rollback group" : "Rollback",
-      primary: {
-        compactLabel: "b Rollback",
-        intent: "neutral",
-        label: isGroup ? "b Rollback group" : "b Rollback",
-        slot: "rollback",
+    options.push(
+      {
+        action: "rollback",
+        description: isGroup
+          ? "Rollback every migration in this group"
+          : "Rollback this migration and affected dependents in safe order",
+        id: "rollback",
+        key: "b",
+        label: isGroup ? "Rollback group" : "Rollback",
+        primary: {
+          compactLabel: "b Rollback",
+          intent: "neutral",
+          label: isGroup ? "b Rollback group" : "b Rollback",
+          slot: "rollback",
+        },
+        shortcutLabel: "b rollback",
       },
-      shortcutLabel: "b rollback",
-    });
+      {
+        action: "run",
+        description: `Rollback destination items no longer present in the ${noun} source inventory`,
+        id: "rollback-orphans",
+        key: "",
+        label: "Rollback orphans",
+        options: { rollbackOrphans: true },
+      }
+    );
   }
 
   if (!isGroup && rows[0]?.status?.lock != null) {

@@ -299,6 +299,20 @@ const operationNeedsDependencyDecision = (
   operation.plan.force !== true &&
   operation.dependencyChecks.some((dependency) => !dependency.satisfied);
 
+const operationRollsBackOrphans = (
+  operation: MigratePreparedOperation
+): boolean =>
+  operation.action === "run" && operation.plan.rollbackOrphans === true;
+
+const preparedOperationCopy = (operation: MigratePreparedOperation) =>
+  operationRollsBackOrphans(operation)
+    ? {
+        button: "rollback orphans",
+        preparing: "Preparing to roll back orphans for",
+        progress: "Rolling back orphans for",
+      }
+    : actionCopy[operation.action];
+
 type PlanHierarchyRow = MigratePreparedOperation["planRows"][number];
 
 interface PlanHierarchyItem {
@@ -546,6 +560,18 @@ const SafetyDialog = ({
   const hierarchyScrollable = hierarchyRows + 9 > dialogHeight;
   const dialogPadding = compact ? 1 : 2;
   const rollback = operation.action === "rollback";
+  const rollbackOrphans = operationRollsBackOrphans(operation);
+  const destructive = rollback || rollbackOrphans;
+  let title = "Required dependencies not ready";
+  let description = `${selectionLabel(operation.selection)} · Some required dependencies have not succeeded.`;
+
+  if (rollback) {
+    title = "Confirm rollback";
+    description = `${selectionLabel(operation.selection)} · Step numbers show rollback execution order.`;
+  } else if (rollbackOrphans) {
+    title = "Confirm orphan rollback";
+    description = `${selectionLabel(operation.selection)} · Destination items missing from the latest source inventory will be rolled back.`;
+  }
 
   return (
     <Dialog
@@ -559,8 +585,8 @@ const SafetyDialog = ({
       <DialogContent
         backdropColor={RGBA.fromValues(0, 0, 0, 0.72)}
         backgroundColor={colors.surface}
-        borderColor={rollback ? colors.danger : colors.warning}
-        focusedBorderColor={rollback ? colors.danger : colors.warning}
+        borderColor={destructive ? colors.danger : colors.warning}
+        focusedBorderColor={destructive ? colors.danger : colors.warning}
         height={dialogHeight}
         maxWidth={dialogWidth}
         onKeyDown={onKeyDown}
@@ -579,27 +605,16 @@ const SafetyDialog = ({
             width: "100%",
           }}
         >
-          <DialogTitle
-            content={
-              rollback ? "Confirm rollback" : "Required dependencies not ready"
-            }
-          />
+          <DialogTitle content={title} />
           <Badge
-            intent={rollback ? "danger" : "warning"}
-            label={rollback ? "DESTRUCTIVE" : "ACTION REQUIRED"}
+            intent={destructive ? "danger" : "warning"}
+            label={destructive ? "DESTRUCTIVE" : "ACTION REQUIRED"}
           />
         </box>
-        <DialogDescription
-          content={
-            rollback
-              ? `${selectionLabel(operation.selection)} · Step numbers show rollback execution order.`
-              : `${selectionLabel(operation.selection)} · Some required dependencies have not succeeded.`
-          }
-          wrapMode="none"
-        />
+        <DialogDescription content={description} wrapMode="none" />
         <box style={{ flexShrink: 0, height: 1, marginTop: 1 }}>
           <text fg={colors.foreground}>
-            {rollback ? "Affected migration hierarchy" : "Run order"}
+            {destructive ? "Affected migration hierarchy" : "Run order"}
           </text>
         </box>
         <scrollbox
@@ -627,8 +642,12 @@ const SafetyDialog = ({
             marginTop: 1,
           }}
         >
-          {rollback ? (
-            <Button intent="warning" label="y Rollback" onPress={onConfirm} />
+          {destructive ? (
+            <Button
+              intent="warning"
+              label={rollbackOrphans ? "y Rollback orphans" : "y Rollback"}
+              onPress={onConfirm}
+            />
           ) : (
             <>
               <Button
@@ -655,8 +674,8 @@ const SafetyDialog = ({
         >
           <text fg={colors.dim}>
             {hierarchyScrollable ? "↑↓ scroll · " : ""}
-            {rollback
-              ? "y rollback · n/esc cancel"
+            {destructive
+              ? `${rollbackOrphans ? "y rollback orphans" : "y rollback"} · n/esc cancel`
               : "i include · f force · n/esc cancel"}
           </text>
         </box>
@@ -1062,7 +1081,7 @@ export const MigrationTuiApp = ({
       setSourceScanStatuses(new Map());
       setNotice(null);
       setBusy(
-        `${actionCopy[operation.action].progress} ${selectionLabel(operation.selection)}…`
+        `${preparedOperationCopy(operation).progress} ${selectionLabel(operation.selection)}…`
       );
       setError(null);
 
@@ -1190,7 +1209,9 @@ export const MigrationTuiApp = ({
 
       setPendingOperation(null);
       setView("dashboard");
-      setBusy(`${actionCopy[action].preparing} ${selectionLabel(selection)}…`);
+      setBusy(
+        `${options.rollbackOrphans === true ? "Preparing to roll back orphans for" : actionCopy[action].preparing} ${selectionLabel(selection)}…`
+      );
       setError(null);
 
       try {
@@ -1206,6 +1227,7 @@ export const MigrationTuiApp = ({
 
         if (
           operation.action === "rollback" ||
+          operationRollsBackOrphans(operation) ||
           operationNeedsDependencyDecision(operation)
         ) {
           setBusy("");
@@ -1556,7 +1578,7 @@ export const MigrationTuiApp = ({
       }
 
       if (option.action !== undefined) {
-        startTask(prepareOperation(option.action));
+        startTask(prepareOperation(option.action, option.options));
       }
     },
     [
@@ -1832,7 +1854,12 @@ export const MigrationTuiApp = ({
 
       if (key.name === "n" || key.name === "escape") {
         cancelConfirmation();
-      } else if (operation?.action === "rollback" && key.name === "y") {
+      } else if (
+        operation !== null &&
+        (operation.action === "rollback" ||
+          operationRollsBackOrphans(operation)) &&
+        key.name === "y"
+      ) {
         startTask(executeOperation(operation));
       } else if (
         operation !== null &&
@@ -2233,7 +2260,10 @@ export const MigrationTuiApp = ({
           height={dimensions.height}
           onCancel={cancelConfirmation}
           onConfirm={() => {
-            if (pendingOperation.action === "rollback") {
+            if (
+              pendingOperation.action === "rollback" ||
+              operationRollsBackOrphans(pendingOperation)
+            ) {
               startTask(executeOperation(pendingOperation));
             }
           }}

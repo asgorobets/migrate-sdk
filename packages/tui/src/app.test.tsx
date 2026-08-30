@@ -2905,6 +2905,58 @@ describe("MigrationTuiApp", () => {
   );
 
   itWithOpenTui(
+    "prepares rollback orphans from All actions and requires confirmation",
+    async () => {
+      const runtime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const prepare = vi.spyOn(runtime, "prepare");
+      const setup = await createTestRenderer({ height: 36, width: 120 });
+      const root = createRoot(setup.renderer);
+
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("All actions · authors")
+          )
+        ).toBe(true);
+        for (let index = 0; index < 5; index += 1) {
+          act(() => setup.mockInput.pressArrow("down"));
+        }
+        act(() => setup.mockInput.pressEnter());
+
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Confirm orphan rollback")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain("y Rollback orphans");
+        expect(prepare).toHaveBeenCalledWith(
+          {
+            definitionIds: [toMigrationDefinitionId("authors")],
+            kind: "definitions",
+          },
+          "run",
+          expect.objectContaining({ rollbackOrphans: true })
+        );
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
     "renders transitive rollback dependents as a numbered hierarchy",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({

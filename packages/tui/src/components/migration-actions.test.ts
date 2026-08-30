@@ -64,6 +64,11 @@ describe("migration actions", () => {
         }),
         expect.objectContaining({ id: "stop-run", key: "x", runId }),
         expect.objectContaining({ id: "break-lock" }),
+        expect.objectContaining({
+          action: "run",
+          id: "rollback-orphans",
+          options: { rollbackOrphans: true },
+        }),
       ])
     );
     expect(migrationTuiPrimaryActions(actions)).toEqual([
