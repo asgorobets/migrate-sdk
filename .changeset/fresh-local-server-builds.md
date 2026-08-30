@@ -4,6 +4,6 @@
 ---
 
 Allow local CLI and TUI clients to identify immutable migration application
-builds with `MIGRATE_SERVER_BUILD_ID`. Changing the build ID starts a new local
-Node Migrate Server endpoint while active runs on the previous endpoint continue
-to drain.
+builds with `MIGRATE_SERVER_BUILD_ID`. Changing the build ID selects a separate
+local Node Migrate Server endpoint while active runs on the previous endpoint
+continue to drain.
