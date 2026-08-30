@@ -9,6 +9,9 @@
     "url": "https://github.com/asgorobets/migrate-sdk",
     "directory": "packages/tui"
   },
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "bin": {
     "migrate-tui": "./bin/migrate-tui.js"
   },
