@@ -103,6 +103,11 @@ export const POST = (request: Request) => remoteServer.handler(request);
 The host route owns the public URL; the Migrate Server handler is routerless
 and does not need to know where it is mounted.
 
+On a serverless or otherwise short-lived HTTP host, `executableLayer` must use a
+durable Execution Adapter. An inline Execution Adapter is supported only when
+the Migrate Server process remains alive for the entire run; ending that process
+ends the inline execution.
+
 Authorization is application-owned Effect HTTP middleware so deployments can
 use their existing identity provider without leaving the request fiber.
 Deployments where authenticated infrastructure already enforces access can omit
