@@ -14,7 +14,7 @@ import type {
 } from "../../protocol/index.ts";
 import { MIGRATE_SDK_VERSION } from "../../version.ts";
 import type { MigrateConnection } from "../connection.ts";
-import { validateMigrateServerInfo } from "../connection.ts";
+import { validateMigrateServerProtocol } from "../connection.ts";
 import { MigrateClient, type MigrateClientService } from "../index.ts";
 import {
   isLocalMigrateServerAuthorizationFailure,
@@ -115,6 +115,18 @@ class LocalMigrateServerCompatibilityFailure extends Error {
     this.cause = cause;
   }
 }
+
+const validateLocalMigrateServerInfo = (
+  serverInfo: MigrateServerInfo
+): void => {
+  validateMigrateServerProtocol(serverInfo);
+
+  if (serverInfo.sdkVersion !== MIGRATE_SDK_VERSION) {
+    throw new Error(
+      `Migrate SDK version ${serverInfo.sdkVersion} is not supported; expected ${MIGRATE_SDK_VERSION}`
+    );
+  }
+};
 
 const isSocketTransportFailure = (cause: unknown): boolean =>
   cause instanceof RpcClientError &&
@@ -319,7 +331,7 @@ const connectEndpoint = async (
         }
       );
     }
-    validateMigrateServerInfo(serverInfo);
+    validateLocalMigrateServerInfo(serverInfo);
     clearHandshakeTimeout();
     return {
       client,

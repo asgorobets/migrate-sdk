@@ -4,7 +4,7 @@ import { layerProtocolHttp } from "effect/unstable/rpc/RpcClient";
 import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
 import {
   type MigrateConnection,
-  validateMigrateServerInfo,
+  validateMigrateServerProtocol,
 } from "../connection.ts";
 import { MigrateClient } from "../index.ts";
 
@@ -82,7 +82,7 @@ const connectMigrateHttpServerUnsafe = ({
       Effect.gen(function* () {
         const client = yield* MigrateClient;
         const serverInfo = yield* client.GetServerInfo();
-        validateMigrateServerInfo(serverInfo);
+        validateMigrateServerProtocol(serverInfo);
 
         return {
           client,

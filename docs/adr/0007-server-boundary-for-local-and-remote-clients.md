@@ -64,9 +64,20 @@ The TUI is a **Migrate Client**. It does not load remote migration definitions,
 choose a workflow provider, or require credentials for the resources behind a
 server. A connection profile identifies the server target and access method.
 The server describes its registry, deployment or environment identity, protocol
-version, and SDK version so that the client can detect incompatibility before
-offering an action. Every compatible Migrate Server implements the complete
-Migrate Protocol; customer-facing operations are not negotiated individually.
+version, and SDK version. Remote clients use the protocol version to detect
+incompatibility before offering an action; the SDK version identifies the
+server implementation for diagnostics and does not require remote deployments
+to upgrade in lockstep with clients. Every compatible Migrate Server implements
+the complete Migrate Protocol; customer-facing operations are not negotiated
+individually.
+
+The Migrate Protocol version is a compatibility epoch, not the SDK package
+version. SDK releases leave it unchanged when existing clients and servers can
+continue exchanging the complete contract. Removing or renaming wire fields,
+adding required fields or operations, changing operation semantics, or changing
+the Effect RPC encoding incompatibly requires a new protocol version. An
+additive wire change may remain in the current protocol only when cross-version
+contract tests demonstrate compatibility in both client/server directions.
 
 The currently implemented local connection uses a Node Migrate Server process
 started by the TUI. The Bun renderer communicates with that process over a
