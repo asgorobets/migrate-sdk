@@ -1,4 +1,3 @@
-import { expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -30,8 +29,11 @@ import {
   localMigrateServerEndpoint,
 } from "migrate-sdk/client/node/testing";
 import { MIGRATE_PROTOCOL_VERSION } from "migrate-sdk/protocol";
-import { makeMigrationTuiRuntime } from "../src/index.ts";
-import { makeMigrationTuiRuntimeWithLocalConnection } from "../src/server/tui-runtime.ts";
+import { expect, test } from "vitest";
+import {
+  makeMigrationTuiRuntime,
+  makeMigrationTuiRuntimeWithLocalConnection,
+} from "../src/server/tui-runtime.ts";
 import { makeMigrationTuiRuntimeForTesting } from "./support/tui-runtime.ts";
 
 const LOCK_ERROR_PATTERN = /lock/i;
@@ -160,34 +162,6 @@ const terminateProcess = async (pid: number | undefined): Promise<void> => {
   process.kill(pid, "SIGKILL");
   await waitForProcessExit(pid, 5000);
 };
-
-test("Bun operates a Node-only migration through local Effect RPC", async () => {
-  const runtime = await makeMigrationTuiRuntime({
-    configPath: resolve("test/fixtures/node-only.config.ts"),
-    cwd: process.cwd(),
-  });
-
-  try {
-    expect(runtime.rows.map((row) => row.entry.id)).toEqual([
-      "packaging-fixture",
-    ]);
-
-    const operation = await runtime.prepare(
-      {
-        definitionIds: [toMigrationDefinitionId("packaging-fixture")],
-        kind: "definitions",
-      },
-      "run"
-    );
-    const reference = await runtime.start(operation);
-    const result = await runtime.observeRun(reference.runId);
-
-    expect(result.message).toContain("succeeded");
-    expect((await runtime.refresh()).rows[0]?.status?.durable.migrated).toBe(1);
-  } finally {
-    await runtime.dispose?.();
-  }
-}, 20_000);
 
 test("local commands use short-lived connections", async () => {
   const serverIdentity = `tui-command-connections-${randomUUID()}`;
