@@ -23,9 +23,11 @@ import {
 } from "./local-authorization.ts";
 import {
   ensurePrivateWindowsLocalMigrateServerDirectory,
+  type LocalMigrateServerPosixEndpointIdentity,
   LocalMigrateServerTcpDiscoveryJson,
   localMigrateServerLoopbackHost,
   makeLocalMigrateServerEndpoint,
+  readLocalMigrateServerPosixEndpointIdentity,
   removeLocalMigrateServerEndpoint,
 } from "./local-endpoint.ts";
 
@@ -82,19 +84,26 @@ const connectionError = (cause: unknown): Error => {
 class LocalMigrateServerConnectionFailure extends Error {
   override readonly cause: unknown;
   readonly discoverySnapshot: string | undefined;
-  readonly removeDiscovery: boolean;
+  readonly posixEndpointIdentity:
+    | LocalMigrateServerPosixEndpointIdentity
+    | undefined;
+  readonly removeEndpoint: boolean;
 
   constructor(
     cause: unknown,
     options: {
       readonly discoverySnapshot?: string | undefined;
-      readonly removeDiscovery?: boolean;
+      readonly posixEndpointIdentity?:
+        | LocalMigrateServerPosixEndpointIdentity
+        | undefined;
+      readonly removeEndpoint?: boolean;
     } = {}
   ) {
     super(cause instanceof Error ? cause.message : String(cause));
     this.cause = cause;
     this.discoverySnapshot = options.discoverySnapshot;
-    this.removeDiscovery = options.removeDiscovery ?? false;
+    this.posixEndpointIdentity = options.posixEndpointIdentity;
+    this.removeEndpoint = options.removeEndpoint ?? false;
   }
 }
 
@@ -114,6 +123,9 @@ const isSocketTransportFailure = (cause: unknown): boolean =>
     cause.reason._tag === "SocketReadError" ||
     cause.reason._tag === "SocketWriteError");
 
+const isSocketOpenFailure = (cause: unknown): boolean =>
+  cause instanceof RpcClientError && cause.reason._tag === "SocketOpenError";
+
 interface LocalEndpointTarget {
   readonly authToken?: string;
   readonly discoverySnapshot?: string;
@@ -121,6 +133,7 @@ interface LocalEndpointTarget {
   readonly options:
     | { readonly path: string }
     | { readonly host: string; readonly port: number };
+  readonly posixEndpointIdentity?: LocalMigrateServerPosixEndpointIdentity;
 }
 
 const processIsRunning = (pid: number): boolean => {
@@ -136,7 +149,12 @@ const processIsRunning = (pid: number): boolean => {
 
 const localEndpointTarget = (endpoint: string): LocalEndpointTarget => {
   if (process.platform !== "win32") {
-    return { options: { path: endpoint } };
+    const posixEndpointIdentity =
+      readLocalMigrateServerPosixEndpointIdentity(endpoint);
+    return {
+      options: { path: endpoint },
+      ...(posixEndpointIdentity === undefined ? {} : { posixEndpointIdentity }),
+    };
   }
 
   let discoverySnapshot: string;
@@ -154,7 +172,7 @@ const localEndpointTarget = (endpoint: string): LocalEndpointTarget => {
   } catch (cause) {
     throw new LocalMigrateServerConnectionFailure(cause, {
       discoverySnapshot,
-      removeDiscovery: true,
+      removeEndpoint: true,
     });
   }
 
@@ -167,13 +185,13 @@ const localEndpointTarget = (endpoint: string): LocalEndpointTarget => {
   ) {
     throw new LocalMigrateServerConnectionFailure(
       new Error(`Invalid local Migrate Server discovery file: ${endpoint}`),
-      { discoverySnapshot, removeDiscovery: true }
+      { discoverySnapshot, removeEndpoint: true }
     );
   }
   if (!processIsRunning(discovery.pid)) {
     throw new LocalMigrateServerConnectionFailure(
       new Error(`Local Migrate Server owner is not running: ${discovery.pid}`),
-      { discoverySnapshot, removeDiscovery: true }
+      { discoverySnapshot, removeEndpoint: true }
     );
   }
 
@@ -276,6 +294,8 @@ const connectEndpoint = async (
     await dispose();
     throw new LocalMigrateServerConnectionFailure(cause, {
       discoverySnapshot: target.discoverySnapshot,
+      posixEndpointIdentity: target.posixEndpointIdentity,
+      removeEndpoint: isSocketOpenFailure(cause),
     });
   }
 
@@ -295,7 +315,7 @@ const connectEndpoint = async (
         ),
         {
           discoverySnapshot: target.discoverySnapshot,
-          removeDiscovery: true,
+          removeEndpoint: true,
         }
       );
     }
@@ -321,23 +341,28 @@ const connectEndpoint = async (
       authorizationFailure
       ? new LocalMigrateServerConnectionFailure(cause, {
           discoverySnapshot: target.discoverySnapshot,
-          removeDiscovery: authorizationFailure,
+          posixEndpointIdentity: target.posixEndpointIdentity,
+          removeEndpoint: authorizationFailure || isSocketOpenFailure(cause),
         })
       : new LocalMigrateServerCompatibilityFailure(cause);
   }
 };
 
 const removeFailedEndpoint = (endpoint: string, cause: unknown): void => {
-  const expectedDiscovery =
-    cause instanceof LocalMigrateServerConnectionFailure &&
-    cause.removeDiscovery
-      ? cause.discoverySnapshot
-      : undefined;
+  if (
+    !(
+      cause instanceof LocalMigrateServerConnectionFailure &&
+      cause.removeEndpoint
+    )
+  ) {
+    return;
+  }
 
   removeLocalMigrateServerEndpoint(
     endpoint,
     process.platform,
-    expectedDiscovery
+    cause.discoverySnapshot,
+    cause.posixEndpointIdentity
   );
 };
 

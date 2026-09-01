@@ -1,17 +1,24 @@
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  guardLocalMigrateServerEndpoint,
   makeLocalMigrateServerEndpoint,
   publishLocalMigrateServerTcpDiscovery,
+  readLocalMigrateServerPosixEndpointIdentity,
   removeLocalMigrateServerEndpoint,
+  settleLocalMigrateServerEndpointClaim,
 } from "./local-endpoint.ts";
 
 const POSIX_SOCKET_NAME = /^migrate-501-[a-f0-9]{24}\.sock$/;
@@ -91,6 +98,113 @@ describe("local Migrate Server endpoint", () => {
       removeLocalMigrateServerEndpoint(endpoint, "win32", "live");
 
       expect(existsSync(endpoint)).toBe(false);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("only unlinks the POSIX endpoint inode owned by the caller", () => {
+    const directory = mkdtempSync(join(tmpdir(), "migrate-endpoint-test-"));
+    const endpoint = join(directory, "server.sock");
+    const replacement = join(directory, "replacement.sock");
+    writeFileSync(endpoint, "stale", "utf8");
+    const staleIdentity = readLocalMigrateServerPosixEndpointIdentity(endpoint);
+
+    try {
+      expect(staleIdentity).toBeDefined();
+      writeFileSync(replacement, "live", "utf8");
+      renameSync(replacement, endpoint);
+
+      removeLocalMigrateServerEndpoint(
+        endpoint,
+        "linux",
+        undefined,
+        staleIdentity
+      );
+
+      expect(readFileSync(endpoint, "utf8")).toBe("live");
+
+      const liveIdentity =
+        readLocalMigrateServerPosixEndpointIdentity(endpoint);
+      expect(liveIdentity).toBeDefined();
+      removeLocalMigrateServerEndpoint(
+        endpoint,
+        "linux",
+        undefined,
+        liveIdentity
+      );
+
+      expect(existsSync(endpoint)).toBe(false);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("removes a restored claim when ownership verification fails", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const directory = mkdtempSync(join(tmpdir(), "migrate-endpoint-test-"));
+    const endpoint = join(directory, "discovery.json");
+    writeFileSync(endpoint, "live", "utf8");
+    chmodSync(endpoint, 0o000);
+
+    try {
+      expect(() =>
+        removeLocalMigrateServerEndpoint(endpoint, "win32", "live")
+      ).toThrow();
+      expect(existsSync(endpoint)).toBe(true);
+      expect(readdirSync(directory)).toEqual(["discovery.json"]);
+    } finally {
+      if (existsSync(endpoint)) {
+        chmodSync(endpoint, 0o600);
+      }
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("guards listener teardown without deleting a later publisher", () => {
+    const directory = mkdtempSync(join(tmpdir(), "migrate-endpoint-test-"));
+    const endpoint = join(directory, "server.sock");
+    writeFileSync(endpoint, "owned", "utf8");
+    const identity = readLocalMigrateServerPosixEndpointIdentity(endpoint);
+
+    if (identity === undefined) {
+      throw new Error("Test endpoint identity was not captured");
+    }
+
+    const guard = guardLocalMigrateServerEndpoint(endpoint, (guardPath) => {
+      const guardIdentity =
+        readLocalMigrateServerPosixEndpointIdentity(guardPath);
+      return (
+        guardIdentity !== undefined &&
+        guardIdentity.device === identity.device &&
+        guardIdentity.inode === identity.inode
+      );
+    });
+
+    if (guard === undefined) {
+      throw new Error("Test endpoint guard was not created");
+    }
+
+    try {
+      expect(() =>
+        writeFileSync(endpoint, "too-early", {
+          encoding: "utf8",
+          flag: "wx",
+        })
+      ).toThrow();
+
+      unlinkSync(endpoint);
+      writeFileSync(endpoint, "new-publisher", {
+        encoding: "utf8",
+        flag: "wx",
+      });
+      settleLocalMigrateServerEndpointClaim(guard);
+
+      expect(readFileSync(endpoint, "utf8")).toBe("new-publisher");
+      expect(readdirSync(directory)).toEqual(["server.sock"]);
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }

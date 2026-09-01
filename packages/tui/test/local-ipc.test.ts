@@ -831,7 +831,80 @@ test("reports an invalid Node executable without crashing the TUI", async () => 
   ).rejects.toThrow("Unable to connect to the local Migrate Server");
 });
 
+const posixTest = process.platform === "win32" ? test.skip : test;
 const windowsTest = process.platform === "win32" ? test : test.skip;
+
+posixTest(
+  "recovers from a stale POSIX socket path",
+  async () => {
+    const serverIdentity = `stale-posix-socket-${randomUUID()}`;
+    const input = {
+      configPath: serverFixturePath("cancellation.config.ts"),
+      cwd: resolve("../.."),
+    };
+    const endpoint = localMigrateServerEndpoint(input, { serverIdentity });
+    await writeFile(endpoint, "stale", { encoding: "utf8", flag: "wx" });
+    let connection: MigrateConnection | undefined;
+
+    try {
+      connection = await connectLocalMigrateServerForTesting(input, {
+        serverIdentity,
+      });
+      expect(connection.serverInfo.protocolVersion).toBe(
+        MIGRATE_PROTOCOL_VERSION
+      );
+    } finally {
+      await connection?.dispose();
+      await unlink(endpoint).catch(() => undefined);
+    }
+  },
+  20_000
+);
+
+posixTest(
+  "server disposal preserves a replacement POSIX endpoint",
+  async () => {
+    const endpoint = join(
+      tmpdir(),
+      `migrate-transport-disposal-${randomUUID()}.sock`
+    );
+    const displacedEndpoint = `${endpoint}.bound`;
+    const child = spawn(
+      process.env.MIGRATE_TUI_NODE_EXECUTABLE ?? "node",
+      [
+        fileURLToPath(
+          new URL("./fixtures/socket-server-info.ts", import.meta.url)
+        ),
+        "--endpoint",
+        endpoint,
+        "--variant",
+        "protocol",
+      ],
+      { cwd: process.cwd(), stdio: "ignore" }
+    );
+    const childPid = child.pid;
+
+    if (childPid === undefined) {
+      throw new Error("POSIX transport fixture did not start");
+    }
+
+    try {
+      await waitForPath(endpoint, 3000);
+      await rename(endpoint, displacedEndpoint);
+      await writeFile(endpoint, "replacement", "utf8");
+
+      process.kill(childPid, "SIGTERM");
+      await waitForProcessExit(childPid, 5000);
+
+      expect(await readFile(endpoint, "utf8")).toBe("replacement");
+    } finally {
+      await terminateProcess(childPid);
+      await unlink(endpoint).catch(() => undefined);
+      await unlink(displacedEndpoint).catch(() => undefined);
+    }
+  },
+  10_000
+);
 
 for (const [variant, discovery] of [
   [

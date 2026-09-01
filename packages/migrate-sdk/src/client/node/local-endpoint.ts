@@ -164,6 +164,150 @@ export interface LocalMigrateServerEndpointEnvironment {
   readonly user: number | string;
 }
 
+export interface LocalMigrateServerPosixEndpointIdentity {
+  readonly device: bigint;
+  readonly inode: bigint;
+}
+
+export const readLocalMigrateServerPosixEndpointIdentity = (
+  endpoint: string
+): LocalMigrateServerPosixEndpointIdentity | undefined => {
+  try {
+    const stats = lstatSync(endpoint, { bigint: true });
+    return { device: stats.dev, inode: stats.ino };
+  } catch (cause) {
+    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") {
+      return;
+    }
+    throw cause;
+  }
+};
+
+const samePosixEndpointIdentity = (
+  first: LocalMigrateServerPosixEndpointIdentity,
+  second: LocalMigrateServerPosixEndpointIdentity
+): boolean => first.device === second.device && first.inode === second.inode;
+
+export interface LocalMigrateServerEndpointClaim {
+  readonly claimedPath: string;
+  readonly endpoint: string;
+  readonly restore: boolean;
+  readonly verification:
+    | { readonly failed: false }
+    | { readonly cause: unknown; readonly failed: true };
+}
+
+export const claimLocalMigrateServerEndpoint = (
+  endpoint: string,
+  ownsClaim: (claimedPath: string) => boolean
+): LocalMigrateServerEndpointClaim | undefined => {
+  const claimedPath = `${endpoint}.${process.pid}.${randomUUID()}.claim`;
+  try {
+    renameSync(endpoint, claimedPath);
+  } catch (cause) {
+    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") {
+      return;
+    }
+    throw cause;
+  }
+
+  try {
+    return {
+      claimedPath,
+      endpoint,
+      restore: !ownsClaim(claimedPath),
+      verification: { failed: false },
+    };
+  } catch (cause) {
+    return {
+      claimedPath,
+      endpoint,
+      restore: true,
+      verification: { cause, failed: true },
+    };
+  }
+};
+
+export const guardLocalMigrateServerEndpoint = (
+  endpoint: string,
+  ownsGuard: (guardPath: string) => boolean
+): LocalMigrateServerEndpointClaim | undefined => {
+  const guardPath = `${endpoint}.${process.pid}.${randomUUID()}.guard`;
+  try {
+    linkSync(endpoint, guardPath);
+  } catch (cause) {
+    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") {
+      return;
+    }
+    throw cause;
+  }
+
+  try {
+    return {
+      claimedPath: guardPath,
+      endpoint,
+      restore: !ownsGuard(guardPath),
+      verification: { failed: false },
+    };
+  } catch (cause) {
+    return {
+      claimedPath: guardPath,
+      endpoint,
+      restore: true,
+      verification: { cause, failed: true },
+    };
+  }
+};
+
+export const settleLocalMigrateServerEndpointClaim = (
+  claim: LocalMigrateServerEndpointClaim
+): void => {
+  const removeClaim = () => {
+    try {
+      unlinkSync(claim.claimedPath);
+    } catch (cause) {
+      if (
+        !(cause instanceof Error && "code" in cause) ||
+        (cause as NodeJS.ErrnoException).code !== "ENOENT"
+      ) {
+        throw cause;
+      }
+    }
+  };
+  const restoreClaim = () => {
+    try {
+      linkSync(claim.claimedPath, claim.endpoint);
+    } catch (cause) {
+      if (
+        !(cause instanceof Error && "code" in cause) ||
+        (cause as NodeJS.ErrnoException).code !== "EEXIST"
+      ) {
+        throw cause;
+      }
+    }
+  };
+
+  try {
+    if (claim.restore) {
+      restoreClaim();
+    }
+  } catch (cause) {
+    if (claim.verification.failed) {
+      throw new AggregateError(
+        [claim.verification.cause, cause],
+        "Migrate Server endpoint ownership verification failed and its claim could not be restored"
+      );
+    }
+    throw cause;
+  }
+
+  removeClaim();
+
+  if (claim.verification.failed) {
+    throw claim.verification.cause;
+  }
+};
+
 export const makeLocalMigrateServerEndpoint = (
   { buildId, configPath, cwd }: LocalMigrateServerEndpointInput,
   environment: LocalMigrateServerEndpointEnvironment
@@ -189,88 +333,39 @@ export const makeLocalMigrateServerEndpoint = (
 export const removeLocalMigrateServerEndpoint = (
   endpoint: string,
   platform: NodeJS.Platform = process.platform,
-  expectedDiscovery?: string
+  expectedDiscovery?: string,
+  expectedPosixIdentity?: LocalMigrateServerPosixEndpointIdentity
 ): void => {
   if (platform === "win32") {
     if (expectedDiscovery === undefined) {
       return;
     }
 
-    const claimedPath = `${endpoint}.${process.pid}.${randomUUID()}.claim`;
-    try {
-      renameSync(endpoint, claimedPath);
-    } catch (cause) {
-      if (
-        cause instanceof Error &&
-        "code" in cause &&
-        cause.code === "ENOENT"
-      ) {
-        return;
-      }
-      throw cause;
+    const claim = claimLocalMigrateServerEndpoint(
+      endpoint,
+      (claimedPath) => readFileSync(claimedPath, "utf8") === expectedDiscovery
+    );
+    if (claim !== undefined) {
+      settleLocalMigrateServerEndpointClaim(claim);
     }
-
-    let removeClaim = false;
-    const restoreClaim = () => {
-      try {
-        linkSync(claimedPath, endpoint);
-      } catch (cause) {
-        if (
-          !(cause instanceof Error && "code" in cause) ||
-          (cause as NodeJS.ErrnoException).code !== "EEXIST"
-        ) {
-          throw cause;
-        }
-      }
-      removeClaim = true;
-    };
-    const removeClaimedFile = () => {
-      try {
-        unlinkSync(claimedPath);
-      } catch (cause) {
-        if (
-          !(cause instanceof Error && "code" in cause) ||
-          (cause as NodeJS.ErrnoException).code !== "ENOENT"
-        ) {
-          throw cause;
-        }
-      }
-    };
-
-    try {
-      if (readFileSync(claimedPath, "utf8") === expectedDiscovery) {
-        removeClaim = true;
-      } else {
-        restoreClaim();
-      }
-    } catch (cause) {
-      if (!removeClaim) {
-        try {
-          restoreClaim();
-        } catch {
-          // Preserve the claimed file when it cannot be restored safely.
-        }
-      }
-      if (removeClaim) {
-        removeClaimedFile();
-      }
-      throw cause;
-    }
-
-    removeClaimedFile();
 
     return;
   }
 
-  try {
-    unlinkSync(endpoint);
-  } catch (cause) {
-    if (
-      !(cause instanceof Error && "code" in cause) ||
-      (cause as NodeJS.ErrnoException).code !== "ENOENT"
-    ) {
-      throw cause;
-    }
+  if (expectedPosixIdentity === undefined) {
+    return;
+  }
+
+  const claim = claimLocalMigrateServerEndpoint(endpoint, (claimedPath) => {
+    const claimedIdentity =
+      readLocalMigrateServerPosixEndpointIdentity(claimedPath);
+    return (
+      claimedIdentity !== undefined &&
+      samePosixEndpointIdentity(claimedIdentity, expectedPosixIdentity)
+    );
+  });
+  if (claim !== undefined) {
+    settleLocalMigrateServerEndpointClaim(claim);
   }
 };
 
