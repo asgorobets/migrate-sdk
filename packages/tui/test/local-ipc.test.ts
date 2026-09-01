@@ -13,13 +13,16 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { Effect } from "effect";
 import { toMigrationDefinitionId } from "migrate-sdk";
+import type { MigrateConnection } from "migrate-sdk/client/node";
 import {
   connectLocalMigrateServerForTesting,
   localMigrateServerEndpoint,
 } from "migrate-sdk/client/node/testing";
 import { MIGRATE_PROTOCOL_VERSION } from "migrate-sdk/protocol";
 import { makeMigrationTuiRuntime } from "../src/index.ts";
+import { makeMigrationTuiRuntimeWithLocalConnection } from "../src/server/tui-runtime.ts";
 import { makeMigrationTuiRuntimeForTesting } from "./support/tui-runtime.ts";
 
 const LOCK_ERROR_PATTERN = /lock/i;
@@ -173,6 +176,117 @@ test("Bun operates a Node-only migration through local Effect RPC", async () => 
     expect((await runtime.refresh()).rows[0]?.status?.durable.migrated).toBe(1);
   } finally {
     await runtime.dispose?.();
+  }
+}, 20_000);
+
+test("local commands use short-lived connections", async () => {
+  const serverIdentity = `tui-command-connections-${randomUUID()}`;
+  let connectionCount = 0;
+  let disposalCount = 0;
+  const runtime = await makeMigrationTuiRuntimeWithLocalConnection(
+    {
+      configPath: serverFixturePath("cancellation.config.ts"),
+      cwd: resolve("../.."),
+    },
+    (input) => {
+      connectionCount += 1;
+      return connectLocalMigrateServerForTesting(input, {
+        serverIdentity,
+      }).then((connection) => ({
+        ...connection,
+        dispose: async () => {
+          disposalCount += 1;
+          await connection.dispose();
+        },
+      }));
+    }
+  );
+
+  try {
+    expect(connectionCount).toBe(1);
+    expect(disposalCount).toBe(0);
+    await runtime.refresh();
+    expect(connectionCount).toBe(2);
+    expect(disposalCount).toBe(1);
+    await runtime.listActiveRuns();
+    expect(connectionCount).toBe(3);
+    expect(disposalCount).toBe(2);
+  } finally {
+    await runtime.dispose?.();
+  }
+  expect(disposalCount).toBe(3);
+}, 20_000);
+
+test("runtime disposal aborts and drains active local commands", async () => {
+  const serverIdentity = `tui-command-disposal-${randomUUID()}`;
+  let connectionCount = 0;
+  let commandDisposed = false;
+  let resolveCommandStarted: (() => void) | undefined;
+  const commandStarted = new Promise<void>((resolveStarted) => {
+    resolveCommandStarted = resolveStarted;
+  });
+  const runtime = await makeMigrationTuiRuntimeWithLocalConnection(
+    {
+      configPath: serverFixturePath("cancellation.config.ts"),
+      cwd: resolve("../.."),
+    },
+    (input) => {
+      connectionCount += 1;
+      const currentConnection = connectionCount;
+
+      return connectLocalMigrateServerForTesting(input, {
+        serverIdentity,
+      }).then((connection) => {
+        if (currentConnection !== 2) {
+          return connection;
+        }
+
+        return {
+          ...connection,
+          dispose: async () => {
+            await new Promise((resolveDelay) => setTimeout(resolveDelay, 25));
+            await connection.dispose();
+            commandDisposed = true;
+          },
+          runPromise: <Value, CommandError>(
+            _effect: Effect.Effect<Value, CommandError>,
+            options?: { readonly signal?: AbortSignal }
+          ): Promise<Value> => {
+            resolveCommandStarted?.();
+
+            return new Promise<Value>((_resolve, reject) => {
+              const signal = options?.signal;
+
+              if (signal?.aborted) {
+                reject(signal.reason);
+                return;
+              }
+              signal?.addEventListener("abort", () => reject(signal.reason), {
+                once: true,
+              });
+            });
+          },
+        } satisfies MigrateConnection;
+      });
+    }
+  );
+  let disposed = false;
+
+  try {
+    const commandOutcome = runtime.refresh().then(
+      () => "resolved" as const,
+      () => "rejected" as const
+    );
+    await within(commandStarted, 5000);
+    await runtime.dispose?.();
+    disposed = true;
+
+    expect(await commandOutcome).toBe("rejected");
+    expect(commandDisposed).toBe(true);
+  } finally {
+    if (!disposed) {
+      await runtime.dispose?.();
+    }
   }
 }, 20_000);
 

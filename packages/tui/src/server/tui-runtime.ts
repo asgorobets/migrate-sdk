@@ -56,6 +56,7 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
       }
     | undefined;
   const runtimeController = new AbortController();
+  const activeLocalCommands = new Set<Promise<void>>();
   const sourceScanSnapshot = (
     dashboard: Pick<MigrateDashboard, "activeRuns" | "rows" | "scannedSource">
   ) => ({
@@ -70,6 +71,44 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
     ...sourceScanSnapshot(dashboard),
     resumeToken,
   });
+
+  const runCommand = <Value, CommandError>(
+    command: (
+      commandClient: MigrateConnection["client"]
+    ) => Effect.Effect<Value, CommandError>
+  ): Promise<Value> => {
+    if (input.server !== undefined) {
+      return runPromise(command(client), {
+        signal: runtimeController.signal,
+      });
+    }
+
+    const execution = (async () => {
+      runtimeController.signal.throwIfAborted();
+      const commandConnection = await connect();
+
+      try {
+        runtimeController.signal.throwIfAborted();
+        return await commandConnection.runPromise(
+          command(commandConnection.client),
+          { signal: runtimeController.signal }
+        );
+      } finally {
+        await commandConnection.dispose();
+      }
+    })();
+    const settled = execution.then(
+      () => {
+        activeLocalCommands.delete(settled);
+      },
+      () => {
+        activeLocalCommands.delete(settled);
+      }
+    );
+    activeLocalCommands.add(settled);
+
+    return execution;
+  };
 
   const consumeObservation = async <ObservationError>(
     observationConnection: MigrateConnection,
@@ -146,8 +185,8 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
   const startOperation = (
     operation: MigratePreparedOperation
   ): Promise<MigrateRunStartResult> =>
-    runPromise(
-      client.StartOperation({
+    runCommand((commandClient) =>
+      commandClient.StartOperation({
         acceptedFingerprint: operation.fingerprint,
         request: operation.request,
       })
@@ -184,29 +223,36 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
   const dispose = async (): Promise<void> => {
     runtimeController.abort();
     detachRunObservation();
+    await Promise.all(activeLocalCommands);
     await connection.dispose();
   };
 
-  // Keep long-lived streams off the command transport. Bun's Windows named
-  // pipes cannot reliably multiplex a stream with concurrent command RPCs.
+  // Keep long-lived streams and local commands off the lifecycle transport.
+  // Reusing an active local named-pipe connection is unreliable on Windows.
 
   return {
     breakLock: (lock: MigrationDefinitionLock) =>
-      runPromise(client.BreakLock({ lock })),
+      runCommand((commandClient) => commandClient.BreakLock({ lock })),
     environmentLabel: serverInfo.environment.label ?? serverInfo.environment.id,
     detachForExit,
     detachRunObservation,
     dispose,
     groups: initialDashboard.dashboard.groups,
-    listActiveRuns: () => runPromise(client.GetActiveRuns()),
-    listMessages: (target) => runPromise(client.GetMessages({ target })),
+    listActiveRuns: () =>
+      runCommand((commandClient) => commandClient.GetActiveRuns()),
+    listMessages: (target) =>
+      runCommand((commandClient) => commandClient.GetMessages({ target })),
     listSourceIdentityHistory: (definitionId) =>
-      runPromise(client.GetSourceIdentityHistory({ definitionId })),
+      runCommand((commandClient) =>
+        commandClient.GetSourceIdentityHistory({ definitionId })
+      ),
     getSourceItemTotals: (definitionIds) =>
-      runPromise(client.GetSourceItemTotals({ definitionIds })),
+      runCommand((commandClient) =>
+        commandClient.GetSourceItemTotals({ definitionIds })
+      ),
     normalizeSourceIdentity: (definitionId, sourceIdentity) =>
-      runPromise(
-        client.NormalizeSourceIdentity({ definitionId, sourceIdentity })
+      runCommand((commandClient) =>
+        commandClient.NormalizeSourceIdentity({ definitionId, sourceIdentity })
       ),
     observeDashboard: async ({
       after,
@@ -278,18 +324,21 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
       }
     },
     prepare: (selection, action, options = {}) =>
-      runPromise(
-        client.PrepareOperation({
+      runCommand((commandClient) =>
+        commandClient.PrepareOperation({
           action,
           options,
           selection,
         })
       ),
-    refresh: () => runPromise(client.GetDashboard()).then(snapshot),
+    refresh: () =>
+      runCommand((commandClient) => commandClient.GetDashboard()).then(
+        snapshot
+      ),
     rows: initialDashboard.dashboard.rows,
     scanSource: (target, options = {}) =>
-      runPromise(
-        client.ScanSource({
+      runCommand((commandClient) =>
+        commandClient.ScanSource({
           ...(options.concurrency === undefined
             ? {}
             : { concurrency: options.concurrency }),
@@ -297,7 +346,8 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
         })
       ).then(sourceScanSnapshot),
     start: startOperation,
-    stopRun: (runId) => runPromise(client.StopRun({ runId })),
+    stopRun: (runId) =>
+      runCommand((commandClient) => commandClient.StopRun({ runId })),
   };
 };
 
