@@ -1,6 +1,6 @@
 {
   "name": "@migrate-sdk/tui",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Interactive terminal UI for Migrate SDK",
   "type": "module",
   "sideEffects": [],
