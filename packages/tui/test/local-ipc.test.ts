@@ -16,13 +16,16 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layerNet } from "@effect/platform-node/NodeSocket";
 import { type Effect, Layer, ManagedRuntime } from "effect";
-import { layerProtocolSocket } from "effect/unstable/rpc/RpcClient";
+import {
+  layerProtocolSocket,
+  make as makeRpcClient,
+} from "effect/unstable/rpc/RpcClient";
 import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
 import { toMigrationDefinitionId } from "migrate-sdk";
-import { MigrateClient } from "migrate-sdk/client";
 import type { MigrateConnection } from "migrate-sdk/client/node";
 import {
   connectLocalMigrateServerForTesting,
+  LocalAuthorizedMigrateStreamingRpcsForTesting,
   localMigrateServerEndpoint,
 } from "migrate-sdk/client/node/testing";
 import { MIGRATE_PROTOCOL_VERSION } from "migrate-sdk/protocol";
@@ -949,12 +952,12 @@ windowsTest(
       Layer.provide(layerNet({ host: "127.0.0.1", port: discovery.port })),
       Layer.provide(layerNdjson)
     );
-    const runtime = ManagedRuntime.make(
-      MigrateClient.streamingLayer.pipe(Layer.provide(ProtocolLive))
-    );
+    const runtime = ManagedRuntime.make(ProtocolLive);
 
     try {
-      const client = await runtime.runPromise(MigrateClient);
+      const client = await runtime.runPromise(
+        makeRpcClient(LocalAuthorizedMigrateStreamingRpcsForTesting)
+      );
 
       await expect(runtime.runPromise(client.GetServerInfo())).rejects.toThrow(
         "Local Migrate Server authorization failed"

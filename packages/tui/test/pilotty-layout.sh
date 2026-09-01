@@ -22,6 +22,7 @@ LOCK_SESSION="migrate-tui-lock"
 LIVE_PROGRESS_SESSION="migrate-tui-live-progress"
 CATALOG_SESSION="migrate-tui-sqlite-catalog"
 CATALOG_STANDALONE_SESSION="migrate-tui-sqlite-catalog-standalone"
+CATALOG_RUNNING_PROGRESS_PATTERN="(^|[^0-9])([89][0-9]|1[0-9][0-9]) migrated"
 ACTIVE_SESSION=""
 
 mkdir -p "${ARTIFACT_DIR}"
@@ -366,7 +367,7 @@ sleep 0.2
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 10000 \
   "x Stop run" >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 30000 --regex \
-  "[89][0-9] migrated" >/dev/null
+  "${CATALOG_RUNNING_PROGRESS_PATTERN}" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${CATALOG_STANDALONE_SESSION}" \
   --settle 150 \
   --strict \
@@ -965,7 +966,7 @@ assert_contains \
   "only the catalog migration with item failures is marked failed"
 assert_matches \
   "${ARTIFACT_DIR}/sqlite-catalog-standalone-progress.txt" \
-  "[89][0-9] migrated" \
+  "${CATALOG_RUNNING_PROGRESS_PATTERN}" \
   "standalone books execution reports live committed progress"
 assert_contains \
   "${ARTIFACT_DIR}/sqlite-catalog-standalone-progress.txt" \
