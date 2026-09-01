@@ -13,6 +13,7 @@ import {
 import type {
   MigrateActiveRun,
   MigrateDashboard,
+  MigrateSelection,
   MigrateServerInfo,
 } from "../../src/protocol/index.ts";
 import { MIGRATE_PROTOCOL_VERSION } from "../../src/protocol/index.ts";
@@ -111,6 +112,23 @@ export const makeAuthorizedRemoteMigrateServerHttp = (
     authorizationMiddleware(authorize)
   );
 
+const requestedDefinitionIds = (
+  selection: MigrateSelection
+): "all" | readonly MigrationDefinitionId[] => {
+  switch (selection.kind) {
+    case "all":
+      return "all";
+    case "definitions":
+      return selection.definitionIds;
+    case "group":
+      return [remoteMigrateDefinitionId];
+    default: {
+      const unhandled: never = selection;
+      return unhandled;
+    }
+  }
+};
+
 export const remoteMigrateServerBackend: MigrateServerBackend<RemoteMigrateServerTestOperation> =
   {
     breakLock: (lock: MigrationDefinitionLock) =>
@@ -138,6 +156,34 @@ export const remoteMigrateServerBackend: MigrateServerBackend<RemoteMigrateServe
     getActiveRuns: Effect.succeed([remoteMigrateActiveRun]),
     getDashboard: Effect.succeed(remoteMigrateDashboard),
     getMessages: () => Effect.succeed([]),
+    getRegistry: Effect.succeed({
+      entries: remoteMigrateDashboard.rows.map((row) => row.entry),
+      groups: remoteMigrateDashboard.groups,
+    }),
+    getRegistryMessages: (request) =>
+      Effect.succeed({
+        includedDefinitionIds: [remoteMigrateDefinitionId],
+        messages: [],
+        notices: [],
+        ...(request.selection.kind === "group"
+          ? { requestedGroup: request.selection.groupId }
+          : {}),
+        requestedDefinitionIds: requestedDefinitionIds(request.selection),
+      }),
+    getRegistryStatus: (request) =>
+      Effect.succeed({
+        definitions: remoteMigrateDashboard.rows.flatMap((row) =>
+          row.status === undefined ? [] : [row.status]
+        ),
+        includedDefinitionIds: [remoteMigrateDefinitionId],
+        notices: [],
+        ...(request.selection.kind === "group"
+          ? { requestedGroup: request.selection.groupId }
+          : {}),
+        requestedDefinitionIds: requestedDefinitionIds(request.selection),
+        scanSource: request.scanSource,
+        warnings: [],
+      }),
     getRunProgress: () =>
       Effect.succeed({
         definitions: remoteMigrateDashboard.rows.flatMap((row) =>

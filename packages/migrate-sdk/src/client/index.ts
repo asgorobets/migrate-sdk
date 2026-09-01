@@ -28,6 +28,7 @@ import {
   makeMigrateClientService,
   makeStreamingMigrateClientService,
 } from "./internal/client-service.ts";
+import { rpcClientHttpStatusCode } from "./internal/rpc-client-error.ts";
 
 type MigrateHttpRpcClient = RpcClient<
   Rpcs<typeof MigrateHttpRpcs>,
@@ -38,29 +39,15 @@ export type { MigrateClientService } from "./internal/client-service.ts";
 
 const transientHttpStatuses = new Set([408, 429, 500, 502, 503, 504]);
 
-const statusCodeFromCause = (cause: unknown): number | undefined => {
-  if (
-    typeof cause !== "object" ||
-    cause === null ||
-    !("response" in cause) ||
-    typeof cause.response !== "object" ||
-    cause.response === null ||
-    !("status" in cause.response) ||
-    typeof cause.response.status !== "number"
-  ) {
-    return;
-  }
-
-  return cause.response.status;
-};
-
 const retryableHttpObservationFailure = (cause: unknown): boolean =>
   Schema.is(RpcClientError)(cause) &&
   cause.reason._tag === "HttpError" &&
   (cause.reason.kind === "TransportError" ||
     cause.reason.kind === "EmptyBodyError" ||
     (cause.reason.kind === "StatusCodeError" &&
-      transientHttpStatuses.has(statusCodeFromCause(cause.reason.cause) ?? 0)));
+      Option.exists(rpcClientHttpStatusCode(cause), (status) =>
+        transientHttpStatuses.has(status)
+      )));
 
 const leasedObservation = (
   client: MigrateHttpRpcClient,

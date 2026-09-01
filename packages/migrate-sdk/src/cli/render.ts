@@ -6,7 +6,6 @@ import type {
   MigrationDefinitionPlanNotice,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryConstructionIssue,
-  MigrationDefinitionRegistryEntry,
   MigrationDefinitionRegistryMessagesReport,
   MigrationDefinitionRegistryPlanningError,
   MigrationDefinitionRegistrySelectionReport,
@@ -31,6 +30,16 @@ interface MigrationDefinitionGraphEdge {
   readonly kind: "required" | "optional";
   readonly toDefinitionId: MigrationDefinitionId;
   readonly unresolved: boolean;
+}
+
+interface RegistryEntryProjection {
+  readonly dependencies: {
+    readonly optional: readonly MigrationDefinitionId[];
+    readonly required: readonly MigrationDefinitionId[];
+  };
+  readonly group?: MigrationDefinitionGroupId | undefined;
+  readonly hasRollback: boolean;
+  readonly id: MigrationDefinitionId;
 }
 
 const ansi = {
@@ -272,11 +281,10 @@ const formatOptionalDependencies = (
         )
         .join(", ");
 
-export const renderRegistryList = (
-  registry: MigrationDefinitionRegistry,
+export const renderRegistryEntriesList = (
+  entries: readonly RegistryEntryProjection[],
   options: RenderOptions = {}
 ): string => {
-  const entries = registry.list();
   const registeredIds = new Set(entries.map((entry) => entry.id));
 
   if (entries.length === 0) {
@@ -332,8 +340,13 @@ export const renderRegistryList = (
   ].join("\n");
 };
 
+export const renderRegistryList = (
+  registry: MigrationDefinitionRegistry,
+  options: RenderOptions = {}
+): string => renderRegistryEntriesList(registry.list(), options);
+
 const collectGraphEdges = (
-  entries: readonly MigrationDefinitionRegistryEntry[]
+  entries: readonly RegistryEntryProjection[]
 ): readonly MigrationDefinitionGraphEdge[] => {
   const registeredIds = new Set(entries.map((entry) => entry.id));
 
@@ -374,12 +387,11 @@ const renderGraphEdge = (
   return `${edge.fromDefinitionId}(${styledLabel}) --> ${edge.toDefinitionId}`;
 };
 
-export const renderRegistryGraph = (
-  registry: MigrationDefinitionRegistry,
+export const renderRegistryEntriesGraph = (
+  entries: readonly RegistryEntryProjection[],
   focusedDefinitionId?: MigrationDefinitionId,
   options: RenderOptions = {}
 ): string => {
-  const entries = registry.list();
   const edges = collectGraphEdges(entries).filter(
     (edge) =>
       focusedDefinitionId === undefined ||
@@ -400,6 +412,13 @@ export const renderRegistryGraph = (
     ...edges.map((edge) => renderGraphEdge(edge, options)),
   ].join("\n");
 };
+
+export const renderRegistryGraph = (
+  registry: MigrationDefinitionRegistry,
+  focusedDefinitionId?: MigrationDefinitionId,
+  options: RenderOptions = {}
+): string =>
+  renderRegistryEntriesGraph(registry.list(), focusedDefinitionId, options);
 
 const renderRequestedDefinitionIdsInline = (
   requestedDefinitionIds: MigratePlanProjection["requestedDefinitionIds"]

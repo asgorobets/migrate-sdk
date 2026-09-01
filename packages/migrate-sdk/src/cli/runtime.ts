@@ -12,16 +12,26 @@ import {
 } from "effect";
 import { Service } from "effect/Context";
 import { Prompt } from "effect/unstable/cli";
+import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import {
   connectMigrateServer,
   type MigrateServerConnectionInput,
 } from "../client/node/index.ts";
 import type { MigrationRunId } from "../domain/ids.ts";
+import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type {
   MigrateActiveRun,
+  MigrateBreakLockResult,
+  MigrateDashboardSnapshot,
   MigrateObservationEvent,
   MigrateOperationRequest,
   MigratePreparedOperation,
+  MigrateProtocolError,
+  MigrateRegistry,
+  MigrateRegistryMessagesReport,
+  MigrateRegistryMessagesRequest,
+  MigrateRegistryStatusReport,
+  MigrateRegistryStatusRequest,
   MigrateRunStartResult,
   MigrateRunStopResult,
 } from "../protocol/index.ts";
@@ -46,22 +56,41 @@ export class MigrationCliConnectionError extends Schema.TaggedError<MigrationCli
   }
 ) {}
 
+export type MigrationCliServerError = MigrateProtocolError | RpcClientError;
+
 export interface MigrationCliServerConnection {
+  readonly breakLock: (
+    lock: MigrationDefinitionLock
+  ) => Effect.Effect<MigrateBreakLockResult, MigrationCliServerError>;
   readonly dispose: () => Promise<void>;
-  readonly getActiveRuns: Effect.Effect<readonly MigrateActiveRun[], unknown>;
+  readonly getActiveRuns: Effect.Effect<
+    readonly MigrateActiveRun[],
+    MigrationCliServerError
+  >;
+  readonly getDashboard: Effect.Effect<
+    MigrateDashboardSnapshot,
+    MigrationCliServerError
+  >;
+  readonly getRegistry: Effect.Effect<MigrateRegistry, MigrationCliServerError>;
+  readonly getRegistryMessages: (
+    input: MigrateRegistryMessagesRequest
+  ) => Effect.Effect<MigrateRegistryMessagesReport, MigrationCliServerError>;
+  readonly getRegistryStatus: (
+    input: MigrateRegistryStatusRequest
+  ) => Effect.Effect<MigrateRegistryStatusReport, MigrationCliServerError>;
   readonly observeRun: (
     runId: MigrationRunId
-  ) => Stream.Stream<MigrateObservationEvent, unknown>;
+  ) => Stream.Stream<MigrateObservationEvent, MigrationCliServerError>;
   readonly prepareOperation: (
     request: MigrateOperationRequest
-  ) => Effect.Effect<MigratePreparedOperation, unknown>;
+  ) => Effect.Effect<MigratePreparedOperation, MigrationCliServerError>;
   readonly startOperation: (input: {
     readonly acceptedFingerprint: MigratePreparedOperation["fingerprint"];
     readonly request: MigrateOperationRequest;
-  }) => Effect.Effect<MigrateRunStartResult, unknown>;
+  }) => Effect.Effect<MigrateRunStartResult, MigrationCliServerError>;
   readonly stopRun: (
     runId: MigrationRunId
-  ) => Effect.Effect<MigrateRunStopResult, unknown>;
+  ) => Effect.Effect<MigrateRunStopResult, MigrationCliServerError>;
 }
 
 export interface MigrationCliRuntimeShape {
@@ -167,8 +196,15 @@ export class MigrationCliRuntime extends Service<
             try: () => connectMigrateServer(input),
           }).pipe(
             Effect.map((connection) => ({
+              breakLock: (lock) => connection.client.BreakLock({ lock }),
               dispose: connection.dispose,
               getActiveRuns: connection.client.GetActiveRuns(),
+              getDashboard: connection.client.GetDashboard(),
+              getRegistry: connection.client.GetRegistry(),
+              getRegistryMessages: (input) =>
+                connection.client.GetRegistryMessages(input),
+              getRegistryStatus: (input) =>
+                connection.client.GetRegistryStatus(input),
               observeRun: (runId: MigrationRunId) =>
                 connection.client.observeRun({ runId }),
               prepareOperation: (request) =>

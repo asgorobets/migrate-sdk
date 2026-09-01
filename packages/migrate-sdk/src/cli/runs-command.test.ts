@@ -14,6 +14,10 @@ import { pretty as prettyCause } from "effect/Cause";
 import { isFailure, isSuccess } from "effect/Exit";
 import { TestClock, TestConsole } from "effect/testing";
 import { CliOutput, Command } from "effect/unstable/cli";
+import {
+  RpcClientDefect,
+  RpcClientError,
+} from "effect/unstable/rpc/RpcClientError";
 import type { MigrateServerConnectionInput } from "../client/node/index.ts";
 import {
   toMigrationDefinitionGroupId,
@@ -31,7 +35,10 @@ import type {
   MigratePreparedOperation,
   MigrateTerminalSummary,
 } from "../protocol/index.ts";
-import { MigratePlanFingerprint } from "../protocol/index.ts";
+import {
+  MigrateDashboardResumeToken,
+  MigratePlanFingerprint,
+} from "../protocol/index.ts";
 import { migrateCommand } from "./command.ts";
 import type { ActiveMigrationCliInterrupts } from "./interrupts.ts";
 import {
@@ -43,6 +50,10 @@ import {
 
 const definitionId = toMigrationDefinitionId("articles");
 const runId = toMigrationRunId("run-cli-observation");
+const rpcFailure = (message: string) =>
+  new RpcClientError({
+    reason: new RpcClientDefect({ cause: message, message }),
+  });
 const activeRun: MigrateActiveRun = {
   definitionIds: [definitionId],
   execution: { adapter: "workflow-sdk", executionId: "workflow-1" },
@@ -143,11 +154,24 @@ const makeConnection = (
   overrides: Partial<MigrationCliServerConnection> = {},
   onDispose: () => void = () => undefined
 ): MigrationCliServerConnection => ({
+  breakLock: () => Effect.die("Unexpected lock break"),
   dispose: () => {
     onDispose();
     return Promise.resolve();
   },
   getActiveRuns: Effect.succeed([]),
+  getDashboard: Effect.succeed({
+    dashboard: {
+      activeRuns: [],
+      groups: [],
+      rows: [],
+      scannedSource: false,
+    },
+    resumeToken: MigrateDashboardResumeToken.make("dashboard-empty"),
+  }),
+  getRegistry: Effect.succeed({ entries: [], groups: [] }),
+  getRegistryMessages: () => Effect.die("Unexpected registry messages read"),
+  getRegistryStatus: () => Effect.die("Unexpected registry status read"),
   observeRun: () => Stream.die("Unexpected run observation"),
   prepareOperation: () => Effect.die("Unexpected operation preparation"),
   startOperation: () => Effect.die("Unexpected operation start"),
@@ -406,7 +430,7 @@ describe("migrate runs", () => {
       const configPath =
         "/workspace/migrations $HOME/$(touch-nope)/operator's.config.ts";
       const connection = makeConnection({
-        observeRun: () => Stream.fail(new Error("connection dropped")),
+        observeRun: () => Stream.fail(rpcFailure("connection dropped")),
       });
       const result = yield* runCli(
         ["runs", "observe", runId, "--config", configPath],
@@ -610,7 +634,7 @@ describe("migrate runs", () => {
       const unsafeServerUrl =
         "https://migrate.example/api/$(touch-nope)/$HOME/`id`/operator's";
       const connection = makeConnection({
-        observeRun: () => Stream.fail(new Error("connection dropped")),
+        observeRun: () => Stream.fail(rpcFailure("connection dropped")),
       });
       const result = yield* runCli(
         ["runs", "observe", unsafeRunId, "--server", unsafeServerUrl],
@@ -898,13 +922,7 @@ describe("migrate runs", () => {
               })
             )
           ).pipe(Stream.concat(Stream.never)),
-        stopRun: () =>
-          Effect.fail(
-            new MigrationCliConnectionError({
-              cause: "stop request failed",
-              message: "stop request failed",
-            })
-          ),
+        stopRun: () => Effect.fail(rpcFailure("stop request failed")),
       });
       const resultFiber = yield* runCli(
         ["runs", "observe", runId],

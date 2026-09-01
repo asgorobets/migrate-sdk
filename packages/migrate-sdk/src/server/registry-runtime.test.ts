@@ -11,6 +11,7 @@ import {
   SourceIdentity,
   toMigrationDefinitionId,
   toMigrationRunId,
+  toSourceVersion,
 } from "../index.ts";
 import { InMemoryMigrationStore } from "../stores/in-memory/in-memory-migration-store.ts";
 import { makeRegistryMigrateServerRuntime } from "./registry-runtime.ts";
@@ -25,6 +26,211 @@ describe("registry migration server runtime", () => {
     expect(runtime.rows).toEqual([]);
     expect(runtime.groups).toEqual([]);
   });
+
+  it.effect("returns canonical empty registry reports", () =>
+    Effect.gen(function* () {
+      const runtime = makeRegistryMigrateServerRuntime({
+        executable: MigrationExecutable.inlineService,
+        registry: MigrationDefinitionRegistry.make({ definitions: [] }),
+      });
+
+      expect(
+        yield* runtime.getRegistryStatus({
+          scanSource: false,
+          selection: { kind: "all" },
+          withDependencies: false,
+        })
+      ).toEqual({
+        definitions: [],
+        includedDefinitionIds: [],
+        notices: [],
+        requestedDefinitionIds: "all",
+        scanSource: false,
+        warnings: [],
+      });
+      expect(
+        yield* runtime.getRegistryMessages({
+          selection: { kind: "all" },
+          withDependencies: false,
+        })
+      ).toEqual({
+        includedDefinitionIds: [],
+        messages: [],
+        notices: [],
+        requestedDefinitionIds: "all",
+      });
+    })
+  );
+
+  it.effect(
+    "preserves registry status selection and validation semantics",
+    () =>
+      Effect.gen(function* () {
+        const identity = SourceIdentity.make({
+          id: "registry-server-status@v1",
+          schema: SourceIdentity.key("id", Schema.NonEmptyString),
+        });
+        const makeDefinition = (
+          id: "authors" | "articles",
+          required: readonly ReturnType<typeof toMigrationDefinitionId>[] = []
+        ) =>
+          MigrationDefinition.make({
+            dependencies: { required },
+            id: toMigrationDefinitionId(id),
+            process: () => Effect.void,
+            source: Source.make({
+              cursorSchema: Schema.Struct({ offset: Schema.Int }),
+              identity,
+              lookupStrategy: "direct",
+              read: () => Effect.succeed({ items: [] }),
+              readByIdentity: () => Effect.succeed(null),
+              sourceSchema: Schema.Struct({ title: Schema.String }),
+            }),
+            store: InMemoryMigrationStore.layer(),
+          });
+        const authorsId = toMigrationDefinitionId("authors");
+        const articlesId = toMigrationDefinitionId("articles");
+        const runtime = makeRegistryMigrateServerRuntime({
+          executable: MigrationExecutable.inlineService,
+          registry: MigrationDefinitionRegistry.make({
+            definitions: [
+              makeDefinition("authors"),
+              makeDefinition("articles", [authorsId]),
+            ] as const,
+          }),
+        });
+
+        expect(
+          yield* runtime
+            .getRegistryStatus({
+              scanSource: false,
+              selection: {
+                definitionIds: [articlesId],
+                kind: "definitions",
+              },
+              withDependencies: false,
+            })
+            .pipe(Effect.flip)
+        ).toMatchObject({
+          _tag: "MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError",
+          definitionId: articlesId,
+          missingDependencyIds: [authorsId],
+        });
+
+        const expanded = yield* runtime.getRegistryStatus({
+          scanSource: false,
+          selection: { definitionIds: [articlesId], kind: "definitions" },
+          withDependencies: true,
+        });
+        expect(expanded.includedDefinitionIds).toEqual([authorsId, articlesId]);
+        expect(
+          expanded.definitions.map((status) => status.definitionId)
+        ).toEqual([authorsId, articlesId]);
+
+        expect(
+          yield* runtime
+            .getRegistryStatus({
+              concurrency: 2,
+              scanSource: false,
+              selection: { kind: "all" },
+              withDependencies: false,
+            })
+            .pipe(Effect.flip)
+        ).toMatchObject({
+          _tag: "MigrationStatusRequestError",
+          message:
+            "Status concurrency is only valid when source scanning is enabled",
+        });
+        expect(
+          yield* runtime
+            .getRegistryStatus({
+              concurrency: 0,
+              scanSource: true,
+              selection: { kind: "all" },
+              withDependencies: false,
+            })
+            .pipe(Effect.flip)
+        ).toMatchObject({
+          _tag: "MigrationStatusRequestError",
+          message: "Status concurrency must be a positive integer",
+        });
+      })
+  );
+
+  it.effect("sorts registry messages globally across definitions", () =>
+    Effect.gen(function* () {
+      const identity = SourceIdentity.make({
+        id: "registry-server-messages@v1",
+        schema: SourceIdentity.key("id", Schema.NonEmptyString),
+      });
+      const state = InMemoryMigrationStore.makeState();
+      const store = InMemoryMigrationStore.layer(state);
+      const makeDefinition = (id: "authors" | "articles") =>
+        MigrationDefinition.make({
+          id: toMigrationDefinitionId(id),
+          process: () => Effect.void,
+          source: Source.make({
+            cursorSchema: Schema.Struct({ offset: Schema.Int }),
+            identity,
+            lookupStrategy: "direct",
+            read: () => Effect.succeed({ items: [] }),
+            readByIdentity: () => Effect.succeed(null),
+            sourceSchema: Schema.Struct({ title: Schema.String }),
+          }),
+          store,
+        });
+      const authorsId = toMigrationDefinitionId("authors");
+      const articlesId = toMigrationDefinitionId("articles");
+      const runId = toMigrationRunId("run-messages");
+      const addSkippedItem = (
+        definitionId: typeof authorsId,
+        sourceIdentity: string,
+        message: string,
+        updatedAt: Date
+      ) => {
+        state.itemStates.set(
+          InMemoryMigrationStore.itemStateKey(definitionId, sourceIdentity),
+          {
+            definitionId,
+            lastRunId: runId,
+            skipReason: message,
+            sourceIdentity: SourceIdentity.fromKey(identity, sourceIdentity),
+            sourceVersion: toSourceVersion("v1"),
+            status: "skipped",
+            updatedAt,
+          }
+        );
+      };
+      addSkippedItem(
+        authorsId,
+        "author-1",
+        "Older author message",
+        new Date("2026-08-29T11:00:00.000Z")
+      );
+      addSkippedItem(
+        articlesId,
+        "article-1",
+        "Newer article message",
+        new Date("2026-08-29T12:00:00.000Z")
+      );
+      const runtime = makeRegistryMigrateServerRuntime({
+        executable: MigrationExecutable.inlineService,
+        registry: MigrationDefinitionRegistry.make({
+          definitions: [makeDefinition("authors"), makeDefinition("articles")],
+        }),
+      });
+
+      const report = yield* runtime.getRegistryMessages({
+        selection: { kind: "all" },
+        withDependencies: false,
+      });
+
+      expect(report.messages.map((message) => message.message)).toEqual([
+        "Newer article message",
+        "Older author message",
+      ]);
+    })
+  );
 
   it.effect(
     "reports server-owned execution failures independently of durable failed items",

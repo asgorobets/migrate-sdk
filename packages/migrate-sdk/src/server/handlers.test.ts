@@ -64,6 +64,26 @@ const serverLayer = Layer.succeed(
     getActiveRuns: Effect.succeed(activeRuns),
     getDashboard: Effect.succeed(dashboardSnapshot),
     getMessages: () => Effect.succeed([]),
+    getRegistry: Effect.succeed({
+      entries: dashboard.rows.map((row) => row.entry),
+      groups: dashboard.groups,
+    }),
+    getRegistryMessages: () =>
+      Effect.succeed({
+        includedDefinitionIds: [MigrationDefinitionId.make("articles")],
+        messages: [],
+        notices: [],
+        requestedDefinitionIds: [MigrationDefinitionId.make("articles")],
+      }),
+    getRegistryStatus: () =>
+      Effect.succeed({
+        definitions: [],
+        includedDefinitionIds: [MigrationDefinitionId.make("articles")],
+        notices: [],
+        requestedDefinitionIds: [MigrationDefinitionId.make("articles")],
+        scanSource: false,
+        warnings: [],
+      }),
     getServerInfo: Effect.succeed(info),
     getSourceIdentityHistory: () => Effect.succeed([]),
     getSourceItemTotals: () =>
@@ -124,6 +144,22 @@ const program = Effect.gen(function* () {
   const client = yield* makeClient(MigrateStreamingRpcs);
   const serverInfo = yield* client.GetServerInfo();
   const currentDashboard = yield* client.GetDashboard();
+  const currentRegistry = yield* client.GetRegistry();
+  const registryMessages = yield* client.GetRegistryMessages({
+    selection: {
+      definitionIds: [MigrationDefinitionId.make("articles")],
+      kind: "definitions",
+    },
+    withDependencies: false,
+  });
+  const registryStatus = yield* client.GetRegistryStatus({
+    scanSource: false,
+    selection: {
+      definitionIds: [MigrationDefinitionId.make("articles")],
+      kind: "definitions",
+    },
+    withDependencies: false,
+  });
   const currentActiveRuns = yield* client.GetActiveRuns();
   const sourceItemTotals = yield* client.GetSourceItemTotals({
     definitionIds: [MigrationDefinitionId.make("articles")],
@@ -138,7 +174,10 @@ const program = Effect.gen(function* () {
   return {
     currentActiveRuns,
     currentDashboard,
+    currentRegistry,
     dashboardSnapshots: [...dashboardSnapshots],
+    registryMessages,
+    registryStatus,
     runEvents: [...runEvents],
     serverInfo,
     sourceItemTotals,
@@ -170,6 +209,24 @@ describe("Migrate Server RPC handlers", () => {
 
       expect(result.serverInfo).toEqual(info);
       expect(result.currentDashboard).toEqual(dashboardSnapshot);
+      expect(result.currentRegistry).toEqual({
+        entries: dashboard.rows.map((row) => row.entry),
+        groups: [],
+      });
+      expect(result.registryMessages).toEqual({
+        includedDefinitionIds: ["articles"],
+        messages: [],
+        notices: [],
+        requestedDefinitionIds: ["articles"],
+      });
+      expect(result.registryStatus).toEqual({
+        definitions: [],
+        includedDefinitionIds: ["articles"],
+        notices: [],
+        requestedDefinitionIds: ["articles"],
+        scanSource: false,
+        warnings: [],
+      });
       expect(result.dashboardSnapshots).toEqual([dashboardSnapshot]);
       expect(result.currentActiveRuns).toEqual(activeRuns);
       expect(result.sourceItemTotals).toEqual([

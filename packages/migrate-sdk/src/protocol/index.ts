@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 import { make as makeRpc } from "effect/unstable/rpc/Rpc";
 import { make as makeRpcGroup } from "effect/unstable/rpc/RpcGroup";
+import { MigrationStoreError, SourceError } from "../domain/errors.ts";
 import {
   MigrationDefinitionGroupId,
   MigrationDefinitionId,
@@ -17,7 +18,11 @@ import {
   MigrationDefinitionRegistryUnknownGroupError,
 } from "../domain/registry.ts";
 import { activeMigrationRunHasObservationDefinition } from "../domain/run.ts";
-import { MigrationDefinitionStatus } from "../domain/status.ts";
+import {
+  MigrationDefinitionStatus,
+  MigrationStatusRequestError,
+  MigrationStatusWarning,
+} from "../domain/status.ts";
 
 export const MIGRATE_PROTOCOL_VERSION = 1;
 
@@ -153,6 +158,61 @@ export const MigrateRegistryGroup = Schema.Struct({
   id: MigrationDefinitionGroupId,
 });
 export type MigrateRegistryGroup = typeof MigrateRegistryGroup.Type;
+
+export const MigrateRegistry = Schema.Struct({
+  entries: Schema.Array(MigrateRegistryEntry),
+  groups: Schema.Array(MigrateRegistryGroup),
+});
+export type MigrateRegistry = typeof MigrateRegistry.Type;
+
+const MigrateRegistrySelectionFields = {
+  selection: MigrateSelection,
+  withDependencies: Schema.Boolean,
+} as const;
+
+export const MigrateRegistryMessagesRequest = Schema.Struct(
+  MigrateRegistrySelectionFields
+);
+export type MigrateRegistryMessagesRequest =
+  typeof MigrateRegistryMessagesRequest.Type;
+
+const MigrateRegistryStatusRequestFields = {
+  ...MigrateRegistrySelectionFields,
+  concurrency: Schema.optional(Schema.Int),
+  scanSource: Schema.Boolean,
+} as const;
+
+export const MigrateRegistryStatusRequest = Schema.Struct(
+  MigrateRegistryStatusRequestFields
+);
+export type MigrateRegistryStatusRequest =
+  typeof MigrateRegistryStatusRequest.Type;
+
+const MigrateRegistrySelectionReportFields = {
+  includedDefinitionIds: Schema.Array(MigrationDefinitionId),
+  notices: Schema.Array(MigrationDefinitionPlanNotice),
+  requestedDefinitionIds: Schema.Union([
+    Schema.Literal("all"),
+    Schema.Array(MigrationDefinitionId),
+  ]),
+  requestedGroup: Schema.optionalKey(MigrationDefinitionGroupId),
+} as const;
+
+export const MigrateRegistryMessagesReport = Schema.Struct({
+  ...MigrateRegistrySelectionReportFields,
+  messages: Schema.Array(MigrationMessage),
+});
+export type MigrateRegistryMessagesReport =
+  typeof MigrateRegistryMessagesReport.Type;
+
+export const MigrateRegistryStatusReport = Schema.Struct({
+  ...MigrateRegistrySelectionReportFields,
+  definitions: Schema.Array(MigrationDefinitionStatus),
+  scanSource: Schema.Boolean,
+  warnings: Schema.Array(MigrationStatusWarning),
+});
+export type MigrateRegistryStatusReport =
+  typeof MigrateRegistryStatusReport.Type;
 
 export const MigrateDashboardRow = Schema.Struct({
   entry: MigrateRegistryEntry,
@@ -500,6 +560,9 @@ export const MigrateProtocolError = Schema.Union([
   MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
   MigrationDefinitionRegistryUnknownDefinitionError,
   MigrationDefinitionRegistryUnknownGroupError,
+  MigrationStatusRequestError,
+  MigrationStoreError,
+  SourceError,
   MigrateOperationError,
   MigratePlanChangedError,
 ]);
@@ -512,6 +575,23 @@ export class GetServerInfo extends makeRpc("GetServerInfo", {
 export class GetDashboard extends makeRpc("GetDashboard", {
   error: MigrateProtocolError,
   success: MigrateDashboardSnapshot,
+}) {}
+
+export class GetRegistry extends makeRpc("GetRegistry", {
+  error: MigrateProtocolError,
+  success: MigrateRegistry,
+}) {}
+
+export class GetRegistryMessages extends makeRpc("GetRegistryMessages", {
+  error: MigrateProtocolError,
+  payload: MigrateRegistrySelectionFields,
+  success: MigrateRegistryMessagesReport,
+}) {}
+
+export class GetRegistryStatus extends makeRpc("GetRegistryStatus", {
+  error: MigrateProtocolError,
+  payload: MigrateRegistryStatusRequestFields,
+  success: MigrateRegistryStatusReport,
 }) {}
 
 export class GetActiveRuns extends makeRpc("GetActiveRuns", {
@@ -630,6 +710,9 @@ export class BreakLock extends makeRpc("BreakLock", {
 const MigrateControlRpcs = makeRpcGroup(
   GetServerInfo,
   GetDashboard,
+  GetRegistry,
+  GetRegistryMessages,
+  GetRegistryStatus,
   GetActiveRuns,
   GetMessages,
   GetSourceIdentityHistory,

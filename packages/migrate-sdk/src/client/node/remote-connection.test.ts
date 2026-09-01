@@ -84,6 +84,37 @@ describe("remote Migrate Server connection", () => {
       expect(
         await connection.runPromise(connection.client.GetDashboard())
       ).toMatchObject({ dashboard });
+      await expect(
+        connection.runPromise(connection.client.GetRegistry())
+      ).resolves.toEqual({
+        entries: dashboard.rows.map((row) => row.entry),
+        groups: dashboard.groups,
+      });
+      await expect(
+        connection.runPromise(
+          connection.client.GetRegistryStatus({
+            scanSource: false,
+            selection: { kind: "all" },
+            withDependencies: false,
+          })
+        )
+      ).resolves.toMatchObject({
+        includedDefinitionIds: ["articles"],
+        requestedDefinitionIds: "all",
+        scanSource: false,
+      });
+      await expect(
+        connection.runPromise(
+          connection.client.GetRegistryMessages({
+            selection: { kind: "all" },
+            withDependencies: false,
+          })
+        )
+      ).resolves.toMatchObject({
+        includedDefinitionIds: ["articles"],
+        messages: [],
+        requestedDefinitionIds: "all",
+      });
       const dashboardSnapshots = await connection.runPromise(
         connection.client
           .observeDashboard({})
@@ -178,10 +209,24 @@ describe("remote Migrate Server connection", () => {
           fetch: (input, init) => http.handler(new Request(input, init)),
           url: "https://migrate.example/rpc",
         })
-      ).rejects.toThrow("Unable to connect to Migrate Server");
+      ).rejects.toThrow(
+        "Permission denied by Migrate Server (HTTP 401 Unauthorized). Check MIGRATE_SERVER_TOKEN."
+      );
     } finally {
       await http.dispose();
     }
+  });
+
+  it("reports forbidden remote connections as permission errors", async () => {
+    await expect(
+      connectRemoteMigrateServer({
+        fetch: () =>
+          Promise.resolve(new Response("Forbidden", { status: 403 })),
+        url: "https://migrate.example/rpc",
+      })
+    ).rejects.toThrow(
+      "Permission denied by Migrate Server (HTTP 403 Forbidden)."
+    );
   });
 
   it("connects to a remote server with the same protocol and a different SDK version", async () => {
