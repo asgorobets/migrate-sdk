@@ -9,6 +9,8 @@ const require = createRequire(import.meta.url);
 const bunPackageDirectory = dirname(require.resolve("bun/package.json"));
 const bunExecutable = join(bunPackageDirectory, "bin", "bun.exe");
 const testFile = "test/local-ipc.test.ts";
+const windowsBunCrashExitCode = 3;
+const windowsBunCrashAttempts = 3;
 const isolateTests =
   process.platform === "win32" ||
   process.env.MIGRATE_TUI_ISOLATE_IPC_TESTS === "1";
@@ -89,14 +91,28 @@ const run = () => {
     console.log(
       `Windows IPC test ${index + 1}/${testNames.length}: ${testName}`
     );
-    const result = runBun([
-      "test",
-      testFile,
-      "--test-name-pattern",
-      `^${escapeRegex(testName)}$`,
-      "--only-failures",
-      "--no-orphans",
-    ]);
+    let result;
+
+    for (let attempt = 1; attempt <= windowsBunCrashAttempts; attempt += 1) {
+      result = runBun([
+        "test",
+        testFile,
+        "--test-name-pattern",
+        `^${escapeRegex(testName)}$`,
+        "--only-failures",
+        "--no-orphans",
+      ]);
+      if (
+        process.platform !== "win32" ||
+        result.status !== windowsBunCrashExitCode
+      ) {
+        break;
+      }
+      console.warn(
+        `Bun crashed during ${testName} (attempt ${attempt}/${windowsBunCrashAttempts})`
+      );
+    }
+
     assertBunSucceeded(result, `IPC test failed: ${testName}`);
   }
 };

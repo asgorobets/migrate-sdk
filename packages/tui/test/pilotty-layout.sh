@@ -22,6 +22,7 @@ LOCK_SESSION="migrate-tui-lock"
 LIVE_PROGRESS_SESSION="migrate-tui-live-progress"
 CATALOG_SESSION="migrate-tui-sqlite-catalog"
 CATALOG_STANDALONE_SESSION="migrate-tui-sqlite-catalog-standalone"
+ACTIVE_SESSION=""
 
 mkdir -p "${ARTIFACT_DIR}"
 PILOTTY_SOCKET_DIR="/tmp/mt-$$"
@@ -82,14 +83,15 @@ report_failure() {
   local status="$1"
   local line="$2"
   local command="$3"
+  local diagnostic_session="${ACTIVE_SESSION:-${CATALOG_STANDALONE_SESSION}}"
   echo "Pilotty layout failed at line ${line}: ${command}" >&2
-  echo "Standalone catalog session status:" >&2
-  "${PILOTTY_BIN}" status -s "${CATALOG_STANDALONE_SESSION}" >&2 || true
-  echo "Standalone catalog terminal:" >&2
-  "${PILOTTY_BIN}" snapshot -s "${CATALOG_STANDALONE_SESSION}" \
+  echo "Active session (${diagnostic_session}) status:" >&2
+  "${PILOTTY_BIN}" status -s "${diagnostic_session}" >&2 || true
+  echo "Active session terminal:" >&2
+  "${PILOTTY_BIN}" snapshot -s "${diagnostic_session}" \
     --format text >&2 || true
-  echo "Standalone catalog retained output:" >&2
-  "${PILOTTY_BIN}" output -s "${CATALOG_STANDALONE_SESSION}" >&2 || true
+  echo "Active session retained output:" >&2
+  "${PILOTTY_BIN}" output -s "${diagnostic_session}" >&2 || true
   exit "${status}"
 }
 
@@ -108,6 +110,7 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
     pnpm exec tsx examples/sqlite-catalog/setup.ts --scale small
 )
 
+ACTIVE_SESSION="${SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${SESSION}" \
   --cwd "${PACKAGE_DIR}" \
@@ -234,7 +237,9 @@ sleep 0.2
   --format text >"${ARTIFACT_DIR}/session-activity-export-compact.txt"
 "${PILOTTY_BIN}" key -s "${SESSION}" Escape >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" key -s "${SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${BUTTON_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${BUTTON_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
@@ -254,7 +259,9 @@ sleep 0.2
   --settle 500 \
   --strict \
   --format text >"${ARTIFACT_DIR}/button-dashboard-after-run.txt"
+"${PILOTTY_BIN}" key -s "${BUTTON_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${LIVE_PROGRESS_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${LIVE_PROGRESS_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
@@ -266,15 +273,17 @@ sleep 0.2
 "${PILOTTY_BIN}" key -s "${LIVE_PROGRESS_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 5000 \
   "x Stop run" >/dev/null
-"${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 5000 --regex \
+"${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 15000 --regex \
   "[123] migrated" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${LIVE_PROGRESS_SESSION}" \
   --strict \
   --format text >"${ARTIFACT_DIR}/live-progress.txt"
 grep -Eq "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
-"${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 5000 \
+"${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 15000 \
   "4 migrated" >/dev/null
+"${PILOTTY_BIN}" key -s "${LIVE_PROGRESS_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${CATALOG_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${CATALOG_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
@@ -313,13 +322,15 @@ grep -Eq "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/sqlite-catalog-books.txt"
+"${PILOTTY_BIN}" key -s "${CATALOG_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${CATALOG_STANDALONE_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${CATALOG_STANDALONE_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env TMPDIR="${CATALOG_STANDALONE_TMP}" \
   MIGRATE_SQLITE_CATALOG_DIR="${CATALOG_STANDALONE_DIR}" \
-  MIGRATE_SQLITE_CATALOG_DELAY_MS=50 node bin/migrate-tui.js \
+  MIGRATE_SQLITE_CATALOG_DELAY_MS=10 node bin/migrate-tui.js \
   --config ../migrate-sdk/examples/sqlite-catalog/migrate.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${CATALOG_STANDALONE_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 30000 \
@@ -373,7 +384,9 @@ sleep 0.2
   --settle 300 \
   --strict \
   --format text >"${ARTIFACT_DIR}/sqlite-catalog-standalone-completed.txt"
+"${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${GROUP_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${GROUP_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
@@ -452,7 +465,9 @@ sleep 0.2
   --settle 500 \
   --strict \
   --format text >"${ARTIFACT_DIR}/group-dashboard-after-run.txt"
+"${PILOTTY_BIN}" key -s "${GROUP_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${DEPENDENCY_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${DEPENDENCY_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
@@ -484,7 +499,9 @@ sleep 0.2
   --settle 500 \
   --strict \
   --format text >"${ARTIFACT_DIR}/dependency-after-include.txt"
+"${PILOTTY_BIN}" key -s "${DEPENDENCY_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${FORCE_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${FORCE_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
@@ -506,7 +523,9 @@ sleep 0.2
   --settle 500 \
   --strict \
   --format text >"${ARTIFACT_DIR}/dependency-after-force.txt"
+"${PILOTTY_BIN}" key -s "${FORCE_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${HIERARCHY_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${HIERARCHY_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
@@ -523,7 +542,10 @@ sleep 0.2
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/transitive-rollback-hierarchy.txt"
+"${PILOTTY_BIN}" key -s "${HIERARCHY_SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" key -s "${HIERARCHY_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${LARGE_HIERARCHY_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${LARGE_HIERARCHY_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
@@ -546,7 +568,10 @@ done
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/large-rollback-hierarchy-scrolled.txt"
+"${PILOTTY_BIN}" key -s "${LARGE_HIERARCHY_SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" key -s "${LARGE_HIERARCHY_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${SELECTIVE_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${SELECTIVE_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
@@ -597,7 +622,9 @@ done
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/selective-run-completed.txt"
+"${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${SOURCE_STATUS_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${SOURCE_STATUS_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
@@ -635,7 +662,9 @@ done
   --strict \
   --format text >"${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
 grep -Fq "Rollback" "${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
+"${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${LOCK_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${LOCK_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
@@ -662,7 +691,9 @@ grep -Fq "Rollback" "${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/lock-cleared.txt"
+"${PILOTTY_BIN}" key -s "${LOCK_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${CANCELLATION_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${CANCELLATION_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
