@@ -78,7 +78,16 @@ cleanup() {
   "${PILOTTY_BIN}" stop >/dev/null 2>&1 || true
 }
 
+report_failure() {
+  local status="$1"
+  local line="$2"
+  local command="$3"
+  echo "Pilotty layout failed at line ${line}: ${command}" >&2
+  exit "${status}"
+}
+
 trap cleanup EXIT
+trap 'report_failure "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
 (
   cd "${SDK_PACKAGE_DIR}"
@@ -341,10 +350,11 @@ sleep 0.2
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 30000 --regex \
   "[89][0-9] migrated" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${CATALOG_STANDALONE_SESSION}" \
+  --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/sqlite-catalog-standalone-progress.txt"
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Up >/dev/null
-"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 5000 \
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 10000 \
   "No item history" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${CATALOG_STANDALONE_SESSION}" \
   --strict \

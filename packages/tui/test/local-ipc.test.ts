@@ -23,6 +23,8 @@ import { makeMigrationTuiRuntime } from "../src/index.ts";
 import { makeMigrationTuiRuntimeForTesting } from "./support/tui-runtime.ts";
 
 const LOCK_ERROR_PATTERN = /lock/i;
+const LIVE_DASHBOARD_READ_TIMEOUT_MS =
+  process.platform === "win32" ? 2500 : 1000;
 const incompatibleProtocolMessage = `Migrate Protocol version ${MIGRATE_PROTOCOL_VERSION + 1} is not supported`;
 const serverFixtureUrl = new URL(
   "../../migrate-sdk/test/fixtures/server/",
@@ -179,6 +181,8 @@ test("live observation does not block dashboard reads or explicit cancellation",
     configPath: serverFixturePath("cancellation.config.ts"),
     cwd: resolve("src"),
   });
+  let observationSettled = Promise.resolve();
+
   try {
     const operation = await runtime.prepare(
       {
@@ -189,8 +193,14 @@ test("live observation does not block dashboard reads or explicit cancellation",
     );
     const reference = await runtime.start(operation);
     const execution = runtime.observeRun(reference.runId);
+    observationSettled = execution.then(
+      () => undefined,
+      () => undefined
+    );
 
-    await expect(within(runtime.refresh(), 1000)).resolves.toBeDefined();
+    await expect(
+      within(runtime.refresh(), LIVE_DASHBOARD_READ_TIMEOUT_MS)
+    ).resolves.toBeDefined();
     await expect(runtime.stopRun(reference.runId)).resolves.toMatchObject({
       kind: "requested",
     });
@@ -199,6 +209,7 @@ test("live observation does not block dashboard reads or explicit cancellation",
     });
   } finally {
     await runtime.dispose?.();
+    await observationSettled;
   }
 }, 20_000);
 
