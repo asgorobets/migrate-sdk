@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { dirname, join } from "node:path";
 import { NodeSocketServer } from "@effect/platform-node";
 import { Effect, Layer, Schema } from "effect";
 import type * as Rpc from "effect/unstable/rpc/Rpc";
@@ -18,14 +20,11 @@ import {
   localMigrateServerAuthorizationLayer,
 } from "./local-authorization.ts";
 import {
-  guardLocalMigrateServerEndpoint,
-  type LocalMigrateServerEndpointClaim,
   LocalMigrateServerTcpDiscoveryJson,
   localMigrateServerLoopbackHost,
+  publishLocalMigrateServerPosixEndpoint,
   publishLocalMigrateServerTcpDiscovery,
-  readLocalMigrateServerPosixEndpointIdentity,
   removeLocalMigrateServerEndpoint,
-  settleLocalMigrateServerEndpointClaim,
 } from "./local-endpoint.ts";
 
 type MigrateStreamingHandlerServices = Rpc.ToHandler<
@@ -128,65 +127,56 @@ const publishWindowsDiscovery = ({
     );
   });
 
-const capturePosixEndpointOwnership = ({
-  endpointPath,
-}: LocalMigrateServerTransportOptions) =>
-  Effect.try({
-    catch: (cause) =>
-      new LocalMigrateServerTransportError({
-        cause,
-        message: `Unable to capture Migrate Server endpoint ownership: ${cause}`,
-      }),
-    try: () => {
-      const identity =
-        readLocalMigrateServerPosixEndpointIdentity(endpointPath);
-      if (identity === undefined) {
-        throw new Error(
-          `Migrate Server endpoint was not published: ${endpointPath}`
-        );
-      }
-      return identity;
-    },
-  });
+const makePosixListenerEndpoint = (publicEndpoint: string): string =>
+  join(
+    dirname(publicEndpoint),
+    `.m-${randomUUID().replaceAll("-", "").slice(0, 24)}`
+  );
+
+const publishPosixEndpoint = (
+  listenerEndpoint: string,
+  publicEndpoint: string
+) =>
+  Effect.acquireRelease(
+    Effect.try({
+      catch: (cause) =>
+        new LocalMigrateServerTransportError({
+          cause,
+          message: `Unable to publish Migrate Server endpoint: ${cause}`,
+        }),
+      try: () =>
+        publishLocalMigrateServerPosixEndpoint(
+          listenerEndpoint,
+          publicEndpoint
+        ),
+    }),
+    (identity) =>
+      Effect.sync(() =>
+        removeLocalMigrateServerEndpoint(
+          publicEndpoint,
+          process.platform,
+          undefined,
+          identity
+        )
+      )
+  );
 
 const runPosixTransport = <Value, Error>(
   effect: Effect.Effect<Value, Error, Protocol | SocketServer.SocketServer>,
   options: LocalMigrateServerTransportOptions
 ) =>
   Effect.suspend(() => {
-    let endpointClaim: LocalMigrateServerEndpointClaim | undefined;
+    const listenerEndpoint = makePosixListenerEndpoint(options.endpointPath);
     const serve = Effect.gen(function* () {
-      const identity = yield* capturePosixEndpointOwnership(options);
-      return yield* effect.pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            endpointClaim = guardLocalMigrateServerEndpoint(
-              options.endpointPath,
-              (claimedPath) => {
-                const claimedIdentity =
-                  readLocalMigrateServerPosixEndpointIdentity(claimedPath);
-                return (
-                  claimedIdentity !== undefined &&
-                  claimedIdentity.device === identity.device &&
-                  claimedIdentity.inode === identity.inode
-                );
-              }
-            );
-          })
-        )
-      );
-    });
-
-    const settleEndpointClaim = Effect.sync(() => {
-      if (endpointClaim !== undefined) {
-        settleLocalMigrateServerEndpointClaim(endpointClaim);
-      }
+      yield* publishPosixEndpoint(listenerEndpoint, options.endpointPath);
+      return yield* effect;
     });
 
     return serve.pipe(
-      Effect.provide(transportLayer(options)),
-      Effect.scoped,
-      Effect.ensuring(settleEndpointClaim)
+      Effect.provide(
+        transportLayer({ ...options, endpointPath: listenerEndpoint })
+      ),
+      Effect.scoped
     );
   });
 

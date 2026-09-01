@@ -6,19 +6,17 @@ import {
   readFileSync,
   renameSync,
   rmSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  guardLocalMigrateServerEndpoint,
   makeLocalMigrateServerEndpoint,
+  publishLocalMigrateServerPosixEndpoint,
   publishLocalMigrateServerTcpDiscovery,
   readLocalMigrateServerPosixEndpointIdentity,
   removeLocalMigrateServerEndpoint,
-  settleLocalMigrateServerEndpointClaim,
 } from "./local-endpoint.ts";
 
 const POSIX_SOCKET_NAME = /^migrate-501-[a-f0-9]{24}\.sock$/;
@@ -164,47 +162,23 @@ describe("local Migrate Server endpoint", () => {
     }
   });
 
-  it("guards listener teardown without deleting a later publisher", () => {
+  it("publishes a POSIX listener through a separate public endpoint", () => {
     const directory = mkdtempSync(join(tmpdir(), "migrate-endpoint-test-"));
-    const endpoint = join(directory, "server.sock");
-    writeFileSync(endpoint, "owned", "utf8");
-    const identity = readLocalMigrateServerPosixEndpointIdentity(endpoint);
-
-    if (identity === undefined) {
-      throw new Error("Test endpoint identity was not captured");
-    }
-
-    const guard = guardLocalMigrateServerEndpoint(endpoint, (guardPath) => {
-      const guardIdentity =
-        readLocalMigrateServerPosixEndpointIdentity(guardPath);
-      return (
-        guardIdentity !== undefined &&
-        guardIdentity.device === identity.device &&
-        guardIdentity.inode === identity.inode
-      );
-    });
-
-    if (guard === undefined) {
-      throw new Error("Test endpoint guard was not created");
-    }
+    const listenerEndpoint = join(directory, "listener.sock");
+    const publicEndpoint = join(directory, "server.sock");
+    writeFileSync(listenerEndpoint, "owned", "utf8");
 
     try {
-      expect(() =>
-        writeFileSync(endpoint, "too-early", {
-          encoding: "utf8",
-          flag: "wx",
-        })
-      ).toThrow();
+      const identity = publishLocalMigrateServerPosixEndpoint(
+        listenerEndpoint,
+        publicEndpoint
+      );
 
-      unlinkSync(endpoint);
-      writeFileSync(endpoint, "new-publisher", {
-        encoding: "utf8",
-        flag: "wx",
-      });
-      settleLocalMigrateServerEndpointClaim(guard);
-
-      expect(readFileSync(endpoint, "utf8")).toBe("new-publisher");
-      expect(readdirSync(directory)).toEqual(["server.sock"]);
+      expect(
+        readLocalMigrateServerPosixEndpointIdentity(publicEndpoint)
+      ).toEqual(identity);
+      expect(existsSync(listenerEndpoint)).toBe(false);
+      expect(readFileSync(publicEndpoint, "utf8")).toBe("owned");
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }

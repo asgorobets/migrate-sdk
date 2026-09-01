@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   mkdtemp,
+  readdir,
   readFile,
   rename,
   rm,
@@ -905,6 +906,64 @@ posixTest(
     }
   },
   20_000
+);
+
+posixTest(
+  "a crashed POSIX server leaves only a recoverable public endpoint",
+  async () => {
+    const directory = await mkdtemp(join(tmpdir(), "m-c-"));
+    const endpoint = join(directory, "server.sock");
+    const startServer = () =>
+      spawn(
+        process.env.MIGRATE_TUI_NODE_EXECUTABLE ?? "node",
+        [
+          fileURLToPath(
+            new URL("./fixtures/socket-server-info.ts", import.meta.url)
+          ),
+          "--endpoint",
+          endpoint,
+          "--variant",
+          "protocol",
+        ],
+        { cwd: process.cwd(), stdio: "ignore" }
+      );
+    const crashedServer = startServer();
+    const crashedServerPid = crashedServer.pid;
+
+    if (crashedServerPid === undefined) {
+      throw new Error("POSIX crash fixture did not start");
+    }
+
+    let replacementServerPid: number | undefined;
+    try {
+      await waitForPath(endpoint, SOCKET_FIXTURE_STARTUP_TIMEOUT_MS);
+      expect(await readdir(directory)).toEqual(["server.sock"]);
+
+      process.kill(crashedServerPid, "SIGKILL");
+      await waitForProcessExit(crashedServerPid, 5000);
+      expect(await readdir(directory)).toEqual(["server.sock"]);
+
+      await unlink(endpoint);
+      const replacementServer = startServer();
+      replacementServerPid = replacementServer.pid;
+      if (replacementServerPid === undefined) {
+        throw new Error("POSIX recovery fixture did not start");
+      }
+
+      await waitForPath(endpoint, SOCKET_FIXTURE_STARTUP_TIMEOUT_MS);
+      expect(await readdir(directory)).toEqual(["server.sock"]);
+
+      process.kill(replacementServerPid, "SIGTERM");
+      await waitForProcessExit(replacementServerPid, 5000);
+      replacementServerPid = undefined;
+      expect(await readdir(directory)).toEqual([]);
+    } finally {
+      await terminateProcess(crashedServerPid);
+      await terminateProcess(replacementServerPid);
+      await rm(directory, { force: true, recursive: true });
+    }
+  },
+  30_000
 );
 
 for (const [variant, discovery] of [

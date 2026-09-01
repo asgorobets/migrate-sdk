@@ -228,37 +228,6 @@ export const claimLocalMigrateServerEndpoint = (
   }
 };
 
-export const guardLocalMigrateServerEndpoint = (
-  endpoint: string,
-  ownsGuard: (guardPath: string) => boolean
-): LocalMigrateServerEndpointClaim | undefined => {
-  const guardPath = `${endpoint}.${process.pid}.${randomUUID()}.guard`;
-  try {
-    linkSync(endpoint, guardPath);
-  } catch (cause) {
-    if (cause instanceof Error && "code" in cause && cause.code === "ENOENT") {
-      return;
-    }
-    throw cause;
-  }
-
-  try {
-    return {
-      claimedPath: guardPath,
-      endpoint,
-      restore: !ownsGuard(guardPath),
-      verification: { failed: false },
-    };
-  } catch (cause) {
-    return {
-      claimedPath: guardPath,
-      endpoint,
-      restore: true,
-      verification: { cause, failed: true },
-    };
-  }
-};
-
 export const settleLocalMigrateServerEndpointClaim = (
   claim: LocalMigrateServerEndpointClaim
 ): void => {
@@ -395,4 +364,38 @@ export const publishLocalMigrateServerTcpDiscovery = (
   }
 
   removeTemporaryFile();
+};
+
+export const publishLocalMigrateServerPosixEndpoint = (
+  listenerEndpoint: string,
+  publicEndpoint: string
+): LocalMigrateServerPosixEndpointIdentity => {
+  const identity =
+    readLocalMigrateServerPosixEndpointIdentity(listenerEndpoint);
+  if (identity === undefined) {
+    throw new Error(
+      `Migrate Server listener endpoint was not published: ${listenerEndpoint}`
+    );
+  }
+
+  linkSync(listenerEndpoint, publicEndpoint);
+  try {
+    unlinkSync(listenerEndpoint);
+  } catch (cause) {
+    try {
+      removeLocalMigrateServerEndpoint(
+        publicEndpoint,
+        "linux",
+        undefined,
+        identity
+      );
+    } catch (rollbackCause) {
+      throw new AggregateError(
+        [cause, rollbackCause],
+        "Unable to hide the Migrate Server listener endpoint or roll back its public endpoint"
+      );
+    }
+    throw cause;
+  }
+  return identity;
 };
