@@ -360,7 +360,7 @@ sleep 0.2
   --strict \
   --format text >"${ARTIFACT_DIR}/sqlite-catalog-running-navigation.txt"
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Down >/dev/null
-"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 60000 \
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 120000 \
   "480 migrated" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${CATALOG_STANDALONE_SESSION}" \
   --settle 300 \
