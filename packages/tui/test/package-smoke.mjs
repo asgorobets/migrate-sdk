@@ -17,12 +17,16 @@ const repositoryDirectory = resolve(packageDirectory, "../..");
 const sdkDirectory = resolve(repositoryDirectory, "packages/migrate-sdk");
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const require = createRequire(import.meta.url);
+const windowsCommandScriptPattern = /\.(?:bat|cmd)$/i;
 
 const run = (command, args, options = {}) => {
+  const shell =
+    process.platform === "win32" && windowsCommandScriptPattern.test(command);
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
     env: options.env ?? process.env,
+    shell,
     stdio: options.capture ? "pipe" : "inherit",
   });
 

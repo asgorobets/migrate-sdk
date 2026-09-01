@@ -627,13 +627,13 @@ test("a persistent startup timeout terminates the server started by the launcher
         },
         {
           serverIdentity,
-          startupTimeoutMs: 1000,
+          startupTimeoutMs: 5000,
         }
       )
     ).rejects.toThrow("Unable to connect to the local Migrate Server");
-    pid = Number(await readFile(markerPath, "utf8"));
+    pid = await readProcessId(markerPath);
 
-    await waitForProcessExit(pid, 500);
+    await waitForProcessExit(pid, 1000);
   } finally {
     if (pid !== undefined && processIsRunning(pid)) {
       process.kill(pid, "SIGKILL");

@@ -108,8 +108,11 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
   --strict \
   --format text >"${ARTIFACT_DIR}/messages-tab.txt"
 "${PILOTTY_BIN}" key -s "${SESSION}" Escape >/dev/null
-
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "[ Overview ]" >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "articles  FAILED" >/dev/null
 "${PILOTTY_BIN}" resize -s "${SESSION}" 120 28 >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SESSION}" \
   --settle 150 \
@@ -131,6 +134,8 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
   --strict \
   --format text >"${ARTIFACT_DIR}/message-expanded.txt"
 "${PILOTTY_BIN}" key -s "${SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "↑↓/jk move · PgUp/PgDn jump · Home/End" >/dev/null
 "${PILOTTY_BIN}" resize -s "${SESSION}" 120 24 >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" j >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
@@ -156,6 +161,8 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
   --strict \
   --format text >"${ARTIFACT_DIR}/wide-dashboard.txt"
 "${PILOTTY_BIN}" key -s "${SESSION}" Up >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "authors  SUCCEEDED" >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" b >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
   "Confirm rollback" >/dev/null
@@ -170,6 +177,8 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
   --format compact >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" Down >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
+  "assets  SUCCEEDED" >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" Enter >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
   "All actions · assets" >/dev/null
@@ -188,7 +197,7 @@ CATALOG_STANDALONE_DIR="${ARTIFACT_DIR}/sqlite-catalog-standalone"
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/session-activity.txt"
-rg -q "↵ expand · e export JSONL · esc back" \
+grep -Fq "↵ expand · e export JSONL · esc back" \
   "${ARTIFACT_DIR}/session-activity.txt"
 "${PILOTTY_BIN}" key -s "${SESSION}" Enter >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
@@ -246,7 +255,7 @@ sleep 0.2
 "${PILOTTY_BIN}" snapshot -s "${LIVE_PROGRESS_SESSION}" \
   --strict \
   --format text >"${ARTIFACT_DIR}/live-progress.txt"
-rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
+grep -Eq "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 5000 \
   "4 migrated" >/dev/null
 
@@ -303,11 +312,15 @@ rg -q "[123] migrated" "${ARTIFACT_DIR}/live-progress.txt"
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 10000 \
   "71 migrated" >/dev/null
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 5000 \
+  "publishers  NOT RUN" >/dev/null
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 10000 \
   "53 migrated" >/dev/null
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Down >/dev/null
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 5000 \
+  "books  NOT RUN" >/dev/null
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Enter >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 5000 \
   "All actions · books" >/dev/null
@@ -320,6 +333,8 @@ sleep 0.2
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 5000 \
   "All actions · books" >/dev/null
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 5000 \
+  "[ Overview ]" >/dev/null
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 10000 \
   "x Stop run" >/dev/null
@@ -373,6 +388,8 @@ sleep 0.2
   --strict \
   --format text >"${ARTIFACT_DIR}/group-messages.txt"
 "${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 5000 \
+  "[ Overview ]" >/dev/null
 "${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Enter >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 5000 \
   "All actions · content" >/dev/null
@@ -409,6 +426,8 @@ sleep 0.2
   "All actions · content" >/dev/null
 "${PILOTTY_BIN}" resize -s "${GROUP_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" key -s "${GROUP_SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 5000 \
+  "[ Overview ]" >/dev/null
 "${PILOTTY_BIN}" key -s "${GROUP_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 5000 \
   "GROUP   SUCCEEDED" >/dev/null
@@ -426,6 +445,8 @@ sleep 0.2
 "${PILOTTY_BIN}" wait-for -s "${DEPENDENCY_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
 "${PILOTTY_BIN}" key -s "${DEPENDENCY_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${DEPENDENCY_SESSION}" -t 5000 \
+  "articles  NOT RUN" >/dev/null
 "${PILOTTY_BIN}" key -s "${DEPENDENCY_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${DEPENDENCY_SESSION}" -t 5000 \
   "Required dependencies not ready" >/dev/null
@@ -456,6 +477,8 @@ sleep 0.2
 "${PILOTTY_BIN}" wait-for -s "${FORCE_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
 "${PILOTTY_BIN}" key -s "${FORCE_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${FORCE_SESSION}" -t 5000 \
+  "articles  NOT RUN" >/dev/null
 "${PILOTTY_BIN}" key -s "${FORCE_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${FORCE_SESSION}" -t 5000 \
   "Required dependencies not ready" >/dev/null
@@ -516,6 +539,8 @@ done
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
 "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
+  "articles  FAILED" >/dev/null
 "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" e >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
   "2 items" >/dev/null
@@ -527,6 +552,10 @@ done
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
   "1 selected" >/dev/null
 "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" Down >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SELECTIVE_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format compact >/dev/null
 "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" Space >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
   "2 selected" >/dev/null
@@ -535,6 +564,8 @@ done
   --strict \
   --format text >"${ARTIFACT_DIR}/selective-run-history.txt"
 "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
+  "[ Overview ]" >/dev/null
 "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" e >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
   "2 selected" >/dev/null
@@ -586,7 +617,7 @@ done
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
-rg -q "Rollback" "${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
+grep -Fq "Rollback" "${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
 
 "${PILOTTY_BIN}" spawn \
   --name "${LOCK_SESSION}" \

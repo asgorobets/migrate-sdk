@@ -2279,6 +2279,9 @@ describe("MigrationTuiApp", () => {
           return Promise.resolve(snapshot);
         }
       );
+      const observeRun = vi.fn(() =>
+        Promise.reject(new Error(`Run ${runId} failed`))
+      );
       const runtime: MigrationTuiRuntime = {
         ...baseRuntime,
         refresh,
@@ -2291,9 +2294,7 @@ describe("MigrationTuiApp", () => {
             signal?.addEventListener("abort", () => resolve(), { once: true })
           );
         },
-        observeRun: vi.fn(() =>
-          Promise.reject(new Error(`Run ${runId} failed`))
-        ),
+        observeRun,
       };
       const setup = await createTestRenderer({ height: 30, width: 120 });
       const root = createRoot(setup.renderer);
@@ -2302,21 +2303,15 @@ describe("MigrationTuiApp", () => {
 
       try {
         expect(
-          await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("v View run")
-          )
-        ).toBe(true);
-
-        act(() => setup.mockInput.pressKey("v"));
-
-        expect(
           await settle(
             setup.renderOnce,
             () =>
-              refresh.mock.calls.length === 3 &&
+              refresh.mock.calls.length >= 3 &&
               setup.captureCharFrame().includes(`Run ${runId} failed`)
           )
         ).toBe(true);
+        expect(observeRun).toHaveBeenCalledWith(runId, expect.any(Object));
+        expect(refresh).toHaveBeenCalledTimes(3);
         expect(dashboardObservationCalls).toBe(2);
         expect(setup.captureCharFrame()).not.toContain("v View run");
       } finally {
