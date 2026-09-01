@@ -17,6 +17,7 @@ $ErrorActionPreference = "Stop"
 [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
 $userSid = [Security.Principal.WindowsIdentity]::GetCurrent().User
 $systemSid = [Security.Principal.SecurityIdentifier]::new("S-1-5-18")
+$administratorsSid = [Security.Principal.SecurityIdentifier]::new("S-1-5-32-544")
 $root = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
 if ([String]::IsNullOrWhiteSpace($root)) {
   throw "Windows did not provide a per-user LocalApplicationData directory"
@@ -26,8 +27,8 @@ if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
   throw "The per-user LocalApplicationData directory is a reparse point"
 }
 $rootOwner = (Get-Acl -LiteralPath $root).GetOwner([Security.Principal.SecurityIdentifier])
-if ($rootOwner.Value -ne $userSid.Value) {
-  throw "The current user does not own the LocalApplicationData directory"
+if ($rootOwner.Value -ne $userSid.Value -and $rootOwner.Value -ne $systemSid.Value -and $rootOwner.Value -ne $administratorsSid.Value) {
+  throw "The LocalApplicationData directory has an untrusted owner"
 }
 
 $directory = [IO.Path]::Combine($rootItem.FullName, "migrate-sdk-ipc")
