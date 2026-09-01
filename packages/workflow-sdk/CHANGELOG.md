@@ -1,5 +1,16 @@
 # @migrate-sdk/workflow-sdk
 
+## 0.8.0
+
+### Patch Changes
+
+- b919a6e: Record a separate durable outcome for every migration definition in a shared
+  run. A failed group run no longer marks successful dependencies or unstarted
+  siblings as failed, and retries use the dependency's own latest outcome.
+  
+  SQL Migration Stores can upgrade to schema version 2 to retain definition
+  outcomes alongside the aggregate run lifecycle.
+
 ## 0.7.0
 
 ### Minor Changes
