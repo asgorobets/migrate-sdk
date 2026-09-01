@@ -26,7 +26,7 @@ $rootItem = Get-Item -LiteralPath $root -Force
 if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
   throw "The per-user LocalApplicationData directory is a reparse point"
 }
-$rootOwner = (Get-Acl -LiteralPath $root).GetOwner([Security.Principal.SecurityIdentifier])
+$rootOwner = [IO.Directory]::GetAccessControl($root).GetOwner([Security.Principal.SecurityIdentifier])
 if ($rootOwner.Value -ne $userSid.Value -and $rootOwner.Value -ne $systemSid.Value -and $rootOwner.Value -ne $administratorsSid.Value) {
   throw "The LocalApplicationData directory has an untrusted owner"
 }
@@ -52,9 +52,9 @@ $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($userSid, 
 if ($userSid.Value -ne $systemSid.Value) {
   $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($systemSid, $fullControl, $inheritance, $propagation, $allow))
 }
-Set-Acl -LiteralPath $directory -AclObject $acl
+[IO.Directory]::SetAccessControl($directory, $acl)
 
-$verified = Get-Acl -LiteralPath $directory
+$verified = [IO.Directory]::GetAccessControl($directory)
 $verifiedItem = Get-Item -LiteralPath $directory -Force
 if (($verifiedItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
   throw "The Migrate SDK endpoint directory became a reparse point"

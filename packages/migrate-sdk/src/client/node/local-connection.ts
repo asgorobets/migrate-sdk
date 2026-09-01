@@ -29,7 +29,7 @@ import {
   removeLocalMigrateServerEndpoint,
 } from "./local-endpoint.ts";
 
-const defaultStartupTimeoutMs = 10_000;
+const defaultStartupTimeoutMs = 15_000;
 const windowsHandshakeTimeoutMs = 3000;
 
 export interface LocalMigrateConnectionInput {
@@ -341,6 +341,37 @@ const removeFailedEndpoint = (endpoint: string, cause: unknown): void => {
   );
 };
 
+type PublishedEndpointConnectionAttempt =
+  | { readonly connection: MigrateConnection; readonly kind: "connected" }
+  | {
+      readonly cause?: unknown;
+      readonly kind: "unavailable";
+    };
+
+const connectPublishedEndpoint = async (
+  endpoint: string
+): Promise<PublishedEndpointConnectionAttempt> => {
+  if (!existsSync(endpoint)) {
+    return { kind: "unavailable" };
+  }
+
+  try {
+    return { connection: await connectEndpoint(endpoint), kind: "connected" };
+  } catch (cause) {
+    if (cause instanceof LocalMigrateServerCompatibilityFailure) {
+      throw cause.cause;
+    }
+    removeFailedEndpoint(endpoint, cause);
+    return {
+      cause:
+        cause instanceof LocalMigrateServerConnectionFailure
+          ? cause.cause
+          : cause,
+      kind: "unavailable",
+    };
+  }
+};
+
 const terminateOwnedServer = async (child: ChildProcess): Promise<void> => {
   if (child.exitCode !== null || child.signalCode !== null) {
     return;
@@ -422,27 +453,16 @@ const connectPersistentMigrateServer = async (
         throw startupError;
       }
 
-      try {
-        return await connectEndpoint(endpointPath);
-      } catch (cause) {
-        if (cause instanceof LocalMigrateServerCompatibilityFailure) {
-          throw cause.cause;
-        }
-        removeFailedEndpoint(endpointPath, cause);
-        lastError =
-          cause instanceof LocalMigrateServerConnectionFailure
-            ? cause.cause
-            : cause;
+      const attempt = await connectPublishedEndpoint(endpointPath);
+      if (attempt.kind === "connected") {
+        return attempt.connection;
       }
+      lastError = attempt.cause ?? lastError;
 
       if (child.exitCode !== null || child.signalCode !== null) {
-        try {
-          return await connectEndpoint(endpointPath);
-        } catch (cause) {
-          if (cause instanceof LocalMigrateServerCompatibilityFailure) {
-            throw cause.cause;
-          }
-          removeFailedEndpoint(endpointPath, cause);
+        const finalAttempt = await connectPublishedEndpoint(endpointPath);
+        if (finalAttempt.kind === "connected") {
+          return finalAttempt.connection;
         }
         throw new Error(
           `Local Migrate Server exited before startup completed (${child.exitCode ?? child.signalCode})`

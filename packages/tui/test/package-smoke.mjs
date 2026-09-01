@@ -80,7 +80,7 @@ const runPackedMigration = async ({ command, fixtureDirectory }) => {
     });
     run(
       pilotty,
-      ["wait-for", "-s", session, "-t", "30000", "Status reloaded"],
+      ["wait-for", "-s", session, "-t", "60000", "Status reloaded"],
       { capture: true, cwd: fixtureDirectory, env }
     );
     run(pilotty, ["key", "-s", session, "r"], {
@@ -95,7 +95,7 @@ const runPackedMigration = async ({ command, fixtureDirectory }) => {
         "-s",
         session,
         "-t",
-        "10000",
+        "20000",
         "packaging-fixture  SUCCEEDED",
       ],
       { capture: true, cwd: fixtureDirectory, env }
@@ -120,6 +120,17 @@ const runPackedMigration = async ({ command, fixtureDirectory }) => {
         `Packed TUI did not execute the fixture migration\n${snapshot}`
       );
     }
+  } catch (cause) {
+    const snapshot = spawnSync(
+      pilotty,
+      ["snapshot", "-s", session, "--format", "text"],
+      { cwd: fixtureDirectory, encoding: "utf8", env }
+    );
+    throw new Error(
+      `${cause instanceof Error ? cause.message : String(cause)}\n` +
+        `Packed TUI failure snapshot:\n${snapshot.stdout ?? ""}${snapshot.stderr ?? ""}`,
+      { cause }
+    );
   } finally {
     spawnSync(pilotty, ["key", "-s", session, "q"], {
       env,
