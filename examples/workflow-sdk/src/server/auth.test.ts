@@ -1,18 +1,15 @@
 import { Effect } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isAuthorizedCronRequest, isAuthorizedMigrationRequest } from "./auth";
-import {
-  MigrateServerAccess,
-  makeMigrateServerAccess,
-} from "./migrate-server-access";
+import { isAuthorizedCronRequest, isAuthorizedDemoSetupRequest } from "./auth";
+import { DemoSetupAccess, makeDemoSetupAccess } from "./demo-setup-access";
 
 const cronRequest = (authorization?: string): Request =>
   new Request("http://localhost/api/cron/import", {
     headers: authorization === undefined ? undefined : { authorization },
   });
 
-const migrationRequest = (authorization?: string): Request =>
-  new Request("http://localhost/api/migrate", {
+const setupRequest = (authorization?: string): Request =>
+  new Request("http://localhost/api/demo/setup", {
     headers: authorization === undefined ? undefined : { authorization },
   });
 
@@ -39,19 +36,19 @@ describe("isAuthorizedCronRequest", () => {
   });
 });
 
-describe("isAuthorizedMigrationRequest", () => {
-  it("uses the exact token shared with the browser sandbox", async () => {
+describe("isAuthorizedDemoSetupRequest", () => {
+  it("uses the private setup token", async () => {
     const authorize = (authorization: string) =>
       Effect.runPromise(
-        isAuthorizedMigrationRequest(migrationRequest(authorization)).pipe(
+        isAuthorizedDemoSetupRequest(setupRequest(authorization)).pipe(
           Effect.provideService(
-            MigrateServerAccess,
-            makeMigrateServerAccess(" migrate-secret ")
+            DemoSetupAccess,
+            makeDemoSetupAccess(" setup-secret ")
           )
         )
       );
 
-    await expect(authorize("Bearer migrate-secret")).resolves.toBe(true);
-    await expect(authorize("Bearer  migrate-secret")).resolves.toBe(false);
+    await expect(authorize("Bearer setup-secret")).resolves.toBe(true);
+    await expect(authorize("Bearer  setup-secret")).resolves.toBe(false);
   });
 });

@@ -9,6 +9,8 @@
       "@fixtures/catalog": ["../../fixtures/catalog/fixture.ts"],
       "migrate-sdk": ["./src/index.ts"],
       "migrate-sdk/client": ["./src/client/index.ts"],
+      "migrate-sdk/client/http": ["./src/client/http.ts"],
+      "migrate-sdk/client/web": ["./src/client/web.ts"],
       "migrate-sdk/cli": ["./src/cli/index.ts"],
       "migrate-sdk/cli/testing": ["./src/cli/testing.ts"],
       "migrate-sdk/core": ["./src/core.ts"],

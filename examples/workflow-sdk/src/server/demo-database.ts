@@ -42,7 +42,7 @@ const createAndSeedDemoTables = (catalogSnapshot?: string) =>
     const sql = yield* SqlClient.SqlClient;
     const fixtureOptions = {
       bookCount: 240,
-      outcomes: "all-migrate" as const,
+      outcomes: "mixed" as const,
     };
     const fixture = yield* catalogSnapshot === undefined
       ? Effect.promise(() => loadCatalogFixture(fixtureOptions))
@@ -61,9 +61,19 @@ const createAndSeedDemoTables = (catalogSnapshot?: string) =>
     CREATE TABLE IF NOT EXISTS demo_books_source (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
-      author_id TEXT NOT NULL REFERENCES demo_authors_source(id),
-      source_version INTEGER NOT NULL
+      author_id TEXT NOT NULL,
+      disposition TEXT NOT NULL,
+      publication_year TEXT NOT NULL,
+      source_version INTEGER NOT NULL,
+      wikidata_work_id TEXT NOT NULL
     )
+  `;
+    yield* sql`
+    ALTER TABLE demo_books_source
+      DROP CONSTRAINT IF EXISTS demo_books_source_author_id_fkey,
+      ADD COLUMN IF NOT EXISTS disposition TEXT NOT NULL DEFAULT 'migrate',
+      ADD COLUMN IF NOT EXISTS publication_year TEXT NOT NULL DEFAULT '2000',
+      ADD COLUMN IF NOT EXISTS wikidata_work_id TEXT NOT NULL DEFAULT 'unknown'
   `;
     yield* sql`
     CREATE TABLE IF NOT EXISTS demo_authors_destination (
@@ -99,14 +109,20 @@ const createAndSeedDemoTables = (catalogSnapshot?: string) =>
     INSERT INTO demo_books_source ${sql.insert(
       fixture.sources.books.map((book) => ({
         author_id: book.author_id,
+        disposition: book.disposition,
         id: book.id,
+        publication_year: book.publication_year,
         source_version: Number(book.source_version),
         title: book.title,
+        wikidata_work_id: book.wikidata_work_id,
       }))
     )}
     ON CONFLICT (id) DO UPDATE SET
       title = excluded.title,
       author_id = excluded.author_id,
+      disposition = excluded.disposition,
+      publication_year = excluded.publication_year,
+      wikidata_work_id = excluded.wikidata_work_id,
       source_version = excluded.source_version
   `;
   });

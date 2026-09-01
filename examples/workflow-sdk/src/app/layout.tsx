@@ -1,11 +1,10 @@
 import type { Metadata } from "next";
-import "@wterm/react/css";
 import "./globals.css";
 
 export const metadata: Metadata = {
   description:
-    "Run a durable Vercel Workflow migration from the real Migrate TUI in your browser",
-  title: "Migrate SDK · Browser TUI demo",
+    "Run and observe durable Migrate SDK operations through a browser client",
+  title: "Migrate SDK · Workflow demo",
 };
 
 export default function RootLayout({

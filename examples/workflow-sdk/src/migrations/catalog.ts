@@ -6,6 +6,7 @@ import {
   MigrationDefinitionRegistry,
   type ProcessPipelineFor,
   type RollbackPipelineFor,
+  skipItem,
   Tracking,
 } from "migrate-sdk";
 import {
@@ -156,9 +157,17 @@ export const authors = MigrationDefinition.make({
 
 const BookRow = Schema.Struct({
   author_id: Schema.NonEmptyString,
+  disposition: Schema.Literals([
+    "fail-reference",
+    "invalid",
+    "migrate",
+    "skip",
+  ]),
   id: Schema.NonEmptyString,
+  publication_year: Schema.NonEmptyString,
   source_version: Schema.Finite,
   title: Schema.String,
+  wikidata_work_id: Schema.NonEmptyString,
 });
 type Book = typeof BookRow.Type;
 type EncodedBook = typeof BookRow.Encoded;
@@ -178,13 +187,15 @@ const readBooks: SqlSourceRead<EncodedBook, BookCursor> = (
 ) =>
   cursor === null
     ? sql`
-        SELECT id, title, author_id, source_version
+        SELECT id, title, author_id, disposition, publication_year,
+               source_version, wikidata_work_id
         FROM demo_books_source
         ORDER BY id
         LIMIT ${limit}
       `
     : sql`
-        SELECT id, title, author_id, source_version
+        SELECT id, title, author_id, disposition, publication_year,
+               source_version, wikidata_work_id
         FROM demo_books_source
         WHERE id > ${cursor.id}
         ORDER BY id
@@ -209,7 +220,8 @@ const bookSource = SqlSource.make({
   }),
   identity: bookIdentity,
   lookup: (sql, identity) => sql`
-    SELECT id, title, author_id, source_version
+    SELECT id, title, author_id, disposition, publication_year,
+           source_version, wikidata_work_id
     FROM demo_books_source
     WHERE id = ${identity.key}
   `,
@@ -221,6 +233,26 @@ const bookTracking = Tracking.record({
   id: "workflow-sdk-book-destination@v1",
   schema: Schema.Struct({ destinationId: Schema.NonEmptyString }),
 });
+
+class CatalogReferenceError extends Schema.TaggedError<CatalogReferenceError>()(
+  "CatalogReferenceError",
+  {
+    message: Schema.String,
+    referenceId: Schema.String,
+  }
+) {}
+
+class CatalogValidationError extends Schema.TaggedError<CatalogValidationError>()(
+  "CatalogValidationError",
+  {
+    message: Schema.String,
+    publicationYear: Schema.Number,
+  }
+) {}
+
+interface DestinationIdRow {
+  readonly id: string;
+}
 
 const writeBook = (book: Book) =>
   Effect.gen(function* () {
@@ -261,9 +293,65 @@ const writeBook = (book: Book) =>
 
 const processBook: ProcessPipelineFor<
   typeof bookSource,
-  DestinationError,
+  | CatalogReferenceError
+  | CatalogValidationError
+  | DestinationError
+  | Schema.SchemaError,
   typeof bookTracking
 > = Effect.fn("workflowSdkExample.processBook")(function* (sourceItem) {
+  if (sourceItem.item.disposition === "skip") {
+    return yield* skipItem("Book is outside the catalog publishing scope");
+  }
+
+  const publicationYear = Number.parseInt(sourceItem.item.publication_year, 10);
+  if (
+    sourceItem.item.disposition === "invalid" ||
+    !Number.isSafeInteger(publicationYear) ||
+    publicationYear > 2100
+  ) {
+    yield* Tracking.logDiagnostic({
+      details: {
+        publicationYear,
+        wikidataWorkId: sourceItem.item.wikidata_work_id,
+      },
+      message: "Publication year is outside the supported catalog range",
+      severity: "error",
+    });
+    return yield* new CatalogValidationError({
+      message: "Book publication year must not be later than 2100",
+      publicationYear,
+    });
+  }
+
+  const author = yield* Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return yield* sql<DestinationIdRow>`
+      SELECT id
+      FROM demo_authors_destination
+      WHERE id = ${sourceItem.item.author_id}
+    `;
+  }).pipe(
+    Effect.provide(PostgresLive),
+    Effect.mapError(
+      (cause) =>
+        new DestinationError({
+          cause,
+          message: `Unable to read demo author ${sourceItem.item.author_id}`,
+        })
+    )
+  );
+  if (author[0]?.id === undefined) {
+    yield* Tracking.logDiagnostic({
+      details: { authorId: sourceItem.item.author_id },
+      message: "Author reference was not found",
+      severity: "error",
+    });
+    return yield* new CatalogReferenceError({
+      message: "Book author must be migrated before the book",
+      referenceId: sourceItem.item.author_id,
+    });
+  }
+
   yield* writeBook(sourceItem.item);
   yield* Tracking.setRecord({ destinationId: sourceItem.item.id });
 });
@@ -292,6 +380,7 @@ const rollbackBook: RollbackPipelineFor<
 };
 
 export const books = MigrationDefinition.make({
+  dependencies: { required: [authors.id] },
   execution: { process: { concurrency: 4 } },
   group: "catalog",
   id: "books",

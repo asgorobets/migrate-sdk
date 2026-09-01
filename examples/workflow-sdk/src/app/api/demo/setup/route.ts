@@ -1,7 +1,7 @@
 import { Effect } from "effect";
-import { isAuthorizedMigrationRequest } from "@/server/auth";
+import { isAuthorizedDemoSetupRequest } from "@/server/auth";
 import { setupDemoDatabase } from "@/server/demo-database";
-import { MigrateServerAccess } from "@/server/migrate-server-access";
+import { DemoSetupAccess } from "@/server/demo-setup-access";
 import catalogFixtureSnapshot from "../../../../../../../fixtures/catalog/books.csv?raw";
 
 export const runtime = "nodejs";
@@ -9,8 +9,8 @@ export const maxDuration = 60;
 
 export const POST = async (request: Request): Promise<Response> => {
   const authorized = await Effect.runPromise(
-    isAuthorizedMigrationRequest(request).pipe(
-      Effect.provide(MigrateServerAccess.layer)
+    isAuthorizedDemoSetupRequest(request).pipe(
+      Effect.provide(DemoSetupAccess.layer)
     )
   );
   if (!authorized) {

@@ -1,0 +1,584 @@
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--background);
+  border: 1px solid var(--line);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 76px;
+  padding: 16px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.toolbar h2 {
+  margin-top: 5px;
+  font-size: 18px;
+}
+
+.kicker,
+.commandPanel span,
+.liveMode span,
+.streamPanel header span {
+  font-size: 9px;
+  color: var(--info);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.connectionGroup {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.connection {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  text-transform: capitalize;
+}
+
+.connection::before {
+  content: "○";
+}
+
+.connection[data-status="connected"] {
+  color: var(--success);
+}
+
+.connection[data-status="connected"]::before {
+  content: "●";
+}
+
+.connection[data-status="error"] {
+  color: var(--danger);
+}
+
+.connection[data-status="error"]::before {
+  content: "×";
+}
+
+.commandPanel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  min-height: 76px;
+  padding: 12px 20px;
+  background: rgb(88 166 255 / 5%);
+  border-bottom: 1px solid var(--line);
+}
+
+.commandPanel div {
+  min-width: 0;
+}
+
+.commandPanel code {
+  display: block;
+  padding: 8px 0 0;
+  overflow-x: auto;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--foreground);
+  white-space: nowrap;
+}
+
+.commandPanel button,
+.actions button,
+.confirmation button {
+  min-height: 34px;
+  padding: 7px 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 0;
+}
+
+.commandPanel button {
+  color: var(--foreground);
+  background: #30363d;
+}
+
+.liveMode {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 70px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.liveModeCopy {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.liveModeCopy strong {
+  font-size: 9px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.concurrencyControl {
+  display: grid;
+  grid-template-columns: auto 130px;
+  gap: 4px 10px;
+  align-items: center;
+}
+
+.concurrencyControl select {
+  min-height: 32px;
+  padding: 5px 28px 5px 9px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--foreground);
+  cursor: pointer;
+  background: #21262d;
+  border: 1px solid var(--line);
+}
+
+.concurrencyControl select:focus-visible {
+  outline: 2px solid var(--info);
+  outline-offset: 2px;
+}
+
+.concurrencyControl small {
+  grid-column: 1 / -1;
+  font-size: 8px;
+  color: var(--muted);
+}
+
+.migrationGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px;
+}
+
+.empty {
+  display: grid;
+  grid-column: 1 / -1;
+  place-items: center;
+  min-height: 280px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.migration {
+  min-width: 0;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.migrationHeader {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.migrationHeader h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 16px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.statusIcon {
+  width: 7px;
+  height: 7px;
+  background: var(--muted);
+  border-radius: 50%;
+}
+
+.statusIcon[data-status="running"],
+.statusIcon[data-status="queued"] {
+  background: var(--info);
+  box-shadow: 0 0 0 3px rgb(88 166 255 / 15%);
+}
+
+.statusIcon[data-status="cancelling"],
+.statusIcon[data-status="needs update"] {
+  background: var(--warning);
+}
+
+.statusIcon[data-status="failed"] {
+  background: var(--danger);
+}
+
+.statusIcon[data-status="succeeded"] {
+  background: var(--success);
+}
+
+.badge {
+  padding: 4px 7px;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--muted);
+  text-transform: uppercase;
+  border: 1px solid var(--line);
+}
+
+.badge[data-status="running"],
+.badge[data-status="queued"] {
+  color: var(--info);
+  border-color: rgb(88 166 255 / 45%);
+}
+
+.badge[data-status="cancelling"],
+.badge[data-status="needs update"] {
+  color: var(--warning);
+  border-color: rgb(210 153 34 / 45%);
+}
+
+.badge[data-status="failed"] {
+  color: var(--danger);
+  border-color: rgb(255 123 114 / 45%);
+}
+
+.badge[data-status="succeeded"] {
+  color: var(--success);
+  border-color: rgb(63 185 80 / 45%);
+}
+
+.summary,
+.runId,
+.replayHint {
+  margin-top: 10px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.progressMeta {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 18px;
+  margin-top: 16px;
+  font-size: 9px;
+  color: var(--muted);
+}
+
+.streaming {
+  color: var(--success);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.streaming::before {
+  margin-right: 5px;
+  content: "●";
+}
+
+.progressTrack {
+  display: flex;
+  height: 8px;
+  margin-top: 6px;
+  overflow: hidden;
+  background: #21262d;
+}
+
+.progressTrack > span {
+  display: block;
+  height: 100%;
+  transition: width 240ms ease-out;
+}
+
+.progressTrack > span[data-kind="migrated"] {
+  background: var(--success);
+}
+
+.progressTrack > span[data-kind="skipped"] {
+  background: var(--warning);
+}
+
+.progressTrack > span[data-kind="needs-update"] {
+  background: #f0883e;
+}
+
+.progressTrack > span[data-kind="failed"] {
+  background: var(--danger);
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 8px;
+  font-size: 8px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.legend span::before {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 5px;
+  vertical-align: 1px;
+  content: "";
+  background: var(--muted);
+}
+
+.legend span[data-kind="migrated"]::before {
+  background: var(--success);
+}
+
+.legend span[data-kind="skipped"]::before {
+  background: var(--warning);
+}
+
+.legend span[data-kind="failed"]::before {
+  background: var(--danger);
+}
+
+.runId {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--info);
+  white-space: nowrap;
+}
+
+.replayHint {
+  color: var(--warning);
+}
+
+.actions,
+.confirmation > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.actions button:disabled,
+.confirmation button:disabled {
+  color: #6e7681;
+  cursor: not-allowed;
+  background: #21262d;
+}
+
+.primaryButton {
+  color: #fff;
+  background: var(--selected);
+}
+
+.secondaryButton {
+  color: var(--foreground);
+  background: #30363d;
+}
+
+.dangerButton {
+  color: #fff;
+  background: #da3633;
+}
+
+.confirmation {
+  padding: 12px;
+  margin-top: 16px;
+  background: rgb(210 153 34 / 8%);
+  border: 1px solid rgb(210 153 34 / 50%);
+}
+
+.confirmation legend {
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--warning);
+}
+
+.streamGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 0 12px 12px;
+}
+
+.streamPanel {
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--line);
+}
+
+.streamPanel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 60px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.streamPanel h3 {
+  margin-top: 4px;
+  font-size: 13px;
+}
+
+.streamPanel header strong {
+  font-size: 9px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.streamPanel ol {
+  height: 260px;
+  padding: 6px;
+  overflow-y: auto;
+  list-style: none;
+  scroll-behavior: smooth;
+}
+
+.streamPanel li {
+  display: grid;
+  grid-template-columns: 24px 66px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px;
+  font-size: 9px;
+  line-height: 1.45;
+  color: var(--foreground);
+  border-bottom: 1px solid rgb(48 54 61 / 55%);
+}
+
+.streamPanel li > span,
+.streamPanel time,
+.streamPanel small {
+  color: var(--muted);
+}
+
+.streamPanel li[data-tone="danger"] > span {
+  color: var(--danger);
+}
+
+.streamPanel li[data-tone="warning"] > span {
+  color: var(--warning);
+}
+
+.streamPanel li[data-tone="success"] > span {
+  color: var(--success);
+}
+
+.streamPanel li[data-tone="info"] > span {
+  color: var(--info);
+}
+
+.streamPanel p {
+  overflow-wrap: anywhere;
+}
+
+.streamPanel small {
+  display: block;
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+}
+
+.streamPanel details {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.streamPanel summary {
+  color: var(--info);
+  cursor: pointer;
+}
+
+.streamPanel pre {
+  padding: 8px;
+  margin-top: 6px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  line-height: 1.4;
+  background: var(--background);
+}
+
+.streamPanel .streamEmpty {
+  display: grid;
+  grid-template-columns: 1fr;
+  place-items: center;
+  min-height: 100%;
+  color: var(--muted);
+  border-bottom: 0;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 10px 20px;
+  font-size: 9px;
+  line-height: 1.45;
+  color: var(--muted);
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+
+.error {
+  color: var(--danger);
+}
+
+@media (max-width: 760px) {
+  .toolbar,
+  .commandPanel,
+  .liveMode {
+    align-items: flex-start;
+  }
+
+  .toolbar,
+  .liveMode {
+    flex-direction: column;
+    gap: 10px;
+    justify-content: center;
+  }
+
+  .concurrencyControl {
+    grid-template-columns: minmax(0, 1fr) 130px;
+    width: 100%;
+  }
+
+  .connectionGroup {
+    flex-wrap: wrap;
+  }
+
+  .commandPanel {
+    grid-template-columns: 1fr;
+  }
+
+  .commandPanel button {
+    justify-self: start;
+  }
+
+  .migrationGrid,
+  .streamGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .streamPanel ol {
+    height: 230px;
+  }
+
+  .streamPanel li {
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .streamPanel li time {
+    display: none;
+  }
+}

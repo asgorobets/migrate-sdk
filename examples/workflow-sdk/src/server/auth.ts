@@ -4,6 +4,7 @@ import {
   HttpServerRequest,
   HttpServerResponse,
 } from "effect/unstable/http";
+import { DemoSetupAccess } from "./demo-setup-access";
 import { MigrateServerAccess } from "./migrate-server-access";
 
 const isAuthorizedBearerHeader = (
@@ -14,10 +15,10 @@ const isAuthorizedBearerHeader = (
   token.length > 0 &&
   authorization === `Bearer ${token}`;
 
-export const isAuthorizedMigrationRequest = (
+export const isAuthorizedDemoSetupRequest = (
   request: Request
-): Effect.Effect<boolean, never, MigrateServerAccess> =>
-  MigrateServerAccess.pipe(
+): Effect.Effect<boolean, never, DemoSetupAccess> =>
+  DemoSetupAccess.pipe(
     Effect.map(({ token }) =>
       isAuthorizedBearerHeader(
         request.headers.get("authorization") ?? undefined,

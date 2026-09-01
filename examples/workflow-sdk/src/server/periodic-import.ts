@@ -6,7 +6,7 @@ import { MigrateServer } from "migrate-sdk/server/http";
 const catalogImportRequest = {
   action: "run",
   options: {},
-  target: {
+  selection: {
     groupId: toMigrationDefinitionGroupId("catalog"),
     kind: "group",
   },

@@ -12,5 +12,9 @@ describe("catalogRegistry", () => {
       { group: "catalog", id: "authors" },
       { group: "catalog", id: "books" },
     ]);
+    expect(
+      catalogRegistry.list().find((entry) => entry.id === "books")?.dependencies
+        .required
+    ).toEqual(["authors"]);
   });
 });

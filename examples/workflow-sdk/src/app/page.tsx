@@ -1,7 +1,15 @@
-import { BrowserTerminal } from "./browser-terminal";
+import { Effect } from "effect";
+import { connection } from "next/server";
+import { MigrateServerAccess } from "@/server/migrate-server-access";
+import { MigrationWidget } from "./migration-widget";
 import styles from "./page.module.css";
 
-export default function Home() {
+export default async function Home() {
+  await connection();
+  const { token: demoMigrateServerToken } = await Effect.runPromise(
+    MigrateServerAccess.pipe(Effect.provide(MigrateServerAccess.layer))
+  );
+
   return (
     <main className={styles.page}>
       <header className={styles.nav}>
@@ -18,27 +26,29 @@ export default function Home() {
         </p>
         <h1>Try a durable migration from your browser</h1>
         <p className={styles.summary}>
-          The actual OpenTUI client starts below inside a shared Vercel Sandbox.
-          Run or roll back PostgreSQL migrations while Vercel Workflow owns the
-          durable execution.
+          Run and roll back PostgreSQL migrations, watch cursor-window progress,
+          and inspect durable item messages while Vercel Workflow owns the
+          execution. The complete TUI is one command away in your terminal.
         </p>
         <div className={styles.runtimeLine}>
-          <span>[ wterm ]</span>
-          <span>[ libghostty ]</span>
-          <span>[ Vercel Sandbox ]</span>
           <span>[ Vercel Workflow ]</span>
+          <span>[ Effect RPC ]</span>
+          <span>[ PostgreSQL ]</span>
+          <span>[ Browser Migrate Client ]</span>
         </div>
       </div>
 
-      <BrowserTerminal />
+      <section aria-label="Migration clients" className={styles.clients}>
+        <MigrationWidget bearerToken={demoMigrateServerToken} />
+      </section>
 
       <section className={styles.grid}>
         <article>
-          <span>01 / terminal</span>
-          <h2>The real TUI</h2>
+          <span>01 / browser</span>
+          <h2>A focused web client</h2>
           <p>
-            OpenTUI runs under Bun in Linux. The browser only renders its PTY
-            byte stream with libghostty.
+            This page uses the public browser client directly. It keeps the demo
+            small while showing the same remote protocol used by the TUI.
           </p>
         </article>
         <article>
@@ -50,18 +60,19 @@ export default function Home() {
           </p>
         </article>
         <article>
-          <span>03 / playground</span>
-          <h2>Shared and disposable</h2>
+          <span>03 / terminal</span>
+          <h2>The complete TUI</h2>
           <p>
-            Every visitor gets their own TUI process in the same temporary
-            sandbox. Activity keeps it warm, with an absolute 30-minute limit.
+            Copy the one-off command above to open the canonical interface in
+            your own terminal. The published demo token exercises the same
+            Bearer authentication as any external client.
           </p>
         </article>
       </section>
 
       <footer className={styles.footer}>
         <span>Migration execution remains provider-owned.</span>
-        <span>Terminal sessions are temporary; workflow runs are durable.</span>
+        <span>Closing this page does not stop a Workflow run.</span>
       </footer>
     </main>
   );

@@ -2,9 +2,9 @@ import type { Effect } from "effect";
 import {
   MIGRATE_PROTOCOL_VERSION,
   type MigrateServerInfo,
-} from "../../protocol/index.ts";
-import { MIGRATE_SDK_VERSION } from "../../version.ts";
-import type { MigrateClientService } from "../index.ts";
+} from "../protocol/index.ts";
+import { MIGRATE_SDK_VERSION } from "../version.ts";
+import type { MigrateClientService } from "./index.ts";
 
 export interface MigrateConnection {
   readonly client: MigrateClientService;

@@ -10,9 +10,9 @@ import { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
 import type { MigrateServerInfo } from "../../protocol/index.ts";
 import { MIGRATE_SDK_VERSION } from "../../version.ts";
+import type { MigrateConnection } from "../connection.ts";
+import { validateMigrateServerInfo } from "../connection.ts";
 import { MigrateClient, type MigrateClientService } from "../index.ts";
-import type { MigrateConnection } from "./connection.ts";
-import { validateMigrateServerInfo } from "./connection.ts";
 import {
   makeLocalMigrateServerEndpoint,
   removeLocalMigrateServerEndpoint,
