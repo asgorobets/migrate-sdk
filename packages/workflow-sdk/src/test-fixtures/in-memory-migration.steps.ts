@@ -1,5 +1,6 @@
 import {
   beginMigrationRunExecutionEnvelope,
+  cancelMigrationRunExecutionEnvelope,
   completeMigrationRunExecutionEnvelope,
   executeMigrationRollbackExecutionEnvelope,
   executeMigrationRunCursorWindow,
@@ -9,17 +10,10 @@ import {
 import { Effect, Layer, Schema } from "effect";
 import {
   MigrationDefinition,
-  type MigrationDefinitionId,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryCatalog,
-  type MigrationRollbackExecutionEnvelopeType,
   MigrationRollbackExecutor,
-  type MigrationRunCursorWindowState,
-  type MigrationRunExecutionEnvelopeType,
-  type MigrationRunRollbackOrphansState,
   MigrationRunStepExecutor,
-  type MigrationRunSummary,
-  type RollbackRunSummary,
   SourceIdentity,
   toMigrationDefinitionId,
 } from "migrate-sdk/core";
@@ -82,6 +76,21 @@ const getRollbackCalls = (): string[] => {
   return scope[rollbackCallsKey];
 };
 const rollbackCalls = getRollbackCalls();
+const processConcurrencyKey = "__migrateSdkWorkflowInMemoryProcessConcurrency";
+interface ProcessConcurrencyState {
+  active: number;
+  max: number;
+}
+const getProcessConcurrencyState = (): ProcessConcurrencyState => {
+  const scope = globalThis as typeof globalThis & {
+    [processConcurrencyKey]?: ProcessConcurrencyState;
+  };
+
+  scope[processConcurrencyKey] ??= { active: 0, max: 0 };
+
+  return scope[processConcurrencyKey];
+};
+const processConcurrencyState = getProcessConcurrencyState();
 
 type InterruptionPoint =
   | "after-source-window"
@@ -129,17 +138,34 @@ const resetStoreState = (state: InMemoryMigrationStoreState) => {
   state.itemStates.clear();
   state.latestRunStates.clear();
   state.migrationContracts.clear();
+  state.runStates.clear();
   state.sourceCursorCommits.splice(0);
   state.sourceCursors.clear();
   state.nextLockNumber = 1;
   state.nextRunNumber = 1;
+  processConcurrencyState.active = 0;
+  processConcurrencyState.max = 0;
 };
 
 const storeState = getStoreState();
 const storeLayer = InMemoryMigrationStore.layer(storeState);
 const articles = MigrationDefinition.make({
   id: articleDefinitionId,
-  process: () => Effect.void,
+  process: () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        processConcurrencyState.active += 1;
+        processConcurrencyState.max = Math.max(
+          processConcurrencyState.max,
+          processConcurrencyState.active
+        );
+      }),
+      () => Effect.sleep("5 millis"),
+      () =>
+        Effect.sync(() => {
+          processConcurrencyState.active -= 1;
+        })
+    ),
   rollback: (state) => {
     rollbackCalls.push(state.sourceIdentity.encoded);
   },
@@ -181,42 +207,30 @@ const disableWorkflowRetries = <Step>(step: Step) => {
   (step as Step & WorkflowRetryMetadata).maxRetries = 0;
 };
 
-const toMigrationRunEnvelope = (
-  envelope: WorkflowSdkMigrationRunEnvelope
-): MigrationRunExecutionEnvelopeType =>
-  envelope as unknown as MigrationRunExecutionEnvelopeType;
-
-const toMigrationRollbackEnvelope = (
-  envelope: WorkflowSdkMigrationRollbackEnvelope
-): MigrationRollbackExecutionEnvelopeType =>
-  envelope as unknown as MigrationRollbackExecutionEnvelopeType;
-
 export async function beginMigrationRunStep(
   envelope: WorkflowSdkMigrationRunEnvelope
 ): Promise<{ readonly rollbackOrphans: boolean }> {
   "use step";
 
-  return await runEffect(
-    beginMigrationRunExecutionEnvelope(toMigrationRunEnvelope(envelope))
-  );
+  return await runEffect(beginMigrationRunExecutionEnvelope(envelope));
 }
 
 export async function executeMigrationRunCursorWindowStep(input: {
-  readonly definitionId: string;
+  readonly definitionId: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number];
   readonly envelope: WorkflowSdkMigrationRunEnvelope;
   readonly runId: WorkflowSdkMigrationRunEnvelope["runId"];
   readonly state: WorkflowSdkMigrationRunCursorWindowState;
 }): Promise<WorkflowSdkMigrationRunCursorWindowResult> {
   "use step";
 
-  const result = (await runEffect(
+  const result = await runEffect(
     executeMigrationRunCursorWindow({
-      definitionId: input.definitionId as MigrationDefinitionId,
-      envelope: toMigrationRunEnvelope(input.envelope),
-      runId: input.runId as MigrationRunExecutionEnvelopeType["runId"],
-      state: input.state as MigrationRunCursorWindowState,
+      definitionId: input.definitionId,
+      envelope: input.envelope,
+      runId: input.runId,
+      state: input.state,
     })
-  )) as WorkflowSdkMigrationRunCursorWindowResult;
+  );
 
   interruptAt("after-source-window");
 
@@ -224,7 +238,7 @@ export async function executeMigrationRunCursorWindowStep(input: {
 }
 
 export async function executeMigrationRunRollbackOrphansPageStep(input: {
-  readonly definitionId: string;
+  readonly definitionId: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number];
   readonly envelope: WorkflowSdkMigrationRunEnvelope;
   readonly runId: WorkflowSdkMigrationRunEnvelope["runId"];
   readonly state: WorkflowSdkMigrationRunRollbackOrphansState;
@@ -233,14 +247,14 @@ export async function executeMigrationRunRollbackOrphansPageStep(input: {
 
   interruptAt("before-rollback-orphans");
 
-  const result = (await runEffect(
+  const result = await runEffect(
     executeMigrationRunRollbackOrphansPage({
-      definitionId: input.definitionId as MigrationDefinitionId,
-      envelope: toMigrationRunEnvelope(input.envelope),
-      runId: input.runId as MigrationRunExecutionEnvelopeType["runId"],
-      state: input.state as MigrationRunRollbackOrphansState,
+      definitionId: input.definitionId,
+      envelope: input.envelope,
+      runId: input.runId,
+      state: input.state,
     })
-  )) as WorkflowSdkMigrationRunRollbackOrphansPageResult;
+  );
 
   interruptAt("after-rollback-orphans-page");
 
@@ -253,29 +267,50 @@ export async function completeMigrationRunStep(input: {
 }): Promise<WorkflowSdkMigrationRunSummary> {
   "use step";
 
-  return (await runEffect(
+  return await runEffect(
     completeMigrationRunExecutionEnvelope({
-      definitions: input.definitions as MigrationRunSummary["definitions"],
-      envelope: toMigrationRunEnvelope(input.envelope),
+      definitions: input.definitions,
+      envelope: input.envelope,
     })
-  )) as WorkflowSdkMigrationRunSummary;
+  );
+}
+
+export async function cancelMigrationRunStep(input: {
+  readonly definitions: WorkflowSdkMigrationRunSummary["definitions"];
+  readonly envelope: WorkflowSdkMigrationRunEnvelope;
+}): Promise<WorkflowSdkMigrationRunSummary> {
+  "use step";
+
+  return await runEffect(
+    cancelMigrationRunExecutionEnvelope({
+      definitions: input.definitions,
+      envelope: input.envelope,
+    })
+  );
 }
 
 export async function failMigrationRunStep(input: {
+  readonly definitions: WorkflowSdkMigrationRunSummary["definitions"];
   readonly envelope: WorkflowSdkMigrationRunEnvelope;
   readonly error: unknown;
+  readonly failedDefinitionId?: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number];
 }): Promise<void> {
   "use step";
 
   return await runEffect(
     failMigrationRunExecutionEnvelope({
-      envelope: toMigrationRunEnvelope(input.envelope),
+      definitions: input.definitions,
+      envelope: input.envelope,
       error: input.error,
+      ...(input.failedDefinitionId === undefined
+        ? {}
+        : { failedDefinitionId: input.failedDefinitionId }),
     })
   );
 }
 
 disableWorkflowRetries(beginMigrationRunStep);
+disableWorkflowRetries(cancelMigrationRunStep);
 disableWorkflowRetries(executeMigrationRunCursorWindowStep);
 disableWorkflowRetries(executeMigrationRunRollbackOrphansPageStep);
 disableWorkflowRetries(completeMigrationRunStep);
@@ -286,11 +321,7 @@ export async function executeMigrationRollbackStep(
 ): Promise<WorkflowSdkMigrationRollbackSummary> {
   "use step";
 
-  return (await runEffect(
-    executeMigrationRollbackExecutionEnvelope(
-      toMigrationRollbackEnvelope(envelope)
-    )
-  )) as RollbackRunSummary as WorkflowSdkMigrationRollbackSummary;
+  return await runEffect(executeMigrationRollbackExecutionEnvelope(envelope));
 }
 
 disableWorkflowRetries(executeMigrationRollbackStep);
@@ -322,6 +353,8 @@ export async function inspectMigrationStoreStep(): Promise<{
 
 export const inMemoryMigrationTestRegistry = registry;
 export const inMemoryMigrationTestStoreState = storeState;
+export const inMemoryMigrationTestProcessConcurrency = () =>
+  processConcurrencyState.max;
 export const removeInMemoryMigrationTestSourceItem = (identity: string) => {
   const index = sourceItems.findIndex((item) => item.identityKey === identity);
   if (index >= 0) {

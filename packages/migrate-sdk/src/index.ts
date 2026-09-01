@@ -1,7 +1,10 @@
 // biome-ignore-all assist/source/organizeImports: Public SDK entrypoint is grouped by domain for readability.
 // biome-ignore-all lint/performance/noBarrelFile: Public package entrypoint intentionally re-exports the SDK surface.
 
+export { MIGRATE_SDK_VERSION } from "./version.ts";
+
 export type {
+  AnySelfContainedMigrationDefinition,
   ConfiguredSource,
   DestinationStubContext,
   DestinationStubInput,
@@ -108,6 +111,12 @@ export {
 
 export { MigrationDefinitionLock } from "./domain/lock.ts";
 
+export {
+  MigrationMessage,
+  MigrationMessageKind,
+  MigrationMessageSeverity,
+} from "./domain/message.ts";
+
 export type { ProcessContext } from "./domain/pipeline.ts";
 
 export type {
@@ -139,14 +148,24 @@ export {
   reduceRollbackProgressState,
 } from "./domain/rollback-progress.ts";
 
-export { MigrationRunState } from "./domain/run.ts";
+export {
+  activeMigrationRunFromState,
+  ActiveMigrationRun,
+  makeMigrationDefinitionRunState,
+  makeMigrationRunState,
+  MigrationDefinitionRunOutcome,
+  MigrationDefinitionRunState,
+  MigrationDefinitionRunStatus,
+  MigrationDefinitionRunSummary,
+  MigrationRunState,
+  MigrationRunStatus,
+  MigrationRunSummary,
+} from "./domain/run.ts";
 export type {
   ExecutionStartResult,
   MigrationExecutionHandle,
-  MigrationDefinitionRunSummary,
   MigrationRunHandle,
   MigrationRunHandleState,
-  MigrationRunSummary,
   MigrationRunTerminalResult,
   MigrationRunTerminalState,
 } from "./domain/run.ts";
@@ -198,8 +217,12 @@ export type {
   MigrationDefinitionRegistryEntry,
   MigrationDefinitionRegistryGroup,
   MigrationDefinitionRegistryInput,
+  MigrationDefinitionRegistryMessagesError,
+  MigrationDefinitionRegistryMessagesInput,
+  MigrationDefinitionRegistryMessagesReport,
   MigrationDefinitionRegistryPlanningError,
   MigrationDefinitionRegistryRollbackInput,
+  MigrationDefinitionRegistrySelectionReport,
   MigrationDefinitionRegistryDurableStatusInput,
   MigrationDefinitionRegistryRunInput,
   MigrationDefinitionRegistrySelectionInput,
@@ -294,6 +317,9 @@ export type {
   MigrationExecutableAdapterError,
   MigrationExecutableInlineRollbackStartError,
   MigrationExecutableInlineRunStartError,
+  MigrationExecutableObservationOptions,
+  MigrationExecutableObservationResult,
+  MigrationExecutableProgressCheckpoint,
   MigrationExecutableRollbackError,
   MigrationExecutableRollbackStartError,
   MigrationExecutableRunError,
@@ -322,8 +348,17 @@ export type {
   MigrationDefinitionRegistryCatalogLayerInput,
   MigrationDefinitionRegistryCatalogService,
 } from "./services/migration-definition-registry-catalog.ts";
-export { MigrationStore } from "./services/migration-store.ts";
+export {
+  canReplaceLatestMigrationDefinitionRun,
+  isActiveMigrationRunStatus,
+  MigrationStore,
+  migrationDefinitionRunStatus,
+  resolveMigrationRunTransition,
+  validateMigrationDefinitionRunOutcomes,
+  validateMigrationRunDefinitionIds,
+} from "./services/migration-store.ts";
 export type {
+  MigrationDefinitionRunOutcomeMap,
   OrphanItemStatePage,
   OrphanItemStatePageInput,
 } from "./services/migration-store.ts";

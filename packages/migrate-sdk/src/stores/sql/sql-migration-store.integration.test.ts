@@ -48,7 +48,8 @@ const makeSqlServerClient = () =>
     database: "master",
     password: Redacted.make("MigrateSdk!2026"),
     port: 51_433,
-    server: "127.0.0.1",
+    server: "localhost",
+    trustServer: true,
     username: "sa",
   });
 
@@ -195,7 +196,14 @@ function registerProviderSuite(
           expect.objectContaining({ execution, runId, status: "running" })
         );
 
-        const completed = yield* store.completeRun(runId, definitionIds);
+        const completed = yield* store.completeRun(
+          runId,
+          definitionIds,
+          definitionIds.map((definitionId) => ({
+            definitionId,
+            status: "succeeded" as const,
+          }))
+        );
         expect(completed).toEqual(
           expect.objectContaining({ execution, runId, status: "succeeded" })
         );
@@ -204,7 +212,13 @@ function registerProviderSuite(
         const latest = yield* Effect.forEach(definitionIds, (definitionId) =>
           store.getLatestRunState(definitionId)
         );
-        expect(latest).toEqual([completed, completed]);
+        expect(latest).toEqual(
+          definitionIds.map((definitionId) => ({
+            ...completed,
+            definitionId,
+            runStatus: "succeeded",
+          }))
+        );
       }).pipe(Effect.provide(makeStoreLayer()))
     );
 

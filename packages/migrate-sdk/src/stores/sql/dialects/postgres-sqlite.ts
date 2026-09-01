@@ -13,7 +13,7 @@ import {
   type Upsert,
 } from "./dialect.ts";
 
-const initializePostgresOrSqlite = (
+export const createPostgresOrSqliteSchemaVersion1 = (
   sql: SqlClient.SqlClient,
   names: SqlMigrationStoreTableNames,
   prefix: string
@@ -133,15 +133,13 @@ const makeOnConflictUpsert =
 
 export const makePostgresOrSqliteDialect = (
   sql: SqlClient.SqlClient,
-  names: SqlMigrationStoreTableNames,
-  prefix: string
+  names: SqlMigrationStoreTableNames
 ): SqlMigrationStoreDialect => {
   const locks = sql(names.locks);
   const itemStates = sql(names.itemStates);
   const upsert = makeOnConflictUpsert(sql);
 
   return {
-    initialize: initializePostgresOrSqlite(sql, names, prefix),
     listOrphanItemStateRows: (query) => {
       const whereAfterIdentity =
         query.afterIdentityKey === null

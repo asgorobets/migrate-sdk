@@ -1,0 +1,15 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "inputs": ["$TURBO_EXTENDS$", "$TURBO_ROOT$/fixtures/catalog/**"]
+    },
+    "check-types": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/fixtures/catalog/**"]
+    },
+    "test": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/fixtures/catalog/**"]
+    }
+  }
+}

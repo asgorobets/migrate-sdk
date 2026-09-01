@@ -39,14 +39,17 @@ const parserFailureCause = (
 });
 
 const decodeJsonResource = (parser: string, resource: string) =>
-  Schema.decodeUnknownEffect(Schema.UnknownFromJsonString)(resource).pipe(
-    Effect.mapError((cause) =>
+  Effect.try({
+    try: () => {
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      return JSON.parse(resource) as unknown;
+    },
+    catch: (cause) =>
       documentParserError(
         "Unable to parse JSON document",
         parserFailureCause(parser, "json-syntax", cause)
-      )
-    )
-  );
+      ),
+  });
 
 const decodeDocument = <Document>(
   parser: string,

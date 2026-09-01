@@ -3,22 +3,24 @@
 
 export { runMigrationExecutionWorkflow } from "./migration-execution-workflow.ts";
 export type {
-  WorkflowSdkMigrationDefinitionLock,
   WorkflowSdkMigrationDefinitionRunCounts,
   WorkflowSdkMigrationDefinitionRunSummary,
   WorkflowSdkMigrationRunCursorWindowResult,
   WorkflowSdkMigrationRunCursorWindowState,
-  WorkflowSdkMigrationRunEnvelope,
   WorkflowSdkMigrationRunRollbackOrphansPageResult,
   WorkflowSdkMigrationRunRollbackOrphansState,
   WorkflowSdkMigrationRunSteps,
   WorkflowSdkMigrationRunSummary,
 } from "./migration-execution-workflow.ts";
+export type {
+  WorkflowSdkMigrationExecutionEnvelope,
+  WorkflowSdkMigrationRollbackEnvelope,
+  WorkflowSdkMigrationRunEnvelope,
+} from "./migration-envelope.ts";
 export { runMigrationRollbackWorkflow } from "./migration-rollback-workflow.ts";
 export type {
   WorkflowSdkMigrationRollbackDefinitionCounts,
   WorkflowSdkMigrationRollbackDefinitionSummary,
-  WorkflowSdkMigrationRollbackEnvelope,
   WorkflowSdkMigrationRollbackSteps,
   WorkflowSdkMigrationRollbackSummary,
 } from "./migration-rollback-workflow.ts";

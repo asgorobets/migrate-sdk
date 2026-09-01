@@ -1,4 +1,4 @@
-import { Effect, Exit, Layer, Schema } from "effect";
+import { Effect, Exit, Filter, Layer, Schema, Stream } from "effect";
 import {
   type ExecutionStartResult,
   type MigrationDefinitionExecutableRollbackPlan,
@@ -6,66 +6,52 @@ import {
   type MigrationDefinitionId,
   type MigrationDefinitionLock,
   MigrationExecutable,
+  type MigrationExecutableObservationOptions,
+  type MigrationExecutableObservationResult,
+  type MigrationProgressCounts,
   type MigrationRunId,
   MigrationRunId as MigrationRunIdSchema,
-  type MigrationRunSummary,
+  MigrationRunSummary,
   MigrationRuntimeError,
   MigrationStore,
   MigrationStoreError,
   type RollbackPreflightError,
-  type RollbackRunSummary,
+  RollbackRunSummary,
+  toMigrationDefinitionId,
+  toMigrationRunId,
 } from "migrate-sdk";
 import {
   type MigrationExecutionEnvelopeMissingRegistryIdError,
-  type MigrationExecutionEnvelopeType,
   makeMigrationRollbackExecutionEnvelope,
   makeMigrationRunExecutionEnvelope,
   validateMigrationRunDependencyPreflight,
   validateMigrationRunRollbackOrphansDependencyPreflight,
 } from "migrate-sdk/core";
-import type { Run, StartOptions } from "workflow/api";
-
-export type WorkflowSdkRun = Run<unknown>;
-type MigrationExecutionEnvelope = MigrationExecutionEnvelopeType;
-
-export type WorkflowSdkMigrationWorkflow = (
-  envelope: MigrationExecutionEnvelope
-) => Promise<unknown>;
-
-export interface WorkflowSdkWorkflowMetadata {
-  readonly workflowId: string;
-}
-
-export type WorkflowSdkStartOptions = StartOptions;
-type WorkflowSdkStartOptionsWithDeploymentId = Extract<
-  WorkflowSdkStartOptions,
-  { readonly deploymentId: "latest" | (string & {}) }
->;
-type WorkflowSdkStartOptionsWithoutDeploymentId = Extract<
-  WorkflowSdkStartOptions,
-  { readonly deploymentId?: undefined }
->;
-
-export interface WorkflowSdkStart {
-  (
-    workflow: WorkflowSdkMigrationWorkflow | WorkflowSdkWorkflowMetadata,
-    args: [MigrationExecutionEnvelope],
-    options: WorkflowSdkStartOptionsWithDeploymentId
-  ): Promise<WorkflowSdkRun>;
-  (
-    workflow: WorkflowSdkMigrationWorkflow | WorkflowSdkWorkflowMetadata,
-    args: [MigrationExecutionEnvelope],
-    options?: WorkflowSdkStartOptionsWithoutDeploymentId
-  ): Promise<WorkflowSdkRun>;
-}
+import type {
+  WorkflowSdkMigrationExecutionEnvelope,
+  WorkflowSdkMigrationRollbackEnvelope,
+  WorkflowSdkMigrationRunEnvelope,
+} from "./migration-envelope.ts";
+import {
+  WorkflowSdkMigrationProgressCheckpoint,
+  workflowSdkMigrationProgressStreamNamespace,
+} from "./migration-progress.ts";
+import {
+  WorkflowSdkClient,
+  type WorkflowSdkClientError,
+  type WorkflowSdkClientService,
+  type WorkflowSdkMigrationWorkflow,
+  type WorkflowSdkRun,
+  type WorkflowSdkStartOptions,
+  type WorkflowSdkWorkflowMetadata,
+} from "./workflow-sdk-client.ts";
 
 export interface WorkflowSdkMigrationExecutableLayerOptions {
   readonly adapterName?: string;
-  readonly start: WorkflowSdkStart;
   readonly startOptions?:
     | WorkflowSdkStartOptions
     | ((
-        envelope: MigrationExecutionEnvelope
+        envelope: WorkflowSdkMigrationExecutionEnvelope
       ) => WorkflowSdkStartOptions | undefined);
   readonly workflow: WorkflowSdkMigrationWorkflow | WorkflowSdkWorkflowMetadata;
 }
@@ -75,7 +61,7 @@ const WorkflowSdkExecutionHandle = Schema.Struct({
   executionId: Schema.String,
 });
 
-export class WorkflowSdkMigrationExecutableStartError extends Schema.TaggedErrorClass<WorkflowSdkMigrationExecutableStartError>()(
+export class WorkflowSdkMigrationExecutableStartError extends Schema.TaggedError<WorkflowSdkMigrationExecutableStartError>()(
   "WorkflowSdkMigrationExecutableStartError",
   {
     cause: Schema.Defect(),
@@ -84,7 +70,7 @@ export class WorkflowSdkMigrationExecutableStartError extends Schema.TaggedError
   }
 ) {}
 
-export class WorkflowSdkMigrationExecutableAttachError extends Schema.TaggedErrorClass<WorkflowSdkMigrationExecutableAttachError>()(
+export class WorkflowSdkMigrationExecutableAttachError extends Schema.TaggedError<WorkflowSdkMigrationExecutableAttachError>()(
   "WorkflowSdkMigrationExecutableAttachError",
   {
     cause: Schema.Defect(),
@@ -93,6 +79,141 @@ export class WorkflowSdkMigrationExecutableAttachError extends Schema.TaggedErro
     runId: MigrationRunIdSchema,
   }
 ) {}
+
+export class WorkflowSdkMigrationExecutableObservationError extends Schema.TaggedError<WorkflowSdkMigrationExecutableObservationError>()(
+  "WorkflowSdkMigrationExecutableObservationError",
+  {
+    cause: Schema.Defect(),
+    execution: WorkflowSdkExecutionHandle,
+    message: Schema.String,
+  }
+) {}
+
+const toMigrationProgressCounts = (
+  counts: WorkflowSdkMigrationProgressCheckpoint["counts"]
+): MigrationProgressCounts => ({
+  failed: counts.failed,
+  migrated: counts.migrated,
+  needsUpdate: counts.needsUpdate,
+  ...(counts.orphaned === undefined ? {} : { orphaned: counts.orphaned }),
+  ...(counts.rollbackFailed === undefined
+    ? {}
+    : { rollbackFailed: counts.rollbackFailed }),
+  ...(counts.rolledBack === undefined ? {} : { rolledBack: counts.rolledBack }),
+  skipped: counts.skipped,
+  unchanged: counts.unchanged,
+});
+
+const observeWorkflowProgress = (
+  run: WorkflowSdkRun,
+  options: MigrationExecutableObservationOptions,
+  observationError: (
+    cause: unknown
+  ) => WorkflowSdkMigrationExecutableObservationError
+) =>
+  Effect.tryPromise({
+    try: async () => {
+      const probe = run.getReadable({
+        namespace: workflowSdkMigrationProgressStreamNamespace,
+      });
+      const tailIndex = await probe.getTailIndex();
+
+      return tailIndex < 0
+        ? run.getReadable<unknown>({
+            namespace: workflowSdkMigrationProgressStreamNamespace,
+          })
+        : run.getReadable<unknown>({
+            namespace: workflowSdkMigrationProgressStreamNamespace,
+            startIndex: tailIndex,
+          });
+    },
+    catch: observationError,
+  }).pipe(
+    Effect.flatMap((readable) =>
+      Stream.fromReadableStream({
+        evaluate: () => readable,
+        onError: observationError,
+      }).pipe(
+        Stream.filterMap(
+          Filter.fromPredicateOption(
+            Schema.decodeUnknownOption(WorkflowSdkMigrationProgressCheckpoint)
+          )
+        ),
+        Stream.runForEach(
+          (checkpoint) =>
+            options.onProgressCheckpoint?.({
+              counts: toMigrationProgressCounts(checkpoint.counts),
+              definitionId: toMigrationDefinitionId(checkpoint.definitionId),
+              kind: checkpoint.kind,
+              runId: toMigrationRunId(checkpoint.runId),
+            }) ?? Effect.void
+        )
+      )
+    )
+  );
+
+const observeWorkflowTerminal = (
+  run: WorkflowSdkRun,
+  observationError: (
+    cause: unknown
+  ) => WorkflowSdkMigrationExecutableObservationError
+): Effect.Effect<
+  MigrationExecutableObservationResult,
+  WorkflowSdkMigrationExecutableObservationError
+> => {
+  const readStatus = Effect.tryPromise({
+    try: () => run.status,
+    catch: observationError,
+  });
+  const readTerminalReturnValue = Effect.tryPromise({
+    try: () => run.returnValue,
+    catch: observationError,
+  }).pipe(
+    Effect.flatMap((value) =>
+      Schema.decodeUnknownEffect(
+        Schema.Union([
+          MigrationRunSummary,
+          RollbackRunSummary,
+          Schema.Struct({
+            summary: Schema.Union([MigrationRunSummary, RollbackRunSummary]),
+          }),
+        ])
+      )(value).pipe(Effect.mapError(observationError))
+    ),
+    Effect.map((value) => ("summary" in value ? value.summary : value))
+  );
+
+  return Effect.gen(function* () {
+    let status = yield* readStatus;
+
+    while (status === "pending" || status === "running") {
+      yield* Effect.sleep("1 second");
+      status = yield* readStatus;
+    }
+
+    if (status === "cancelled") {
+      return { kind: "cancelled" as const };
+    }
+
+    if (status === "failed") {
+      return yield* readTerminalReturnValue.pipe(
+        Effect.match({
+          onFailure: (error) => ({
+            cause: error.cause,
+            kind: "failed" as const,
+          }),
+          onSuccess: (summary) => ({
+            kind: "succeeded" as const,
+            summary,
+          }),
+        })
+      );
+    }
+
+    const summary = yield* readTerminalReturnValue;
+    return { kind: "succeeded" as const, summary };
+  });
+};
 
 type WorkflowSdkMigrationExecutableError =
   | WorkflowSdkMigrationExecutableStartError
@@ -252,35 +373,61 @@ const makeAttachError = (
   });
 
 const makeStartOptions = (
-  envelope: MigrationExecutionEnvelope,
+  envelope: WorkflowSdkMigrationExecutionEnvelope,
   input: WorkflowSdkMigrationExecutableLayerOptions
 ): WorkflowSdkStartOptions | undefined =>
   typeof input.startOptions === "function"
     ? input.startOptions(envelope)
     : input.startOptions;
 
+const makeWorkflowSdkMigrationRunEnvelope = (
+  plan: MigrationDefinitionExecutableRunPlan,
+  runId: MigrationRunId,
+  locks: readonly MigrationDefinitionLock[]
+): Effect.Effect<
+  WorkflowSdkMigrationRunEnvelope,
+  MigrationExecutionEnvelopeMissingRegistryIdError
+> =>
+  makeMigrationRunExecutionEnvelope(plan, { runId }).pipe(
+    Effect.map((envelope) => ({ ...envelope, locks }))
+  );
+
+const makeWorkflowSdkMigrationRollbackEnvelope = (
+  plan: MigrationDefinitionExecutableRollbackPlan,
+  runId: MigrationRunId,
+  locks: readonly MigrationDefinitionLock[]
+): Effect.Effect<
+  WorkflowSdkMigrationRollbackEnvelope,
+  MigrationExecutionEnvelopeMissingRegistryIdError
+> =>
+  makeMigrationRollbackExecutionEnvelope(plan, { runId }).pipe(
+    Effect.map((envelope) => ({ ...envelope, locks }))
+  );
+
 const startWorkflowRun = (
-  envelope: MigrationExecutionEnvelope,
-  input: WorkflowSdkMigrationExecutableLayerOptions
-): Promise<WorkflowSdkRun> => {
+  envelope: WorkflowSdkMigrationExecutionEnvelope,
+  input: WorkflowSdkMigrationExecutableLayerOptions,
+  client: WorkflowSdkClientService
+): Effect.Effect<WorkflowSdkRun, WorkflowSdkClientError> => {
   const options = makeStartOptions(envelope, input);
 
-  return options?.deploymentId === undefined
-    ? input.start(input.workflow, [envelope], options)
-    : input.start(input.workflow, [envelope], options);
+  return client.start({
+    envelope,
+    workflow: input.workflow,
+    ...(options === undefined ? {} : { options }),
+  });
 };
 
 const startWorkflow = (
-  envelope: MigrationExecutionEnvelope,
-  input: WorkflowSdkMigrationExecutableLayerOptions
+  envelope: WorkflowSdkMigrationExecutionEnvelope,
+  input: WorkflowSdkMigrationExecutableLayerOptions,
+  client: WorkflowSdkClientService
 ): Effect.Effect<
   typeof WorkflowSdkExecutionHandle.Type,
   WorkflowSdkMigrationExecutableStartError
 > =>
-  Effect.tryPromise({
-    try: () => startWorkflowRun(envelope, input),
-    catch: (cause) => makeStartError(envelope.runId, cause),
-  }).pipe(
+  startWorkflowRun(envelope, input, client).pipe(
+    Effect.mapError((error) => makeStartError(envelope.runId, error.cause)),
     Effect.map((run) => ({
       adapter: input.adapterName ?? "workflow-sdk",
       executionId: run.runId,
@@ -288,18 +435,20 @@ const startWorkflow = (
   );
 
 const startDurablePlan = <Summary>({
+  client,
   input,
   makeEnvelope,
   preflight,
   scopeDefinitionIds,
   storeLayer,
 }: {
+  readonly client: WorkflowSdkClientService;
   readonly input: WorkflowSdkMigrationExecutableLayerOptions;
   readonly makeEnvelope: (
     runId: MigrationRunId,
     locks: readonly MigrationDefinitionLock[]
   ) => Effect.Effect<
-    MigrationExecutionEnvelope,
+    WorkflowSdkMigrationExecutionEnvelope,
     MigrationExecutionEnvelopeMissingRegistryIdError
   >;
   readonly preflight?: (
@@ -342,7 +491,7 @@ const startDurablePlan = <Summary>({
         )
       );
 
-    const execution = yield* startWorkflow(envelope, input).pipe(
+    const execution = yield* startWorkflow(envelope, input, client).pipe(
       Effect.catch((error) =>
         markStartFailedAndReleaseLocks(
           store,
@@ -353,13 +502,11 @@ const startDurablePlan = <Summary>({
         ).pipe(Effect.andThen(Effect.fail(error)))
       )
     );
-
     yield* store
       .attachRunExecution(runId, scopeDefinitionIds, execution)
       .pipe(
         Effect.mapError((error) => makeAttachError(runId, execution, error))
       );
-
     return {
       execution,
       kind: "started" as const,
@@ -368,40 +515,97 @@ const startDurablePlan = <Summary>({
   }).pipe(Effect.provide(storeLayer));
 
 export const WorkflowSdkMigrationExecutable = {
-  layer: (input: WorkflowSdkMigrationExecutableLayerOptions) =>
-    Layer.succeed(MigrationExecutable, {
-      startRun: (plan: MigrationDefinitionExecutableRunPlan) =>
-        validateMigrationRunDependencyPreflight(plan).pipe(
-          Effect.andThen(
+  layer: (
+    input: WorkflowSdkMigrationExecutableLayerOptions
+  ): Layer.Layer<MigrationExecutable, never, WorkflowSdkClient> =>
+    Layer.effect(
+      MigrationExecutable,
+      Effect.gen(function* () {
+        const client = yield* WorkflowSdkClient;
+        const adapterName = input.adapterName ?? "workflow-sdk";
+
+        return {
+          startRun: (plan: MigrationDefinitionExecutableRunPlan) =>
+            validateMigrationRunDependencyPreflight(plan).pipe(
+              Effect.andThen(
+                Effect.flatMap(
+                  validateSharedStore(plan.definitions),
+                  (storeLayer) =>
+                    startDurablePlan<MigrationRunSummary>({
+                      client,
+                      input,
+                      makeEnvelope: (runId, locks) =>
+                        makeWorkflowSdkMigrationRunEnvelope(plan, runId, locks),
+                      preflight: (store) =>
+                        validateMigrationRunRollbackOrphansDependencyPreflight(
+                          plan
+                        ).pipe(Effect.provideService(MigrationStore, store)),
+                      scopeDefinitionIds: plan.includedDefinitionIds,
+                      storeLayer,
+                    })
+                )
+              )
+            ),
+          startRollback: (plan: MigrationDefinitionExecutableRollbackPlan) =>
             Effect.flatMap(
               validateSharedStore(plan.definitions),
               (storeLayer) =>
-                startDurablePlan<MigrationRunSummary>({
+                startDurablePlan<RollbackRunSummary>({
+                  client,
                   input,
                   makeEnvelope: (runId, locks) =>
-                    makeMigrationRunExecutionEnvelope(plan, {
-                      locks,
+                    makeWorkflowSdkMigrationRollbackEnvelope(
+                      plan,
                       runId,
-                    }),
-                  preflight: (store) =>
-                    validateMigrationRunRollbackOrphansDependencyPreflight(
-                      plan
-                    ).pipe(Effect.provideService(MigrationStore, store)),
+                      locks
+                    ),
                   scopeDefinitionIds: plan.includedDefinitionIds,
                   storeLayer,
                 })
-            )
-          )
-        ),
-      startRollback: (plan: MigrationDefinitionExecutableRollbackPlan) =>
-        Effect.flatMap(validateSharedStore(plan.definitions), (storeLayer) =>
-          startDurablePlan<RollbackRunSummary>({
-            input,
-            makeEnvelope: (runId, locks) =>
-              makeMigrationRollbackExecutionEnvelope(plan, { locks, runId }),
-            scopeDefinitionIds: plan.includedDefinitionIds,
-            storeLayer,
-          })
-        ),
-    }),
+            ),
+          waitForExecution: (
+            execution,
+            options: MigrationExecutableObservationOptions = {}
+          ) => {
+            if (execution.adapter !== adapterName) {
+              return Effect.fail(
+                new WorkflowSdkMigrationExecutableObservationError({
+                  cause: { adapterName },
+                  execution,
+                  message: `Workflow SDK cannot observe execution from adapter ${execution.adapter}`,
+                })
+              );
+            }
+
+            const observationError = (cause: unknown) =>
+              new WorkflowSdkMigrationExecutableObservationError({
+                cause,
+                execution,
+                message: `Unable to observe Workflow SDK execution ${execution.executionId}`,
+              });
+            const getRun = client
+              .getRun(execution.executionId)
+              .pipe(Effect.mapError((error) => observationError(error.cause)));
+
+            return getRun.pipe(
+              Effect.flatMap((run) => {
+                const terminal = observeWorkflowTerminal(run, observationError);
+
+                if (options.onProgressCheckpoint === undefined) {
+                  return terminal;
+                }
+
+                const progress = observeWorkflowProgress(
+                  run,
+                  options,
+                  observationError
+                ).pipe(Effect.andThen(Effect.never));
+
+                return Effect.raceFirst(terminal, progress);
+              })
+            );
+          },
+        };
+      })
+    ),
 } as const;

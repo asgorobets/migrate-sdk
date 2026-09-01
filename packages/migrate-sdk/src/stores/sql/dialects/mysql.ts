@@ -17,7 +17,7 @@ interface SqlTokenRow {
   readonly token: string;
 }
 
-const initializeMysql = (
+export const createMysqlSchemaVersion1 = (
   sql: SqlClient.SqlClient,
   names: SqlMigrationStoreTableNames,
   prefix: string
@@ -129,15 +129,13 @@ const makeMysqlUpsert =
 
 export const makeMysqlDialect = (
   sql: SqlClient.SqlClient,
-  names: SqlMigrationStoreTableNames,
-  prefix: string
+  names: SqlMigrationStoreTableNames
 ): SqlMigrationStoreDialect => {
   const locks = sql(names.locks);
   const itemStates = sql(names.itemStates);
   const upsert = makeMysqlUpsert(sql);
 
   return {
-    initialize: initializeMysql(sql, names, prefix),
     listOrphanItemStateRows: (query) => {
       const limit = sql.literal(String(query.limit));
       const whereAfterIdentity =

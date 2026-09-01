@@ -12,7 +12,7 @@ import {
 } from "./ids.ts";
 import { MigrationDefinitionLock } from "./lock.ts";
 import type { AnyMigrationDefinition } from "./run.ts";
-import { MigrationRunState } from "./run.ts";
+import { MigrationDefinitionRunState } from "./run.ts";
 import { MigrationItemErrorDetail, type MigrationItemState } from "./state.ts";
 
 const StatusCount = Schema.Finite.check(Schema.isInt()).check(
@@ -75,7 +75,7 @@ export const MigrationDefinitionStatus = Schema.Struct({
   definitionId: MigrationDefinitionIdSchema,
   discovery: Schema.Literals(["full", "incremental"]),
   durable: MigrationItemStateSummary,
-  lastRun: Schema.NullOr(MigrationRunState),
+  lastRun: Schema.NullOr(MigrationDefinitionRunState),
   lock: Schema.NullOr(MigrationDefinitionLock),
   source: Schema.optional(MigrationDefinitionSourceStatus),
   warnings: Schema.Array(MigrationStatusWarning),
@@ -127,7 +127,7 @@ export interface MigrationStatusRequest<
   readonly scanSource: boolean;
 }
 
-export class MigrationStatusRequestError extends Schema.TaggedErrorClass<MigrationStatusRequestError>()(
+export class MigrationStatusRequestError extends Schema.TaggedError<MigrationStatusRequestError>()(
   "MigrationStatusRequestError",
   {
     message: Schema.String,

@@ -1,17 +1,24 @@
-import { Effect } from "effect";
-import { MigrationExecutable } from "migrate-sdk";
+import { Effect, Layer } from "effect";
+import {
+  MigrationExecutable,
+  type MigrationExecutableProgressCheckpoint,
+  MigrationStore,
+  toMigrationDefinitionId,
+} from "migrate-sdk";
+import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { expect, test } from "vitest";
-import { getRun, start } from "workflow/api";
+import { getRun } from "workflow/api";
 import { getWorld } from "workflow/runtime";
-import type { WorkflowSdkMigrationRunEnvelope } from "./migration-execution-workflow.ts";
-import type { WorkflowSdkMigrationRollbackEnvelope } from "./migration-rollback-workflow.ts";
+import { workflowSdkMigrationProgressStreamNamespace } from "./migration-progress.ts";
 import {
   beginMigrationRunStep,
+  cancelMigrationRunStep,
   completeMigrationRunStep,
   executeMigrationRollbackStep,
   executeMigrationRunCursorWindowStep,
   executeMigrationRunRollbackOrphansPageStep,
   failMigrationRunStep,
+  inMemoryMigrationTestProcessConcurrency,
   inMemoryMigrationTestRegistry,
   inMemoryMigrationTestStoreState,
   interruptInMemoryMigrationTestWorkflowAt,
@@ -20,34 +27,40 @@ import {
   setInMemoryMigrationTestSourceItemCount,
 } from "./test-fixtures/in-memory-migration.steps.ts";
 import { inMemoryMigrationTestWorkflow } from "./test-fixtures/in-memory-migration.workflow.ts";
-import { inMemoryRollbackTestWorkflow } from "./test-fixtures/in-memory-rollback.workflow.ts";
-import type { WorkflowSdkMigrationWorkflow } from "./workflow-sdk-migration-executable.ts";
+import {
+  WorkflowSdkClient,
+  type WorkflowSdkMigrationWorkflow,
+} from "./workflow-sdk-client.ts";
 import { WorkflowSdkMigrationExecutable } from "./workflow-sdk-migration-executable.ts";
 
-const runWorkflow =
-  inMemoryMigrationTestWorkflow as WorkflowSdkMigrationWorkflow;
+const runWorkflow: WorkflowSdkMigrationWorkflow = inMemoryMigrationTestWorkflow;
 
-const startInMemoryMigrationRun = async (rollbackOrphans = false) => {
+const makeWorkflowSdkMigrationExecutableLayer = (
+  workflow: WorkflowSdkMigrationWorkflow
+) =>
+  WorkflowSdkMigrationExecutable.layer({ workflow }).pipe(
+    Layer.provide(WorkflowSdkClient.layer)
+  );
+
+const startInMemoryMigrationRun = async (
+  rollbackOrphans = false,
+  processConcurrency?: number
+) => {
   const plan = await Effect.runPromise(
     inMemoryMigrationTestRegistry.executable().planRun({
       definitionIds: ["articles"],
+      ...(processConcurrency === undefined
+        ? {}
+        : { execution: { process: { concurrency: processConcurrency } } }),
       ...(rollbackOrphans ? { rollbackOrphans: true } : {}),
     })
   );
-  const started = await Effect.runPromise(
-    MigrationExecutable.startRun(plan).pipe(
-      Effect.provide(
-        WorkflowSdkMigrationExecutable.layer({
-          start: (workflow, args) =>
-            start(
-              workflow as typeof inMemoryMigrationTestWorkflow,
-              args as unknown as [WorkflowSdkMigrationRunEnvelope]
-            ),
-          workflow: runWorkflow,
-        })
-      )
+  const executable = await Effect.runPromise(
+    MigrationExecutable.pipe(
+      Effect.provide(makeWorkflowSdkMigrationExecutableLayer(runWorkflow))
     )
   );
+  const started = await Effect.runPromise(executable.startRun(plan));
 
   if (started.kind !== "started") {
     throw new Error("Expected Workflow SDK adapter to start the run");
@@ -59,6 +72,7 @@ const startInMemoryMigrationRun = async (rollbackOrphans = false) => {
   }
 
   return {
+    executable,
     run: getRun<Awaited<ReturnType<typeof inMemoryMigrationTestWorkflow>>>(
       executionId
     ),
@@ -68,8 +82,6 @@ const startInMemoryMigrationRun = async (rollbackOrphans = false) => {
 
 test("Workflow SDK executes a real in-memory migration run and rollback", async () => {
   resetInMemoryMigrationTestState();
-  const rollbackWorkflow =
-    inMemoryRollbackTestWorkflow as WorkflowSdkMigrationWorkflow;
 
   const plan = await Effect.runPromise(
     inMemoryMigrationTestRegistry.executable().planRun({
@@ -78,16 +90,7 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
   );
   const started = await Effect.runPromise(
     MigrationExecutable.startRun(plan).pipe(
-      Effect.provide(
-        WorkflowSdkMigrationExecutable.layer({
-          start: (workflow, args) =>
-            start(
-              workflow as typeof inMemoryMigrationTestWorkflow,
-              args as unknown as [WorkflowSdkMigrationRunEnvelope]
-            ),
-          workflow: runWorkflow,
-        })
-      )
+      Effect.provide(makeWorkflowSdkMigrationExecutableLayer(runWorkflow))
     )
   );
 
@@ -150,6 +153,7 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
   ]);
   const migrationExecutionSteps = [
     beginMigrationRunStep,
+    cancelMigrationRunStep,
     executeMigrationRunCursorWindowStep,
     executeMigrationRunRollbackOrphansPageStep,
     completeMigrationRunStep,
@@ -158,7 +162,7 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
     readonly maxRetries?: number;
   })[];
   expect(migrationExecutionSteps.map((step) => step.maxRetries)).toEqual([
-    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0,
   ]);
 
   removeInMemoryMigrationTestSourceItem("article-100");
@@ -170,16 +174,7 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
   );
   const rollbackOrphansStarted = await Effect.runPromise(
     MigrationExecutable.startRun(rollbackOrphansPlan).pipe(
-      Effect.provide(
-        WorkflowSdkMigrationExecutable.layer({
-          start: (workflow, args) =>
-            start(
-              workflow as typeof inMemoryMigrationTestWorkflow,
-              args as unknown as [WorkflowSdkMigrationRunEnvelope]
-            ),
-          workflow: runWorkflow,
-        })
-      )
+      Effect.provide(makeWorkflowSdkMigrationExecutableLayer(runWorkflow))
     )
   );
 
@@ -239,16 +234,7 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
   );
   const rollbackStarted = await Effect.runPromise(
     MigrationExecutable.startRollback(rollbackPlan).pipe(
-      Effect.provide(
-        WorkflowSdkMigrationExecutable.layer({
-          start: (workflow, args) =>
-            start(
-              workflow as typeof inMemoryRollbackTestWorkflow,
-              args as unknown as [WorkflowSdkMigrationRollbackEnvelope]
-            ),
-          workflow: rollbackWorkflow,
-        })
-      )
+      Effect.provide(makeWorkflowSdkMigrationExecutableLayer(runWorkflow))
     )
   );
 
@@ -266,7 +252,7 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
   }
 
   const rollbackRun =
-    getRun<Awaited<ReturnType<typeof inMemoryRollbackTestWorkflow>>>(
+    getRun<Awaited<ReturnType<typeof inMemoryMigrationTestWorkflow>>>(
       rollbackExecutionId
     );
   const rollbackResult = await rollbackRun.returnValue;
@@ -316,6 +302,132 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
       }
     ).maxRetries
   ).toBe(0);
+});
+
+test("Workflow SDK applies planned Process Pipeline concurrency inside cursor-window steps", async () => {
+  resetInMemoryMigrationTestState();
+  const execution = await startInMemoryMigrationRun(false, 3);
+
+  await execution.run.returnValue;
+
+  expect(inMemoryMigrationTestProcessConcurrency()).toBe(3);
+});
+
+test("Workflow SDK observes a durable cancellation request between cursor-window steps", async () => {
+  resetInMemoryMigrationTestState();
+  setInMemoryMigrationTestSourceItemCount(1000);
+  const execution = await startInMemoryMigrationRun();
+  const store = await Effect.runPromise(
+    MigrationStore.pipe(
+      Effect.provide(
+        InMemoryMigrationStore.layer(inMemoryMigrationTestStoreState)
+      )
+    )
+  );
+
+  const requested = await Effect.runPromise(
+    store.requestRunCancellation(execution.started.runId, [
+      toMigrationDefinitionId("articles"),
+    ])
+  );
+
+  expect(requested.status).toBe("cancelling");
+  const result = await execution.run.returnValue;
+
+  expect(result.summary.status).toBe("cancelled");
+  expect(result.snapshot.latestRunStatus).toBe("cancelled");
+  expect(await execution.run.status).toBe("completed");
+  expect(
+    inMemoryMigrationTestStoreState.runStates.get(execution.started.runId)
+      ?.status
+  ).toBe("cancelled");
+  expect(inMemoryMigrationTestStoreState.definitionLocks.size).toBe(0);
+  expect(inMemoryMigrationTestStoreState.itemStates.size).toBeLessThan(1000);
+});
+
+test("Workflow SDK streams committed cursor-window checkpoints during a detached run", async () => {
+  resetInMemoryMigrationTestState();
+  const execution = await startInMemoryMigrationRun();
+  const checkpoints: MigrationExecutableProgressCheckpoint[] = [];
+  const waitForExecution = execution.executable.waitForExecution;
+
+  if (waitForExecution === undefined) {
+    throw new Error("Expected Workflow SDK execution observation");
+  }
+
+  const observed = await Effect.runPromise(
+    waitForExecution(
+      {
+        adapter: execution.started.execution.adapter,
+        executionId: execution.run.runId,
+      },
+      {
+        onProgressCheckpoint: (checkpoint) =>
+          Effect.sync(() => checkpoints.push(checkpoint)),
+      }
+    )
+  );
+
+  expect(observed).toEqual({
+    kind: "succeeded",
+    summary: expect.objectContaining({
+      runId: execution.started.runId,
+      status: "succeeded",
+    }),
+  });
+  const progressStream = execution.run.getReadable({
+    namespace: workflowSdkMigrationProgressStreamNamespace,
+  });
+  expect(await progressStream.getTailIndex()).toBe(1);
+  const progressReader = execution.run
+    .getReadable({
+      namespace: workflowSdkMigrationProgressStreamNamespace,
+      startIndex: 0,
+    })
+    .getReader();
+  const firstRawCheckpoint = await progressReader.read();
+  await progressReader.cancel();
+  expect(firstRawCheckpoint).toEqual({
+    done: false,
+    value: {
+      counts: {
+        failed: 0,
+        migrated: 50,
+        needsUpdate: 0,
+        skipped: 0,
+        unchanged: 0,
+      },
+      definitionId: "articles",
+      kind: "source-cursor-window-completed",
+      runId: execution.started.runId,
+    },
+  });
+  expect(checkpoints).toEqual([
+    {
+      counts: {
+        failed: 0,
+        migrated: 50,
+        needsUpdate: 0,
+        skipped: 0,
+        unchanged: 0,
+      },
+      definitionId: "articles",
+      kind: "source-cursor-window-completed",
+      runId: execution.started.runId,
+    },
+    {
+      counts: {
+        failed: 0,
+        migrated: 100,
+        needsUpdate: 0,
+        skipped: 0,
+        unchanged: 0,
+      },
+      definitionId: "articles",
+      kind: "source-cursor-window-completed",
+      runId: execution.started.runId,
+    },
+  ]);
 });
 
 test("Workflow SDK restarts Rollback Orphans from the beginning after interruption between source windows", async () => {

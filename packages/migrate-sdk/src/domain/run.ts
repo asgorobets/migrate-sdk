@@ -109,7 +109,31 @@ export const makeRunRequest = <
   };
 };
 
-export const MigrationRunState = Schema.Struct({
+export const MigrationRunStatus = Schema.Literals([
+  "queued",
+  "running",
+  "cancelling",
+  "cancelled",
+  "succeeded",
+  "failed",
+  "start-failed",
+]);
+export type MigrationRunStatus = typeof MigrationRunStatus.Type;
+
+export const MigrationDefinitionRunStatus = Schema.Literals([
+  "queued",
+  "running",
+  "cancelling",
+  "cancelled",
+  "succeeded",
+  "failed",
+  "skipped",
+  "start-failed",
+]);
+export type MigrationDefinitionRunStatus =
+  typeof MigrationDefinitionRunStatus.Type;
+
+const MigrationRunStateFields = {
   definitionIds: Schema.Array(MigrationDefinitionIdSchema),
   execution: Schema.optional(
     Schema.Struct({
@@ -120,20 +144,116 @@ export const MigrationRunState = Schema.Struct({
   finishedAt: Schema.optional(Schema.Date),
   runId: MigrationRunId,
   startedAt: Schema.Date,
-  status: Schema.Literals([
-    "queued",
-    "running",
-    "cancelled",
-    "succeeded",
-    "failed",
-    "start-failed",
-  ]),
-});
+  status: MigrationRunStatus,
+} as const;
+
+export const MigrationRunState = Schema.Struct(MigrationRunStateFields);
 export type MigrationRunState = typeof MigrationRunState.Type;
+
+export const activeMigrationRunHasObservationDefinition = (run: {
+  readonly definitionIds: readonly MigrationDefinitionId[];
+  readonly observationDefinitionId: MigrationDefinitionId;
+}): boolean => run.definitionIds.includes(run.observationDefinitionId);
+
+export const ActiveMigrationRun = Schema.Struct({
+  definitionIds: Schema.NonEmptyArray(MigrationDefinitionIdSchema),
+  execution: Schema.optional(
+    Schema.Struct({
+      adapter: Schema.NonEmptyString,
+      executionId: Schema.NonEmptyString,
+    })
+  ),
+  observationDefinitionId: MigrationDefinitionIdSchema,
+  runId: MigrationRunId,
+  startedAt: Schema.Date,
+  status: Schema.Literals(["queued", "running", "cancelling"]),
+}).check(
+  Schema.makeFilter(activeMigrationRunHasObservationDefinition, {
+    message: "Observation definition must belong to the Active Migration Run",
+  })
+);
+export type ActiveMigrationRun = typeof ActiveMigrationRun.Type;
+
+export const activeMigrationRunFromState = (
+  observationDefinitionId: MigrationDefinitionId,
+  state: MigrationRunState
+): ActiveMigrationRun | null => {
+  const firstDefinitionId = state.definitionIds[0];
+
+  if (
+    firstDefinitionId === undefined ||
+    !state.definitionIds.includes(observationDefinitionId) ||
+    (state.status !== "queued" &&
+      state.status !== "running" &&
+      state.status !== "cancelling")
+  ) {
+    return null;
+  }
+
+  const execution = state.execution;
+
+  return {
+    definitionIds: [firstDefinitionId, ...state.definitionIds.slice(1)],
+    ...(execution?.executionId === undefined
+      ? {}
+      : {
+          execution: {
+            adapter: execution.adapter,
+            executionId: execution.executionId,
+          },
+        }),
+    observationDefinitionId,
+    runId: state.runId,
+    startedAt: state.startedAt,
+    status: state.status,
+  };
+};
+
+export const MigrationDefinitionRunState = Schema.Struct({
+  ...MigrationRunStateFields,
+  definitionId: MigrationDefinitionIdSchema,
+  runStatus: MigrationRunStatus,
+  status: MigrationDefinitionRunStatus,
+});
+export type MigrationDefinitionRunState =
+  typeof MigrationDefinitionRunState.Type;
+
+export const MigrationDefinitionRunOutcome = Schema.Struct({
+  definitionId: MigrationDefinitionIdSchema,
+  status: Schema.Literals(["succeeded", "failed", "skipped"]),
+});
+export type MigrationDefinitionRunOutcome =
+  typeof MigrationDefinitionRunOutcome.Type;
+
+export const makeMigrationDefinitionRunState = (
+  definitionId: MigrationDefinitionId,
+  runState: MigrationRunState,
+  status: MigrationDefinitionRunStatus = runState.status
+): MigrationDefinitionRunState => ({
+  ...runState,
+  definitionId,
+  runStatus: runState.status,
+  status,
+});
+
+export const makeMigrationRunState = (
+  definitionRunState: MigrationDefinitionRunState
+): MigrationRunState => {
+  const {
+    definitionId: _definitionId,
+    runStatus,
+    ...runState
+  } = definitionRunState;
+
+  return {
+    ...runState,
+    status: runStatus,
+  };
+};
 
 export interface MigrationRunHandleState
   extends Omit<MigrationRunState, "status"> {
-  readonly status: MigrationRunState["status"] | "cancelling";
+  readonly status: MigrationRunState["status"];
 }
 
 export type MigrationRunTerminalState = MigrationRunState & {
@@ -158,7 +278,8 @@ export interface MigrationRunSummary {
   readonly status: "succeeded" | "failed" | "cancelled";
 }
 
-export interface MigrationDefinitionRunSummary {
+export interface MigrationDefinitionRunSummary
+  extends MigrationDefinitionRunOutcome {
   readonly counts: {
     readonly migrated: number;
     readonly skipped: number;
@@ -169,9 +290,34 @@ export interface MigrationDefinitionRunSummary {
     readonly rolledBack?: number;
     readonly rollbackFailed?: number;
   };
-  readonly definitionId: MigrationDefinitionId;
-  readonly status: "succeeded" | "failed" | "skipped";
 }
+
+const MigrationRunSummaryCount = Schema.Finite.check(Schema.isInt()).check(
+  Schema.isGreaterThanOrEqualTo(0)
+);
+
+export const MigrationDefinitionRunSummary = Schema.Struct({
+  counts: Schema.Struct({
+    failed: MigrationRunSummaryCount,
+    migrated: MigrationRunSummaryCount,
+    needsUpdate: MigrationRunSummaryCount,
+    orphaned: Schema.optionalKey(MigrationRunSummaryCount),
+    rollbackFailed: Schema.optionalKey(MigrationRunSummaryCount),
+    rolledBack: Schema.optionalKey(MigrationRunSummaryCount),
+    skipped: MigrationRunSummaryCount,
+    unchanged: MigrationRunSummaryCount,
+  }),
+  definitionId: MigrationDefinitionIdSchema,
+  status: Schema.Literals(["succeeded", "failed", "skipped"]),
+});
+
+export const MigrationRunSummary = Schema.Struct({
+  definitions: Schema.Array(MigrationDefinitionRunSummary),
+  finishedAt: Schema.Date,
+  runId: MigrationRunId,
+  startedAt: Schema.Date,
+  status: Schema.Literals(["succeeded", "failed", "cancelled"]),
+});
 
 export interface RollbackOrphansCounts {
   readonly orphaned: number;

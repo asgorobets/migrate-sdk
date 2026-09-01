@@ -2,8 +2,12 @@
 
 # Dependencies
 node_modules
+.pnpm-store/
 .pnp
 .pnp.js
+
+# Local repositories
+.repos/
 
 # Local env files
 .env
@@ -17,6 +21,7 @@ coverage
 .workflow-data
 .workflow-vitest
 packages/migrate-sdk/examples/.migration-state/
+packages/migrate-sdk/examples/sqlite-catalog/.data/
 
 # Turbo
 .turbo
@@ -40,3 +45,4 @@ yarn-error.log*
 # Misc
 .DS_Store
 *.pem
+.env*

@@ -41,6 +41,9 @@ jobs:
       - name: Validate packages
         run: pnpm run validate-packages
 
+      - name: Smoke test packed TUI
+        run: pnpm --filter @migrate-sdk/tui test:package
+
       - name: Smoke test SQL providers
         run: pnpm run test:sql:smoke
 
@@ -82,13 +85,13 @@ jobs:
 
       - name: Create release PR or publish packages
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@v2
         with:
-          version: pnpm exec changeset version
-          publish: pnpm exec changeset publish
-          commit: "chore(migrate-sdk): version packages"
-          title: "chore(migrate-sdk): version packages"
+          version-script: pnpm exec changeset version
+          publish-script: pnpm exec changeset publish
+          commit-message: "chore(migrate-sdk): version packages"
+          pr-title: "chore(migrate-sdk): version packages"
+          github-token: ${{ secrets.GITHUB_TOKEN }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NPM_CONFIG_PROVENANCE: "true"

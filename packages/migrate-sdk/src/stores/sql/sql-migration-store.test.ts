@@ -15,6 +15,7 @@ import {
 } from "migrate-sdk";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { SqlMigrationStore } from "migrate-sdk/stores/sql";
+import { runSupersededMigrationRunScenario } from "migrate-sdk/testing";
 import { runInlineRegistry } from "../../testing/inline-registry-execution.ts";
 
 const TestSourceIdentity = SourceIdentity.make({
@@ -326,6 +327,7 @@ describe("SqlMigrationStore", () => {
         "migrate_sdk_locks",
         "migrate_sdk_run_definitions",
         "migrate_sdk_runs",
+        "migrate_sdk_schema_migrations",
       ]);
       expect(itemStateColumns.map(({ name }) => name)).toEqual(
         expect.arrayContaining([
@@ -367,7 +369,7 @@ describe("SqlMigrationStore", () => {
   );
 
   it.effect(
-    "keeps shared run lifecycle state consistent across definitions",
+    "keeps durable cancellation state consistent across definitions",
     () =>
       Effect.gen(function* () {
         const store = yield* MigrationStore;
@@ -383,17 +385,134 @@ describe("SqlMigrationStore", () => {
 
         yield* store.queueRun(runId, definitionIds);
         yield* store.attachRunExecution(runId, definitionIds, execution);
-        const cancelled = yield* store.markRunCancelled(runId, definitionIds);
+        const requested = yield* store.requestRunCancellation(
+          runId,
+          definitionIds
+        );
+        const begun = yield* store.beginRun(runId, definitionIds);
+        const cancelled = yield* store.completeRun(
+          runId,
+          definitionIds,
+          definitionIds.map((definitionId) => ({
+            definitionId,
+            status: "succeeded" as const,
+          }))
+        );
+        const lateQueue = yield* store.queueRun(runId, definitionIds);
+        const lateBegin = yield* store.beginRun(runId, definitionIds);
         const states = yield* Effect.forEach(definitionIds, (definitionId) =>
           store.getLatestRunState(definitionId)
         );
 
+        expect(requested).toEqual(
+          expect.objectContaining({ execution, runId, status: "cancelling" })
+        );
+        expect(begun.status).toBe("cancelling");
         expect(cancelled).toEqual(
           expect.objectContaining({ execution, runId, status: "cancelled" })
         );
+        expect(lateQueue).toEqual(cancelled);
+        expect(lateBegin).toEqual(cancelled);
         expect(cancelled.finishedAt).toBeInstanceOf(Date);
-        expect(states).toEqual([cancelled, cancelled]);
+        expect(states).toEqual(
+          definitionIds.map((definitionId) => ({
+            ...cancelled,
+            definitionId,
+            runStatus: "cancelled",
+          }))
+        );
       }).pipe(Effect.provide(sqlStoreLayer))
+  );
+
+  it.effect(
+    "keeps concurrent cancellation and completion transitions monotonic",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const definitionId = toMigrationDefinitionId("concurrent-cancellation");
+        const definitionIds = [definitionId] as const;
+        const runId = toMigrationRunId("run-concurrent-cancellation-sql");
+
+        yield* store.queueRun(runId, definitionIds);
+        yield* store.beginRun(runId, definitionIds);
+        const [requested, completed] = yield* Effect.all(
+          [
+            store.requestRunCancellation(runId, definitionIds),
+            store.completeRun(runId, definitionIds, [
+              { definitionId, status: "succeeded" },
+            ]),
+          ] as const,
+          { concurrency: "unbounded" }
+        );
+        const finalState = yield* store.getRunState(runId);
+
+        if (requested.status === "cancelling") {
+          expect(completed.status).toBe("cancelled");
+          expect(finalState?.status).toBe("cancelled");
+        } else {
+          expect(requested.status).toBe("succeeded");
+          expect(completed.status).toBe("succeeded");
+          expect(finalState?.status).toBe("succeeded");
+        }
+      }).pipe(Effect.provide(sqlStoreLayer))
+  );
+
+  it.effect(
+    "completes a shared run after one definition starts a newer run",
+    () =>
+      Effect.gen(function* () {
+        const result = yield* runSupersededMigrationRunScenario("sql");
+
+        expect(result.originalRunState).toEqual(result.completed);
+        expect(result.selectedLatest).toEqual(
+          expect.objectContaining({
+            definitionId: result.selectedId,
+            runId: result.originalRunId,
+            status: "succeeded",
+          })
+        );
+        expect(result.dependencyLatest).toEqual(
+          expect.objectContaining({
+            definitionId: result.dependencyId,
+            runId: result.newerRunId,
+            status: "running",
+          })
+        );
+      }).pipe(Effect.provide(sqlStoreLayer))
+  );
+
+  it.effect("persists each definition outcome from a failed shared run", () =>
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const authorsId = toMigrationDefinitionId("authors");
+      const articlesId = toMigrationDefinitionId("articles");
+      const definitionIds = [authorsId, articlesId] as const;
+      const runId = toMigrationRunId("run-mixed-sql");
+
+      yield* store.beginRun(runId, definitionIds);
+      const failedRun = yield* store.failRun(runId, definitionIds, [
+        { definitionId: authorsId, status: "succeeded" },
+        { definitionId: articlesId, status: "failed" },
+      ]);
+      const states = yield* Effect.all([
+        store.getLatestRunState(authorsId),
+        store.getLatestRunState(articlesId),
+      ]);
+
+      expect(failedRun.status).toBe("failed");
+      expect(states).toEqual([
+        expect.objectContaining({
+          definitionId: authorsId,
+          runStatus: "failed",
+          status: "succeeded",
+        }),
+        expect.objectContaining({
+          definitionId: articlesId,
+          runStatus: "failed",
+          status: "failed",
+        }),
+      ]);
+    }).pipe(Effect.provide(sqlStoreLayer))
   );
 
   it.effect("enforces definition-lock ownership", () =>

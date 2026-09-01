@@ -1,35 +1,15 @@
-import type { WorkflowSdkMigrationDefinitionLock } from "./migration-execution-workflow.ts";
+import type { RollbackRunSummary } from "migrate-sdk/core";
+import type { WorkflowSdkMigrationRollbackEnvelope } from "./migration-envelope.ts";
 
-export interface WorkflowSdkMigrationRollbackEnvelope {
-  readonly executionDefinitionIds: readonly string[];
-  readonly kind: "rollback";
-  readonly locks: readonly WorkflowSdkMigrationDefinitionLock[];
-  readonly registryId: string;
-  readonly request: unknown;
-  readonly runId: string;
-  readonly scopeDefinitionIds: readonly string[];
-}
+export type { WorkflowSdkMigrationRollbackEnvelope } from "./migration-envelope.ts";
 
-export interface WorkflowSdkMigrationRollbackDefinitionCounts {
-  readonly failed: number;
-  readonly rolledBack: number;
-  readonly skipped: number;
-}
+export type WorkflowSdkMigrationRollbackDefinitionSummary =
+  RollbackRunSummary["definitions"][number];
 
-export interface WorkflowSdkMigrationRollbackDefinitionSummary {
-  readonly counts: WorkflowSdkMigrationRollbackDefinitionCounts;
-  readonly definitionId: string;
-  readonly status: "failed" | "skipped" | "succeeded";
-}
+export type WorkflowSdkMigrationRollbackDefinitionCounts =
+  WorkflowSdkMigrationRollbackDefinitionSummary["counts"];
 
-export interface WorkflowSdkMigrationRollbackSummary {
-  readonly definitions: readonly WorkflowSdkMigrationRollbackDefinitionSummary[];
-  readonly finishedAt: Date;
-  readonly kind: "rollback";
-  readonly runId: string;
-  readonly startedAt: Date;
-  readonly status: "failed" | "succeeded";
-}
+export type WorkflowSdkMigrationRollbackSummary = RollbackRunSummary;
 
 export interface WorkflowSdkMigrationRollbackSteps {
   readonly execute: (

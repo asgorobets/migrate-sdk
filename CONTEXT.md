@@ -154,15 +154,38 @@ A future catalog of plugin factories for compiling migration specs into migratio
 One execution attempt of one or more migration definitions.
 
 **Migration Run State**:
-The durable state for one migration run.
+The durable state for one migration run. `cancelling` is a non-terminal state:
+the run still owns its locks while execution drains already-started work and
+stops scheduling new work. Terminal Migration Run States are absorbing under
+late or replayed lifecycle writes.
+
+**Active Migration Run**:
+A non-terminal migration run whose run id still owns at least one Migration Definition Lock.
+
+**Reconnectable Migration Run**:
+An Active Migration Run whose durable Migration Run State includes the Execution Adapter identity required for a new Migrate Server to observe it.
+_Avoid_: Attached run, server execution
+
+**Migration Run Observation**:
+A client-scoped stream of progress, lifecycle, warning, and terminal events for
+one Migration Run id. Ending or losing an observation does not change the
+Migration Run.
+
+**Detach Migration Run Observation**:
+End one client’s Migration Run Observation while leaving the Migration Run
+active. The same or another Migrate Client may observe the run again by its
+Migration Run id.
+_Avoid_: Pause run, detach run, resume run
+
+**Migration Definition Run State**:
+The durable state of one migration definition's participation in a migration run.
 
 **Migration Run Handle**:
 A run-scoped capability for observing and cooperatively cancelling work owned by
 the current execution host.
 
 **Migration Run Handle State**:
-The current host's in-memory view of an attached migration run. It may be
-`cancelling` before terminal cancellation is persisted as Migration Run State.
+The current host's in-memory view of an attached migration run.
 
 **Migration Run Summary**:
 The structured result returned after a migration run completes or fails.
@@ -192,10 +215,46 @@ The invocation object that starts a rollback run from the SDK, CLI, or another h
 The runtime strategy that executes migration definitions inline or starts them through a durable workflow provider.
 
 **Workflow SDK Execution Adapter**:
-An execution adapter that starts a Workflow SDK run from a migration execution envelope.
+An execution adapter that starts a Workflow SDK run from a Workflow SDK Migration Execution Envelope.
+
+**Workflow SDK Migration Execution Envelope**:
+A Migration Execution Envelope that carries the complete acquired Migration Definition Lock set transferred to the provider-owned workflow execution.
 
 **Effect Workflow Execution Adapter**:
 An execution adapter that starts an Effect workflow from a migration execution envelope.
+
+**Migrate Server**:
+An environment-bound application that serves migration operations backed by an authoritative Migration Definition Registry and the capabilities required to inspect, plan, execute, observe, and control its migrations.
+
+**Migrate Server Instance**:
+One running incarnation of a Migrate Server. Its identity changes when the server process is replaced; unlike a Migrate Environment, Migration Definition Registry, or Migrate Server Build, it is not a stable deployment or content identity.
+
+**Migrate Server Instance Id**:
+The ephemeral identity of one Migrate Server Instance, used by a connection to verify that a discovered transport still reaches the instance that published it.
+
+**Migrate Client**:
+A user-facing or automated caller, such as the TUI, that uses a Migrate Server without owning the server environment's source, destination, migration store, or execution capabilities.
+
+**Migrate Protocol**:
+The versioned, schema-backed contract of requests, results, events, and errors exchanged between a Migrate Client and a Migrate Server.
+
+**Migrate Connection**:
+The configured path by which a Migrate Client reaches a Migrate Server. It selects a server target and access method, not an Execution Adapter.
+
+**Migrate Server Build Id**:
+The immutable identity of a packaged or deployed Migrate Server artifact. It does not identify edits to local migration source.
+
+**Local Migrate Supervisor**:
+A stable local Migrate Connection host that keeps one logical Migrate Server reachable while Local Source Generations change or drain.
+
+**Local Source Generation**:
+An immutable, successfully loaded revision of a local migration configuration. New operations use the current generation while active Migration Runs remain associated with the generation that started them.
+
+**Migrate Operation Selection**:
+The serializable scope of a run or rollback operation: all registered migration definitions, a non-empty explicit definition set, or one migration definition group.
+
+**Migrate Dashboard Target**:
+The single migration definition or migration definition group currently addressed for navigation, messages, or source scanning. It is distinct from a Migrate Operation Selection.
 
 **Migration Reference Lookup**:
 A process capability for reading migrated tracking state or destination references from migration item states.
@@ -290,6 +349,9 @@ Durable structured detail for inspecting a migration item error after the run ha
 **Migration Diagnostic**:
 A schema-backed warning or error record that explains migration status, item failure, run failure, or another operational condition.
 
+**Migration Message**:
+An operator-facing durable read model for a Migration Item Error, state reason, or Destination Journal Diagnostic, scoped to one Migration Definition and Source Identity.
+
 ## Relationships
 
 - A **Source Item** has exactly one **Migration Item State** for a given migration definition.
@@ -340,7 +402,7 @@ A schema-backed warning or error record that explains migration status, item fai
 - A source item with a valid identity and version but invalid payload becomes a failed **Migration Item State** with durable **Migration Item Error Details**.
 - A **Source Lookup Strategy** may be direct or scan-based.
 - A **Migration Definition** may select separate **Source Cursor Retry Strategy** and **Source Lookup Retry Strategy** wrappers.
-- A **Migration Store** records **Migration Item State**, the latest **Migration Run State**, the last successful **Source Cursor**, and the **Migration Contract** for each **Migration Definition**.
+- A **Migration Store** records **Migration Item State**, the latest **Migration Definition Run State**, the last successful **Source Cursor**, and the **Migration Contract** for each **Migration Definition**.
 - A **Migration Store** may be backed by SQL, key/value storage, files, or another durable system.
 - A **Migration Definition** uses one public **Migration Store** service.
 - A **Migration Run** blocks before processing items when the current **Migration Contract** differs from the stored **Migration Contract** and any **Migration Item State** exists for the **Migration Definition**.
@@ -362,13 +424,34 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Migration Definition Registry Catalog** rejects duplicate **Migration Definition Registry Ids** at construction.
 - A **Migration Definition Registry** is distinct from a **Plugin Registry** and does not compile **Migration Specs**.
 - A **Migration Definition Registry** may be authored directly or initialized from previously compiled **Migration Definitions**.
+- A **Migrate Server** runs in the environment that owns its authoritative **Migration Definition Registry** and required runtime capabilities.
+- A **Migrate Client** selects a **Migrate Server** through a **Migrate Connection**; it does not select the server's **Execution Adapter**.
+- A **Migrate Operation Selection** is distinct from a **Migrate Dashboard Target** so CLI operations can select all definitions or several explicit definitions without widening dashboard navigation APIs.
+- A **Migrate Protocol** carries serializable domain requests, results, events, and errors; it does not carry executable plans, Effects, Layers, or migration definitions.
+- Closing a **Migrate Client** observation does not cancel a **Migration Run**; the **Migrate Protocol** models stopping as a separate explicit operation that durably changes an active run to `cancelling` through its **Migration Store**.
+- An **Active Migration Run** is discovered from non-terminal **Migration Run State** whose run id matches a current **Migration Definition Lock** owner.
+- An **Active Migration Run** retains a lock-owning **Migration Definition** as its durable observation anchor, even when another definition from the same run has been unlocked and run again.
+- A terminal **Migration Run** with a remaining **Migration Definition Lock** is lock-recovery work, not an **Active Migration Run**.
+- Breaking the last **Migration Definition Lock** owned by an **Active Migration Run** removes that run from active-run discovery without claiming to cancel its Execution Adapter.
+- A **Reconnectable Migration Run** is observed by **Migration Run** id; the **Migrate Server** resolves its durable Execution Adapter identity rather than relying on a previous server process's execution id.
+- A **Migration Store** retains **Migration Run State** by **Migration Run** id after a newer run replaces a definition's latest **Migration Definition Run State**.
+- **Migration Run State** addressed by **Migration Run** id is authoritative; latest **Migration Definition Run State** records are replaceable per-definition projections.
+- A non-transactional **Migration Store** persists authoritative **Migration Run State** before updating latest-definition projections. Retrying the same transition repairs projections that still reference that run without replacing a newer run.
+- Ending observation of a **Reconnectable Migration Run** ends only that observation and leaves the **Migration Run** active.
+- A **Migration Run Observation** is client-scoped; changing the focused run or closing a **Migrate Client** ends the observation without stopping the **Migration Run**.
+- Detaching a **Migration Run Observation** preserves the **Migration Run** id as the stable way to observe the run again; it does not pause execution.
+- Stopping a **Migration Run** is an explicit run-scoped operation and is distinct from ending a **Migration Run Observation** or breaking a **Migration Definition Lock**.
+- A `cancelling` **Migration Run** remains active and keeps its **Migration Definition Locks** until execution stops scheduling work, drains already-started work, persists terminal `cancelled` state, and releases the locks.
+- Durable cancellation is observed at execution scheduling boundaries and may use a short cached read interval to avoid one remote **Migration Store** request per migrated item.
+- Hard cancellation by an **Execution Adapter** is not the normal stop path because it cannot guarantee migration finalization or lock release; a non-returning provider step can therefore leave a cooperative stop in `cancelling` until that step returns or an operator performs recovery.
+- A **Migrate Server** may own multiple concurrent **Migration Runs**; each run has independent observation and cancellation, while overlapping definition sets are rejected through **Migration Definition Locks**.
 - An **Executable Migration Definition Registry** validates that planned definitions have all runtime service requirements provided.
 - An **Executable Migration Definition Registry** relies on Effect requirements for static executability and uses **Migration Definition Registry Executable Error** for dynamic runtime diagnostics.
 - An **Executable Migration Definition Registry** produces executable plans that are distinct from non-executable registry plans.
 - A **Migration Definition Registry** plans migration run and rollback execution before a **Migration Executable** executes the plan.
 - A **Migration Executable** executes plans whose **Migration Definitions** have all runtime service requirements provided before execution starts.
 - A **Migration Status Report** inspects selected **Migration Definitions** without acquiring **Migration Definition Locks** or creating **Migration Run State**.
-- A **Migration Status Report** may include current durable item-state counts, latest **Migration Run State** lifecycle metadata, and **Source Inventory Scan** counts.
+- A **Migration Status Report** may include current durable item-state counts, latest **Migration Definition Run State** lifecycle metadata, and **Source Inventory Scan** counts.
 - A **Migration Status Report** over multiple **Migration Definitions** may read each definition's own **Migration Store** independently.
 - A **Migration Definition Lock** is acquired through the **Migration Store** before a migration definition is executed.
 - A **Migration Definition Lock** prevents concurrent runners from executing the same **Migration Definition** in the first version.
@@ -385,6 +468,8 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Migration Run** executes ordered **Migration Definitions** sequentially in the first version.
 - A **Migration Run** continues processing source items after an item failure in the first version.
 - A **Migration Run** is marked failed when one or more source items fail, even if other items complete.
+- A failed **Migration Run** does not make every participating **Migration Definition Run State** failed; each definition records its own outcome.
+- Dependency readiness uses the dependency's latest **Migration Definition Run State**, not the aggregate status of a shared **Migration Run**.
 - A completed **Migration Run** produces a **Migration Run Summary** for SDK callers and CLI rendering.
 - A completed rollback run produces a **Rollback Run Summary** for SDK callers and CLI rendering.
 - A **Rollback Run Summary** is distinct from a **Migration Run Summary**.
@@ -395,6 +480,7 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Migration Execution** selects and plans registry-bound work; a **Migration Executable** starts it.
 - An attached **Migration Run Handle** observes and cooperatively cancels work owned by the current host.
 - Detached execution is observed through the execution provider's identity and native observability surface.
+- A **Migration Executable** may reattach to a detached provider execution by execution identity, wait for its native terminal lifecycle, and publish cursor-window progress checkpoints with cumulative committed counts; durable **Migration Run State** and **Migration Item State** remain authoritative for migration status and item progress.
 - Existing function-style run and rollback entrypoints may delegate to the default inline **Migration Executable** for compatibility.
 - A **Migration Executable** allocates the **Migration Run** id when starting execution.
 - A durable **Migration Executable** creates **Migration Run State** before returning a started **Execution Start Result**.
@@ -460,6 +546,7 @@ A schema-backed warning or error record that explains migration status, item fai
 - A **Destination Journal Diagnostic** is not a **Destination Change**.
 - A **Process Pipeline** may record a **Destination Journal Diagnostic** when failure context would otherwise exist only in logs.
 - Ordinary logs are not **Destination Journal Diagnostics**.
+- A **Migration Message** is projected from durable **Migration Item State** evidence; it is not live CLI output or an ordinary log.
 - A **Destination Journal Diagnostic** is created from explicitly marked diagnostic logging.
 - A **Destination Journal Diagnostic** uses one generic message shape; migration authors and destination helpers map their own errors or domain context into that shape.
 - A **Destination Journal Diagnostic** has severity `info`, `warning`, or `error`.

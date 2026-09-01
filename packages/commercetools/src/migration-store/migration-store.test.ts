@@ -6,9 +6,10 @@ import {
   makeRecordingCustomObjectApiRoot,
   type RecordedCustomObjectRequest,
 } from "@migrate-sdk/commercetools/testing";
-import { Data, Effect, Layer, Schema } from "effect";
+import { Data, Effect, Fiber, Layer, Schema } from "effect";
 import {
   DestinationChangeDescriptorId,
+  type MigrationRunState,
   MigrationStore,
   makeSourceVersionContractFingerprint,
   SourceIdentity,
@@ -18,6 +19,7 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
+import { runSupersededMigrationRunScenario } from "migrate-sdk/testing";
 import { CommercetoolsSdk } from "../sdk.ts";
 
 const runIdPattern = /^run-/u;
@@ -68,6 +70,9 @@ const itemStateKey = (
 
 const latestRunStateKey = (definition: string): string =>
   `${namespace}__latest-run-state__${definitionHashSegment(definition)}`;
+
+const runStateKey = (runId: string): string =>
+  `${namespace}__migration-run-state__run-hash_${hashedSegment(runId)}`;
 
 const definitionLockKey = (definition: string): string =>
   `${namespace}__migration-definition-lock__${definitionHashSegment(
@@ -120,6 +125,26 @@ const customObjectValue = (request: RecordedCustomObjectRequest): unknown => {
   return;
 };
 
+const customObjectRunStatus = (
+  request: RecordedCustomObjectRequest
+): string | undefined => {
+  const value = customObjectValue(request);
+
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("state" in value) ||
+    typeof value.state !== "object" ||
+    value.state === null ||
+    !("status" in value.state) ||
+    typeof value.state.status !== "string"
+  ) {
+    return;
+  }
+
+  return value.state.status;
+};
+
 const customObjectQueryRequests = (
   requests: readonly RecordedCustomObjectRequest[]
 ): readonly RecordedCustomObjectRequest[] =>
@@ -170,6 +195,24 @@ const seedCustomObject = (
     catch: recordedHttpError,
   }).pipe(Effect.asVoid);
 };
+
+const seedRunState = (
+  recording: ReturnType<typeof makeRecordingCustomObjectApiRoot>,
+  state: MigrationRunState
+): Effect.Effect<void, RecordedHttpError> =>
+  seedCustomObject(recording, runStateKey(state.runId), {
+    formatVersion: 1,
+    index: { runId: state.runId },
+    namespace,
+    recordKind: "migration-run-state",
+    state: {
+      ...state,
+      ...(state.finishedAt === undefined
+        ? {}
+        : { finishedAt: state.finishedAt.toISOString() }),
+      startedAt: state.startedAt.toISOString(),
+    },
+  });
 
 class RecordedHttpError extends Data.TaggedError("RecordedHttpError")<{
   readonly cause: unknown;
@@ -924,7 +967,7 @@ describe("CommercetoolsMigrationStore", () => {
         (request) => request.method === "POST"
       );
 
-      expect(upserts).toHaveLength(4);
+      expect(upserts).toHaveLength(5);
       expect(
         upserts.some((request) =>
           containsExplicitNull(customObjectValue(request))
@@ -1819,6 +1862,12 @@ describe("CommercetoolsMigrationStore", () => {
     const key = latestRunStateKey(definitionId);
 
     return Effect.gen(function* () {
+      yield* seedRunState(recording, {
+        definitionIds: [definitionId],
+        runId,
+        startedAt: new Date("2026-06-09T12:00:00.000Z"),
+        status: "running",
+      });
       yield* seedCustomObject(recording, key, {
         formatVersion: 1,
         index: {
@@ -1840,7 +1889,11 @@ describe("CommercetoolsMigrationStore", () => {
       const error = yield* Effect.gen(function* () {
         const store = yield* MigrationStore;
 
-        return yield* store.completeRun(runId, [definitionId]);
+        return yield* store.completeRun(
+          runId,
+          [definitionId],
+          [{ definitionId, status: "succeeded" }]
+        );
       }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
 
       expect(error).toEqual(
@@ -1861,6 +1914,12 @@ describe("CommercetoolsMigrationStore", () => {
     const definitionIds = [definitionId, additionalDefinitionId] as const;
 
     return Effect.gen(function* () {
+      yield* seedRunState(recording, {
+        definitionIds,
+        runId,
+        startedAt: new Date("2026-06-09T12:00:00.000Z"),
+        status: "running",
+      });
       yield* seedCustomObject(recording, latestRunStateKey(definitionId), {
         formatVersion: 1,
         index: {
@@ -1903,7 +1962,14 @@ describe("CommercetoolsMigrationStore", () => {
       const error = yield* Effect.gen(function* () {
         const store = yield* MigrationStore;
 
-        return yield* store.completeRun(runId, definitionIds);
+        return yield* store.completeRun(
+          runId,
+          definitionIds,
+          definitionIds.map((currentDefinitionId) => ({
+            definitionId: currentDefinitionId,
+            status: "succeeded" as const,
+          }))
+        );
       }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
 
       expect(error).toEqual(
@@ -1924,6 +1990,12 @@ describe("CommercetoolsMigrationStore", () => {
     const definitionIds = [definitionId, additionalDefinitionId] as const;
 
     return Effect.gen(function* () {
+      yield* seedRunState(recording, {
+        definitionIds,
+        runId,
+        startedAt: new Date("2026-06-09T12:00:00.000Z"),
+        status: "running",
+      });
       yield* seedCustomObject(recording, latestRunStateKey(definitionId), {
         formatVersion: 1,
         index: {
@@ -1968,7 +2040,14 @@ describe("CommercetoolsMigrationStore", () => {
       const error = yield* Effect.gen(function* () {
         const store = yield* MigrationStore;
 
-        return yield* store.completeRun(runId, definitionIds);
+        return yield* store.completeRun(
+          runId,
+          definitionIds,
+          definitionIds.map((currentDefinitionId) => ({
+            definitionId: currentDefinitionId,
+            status: "succeeded" as const,
+          }))
+        );
       }).pipe(Effect.provide(makeStoreLayer(recording)), Effect.flip);
 
       expect(error).toEqual(
@@ -1982,7 +2061,7 @@ describe("CommercetoolsMigrationStore", () => {
     });
   });
 
-  it.effect("round-trips latest run states for every definition", () => {
+  it.effect("round-trips latest and historical run states", () => {
     const recording = makeRecordingCustomObjectApiRoot();
     const runId = toMigrationRunId("run-latest-state");
     const additionalDefinitionId = toMigrationDefinitionId("catalog-prices");
@@ -1992,16 +2071,31 @@ describe("CommercetoolsMigrationStore", () => {
       const store = yield* MigrationStore;
 
       const running = yield* store.beginRun(runId, definitionIds);
-      const succeeded = yield* store.completeRun(runId, definitionIds);
+      const succeeded = yield* store.completeRun(
+        runId,
+        definitionIds,
+        definitionIds.map((currentDefinitionId) => ({
+          definitionId: currentDefinitionId,
+          status: "succeeded" as const,
+        }))
+      );
       const rerun = toMigrationRunId("run-latest-state-retry");
       const retryRunning = yield* store.beginRun(rerun, definitionIds);
-      const failed = yield* store.failRun(rerun, definitionIds);
+      const failed = yield* store.failRun(
+        rerun,
+        definitionIds,
+        definitionIds.map((currentDefinitionId) => ({
+          definitionId: currentDefinitionId,
+          status: "failed" as const,
+        }))
+      );
       const cancelledRunId = toMigrationRunId("run-latest-state-cancelled");
       yield* store.beginRun(cancelledRunId, definitionIds);
       const cancelled = yield* store.markRunCancelled(
         cancelledRunId,
         definitionIds
       );
+      const historical = yield* store.getRunState(runId);
 
       expect(running).toMatchObject({
         definitionIds,
@@ -2031,17 +2125,22 @@ describe("CommercetoolsMigrationStore", () => {
         status: "cancelled",
       });
       expect(cancelled.finishedAt).toBeInstanceOf(Date);
+      expect(historical).toMatchObject({
+        definitionIds,
+        runId,
+        status: "succeeded",
+      });
 
-      const expectedKeys = definitionIds.map(latestRunStateKey);
+      const expectedKeys = [
+        ...definitionIds.map(latestRunStateKey),
+        runStateKey(runId),
+        runStateKey(rerun),
+        runStateKey(cancelledRunId),
+      ];
       const upserts = recording.requests.filter(
         (request) => request.method === "POST"
       );
-      const lookups = recording.requests.filter(
-        (request) => request.method === "GET"
-      );
-
-      expect(upserts).toHaveLength(12);
-      expect(lookups).toHaveLength(9);
+      expect(upserts).toHaveLength(18);
       expect(
         upserts.every((request) =>
           expectedKeys.includes(customObjectKey(request) ?? "")
@@ -2051,16 +2150,336 @@ describe("CommercetoolsMigrationStore", () => {
         body: {
           value: {
             formatVersion: 1,
-            index: {
-              definitionId,
-              runId,
-              status: "running",
-            },
+            index: { runId },
             namespace,
+            recordKind: "migration-run-state",
+          },
+        },
+      });
+      expect(upserts.at(1)).toMatchObject({
+        body: {
+          value: {
+            index: { definitionId, runId, status: "running" },
             recordKind: "latest-run-state",
           },
         },
       });
     }).pipe(Effect.provide(makeStoreLayer(recording)));
   });
+
+  it.effect("persists a durable cancellation request until completion", () => {
+    const recording = makeRecordingCustomObjectApiRoot();
+    const runId = toMigrationRunId("run-cancelling");
+    const definitionIds = [definitionId] as const;
+
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+
+      yield* store.queueRun(runId, definitionIds);
+      const requested = yield* store.requestRunCancellation(
+        runId,
+        definitionIds
+      );
+      const begun = yield* store.beginRun(runId, definitionIds);
+      const cancelled = yield* store.completeRun(runId, definitionIds, [
+        { definitionId, status: "succeeded" },
+      ]);
+      const lateQueue = yield* store.queueRun(runId, definitionIds);
+      const lateBegin = yield* store.beginRun(runId, definitionIds);
+      const latest = yield* store.getLatestRunState(definitionId);
+
+      expect(requested.status).toBe("cancelling");
+      expect(begun.status).toBe("cancelling");
+      expect(cancelled).toEqual(
+        expect.objectContaining({ runId, status: "cancelled" })
+      );
+      expect(lateQueue).toEqual(cancelled);
+      expect(lateBegin).toEqual(cancelled);
+      expect(latest).toEqual(
+        expect.objectContaining({ runId, status: "cancelled" })
+      );
+    }).pipe(Effect.provide(makeStoreLayer(recording)));
+  });
+
+  it.effect(
+    "keeps an acknowledged cancellation when completion writes concurrently",
+    () => {
+      const runId = toMigrationRunId("run-concurrent-cancellation");
+      const definitionIds = [definitionId] as const;
+      let blockCompletionWrite = false;
+      let signalCompletionWrite: () => void = () => undefined;
+      const completionWriteReached = new Promise<void>((resolve) => {
+        signalCompletionWrite = resolve;
+      });
+      let releaseCompletionWrite: () => void = () => undefined;
+      const completionWriteReleased = new Promise<void>((resolve) => {
+        releaseCompletionWrite = resolve;
+      });
+      const recording = makeRecordingCustomObjectApiRoot({
+        beforeRequest: async (request) => {
+          if (
+            blockCompletionWrite &&
+            request.method === "POST" &&
+            customObjectKey(request) === runStateKey(runId) &&
+            customObjectRunStatus(request) === "succeeded"
+          ) {
+            signalCompletionWrite();
+            await completionWriteReleased;
+          }
+        },
+      });
+
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        yield* store.queueRun(runId, definitionIds);
+        yield* store.beginRun(runId, definitionIds);
+        blockCompletionWrite = true;
+
+        const completionFiber = yield* store
+          .completeRun(runId, definitionIds, [
+            { definitionId, status: "succeeded" },
+          ])
+          .pipe(Effect.forkChild);
+
+        yield* Effect.promise(() => completionWriteReached);
+        const requestedExit = yield* store
+          .requestRunCancellation(runId, definitionIds)
+          .pipe(Effect.exit);
+        releaseCompletionWrite();
+        const requested = yield* requestedExit;
+        const completed = yield* Fiber.join(completionFiber);
+
+        expect(requested.status).toBe("cancelling");
+        expect(completed.status).toBe("cancelled");
+        expect(yield* store.getRunState(runId)).toEqual(
+          expect.objectContaining({ runId, status: "cancelled" })
+        );
+        expect(yield* store.getLatestRunState(definitionId)).toEqual(
+          expect.objectContaining({ runId, status: "cancelled" })
+        );
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  it.effect(
+    "completes a shared run after one definition starts a newer run",
+    () => {
+      const recording = makeRecordingCustomObjectApiRoot();
+
+      return Effect.gen(function* () {
+        const result = yield* runSupersededMigrationRunScenario("commerce");
+
+        expect(result.originalRunState).toEqual(result.completed);
+        expect(result.selectedLatest).toEqual(
+          expect.objectContaining({
+            definitionId: result.selectedId,
+            runId: result.originalRunId,
+            status: "succeeded",
+          })
+        );
+        expect(result.dependencyLatest).toEqual(
+          expect.objectContaining({
+            definitionId: result.dependencyId,
+            runId: result.newerRunId,
+            status: "running",
+          })
+        );
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  it.effect("persists each definition outcome from a failed shared run", () => {
+    const recording = makeRecordingCustomObjectApiRoot();
+    const runId = toMigrationRunId("run-mixed-outcomes");
+    const additionalDefinitionId = toMigrationDefinitionId("catalog-prices");
+    const definitionIds = [definitionId, additionalDefinitionId] as const;
+
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+
+      yield* store.beginRun(runId, definitionIds);
+      const failedRun = yield* store.failRun(runId, definitionIds, [
+        { definitionId, status: "succeeded" },
+        { definitionId: additionalDefinitionId, status: "failed" },
+      ]);
+      const states = yield* Effect.all([
+        store.getLatestRunState(definitionId),
+        store.getLatestRunState(additionalDefinitionId),
+      ]);
+
+      expect(failedRun.status).toBe("failed");
+      expect(states).toEqual([
+        expect.objectContaining({
+          definitionId,
+          runStatus: "failed",
+          status: "succeeded",
+        }),
+        expect.objectContaining({
+          definitionId: additionalDefinitionId,
+          runStatus: "failed",
+          status: "failed",
+        }),
+      ]);
+    }).pipe(Effect.provide(makeStoreLayer(recording)));
+  });
+
+  it.effect(
+    "keeps a terminal run observable when its latest projection write fails",
+    () => {
+      const recoveryDefinitionId = toMigrationDefinitionId(
+        "terminal-projection-recovery"
+      );
+      const runId = toMigrationRunId("run-terminal-projection-recovery");
+      const projectionKey = latestRunStateKey(recoveryDefinitionId);
+      let armed = false;
+      let failed = false;
+      const recording = makeRecordingCustomObjectApiRoot({
+        beforeRequest: (request) => {
+          if (
+            armed &&
+            !failed &&
+            request.method === "POST" &&
+            customObjectKey(request) === projectionKey
+          ) {
+            failed = true;
+            throw new Error("Injected latest run projection failure");
+          }
+        },
+      });
+
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        yield* store.beginRun(runId, [recoveryDefinitionId]);
+        armed = true;
+        yield* store
+          .completeRun(
+            runId,
+            [recoveryDefinitionId],
+            [{ definitionId: recoveryDefinitionId, status: "succeeded" }]
+          )
+          .pipe(Effect.flip);
+
+        expect(yield* store.getRunState(runId)).toEqual(
+          expect.objectContaining({ runId, status: "succeeded" })
+        );
+        expect(yield* store.getLatestRunState(recoveryDefinitionId)).toEqual(
+          expect.objectContaining({ runId, status: "running" })
+        );
+
+        yield* store.completeRun(
+          runId,
+          [recoveryDefinitionId],
+          [{ definitionId: recoveryDefinitionId, status: "succeeded" }]
+        );
+
+        expect(yield* store.getLatestRunState(recoveryDefinitionId)).toEqual(
+          expect.objectContaining({ runId, status: "succeeded" })
+        );
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  it.effect(
+    "does not replace a newer latest projection when retrying a partial run start",
+    () => {
+      const dependencyId = toMigrationDefinitionId("projection-dependency");
+      const selectedId = toMigrationDefinitionId("projection-selected");
+      const originalRunId = toMigrationRunId("run-partial-start");
+      const newerRunId = toMigrationRunId("run-newer-start");
+      const projectionKey = latestRunStateKey(selectedId);
+      let armed = true;
+      const recording = makeRecordingCustomObjectApiRoot({
+        beforeRequest: (request) => {
+          if (
+            armed &&
+            request.method === "POST" &&
+            customObjectKey(request) === projectionKey
+          ) {
+            armed = false;
+            throw new Error("Injected latest run projection failure");
+          }
+        },
+      });
+
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+
+        yield* store
+          .beginRun(originalRunId, [dependencyId, selectedId])
+          .pipe(Effect.flip);
+        yield* store.beginRun(newerRunId, [selectedId]);
+        yield* store.beginRun(originalRunId, [dependencyId, selectedId]);
+
+        expect(
+          yield* Effect.all([
+            store.getLatestRunState(dependencyId),
+            store.getLatestRunState(selectedId),
+          ])
+        ).toEqual([
+          expect.objectContaining({ runId: originalRunId }),
+          expect.objectContaining({ runId: newerRunId }),
+        ]);
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  it.effect(
+    "does not replace a newer projection when an old run completes concurrently",
+    () => {
+      const raceDefinitionId = toMigrationDefinitionId("projection-race");
+      const originalRunId = toMigrationRunId("run-projection-race-old");
+      const newerRunId = toMigrationRunId("run-projection-race-new");
+      const projectionKey = latestRunStateKey(raceDefinitionId);
+      let armed = false;
+      let interleaved = false;
+      let store: typeof MigrationStore.Service | undefined;
+      const recording = makeRecordingCustomObjectApiRoot({
+        beforeRequest: async (request) => {
+          const value = customObjectValue(request);
+
+          if (
+            !armed ||
+            interleaved ||
+            store === undefined ||
+            request.method !== "POST" ||
+            customObjectKey(request) !== projectionKey ||
+            typeof value !== "object" ||
+            value === null ||
+            !("state" in value) ||
+            typeof value.state !== "object" ||
+            value.state === null ||
+            !("runId" in value.state) ||
+            value.state.runId !== originalRunId ||
+            !("status" in value.state) ||
+            value.state.status !== "succeeded"
+          ) {
+            return;
+          }
+
+          interleaved = true;
+          await Effect.runPromise(
+            store.beginRun(newerRunId, [raceDefinitionId])
+          );
+        },
+      });
+
+      return Effect.gen(function* () {
+        store = yield* MigrationStore;
+        yield* store.beginRun(originalRunId, [raceDefinitionId]);
+        armed = true;
+        yield* store.completeRun(
+          originalRunId,
+          [raceDefinitionId],
+          [{ definitionId: raceDefinitionId, status: "succeeded" }]
+        );
+
+        expect(interleaved).toBe(true);
+        expect(yield* store.getLatestRunState(raceDefinitionId)).toEqual(
+          expect.objectContaining({ runId: newerRunId, status: "running" })
+        );
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
 });

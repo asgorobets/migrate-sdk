@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import type { SqlClient, Statement } from "effect/unstable/sql";
+import { makeInitialSqlMigrationStoreSchema } from "./schema/migrations/0001-initial-schema.ts";
 import {
   makeSqlMigrationStoreDialect,
   type SqlMigrationStoreDialect,
@@ -102,7 +103,7 @@ const getDialect = (
   dialect: Exclude<TestDialect, "clickhouse">,
   client: SqlClient.SqlClient
 ): SqlMigrationStoreDialect => {
-  const result = makeSqlMigrationStoreDialect(client, names, "test");
+  const result = makeSqlMigrationStoreDialect(client, names);
 
   if (result === null) {
     throw new Error(`Expected ${dialect} SQL migration store dialect`);
@@ -112,21 +113,17 @@ const getDialect = (
 };
 
 describe("SqlMigrationStoreDialect", () => {
-  it.effect("uses each vendor's schema initialization syntax", () =>
+  it.effect("runs schema migration 1 with each vendor's syntax", () =>
     Effect.gen(function* () {
       const pg = makeFakeSqlClient("pg");
       const sqlite = makeFakeSqlClient("sqlite");
       const mysql = makeFakeSqlClient("mysql");
       const mssql = makeFakeSqlClient("mssql");
-      const pgDialect = getDialect("pg", pg.client);
-      const sqliteDialect = getDialect("sqlite", sqlite.client);
-      const mysqlDialect = getDialect("mysql", mysql.client);
-      const mssqlDialect = getDialect("mssql", mssql.client);
 
-      yield* pgDialect.initialize;
-      yield* sqliteDialect.initialize;
-      yield* mysqlDialect.initialize;
-      yield* mssqlDialect.initialize;
+      yield* makeInitialSqlMigrationStoreSchema(pg.client, names, "test");
+      yield* makeInitialSqlMigrationStoreSchema(sqlite.client, names, "test");
+      yield* makeInitialSqlMigrationStoreSchema(mysql.client, names, "test");
+      yield* makeInitialSqlMigrationStoreSchema(mssql.client, names, "test");
 
       const pgSql = pg.calls.map(normalizeSql).join(" ");
       const sqliteSql = sqlite.calls.map(normalizeSql).join(" ");
@@ -176,7 +173,7 @@ describe("SqlMigrationStoreDialect", () => {
         );
 
         if (name === "mssql") {
-          expect(statement).toContain("offset 0 rows fetch next ? rows only");
+          expect(statement).toContain("offset 0 rows fetch next 101 rows only");
         } else {
           expect(statement).toContain("limit");
         }
@@ -237,6 +234,6 @@ describe("SqlMigrationStoreDialect", () => {
   it("rejects ClickHouse because it cannot satisfy the store contract", () => {
     const fake = makeFakeSqlClient("clickhouse");
 
-    expect(makeSqlMigrationStoreDialect(fake.client, names, "test")).toBeNull();
+    expect(makeSqlMigrationStoreDialect(fake.client, names)).toBeNull();
   });
 });

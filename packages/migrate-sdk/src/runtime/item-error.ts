@@ -1,4 +1,4 @@
-import type { Schema, SchemaIssue } from "effect";
+import { type Schema, SchemaIssue } from "effect";
 import type {
   MigrationItemError,
   MigrationItemErrorDetail,
@@ -54,6 +54,8 @@ const sourcePayloadSchemaErrorTag = "SourcePayloadSchemaError";
 
 const maxSchemaErrorDetails = 5;
 
+const formatSchemaIssue = SchemaIssue.makeFormatterDefault();
+
 const pathSegment = (segment: PropertyKey): string => String(segment);
 
 const pathString = (path: readonly PropertyKey[]): string | undefined =>
@@ -107,7 +109,7 @@ const collectSchemaErrorDetails = (
 
     details.push({
       ...(detailPath === undefined ? {} : { path: detailPath }),
-      message: String(issue),
+      message: formatSchemaIssue(issue),
     });
   }
 

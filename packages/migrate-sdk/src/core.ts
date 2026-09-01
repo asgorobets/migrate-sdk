@@ -46,20 +46,32 @@ export {
 } from "./domain/registry.ts";
 export type { MigrationDefinitionRegistryPlanningError } from "./domain/registry.ts";
 
-export type {
+export {
+  MigrationDefinitionRunOutcome,
+  MigrationDefinitionRunState,
+  MigrationDefinitionRunStatus,
   MigrationDefinitionRunSummary,
+  MigrationRunStatus,
   MigrationRunSummary,
-  RollbackOrphansCounts,
+  mergeRollbackOrphansCounts,
 } from "./domain/run.ts";
-export { mergeRollbackOrphansCounts } from "./domain/run.ts";
-export type { RollbackRunSummary } from "./domain/rollback.ts";
+export type { RollbackOrphansCounts } from "./domain/run.ts";
+export { RollbackRunSummary } from "./domain/rollback.ts";
+export type {
+  MigrationProgressCounts,
+  MigrationProgressEvent,
+} from "./domain/progress.ts";
 
 export { MigrationExecutable } from "./services/migration-executable.ts";
 export type {
+  MigrationExecutableObservationOptions,
+  MigrationExecutableObservationResult,
+  MigrationExecutableProgressCheckpoint,
   MigrationExecutableRollbackError,
   MigrationExecutableRunError,
   MigrationExecutableService,
 } from "./services/migration-executable.ts";
+export { MigrationProgress } from "./services/migration-progress.ts";
 export { MigrationExecution } from "./services/migration-execution.ts";
 export type {
   BoundMigrationExecutionService,
@@ -95,6 +107,7 @@ export type {
 export { MigrationRunStepExecutor } from "./services/migration-run-step-executor.ts";
 export type { MigrationRunStepExecutorService } from "./services/migration-run-step-executor.ts";
 export type {
+  MigrationRunCancellationInput,
   MigrationRunCompletionInput,
   MigrationRunDefinitionCursorWindowInput,
   MigrationRunCursorWindowResult,

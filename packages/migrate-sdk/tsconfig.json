@@ -7,6 +7,9 @@
     "incremental": true,
     "noImplicitOverride": true,
     "noUnusedLocals": true,
+    "paths": {
+      "@fixtures/catalog": ["../../fixtures/catalog/fixture.ts"]
+    },
     "rootDir": "src",
     "outDir": "dist",
     "rewriteRelativeImportExtensions": true,
@@ -39,6 +42,20 @@
           "unsafeEffectTypeAssertion": "warning"
         },
         "overrides": [
+          {
+            "include": ["src/client/node/**/*.ts"],
+            "options": {
+              "diagnosticSeverity": {
+                "asyncFunction": "off",
+                "extendsNativeError": "off",
+                "globalDate": "off",
+                "globalTimers": "off",
+                "instanceOfSchema": "off",
+                "newPromise": "off",
+                "nodeBuiltinImport": "off"
+              }
+            }
+          },
           {
             "include": ["src/**/*.test.ts", "examples/**/*.test.ts"],
             "options": {

@@ -18,7 +18,7 @@ interface SqlTokenRow {
   readonly token: string;
 }
 
-const initializeMssql = (
+export const createMssqlSchemaVersion1 = (
   sql: SqlClient.SqlClient,
   names: SqlMigrationStoreTableNames,
   prefix: string
@@ -186,16 +186,15 @@ const makeMssqlUpsert =
 
 export const makeMssqlDialect = (
   sql: SqlClient.SqlClient,
-  names: SqlMigrationStoreTableNames,
-  prefix: string
+  names: SqlMigrationStoreTableNames
 ): SqlMigrationStoreDialect => {
   const locks = sql(names.locks);
   const itemStates = sql(names.itemStates);
   const upsert = makeMssqlUpsert(sql);
 
   return {
-    initialize: initializeMssql(sql, names, prefix),
     listOrphanItemStateRows: (query) => {
+      const limit = sql.literal(String(query.limit));
       const whereAfterIdentity =
         query.afterIdentityKey === null
           ? sql``
@@ -214,7 +213,7 @@ export const makeMssqlDialect = (
           )
           ${whereAfterIdentity}
         ORDER BY source_identity_key
-        OFFSET 0 ROWS FETCH NEXT ${query.limit} ROWS ONLY
+        OFFSET 0 ROWS FETCH NEXT ${limit} ROWS ONLY
       `;
     },
     upsertCursor: (row) =>

@@ -8,6 +8,9 @@
     "url": "https://github.com/asgorobets/migrate-sdk",
     "directory": "packages/migrate-sdk"
   },
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "bin": {
     "migrate": "./dist/cli/bin.js"
   },
@@ -27,6 +30,36 @@
       "source": "./src/index.ts",
       "import": "./dist/index.js"
     },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "bun": "./src/client/index.ts",
+      "source": "./src/client/index.ts",
+      "import": "./dist/client/index.js"
+    },
+    "./client/http": {
+      "types": "./dist/client/http.d.ts",
+      "bun": "./src/client/http.ts",
+      "source": "./src/client/http.ts",
+      "import": "./dist/client/http.js"
+    },
+    "./client/node": {
+      "types": "./dist/client/node/index.d.ts",
+      "bun": "./src/client/node/index.ts",
+      "source": "./src/client/node/index.ts",
+      "import": "./dist/client/node/index.js"
+    },
+    "./client/node/testing": {
+      "types": "./dist/client/node/testing.d.ts",
+      "bun": "./src/client/node/testing.ts",
+      "source": "./src/client/node/testing.ts",
+      "import": "./dist/client/node/testing.js"
+    },
+    "./client/web": {
+      "types": "./dist/client/web.d.ts",
+      "bun": "./src/client/web.ts",
+      "source": "./src/client/web.ts",
+      "import": "./dist/client/web.js"
+    },
     "./cli": {
       "types": "./dist/cli/index.d.ts",
       "bun": "./src/cli/index.ts",
@@ -44,6 +77,24 @@
       "bun": "./src/core.ts",
       "source": "./src/core.ts",
       "import": "./dist/core.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol/index.d.ts",
+      "bun": "./src/protocol/index.ts",
+      "source": "./src/protocol/index.ts",
+      "import": "./dist/protocol/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "bun": "./src/server/index.ts",
+      "source": "./src/server/index.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./server/http": {
+      "types": "./dist/server/http-host.d.ts",
+      "bun": "./src/server/http-host.ts",
+      "source": "./src/server/http-host.ts",
+      "import": "./dist/server/http-host.js"
     },
     "./destinations/in-memory": {
       "types": "./dist/destinations/in-memory/index.d.ts",
@@ -125,6 +176,8 @@
     "dev:document-source": "pnpm run build && tsx examples/dev.ts document-source",
     "dev:file-store": "pnpm run build && tsx examples/dev.ts file-store",
     "dev:nested-article": "pnpm run build && tsx examples/dev.ts nested-article",
+    "demo:sqlite-catalog:setup": "tsx examples/sqlite-catalog/setup.ts",
+    "demo:sqlite-catalog:mutate": "tsx examples/sqlite-catalog/mutate.ts",
     "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
     "check-types": "tsc --noEmit -p tsconfig.check.json",
     "test": "vitest run",
@@ -136,11 +189,13 @@
     "@effect/sql-mssql": "catalog:",
     "@effect/sql-mysql2": "catalog:",
     "@effect/sql-pg": "catalog:",
+    "@effect/sql-sqlite-bun": "catalog:",
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@repo/typescript-config": "workspace:*",
     "@types/node": "^24.13.1",
     "@types/papaparse": "^5.5.2",
+    "@types/proper-lockfile": "^4.1.4",
     "@typescript/native": "npm:typescript@7.0.2",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "vitest": "^4.1.8"
@@ -149,6 +204,7 @@
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
     "papaparse": "^5.5.3",
+    "proper-lockfile": "^4.1.2",
     "tsx": "^4.22.4"
   }
 }

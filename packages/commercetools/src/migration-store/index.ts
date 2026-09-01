@@ -4,17 +4,23 @@ import type {
   CustomObjectDraft,
   CustomObjectPagedQueryResponse,
 } from "@commercetools/platform-sdk";
-import { Effect, Layer, Schema } from "effect";
+import { Data, Effect, Layer, Schema } from "effect";
 import {
+  canReplaceLatestMigrationDefinitionRun,
   DestinationJournalEntry,
   DestinationJournalRollbackAttemptError,
   EncodedSourceCursor as EncodedSourceCursorSchema,
   type EncodedSourceIdentity as EncodedSourceIdentitySchema,
+  isActiveMigrationRunStatus,
   MigrationContractSchema,
   type MigrationContract as MigrationContractType,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
   type MigrationDefinitionLock as MigrationDefinitionLockSchema,
   MigrationDefinitionLockToken as MigrationDefinitionLockTokenSchema,
+  type MigrationDefinitionRunOutcome,
+  type MigrationDefinitionRunOutcomeMap,
+  type MigrationDefinitionRunState,
+  MigrationDefinitionRunStatus,
   type MigrationExecutionHandle,
   MigrationItemError,
   type MigrationItemState as MigrationItemStateSchema,
@@ -22,12 +28,17 @@ import {
   type MigrationRunState,
   MigrationStore,
   MigrationStoreError,
+  makeMigrationDefinitionRunState,
+  migrationDefinitionRunStatus,
+  resolveMigrationRunTransition,
   SourceIdentitySnapshotSchema,
   SourceVersionContractFingerprint,
   SourceVersion as SourceVersionSchema,
   TrackingRecord,
   toMigrationDefinitionLockToken,
   toMigrationRunId,
+  validateMigrationDefinitionRunOutcomes,
+  validateMigrationRunDefinitionIds,
 } from "migrate-sdk";
 import {
   CommercetoolsSdk,
@@ -41,6 +52,7 @@ type MigrationDefinitionLock = typeof MigrationDefinitionLockSchema.Type;
 type MigrationDefinitionId = typeof MigrationDefinitionIdSchema.Type;
 type MigrationRunId = typeof MigrationRunIdSchema.Type;
 type MigrationRunStateType = typeof MigrationRunState.Type;
+type MigrationDefinitionRunStateType = typeof MigrationDefinitionRunState.Type;
 type MigrationItemState = typeof MigrationItemStateSchema.Type;
 type SourceIdentitySnapshot = typeof SourceIdentitySnapshotSchema.Type;
 
@@ -70,6 +82,7 @@ const maxCustomObjectPageSize = 500;
 
 const PersistedMigrationRunState = Schema.Struct({
   definitionIds: Schema.Array(MigrationDefinitionIdSchema),
+  definitionStatus: Schema.optional(MigrationDefinitionRunStatus),
   execution: Schema.optional(
     Schema.Struct({
       adapter: Schema.String,
@@ -82,6 +95,7 @@ const PersistedMigrationRunState = Schema.Struct({
   status: Schema.Literals([
     "queued",
     "running",
+    "cancelling",
     "cancelled",
     "succeeded",
     "failed",
@@ -96,20 +110,36 @@ const LatestRunStateRecord = Schema.Struct({
     finishedAt: Schema.optional(Schema.DateFromString),
     runId: MigrationRunIdSchema,
     startedAt: Schema.DateFromString,
-    status: Schema.Literals([
-      "queued",
-      "running",
-      "cancelled",
-      "succeeded",
-      "failed",
-      "start-failed",
-    ]),
+    status: MigrationDefinitionRunStatus,
   }),
   namespace: Schema.String,
   recordKind: Schema.Literal("latest-run-state"),
   state: PersistedMigrationRunState,
 });
 type LatestRunStateRecord = typeof LatestRunStateRecord.Type;
+type PersistedMigrationRunStateType = typeof PersistedMigrationRunState.Type;
+
+const MigrationRunStateRecord = Schema.Struct({
+  formatVersion: Schema.Literal(formatVersion),
+  index: Schema.Struct({
+    runId: MigrationRunIdSchema,
+  }),
+  namespace: Schema.String,
+  projectionPredecessors: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        definitionId: MigrationDefinitionIdSchema,
+        runId: Schema.optional(MigrationRunIdSchema),
+      })
+    )
+  ),
+  recordKind: Schema.Literal("migration-run-state"),
+  state: PersistedMigrationRunState,
+});
+type MigrationRunStateRecord = typeof MigrationRunStateRecord.Type;
+type MigrationRunProjectionPredecessor = NonNullable<
+  MigrationRunStateRecord["projectionPredecessors"]
+>[number];
 
 const EncodedSourceCursorRecord = Schema.Struct({
   formatVersion: Schema.Literal(formatVersion),
@@ -295,6 +325,9 @@ const latestRunStateKey = (
 ): string =>
   `${namespace}__latest-run-state__${definitionHashSegment(definitionId)}`;
 
+const runStateKey = (namespace: string, runId: MigrationRunId): string =>
+  `${namespace}__migration-run-state__run-hash_${hashSegment(runId)}`;
+
 const definitionLockKey = (
   namespace: string,
   definitionId: MigrationDefinitionId
@@ -413,6 +446,14 @@ const isNotFoundSdkError = (cause: CommercetoolsSdkError): boolean =>
 const isConcurrentModificationSdkError = (
   cause: CommercetoolsSdkError
 ): boolean => hasStatusCode(cause.cause, 409);
+
+class LatestRunProjectionConflict extends Data.TaggedError(
+  "LatestRunProjectionConflict"
+)<{ readonly cause: CommercetoolsSdkError }> {}
+
+class MigrationRunStateConflict extends Data.TaggedError(
+  "MigrationRunStateConflict"
+)<{ readonly cause: CommercetoolsSdkError }> {}
 
 interface CustomObjectQueryPredicate {
   readonly variables: Readonly<Record<`var.${string}`, string>>;
@@ -808,7 +849,7 @@ const validateLatestRunStateRecord = (
       validateMetadata(
         key,
         "index.status",
-        record.state.status,
+        record.state.definitionStatus ?? record.state.status,
         record.index.status
       )
     ),
@@ -831,6 +872,29 @@ const validateLatestRunStateRecord = (
               record.state.definitionIds
             )
           )
+    )
+  );
+
+const validateRunStateRecord = (
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  key: string,
+  runId: MigrationRunId,
+  record: MigrationRunStateRecord
+): Effect.Effect<void, MigrationStoreError> =>
+  validateRecordNamespace(options, key, record).pipe(
+    Effect.andThen(
+      validateMetadata(
+        key,
+        "key",
+        runStateKey(options.namespace, record.index.runId),
+        key
+      )
+    ),
+    Effect.andThen(
+      validateMetadata(key, "index.runId", runId, record.index.runId)
+    ),
+    Effect.andThen(
+      validateMetadata(key, "state.runId", runId, record.state.runId)
     )
   );
 
@@ -878,7 +942,8 @@ const validateDefinitionLockRecord = (
 const validateRunStateRecords = (
   runId: MigrationRunId,
   definitionIds: readonly MigrationDefinitionId[],
-  runStates: readonly MigrationRunStateType[]
+  runStates: readonly PersistedMigrationRunStateType[],
+  options: { readonly allowIncompleteTerminalProjection?: boolean } = {}
 ): Effect.Effect<MigrationRunStateType, MigrationStoreError> =>
   Effect.gen(function* () {
     const current = runStates[0];
@@ -893,28 +958,43 @@ const validateRunStateRecords = (
     const key = `migration run ${runId}`;
 
     for (const runState of runStates) {
+      const isIncompleteTerminalProjection =
+        options.allowIncompleteTerminalProjection === true &&
+        current.status !== "queued" &&
+        current.status !== "running" &&
+        current.status !== "cancelling" &&
+        (runState.status === "queued" ||
+          runState.status === "running" ||
+          runState.status === "cancelling");
+
       yield* validateDefinitionIdsMetadata(
         key,
         "definitionIds",
         definitionIds,
         runState.definitionIds
       );
-      yield* validateMetadata(key, "status", current.status, runState.status);
+      if (!isIncompleteTerminalProjection) {
+        yield* validateMetadata(key, "status", current.status, runState.status);
+      }
       yield* validateDateMetadata(
         key,
         "startedAt",
         current.startedAt,
         runState.startedAt
       );
-      yield* validateDateMetadata(
-        key,
-        "finishedAt",
-        current.finishedAt,
-        runState.finishedAt
-      );
+      if (!isIncompleteTerminalProjection) {
+        yield* validateDateMetadata(
+          key,
+          "finishedAt",
+          current.finishedAt,
+          runState.finishedAt
+        );
+      }
     }
 
-    return current;
+    const { definitionStatus: _definitionStatus, ...runState } = current;
+
+    return runState;
   });
 
 const readCustomObjectOptional = (
@@ -1076,6 +1156,27 @@ const readRecordOptional = <A>(
         )
   );
 
+const readVersionedRecordOptional = <A>(
+  sdk: typeof CommercetoolsSdk.Service,
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  key: string,
+  schema: Schema.Codec<A, unknown, never, never>,
+  validateRecord: (
+    record: A
+  ) => Effect.Effect<void, MigrationStoreError> = () => Effect.void
+): Effect.Effect<
+  { readonly record: A; readonly version: number } | null,
+  MigrationStoreError
+> =>
+  Effect.flatMap(readCustomObjectOptional(sdk, options, key), (customObject) =>
+    customObject === null
+      ? Effect.succeed(null)
+      : decodeRecord(schema, customObject.value, key).pipe(
+          Effect.tap(validateRecord),
+          Effect.map((record) => ({ record, version: customObject.version }))
+        )
+  );
+
 const writeRecord = <A>(
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions,
@@ -1142,7 +1243,7 @@ const itemStateRecord = (
 const latestRunStateRecord = (
   options: ResolvedCommercetoolsMigrationStoreOptions,
   definitionId: MigrationDefinitionId,
-  state: MigrationRunStateType
+  state: PersistedMigrationRunStateType
 ): LatestRunStateRecord => ({
   formatVersion,
   index: {
@@ -1150,10 +1251,23 @@ const latestRunStateRecord = (
     ...(state.finishedAt === undefined ? {} : { finishedAt: state.finishedAt }),
     runId: state.runId,
     startedAt: state.startedAt,
-    status: state.status,
+    status: state.definitionStatus ?? state.status,
   },
   namespace: options.namespace,
   recordKind: "latest-run-state",
+  state,
+});
+
+const runStateRecord = (
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  state: MigrationRunStateType,
+  projectionPredecessors?: readonly MigrationRunProjectionPredecessor[]
+): MigrationRunStateRecord => ({
+  formatVersion,
+  index: { runId: state.runId },
+  namespace: options.namespace,
+  ...(projectionPredecessors === undefined ? {} : { projectionPredecessors }),
+  recordKind: "migration-run-state",
   state,
 });
 
@@ -1171,17 +1285,101 @@ const definitionLockRecord = (
   state: lock,
 });
 
-const readLatestRunState = (
+const readPersistedLatestRunState = (
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions,
   definitionId: MigrationDefinitionId
-): Effect.Effect<MigrationRunStateType | null, MigrationStoreError> => {
+): Effect.Effect<
+  PersistedMigrationRunStateType | null,
+  MigrationStoreError
+> => {
   const key = latestRunStateKey(options.namespace, definitionId);
 
   return readRecordOptional(sdk, options, key, LatestRunStateRecord, (record) =>
     validateLatestRunStateRecord(options, key, definitionId, record)
   ).pipe(Effect.map((record) => record?.state ?? null));
 };
+
+const readVersionedLatestRunStateRecord = (
+  sdk: typeof CommercetoolsSdk.Service,
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  definitionId: MigrationDefinitionId
+) => {
+  const key = latestRunStateKey(options.namespace, definitionId);
+
+  return readVersionedRecordOptional(
+    sdk,
+    options,
+    key,
+    LatestRunStateRecord,
+    (record) => validateLatestRunStateRecord(options, key, definitionId, record)
+  );
+};
+
+const readLatestRunState = (
+  sdk: typeof CommercetoolsSdk.Service,
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  definitionId: MigrationDefinitionId
+): Effect.Effect<MigrationDefinitionRunStateType | null, MigrationStoreError> =>
+  readPersistedLatestRunState(sdk, options, definitionId).pipe(
+    Effect.map((stored) => {
+      if (stored === null) {
+        return null;
+      }
+
+      const { definitionStatus: storedDefinitionStatus, ...runState } = stored;
+
+      return makeMigrationDefinitionRunState(
+        definitionId,
+        runState,
+        storedDefinitionStatus ?? runState.status
+      );
+    })
+  );
+
+const readVersionedPersistedRunStateRecord = (
+  sdk: typeof CommercetoolsSdk.Service,
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  runId: MigrationRunId
+): Effect.Effect<
+  { readonly record: MigrationRunStateRecord; readonly version: number } | null,
+  MigrationStoreError
+> => {
+  const key = runStateKey(options.namespace, runId);
+
+  return readVersionedRecordOptional(
+    sdk,
+    options,
+    key,
+    MigrationRunStateRecord,
+    (record) => validateRunStateRecord(options, key, runId, record)
+  );
+};
+
+const readPersistedRunStateRecord = (
+  sdk: typeof CommercetoolsSdk.Service,
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  runId: MigrationRunId
+): Effect.Effect<MigrationRunStateRecord | null, MigrationStoreError> =>
+  readVersionedPersistedRunStateRecord(sdk, options, runId).pipe(
+    Effect.map((versioned) => versioned?.record ?? null)
+  );
+
+const readPersistedRunState = (
+  sdk: typeof CommercetoolsSdk.Service,
+  options: ResolvedCommercetoolsMigrationStoreOptions,
+  runId: MigrationRunId
+): Effect.Effect<MigrationRunStateType | null, MigrationStoreError> =>
+  readPersistedRunStateRecord(sdk, options, runId).pipe(
+    Effect.map((record) => {
+      if (record === null) {
+        return null;
+      }
+
+      const { definitionStatus: _definitionStatus, ...runState } = record.state;
+      return runState;
+    })
+  );
 
 const listItemStates = (
   sdk: typeof CommercetoolsSdk.Service,
@@ -1260,44 +1458,159 @@ const summarizeItemStates = (
   return summary;
 };
 
-const readRunState = (
+const maximumLatestRunProjectionWriteAttempts = 5;
+const maximumMigrationRunStateWriteAttempts = 5;
+
+const writeLatestRunProjection = (
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions,
-  runId: MigrationRunId,
-  definitionIds: readonly MigrationDefinitionId[]
-): Effect.Effect<MigrationRunStateType, MigrationStoreError> =>
+  state: MigrationRunStateType,
+  definitionId: MigrationDefinitionId,
+  predecessorRunId: MigrationRunId | null | undefined,
+  definitionOutcomes?: MigrationDefinitionRunOutcomeMap,
+  remainingAttempts = maximumLatestRunProjectionWriteAttempts
+): Effect.Effect<void, MigrationStoreError> =>
   Effect.gen(function* () {
-    const runStates: MigrationRunStateType[] = [];
+    const key = latestRunStateKey(options.namespace, definitionId);
+    const current = yield* readVersionedLatestRunStateRecord(
+      sdk,
+      options,
+      definitionId
+    );
+    const canUpdateProjection = canReplaceLatestMigrationDefinitionRun({
+      currentRunId: current?.record.state.runId ?? null,
+      ...(predecessorRunId === undefined ? {} : { predecessorRunId }),
+      runId: state.runId,
+    });
 
-    for (const definitionId of definitionIds) {
-      const runState = yield* readLatestRunState(sdk, options, definitionId);
-
-      if (runState === null) {
-        return yield* storeError("Migration run was not found", runId);
-      }
-
-      runStates.push(runState);
+    if (!canUpdateProjection) {
+      return;
     }
 
-    return yield* validateRunStateRecords(runId, definitionIds, runStates);
+    if (current?.record.state.runId === state.runId) {
+      const transition = resolveMigrationRunTransition(
+        current.record.state.status,
+        state.status
+      );
+
+      if (!transition.accepted || transition.status !== state.status) {
+        return;
+      }
+    }
+
+    const record = latestRunStateRecord(options, definitionId, {
+      ...state,
+      definitionStatus: migrationDefinitionRunStatus(
+        definitionId,
+        state.status,
+        definitionOutcomes
+      ),
+    });
+    const value = yield* encodeRecord(LatestRunStateRecord, record, key);
+    const write = sdk
+      .request("customObjects.upsertMigrationStoreRecord", (project) =>
+        project.customObjects().post({
+          body: {
+            container: options.container,
+            key,
+            value,
+            version: current?.version ?? 0,
+          },
+        })
+      )
+      .pipe(
+        Effect.asVoid,
+        Effect.mapError((cause) =>
+          isConcurrentModificationSdkError(cause)
+            ? new LatestRunProjectionConflict({ cause })
+            : storeError(
+                `Unable to upsert migration store Custom Object ${key}`,
+                cause
+              )
+        )
+      );
+
+    return yield* write.pipe(
+      Effect.catchTag("LatestRunProjectionConflict", (conflict) =>
+        remainingAttempts > 1
+          ? writeLatestRunProjection(
+              sdk,
+              options,
+              state,
+              definitionId,
+              predecessorRunId,
+              definitionOutcomes,
+              remainingAttempts - 1
+            )
+          : Effect.fail(
+              storeError(
+                `Unable to update latest Migration Definition Run State ${definitionId} after concurrent changes`,
+                conflict.cause
+              )
+            )
+      )
+    );
   });
 
 const writeLatestRunState = (
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions,
   state: MigrationRunStateType,
-  definitionIds: readonly MigrationDefinitionId[]
-): Effect.Effect<void, MigrationStoreError> =>
+  definitionIds: readonly MigrationDefinitionId[],
+  projectionPredecessors:
+    | readonly MigrationRunProjectionPredecessor[]
+    | undefined,
+  runStateVersion: number,
+  definitionOutcomes?: MigrationDefinitionRunOutcomeMap
+): Effect.Effect<void, MigrationStoreError | MigrationRunStateConflict> =>
   Effect.gen(function* () {
-    for (const definitionId of definitionIds) {
-      const key = latestRunStateKey(options.namespace, definitionId);
+    const runKey = runStateKey(options.namespace, state.runId);
+    const value = yield* encodeRecord(
+      MigrationRunStateRecord,
+      runStateRecord(options, state, projectionPredecessors),
+      runKey
+    );
+    yield* sdk
+      .request("customObjects.upsertMigrationStoreRecord", (project) =>
+        project.customObjects().post({
+          body: {
+            container: options.container,
+            key: runKey,
+            value,
+            version: runStateVersion,
+          },
+        })
+      )
+      .pipe(
+        Effect.asVoid,
+        Effect.mapError((cause) =>
+          isConcurrentModificationSdkError(cause)
+            ? new MigrationRunStateConflict({ cause })
+            : storeError(
+                `Unable to upsert migration store Custom Object ${runKey}`,
+                cause
+              )
+        )
+      );
 
-      yield* writeRecord(
+    const predecessorByDefinitionId = new Map(
+      projectionPredecessors?.map((predecessor) => [
+        predecessor.definitionId,
+        predecessor.runId,
+      ])
+    );
+
+    for (const definitionId of definitionIds) {
+      const predecessorRunId = predecessorByDefinitionId.get(definitionId);
+      yield* writeLatestRunProjection(
         sdk,
         options,
-        key,
-        LatestRunStateRecord,
-        latestRunStateRecord(options, definitionId, state)
+        state,
+        definitionId,
+        predecessorByDefinitionId.has(definitionId)
+          ? (predecessorRunId ?? null)
+          : undefined,
+        definitionOutcomes
       );
     }
   });
@@ -1308,23 +1621,107 @@ const updateLatestRunState = (
   runId: MigrationRunId,
   definitionIds: readonly MigrationDefinitionId[],
   input: {
+    readonly definitionOutcomes?: MigrationDefinitionRunOutcomeMap;
     readonly execution?: MigrationExecutionHandle;
     readonly finish?: boolean;
+    readonly cancelIfRequested?: boolean;
+    readonly onlyIfActive?: boolean;
     readonly status?: MigrationRunStateType["status"];
-  }
+  },
+  remainingAttempts = maximumMigrationRunStateWriteAttempts
 ): Effect.Effect<MigrationRunStateType, MigrationStoreError> =>
   Effect.gen(function* () {
-    const current = yield* readRunState(sdk, options, runId, definitionIds);
+    const currentRecord = yield* readVersionedPersistedRunStateRecord(
+      sdk,
+      options,
+      runId
+    );
+
+    if (currentRecord === null) {
+      return yield* storeError("Migration run was not found", runId);
+    }
+
+    const current = (({ definitionStatus: _definitionStatus, ...runState }) =>
+      runState)(currentRecord.record.state);
+
+    yield* validateMigrationRunDefinitionIds(current, definitionIds);
+
+    if (
+      input.onlyIfActive === true &&
+      !isActiveMigrationRunStatus(current.status)
+    ) {
+      return current;
+    }
+
+    const transition = resolveMigrationRunTransition(
+      current.status,
+      input.status,
+      { cancelIfRequested: input.cancelIfRequested }
+    );
+
+    if (!transition.accepted) {
+      return current;
+    }
+
+    const status = transition.status;
+
     const updated: MigrationRunStateType = {
       ...current,
       ...(input.execution === undefined ? {} : { execution: input.execution }),
-      ...(input.finish === true ? { finishedAt: new Date() } : {}),
-      ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.finish === true
+        ? { finishedAt: current.finishedAt ?? new Date() }
+        : {}),
+      ...(status === undefined ? {} : { status }),
     };
+    const currentProjectionDefinitionIds: MigrationDefinitionId[] = [];
 
-    yield* writeLatestRunState(sdk, options, updated, definitionIds);
+    for (const definitionId of definitionIds) {
+      const latest = yield* readPersistedLatestRunState(
+        sdk,
+        options,
+        definitionId
+      );
 
-    return updated;
+      if (latest?.runId !== runId) {
+        continue;
+      }
+
+      yield* validateRunStateRecords(runId, definitionIds, [current, latest], {
+        allowIncompleteTerminalProjection: true,
+      });
+      currentProjectionDefinitionIds.push(definitionId);
+    }
+
+    const write = writeLatestRunState(
+      sdk,
+      options,
+      updated,
+      currentProjectionDefinitionIds,
+      currentRecord.record.projectionPredecessors,
+      currentRecord.version,
+      input.definitionOutcomes
+    );
+
+    return yield* write.pipe(
+      Effect.as(updated),
+      Effect.catchTag("MigrationRunStateConflict", (conflict) =>
+        remainingAttempts > 1
+          ? updateLatestRunState(
+              sdk,
+              options,
+              runId,
+              definitionIds,
+              input,
+              remainingAttempts - 1
+            )
+          : Effect.fail(
+              storeError(
+                `Unable to update Migration Run State ${runId} after concurrent changes`,
+                conflict.cause
+              )
+            )
+      )
+    );
   });
 
 const writeOrTransitionLatestRunState = (
@@ -1332,28 +1729,89 @@ const writeOrTransitionLatestRunState = (
   options: ResolvedCommercetoolsMigrationStoreOptions,
   runId: MigrationRunId,
   definitionIds: readonly MigrationDefinitionId[],
-  status: MigrationRunStateType["status"]
+  status: MigrationRunStateType["status"],
+  remainingAttempts = maximumMigrationRunStateWriteAttempts
 ): Effect.Effect<MigrationRunStateType, MigrationStoreError> =>
   Effect.gen(function* () {
-    const firstDefinitionId = definitionIds[0];
-    const current =
-      firstDefinitionId === undefined
+    const currentRecord = yield* readVersionedPersistedRunStateRecord(
+      sdk,
+      options,
+      runId
+    );
+    const currentRunState =
+      currentRecord === null
         ? null
-        : yield* readLatestRunState(sdk, options, firstDefinitionId);
+        : (({ definitionStatus: _definitionStatus, ...runState }) => runState)(
+            currentRecord.record.state
+          );
+
+    if (currentRunState !== null) {
+      yield* validateMigrationRunDefinitionIds(currentRunState, definitionIds);
+    }
+
+    const transition = resolveMigrationRunTransition(
+      currentRunState?.status,
+      status
+    );
+
+    if (currentRunState !== null && !transition.accepted) {
+      return currentRunState;
+    }
+
+    const projectionPredecessors =
+      currentRecord?.record.projectionPredecessors ??
+      (currentRecord === null
+        ? yield* Effect.forEach(definitionIds, (definitionId) =>
+            Effect.gen(function* () {
+              const latest = yield* readPersistedLatestRunState(
+                sdk,
+                options,
+                definitionId
+              );
+
+              return {
+                definitionId,
+                ...(latest === null ? {} : { runId: latest.runId }),
+              } satisfies MigrationRunProjectionPredecessor;
+            })
+          )
+        : undefined);
+
     const runState: MigrationRunStateType = {
-      ...(current?.runId === runId ? current : {}),
+      ...(currentRunState ?? {}),
       definitionIds,
       runId,
-      startedAt:
-        current?.runId === runId && current.startedAt !== undefined
-          ? current.startedAt
-          : new Date(),
-      status,
+      startedAt: currentRunState?.startedAt ?? new Date(),
+      status: transition.status ?? status,
     };
 
-    yield* writeLatestRunState(sdk, options, runState, definitionIds);
-
-    return runState;
+    return yield* writeLatestRunState(
+      sdk,
+      options,
+      runState,
+      definitionIds,
+      projectionPredecessors,
+      currentRecord?.version ?? 0
+    ).pipe(
+      Effect.as(runState),
+      Effect.catchTag("MigrationRunStateConflict", (conflict) =>
+        remainingAttempts > 1
+          ? writeOrTransitionLatestRunState(
+              sdk,
+              options,
+              runId,
+              definitionIds,
+              status,
+              remainingAttempts - 1
+            )
+          : Effect.fail(
+              storeError(
+                `Unable to update Migration Run State ${runId} after concurrent changes`,
+                conflict.cause
+              )
+            )
+      )
+    );
   });
 
 const makeService = (
@@ -1634,21 +2092,47 @@ const makeService = (
     readLatestRunState(sdk, options, definitionId)
   );
 
-  const completeRun = Effect.fn("CommercetoolsMigrationStore.completeRun")(
-    (runId: MigrationRunId, definitionIds: readonly MigrationDefinitionId[]) =>
-      updateLatestRunState(sdk, options, runId, definitionIds, {
-        finish: true,
-        status: "succeeded",
-      })
+  const getRunState = Effect.fn("CommercetoolsMigrationStore.getRunState")(
+    (runId: MigrationRunId) => readPersistedRunState(sdk, options, runId)
   );
 
-  const failRun = Effect.fn("CommercetoolsMigrationStore.failRun")(
-    (runId: MigrationRunId, definitionIds: readonly MigrationDefinitionId[]) =>
-      updateLatestRunState(sdk, options, runId, definitionIds, {
+  const completeRun = Effect.fn("CommercetoolsMigrationStore.completeRun")(
+    function* (
+      runId: MigrationRunId,
+      definitionIds: readonly MigrationDefinitionId[],
+      definitionOutcomes: readonly MigrationDefinitionRunOutcome[]
+    ) {
+      const outcomeByDefinitionId =
+        yield* validateMigrationDefinitionRunOutcomes(
+          definitionIds,
+          definitionOutcomes
+        );
+
+      return yield* updateLatestRunState(sdk, options, runId, definitionIds, {
+        cancelIfRequested: true,
+        definitionOutcomes: outcomeByDefinitionId,
         finish: true,
-        status: "failed",
-      })
+        status: "succeeded",
+      });
+    }
   );
+
+  const failRun = Effect.fn("CommercetoolsMigrationStore.failRun")(function* (
+    runId: MigrationRunId,
+    definitionIds: readonly MigrationDefinitionId[],
+    definitionOutcomes: readonly MigrationDefinitionRunOutcome[]
+  ) {
+    const outcomeByDefinitionId = yield* validateMigrationDefinitionRunOutcomes(
+      definitionIds,
+      definitionOutcomes
+    );
+
+    return yield* updateLatestRunState(sdk, options, runId, definitionIds, {
+      definitionOutcomes: outcomeByDefinitionId,
+      finish: true,
+      status: "failed",
+    });
+  });
 
   const markRunCancelled = Effect.fn(
     "CommercetoolsMigrationStore.markRunCancelled"
@@ -1656,6 +2140,15 @@ const makeService = (
     updateLatestRunState(sdk, options, runId, definitionIds, {
       finish: true,
       status: "cancelled",
+    })
+  );
+
+  const requestRunCancellation = Effect.fn(
+    "CommercetoolsMigrationStore.requestRunCancellation"
+  )((runId: MigrationRunId, definitionIds: readonly MigrationDefinitionId[]) =>
+    updateLatestRunState(sdk, options, runId, definitionIds, {
+      onlyIfActive: true,
+      status: "cancelling",
     })
   );
 
@@ -1832,6 +2325,7 @@ const makeService = (
     upsertItemState,
     createRunId: Effect.sync(() => toMigrationRunId(`run-${randomUUID()}`)),
     getLatestRunState,
+    getRunState,
     beginRun,
     queueRun,
     completeRun,
@@ -1839,6 +2333,7 @@ const makeService = (
     attachRunExecution,
     markRunStartFailed,
     markRunCancelled,
+    requestRunCancellation,
     acquireDefinitionLock,
     getDefinitionLock,
     assertDefinitionLocks,

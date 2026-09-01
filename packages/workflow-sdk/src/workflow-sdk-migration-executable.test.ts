@@ -1,9 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Fiber, Layer, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import {
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecutable,
+  type MigrationRunSummary,
   MigrationRuntimeError,
   MigrationStore,
   MigrationStoreError,
@@ -13,21 +15,27 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
-import type { MigrationExecutionEnvelopeType } from "migrate-sdk/core";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
-import { Run, start as workflowStart } from "workflow/api";
+import { Run } from "workflow/api";
+import type { WorkflowSdkMigrationExecutionEnvelope } from "./migration-envelope.ts";
+import {
+  WorkflowSdkClient,
+  WorkflowSdkClientError,
+  type WorkflowSdkMigrationWorkflow,
+  type WorkflowSdkRun,
+  type WorkflowSdkStartOptions,
+  type WorkflowSdkWorkflowMetadata,
+} from "./workflow-sdk-client.ts";
 import {
   WorkflowSdkMigrationExecutable,
   WorkflowSdkMigrationExecutableAttachError,
+  type WorkflowSdkMigrationExecutableLayerOptions,
+  WorkflowSdkMigrationExecutableObservationError,
   WorkflowSdkMigrationExecutableStartError,
-  type WorkflowSdkMigrationWorkflow,
-  type WorkflowSdkStart,
-  type WorkflowSdkStartOptions,
-  type WorkflowSdkWorkflowMetadata,
 } from "./workflow-sdk-migration-executable.ts";
 
-type MigrationExecutionEnvelope = MigrationExecutionEnvelopeType;
+type MigrationExecutionEnvelope = WorkflowSdkMigrationExecutionEnvelope;
 
 const ArticleSource = Schema.Struct({
   title: Schema.String,
@@ -55,13 +63,124 @@ const makeArticlesSource = () =>
 
 const migrationExecutionWorkflow = async () => undefined;
 const makeWorkflowRun = (runId: string) => new Run<unknown>(runId);
-const assertWorkflowSdkStart = (_start: WorkflowSdkStart) => undefined;
-assertWorkflowSdkStart(workflowStart);
+const makeObservedRunSummary = (runId: string): MigrationRunSummary => ({
+  definitions: [],
+  finishedAt: new Date("2026-08-29T12:00:01.000Z"),
+  runId: toMigrationRunId(runId),
+  startedAt: new Date("2026-08-29T12:00:00.000Z"),
+  status: "succeeded",
+});
+const makeObservedWorkflowRun = (
+  runId: string,
+  outcome: "cancelled" | "failed" | "succeeded"
+): WorkflowSdkRun =>
+  ({
+    runId,
+    get returnValue() {
+      return outcome === "succeeded"
+        ? Promise.resolve(makeObservedRunSummary(runId))
+        : Promise.reject(new Error(`Workflow ${outcome}`));
+    },
+    get status() {
+      return Promise.resolve(outcome === "succeeded" ? "completed" : outcome);
+    },
+  }) as unknown as WorkflowSdkRun;
+const makeProgressWorkflowRun = (
+  runId: string,
+  onReadable?: (options: unknown) => void
+): WorkflowSdkRun => {
+  let complete: () => void = () => undefined;
+  const terminal = new Promise<MigrationRunSummary>((resolve) => {
+    complete = () => resolve(makeObservedRunSummary("run-progress"));
+  });
+
+  return {
+    runId,
+    getReadable: (options: {
+      readonly namespace?: string;
+      readonly startIndex?: number;
+    }) => {
+      onReadable?.(options);
+
+      if (options.startIndex === undefined) {
+        return Object.assign(new ReadableStream(), {
+          getTailIndex: () => Promise.resolve(5),
+        });
+      }
+
+      return Object.assign(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              counts: {
+                failed: 0,
+                migrated: 1,
+                needsUpdate: 0,
+                skipped: 0,
+                unchanged: 0,
+              },
+              definitionId: "articles",
+              kind: "source-cursor-window-completed",
+              runId: "run-progress",
+            });
+            controller.close();
+            setTimeout(complete, 0);
+          },
+        }),
+        {
+          getTailIndex: () => Promise.resolve(0),
+        }
+      );
+    },
+    get returnValue() {
+      return terminal;
+    },
+    get status() {
+      return Promise.resolve("completed");
+    },
+  } as unknown as WorkflowSdkRun;
+};
 type WorkflowSdkStartCall = [
   workflow: WorkflowSdkMigrationWorkflow | WorkflowSdkWorkflowMetadata,
   args: [MigrationExecutionEnvelope],
   options: WorkflowSdkStartOptions | undefined,
 ];
+type WorkflowSdkStart = (
+  ...args: WorkflowSdkStartCall
+) => Promise<WorkflowSdkRun>;
+
+interface WorkflowSdkMigrationExecutableTestLayerOptions
+  extends WorkflowSdkMigrationExecutableLayerOptions {
+  readonly getRun?: (executionId: string) => WorkflowSdkRun;
+  readonly start: WorkflowSdkStart;
+}
+
+const makeWorkflowSdkMigrationExecutableTestLayer = ({
+  getRun,
+  start,
+  ...options
+}: WorkflowSdkMigrationExecutableTestLayerOptions) =>
+  WorkflowSdkMigrationExecutable.layer(options).pipe(
+    Layer.provide(
+      Layer.succeed(WorkflowSdkClient, {
+        getRun: (executionId) =>
+          Effect.try({
+            try: () => getRun?.(executionId) ?? makeWorkflowRun(executionId),
+            catch: (cause) =>
+              new WorkflowSdkClientError({
+                cause,
+                operation: "get-run",
+              }),
+          }),
+        start: (input) =>
+          Effect.tryPromise({
+            try: () => start(input.workflow, [input.envelope], input.options),
+            catch: (cause) =>
+              new WorkflowSdkClientError({ cause, operation: "start" }),
+          }),
+      })
+    )
+  );
 
 const makeFixture = (
   input: {
@@ -136,6 +255,317 @@ const makeFixture = (
 
 describe("WorkflowSdkMigrationExecutable", () => {
   it.effect(
+    "reattaches to Workflow SDK execution identities for native observation",
+    () =>
+      Effect.gen(function* () {
+        const cases = [
+          { expected: { kind: "cancelled" }, outcome: "cancelled" },
+          {
+            expected: {
+              cause: expect.objectContaining({ message: "Workflow failed" }),
+              kind: "failed",
+            },
+            outcome: "failed",
+          },
+        ] as const;
+
+        for (const testCase of cases) {
+          const executionId = `wrun-observe-${testCase.outcome}`;
+          const executable = yield* MigrationExecutable.pipe(
+            Effect.provide(
+              makeWorkflowSdkMigrationExecutableTestLayer({
+                getRun: (runId) =>
+                  makeObservedWorkflowRun(runId, testCase.outcome),
+                start: () => Promise.resolve(makeWorkflowRun("unused")),
+                workflow: migrationExecutionWorkflow,
+              })
+            )
+          );
+          const waitForExecution = executable.waitForExecution;
+
+          if (waitForExecution === undefined) {
+            return yield* Effect.die(
+              "Expected Workflow SDK execution observation"
+            );
+          }
+
+          const result = yield* waitForExecution({
+            adapter: "workflow-sdk",
+            executionId,
+          });
+
+          expect(result).toEqual(testCase.expected);
+        }
+
+        const succeededExecutionId = "wrun-observe-succeeded";
+        const executable = yield* MigrationExecutable.pipe(
+          Effect.provide(
+            makeWorkflowSdkMigrationExecutableTestLayer({
+              getRun: (runId) => makeObservedWorkflowRun(runId, "succeeded"),
+              start: () => Promise.resolve(makeWorkflowRun("unused")),
+              workflow: migrationExecutionWorkflow,
+            })
+          )
+        );
+        const waitForExecution = executable.waitForExecution;
+
+        if (waitForExecution === undefined) {
+          return yield* Effect.die(
+            "Expected Workflow SDK execution observation"
+          );
+        }
+
+        expect(
+          yield* waitForExecution({
+            adapter: "workflow-sdk",
+            executionId: succeededExecutionId,
+          })
+        ).toEqual({
+          kind: "succeeded",
+          summary: makeObservedRunSummary(succeededExecutionId),
+        });
+      })
+  );
+
+  it.effect(
+    "interrupts observation without leaving Workflow SDK polling active",
+    () =>
+      Effect.gen(function* () {
+        let returnValueReads = 0;
+        let statusReads = 0;
+        let resolveObservationStarted: () => void = () => undefined;
+        const observationStarted = new Promise<void>((resolve) => {
+          resolveObservationStarted = resolve;
+        });
+        const pendingRun = {
+          runId: "wrun-interrupted",
+          get returnValue() {
+            returnValueReads += 1;
+            resolveObservationStarted();
+            return new Promise<never>(() => undefined);
+          },
+          get status() {
+            statusReads += 1;
+            resolveObservationStarted();
+            return Promise.resolve("running");
+          },
+        } as unknown as WorkflowSdkRun;
+        const executable = yield* MigrationExecutable.pipe(
+          Effect.provide(
+            makeWorkflowSdkMigrationExecutableTestLayer({
+              getRun: () => pendingRun,
+              start: () => Promise.resolve(makeWorkflowRun("unused")),
+              workflow: migrationExecutionWorkflow,
+            })
+          )
+        );
+        const waitForExecution = executable.waitForExecution;
+
+        if (waitForExecution === undefined) {
+          return yield* Effect.die(
+            "Expected Workflow SDK execution observation"
+          );
+        }
+
+        const observationFiber = yield* waitForExecution({
+          adapter: "workflow-sdk",
+          executionId: pendingRun.runId,
+        }).pipe(Effect.forkChild);
+
+        yield* Effect.promise(() => observationStarted);
+        expect(statusReads).toBe(1);
+        expect(returnValueReads).toBe(0);
+
+        yield* Fiber.interrupt(observationFiber);
+        yield* TestClock.adjust("5 seconds");
+
+        expect(statusReads).toBe(1);
+        expect(returnValueReads).toBe(0);
+      })
+  );
+
+  it.effect("streams committed cursor checkpoints during observation", () =>
+    Effect.gen(function* () {
+      const checkpoints: unknown[] = [];
+      const readableOptions: unknown[] = [];
+      const executable = yield* MigrationExecutable.pipe(
+        Effect.provide(
+          makeWorkflowSdkMigrationExecutableTestLayer({
+            getRun: (runId) =>
+              makeProgressWorkflowRun(runId, (options) =>
+                readableOptions.push(options)
+              ),
+            start: () => Promise.resolve(makeWorkflowRun("unused")),
+            workflow: migrationExecutionWorkflow,
+          })
+        )
+      );
+      const waitForExecution = executable.waitForExecution;
+
+      if (waitForExecution === undefined) {
+        return yield* Effect.die("Expected Workflow SDK execution observation");
+      }
+
+      const result = yield* waitForExecution(
+        {
+          adapter: "workflow-sdk",
+          executionId: "wrun-progress",
+        },
+        {
+          onProgressCheckpoint: (checkpoint) =>
+            Effect.sync(() => checkpoints.push(checkpoint)),
+        }
+      );
+
+      expect(result).toEqual({
+        kind: "succeeded",
+        summary: makeObservedRunSummary("run-progress"),
+      });
+      expect(readableOptions).toEqual([
+        {
+          namespace: "migrate-sdk-progress",
+        },
+        {
+          namespace: "migrate-sdk-progress",
+          startIndex: 5,
+        },
+      ]);
+      expect(checkpoints).toEqual([
+        {
+          counts: {
+            failed: 0,
+            migrated: 1,
+            needsUpdate: 0,
+            skipped: 0,
+            unchanged: 0,
+          },
+          definitionId: toMigrationDefinitionId("articles"),
+          kind: "source-cursor-window-completed",
+          runId: toMigrationRunId("run-progress"),
+        },
+      ]);
+    })
+  );
+
+  it.effect(
+    "reports progress stream failures through provider observation",
+    () =>
+      Effect.gen(function* () {
+        const progressFailure = new Error("Progress stream unavailable");
+        const run = {
+          runId: "wrun-progress-failure",
+          getReadable: () =>
+            Object.assign(new ReadableStream(), {
+              getTailIndex: () => Promise.reject(progressFailure),
+            }),
+          get returnValue() {
+            return new Promise<never>(() => undefined);
+          },
+          get status() {
+            return Promise.resolve("running");
+          },
+        } as unknown as WorkflowSdkRun;
+        const executable = yield* MigrationExecutable.pipe(
+          Effect.provide(
+            makeWorkflowSdkMigrationExecutableTestLayer({
+              getRun: () => run,
+              start: () => Promise.resolve(makeWorkflowRun("unused")),
+              workflow: migrationExecutionWorkflow,
+            })
+          )
+        );
+        const waitForExecution = executable.waitForExecution;
+
+        if (waitForExecution === undefined) {
+          return yield* Effect.die(
+            "Expected Workflow SDK execution observation"
+          );
+        }
+
+        const error = yield* waitForExecution(
+          {
+            adapter: "workflow-sdk",
+            executionId: run.runId,
+          },
+          { onProgressCheckpoint: () => Effect.void }
+        ).pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(
+          WorkflowSdkMigrationExecutableObservationError
+        );
+
+        if (
+          !(error instanceof WorkflowSdkMigrationExecutableObservationError)
+        ) {
+          return yield* Effect.die("Expected a progress observation error");
+        }
+
+        expect(error.cause).toBe(progressFailure);
+      })
+  );
+
+  it.effect("reattaches an unobserved provider run by execution id", () =>
+    Effect.gen(function* () {
+      const { registry } = makeFixture();
+      let resolveTerminal: () => void = () => undefined;
+      const terminal = new Promise<void>((resolve) => {
+        resolveTerminal = resolve;
+      });
+      const startedRun = {
+        runId: "wrun-unobserved",
+        get returnValue() {
+          return terminal;
+        },
+        get status() {
+          return Promise.resolve("running");
+        },
+      } as unknown as WorkflowSdkRun;
+      let getRunCalls = 0;
+      const executable = yield* MigrationExecutable.pipe(
+        Effect.provide(
+          makeWorkflowSdkMigrationExecutableTestLayer({
+            getRun: (runId) => {
+              getRunCalls += 1;
+              return makeObservedWorkflowRun(runId, "succeeded");
+            },
+            start: () => Promise.resolve(startedRun),
+            workflow: migrationExecutionWorkflow,
+          })
+        )
+      );
+      const plan = yield* registry.executable().planRun({
+        definitionIds: ["articles"],
+      });
+      const started = yield* executable.startRun(plan);
+
+      expect(started.kind).toBe("started");
+      resolveTerminal();
+      yield* Effect.promise(
+        () => new Promise<void>((resolve) => queueMicrotask(resolve))
+      );
+
+      if (
+        started.kind !== "started" ||
+        started.execution.executionId === undefined ||
+        executable.waitForExecution === undefined
+      ) {
+        return yield* Effect.die("Expected an observable Workflow SDK run");
+      }
+
+      const observed = yield* executable.waitForExecution({
+        adapter: started.execution.adapter,
+        executionId: started.execution.executionId,
+      });
+
+      expect(observed).toEqual({
+        kind: "succeeded",
+        summary: makeObservedRunSummary(started.execution.executionId),
+      });
+      expect(getRunCalls).toBe(1);
+    })
+  );
+
+  it.effect(
     "starts executable run plans through Workflow SDK and attaches the workflow run id",
     () =>
       Effect.gen(function* () {
@@ -151,7 +581,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
 
         const result = yield* MigrationExecutable.startRun(plan).pipe(
           Effect.provide(
-            WorkflowSdkMigrationExecutable.layer({
+            makeWorkflowSdkMigrationExecutableTestLayer({
               start,
               workflow: migrationExecutionWorkflow,
               startOptions: {
@@ -221,7 +651,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
 
       const result = yield* MigrationExecutable.startRollback(plan).pipe(
         Effect.provide(
-          WorkflowSdkMigrationExecutable.layer({
+          makeWorkflowSdkMigrationExecutableTestLayer({
             start,
             workflow: migrationExecutionWorkflow,
           })
@@ -302,7 +732,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
 
       const result = yield* MigrationExecutable.startRollback(plan).pipe(
         Effect.provide(
-          WorkflowSdkMigrationExecutable.layer({
+          makeWorkflowSdkMigrationExecutableTestLayer({
             start,
             workflow: migrationExecutionWorkflow,
           })
@@ -369,7 +799,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -465,7 +895,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -527,7 +957,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRollback(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -562,7 +992,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -604,7 +1034,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -644,7 +1074,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -688,7 +1118,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const error = yield* Effect.flip(
           MigrationExecutable.startRun(plan).pipe(
             Effect.provide(
-              WorkflowSdkMigrationExecutable.layer({
+              makeWorkflowSdkMigrationExecutableTestLayer({
                 start,
                 workflow: migrationExecutionWorkflow,
               })
@@ -731,7 +1161,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         const { articlesId, registry, storeState } = makeFixture();
         const start: WorkflowSdkStart = () =>
           Promise.resolve(makeWorkflowRun("wrun_1"));
-        const layer = WorkflowSdkMigrationExecutable.layer({
+        const layer = makeWorkflowSdkMigrationExecutableTestLayer({
           start,
           workflow: migrationExecutionWorkflow,
         });

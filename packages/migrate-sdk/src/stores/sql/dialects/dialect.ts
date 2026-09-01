@@ -90,7 +90,6 @@ export interface SqlMigrationStoreDialect {
   readonly deleteOwnedLock: (
     row: SqlOwnedLockRow
   ) => Effect.Effect<boolean, SqlError.SqlError>;
-  readonly initialize: Effect.Effect<void, SqlError.SqlError>;
   readonly listOrphanItemStateRows: (
     query: SqlOrphanItemStatePageQuery
   ) => Effect.Effect<readonly unknown[], SqlError.SqlError>;

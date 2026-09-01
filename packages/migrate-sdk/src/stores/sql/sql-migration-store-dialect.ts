@@ -21,13 +21,12 @@ export type {
 
 export const makeSqlMigrationStoreDialect = (
   sql: SqlClient.SqlClient,
-  names: SqlMigrationStoreTableNames,
-  prefix: string
+  names: SqlMigrationStoreTableNames
 ): SqlMigrationStoreDialect | null =>
   sql.onDialect({
-    pg: () => makePostgresOrSqliteDialect(sql, names, prefix),
-    sqlite: () => makePostgresOrSqliteDialect(sql, names, prefix),
-    mysql: () => makeMysqlDialect(sql, names, prefix),
-    mssql: () => makeMssqlDialect(sql, names, prefix),
+    pg: () => makePostgresOrSqliteDialect(sql, names),
+    sqlite: () => makePostgresOrSqliteDialect(sql, names),
+    mysql: () => makeMysqlDialect(sql, names),
+    mssql: () => makeMssqlDialect(sql, names),
     clickhouse: () => null,
   });

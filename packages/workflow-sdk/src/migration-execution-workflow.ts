@@ -1,110 +1,67 @@
-export interface WorkflowSdkMigrationDefinitionLock {
-  readonly definitionId: string;
-  readonly ownerRunId: string;
-  readonly token: string;
-}
+import type {
+  MigrationDefinitionRunSummary,
+  MigrationRunCursorWindowResult,
+  MigrationRunCursorWindowState,
+  MigrationRunRollbackOrphansPageResult,
+  MigrationRunRollbackOrphansState,
+  MigrationRunSummary,
+} from "migrate-sdk/core";
+import type { WorkflowSdkMigrationRunEnvelope } from "./migration-envelope.ts";
 
-export interface WorkflowSdkMigrationRunEnvelope {
-  readonly executionDefinitionIds: readonly string[];
-  readonly kind: "run";
-  readonly locks: readonly WorkflowSdkMigrationDefinitionLock[];
-  readonly registryId: string;
-  readonly request: unknown;
-  readonly runId: string;
-  readonly scopeDefinitionIds: readonly string[];
-}
+export type { WorkflowSdkMigrationRunEnvelope } from "./migration-envelope.ts";
 
-export interface WorkflowSdkMigrationDefinitionRunCounts {
-  readonly failed: number;
-  readonly migrated: number;
-  readonly needsUpdate: number;
-  readonly orphaned?: number;
-  readonly rollbackFailed?: number;
-  readonly rolledBack?: number;
-  readonly skipped: number;
-  readonly unchanged: number;
-}
+type WorkflowSdkMigrationDefinitionId =
+  WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number];
 
-export interface WorkflowSdkMigrationDefinitionRunSummary {
-  readonly counts: WorkflowSdkMigrationDefinitionRunCounts;
-  readonly definitionId: string;
-  readonly status: "failed" | "skipped" | "succeeded";
-}
+export type WorkflowSdkMigrationDefinitionRunCounts =
+  MigrationDefinitionRunSummary["counts"];
 
-export interface WorkflowSdkMigrationRunSummary {
-  readonly definitions: readonly WorkflowSdkMigrationDefinitionRunSummary[];
-  readonly finishedAt: Date;
-  readonly runId: string;
-  readonly startedAt: Date;
-  readonly status: "failed" | "succeeded";
-}
+export type WorkflowSdkMigrationDefinitionRunSummary =
+  MigrationDefinitionRunSummary;
 
-export interface WorkflowSdkMigrationRunCursorWindowState {
-  readonly counts: WorkflowSdkMigrationDefinitionRunCounts;
-  readonly excludedSourceIdentities: readonly string[];
-  readonly phase: "scan";
-}
+export type WorkflowSdkMigrationRunSummary = MigrationRunSummary;
 
-export interface WorkflowSdkMigrationRunRollbackOrphansState {
-  readonly afterIdentity?: string;
-  readonly orphaned: number;
-  readonly phase: "rollback";
-  readonly rollbackFailed: number;
-  readonly rolledBack: number;
-}
+export type WorkflowSdkMigrationRunCursorWindowState =
+  MigrationRunCursorWindowState;
+
+export type WorkflowSdkMigrationRunRollbackOrphansState =
+  MigrationRunRollbackOrphansState;
 
 export type WorkflowSdkMigrationRunRollbackOrphansPageResult =
-  | {
-      readonly kind: "cancelled";
-      readonly state: WorkflowSdkMigrationRunRollbackOrphansState;
-    }
-  | {
-      readonly kind: "continue";
-      readonly state: WorkflowSdkMigrationRunRollbackOrphansState;
-    }
-  | {
-      readonly kind: "completed";
-      readonly state: WorkflowSdkMigrationRunRollbackOrphansState;
-    };
+  MigrationRunRollbackOrphansPageResult;
 
 export type WorkflowSdkMigrationRunCursorWindowResult =
-  | {
-      readonly kind: "cancelled";
-      readonly state: WorkflowSdkMigrationRunCursorWindowState;
-    }
-  | {
-      readonly kind: "continue";
-      readonly state: WorkflowSdkMigrationRunCursorWindowState;
-    }
-  | {
-      readonly kind: "definition-completed";
-      readonly state: WorkflowSdkMigrationRunCursorWindowState;
-      readonly summary: WorkflowSdkMigrationDefinitionRunSummary;
-    };
+  MigrationRunCursorWindowResult;
 
 export interface WorkflowSdkMigrationRunSteps {
   readonly begin: (
     envelope: WorkflowSdkMigrationRunEnvelope
   ) => Promise<{ readonly rollbackOrphans: boolean }>;
+  readonly cancel: (input: {
+    readonly definitions: WorkflowSdkMigrationRunSummary["definitions"];
+    readonly envelope: WorkflowSdkMigrationRunEnvelope;
+  }) => Promise<WorkflowSdkMigrationRunSummary>;
   readonly complete: (input: {
     readonly definitions: WorkflowSdkMigrationRunSummary["definitions"];
     readonly envelope: WorkflowSdkMigrationRunEnvelope;
   }) => Promise<WorkflowSdkMigrationRunSummary>;
   readonly executeCursorWindow: (input: {
-    readonly definitionId: string;
+    readonly definitionId: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number];
     readonly envelope: WorkflowSdkMigrationRunEnvelope;
     readonly runId: WorkflowSdkMigrationRunEnvelope["runId"];
     readonly state: WorkflowSdkMigrationRunCursorWindowState;
   }) => Promise<WorkflowSdkMigrationRunCursorWindowResult>;
   readonly executeRollbackOrphansPage: (input: {
-    readonly definitionId: string;
+    readonly definitionId: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number];
     readonly envelope: WorkflowSdkMigrationRunEnvelope;
     readonly runId: WorkflowSdkMigrationRunEnvelope["runId"];
     readonly state: WorkflowSdkMigrationRunRollbackOrphansState;
   }) => Promise<WorkflowSdkMigrationRunRollbackOrphansPageResult>;
   readonly fail: (input: {
+    readonly definitions: WorkflowSdkMigrationRunSummary["definitions"];
     readonly envelope: WorkflowSdkMigrationRunEnvelope;
     readonly error: unknown;
+    readonly failedDefinitionId?: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number];
   }) => Promise<void>;
 }
 
@@ -134,16 +91,78 @@ const serializeWorkflowError = (error: unknown) => {
   };
 };
 
+const executeWorkflowRollbackOrphans = async ({
+  completedDefinitions,
+  definitions,
+  envelope,
+  onActiveDefinition,
+  steps,
+}: {
+  readonly completedDefinitions: WorkflowSdkMigrationDefinitionRunSummary[];
+  readonly definitions: WorkflowSdkMigrationDefinitionRunSummary[];
+  readonly envelope: WorkflowSdkMigrationRunEnvelope;
+  readonly onActiveDefinition: (
+    definitionId: WorkflowSdkMigrationDefinitionId | undefined
+  ) => void;
+  readonly steps: WorkflowSdkMigrationRunSteps;
+}): Promise<boolean> => {
+  for (const definitionId of [...envelope.executionDefinitionIds].reverse()) {
+    onActiveDefinition(definitionId);
+    let rollbackState: WorkflowSdkMigrationRunRollbackOrphansState = {
+      orphaned: 0,
+      phase: "rollback",
+      rollbackFailed: 0,
+      rolledBack: 0,
+    };
+
+    while (true) {
+      const rollback = await steps.executeRollbackOrphansPage({
+        definitionId,
+        envelope,
+        runId: envelope.runId,
+        state: rollbackState,
+      });
+      rollbackState = rollback.state;
+
+      if (rollback.kind === "cancelled") {
+        return true;
+      }
+      if (rollback.kind === "completed") {
+        break;
+      }
+    }
+
+    const index = definitions.findIndex(
+      (definition) => definition.definitionId === definitionId
+    );
+    const scan = definitions[index];
+
+    if (scan !== undefined) {
+      const completed = mergeRollbackOrphansCounts(scan, rollbackState);
+      definitions[index] = completed;
+      completedDefinitions.push(completed);
+    }
+    onActiveDefinition(undefined);
+  }
+
+  return false;
+};
+
 export const runMigrationExecutionWorkflow = async (
   envelope: WorkflowSdkMigrationRunEnvelope,
   steps: WorkflowSdkMigrationRunSteps
 ): Promise<WorkflowSdkMigrationRunSummary> => {
   const definitions: WorkflowSdkMigrationDefinitionRunSummary[] = [];
+  const completedDefinitions: WorkflowSdkMigrationDefinitionRunSummary[] = [];
+  let activeDefinitionId: WorkflowSdkMigrationDefinitionId | undefined;
+  let rollbackOrphans = false;
 
   try {
     const execution = await steps.begin(envelope);
+    rollbackOrphans = execution.rollbackOrphans;
 
     for (const definitionId of envelope.executionDefinitionIds) {
+      activeDefinitionId = definitionId;
       let state = emptyCursorWindowState;
 
       while (true) {
@@ -157,19 +176,24 @@ export const runMigrationExecutionWorkflow = async (
         state = result.state;
 
         if (result.kind === "cancelled") {
-          throw new Error(
-            `Migration run was cancelled while scanning ${definitionId}`
-          );
+          return await steps.cancel({
+            definitions: completedDefinitions,
+            envelope,
+          });
         }
 
         if (result.kind === "definition-completed") {
           definitions.push(result.summary);
+          if (!rollbackOrphans) {
+            completedDefinitions.push(result.summary);
+          }
+          activeDefinitionId = undefined;
           break;
         }
       }
     }
 
-    if (execution.rollbackOrphans) {
+    if (rollbackOrphans) {
       for (let index = 0; index < definitions.length; index += 1) {
         const summary = definitions[index];
         if (summary !== undefined) {
@@ -183,52 +207,34 @@ export const runMigrationExecutionWorkflow = async (
     }
 
     if (
-      execution.rollbackOrphans &&
+      rollbackOrphans &&
       definitions.every((definition) => definition.status === "succeeded")
     ) {
-      for (const definitionId of [
-        ...envelope.executionDefinitionIds,
-      ].reverse()) {
-        let rollbackState: WorkflowSdkMigrationRunRollbackOrphansState = {
-          orphaned: 0,
-          phase: "rollback",
-          rollbackFailed: 0,
-          rolledBack: 0,
-        };
+      const cancelled = await executeWorkflowRollbackOrphans({
+        completedDefinitions,
+        definitions,
+        envelope,
+        onActiveDefinition: (definitionId) => {
+          activeDefinitionId = definitionId;
+        },
+        steps,
+      });
 
-        while (true) {
-          const rollback = await steps.executeRollbackOrphansPage({
-            definitionId,
-            envelope,
-            runId: envelope.runId,
-            state: rollbackState,
-          });
-          rollbackState = rollback.state;
-
-          if (rollback.kind === "cancelled") {
-            throw new Error(
-              `Migration run was cancelled while rolling back orphans for ${definitionId}`
-            );
-          }
-          if (rollback.kind === "completed") {
-            break;
-          }
-        }
-
-        const index = definitions.findIndex(
-          (definition) => definition.definitionId === definitionId
-        );
-        const scan = definitions[index];
-
-        if (scan !== undefined) {
-          definitions[index] = mergeRollbackOrphansCounts(scan, rollbackState);
-        }
+      if (cancelled) {
+        return await steps.cancel({
+          definitions: completedDefinitions,
+          envelope,
+        });
       }
     }
   } catch (error) {
     await steps.fail({
+      definitions: completedDefinitions,
       envelope,
       error: serializeWorkflowError(error),
+      ...(activeDefinitionId === undefined
+        ? {}
+        : { failedDefinitionId: activeDefinitionId }),
     });
     throw error;
   }

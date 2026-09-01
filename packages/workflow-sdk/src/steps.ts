@@ -24,6 +24,7 @@ import {
   type RollbackRunSummary,
   toMigrationDefinitionId,
 } from "migrate-sdk/core";
+import { workflowSdkMigrationProgressLayer } from "./migration-progress.ts";
 
 export type WorkflowSdkMigrationRunStepError =
   | MigrationDefinitionRegistryCatalogLookupError
@@ -155,14 +156,18 @@ export const executeMigrationRunCursorWindow = (input: {
       });
     }
 
-    return yield* MigrationRunStepExecutor.executeCursorWindow(definition, {
-      definitionId: input.definitionId,
-      definitionIds: job.plan.executionDefinitionIds,
-      lease,
-      ...(job.plan.rollbackOrphans === true ? { rollbackOrphans: true } : {}),
-      runId: input.runId,
-      state: input.state,
-    });
+    return yield* MigrationRunStepExecutor.executeCursorWindow(
+      definition,
+      {
+        definitionId: input.definitionId,
+        definitionIds: job.plan.executionDefinitionIds,
+        lease,
+        ...(job.plan.rollbackOrphans === true ? { rollbackOrphans: true } : {}),
+        runId: input.runId,
+        state: input.state,
+      },
+      job.plan.execution?.process
+    ).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
   });
 
 export const executeMigrationRunRollbackOrphansPage = (input: {
@@ -244,9 +249,34 @@ export const completeMigrationRunExecutionEnvelope = (input: {
     });
   });
 
+export const cancelMigrationRunExecutionEnvelope = (input: {
+  readonly definitions: MigrationRunSummary["definitions"];
+  readonly envelope: MigrationRunExecutionEnvelopeType;
+}): Effect.Effect<
+  MigrationRunSummary,
+  WorkflowSdkMigrationRunStepError,
+  WorkflowSdkMigrationRunStepRequirements
+> =>
+  Effect.gen(function* () {
+    const { job, lease } = yield* resolveRunJob(input.envelope);
+    const firstDefinition = job.plan.definitions[0];
+
+    if (firstDefinition === undefined) {
+      return yield* unsupportedRunPlanError(input.envelope);
+    }
+
+    return yield* MigrationRunStepExecutor.cancel({
+      definitions: input.definitions,
+      lease,
+      storeLayer: firstDefinition.store,
+    });
+  });
+
 export const failMigrationRunExecutionEnvelope = (input: {
+  readonly definitions: MigrationRunSummary["definitions"];
   readonly envelope: MigrationRunExecutionEnvelopeType;
   readonly error: unknown;
+  readonly failedDefinitionId?: MigrationDefinitionId;
 }): Effect.Effect<
   void,
   WorkflowSdkMigrationRunStepError,
@@ -261,6 +291,21 @@ export const failMigrationRunExecutionEnvelope = (input: {
     }
 
     return yield* MigrationRunStepExecutor.fail({
+      definitionOutcomes: job.plan.executionDefinitionIds.map(
+        (definitionId) => {
+          const completed = input.definitions.find(
+            (definition) => definition.definitionId === definitionId
+          );
+
+          return {
+            definitionId,
+            status:
+              definitionId === input.failedDefinitionId
+                ? ("failed" as const)
+                : (completed?.status ?? ("skipped" as const)),
+          };
+        }
+      ),
       definitionIds: job.plan.executionDefinitionIds,
       error: input.error,
       lease,

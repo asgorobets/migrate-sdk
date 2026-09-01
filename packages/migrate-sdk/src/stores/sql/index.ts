@@ -2,3 +2,10 @@
 
 export type { SqlMigrationStoreOptions } from "./sql-migration-store.ts";
 export { SqlMigrationStore } from "./sql-migration-store.ts";
+export type {
+  SqlMigrationStoreAppliedSchemaMigration,
+  SqlMigrationStoreSchemaDatabase,
+  SqlMigrationStoreSchemaMigration,
+  SqlMigrationStoreSchemaPlan,
+  SqlMigrationStoreSchemaStatus,
+} from "./sql-migration-store-schema.ts";

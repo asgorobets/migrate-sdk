@@ -227,7 +227,11 @@ describe("getMigrationStatuses", () => {
               needsUpdate: 1,
               skipped: 1,
             },
-            lastRun,
+            lastRun: {
+              ...lastRun,
+              definitionId,
+              runStatus: "succeeded",
+            },
             lock,
             warnings: [],
           },
@@ -281,6 +285,7 @@ describe("getMigrationStatuses", () => {
       const store = Layer.succeed(MigrationStore, {
         listOrphanItemStates: () => fail("listOrphanItemStates"),
         observeItemState: () => fail("observeItemState"),
+        getRunState: () => fail("getRunState"),
         getLatestRunState: (id) =>
           Effect.sync(() => {
             calls.push(`getLatestRunState:${id}`);
@@ -316,6 +321,7 @@ describe("getMigrationStatuses", () => {
         attachRunExecution: () => fail("attachRunExecution"),
         markRunStartFailed: () => fail("markRunStartFailed"),
         markRunCancelled: () => fail("markRunCancelled"),
+        requestRunCancellation: () => fail("requestRunCancellation"),
         completeRun: () => fail("completeRun"),
         failRun: () => fail("failRun"),
         acquireDefinitionLock: () => fail("acquireDefinitionLock"),
@@ -458,6 +464,7 @@ describe("getMigrationStatuses", () => {
       const store = Layer.succeed(MigrationStore, {
         listOrphanItemStates: () => fail("listOrphanItemStates"),
         observeItemState: () => fail("observeItemState"),
+        getRunState: () => fail("getRunState"),
         getLatestRunState: (id) =>
           Effect.sync(() => {
             calls.push(`getLatestRunState:${id}`);
@@ -488,6 +495,7 @@ describe("getMigrationStatuses", () => {
         attachRunExecution: () => fail("attachRunExecution"),
         markRunStartFailed: () => fail("markRunStartFailed"),
         markRunCancelled: () => fail("markRunCancelled"),
+        requestRunCancellation: () => fail("requestRunCancellation"),
         completeRun: () => fail("completeRun"),
         failRun: () => fail("failRun"),
         acquireDefinitionLock: () => fail("acquireDefinitionLock"),

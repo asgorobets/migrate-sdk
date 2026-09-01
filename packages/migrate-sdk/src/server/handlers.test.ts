@@ -1,0 +1,209 @@
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Layer, Schema, Stream } from "effect";
+import { makeClient } from "effect/unstable/rpc/RpcTest";
+import { MigrationDefinitionId, MigrationRunId } from "../domain/ids.ts";
+import {
+  MIGRATE_PROTOCOL_VERSION,
+  MigrateActiveRun,
+  MigrateDashboard,
+  MigrateDashboardResumeToken,
+  MigrateHttpRpcs,
+  MigrateObservationResumeToken,
+  MigrateServerInfo,
+  MigrateStreamingRpcs,
+} from "../protocol/index.ts";
+import {
+  MigrateHttpServerHandlers,
+  MigrateServer,
+  MigrateStreamingServerHandlers,
+} from "./handlers.ts";
+
+const info = Schema.decodeUnknownSync(MigrateServerInfo)({
+  environment: { id: "test" },
+  protocolVersion: MIGRATE_PROTOCOL_VERSION,
+  registryId: "catalog",
+  sdkVersion: "0.6.0",
+});
+
+const dashboard = Schema.decodeUnknownSync(MigrateDashboard)({
+  activeRuns: [],
+  groups: [],
+  rows: [
+    {
+      entry: {
+        dependencies: { optional: [], required: [] },
+        hasRollback: true,
+        id: "articles",
+      },
+    },
+  ],
+  scannedSource: false,
+});
+
+const activeRuns = Schema.decodeUnknownSync(Schema.Array(MigrateActiveRun))([
+  {
+    definitionIds: ["articles"],
+    execution: { adapter: "workflow-sdk", executionId: "workflow-1" },
+    observationDefinitionId: "articles",
+    runId: "run-1",
+    startedAt: "2026-08-25T12:00:00.000Z",
+    status: "running",
+    stopSupported: false,
+  },
+]);
+
+const dashboardSnapshot = {
+  dashboard,
+  resumeToken: MigrateDashboardResumeToken.make("sha256:dashboard"),
+};
+
+const serverLayer = Layer.succeed(
+  MigrateServer,
+  MigrateServer.of({
+    breakLock: () => Effect.die("not used"),
+    getActiveRuns: Effect.succeed(activeRuns),
+    getDashboard: Effect.succeed(dashboardSnapshot),
+    getMessages: () => Effect.succeed([]),
+    getServerInfo: Effect.succeed(info),
+    getSourceIdentityHistory: () => Effect.succeed([]),
+    getSourceItemTotals: () =>
+      Effect.succeed([
+        {
+          definitionId: MigrationDefinitionId.make("articles"),
+          total: { count: 42, kind: "known" as const },
+        },
+      ]),
+    normalizeSourceIdentity: ({ sourceIdentity }) =>
+      Effect.succeed(sourceIdentity),
+    observeDashboard: () => Stream.succeed(dashboardSnapshot),
+    observeDashboardLease: () =>
+      Effect.succeed({
+        kind: "snapshot" as const,
+        snapshot: dashboardSnapshot,
+      }),
+    observeRun: () =>
+      Stream.fromIterable([
+        {
+          definitions: [],
+          kind: "progress" as const,
+        },
+        {
+          kind: "terminal" as const,
+          message: "Run run-1 succeeded",
+          outcome: "completed" as const,
+          runId: MigrationRunId.make("run-1"),
+        },
+      ]),
+    observeRunLease: () =>
+      Effect.succeed({
+        event: {
+          resumeToken: MigrateObservationResumeToken.make("sha256:terminal"),
+          event: {
+            kind: "terminal" as const,
+            message: "Run run-1 succeeded",
+            outcome: "completed" as const,
+            runId: MigrationRunId.make("run-1"),
+          },
+        },
+        events: [],
+        kind: "terminal" as const,
+      }),
+    prepareOperation: () => Effect.die("not used"),
+    scanSource: () => Effect.succeed(dashboard),
+    startOperation: () => Effect.die("not used"),
+    stopRun: ({ runId }) =>
+      Effect.succeed({
+        kind: "requested" as const,
+        message: `Stopping run ${runId}`,
+        runId,
+      }),
+  })
+);
+
+const program = Effect.gen(function* () {
+  const client = yield* makeClient(MigrateStreamingRpcs);
+  const serverInfo = yield* client.GetServerInfo();
+  const currentDashboard = yield* client.GetDashboard();
+  const currentActiveRuns = yield* client.GetActiveRuns();
+  const sourceItemTotals = yield* client.GetSourceItemTotals({
+    definitionIds: [MigrationDefinitionId.make("articles")],
+  });
+  const dashboardSnapshots = yield* client
+    .ObserveDashboard({})
+    .pipe(Stream.runCollect);
+  const runEvents = yield* client
+    .ObserveRun({ runId: MigrationRunId.make("run-1") })
+    .pipe(Stream.runCollect);
+
+  return {
+    currentActiveRuns,
+    currentDashboard,
+    dashboardSnapshots: [...dashboardSnapshots],
+    runEvents: [...runEvents],
+    serverInfo,
+    sourceItemTotals,
+  };
+}).pipe(
+  Effect.provide(
+    MigrateStreamingServerHandlers.pipe(Layer.provide(serverLayer))
+  )
+);
+
+const httpProgram = Effect.gen(function* () {
+  const client = yield* makeClient(MigrateHttpRpcs);
+
+  const dashboardLease = yield* client.ObserveDashboardLease({});
+  const runLease = yield* client.ObserveRunLease({
+    runId: MigrationRunId.make("run-1"),
+  });
+
+  return { dashboardLease, runLease };
+}).pipe(
+  Effect.provide(MigrateHttpServerHandlers.pipe(Layer.provide(serverLayer)))
+);
+
+describe("Migrate Server RPC handlers", () => {
+  it.effect("serves unary and streaming operations through the protocol", () =>
+    Effect.gen(function* () {
+      const result = yield* program;
+      const { dashboardLease, runLease } = yield* httpProgram;
+
+      expect(result.serverInfo).toEqual(info);
+      expect(result.currentDashboard).toEqual(dashboardSnapshot);
+      expect(result.dashboardSnapshots).toEqual([dashboardSnapshot]);
+      expect(result.currentActiveRuns).toEqual(activeRuns);
+      expect(result.sourceItemTotals).toEqual([
+        {
+          definitionId: "articles",
+          total: { count: 42, kind: "known" },
+        },
+      ]);
+      expect(result.runEvents).toEqual([
+        { definitions: [], kind: "progress" },
+        {
+          kind: "terminal",
+          message: "Run run-1 succeeded",
+          outcome: "completed",
+          runId: "run-1",
+        },
+      ]);
+      expect(runLease).toEqual({
+        event: {
+          resumeToken: "sha256:terminal",
+          event: {
+            kind: "terminal",
+            message: "Run run-1 succeeded",
+            outcome: "completed",
+            runId: "run-1",
+          },
+        },
+        events: [],
+        kind: "terminal",
+      });
+      expect(dashboardLease).toEqual({
+        kind: "snapshot",
+        snapshot: dashboardSnapshot,
+      });
+    })
+  );
+});

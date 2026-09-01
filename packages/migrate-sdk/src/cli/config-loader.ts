@@ -1,9 +1,7 @@
-import { DateTime, Effect, FileSystem, Path, Schema } from "effect";
+import { DateTime, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import { register } from "tsx/esm/api";
 import type { MigrationDefinitionRegistry } from "../domain/registry.ts";
 import type { MigrationCliConfig } from "./config.ts";
-
-const tsxLoader = register({ namespace: "migrate-sdk-cli" });
 
 const CONFIG_FILE_NAMES = [
   "migrate.config.ts",
@@ -22,7 +20,7 @@ const MigrationCliConfigLoadErrorKind = Schema.Literals([
   "UnsupportedAsyncConfig",
 ]);
 
-export class MigrationCliConfigLoadError extends Schema.TaggedErrorClass<MigrationCliConfigLoadError>()(
+export class MigrationCliConfigLoadError extends Schema.TaggedError<MigrationCliConfigLoadError>()(
   "MigrationCliConfigLoadError",
   {
     cause: Schema.optional(Schema.Unknown),
@@ -35,6 +33,11 @@ export class MigrationCliConfigLoadError extends Schema.TaggedErrorClass<Migrati
 export interface LoadMigrationCliConfigInput {
   readonly configPath?: string;
   readonly cwd: string;
+}
+
+export interface LoadedMigrationCliConfig {
+  readonly config: MigrationCliConfig;
+  readonly configPath: string;
 }
 
 const isPromiseLike = (value: unknown): value is PromiseLike<unknown> =>
@@ -50,11 +53,30 @@ const isMigrationCliConfig = (value: unknown): value is MigrationCliConfig => {
 
   const registry = (value as { readonly registry: unknown }).registry;
 
-  return (
+  const hasRegistry =
     typeof registry === "object" &&
     registry !== null &&
     "list" in registry &&
-    typeof (registry as MigrationDefinitionRegistry).list === "function"
+    typeof (registry as MigrationDefinitionRegistry).list === "function";
+
+  if (!hasRegistry) {
+    return false;
+  }
+
+  if (!("sqlStore" in value) || value.sqlStore === undefined) {
+    return true;
+  }
+
+  const sqlStore = value.sqlStore;
+
+  return (
+    typeof sqlStore === "object" &&
+    sqlStore !== null &&
+    "clientLayer" in sqlStore &&
+    Layer.isLayer(sqlStore.clientLayer) &&
+    (!("tablePrefix" in sqlStore) ||
+      sqlStore.tablePrefix === undefined ||
+      typeof sqlStore.tablePrefix === "string")
   );
 };
 
@@ -81,7 +103,7 @@ const configPathExists = (
         cause,
         configPath: path,
         kind: "ConfigPathAccessFailed",
-        message: "Unable to access Migration CLI config path",
+        message: "Unable to access migration config path",
       })
   );
 
@@ -165,7 +187,7 @@ const discoverConfigPath = (
         return yield* new MigrationCliConfigLoadError({
           configPath: cwd,
           kind: "NoConfigFound",
-          message: "No Migration CLI config was found",
+          message: "No migration config was found",
         });
       }
 
@@ -185,26 +207,30 @@ const importConfigModule = (
         cause,
         configPath,
         kind: "ConfigImportFailed",
-        message: "Failed to import Migration CLI config",
+        message: "Failed to import migration config",
       });
     const configUrl = yield* path.toFileUrl(configPath).pipe(
       Effect.map((url) => url.href),
       Effect.mapError(importFailed)
     );
-    const extension = path.extname(configPath);
     const importModule = (load: () => Promise<unknown>) =>
       Effect.tryPromise({
         try: load,
         catch: importFailed,
       });
 
-    if (extension === ".ts" || extension === ".mts") {
-      return yield* importModule(() => tsxLoader.import(configUrl, configUrl));
+    const now = yield* DateTime.now;
+    const load = () =>
+      import(`${configUrl}?migrateSdkCli=${DateTime.toEpochMillis(now)}`);
+
+    if (Reflect.has(globalThis, "Bun")) {
+      return yield* importModule(load);
     }
 
-    const now = yield* DateTime.now;
-    return yield* importModule(
-      () => import(`${configUrl}?migrateSdkCli=${DateTime.toEpochMillis(now)}`)
+    return yield* Effect.acquireUseRelease(
+      Effect.sync(() => register()),
+      () => importModule(load),
+      (unregister) => Effect.promise(() => unregister())
     );
   });
 
@@ -221,7 +247,7 @@ const readDefaultExport = (
       new MigrationCliConfigLoadError({
         configPath,
         kind: "DefaultExportMissing",
-        message: "Migration CLI config must be exported as the default export",
+        message: "Migration config must be exported as the default export",
       })
     );
   }
@@ -234,7 +260,7 @@ const readDefaultExport = (
         configPath,
         kind: "UnsupportedAsyncConfig",
         message:
-          "Migration CLI config must be synchronous; async config factories are not supported",
+          "Migration config must be synchronous; async config factories are not supported",
       })
     );
   }
@@ -245,7 +271,7 @@ const readDefaultExport = (
         configPath,
         kind: "InvalidConfig",
         message:
-          "Migration CLI config must be created with defineMigrationCliConfig({ registry, executableLayer? })",
+          "Migration config must be created with defineMigrationCliConfig({ registry, executableLayer?, sqlStore? })",
       })
     );
   }
@@ -253,11 +279,11 @@ const readDefaultExport = (
   return Effect.succeed(config);
 };
 
-export const loadMigrationCliConfig = ({
+export const loadMigrationCliConfigWithPath = ({
   configPath,
   cwd,
 }: LoadMigrationCliConfigInput): Effect.Effect<
-  MigrationCliConfig,
+  LoadedMigrationCliConfig,
   MigrationCliConfigLoadError,
   FileSystem.FileSystem | Path.Path
 > =>
@@ -274,11 +300,23 @@ export const loadMigrationCliConfig = ({
       return yield* new MigrationCliConfigLoadError({
         configPath: resolvedConfigPath,
         kind: "ConfigPathNotFound",
-        message: "Migration CLI config file was not found",
+        message: "Migration config file was not found",
       });
     }
 
     const moduleValue = yield* importConfigModule(path, resolvedConfigPath);
+    const config = yield* readDefaultExport(resolvedConfigPath, moduleValue);
 
-    return yield* readDefaultExport(resolvedConfigPath, moduleValue);
+    return { config, configPath: resolvedConfigPath };
   });
+
+export const loadMigrationCliConfig = (
+  input: LoadMigrationCliConfigInput
+): Effect.Effect<
+  MigrationCliConfig,
+  MigrationCliConfigLoadError,
+  FileSystem.FileSystem | Path.Path
+> =>
+  loadMigrationCliConfigWithPath(input).pipe(
+    Effect.map((loaded) => loaded.config)
+  );

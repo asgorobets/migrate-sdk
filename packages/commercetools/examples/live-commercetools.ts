@@ -54,7 +54,7 @@ const optionalCommaSeparatedList = (value: string | undefined): string[] =>
         .map((item) => item.trim())
         .filter((item) => item.length > 0);
 
-export class MissingLiveCommercetoolsEnv extends Schema.TaggedErrorClass<MissingLiveCommercetoolsEnv>()(
+export class MissingLiveCommercetoolsEnv extends Schema.TaggedError<MissingLiveCommercetoolsEnv>()(
   "MissingLiveCommercetoolsEnv",
   {
     name: Schema.String,
@@ -69,7 +69,7 @@ const readLiveEnv = (name: string): string | undefined => {
     return value.trim();
   }
 
-  return undefined;
+  return;
 };
 
 export const requiredLiveEnv = (

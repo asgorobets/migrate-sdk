@@ -1,8 +1,9 @@
-import { Schema, SchemaRepresentation } from "effect";
+import { Schema } from "effect";
 import {
   MigrationDefinitionId,
   SourceIdentityContractFingerprint,
 } from "./ids.ts";
+import { makeEffectSchemaContractFingerprint } from "./schema-contract-fingerprint.ts";
 
 export const SourceVersionContractId = Schema.NonEmptyString.pipe(
   Schema.brand("SourceVersionContractId")
@@ -65,5 +66,5 @@ export const makeTrackingRecordContractFingerprint = (
   schema: Schema.Codec<unknown, unknown, never, never>
 ): TrackingRecordContractFingerprint =>
   TrackingRecordContractFingerprint.make(
-    stringifyContractInput(SchemaRepresentation.fromAST(schema.ast))
+    makeEffectSchemaContractFingerprint(schema)
   );

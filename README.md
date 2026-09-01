@@ -1,96 +1,161 @@
-# Turborepo with Ultracite
+# Migrate SDK
 
-This example is maintained by the community.
+**Migrate content from any CMS to any CMS.**
 
-## Using this example
+Migrate SDK is a TypeScript toolkit for moving content into, out of, or between
+CMSes. Connect it to CMS APIs, databases, files, or commerce platforms. It saves
+progress for each content item, so you can stop and restart a run, retry only
+what failed, and roll changes back when needed.
 
-Run the following command:
+Use it when a one-off script is no longer enough and the migration needs to run
+safely more than once.
 
-```sh
-npx create-turbo@latest -e with-ultracite
+> Migrate SDK is under active development and its public API may change before
+> 1.0.
+
+## Why Migrate SDK?
+
+- **Move more than pages.** Migrate entries, assets, references, localized
+  content, and related commerce data in the order they need.
+- **Catch bad input early.** Define incoming content with Effect Schema and keep
+  those types while you process it.
+- **Pick up where you stopped.** Saved cursors and item results let interrupted
+  runs continue instead of starting over.
+- **Retry only what needs attention.** Re-run failed or skipped items, update
+  records you already moved, or target one item.
+- **See what happened.** Preview a run, check its status, follow progress, and
+  inspect errors without digging through a wall of logs.
+- **Undo changes when needed.** Keep track of destination changes while the
+  migration runs and use them in your rollback code.
+- **Connect to any CMS API.** Write the CMS-specific calls while Migrate SDK
+  handles progress, retries, status, and rollback.
+
+## How it works
+
+```text
+Read content -> Define the move -> Process each item -> Write content
+                         |
+                         v
+                  Save progress
+          position, results, changes,
+               locks, and run history
 ```
 
-## What's inside?
+A **Migration Definition** says where content comes from, how each item should
+be handled, and where progress should be saved. Put definitions in a
+**Migration Definition Registry** when content types need to run together or in
+a certain order.
 
-This Turborepo includes the following packages/apps:
-
-### Apps and Packages
-
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
-
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
-
-### Utilities
-
-This Turborepo has some additional tools already setup for you:
-
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [Ultracite](https://ultracite.ai/) for code linting and formatting (powered by [Biome](https://biomejs.dev/))
-
-### Build
-
-To build all apps and packages, run the following command:
+## Install
 
 ```sh
-cd my-turborepo
-turbo build
+pnpm add migrate-sdk effect
 ```
 
-### Develop
-
-To develop all apps and packages, run the following command:
+Optional packages add support for more systems:
 
 ```sh
-cd my-turborepo
-turbo dev
+pnpm add @migrate-sdk/commercetools
+pnpm add @migrate-sdk/workflow-sdk
+pnpm add --save-dev @migrate-sdk/tui
 ```
 
-### Linting and Formatting
+## From plan to recovery
 
-To check all apps and packages for linting and formatting issues:
+Once you export your migrations from `migrate.config.ts`, the CLI gives you a
+simple plan, run, check, retry, and rollback loop:
 
 ```sh
-pnpm check
+# See what will run before touching the new CMS
+pnpm exec migrate run content --plan
+
+# Run one migration and check its saved progress
+pnpm exec migrate run articles
+pnpm exec migrate status articles
+
+# Retry only failed entries or target one entry
+pnpm exec migrate run articles --failed
+pnpm exec migrate run articles --id article-1042
+
+# Scan from the beginning but skip entries whose source version still matches
+pnpm exec migrate run articles --rescan
+
+# Scan from the beginning and force migrated entries through process again
+pnpm exec migrate run articles --update
+
+# Preview a rollback before executing it
+pnpm exec migrate rollback articles --plan
+pnpm exec migrate rollback articles
 ```
 
-To automatically fix linting and formatting issues:
+## Full and incremental source discovery
+
+Sources default to full discovery. Cursors let interrupted runs resume, but a
+completed run clears its cursor so the next run scans from the beginning.
+Existing Source Versions still keep unchanged items out of the Process
+Pipeline.
+
+Use incremental discovery only when the source has a valid high-water cursor
+and every new or changed item is guaranteed to sort after it:
+
+```ts
+const source = CommercetoolsSource.products({
+  discovery: "incremental",
+});
+```
+
+`migrate run --plan` and `migrate status` show the resolved discovery policy.
+Normal cursor-discovery runs warn when a selected source is incremental because
+changes at or before its saved cursor require `--rescan` to be discovered.
+Targeted failed, skipped, and item retries do not emit this warning because they
+look up durable item state directly instead of traversing the source cursor.
+
+## What is included
+
+| Area | Included |
+| --- | --- |
+| Sources | SQL, CSV, structured documents, in-memory, and custom CMS or API sources |
+| Saved progress | SQL, file, in-memory, and Commercetools Custom Objects |
+| Destinations | Custom CMS or API services, Commercetools, and in-memory testing |
+| Running migrations | In the current process or through Workflow SDK |
+| Operations | Planning, progress, status, targeted runs, retries, updates, cancellation, and rollback |
+
+## Packages
+
+- [`migrate-sdk`](./packages/migrate-sdk) — TypeScript API, CLI, built-in data
+  sources, and places to save progress.
+- [`@migrate-sdk/commercetools`](./packages/commercetools) — Commercetools
+  source, write helpers, and migration progress stored in Custom Objects.
+- [`@migrate-sdk/workflow-sdk`](./packages/workflow-sdk) — run migrations with
+  Workflow SDK.
+- [`@migrate-sdk/tui`](./packages/tui) — discover, inspect, run, retry, and roll
+  back registered migrations in a terminal UI. Its OpenTUI renderer runs under
+  Bun while a package-supplied Node Migrate Server loads and executes local
+  migration configs.
+
+Local CLI and TUI clients reuse a Node Migrate Server for the selected config.
+Built applications should set `MIGRATE_SERVER_BUILD_ID` to their immutable
+build identifier. A changed value selects a separate local server endpoint for
+new operations without replacing migration code underneath active runs on the
+previous endpoint. This value identifies a packaged artifact, not an edit to
+local source. [ADR 0008](./docs/adr/0008-local-source-generations.md) defines
+the separate Local Source Generation model.
+
+## Repository development
+
+This repository uses pnpm and Turborepo. Node.js 24 is required.
 
 ```sh
-pnpm fix
+pnpm install
+pnpm build-packages
+pnpm validate-packages
 ```
 
-### Remote Caching
+Run `pnpm dev` to start the local apps. The documentation site lives in
+[`apps/docs`](./apps/docs).
 
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
+## Status
 
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-```sh
-turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+Migrate SDK is used in real migration projects, but it has not reached 1.0. For
+now, the focus is the core workflow: define a content migration, run it, see
+what happened, retry what failed, and roll it back when needed.

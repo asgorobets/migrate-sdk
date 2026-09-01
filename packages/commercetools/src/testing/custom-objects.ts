@@ -26,6 +26,12 @@ export interface RecordingCustomObjectApiRoot {
   readonly requests: readonly RecordedCustomObjectRequest[];
 }
 
+export interface RecordingCustomObjectApiRootOptions {
+  readonly beforeRequest?: (
+    request: RecordedCustomObjectRequest
+  ) => Promise<void> | void;
+}
+
 export interface ScriptedCustomObjectRoutes {
   readonly requests: readonly ScriptedCommercetoolsSdkRequest[];
   readonly routes: readonly ScriptedCommercetoolsSdkRoute[];
@@ -73,7 +79,7 @@ const customObjectPath = (
   const key = request.pathVariables?.key;
 
   if (typeof container !== "string" || typeof key !== "string") {
-    return undefined;
+    return;
   }
 
   return { container, key };
@@ -92,7 +98,7 @@ const customObjectVersion = (
     return Number.parseInt(version, 10);
   }
 
-  return undefined;
+  return;
 };
 
 const recordedCustomObject = ({
@@ -137,7 +143,7 @@ const stringQueryParam = (value: unknown): string | undefined => {
       : undefined;
   }
 
-  return undefined;
+  return;
 };
 
 const numberQueryParam = (value: unknown): number | undefined => {
@@ -151,7 +157,7 @@ const numberQueryParam = (value: unknown): number | undefined => {
     return Number.isNaN(parsed) ? undefined : parsed;
   }
 
-  return undefined;
+  return;
 };
 
 const queryVariable = (
@@ -379,23 +385,25 @@ const makeCustomObjectRecorderState = () => {
   return { executeCustomObjectRequest };
 };
 
-export const makeRecordingCustomObjectApiRoot =
-  (): RecordingCustomObjectApiRoot => {
-    const requests: RecordedCustomObjectRequest[] = [];
-    const state = makeCustomObjectRecorderState();
+export const makeRecordingCustomObjectApiRoot = (
+  options: RecordingCustomObjectApiRootOptions = {}
+): RecordingCustomObjectApiRoot => {
+  const requests: RecordedCustomObjectRequest[] = [];
+  const state = makeCustomObjectRecorderState();
 
-    return {
-      apiRoot: new PlatformApiRoot({
-        executeRequest: (request) => {
-          const recordedRequest = recordRequest(request);
-          requests.push(recordedRequest);
+  return {
+    apiRoot: new PlatformApiRoot({
+      executeRequest: async (request) => {
+        const recordedRequest = recordRequest(request);
+        requests.push(recordedRequest);
+        await options.beforeRequest?.(recordedRequest);
 
-          return state.executeCustomObjectRequest(recordedRequest);
-        },
-      }),
-      requests,
-    };
+        return state.executeCustomObjectRequest(recordedRequest);
+      },
+    }),
+    requests,
   };
+};
 
 const migrationStoreCustomObjectOperations = [
   "customObjects.deleteMigrationStoreRecord",

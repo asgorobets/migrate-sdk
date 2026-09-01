@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import {
   type ExecutionStartResult,
   MigrationDefinition,
@@ -258,6 +259,77 @@ describe("MigrationExecution", () => {
           )
         ).toBe(false);
         expect(storeState.sourceCursorCommits).toEqual([]);
+        expect(storeState.definitionLocks.size).toBe(0);
+      })
+  );
+
+  it.effect(
+    "observes a durable cancellation request without an in-process handle call",
+    () =>
+      Effect.gen(function* () {
+        const itemStarted = yield* Deferred.make<void>();
+        const releaseItem = yield* Deferred.make<void>();
+        const processed: string[] = [];
+        const storeState = InMemoryMigrationStore.makeState();
+        const durableStore = InMemoryMigrationStore.layer(storeState);
+        const definition = MigrationDefinition.make({
+          id: "durably-cancellable-articles",
+          source: InMemorySource.make({
+            batchSize: 2,
+            identity: ArticleSourceIdentity,
+            items: [
+              {
+                identityKey: "article-1",
+                item: { title: "First article" },
+                version: "source-version-1",
+              },
+              {
+                identityKey: "article-2",
+                item: { title: "Second article" },
+                version: "source-version-1",
+              },
+            ],
+            sourceSchema: ArticleSource,
+          }),
+          store: durableStore,
+          process: (source) =>
+            Effect.gen(function* () {
+              processed.push(source.item.title);
+
+              if (source.item.title === "First article") {
+                yield* Deferred.succeed(itemStarted, undefined);
+                yield* Deferred.await(releaseItem);
+              }
+            }),
+        });
+        const execution = MigrationExecution.make({
+          registry: MigrationDefinitionRegistry.make({
+            definitions: [definition] as const,
+          }),
+        });
+        const start = yield* execution.run({
+          all: true,
+          execution: { process: { concurrency: 1 } },
+        });
+        const handle = attachedHandle(start);
+
+        yield* Deferred.await(itemStarted);
+        const requested = yield* MigrationStore.pipe(
+          Effect.flatMap((store) =>
+            store.requestRunCancellation(handle.runId, [definition.id])
+          ),
+          Effect.provide(durableStore)
+        );
+
+        expect(requested.status).toBe("cancelling");
+        expect(storeState.definitionLocks.size).toBe(1);
+
+        yield* TestClock.adjust("1 second");
+        yield* Deferred.succeed(releaseItem, undefined);
+        const terminal = yield* handle.wait;
+
+        expect(terminal.kind).toBe("cancelled");
+        expect(processed).toEqual(["First article"]);
         expect(storeState.definitionLocks.size).toBe(0);
       })
   );

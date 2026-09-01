@@ -1,3 +1,10 @@
+import {
+  toEncodedSourceIdentity,
+  toMigrationDefinitionId,
+  toMigrationDefinitionLockToken,
+  toMigrationDefinitionRegistryId,
+  toMigrationRunId,
+} from "migrate-sdk";
 import { describe, expect, it, vi } from "vitest";
 import {
   runMigrationExecutionWorkflow,
@@ -5,33 +12,47 @@ import {
   type WorkflowSdkMigrationRunSteps,
 } from "./migration-execution-workflow.ts";
 
+const definitionIds = (...ids: readonly string[]) =>
+  ids.map(toMigrationDefinitionId);
+
 const makeEnvelope = (): WorkflowSdkMigrationRunEnvelope => ({
-  executionDefinitionIds: ["articles"],
+  executionDefinitionIds: definitionIds("articles"),
   kind: "run",
   locks: [
     {
-      definitionId: "articles",
-      ownerRunId: "run-1",
-      token: "lock-1",
+      createdAt: new Date(0),
+      definitionId: toMigrationDefinitionId("articles"),
+      ownerRunId: toMigrationRunId("run-1"),
+      token: toMigrationDefinitionLockToken("lock-1"),
     },
   ],
-  registryId: "catalog",
+  registryId: toMigrationDefinitionRegistryId("catalog"),
   request: {
     definitionIds: ["articles"],
   },
-  runId: "run-1",
-  scopeDefinitionIds: ["articles"],
+  runId: toMigrationRunId("run-1"),
+  scopeDefinitionIds: definitionIds("articles"),
+});
+
+const cancelMigrationRun: WorkflowSdkMigrationRunSteps["cancel"] = async ({
+  definitions,
+  envelope,
+}) => ({
+  definitions,
+  finishedAt: new Date(2),
+  runId: envelope.runId,
+  startedAt: new Date(1),
+  status: "cancelled",
 });
 
 describe("runMigrationExecutionWorkflow", () => {
   it("does not start rollback orphans after a cancelled scan", async () => {
-    const cancellation = new Error(
-      "Migration run was cancelled while scanning articles"
-    );
+    const cancel = vi.fn(cancelMigrationRun);
     const executeRollbackOrphansPage = vi.fn();
     const fail = vi.fn<WorkflowSdkMigrationRunSteps["fail"]>();
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      cancel,
       complete: vi.fn(),
       executeCursorWindow: vi.fn().mockResolvedValue({
         kind: "cancelled",
@@ -53,18 +74,89 @@ describe("runMigrationExecutionWorkflow", () => {
 
     await expect(
       runMigrationExecutionWorkflow(makeEnvelope(), steps)
-    ).rejects.toEqual(cancellation);
+    ).resolves.toEqual(expect.objectContaining({ status: "cancelled" }));
     expect(executeRollbackOrphansPage).not.toHaveBeenCalled();
-    expect(fail).toHaveBeenCalledOnce();
+    expect(cancel).toHaveBeenCalledWith({
+      definitions: [],
+      envelope: makeEnvelope(),
+    });
+    expect(fail).not.toHaveBeenCalled();
+  });
+
+  it("reports completed and active definitions when a later scan fails", async () => {
+    const envelope: WorkflowSdkMigrationRunEnvelope = {
+      ...makeEnvelope(),
+      executionDefinitionIds: definitionIds("authors", "articles", "assets"),
+    };
+    const sourceError = new Error("Article source is unavailable");
+    const fail = vi.fn<WorkflowSdkMigrationRunSteps["fail"]>();
+    const executeCursorWindow = vi.fn(({ definitionId }) => {
+      if (definitionId === "articles") {
+        return Promise.reject(sourceError);
+      }
+
+      return Promise.resolve({
+        kind: "definition-completed" as const,
+        state: {
+          counts: {
+            failed: 0,
+            migrated: 1,
+            needsUpdate: 0,
+            skipped: 0,
+            unchanged: 0,
+          },
+          excludedSourceIdentities: [],
+          phase: "scan" as const,
+        },
+        summary: {
+          counts: {
+            failed: 0,
+            migrated: 1,
+            needsUpdate: 0,
+            skipped: 0,
+            unchanged: 0,
+          },
+          definitionId,
+          status: "succeeded" as const,
+        },
+      });
+    });
+    const steps: WorkflowSdkMigrationRunSteps = {
+      begin: vi.fn().mockResolvedValue({ rollbackOrphans: false }),
+      cancel: vi.fn(cancelMigrationRun),
+      complete: vi.fn(),
+      executeCursorWindow,
+      executeRollbackOrphansPage: vi.fn(),
+      fail,
+    };
+
+    await expect(runMigrationExecutionWorkflow(envelope, steps)).rejects.toBe(
+      sourceError
+    );
+
+    expect(executeCursorWindow).toHaveBeenCalledTimes(2);
+    expect(fail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        definitions: [
+          expect.objectContaining({
+            definitionId: "authors",
+            status: "succeeded",
+          }),
+        ],
+        failedDefinitionId: "articles",
+      })
+    );
   });
 
   it("finishes every scan before rolling back orphans in reverse order", async () => {
     const envelope: WorkflowSdkMigrationRunEnvelope = {
       ...makeEnvelope(),
-      executionDefinitionIds: ["assets", "articles"],
+      executionDefinitionIds: definitionIds("assets", "articles"),
     };
     const calls: string[] = [];
-    const definitionSummary = (definitionId: string) => ({
+    const definitionSummary = (
+      definitionId: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number]
+    ) => ({
       counts: {
         failed: 0,
         migrated: 0,
@@ -77,10 +169,11 @@ describe("runMigrationExecutionWorkflow", () => {
     });
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      cancel: vi.fn(cancelMigrationRun),
       complete: vi.fn(async ({ definitions }) => ({
         definitions,
         finishedAt: new Date(2),
-        runId: "run-1",
+        runId: toMigrationRunId("run-1"),
         startedAt: new Date(1),
         status: "succeeded" as const,
       })),
@@ -126,14 +219,89 @@ describe("runMigrationExecutionWorkflow", () => {
     ]);
   });
 
+  it("reports only completed rollbacks when a later rollback fails", async () => {
+    const envelope: WorkflowSdkMigrationRunEnvelope = {
+      ...makeEnvelope(),
+      executionDefinitionIds: definitionIds("authors", "articles", "assets"),
+    };
+    const rollbackError = new Error("article rollback unavailable");
+    const fail = vi.fn<WorkflowSdkMigrationRunSteps["fail"]>();
+    const rollbackCalls: string[] = [];
+    const definitionSummary = (
+      definitionId: WorkflowSdkMigrationRunEnvelope["executionDefinitionIds"][number]
+    ) => ({
+      counts: {
+        failed: 0,
+        migrated: 0,
+        needsUpdate: 0,
+        skipped: 0,
+        unchanged: 1,
+      },
+      definitionId,
+      status: "succeeded" as const,
+    });
+    const steps: WorkflowSdkMigrationRunSteps = {
+      begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      cancel: vi.fn(cancelMigrationRun),
+      complete: vi.fn(),
+      executeCursorWindow: vi.fn(({ definitionId }) => {
+        const summary = definitionSummary(definitionId);
+        return Promise.resolve({
+          kind: "definition-completed" as const,
+          state: {
+            counts: summary.counts,
+            excludedSourceIdentities: [],
+            phase: "scan" as const,
+          },
+          summary,
+        });
+      }),
+      executeRollbackOrphansPage: vi.fn(({ definitionId, state }) => {
+        rollbackCalls.push(definitionId);
+
+        if (definitionId === "articles") {
+          return Promise.reject(rollbackError);
+        }
+
+        return Promise.resolve({
+          kind: "completed" as const,
+          state: {
+            ...state,
+            orphaned: 1,
+            rolledBack: 1,
+          },
+        });
+      }),
+      fail,
+    };
+
+    await expect(runMigrationExecutionWorkflow(envelope, steps)).rejects.toBe(
+      rollbackError
+    );
+
+    expect(rollbackCalls).toEqual(["assets", "articles"]);
+    expect(fail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        definitions: [
+          expect.objectContaining({
+            definitionId: "assets",
+            status: "succeeded",
+          }),
+        ],
+        failedDefinitionId: "articles",
+      })
+    );
+  });
+
   it("carries rollback page cursor and counts in workflow state", async () => {
     const pageStates: unknown[] = [];
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      cancel: vi.fn(cancelMigrationRun),
       complete: vi.fn(async ({ definitions }) => ({
         definitions,
         finishedAt: new Date(2),
-        runId: "run-1",
+        runId: toMigrationRunId("run-1"),
         startedAt: new Date(1),
         status: "succeeded" as const,
       })),
@@ -158,7 +326,7 @@ describe("runMigrationExecutionWorkflow", () => {
             skipped: 0,
             unchanged: 1,
           },
-          definitionId: "articles",
+          definitionId: toMigrationDefinitionId("articles"),
           status: "succeeded",
         },
       }),
@@ -169,7 +337,7 @@ describe("runMigrationExecutionWorkflow", () => {
               kind: "continue" as const,
               state: {
                 ...state,
-                afterIdentity: "article-100",
+                afterIdentity: toEncodedSourceIdentity("article-100"),
                 orphaned: 100,
                 rolledBack: 100,
               },
@@ -209,10 +377,12 @@ describe("runMigrationExecutionWorkflow", () => {
   });
 
   it("does not complete after rollback-orphan cancellation", async () => {
+    const cancel = vi.fn(cancelMigrationRun);
     const complete = vi.fn<WorkflowSdkMigrationRunSteps["complete"]>();
     const fail = vi.fn<WorkflowSdkMigrationRunSteps["fail"]>();
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      cancel,
       complete,
       executeCursorWindow: vi.fn().mockResolvedValue({
         kind: "definition-completed",
@@ -235,7 +405,7 @@ describe("runMigrationExecutionWorkflow", () => {
             skipped: 0,
             unchanged: 1,
           },
-          definitionId: "articles",
+          definitionId: toMigrationDefinitionId("articles"),
           status: "succeeded",
         },
       }),
@@ -247,21 +417,21 @@ describe("runMigrationExecutionWorkflow", () => {
 
     await expect(
       runMigrationExecutionWorkflow(makeEnvelope(), steps)
-    ).rejects.toThrow(
-      "Migration run was cancelled while rolling back orphans for articles"
-    );
+    ).resolves.toEqual(expect.objectContaining({ status: "cancelled" }));
+    expect(cancel).toHaveBeenCalledOnce();
     expect(complete).not.toHaveBeenCalled();
-    expect(fail).toHaveBeenCalledOnce();
+    expect(fail).not.toHaveBeenCalled();
   });
 
   it("reports zero rollback-orphans counts when a scan fails", async () => {
     const executeRollbackOrphansPage = vi.fn();
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: true }),
+      cancel: vi.fn(cancelMigrationRun),
       complete: vi.fn(async ({ definitions }) => ({
         definitions,
         finishedAt: new Date(2),
-        runId: "run-1",
+        runId: toMigrationRunId("run-1"),
         startedAt: new Date(1),
         status: "failed" as const,
       })),
@@ -286,7 +456,7 @@ describe("runMigrationExecutionWorkflow", () => {
             skipped: 0,
             unchanged: 0,
           },
-          definitionId: "articles",
+          definitionId: toMigrationDefinitionId("articles"),
           status: "failed",
         },
       }),
@@ -314,6 +484,7 @@ describe("runMigrationExecutionWorkflow", () => {
     const fail = vi.fn<WorkflowSdkMigrationRunSteps["fail"]>();
     const steps: WorkflowSdkMigrationRunSteps = {
       begin: vi.fn().mockResolvedValue({ rollbackOrphans: false }),
+      cancel: vi.fn(cancelMigrationRun),
       complete: vi.fn().mockRejectedValue(completionError),
       executeCursorWindow: vi.fn().mockResolvedValue({
         kind: "definition-completed",
@@ -336,7 +507,7 @@ describe("runMigrationExecutionWorkflow", () => {
             skipped: 0,
             unchanged: 0,
           },
-          definitionId: "articles",
+          definitionId: toMigrationDefinitionId("articles"),
           status: "succeeded",
         },
       }),

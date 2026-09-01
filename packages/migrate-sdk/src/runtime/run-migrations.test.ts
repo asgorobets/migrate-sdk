@@ -407,9 +407,12 @@ describe("MigrationStore durable records", () => {
         toMigrationDefinitionId("articles"),
       ]);
 
-      const completed = yield* store.completeRun(runState.runId, [
-        toMigrationDefinitionId("articles"),
-      ]);
+      const definitionId = toMigrationDefinitionId("articles");
+      const completed = yield* store.completeRun(
+        runState.runId,
+        [definitionId],
+        [{ definitionId, status: "succeeded" }]
+      );
       const decoded = yield* roundTripRunState(completed);
 
       expect(completed.status).toBe("succeeded");
@@ -426,9 +429,12 @@ describe("MigrationStore durable records", () => {
         toMigrationDefinitionId("articles"),
       ]);
 
-      const failed = yield* store.failRun(runState.runId, [
-        toMigrationDefinitionId("articles"),
-      ]);
+      const definitionId = toMigrationDefinitionId("articles");
+      const failed = yield* store.failRun(
+        runState.runId,
+        [definitionId],
+        [{ definitionId, status: "failed" }]
+      );
       const decoded = yield* roundTripRunState(failed);
 
       expect(failed.status).toBe("failed");
@@ -7300,6 +7306,262 @@ describe("runInlineDefinition", () => {
   );
 
   it.effect(
+    "preserves successful dependency state when another definition in the run fails",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        let articlesShouldFail = true;
+        const processError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          code: "process-failed",
+          message: "Process failed",
+        };
+
+        const authors = MigrationDefinition.make({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          store,
+          process: () => Effect.void,
+        });
+        const articles = MigrationDefinition.make({
+          id: "articles",
+          dependencies: { required: ["authors"] },
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: { title: "Recoverable article" },
+              },
+            ],
+          }),
+          store,
+          process: () =>
+            articlesShouldFail ? Effect.fail(processError) : Effect.void,
+        });
+
+        const failedGroupRun = yield* runInlineRegistry({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+          withDependencies: true,
+        });
+
+        expect(failedGroupRun.status).toBe("failed");
+        const [authorsRun, articlesRun] = yield* Effect.gen(function* () {
+          const migrationStore = yield* MigrationStore;
+          return yield* Effect.all([
+            migrationStore.getLatestRunState(
+              toMigrationDefinitionId("authors")
+            ),
+            migrationStore.getLatestRunState(
+              toMigrationDefinitionId("articles")
+            ),
+          ]);
+        }).pipe(Effect.provide(store));
+
+        expect(authorsRun).toEqual(
+          expect.objectContaining({
+            runStatus: "failed",
+            status: "succeeded",
+          })
+        );
+        expect(articlesRun).toEqual(
+          expect.objectContaining({
+            runStatus: "failed",
+            status: "failed",
+          })
+        );
+
+        articlesShouldFail = false;
+        const recoveredArticle = yield* runInlineRegistry({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+          mode: { kind: "failed" },
+        });
+
+        expect(recoveredArticle.status).toBe("succeeded");
+        expect(recoveredArticle.definitions).toEqual([
+          expect.objectContaining({
+            definitionId: toMigrationDefinitionId("articles"),
+            status: "succeeded",
+          }),
+        ]);
+      })
+  );
+
+  it.effect(
+    "records completed, failed, and unstarted definition outcomes after a fatal source error",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const sourceError = new SourceError({
+          message: "Article source is unavailable",
+        });
+        const authors = MigrationDefinition.make({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          store,
+          process: () => Effect.void,
+        });
+        const articles = MigrationDefinition.make({
+          id: "articles",
+          dependencies: { required: ["authors"] },
+          source: Source.make({
+            cursorSchema: InMemorySourceCursor,
+            identity: ArticleSourceIdentity,
+            lookupStrategy: "direct",
+            read: () => Effect.fail(sourceError),
+            readByIdentity: () => Effect.succeed(null),
+            sourceSchema: Schema.Unknown,
+          }),
+          store,
+          process: () => Effect.void,
+        });
+        const assets = MigrationDefinition.make({
+          id: "assets",
+          dependencies: { required: ["articles"] },
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "asset-1",
+                version: "source-version-1",
+                item: { path: "/cover.jpg" },
+              },
+            ],
+          }),
+          store,
+          process: () => Effect.void,
+        });
+
+        const error = yield* Effect.flip(
+          runInlineRegistry({
+            definitions: [assets, articles, authors],
+            definitionIds: ["assets"],
+            withDependencies: true,
+          })
+        );
+        const states = yield* Effect.gen(function* () {
+          const migrationStore = yield* MigrationStore;
+          return yield* Effect.all(
+            ["authors", "articles", "assets"].map((definitionId) =>
+              migrationStore.getLatestRunState(
+                toMigrationDefinitionId(definitionId)
+              )
+            )
+          );
+        }).pipe(Effect.provide(store));
+
+        expect(error).toBe(sourceError);
+        expect(states.map((state) => state?.status)).toEqual([
+          "succeeded",
+          "failed",
+          "skipped",
+        ]);
+        expect(states.every((state) => state?.runStatus === "failed")).toBe(
+          true
+        );
+      })
+  );
+
+  it.effect(
+    "runs included dependencies normally when retrying failed items",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const executionOrder: string[] = [];
+
+        const authors = MigrationDefinition.make({
+          id: "authors",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "author-1",
+                version: "source-version-1",
+                item: { name: "Ada" },
+              },
+            ],
+          }),
+          store,
+          process: (source) =>
+            Effect.sync(() => {
+              executionOrder.push(`authors:${source.identity.encoded}`);
+            }),
+        });
+        const articles = MigrationDefinition.make({
+          id: "articles",
+          dependencies: { required: ["authors"] },
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-1",
+                version: "source-version-1",
+                item: { title: "Recovered article" },
+              },
+            ],
+          }),
+          store,
+          process: (source) =>
+            Effect.sync(() => {
+              executionOrder.push(`articles:${source.identity.encoded}`);
+            }),
+        });
+
+        seedArticleMigrationContract(storeState);
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-1"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: articleSourceIdentity("article-1"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            lastRunId: toMigrationRunId("run-previous"),
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            status: "failed",
+            error: {
+              kind: "destination",
+              errorTag: "DestinationError",
+              message: "destination effect failed",
+            },
+          }
+        );
+
+        const summary = yield* runInlineRegistry({
+          definitions: [articles, authors],
+          definitionIds: ["articles"],
+          mode: { kind: "failed" },
+          withDependencies: true,
+        });
+
+        expect(summary.status).toBe("succeeded");
+        expect(
+          summary.definitions.map((definition) => definition.definitionId)
+        ).toEqual(["authors", "articles"]);
+        expect(executionOrder).toEqual([
+          "authors:author-1",
+          "articles:article-1",
+        ]);
+      })
+  );
+
+  it.effect(
     "validates omitted run dependencies from durable state without executing them",
     () =>
       Effect.gen(function* () {
@@ -8176,6 +8438,109 @@ describe("runInlineDefinition", () => {
             ],
           ])
         );
+      })
+  );
+
+  it.effect(
+    "records untouched definitions as skipped when rollback-orphans fails",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const rollbackError = new MigrationStoreError({
+          message: "Article orphan state is unavailable",
+        });
+        const store = Layer.effect(
+          MigrationStore,
+          Effect.gen(function* () {
+            const migrationStore = yield* MigrationStore;
+
+            return {
+              ...migrationStore,
+              listOrphanItemStates: (definitionId, runId, page) =>
+                definitionId === toMigrationDefinitionId("articles")
+                  ? Effect.fail(rollbackError)
+                  : migrationStore.listOrphanItemStates(
+                      definitionId,
+                      runId,
+                      page
+                    ),
+            };
+          })
+        ).pipe(Layer.provide(InMemoryMigrationStore.layer(storeState)));
+        const authorsId = toMigrationDefinitionId("authors");
+        const articlesId = toMigrationDefinitionId("articles");
+        const assetsId = toMigrationDefinitionId("assets");
+        const source = () =>
+          makeTestInMemorySource({
+            items: [],
+            sourceSchema: ArticleSource,
+          });
+        const authors = MigrationDefinition.make({
+          id: authorsId,
+          source: source(),
+          store,
+          process: () => Effect.void,
+          rollback: () => undefined,
+        });
+        const articles = MigrationDefinition.make({
+          id: articlesId,
+          dependencies: { required: [authorsId] },
+          source: source(),
+          store,
+          process: () => Effect.void,
+          rollback: () => undefined,
+        });
+        const assets = MigrationDefinition.make({
+          id: assetsId,
+          dependencies: { required: [articlesId] },
+          source: source(),
+          store,
+          process: () => Effect.void,
+          rollback: () => undefined,
+        });
+
+        const error = yield* Effect.flip(
+          runInlineRegistry({
+            definitions: [assets, articles, authors],
+            force: true,
+            rollbackOrphans: true,
+          })
+        );
+
+        expect(error).toEqual(rollbackError);
+
+        const states = yield* Effect.all([
+          Effect.gen(function* () {
+            const migrationStore = yield* MigrationStore;
+            return yield* migrationStore.getLatestRunState(authorsId);
+          }).pipe(Effect.provide(store)),
+          Effect.gen(function* () {
+            const migrationStore = yield* MigrationStore;
+            return yield* migrationStore.getLatestRunState(articlesId);
+          }).pipe(Effect.provide(store)),
+          Effect.gen(function* () {
+            const migrationStore = yield* MigrationStore;
+            return yield* migrationStore.getLatestRunState(assetsId);
+          }).pipe(Effect.provide(store)),
+        ]);
+
+        expect(states).toEqual([
+          expect.objectContaining({
+            definitionId: authorsId,
+            runStatus: "failed",
+            status: "skipped",
+          }),
+          expect.objectContaining({
+            definitionId: articlesId,
+            runStatus: "failed",
+            status: "failed",
+          }),
+          expect.objectContaining({
+            definitionId: assetsId,
+            runStatus: "failed",
+            status: "succeeded",
+          }),
+        ]);
       })
   );
 });
