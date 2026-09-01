@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Option, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { MigrationStoreError, SourceError } from "../domain/errors.ts";
 import {
   MigrationDefinitionGroupId,
   MigrationDefinitionId,
@@ -12,6 +13,7 @@ import {
   MigrationDefinitionRegistryUnknownDefinitionError,
   MigrationDefinitionRegistryUnknownGroupError,
 } from "../domain/registry.ts";
+import { MigrationStatusRequestError } from "../domain/status.ts";
 import {
   type MigrateActiveRun,
   type MigrateDashboard,
@@ -114,6 +116,9 @@ const makeBackend = (input?: {
   readonly executeOperation?: MigrateServerBackend<FakeExecutableOperation>["executeOperation"];
   readonly getActiveRuns?: MigrateServerBackend<FakeExecutableOperation>["getActiveRuns"];
   readonly getDashboard?: MigrateServerBackend<FakeExecutableOperation>["getDashboard"];
+  readonly getRegistry?: MigrateServerBackend<FakeExecutableOperation>["getRegistry"];
+  readonly getRegistryMessages?: MigrateServerBackend<FakeExecutableOperation>["getRegistryMessages"];
+  readonly getRegistryStatus?: MigrateServerBackend<FakeExecutableOperation>["getRegistryStatus"];
   readonly getRunProgress?: MigrateServerBackend<FakeExecutableOperation>["getRunProgress"];
   readonly getSourceItemTotals?: MigrateServerBackend<FakeExecutableOperation>["getSourceItemTotals"];
   readonly observeRun?: MigrateServerBackend<FakeExecutableOperation>["observeRun"];
@@ -148,6 +153,28 @@ const makeBackend = (input?: {
       scannedSource: false,
     }),
   getMessages: () => Effect.succeed([]),
+  getRegistry:
+    input?.getRegistry ?? Effect.succeed({ entries: [], groups: [] }),
+  getRegistryMessages:
+    input?.getRegistryMessages ??
+    (() =>
+      Effect.succeed({
+        includedDefinitionIds: [],
+        messages: [],
+        notices: [],
+        requestedDefinitionIds: "all",
+      })),
+  getRegistryStatus:
+    input?.getRegistryStatus ??
+    (() =>
+      Effect.succeed({
+        definitions: [],
+        includedDefinitionIds: [],
+        notices: [],
+        requestedDefinitionIds: "all",
+        scanSource: false,
+        warnings: [],
+      })),
   getRunProgress: input?.getRunProgress ?? (() => Effect.sync(() => undefined)),
   getSourceIdentityHistory: () => Effect.succeed([]),
   getSourceItemTotals: input?.getSourceItemTotals ?? (() => Effect.succeed([])),
@@ -209,6 +236,59 @@ describe("Migrate Server", () => {
 
         expect(error).toEqual(planningError);
       }
+    })
+  );
+
+  it.effect("preserves typed registry inspection errors", () =>
+    Effect.gen(function* () {
+      const statusError = new MigrationStatusRequestError({
+        message:
+          "Status concurrency is only valid when source scanning is enabled",
+      });
+      const server = yield* makeServer(
+        makeBackend({
+          getRegistryStatus: () => Effect.fail(statusError),
+        })
+      );
+      const error = yield* server
+        .getRegistryStatus({
+          concurrency: 2,
+          scanSource: false,
+          selection: { kind: "all" },
+          withDependencies: false,
+        })
+        .pipe(Effect.flip);
+
+      expect(error).toEqual(statusError);
+
+      const storeError = new MigrationStoreError({
+        message: "Unable to read migration messages",
+      });
+      const sourceError = new SourceError({
+        message: "Unable to scan source inventory",
+      });
+      const failingServer = yield* makeServer(
+        makeBackend({
+          getRegistryMessages: () => Effect.fail(storeError),
+          getRegistryStatus: () => Effect.fail(sourceError),
+        })
+      );
+      const messagesFailure = yield* failingServer
+        .getRegistryMessages({
+          selection: { kind: "all" },
+          withDependencies: false,
+        })
+        .pipe(Effect.flip);
+      const statusFailure = yield* failingServer
+        .getRegistryStatus({
+          scanSource: true,
+          selection: { kind: "all" },
+          withDependencies: false,
+        })
+        .pipe(Effect.flip);
+
+      expect(messagesFailure).toEqual(storeError);
+      expect(statusFailure).toEqual(sourceError);
     })
   );
 

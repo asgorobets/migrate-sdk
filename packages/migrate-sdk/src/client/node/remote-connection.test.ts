@@ -84,6 +84,37 @@ describe("remote Migrate Server connection", () => {
       expect(
         await connection.runPromise(connection.client.GetDashboard())
       ).toMatchObject({ dashboard });
+      await expect(
+        connection.runPromise(connection.client.GetRegistry())
+      ).resolves.toEqual({
+        entries: dashboard.rows.map((row) => row.entry),
+        groups: dashboard.groups,
+      });
+      await expect(
+        connection.runPromise(
+          connection.client.GetRegistryStatus({
+            scanSource: false,
+            selection: { kind: "all" },
+            withDependencies: false,
+          })
+        )
+      ).resolves.toMatchObject({
+        includedDefinitionIds: ["articles"],
+        requestedDefinitionIds: "all",
+        scanSource: false,
+      });
+      await expect(
+        connection.runPromise(
+          connection.client.GetRegistryMessages({
+            selection: { kind: "all" },
+            withDependencies: false,
+          })
+        )
+      ).resolves.toMatchObject({
+        includedDefinitionIds: ["articles"],
+        messages: [],
+        requestedDefinitionIds: "all",
+      });
       const dashboardSnapshots = await connection.runPromise(
         connection.client
           .observeDashboard({})

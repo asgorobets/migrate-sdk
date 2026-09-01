@@ -6,6 +6,9 @@ import {
   GetActiveRuns,
   GetDashboard,
   GetMessages,
+  GetRegistry,
+  GetRegistryMessages,
+  GetRegistryStatus,
   GetServerInfo,
   GetSourceIdentityHistory,
   MIGRATE_PROTOCOL_VERSION,
@@ -35,8 +38,13 @@ import {
   MigratePrepareOptions,
   MigrateProtocolError,
   MigrateProtocolVersion,
+  MigrateRegistry,
   MigrateRegistryEntry,
   MigrateRegistryGroup,
+  MigrateRegistryMessagesReport,
+  MigrateRegistryMessagesRequest,
+  MigrateRegistryStatusReport,
+  MigrateRegistryStatusRequest,
   MigrateRunStartResult,
   MigrateSelection,
   MigrateServerInfo,
@@ -85,6 +93,55 @@ const dashboardValue = {
     },
   ],
   scannedSource: false,
+};
+
+const registryValue = {
+  entries: dashboardValue.rows.map((row) => row.entry),
+  groups: dashboardValue.groups,
+};
+
+const registryMessagesRequestValue = {
+  selection: { definitionIds: ["articles"], kind: "definitions" },
+  withDependencies: true,
+};
+
+const registryMessagesReportValue = {
+  includedDefinitionIds: ["authors", "articles"],
+  messages: [
+    {
+      ...messageBase,
+      kind: "skip-reason",
+      severity: "info",
+    },
+  ],
+  notices: [],
+  requestedDefinitionIds: ["articles"],
+};
+
+const registryStatusRequestValue = {
+  concurrency: 2,
+  scanSource: true,
+  selection: { groupId: "content", kind: "group" },
+  withDependencies: false,
+};
+
+const registryStatusReportValue = {
+  definitions: [
+    {
+      definitionId: "articles",
+      discovery: "full",
+      durable: { failed: 0, migrated: 1, needsUpdate: 0, skipped: 0 },
+      lastRun: null,
+      lock: null,
+      warnings: [],
+    },
+  ],
+  includedDefinitionIds: ["articles"],
+  notices: [],
+  requestedDefinitionIds: ["articles"],
+  requestedGroup: "content",
+  scanSource: true,
+  warnings: [],
 };
 
 const operationRequestValue = {
@@ -275,6 +332,31 @@ const contractCases: readonly {
     name: "registry group",
     schema: MigrateRegistryGroup,
     value: { definitionIds: ["authors", "articles"], id: "content" },
+  },
+  {
+    name: "registry",
+    schema: MigrateRegistry,
+    value: registryValue,
+  },
+  {
+    name: "registry messages request",
+    schema: MigrateRegistryMessagesRequest,
+    value: registryMessagesRequestValue,
+  },
+  {
+    name: "registry messages report",
+    schema: MigrateRegistryMessagesReport,
+    value: registryMessagesReportValue,
+  },
+  {
+    name: "registry status request",
+    schema: MigrateRegistryStatusRequest,
+    value: registryStatusRequestValue,
+  },
+  {
+    name: "registry status report",
+    schema: MigrateRegistryStatusReport,
+    value: registryStatusReportValue,
   },
   {
     name: "dashboard",
@@ -525,6 +607,31 @@ const contractCases: readonly {
     },
   },
   {
+    name: "status request protocol error",
+    schema: MigrateProtocolError,
+    value: {
+      _tag: "MigrationStatusRequestError",
+      message:
+        "Status concurrency is only valid when source scanning is enabled",
+    },
+  },
+  {
+    name: "migration store protocol error",
+    schema: MigrateProtocolError,
+    value: {
+      _tag: "MigrationStoreError",
+      message: "Unable to read migration state",
+    },
+  },
+  {
+    name: "source protocol error",
+    schema: MigrateProtocolError,
+    value: {
+      _tag: "SourceError",
+      message: "Unable to scan source inventory",
+    },
+  },
+  {
     name: "item error message",
     schema: MigrationMessage,
     value: {
@@ -593,6 +700,21 @@ const rpcPayloadCases: readonly {
     name: "GetDashboard",
     schema: GetDashboard.payloadSchema,
     value: undefined,
+  },
+  {
+    name: "GetRegistry",
+    schema: GetRegistry.payloadSchema,
+    value: undefined,
+  },
+  {
+    name: "GetRegistryMessages",
+    schema: GetRegistryMessages.payloadSchema,
+    value: registryMessagesRequestValue,
+  },
+  {
+    name: "GetRegistryStatus",
+    schema: GetRegistryStatus.payloadSchema,
+    value: registryStatusRequestValue,
   },
   {
     name: "GetActiveRuns",
@@ -695,6 +817,21 @@ const rpcUnarySuccessCases: readonly {
     },
   },
   {
+    name: "GetRegistry",
+    schema: GetRegistry.successSchema,
+    value: registryValue,
+  },
+  {
+    name: "GetRegistryMessages",
+    schema: GetRegistryMessages.successSchema,
+    value: registryMessagesReportValue,
+  },
+  {
+    name: "GetRegistryStatus",
+    schema: GetRegistryStatus.successSchema,
+    value: registryStatusReportValue,
+  },
+  {
     name: "ObserveDashboardLease",
     schema: ObserveDashboardLease.successSchema,
     value: {
@@ -758,6 +895,9 @@ const rpcUnarySuccessCases: readonly {
 const rpcErrorCases = [
   GetActiveRuns,
   GetDashboard,
+  GetRegistry,
+  GetRegistryMessages,
+  GetRegistryStatus,
   ObserveDashboardLease,
   GetMessages,
   GetSourceIdentityHistory,

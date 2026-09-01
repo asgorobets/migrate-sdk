@@ -9,8 +9,10 @@ import {
   type MigrationDefinitionId,
   type MigrationDefinitionLock,
   type MigrationDefinitionRegistry,
+  type MigrationDefinitionRegistryEntry,
   type MigrationDefinitionRegistryGroup,
   type MigrationDefinitionRegistryId,
+  type MigrationDefinitionRegistryMessagesReport,
   type MigrationDefinitionRegistryStatusReport,
   type MigrationDefinitionStatus,
   type MigrationExecutableObservationResult,
@@ -40,12 +42,15 @@ import type {
   MigrateDefinitionSourceItemTotal,
   MigrateDependencyCheck,
   MigrateExecutionState,
+  MigrateRegistryMessagesRequest,
+  MigrateRegistryStatusRequest,
   MigrateSelection,
   MigrateSourceIdentityHistoryEntry,
   MigrateSourceItemTotal,
   MigrateTarget,
   MigrateTerminalSummary,
 } from "../protocol/index.ts";
+import { toMigrationDefinitionRegistrySelectionInput } from "../protocol/registry-selection.ts";
 import { MigrationDefinitionSource } from "../services/migration-definition-source.ts";
 import {
   isTerminalRunState,
@@ -253,6 +258,13 @@ export interface RegistryMigrateServerRuntime {
   readonly breakLock: (
     lock: MigrationDefinitionLock
   ) => Effect.Effect<MigrateBreakLockResult, unknown>;
+  readonly entries: readonly MigrationDefinitionRegistryEntry[];
+  readonly getRegistryMessages: (
+    input: MigrateRegistryMessagesRequest
+  ) => Effect.Effect<MigrationDefinitionRegistryMessagesReport, unknown>;
+  readonly getRegistryStatus: (
+    input: MigrateRegistryStatusRequest
+  ) => Effect.Effect<MigrationDefinitionRegistryStatusReport, unknown>;
   readonly getRunProgress: (
     runId: MigrationRunId,
     observationDefinitionId?: MigrationDefinitionId
@@ -372,6 +384,18 @@ export const makeRegistryMigrateServerRuntime = (
   const progressFallbackIntervalMs = input.progressFallbackIntervalMs ?? 5000;
   const providerSettlementGraceMs = input.providerSettlementGraceMs ?? 2000;
   const terminalPollIntervalMs = input.terminalPollIntervalMs ?? 500;
+
+  const getRegistryMessages = (input: MigrateRegistryMessagesRequest) =>
+    registry.messages(toMigrationDefinitionRegistrySelectionInput(input));
+
+  const getRegistryStatus = (input: MigrateRegistryStatusRequest) =>
+    registry.status({
+      ...toMigrationDefinitionRegistrySelectionInput(input),
+      ...(input.concurrency === undefined
+        ? {}
+        : { concurrency: input.concurrency }),
+      scanSource: input.scanSource,
+    });
 
   const readExecutionProgressEffect = (
     definitionIds: readonly MigrationDefinitionId[]
@@ -1546,6 +1570,9 @@ export const makeRegistryMigrateServerRuntime = (
 
   return {
     breakLock,
+    entries,
+    getRegistryMessages,
+    getRegistryStatus,
     groups,
     hasActiveExecutions: () => activeExecutions.size > 0,
     getRunProgress,

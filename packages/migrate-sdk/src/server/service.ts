@@ -45,6 +45,11 @@ import {
   MigratePlanFingerprint,
   type MigratePreparedOperation,
   MigrateProtocolError,
+  type MigrateRegistry,
+  type MigrateRegistryMessagesReport,
+  type MigrateRegistryMessagesRequest,
+  type MigrateRegistryStatusReport,
+  type MigrateRegistryStatusRequest,
   type MigrateRunStartResult,
   type MigrateRunStopResult,
   type MigrateServerInfo,
@@ -72,6 +77,13 @@ export interface MigrateServerService {
   readonly getMessages: (input: {
     readonly target: MigrateTarget;
   }) => Effect.Effect<readonly MigrationMessage[], MigrateProtocolError>;
+  readonly getRegistry: Effect.Effect<MigrateRegistry, MigrateProtocolError>;
+  readonly getRegistryMessages: (
+    input: MigrateRegistryMessagesRequest
+  ) => Effect.Effect<MigrateRegistryMessagesReport, MigrateProtocolError>;
+  readonly getRegistryStatus: (
+    input: MigrateRegistryStatusRequest
+  ) => Effect.Effect<MigrateRegistryStatusReport, MigrateProtocolError>;
   readonly getServerInfo: Effect.Effect<MigrateServerInfo>;
   readonly getSourceIdentityHistory: (input: {
     readonly definitionId: MigrationDefinitionId;
@@ -168,6 +180,13 @@ export interface MigrateServerBackend<ExecutableOperation> {
   readonly getMessages: (
     target: MigrateTarget
   ) => Effect.Effect<readonly MigrationMessage[], unknown>;
+  readonly getRegistry: Effect.Effect<MigrateRegistry, unknown>;
+  readonly getRegistryMessages: (
+    input: MigrateRegistryMessagesRequest
+  ) => Effect.Effect<MigrateRegistryMessagesReport, unknown>;
+  readonly getRegistryStatus: (
+    input: MigrateRegistryStatusRequest
+  ) => Effect.Effect<MigrateRegistryStatusReport, unknown>;
   readonly getRunProgress: (
     runId: MigrationRunId,
     observationDefinitionId?: MigrationDefinitionId
@@ -1302,6 +1321,11 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
     getActiveRuns,
     getMessages: ({ target }) =>
       backend.getMessages(target).pipe(Effect.mapError(operationError)),
+    getRegistry: backend.getRegistry.pipe(Effect.mapError(operationError)),
+    getRegistryMessages: (input) =>
+      backend.getRegistryMessages(input).pipe(Effect.mapError(operationError)),
+    getRegistryStatus: (input) =>
+      backend.getRegistryStatus(input).pipe(Effect.mapError(operationError)),
     getServerInfo: Effect.succeed(serverInfo),
     getSourceIdentityHistory: ({ definitionId }) =>
       backend

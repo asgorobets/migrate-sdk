@@ -7,6 +7,7 @@ import type {
   MigrateDashboard,
   MigrateOperationRequest,
   MigratePreparedOperation,
+  MigrateRegistry,
 } from "../protocol/index.ts";
 import type {
   ExecutableMigrationOperation,
@@ -126,6 +127,12 @@ export const makeRegistryMigrateServerBackend = (
     Effect.map((snapshot) => dashboard(runtime, snapshot))
   ),
   getMessages: (target) => runtime.listMessages(target),
+  getRegistry: Effect.succeed({
+    entries: runtime.entries,
+    groups: runtime.groups,
+  } satisfies MigrateRegistry),
+  getRegistryMessages: runtime.getRegistryMessages,
+  getRegistryStatus: runtime.getRegistryStatus,
   getRunProgress: runtime.getRunProgress,
   getSourceIdentityHistory: runtime.listSourceIdentityHistory,
   getSourceItemTotals: runtime.getSourceItemTotals,

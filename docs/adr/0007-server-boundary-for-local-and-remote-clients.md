@@ -79,6 +79,13 @@ the Effect RPC encoding incompatibly requires a new protocol version. An
 additive wire change may remain in the current protocol only when cross-version
 contract tests demonstrate compatibility in both client/server directions.
 
+Protocol v1 is finalized before external adoption by including the complete CLI
+inspection surface described below. Earlier `0.8.0` development deployments
+that advertised the incomplete v1 draft must be redeployed with the corrected
+server before using the new remote CLI inspection commands. This is a one-time
+baseline correction, not precedent for adding required operations to an adopted
+protocol version. Existing TUI operations and payloads remain unchanged.
+
 The currently implemented local connection uses a Node Migrate Server process
 started by the TUI. The Bun renderer communicates with that process over a
 reconnectable local Effect RPC socket, while the Node process loads the same
@@ -280,6 +287,14 @@ lifecycle management:
 - `migrate runs stop <run-id>` explicitly requests durable cooperative
   cancellation.
 
+`GetRegistry` returns static registry entries and groups without reading
+Migration Stores. `GetRegistryStatus` and `GetRegistryMessages` accept the same
+selection and dependency-expansion inputs as their local registry operations;
+the server performs selection validation, source-scan concurrency, dependency
+deduplication, and global message ordering authoritatively. Clients render
+those canonical reports rather than reconstructing them from dashboard rows or
+per-definition requests.
+
 Remote CLI commands accept a Migrate Server URL and read its bearer token from
 `MIGRATE_SERVER_TOKEN`; secrets are not accepted as command-line flags. Store
 schema commands remain local infrastructure operations because the Migrate
@@ -322,8 +337,10 @@ unknown, active-run discovery is the recovery path.
   CLI-specific execution progress services, or wait on in-process run handles.
 - Execution providers remain replaceable behind Migration Executable instead of
   becoming TUI integrations.
-- The TUI and server negotiate protocol and SDK compatibility and exchange
-  registry and environment identity before operations begin.
+- Clients and servers negotiate Migrate Protocol compatibility and exchange
+  registry, environment, and SDK identity before operations begin. Remote SDK
+  versions are diagnostic; local socket connections additionally require exact
+  SDK identity.
 - Contextual availability, such as rollback support or whether a run can be
   stopped, is represented by migration and run data rather than server feature
   negotiation.

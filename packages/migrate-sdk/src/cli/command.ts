@@ -11,34 +11,26 @@ import {
 } from "effect";
 import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
 import type { SqlClient } from "effect/unstable/sql";
-import type { AnySelfContainedMigrationDefinition } from "../domain/definition.ts";
 import type { PipelineExecutionConcurrency } from "../domain/execution.ts";
 import {
-  type MigrationDefinitionId,
   toMigrationDefinitionGroupId,
   toMigrationDefinitionId,
   toMigrationRunId,
 } from "../domain/ids.ts";
 import { MigrationMessage } from "../domain/message.ts";
-import type {
-  MigrationDefinitionRegistry,
-  MigrationDefinitionRegistryMessagesError,
-  MigrationDefinitionRegistryMessagesReport,
-  MigrationDefinitionRegistryPlanningError,
-  MigrationDefinitionRegistrySelectionInput,
-  MigrationDefinitionRegistryStatusError,
-  MigrationDefinitionRegistryStatusInput,
-  MigrationDefinitionRegistryStatusReport,
+import {
+  MigrationDefinitionRegistryInvalidSelectionError,
+  MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError,
+  type MigrationDefinitionRegistryPlanningError,
+  MigrationDefinitionRegistryUnknownDefinitionError,
+  MigrationDefinitionRegistryUnknownGroupError,
 } from "../domain/registry.ts";
 import type {
   MigrateAction,
-  MigrateDashboardRow,
   MigrateOperationRequest,
   MigratePreparedOperation,
   MigrateSelection,
-  MigrateTarget,
 } from "../protocol/index.ts";
-import { MigrationStore } from "../services/migration-store.ts";
 import { SqlMigrationStore } from "../stores/sql/sql-migration-store.ts";
 import type { SqlMigrationStoreSchemaPlan } from "../stores/sql/sql-migration-store-schema.ts";
 import type { MigrationCliConfig } from "./config.ts";
@@ -46,6 +38,11 @@ import {
   loadMigrationCliConfig,
   type MigrationCliConfigLoadError,
 } from "./config-loader.ts";
+import {
+  type MigrationCliRegistryOperations,
+  makeLocalMigrationCliRegistryOperations,
+  makeRemoteMigrationCliRegistryOperations,
+} from "./inspection.ts";
 import type { ActiveMigrationCliInterrupts } from "./interrupts.ts";
 import {
   type CliObservationProgressMode,
@@ -63,8 +60,6 @@ import {
   renderPreparedOperationWarnings,
   renderRegistryEntriesGraph,
   renderRegistryEntriesList,
-  renderRegistryGraph,
-  renderRegistryList,
   renderRunStopResult,
   renderRuntimeError,
   renderSqlMigrationStoreSchemaPlan,
@@ -190,11 +185,6 @@ const loadConfiguredConfig = Effect.gen(function* () {
 
   return loadedConfig;
 });
-
-const loadConfiguredRegistry = Effect.map(
-  loadConfiguredConfig,
-  (loadedConfig) => loadedConfig.registry
-);
 
 interface CliMigrateConnection {
   readonly connection: MigrationCliServerConnection;
@@ -333,7 +323,7 @@ const withCliMigrateConnection = <A, E, R>(
     releaseCliMigrateConnection
   );
 
-const reportCliConnectionErrors = <A, R>(
+const reportCliRegistryCommandErrors = <A, R>(
   effect: Effect.Effect<A, unknown, R>
 ): Effect.Effect<A, CliError.CliError, R> =>
   effect.pipe(
@@ -343,6 +333,26 @@ const reportCliConnectionErrors = <A, R>(
         : failReportedCliMessage(renderStoredFailure(error))
     )
   );
+
+const withCliRegistryOperations = <A, Error, Requirements>(
+  use: (
+    operations: MigrationCliRegistryOperations
+  ) => Effect.Effect<A, Error, Requirements>
+) =>
+  Effect.gen(function* () {
+    const root = yield* migrateBaseCommand;
+
+    if (Option.isSome(root.server)) {
+      return yield* withCliMigrateConnection(({ connection }) =>
+        use(makeRemoteMigrationCliRegistryOperations(connection))
+      );
+    }
+
+    const loadedConfig = yield* loadConfiguredConfig;
+    return yield* use(
+      makeLocalMigrationCliRegistryOperations(loadedConfig.registry)
+    );
+  }).pipe(reportCliRegistryCommandErrors);
 
 const requireConfiguredSqlStore = (config: MigrationCliConfig) =>
   config.sqlStore === undefined
@@ -501,45 +511,17 @@ const storeCommand = Command.make("store").pipe(
   Command.withSubcommands([schemaCommand])
 );
 
-type CliExecutableRegistry = MigrationDefinitionRegistry<
-  readonly AnySelfContainedMigrationDefinition[]
->;
-
-const toCliExecutableRegistry = (
-  registry: MigrationDefinitionRegistry
-): CliExecutableRegistry => registry as CliExecutableRegistry;
-
-const hasRegisteredDefinition = (
-  registry: MigrationDefinitionRegistry,
-  definitionId: MigrationDefinitionId
-): boolean => registry.list().some((entry) => entry.id === definitionId);
-
 const listCommand = Command.make("list", {}, () =>
-  Effect.gen(function* () {
-    const root = yield* migrateBaseCommand;
-
-    if (Option.isSome(root.server)) {
-      return yield* reportCliConnectionErrors(
-        withCliMigrateConnection(({ connection }) =>
-          Effect.gen(function* () {
-            const snapshot = yield* connection.getDashboard;
-            yield* Console.log(
-              renderRegistryEntriesList(
-                snapshot.dashboard.rows.map((row) => row.entry),
-                { colors: yield* useColor }
-              )
-            );
-          })
-        )
+  withCliRegistryOperations((operations) =>
+    Effect.gen(function* () {
+      const registry = yield* operations.getRegistry;
+      yield* Console.log(
+        renderRegistryEntriesList(registry.entries, {
+          colors: yield* useColor,
+        })
       );
-    }
-
-    const registry = yield* loadConfiguredRegistry;
-
-    yield* Console.log(
-      renderRegistryList(registry, { colors: yield* useColor })
-    );
-  })
+    })
+  )
 ).pipe(Command.withDescription("List registered Migration Definitions"));
 
 const graphDefinition = Argument.string("definition").pipe(Argument.optional);
@@ -548,66 +530,31 @@ const graphCommand = Command.make(
   "graph",
   { definition: graphDefinition },
   ({ definition }) =>
-    Effect.gen(function* () {
-      const focusedDefinitionId = Option.getOrUndefined(definition);
-      const root = yield* migrateBaseCommand;
+    withCliRegistryOperations((operations) =>
+      Effect.gen(function* () {
+        const focusedDefinitionId = Option.getOrUndefined(definition);
+        const registry = yield* operations.getRegistry;
 
-      if (Option.isSome(root.server)) {
-        return yield* reportCliConnectionErrors(
-          withCliMigrateConnection(({ connection }) =>
-            Effect.gen(function* () {
-              const snapshot = yield* connection.getDashboard;
-              const entries = snapshot.dashboard.rows.map((row) => row.entry);
-
-              if (
-                focusedDefinitionId !== undefined &&
-                !entries.some((entry) => entry.id === focusedDefinitionId)
-              ) {
-                return yield* failReportedCliMessage(
-                  `Migration Definition was not found in the registry: ${focusedDefinitionId}`
-                );
-              }
-
-              yield* Console.log(
-                renderRegistryEntriesGraph(
-                  entries,
-                  focusedDefinitionId === undefined
-                    ? undefined
-                    : toMigrationDefinitionId(focusedDefinitionId),
-                  { colors: yield* useColor }
-                )
-              );
-            })
-          )
-        );
-      }
-
-      const loadedConfig = yield* loadConfiguredConfig;
-      const registry = loadedConfig.registry;
-
-      if (focusedDefinitionId !== undefined) {
-        const definitionId = toMigrationDefinitionId(focusedDefinitionId);
-
-        if (!hasRegisteredDefinition(registry, definitionId)) {
+        if (
+          focusedDefinitionId !== undefined &&
+          !registry.entries.some((entry) => entry.id === focusedDefinitionId)
+        ) {
           return yield* failReportedCliMessage(
-            `Migration Definition was not found in the registry: ${definitionId}`
+            `Migration Definition was not found in the registry: ${focusedDefinitionId}`
           );
         }
 
         yield* Console.log(
-          renderRegistryGraph(registry, definitionId, {
-            colors: yield* useColor,
-          })
+          renderRegistryEntriesGraph(
+            registry.entries,
+            focusedDefinitionId === undefined
+              ? undefined
+              : toMigrationDefinitionId(focusedDefinitionId),
+            { colors: yield* useColor }
+          )
         );
-        return;
-      }
-
-      yield* Console.log(
-        renderRegistryGraph(registry, undefined, {
-          colors: yield* useColor,
-        })
-      );
-    })
+      })
+    )
 ).pipe(Command.withDescription("Inspect Migration Definition dependencies"));
 
 const plan = Flag.boolean("plan").pipe(
@@ -746,40 +693,12 @@ interface CliRegistrySelectionInput {
   readonly withDependencies: boolean;
 }
 
-const makeRegistrySelectionInput = (
-  input: CliRegistrySelectionInput
-): MigrationDefinitionRegistrySelectionInput => {
-  if (input.group !== undefined) {
-    return {
-      group: input.group,
-      ...(input.all ? { all: true } : {}),
-      ...(input.definitionIds.length === 0
-        ? {}
-        : { definitionIds: input.definitionIds }),
-      withDependencies: input.withDependencies,
-    } as unknown as MigrationDefinitionRegistrySelectionInput;
-  }
-
-  if (input.all) {
-    return {
-      all: true,
-      ...(input.definitionIds.length === 0
-        ? {}
-        : { definitionIds: input.definitionIds }),
-      withDependencies: input.withDependencies,
-    } as MigrationDefinitionRegistrySelectionInput;
-  }
-
-  return input.definitionIds.length === 0
-    ? ({} as MigrationDefinitionRegistrySelectionInput)
-    : {
-        definitionIds: input.definitionIds as [string, ...string[]],
-        withDependencies: input.withDependencies,
-      };
-};
-
 const makeMigrateSelection = (
-  input: Pick<CliRegistrySelectionInput, "all" | "definitionIds" | "group">
+  input: Pick<CliRegistrySelectionInput, "all" | "definitionIds" | "group">,
+  messages: {
+    readonly missing?: string;
+    readonly mixed?: string;
+  } = {}
 ): Effect.Effect<MigrateSelection, CliError.UserError> => {
   const selectedKinds =
     Number(input.all) +
@@ -788,13 +707,15 @@ const makeMigrateSelection = (
 
   if (selectedKinds === 0) {
     return failReportedCliMessage(
-      "Select migrations with definition IDs, --group, or --all"
+      messages.missing ??
+        "Select migrations with definition IDs, --group, or --all"
     );
   }
 
   if (selectedKinds > 1) {
     return failReportedCliMessage(
-      "Choose only one migration selection: definition IDs, --group, or --all"
+      messages.mixed ??
+        "Choose only one migration selection: definition IDs, --group, or --all"
     );
   }
 
@@ -813,7 +734,8 @@ const makeMigrateSelection = (
 
   if (firstDefinitionId === undefined) {
     return failReportedCliMessage(
-      "Select migrations with definition IDs, --group, or --all"
+      messages.missing ??
+        "Select migrations with definition IDs, --group, or --all"
     );
   }
 
@@ -826,40 +748,25 @@ const makeMigrateSelection = (
   });
 };
 
-const makeStatusInput = (
-  input: CliRegistrySelectionInput & {
-    readonly concurrency?: number;
-    readonly scanSource: boolean;
-  }
-): MigrationDefinitionRegistryStatusInput =>
-  ({
-    ...makeRegistrySelectionInput(input),
-    ...(input.concurrency === undefined
-      ? {}
-      : { concurrency: input.concurrency }),
-    scanSource: input.scanSource,
-  }) as MigrationDefinitionRegistryStatusInput;
+const registryReadSelectionMessages = {
+  missing:
+    "Registry planning requires all: true, a Migration Definition group, or at least one Migration Definition id",
+  mixed:
+    "Registry planning accepts only one selection form: all: true, Migration Definition ids, or a Migration Definition group",
+} as const;
 
 const isPlanningError = (
   error: unknown
-): error is MigrationDefinitionRegistryPlanningError => {
-  if (typeof error !== "object" || error === null || !("_tag" in error)) {
-    return false;
-  }
-
-  switch (error._tag) {
-    case "MigrationDefinitionRegistryInvalidSelectionError":
-    case "MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError":
-    case "MigrationDefinitionRegistryUnknownDefinitionError":
-    case "MigrationDefinitionRegistryUnknownGroupError":
-      return true;
-    default:
-      return false;
-  }
-};
+): error is MigrationDefinitionRegistryPlanningError =>
+  Schema.is(MigrationDefinitionRegistryInvalidSelectionError)(error) ||
+  Schema.is(
+    MigrationDefinitionRegistryMissingExplicitRequiredDependenciesError
+  )(error) ||
+  Schema.is(MigrationDefinitionRegistryUnknownDefinitionError)(error) ||
+  Schema.is(MigrationDefinitionRegistryUnknownGroupError)(error);
 
 const renderStatusCommandError = (
-  error: MigrationDefinitionRegistryStatusError,
+  error: unknown,
   input: {
     readonly definitionIds: readonly string[];
     readonly group?: string;
@@ -874,15 +781,11 @@ const renderStatusCommandError = (
     });
   }
 
-  if (error._tag === "MigrationStatusRequestError") {
-    return error.message;
-  }
-
-  return renderRuntimeError(error);
+  return renderStoredFailure(error);
 };
 
 const renderMessagesCommandError = (
-  error: MigrationDefinitionRegistryMessagesError,
+  error: unknown,
   input: {
     readonly definitionIds: readonly string[];
     readonly group?: string;
@@ -895,140 +798,7 @@ const renderMessagesCommandError = (
         ...(input.group === undefined ? {} : { group: input.group }),
         hasTarget: false,
       })
-    : renderRuntimeError(error);
-
-interface RemoteReadSelection {
-  readonly operation: MigratePreparedOperation;
-  readonly selection: MigrateSelection;
-}
-
-function prepareRemoteReadSelection(
-  connection: MigrationCliServerConnection,
-  input: CliRegistrySelectionInput,
-  renderError: (error: unknown) => string
-): Effect.Effect<RemoteReadSelection, CliError.UserError> {
-  return Effect.gen(function* () {
-    const selection = yield* makeMigrateSelection(input);
-    const operation = yield* connection
-      .prepareOperation({
-        action: "run",
-        options: { withDependencies: input.withDependencies },
-        selection,
-      })
-      .pipe(
-        Effect.catch((error) => failReportedCliMessage(renderError(error)))
-      );
-
-    return { operation, selection };
-  });
-}
-
-function remoteStatusScanTargets(
-  selection: MigrateSelection,
-  includedDefinitionIds: readonly MigrationDefinitionId[]
-): readonly MigrateTarget[] {
-  switch (selection.kind) {
-    case "group":
-      return [{ groupId: selection.groupId, kind: "group" }];
-    case "definitions":
-      return selection.definitionIds.map((definitionId) => ({
-        definitionId,
-        kind: "migration",
-      }));
-    case "all":
-      return includedDefinitionIds.map((definitionId) => ({
-        definitionId,
-        kind: "migration",
-      }));
-    default: {
-      const unhandled: never = selection;
-      return unhandled;
-    }
-  }
-}
-
-function collectRemoteStatusRows(
-  connection: MigrationCliServerConnection,
-  selection: MigrateSelection,
-  operation: MigratePreparedOperation,
-  options: { readonly concurrency?: number; readonly scanSource: boolean }
-): Effect.Effect<
-  ReadonlyMap<MigrationDefinitionId, MigrateDashboardRow>,
-  unknown
-> {
-  const rowsById = new Map(
-    operation.planRows.map((row) => [row.entry.id, row])
-  );
-
-  if (!options.scanSource) {
-    return Effect.succeed(rowsById);
-  }
-
-  return Effect.gen(function* () {
-    const includedIds = new Set(operation.plan.includedDefinitionIds);
-    const targets = remoteStatusScanTargets(
-      selection,
-      operation.plan.includedDefinitionIds
-    );
-
-    for (const target of targets) {
-      const dashboard = yield* connection.scanSource({
-        ...(options.concurrency === undefined
-          ? {}
-          : { concurrency: options.concurrency }),
-        target,
-      });
-
-      for (const row of dashboard.rows) {
-        if (includedIds.has(row.entry.id) && row.status?.source !== undefined) {
-          rowsById.set(row.entry.id, row);
-        }
-      }
-    }
-
-    return rowsById;
-  });
-}
-
-function makeRemoteStatusReport(
-  operation: MigratePreparedOperation,
-  rowsById: ReadonlyMap<MigrationDefinitionId, MigrateDashboardRow>,
-  scanSource: boolean
-): MigrationDefinitionRegistryStatusReport {
-  const definitions = operation.plan.includedDefinitionIds.flatMap(
-    (definitionId) => {
-      const status = rowsById.get(definitionId)?.status;
-      return status === undefined ? [] : [status];
-    }
-  );
-
-  return {
-    definitions,
-    includedDefinitionIds: operation.plan.includedDefinitionIds,
-    notices: operation.plan.notices,
-    ...(operation.plan.requestedGroup === undefined
-      ? {}
-      : { requestedGroup: operation.plan.requestedGroup }),
-    requestedDefinitionIds: operation.plan.requestedDefinitionIds,
-    scanSource,
-    warnings: definitions.flatMap((definition) => definition.warnings),
-  };
-}
-
-function makeRemoteMessagesReport(
-  operation: MigratePreparedOperation,
-  messages: readonly MigrationMessage[]
-): MigrationDefinitionRegistryMessagesReport {
-  return {
-    includedDefinitionIds: operation.plan.includedDefinitionIds,
-    messages,
-    notices: operation.plan.notices,
-    ...(operation.plan.requestedGroup === undefined
-      ? {}
-      : { requestedGroup: operation.plan.requestedGroup }),
-    requestedDefinitionIds: operation.plan.requestedDefinitionIds,
-  };
-}
+    : renderStoredFailure(error);
 
 const statusCommand = Command.make(
   "status",
@@ -1041,86 +811,46 @@ const statusCommand = Command.make(
     withDependencies,
   },
   (input) =>
-    Effect.gen(function* () {
-      const concurrencyInput = Option.getOrUndefined(input.concurrency);
-      const groupInput = Option.getOrUndefined(input.group);
-      const root = yield* migrateBaseCommand;
-
-      if (Option.isSome(root.server)) {
-        return yield* reportCliConnectionErrors(
-          withCliMigrateConnection(({ connection }) =>
-            Effect.gen(function* () {
-              const { operation, selection } =
-                yield* prepareRemoteReadSelection(
-                  connection,
-                  {
-                    all: input.all,
-                    definitionIds: input.definitions,
-                    ...(groupInput === undefined ? {} : { group: groupInput }),
-                    withDependencies: input.withDependencies,
-                  },
-                  (error) =>
-                    isPlanningError(error)
-                      ? renderStatusCommandError(error, {
-                          definitionIds: input.definitions,
-                          ...(groupInput === undefined
-                            ? {}
-                            : { group: groupInput }),
-                        })
-                      : renderStoredFailure(error)
-                );
-              const rowsById = yield* collectRemoteStatusRows(
-                connection,
-                selection,
-                operation,
-                {
-                  ...(concurrencyInput === undefined
-                    ? {}
-                    : { concurrency: concurrencyInput }),
-                  scanSource: input.scanSource,
-                }
-              );
-              const report = makeRemoteStatusReport(
-                operation,
-                rowsById,
-                input.scanSource
-              );
-
-              yield* Console.log(
-                renderStatusReport(report, { colors: yield* useColor })
-              );
-            })
-          )
+    withCliRegistryOperations((operations) =>
+      Effect.gen(function* () {
+        const concurrencyInput = Option.getOrUndefined(input.concurrency);
+        const groupInput = Option.getOrUndefined(input.group);
+        const selection = yield* makeMigrateSelection(
+          {
+            all: input.all,
+            definitionIds: input.definitions,
+            ...(groupInput === undefined ? {} : { group: groupInput }),
+          },
+          registryReadSelectionMessages
         );
-      }
+        const report = yield* operations
+          .getStatus({
+            ...(concurrencyInput === undefined
+              ? {}
+              : { concurrency: concurrencyInput }),
+            scanSource: input.scanSource,
+            selection,
+            withDependencies: input.withDependencies,
+          })
+          .pipe(
+            Effect.catchTag("MigrationStatusRequestError", (error) =>
+              failReportedCliMessage(error.message)
+            ),
+            Effect.catch((error) =>
+              failReportedCliMessage(
+                renderStatusCommandError(error, {
+                  definitionIds: input.definitions,
+                  ...(groupInput === undefined ? {} : { group: groupInput }),
+                })
+              )
+            )
+          );
 
-      const loadedConfig = yield* loadConfiguredConfig;
-      const registry = toCliExecutableRegistry(loadedConfig.registry);
-      const statusInput = makeStatusInput({
-        all: input.all,
-        ...(concurrencyInput === undefined
-          ? {}
-          : { concurrency: concurrencyInput }),
-        definitionIds: input.definitions,
-        ...(groupInput === undefined ? {} : { group: groupInput }),
-        scanSource: input.scanSource,
-        withDependencies: input.withDependencies,
-      });
-      const report = yield* registry.status(statusInput).pipe(
-        Effect.catch((error) =>
-          failReportedCliMessage(
-            renderStatusCommandError(error, {
-              definitionIds: input.definitions,
-              ...(groupInput === undefined ? {} : { group: groupInput }),
-            })
-          )
-        )
-      );
-
-      yield* Console.log(
-        renderStatusReport(report, { colors: yield* useColor })
-      );
-    })
+        yield* Console.log(
+          renderStatusReport(report, { colors: yield* useColor })
+        );
+      })
+    )
 ).pipe(Command.withDescription("Inspect Migration Definition status"));
 
 const messagesCommand = Command.make(
@@ -1133,92 +863,46 @@ const messagesCommand = Command.make(
     withDependencies,
   },
   (input) =>
-    Effect.gen(function* () {
-      const groupInput = Option.getOrUndefined(input.group);
-      const root = yield* migrateBaseCommand;
-
-      if (Option.isSome(root.server)) {
-        return yield* reportCliConnectionErrors(
-          withCliMigrateConnection(({ connection }) =>
-            Effect.gen(function* () {
-              const { operation } = yield* prepareRemoteReadSelection(
-                connection,
-                {
-                  all: input.all,
-                  definitionIds: input.definitions,
-                  ...(groupInput === undefined ? {} : { group: groupInput }),
-                  withDependencies: input.withDependencies,
-                },
-                (error) =>
-                  isPlanningError(error)
-                    ? renderMessagesCommandError(error, {
-                        definitionIds: input.definitions,
-                        ...(groupInput === undefined
-                          ? {}
-                          : { group: groupInput }),
-                      })
-                    : renderStoredFailure(error)
-              );
-              const messages = (yield* Effect.forEach(
-                operation.plan.includedDefinitionIds,
-                (definitionId) =>
-                  connection.getMessages({
-                    definitionId,
-                    kind: "migration",
-                  })
-              )).flat();
-              const report = makeRemoteMessagesReport(operation, messages);
-
-              if (input.json) {
-                const json = yield* Schema.encodeEffect(
-                  MigrationMessagesFromJson
-                )(report.messages).pipe(Effect.orDie);
-                yield* Console.log(json);
-                return;
-              }
-
-              yield* Console.log(
-                renderMessagesReport(report, { colors: yield* useColor })
-              );
-            })
-          )
-        );
-      }
-
-      const loadedConfig = yield* loadConfiguredConfig;
-      const registry = loadedConfig.registry;
-      const report = yield* registry
-        .messages(
-          makeRegistrySelectionInput({
+    withCliRegistryOperations((operations) =>
+      Effect.gen(function* () {
+        const groupInput = Option.getOrUndefined(input.group);
+        const selection = yield* makeMigrateSelection(
+          {
             all: input.all,
             definitionIds: input.definitions,
             ...(groupInput === undefined ? {} : { group: groupInput }),
+          },
+          registryReadSelectionMessages
+        );
+        const report = yield* operations
+          .getMessages({
+            selection,
             withDependencies: input.withDependencies,
           })
-        )
-        .pipe(
-          Effect.catch((error) =>
-            failReportedCliMessage(
-              renderMessagesCommandError(error, {
-                definitionIds: input.definitions,
-                ...(groupInput === undefined ? {} : { group: groupInput }),
-              })
+          .pipe(
+            Effect.catch((error) =>
+              failReportedCliMessage(
+                renderMessagesCommandError(error, {
+                  definitionIds: input.definitions,
+                  ...(groupInput === undefined ? {} : { group: groupInput }),
+                })
+              )
             )
-          )
+          );
+
+        if (input.json) {
+          const json = yield* Schema.encodeEffect(MigrationMessagesFromJson)(
+            report.messages
+          ).pipe(Effect.orDie);
+          yield* Console.log(json);
+          return;
+        }
+
+        yield* Console.log(
+          renderMessagesReport(report, { colors: yield* useColor })
         );
-
-      if (input.json) {
-        const json = yield* Schema.encodeEffect(MigrationMessagesFromJson)(
-          report.messages
-        ).pipe(Effect.orDie);
-        yield* Console.log(json);
-        return;
-      }
-
-      yield* Console.log(
-        renderMessagesReport(report, { colors: yield* useColor })
-      );
-    })
+      })
+    )
 ).pipe(Command.withDescription("Inspect durable Migration Messages"));
 
 const unlockDefinition = Argument.string("definition").pipe(
@@ -1231,95 +915,34 @@ const unlockCommand = Command.make(
   "unlock",
   { definition: unlockDefinition },
   ({ definition }) =>
-    Effect.gen(function* () {
-      const definitionId = toMigrationDefinitionId(definition);
-      const root = yield* migrateBaseCommand;
+    withCliRegistryOperations((operations) =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId(definition);
+        const result = yield* operations.breakLock(definitionId);
 
-      if (Option.isSome(root.server)) {
-        return yield* reportCliConnectionErrors(
-          withCliMigrateConnection(({ connection }) =>
-            Effect.gen(function* () {
-              const snapshot = yield* connection.getDashboard;
-              const row = snapshot.dashboard.rows.find(
-                (candidate) => candidate.entry.id === definitionId
-              );
+        if (result.kind === "not-found") {
+          return yield* failReportedCliMessage(
+            `Migration Definition was not found in the registry: ${definitionId}`
+          );
+        }
 
-              if (row === undefined) {
-                return yield* failReportedCliMessage(
-                  `Migration Definition was not found in the registry: ${definitionId}`
-                );
-              }
+        if (result.kind === "already-clear") {
+          yield* Console.log(
+            `Migration Definition lock is already clear: ${definitionId}`
+          );
+          return;
+        }
 
-              const lock = row.status?.lock;
-
-              if (lock === undefined || lock === null) {
-                yield* Console.log(
-                  `Migration Definition lock is already clear: ${definitionId}`
-                );
-                return;
-              }
-
-              const result = yield* connection.breakLock(lock);
-
-              if (result.kind === "already-clear") {
-                yield* Console.log(
-                  `Migration Definition lock is already clear: ${definitionId}`
-                );
-                return;
-              }
-
-              yield* Console.log(
-                [
-                  "Migration Definition lock cleared",
-                  `Migration ID  ${definitionId}`,
-                  `Owner Run ID  ${lock.ownerRunId}`,
-                  `Token         ${lock.token}`,
-                ].join("\n")
-              );
-            })
-          )
-        );
-      }
-
-      const loadedConfig = yield* loadConfiguredConfig;
-      const registry = loadedConfig.registry;
-      const migrationDefinition = Option.getOrUndefined(
-        registry.get(definitionId)
-      );
-
-      if (migrationDefinition === undefined) {
-        return yield* failReportedCliMessage(
-          `Migration Definition was not found in the registry: ${definitionId}`
-        );
-      }
-
-      const lock = yield* Effect.gen(function* () {
-        const store = yield* MigrationStore;
-
-        return yield* store.breakDefinitionLock(definitionId);
-      }).pipe(
-        Effect.provide(migrationDefinition.store),
-        Effect.catch((error) =>
-          failReportedCliMessage(renderRuntimeError(error))
-        )
-      );
-
-      if (lock === null) {
         yield* Console.log(
-          `Migration Definition lock is already clear: ${definitionId}`
+          [
+            "Migration Definition lock cleared",
+            `Migration ID  ${definitionId}`,
+            `Owner Run ID  ${result.lock.ownerRunId}`,
+            `Token         ${result.lock.token}`,
+          ].join("\n")
         );
-        return;
-      }
-
-      yield* Console.log(
-        [
-          "Migration Definition lock cleared",
-          `Migration ID  ${definitionId}`,
-          `Owner Run ID  ${lock.ownerRunId}`,
-          `Token         ${lock.token}`,
-        ].join("\n")
-      );
-    })
+      })
+    )
 ).pipe(Command.withDescription("Break a Migration Definition lock"));
 
 const runIdArgument = Argument.string("run-id").pipe(

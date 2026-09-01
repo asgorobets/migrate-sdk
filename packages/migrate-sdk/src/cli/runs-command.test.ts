@@ -14,12 +14,14 @@ import { pretty as prettyCause } from "effect/Cause";
 import { isFailure, isSuccess } from "effect/Exit";
 import { TestClock, TestConsole } from "effect/testing";
 import { CliOutput, Command } from "effect/unstable/cli";
+import {
+  RpcClientDefect,
+  RpcClientError,
+} from "effect/unstable/rpc/RpcClientError";
 import type { MigrateServerConnectionInput } from "../client/node/index.ts";
 import {
-  toEncodedSourceIdentity,
   toMigrationDefinitionGroupId,
   toMigrationDefinitionId,
-  toMigrationDefinitionLockToken,
   toMigrationRunId,
 } from "../domain/ids.ts";
 import {
@@ -28,7 +30,6 @@ import {
 } from "../domain/registry.ts";
 import type {
   MigrateActiveRun,
-  MigrateDashboardRow,
   MigrateObservationEvent,
   MigrateOperationRequest,
   MigratePreparedOperation,
@@ -49,6 +50,10 @@ import {
 
 const definitionId = toMigrationDefinitionId("articles");
 const runId = toMigrationRunId("run-cli-observation");
+const rpcFailure = (message: string) =>
+  new RpcClientError({
+    reason: new RpcClientDefect({ cause: message, message }),
+  });
 const activeRun: MigrateActiveRun = {
   definitionIds: [definitionId],
   execution: { adapter: "workflow-sdk", executionId: "workflow-1" },
@@ -58,26 +63,6 @@ const activeRun: MigrateActiveRun = {
   status: "running",
   stopSupported: true,
 };
-const remoteDashboardRow = {
-  entry: {
-    dependencies: { optional: [], required: [] },
-    hasRollback: true,
-    id: definitionId,
-  },
-  status: {
-    definitionId,
-    discovery: "full",
-    durable: { failed: 0, migrated: 3, needsUpdate: 0, skipped: 1 },
-    lastRun: null,
-    lock: {
-      createdAt: new Date("2026-08-29T11:00:00.000Z"),
-      definitionId,
-      ownerRunId: runId,
-      token: toMigrationDefinitionLockToken("lock-remote"),
-    },
-    warnings: [],
-  },
-} satisfies MigrateDashboardRow;
 
 const runTerminalSummary = (
   status: "succeeded" | "failed" = "succeeded"
@@ -184,11 +169,12 @@ const makeConnection = (
     },
     resumeToken: MigrateDashboardResumeToken.make("dashboard-empty"),
   }),
-  getMessages: () => Effect.succeed([]),
+  getRegistry: Effect.succeed({ entries: [], groups: [] }),
+  getRegistryMessages: () => Effect.die("Unexpected registry messages read"),
+  getRegistryStatus: () => Effect.die("Unexpected registry status read"),
   observeRun: () => Stream.die("Unexpected run observation"),
   prepareOperation: () => Effect.die("Unexpected operation preparation"),
   startOperation: () => Effect.die("Unexpected operation start"),
-  scanSource: () => Effect.die("Unexpected source scan"),
   stopRun: (requestedRunId) =>
     Effect.succeed({
       kind: "requested" as const,
@@ -197,38 +183,6 @@ const makeConnection = (
     }),
   ...overrides,
 });
-
-const makeServerBackedCommandConnection = (): MigrationCliServerConnection =>
-  makeConnection({
-    breakLock: (lock) =>
-      Effect.succeed({ definitionId: lock.definitionId, kind: "cleared" }),
-    getDashboard: Effect.succeed({
-      dashboard: {
-        activeRuns: [],
-        groups: [],
-        rows: [remoteDashboardRow],
-        scannedSource: false,
-      },
-      resumeToken: MigrateDashboardResumeToken.make("dashboard-remote"),
-    }),
-    getMessages: () =>
-      Effect.succeed([
-        {
-          definitionId,
-          kind: "skip-reason",
-          message: "Already migrated remotely",
-          runId,
-          severity: "info",
-          sourceIdentity: toEncodedSourceIdentity("article-1"),
-          updatedAt: new Date("2026-08-29T11:30:00.000Z"),
-        },
-      ]),
-    prepareOperation: (request) =>
-      Effect.succeed({
-        ...preparedOperation(request),
-        planRows: [remoteDashboardRow],
-      }),
-  });
 
 const makeLayer = (runtime: MigrationCliRuntimeShape) =>
   Layer.mergeAll(
@@ -267,122 +221,6 @@ const interruptRuntime = (
 });
 
 describe("migrate runs", () => {
-  it.effect(
-    "lists remote Migration Definitions through the shared connection",
-    () =>
-      Effect.gen(function* () {
-        const result = yield* runCli(
-          ["list", "--server", "https://migrate.example/api/migrate"],
-          {
-            connectMigrateServer: () => Effect.succeed(makeConnection()),
-            cwd: "/workspace",
-          }
-        );
-
-        expect(result.exitCode).toBe(0);
-        expect(result.stderr).toBe("");
-        expect(result.stdout).toContain("Migration Definitions");
-      })
-  );
-
-  it.effect(
-    "routes every server-backed read and control command remotely",
-    () =>
-      Effect.gen(function* () {
-        const runtime = {
-          connectMigrateServer: () =>
-            Effect.succeed(makeServerBackedCommandConnection()),
-          cwd: "/workspace",
-        } satisfies MigrationCliRuntimeShape;
-        const server = "https://migrate.example/api/migrate";
-        const graph = yield* runCli(
-          ["graph", "articles", "--server", server],
-          runtime
-        );
-        const status = yield* runCli(
-          ["status", "articles", "--server", server],
-          runtime
-        );
-        const messages = yield* runCli(
-          ["messages", "articles", "--server", server],
-          runtime
-        );
-        const unlock = yield* runCli(
-          ["unlock", "articles", "--server", server],
-          runtime
-        );
-
-        expect(graph.exitCode).toBe(0);
-        expect(graph.stdout).toContain("Migration Dependency Graph: articles");
-        expect(status.exitCode).toBe(0);
-        expect(status.stdout).toContain("Migration Status");
-        expect(status.stdout).toContain("articles");
-        expect(status.stdout).toContain("3");
-        expect(messages.exitCode).toBe(0);
-        expect(messages.stdout).toContain("Already migrated remotely");
-        expect(unlock.exitCode).toBe(0);
-        expect(unlock.stdout).toContain("Migration Definition lock cleared");
-        expect(unlock.stdout).toContain("lock-remote");
-      })
-  );
-
-  it.effect("scans remote status through the Migrate Protocol", () =>
-    Effect.gen(function* () {
-      let scanInput:
-        | Parameters<MigrationCliServerConnection["scanSource"]>[0]
-        | undefined;
-      const scannedRow = {
-        ...remoteDashboardRow,
-        status: {
-          ...remoteDashboardRow.status,
-          source: {
-            duplicate: 0,
-            invalid: 0,
-            orphaned: 0,
-            total: 5,
-            unprocessed: 2,
-          },
-        },
-      } satisfies MigrateDashboardRow;
-      const connection = makeServerBackedCommandConnection();
-      const result = yield* runCli(
-        [
-          "status",
-          "articles",
-          "--scan-source",
-          "--concurrency",
-          "2",
-          "--server",
-          "https://migrate.example/api/migrate",
-        ],
-        {
-          connectMigrateServer: () =>
-            Effect.succeed({
-              ...connection,
-              scanSource: (input) => {
-                scanInput = input;
-                return Effect.succeed({
-                  activeRuns: [],
-                  groups: [],
-                  rows: [scannedRow],
-                  scannedSource: true,
-                });
-              },
-            }),
-          cwd: "/workspace",
-        }
-      );
-
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain("source inventory");
-      expect(result.stdout).toContain("Unprocessed");
-      expect(scanInput).toEqual({
-        concurrency: 2,
-        target: { definitionId, kind: "migration" },
-      });
-    })
-  );
-
   it.effect("renders typed remote planning errors with their identifiers", () =>
     Effect.gen(function* () {
       const cases = [
@@ -592,7 +430,7 @@ describe("migrate runs", () => {
       const configPath =
         "/workspace/migrations $HOME/$(touch-nope)/operator's.config.ts";
       const connection = makeConnection({
-        observeRun: () => Stream.fail(new Error("connection dropped")),
+        observeRun: () => Stream.fail(rpcFailure("connection dropped")),
       });
       const result = yield* runCli(
         ["runs", "observe", runId, "--config", configPath],
@@ -796,7 +634,7 @@ describe("migrate runs", () => {
       const unsafeServerUrl =
         "https://migrate.example/api/$(touch-nope)/$HOME/`id`/operator's";
       const connection = makeConnection({
-        observeRun: () => Stream.fail(new Error("connection dropped")),
+        observeRun: () => Stream.fail(rpcFailure("connection dropped")),
       });
       const result = yield* runCli(
         ["runs", "observe", unsafeRunId, "--server", unsafeServerUrl],
@@ -1084,13 +922,7 @@ describe("migrate runs", () => {
               })
             )
           ).pipe(Stream.concat(Stream.never)),
-        stopRun: () =>
-          Effect.fail(
-            new MigrationCliConnectionError({
-              cause: "stop request failed",
-              message: "stop request failed",
-            })
-          ),
+        stopRun: () => Effect.fail(rpcFailure("stop request failed")),
       });
       const resultFiber = yield* runCli(
         ["runs", "observe", runId],
