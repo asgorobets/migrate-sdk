@@ -1,7 +1,8 @@
+import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSystem";
 import { MssqlClient } from "@effect/sql-mssql";
 import { MysqlClient } from "@effect/sql-mysql2";
 import { PgClient } from "@effect/sql-pg";
-import { Console, Effect, Redacted, Schema } from "effect";
+import { Effect, FileSystem, Redacted, Schedule, Schema } from "effect";
 import { SqlClient } from "effect/unstable/sql";
 import {
   DestinationError,
@@ -22,6 +23,10 @@ import { SqlMigrationStore } from "migrate-sdk/stores/sql";
 
 const environment = process.env;
 const provider = environment.MIGRATE_SQL_SMOKE_PROVIDER;
+const processingMarkerPath =
+  environment.MIGRATE_SQL_SMOKE_PROCESSING_MARKER_PATH;
+const processingReleasePath =
+  environment.MIGRATE_SQL_SMOKE_PROCESSING_RELEASE_PATH;
 const tablePrefix = environment.MIGRATE_SQL_SMOKE_TABLE_PREFIX;
 const slowArticleId = environment.MIGRATE_SQL_SMOKE_SLOW_ARTICLE_ID;
 
@@ -238,8 +243,23 @@ const processArticle: ProcessPipelineFor<
   typeof tracking
 > = Effect.fn("sqlCliArticles.process")(function* (sourceItem) {
   if (sourceItem.item.id === slowArticleId) {
-    yield* Console.log(`[sql-smoke] processing ${sourceItem.item.id}`);
-    yield* Effect.sleep("2 seconds");
+    if (
+      processingMarkerPath !== undefined &&
+      processingReleasePath !== undefined
+    ) {
+      yield* Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(processingMarkerPath, sourceItem.item.id);
+        yield* fs.exists(processingReleasePath).pipe(
+          Effect.repeat({
+            schedule: Schedule.spaced("10 millis"),
+            while: (exists) => !exists,
+          })
+        );
+      }).pipe(Effect.provide(nodeFileSystemLayer), Effect.orDie);
+    } else {
+      yield* Effect.sleep("2 seconds");
+    }
   }
 
   yield* writeDestinationArticle(sourceItem.item);

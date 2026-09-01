@@ -1,15 +1,26 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { layer as nodeServicesLayer } from "@effect/platform-node/NodeServices";
 import { MssqlClient } from "@effect/sql-mssql";
 import { MysqlClient } from "@effect/sql-mysql2";
 import { PgClient } from "@effect/sql-pg";
 import { describe, expect, it } from "@effect/vitest";
-import { Data, Effect, type Layer, Redacted } from "effect";
+import {
+  Data,
+  Effect,
+  Fiber,
+  FileSystem,
+  type Layer,
+  Path,
+  Redacted,
+  Schedule,
+} from "effect";
+import { TestClock } from "effect/testing";
 import { SqlClient } from "effect/unstable/sql";
 import {
-  type MigrationItemStateSummary,
   type MigrationDefinitionRunStatus,
+  type MigrationItemStateSummary,
   MigrationStore,
   toMigrationDefinitionId,
 } from "migrate-sdk";
@@ -59,6 +70,9 @@ interface SqlCliProvider {
     Readonly<Record<string, number>>,
     unknown
   >;
+  readonly readLatestRunId: (
+    tablePrefix: string
+  ) => Effect.Effect<string | undefined, unknown>;
   readonly readMigrationState: (
     tablePrefix: string
   ) => Effect.Effect<ObservedMigrationState, unknown>;
@@ -187,6 +201,20 @@ const makeProvider = <ClientError>(
   readDestinationWriteCounts: readDestinationWriteCounts.pipe(
     Effect.provide(layer)
   ),
+  readLatestRunId: (tablePrefix) =>
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const latestRun = yield* store.getLatestRunState(definitionId);
+
+      return latestRun?.runId;
+    }).pipe(
+      Effect.provide(
+        SqlMigrationStore.layerFromClient(layer, {
+          initialize: false,
+          tablePrefix,
+        })
+      )
+    ),
   readMigrationState: (tablePrefix) =>
     Effect.gen(function* () {
       const store = yield* MigrationStore;
@@ -255,8 +283,15 @@ interface CliResult {
 }
 
 interface CliRunOptions {
+  readonly processingMarkerPath?: string;
+  readonly processingReleasePath?: string;
   readonly slowArticleId?: string;
   readonly tablePrefix: string;
+}
+
+interface ProcessingCliRunOptions extends CliRunOptions {
+  readonly processingMarkerPath: string;
+  readonly processingReleasePath: string;
 }
 
 class CliProcessError extends Data.TaggedError("CliProcessError")<{
@@ -269,6 +304,8 @@ const cliEnvironment = (
   options: CliRunOptions
 ): NodeJS.ProcessEnv => ({
   ...process.env,
+  MIGRATE_SQL_SMOKE_PROCESSING_MARKER_PATH: options.processingMarkerPath,
+  MIGRATE_SQL_SMOKE_PROCESSING_RELEASE_PATH: options.processingReleasePath,
   MIGRATE_SQL_SMOKE_PROVIDER: provider.id,
   MIGRATE_SQL_SMOKE_SLOW_ARTICLE_ID: options.slowArticleId,
   MIGRATE_SQL_SMOKE_TABLE_PREFIX: options.tablePrefix,
@@ -298,13 +335,13 @@ const runCli = (
     };
   });
 
-const runCliAndInterrupt = (
+const runCliUntilProcessingStarts = (
   provider: SqlCliProvider,
-  options: CliRunOptions,
-  args: readonly string[],
-  outputMarker: string
+  options: ProcessingCliRunOptions,
+  args: readonly string[]
 ) =>
-  Effect.callback<CliResult, CliProcessError>((resume) => {
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
     const child = spawn(process.execPath, [binPath, ...args], {
       cwd: packageRoot,
       env: cliEnvironment(provider, options),
@@ -312,52 +349,66 @@ const runCliAndInterrupt = (
     });
     let stderr = "";
     let stdout = "";
-    let interrupted = false;
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       stdout += chunk;
-      if (!interrupted && stdout.includes(outputMarker)) {
-        interrupted = true;
-        child.kill("SIGINT");
-      }
     });
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    child.once("error", (error) => {
-      resume(
-        Effect.fail(
-          new CliProcessError({
-            cause: error,
-            message: "Unable to start the CLI cancellation test process",
-          })
-        )
-      );
-    });
-    child.once("close", (exitCode) => {
-      if (!interrupted) {
-        const diagnostics = [stdout.trim(), stderr.trim()]
-          .filter((output) => output.length > 0)
-          .join("\n");
-        resume(
-          Effect.fail(
-            new CliProcessError({
-              message: `CLI exited before emitting ${outputMarker}${
-                diagnostics === "" ? "" : `\n${diagnostics}`
-              }`,
-            })
-          )
-        );
-        return;
-      }
-      resume(Effect.succeed({ exitCode, stderr, stdout }));
-    });
+    const resultFiber = yield* Effect.callback<CliResult, CliProcessError>(
+      (resume) => {
+        child.once("error", (error) => {
+          resume(
+            Effect.fail(
+              new CliProcessError({
+                cause: error,
+                message: "Unable to start the CLI cancellation test process",
+              })
+            )
+          );
+        });
+        child.once("close", (exitCode) => {
+          resume(Effect.succeed({ exitCode, stderr, stdout }));
+        });
 
-    return Effect.sync(() => {
-      child.kill("SIGKILL");
-    });
+        return Effect.sync(() => {
+          child.kill("SIGKILL");
+        });
+      }
+    ).pipe(Effect.forkChild);
+    const first = yield* Effect.raceFirst(
+      fs.exists(options.processingMarkerPath).pipe(
+        Effect.repeat({
+          schedule: Schedule.spaced("10 millis"),
+          while: (exists) => !exists,
+        }),
+        TestClock.withLive,
+        Effect.as({ kind: "processing" as const })
+      ),
+      Fiber.join(resultFiber).pipe(
+        Effect.map((result) => ({ kind: "closed" as const, result }))
+      )
+    );
+
+    if (first.kind === "closed") {
+      const diagnostics = [
+        first.result.stdout.trim(),
+        first.result.stderr.trim(),
+      ]
+        .filter((output) => output.length > 0)
+        .join("\n");
+
+      return yield* new CliProcessError({
+        message: `CLI exited before the slow migration item started${
+          diagnostics === "" ? "" : `\n${diagnostics}`
+        }`,
+      });
+    }
+
+    return resultFiber;
   });
 
 const expectSuccessfulCli = (result: {
@@ -430,8 +481,9 @@ for (const provider of providers) {
           ]);
           expectSuccessfulCli(firstRun);
           expect(firstRun.stdout).toContain("Run Completed succeeded");
+          expect(firstRun.stdout).toContain("Progress");
           expect(firstRun.stdout).toContain(
-            "[progress] Source Cursor Window completed"
+            "Migration ID  Migrated  Skipped  Needs Update  Failed"
           );
           expect(yield* provider.readMigrationState(tablePrefix)).toEqual({
             lastRunStatus: "succeeded",
@@ -587,56 +639,95 @@ for (const provider of providers) {
       })
     );
 
-    it.effect("drains active work on SIGINT and resumes without replay", () =>
-      Effect.gen(function* () {
-        const tablePrefix = makeTablePrefix(provider, "cancellation");
-        const options = { slowArticleId: "article-2", tablePrefix };
-        yield* provider.reset;
+    it.effect(
+      "drains active work after an explicit stop and resumes without replay",
+      () =>
+        Effect.gen(function* () {
+          const tablePrefix = makeTablePrefix(provider, "cancellation");
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const processingMarkerDirectory = yield* fs.makeTempDirectoryScoped({
+            prefix: `migrate-sdk-sql-smoke-${provider.id}-`,
+          });
+          const processingMarkerPath = path.join(
+            processingMarkerDirectory,
+            "processing.ready"
+          );
+          const processingReleasePath = path.join(
+            processingMarkerDirectory,
+            "processing.release"
+          );
+          const options = {
+            processingMarkerPath,
+            processingReleasePath,
+            slowArticleId: "article-2",
+            tablePrefix,
+          };
+          yield* provider.reset;
 
-        const cancelledRun = yield* runCliAndInterrupt(
-          provider,
-          options,
-          ["run", "--config", configPath, "--concurrency", "1", "articles"],
-          "[sql-smoke] processing article-2"
-        );
+          const runningCli = yield* runCliUntilProcessingStarts(
+            provider,
+            options,
+            ["run", "--config", configPath, "--concurrency", "1", "articles"]
+          );
+          const activeRunId = yield* provider.readLatestRunId(tablePrefix);
 
-        expect(cancelledRun.exitCode).toBe(130);
-        expect(cancelledRun.stderr).toContain(
-          "Cancellation requested; draining active migration work."
-        );
-        expect(cancelledRun.stdout).toContain("Run cancelled");
-        expect(yield* provider.readMigrationState(tablePrefix)).toEqual({
-          lastRunStatus: "cancelled",
-          summary: { ...emptySummary, migrated: 2 },
-        });
-        expect(yield* provider.readDestination).toEqual(
-          initialDestinationRows.slice(0, 2)
-        );
-        expect(yield* provider.readDestinationWriteCounts).toEqual({
-          "article-1": 1,
-          "article-2": 1,
-        });
+          if (activeRunId === undefined) {
+            return yield* new CliProcessError({
+              message: "The active SQL smoke Migration Run was not persisted",
+            });
+          }
 
-        const resumedRun = yield* runCli(provider, { tablePrefix }, [
-          "run",
-          "--config",
-          configPath,
-          "articles",
-        ]);
+          const stopResult = yield* runCli(provider, { tablePrefix }, [
+            "--config",
+            configPath,
+            "runs",
+            "stop",
+            activeRunId,
+          ]);
+          expectSuccessfulCli(stopResult);
+          expect(stopResult.stdout).toContain("Stop Requested");
+          yield* fs.writeFileString(processingReleasePath, "release");
+          const cancelledRun = yield* Fiber.join(runningCli);
 
-        expectSuccessfulCli(resumedRun);
-        expect(resumedRun.stdout).toContain("Run Completed succeeded");
-        expect(yield* provider.readMigrationState(tablePrefix)).toEqual({
-          lastRunStatus: "succeeded",
-          summary: { ...emptySummary, migrated: 3 },
-        });
-        expect(yield* provider.readDestination).toEqual(initialDestinationRows);
-        expect(yield* provider.readDestinationWriteCounts).toEqual({
-          "article-1": 1,
-          "article-2": 1,
-          "article-3": 1,
-        });
-      })
+          expect(cancelledRun.exitCode).toBe(130);
+          expect(`${cancelledRun.stdout}\n${cancelledRun.stderr}`).toContain(
+            `Run ${activeRunId} cancelled`
+          );
+          expect(yield* provider.readMigrationState(tablePrefix)).toEqual({
+            lastRunStatus: "cancelled",
+            summary: { ...emptySummary, migrated: 2 },
+          });
+          expect(yield* provider.readDestination).toEqual(
+            initialDestinationRows.slice(0, 2)
+          );
+          expect(yield* provider.readDestinationWriteCounts).toEqual({
+            "article-1": 1,
+            "article-2": 1,
+          });
+
+          const resumedRun = yield* runCli(provider, { tablePrefix }, [
+            "run",
+            "--config",
+            configPath,
+            "articles",
+          ]);
+
+          expectSuccessfulCli(resumedRun);
+          expect(resumedRun.stdout).toContain("Run Completed succeeded");
+          expect(yield* provider.readMigrationState(tablePrefix)).toEqual({
+            lastRunStatus: "succeeded",
+            summary: { ...emptySummary, migrated: 3 },
+          });
+          expect(yield* provider.readDestination).toEqual(
+            initialDestinationRows
+          );
+          expect(yield* provider.readDestinationWriteCounts).toEqual({
+            "article-1": 1,
+            "article-2": 1,
+            "article-3": 1,
+          });
+        }).pipe(Effect.provide(nodeServicesLayer))
     );
   });
 }

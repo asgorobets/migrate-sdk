@@ -1614,7 +1614,7 @@ describe("Migrate Server", () => {
             ),
           }),
           dashboardFallbackInterval: "1 hour",
-          dashboardProjectionInterval: "1 second",
+          dashboardProjectionInterval: 0,
           ...serverIdentity,
         });
         const snapshotsFiber = yield* server.observeDashboard({}).pipe(
@@ -1627,8 +1627,6 @@ describe("Migrate Server", () => {
 
         dashboard = { ...dashboard, activeRuns: [activeRun] };
         yield* server.breakLock({ lock: definitionLock });
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust("1 second");
         yield* Deferred.await(slowReadStarted);
 
         dashboard = {
@@ -1637,8 +1635,6 @@ describe("Migrate Server", () => {
         };
         yield* server.breakLock({ lock: definitionLock });
         yield* Deferred.succeed(releaseSlowRead, undefined);
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust("1 second");
         const snapshots = yield* Fiber.join(snapshotsFiber);
 
         expect(maximumInFlightReads).toBe(1);
@@ -1745,30 +1741,21 @@ describe("Migrate Server", () => {
     Effect.gen(function* () {
       const slowClientReceivedInitial = yield* Deferred.make<void>();
       const releaseSlowClient = yield* Deferred.make<void>();
-      const secondReadCompleted = yield* Deferred.make<void>();
-      const thirdReadCompleted = yield* Deferred.make<void>();
+      const fastClientReceivedInitial = yield* Deferred.make<void>();
+      const firstSnapshotPublished = yield* Deferred.make<void>();
+      const latestSnapshotPublished = yield* Deferred.make<void>();
       let dashboard: MigrateDashboard = {
         activeRuns: [],
         groups: [],
         rows: [],
         scannedSource: false,
       };
-      let reads = 0;
       const server = yield* MigrateServer.make({
         backend: makeBackend({
-          getDashboard: Effect.sync(() => {
-            reads += 1;
-            if (reads === 2) {
-              Deferred.doneUnsafe(secondReadCompleted, Effect.void);
-            }
-            if (reads === 3) {
-              Deferred.doneUnsafe(thirdReadCompleted, Effect.void);
-            }
-            return dashboard;
-          }),
+          getDashboard: Effect.sync(() => dashboard),
         }),
         dashboardFallbackInterval: "1 hour",
-        dashboardProjectionInterval: "1 second",
+        dashboardProjectionInterval: 0,
         ...serverIdentity,
       });
       let receivedSnapshots = 0;
@@ -1787,24 +1774,37 @@ describe("Migrate Server", () => {
         Effect.forkChild
       );
       yield* Deferred.await(slowClientReceivedInitial);
+      const fastClientFiber = yield* server.observeDashboard({}).pipe(
+        Stream.runForEach((snapshot) => {
+          const activeRunCount = snapshot.dashboard.activeRuns.length;
+
+          if (activeRunCount === 0) {
+            return Deferred.succeed(fastClientReceivedInitial, undefined);
+          }
+
+          if (activeRunCount === 1) {
+            return Deferred.succeed(firstSnapshotPublished, undefined);
+          }
+
+          return Deferred.succeed(latestSnapshotPublished, undefined);
+        }),
+        Effect.forkChild
+      );
+      yield* Deferred.await(fastClientReceivedInitial);
 
       dashboard = { ...dashboard, activeRuns: [activeRun] };
       yield* server.breakLock({ lock: definitionLock });
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust("1 second");
-      yield* Deferred.await(secondReadCompleted);
+      yield* Deferred.await(firstSnapshotPublished);
 
       dashboard = {
         ...dashboard,
         activeRuns: [activeRun, secondActiveRun],
       };
       yield* server.breakLock({ lock: definitionLock });
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust("1 second");
-      yield* Deferred.await(thirdReadCompleted);
-      yield* Effect.yieldNow;
+      yield* Deferred.await(latestSnapshotPublished);
       yield* Deferred.succeed(releaseSlowClient, undefined);
       const snapshots = yield* Fiber.join(snapshotsFiber);
+      yield* Fiber.interrupt(fastClientFiber);
 
       expect(
         snapshots.map((snapshot) => snapshot.dashboard.activeRuns)
