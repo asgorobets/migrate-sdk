@@ -867,7 +867,7 @@ posixTest(
   async () => {
     const endpoint = join(
       tmpdir(),
-      `migrate-transport-disposal-${randomUUID()}.sock`
+      `migrate-d-${randomUUID().slice(0, 16)}.sock`
     );
     const displacedEndpoint = `${endpoint}.bound`;
     const child = spawn(
