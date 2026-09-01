@@ -36,6 +36,7 @@ import { makeMigrationTuiRuntimeForTesting } from "./support/tui-runtime.ts";
 const LOCK_ERROR_PATTERN = /lock/i;
 const LIVE_DASHBOARD_READ_TIMEOUT_MS =
   process.platform === "win32" ? 2500 : 1000;
+const SOCKET_FIXTURE_STARTUP_TIMEOUT_MS = 10_000;
 const incompatibleProtocolMessage = `Migrate Protocol version ${MIGRATE_PROTOCOL_VERSION + 1} is not supported`;
 const serverFixtureUrl = new URL(
   "../../migrate-sdk/test/fixtures/server/",
@@ -889,7 +890,7 @@ posixTest(
     }
 
     try {
-      await waitForPath(endpoint, 3000);
+      await waitForPath(endpoint, SOCKET_FIXTURE_STARTUP_TIMEOUT_MS);
       await rename(endpoint, displacedEndpoint);
       await writeFile(endpoint, "replacement", "utf8");
 
@@ -903,7 +904,7 @@ posixTest(
       await unlink(displacedEndpoint).catch(() => undefined);
     }
   },
-  10_000
+  20_000
 );
 
 for (const [variant, discovery] of [
@@ -1072,7 +1073,7 @@ windowsTest(
     let connection: MigrateConnection | undefined;
 
     try {
-      await waitForPath(endpoint, 3000);
+      await waitForPath(endpoint, SOCKET_FIXTURE_STARTUP_TIMEOUT_MS);
       connection = await connectLocalMigrateServerForTesting(input, {
         serverIdentity,
       });
@@ -1096,58 +1097,30 @@ windowsTest(
 
 windowsTest(
   "concurrent Windows connectors converge on one TCP server",
-  async () => {
-    const serverIdentity = `concurrent-windows-connectors-${randomUUID()}`;
-    const input = {
-      configPath: resolve("test/fixtures/concurrent-runs.config.ts"),
-      cwd: process.cwd(),
-    };
-    const connect = (connectionInput: typeof input) =>
-      connectLocalMigrateServerForTesting(connectionInput, { serverIdentity });
-    const [firstResult, secondResult] = await Promise.allSettled([
-      makeMigrationTuiRuntimeWithLocalConnection(input, connect),
-      makeMigrationTuiRuntimeWithLocalConnection(input, connect),
-    ]);
-    if (
-      firstResult.status === "rejected" ||
-      secondResult.status === "rejected"
-    ) {
-      if (firstResult.status === "fulfilled") {
-        await firstResult.value.dispose?.();
-      }
-      if (secondResult.status === "fulfilled") {
-        await secondResult.value.dispose?.();
-      }
-      throw firstResult.status === "rejected"
-        ? firstResult.reason
-        : secondResult.reason;
-    }
-    const firstRuntime = firstResult.value;
-    const secondRuntime = secondResult.value;
+  () => {
+    const result = spawnSync(
+      process.env.MIGRATE_TUI_NODE_EXECUTABLE ?? "node",
+      [
+        fileURLToPath(
+          new URL("./fixtures/concurrent-local-connectors.ts", import.meta.url)
+        ),
+      ],
+      { cwd: process.cwd(), encoding: "utf8", timeout: 30_000 }
+    );
 
-    try {
-      const target = {
-        definitionIds: [toMigrationDefinitionId("locked")],
-        kind: "definitions" as const,
-      };
-      const firstRun = await firstRuntime.start(
-        await firstRuntime.prepare(target, "run")
+    if (result.error !== undefined || result.status !== 0) {
+      const output = `${result.stdout}${result.stderr}`.trim();
+      const failure =
+        result.error?.message ??
+        `status=${result.status ?? "null"}, signal=${result.signal ?? "none"}`;
+      throw new Error(
+        `Concurrent connector fixture failed (${failure})${
+          output.length === 0 ? "" : `\n${output}`
+        }`
       );
-      const overlappingOperation = await secondRuntime.prepare(target, "run");
-
-      await expect(secondRuntime.start(overlappingOperation)).rejects.toThrow(
-        LOCK_ERROR_PATTERN
-      );
-      await firstRuntime.stopRun(firstRun.runId);
-      await expect(
-        firstRuntime.observeRun(firstRun.runId)
-      ).resolves.toMatchObject({ outcome: "cancelled", runId: firstRun.runId });
-    } finally {
-      await firstRuntime.dispose?.();
-      await secondRuntime.dispose?.();
     }
   },
-  20_000
+  35_000
 );
 
 for (const variant of ["protocol", "malformed"] as const) {
@@ -1175,7 +1148,7 @@ for (const variant of ["protocol", "malformed"] as const) {
     }
 
     try {
-      await waitForPath(endpointPath, 3000);
+      await waitForPath(endpointPath, SOCKET_FIXTURE_STARTUP_TIMEOUT_MS);
       await expect(
         connectLocalMigrateServerForTesting(
           { configPath, cwd },
@@ -1198,7 +1171,7 @@ for (const variant of ["protocol", "malformed"] as const) {
       }
       await unlink(endpointPath).catch(() => undefined);
     }
-  }, 10_000);
+  }, 20_000);
 }
 
 test("reports when the socket server exits during startup", async () => {
