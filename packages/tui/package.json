@@ -50,7 +50,7 @@
     "test": "vitest run --passWithNoTests",
     "test:ipc": "bun test test/local-ipc.test.ts",
     "test:binary": "bash test/binary-smoke.sh",
-    "test:package": "node test/package-smoke.mjs",
+    "test:package": "node --test test/remove-temporary-directory.node-test.mjs && node test/package-smoke.mjs",
     "test:renderer": "bun test src/app.test.tsx src/render-session.test.ts",
     "test:pilotty": "pnpm run build && pnpm run test:renderer && bash test/pilotty-layout.sh"
   },

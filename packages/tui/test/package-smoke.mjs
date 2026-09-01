@@ -11,6 +11,7 @@ import {
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { removeTemporaryDirectory } from "./remove-temporary-directory.mjs";
 
 const packageDirectory = resolve(import.meta.dirname, "..");
 const repositoryDirectory = resolve(packageDirectory, "../..");
@@ -279,5 +280,5 @@ try {
     `Packed launcher and consumer migration smoke check passed (${basename(tuiTarball)})\n`
   );
 } finally {
-  await rm(tempDirectory, { force: true, recursive: true });
+  await removeTemporaryDirectory(tempDirectory);
 }
