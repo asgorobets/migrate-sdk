@@ -1,9 +1,9 @@
 # Workflow SDK remote Migrate Server example
 
 This Create Next App project runs PostgreSQL-backed migrations through Vercel
-Workflow and exposes one authenticated Migrate Server to a focused browser demo
-and the complete local Migrate TUI. The app constructs its registry directly in
-TypeScript; it never discovers or loads a `migrate.config.*` file.
+Workflow and exposes one authenticated Migrate Server to interactive migration
+controls and the complete local Migrate TUI. The app constructs its registry
+directly in TypeScript; it never discovers or loads a `migrate.config.*` file.
 
 ## What runs where
 
@@ -45,8 +45,8 @@ pnpm db:setup -- --reset
 pnpm dev
 ```
 
-Open <http://127.0.0.1:3100> for the browser demo. In another terminal, launch
-the complete TUI against the same Migrate Server:
+Open <http://127.0.0.1:3100> to try the migration controls. In another terminal,
+launch the complete TUI against the same Migrate Server:
 
 ```bash
 MIGRATE_SERVER_TOKEN=local-migrate-secret \
@@ -88,8 +88,8 @@ curl \
      "https://YOUR_DEPLOYMENT/api/demo/setup"
    ```
 
-6. Open the deployment for the browser demo, or point a local TUI at the same
-   server:
+6. Open the deployment to try the migration controls, or point a local TUI at
+   the same server:
 
    ```bash
    MIGRATE_SERVER_TOKEN="TOKEN_SHOWN_ON_THE_DEMO_PAGE" \

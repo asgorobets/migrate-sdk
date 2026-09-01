@@ -30,6 +30,11 @@ interface ProgressSegment {
   readonly percentage: number;
 }
 
+interface MigrationDependency {
+  readonly id: MigrateDashboardRow["entry"]["id"];
+  readonly kind: "optional" | "required";
+}
+
 interface ActivityEntry {
   readonly id: number;
   readonly message: string;
@@ -51,6 +56,19 @@ const activeRunFor = (
   definitionId: MigrateDashboardRow["entry"]["id"]
 ): MigrateActiveRun | undefined =>
   activeRuns.find((run) => run.definitionIds.includes(definitionId));
+
+const migrationDependencies = (
+  row: MigrateDashboardRow
+): readonly MigrationDependency[] => [
+  ...row.entry.dependencies.required.map((id) => ({
+    id,
+    kind: "required" as const,
+  })),
+  ...row.entry.dependencies.optional.map((id) => ({
+    id,
+    kind: "optional" as const,
+  })),
+];
 
 const statusLabel = (
   row: MigrateDashboardRow,
@@ -441,10 +459,10 @@ export function MigrationWidget({ bearerToken }: MigrationWidgetProps) {
   const displayedError = error ?? connectionError;
 
   return (
-    <section aria-label="Browser migration controls" className={styles.shell}>
+    <section aria-label="Workflow migration controls" className={styles.shell}>
       <header className={styles.toolbar}>
         <div>
-          <p className={styles.kicker}>Browser Migrate Client</p>
+          <p className={styles.kicker}>Workflow migration</p>
           <h2>Catalog migrations</h2>
         </div>
         <div className={styles.connectionGroup}>
@@ -457,7 +475,7 @@ export function MigrationWidget({ bearerToken }: MigrationWidgetProps) {
 
       <div className={styles.commandPanel}>
         <div>
-          <span>Open the complete TUI in your terminal</span>
+          <span>Try the full TUI in your terminal</span>
           <code>{tuiCommand}</code>
         </div>
         <button onClick={copyCommand} type="button">
@@ -467,8 +485,10 @@ export function MigrationWidget({ bearerToken }: MigrationWidgetProps) {
 
       <div className={styles.liveMode}>
         <div className={styles.liveModeCopy}>
-          <span>Durable progress</span>
-          <strong>Watch every durable checkpoint as it completes.</strong>
+          <span>Live progress</span>
+          <strong>
+            Open another window and watch each completed batch appear here.
+          </strong>
         </div>
         <label className={styles.concurrencyControl}>
           <span>Concurrency</span>
@@ -486,7 +506,7 @@ export function MigrationWidget({ bearerToken }: MigrationWidgetProps) {
           >
             {concurrencyOptions.map((option) => (
               <option key={option} value={option}>
-                {option === 1 ? "1 · demo pace" : option}
+                {option}
               </option>
             ))}
           </select>
@@ -506,6 +526,7 @@ export function MigrationWidget({ bearerToken }: MigrationWidgetProps) {
         ) : (
           dashboard.rows.map((row) => {
             const activeRun = activeRunFor(dashboard.activeRuns, row.entry.id);
+            const dependencies = migrationDependencies(row);
             const status = statusLabel(row, activeRun);
             const total = sourceTotals?.get(row.entry.id);
             const progress = migrationProgress(
@@ -533,6 +554,24 @@ export function MigrationWidget({ bearerToken }: MigrationWidgetProps) {
                   </span>
                 </div>
                 <p className={styles.summary}>{itemSummary(row)}</p>
+                <div
+                  aria-hidden={dependencies.length === 0}
+                  className={styles.dependencies}
+                >
+                  {dependencies.length === 0 ? null : (
+                    <>
+                      <span>Depends on</span>
+                      <ul aria-label={`${row.entry.id} dependencies`}>
+                        {dependencies.map((dependency) => (
+                          <li key={`${dependency.kind}:${dependency.id}`}>
+                            <strong>{dependency.id}</strong>
+                            <span>{dependency.kind}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </div>
                 <div className={styles.progressMeta}>
                   <span>{progress.label}</span>
                   {activeRun === undefined ? null : (

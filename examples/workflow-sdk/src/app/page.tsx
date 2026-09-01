@@ -16,64 +16,60 @@ export default async function Home() {
         <a className={styles.brand} href="#top">
           Migrate
         </a>
-        <span>workflow-sdk · browser demo</span>
+        <span>workflow-sdk · durable migrations</span>
       </header>
 
       <div className={styles.hero} id="top">
-        <p className={styles.eyebrow}>
-          <span aria-hidden="true">$</span> migrate observe --server
-          workflow-sdk.demo
-        </p>
-        <h1>Try a durable migration from your browser</h1>
+        <p className={styles.eyebrow}>Powered by Vercel Workflow</p>
+        <h1>Run migrations that outlive a serverless request</h1>
         <p className={styles.summary}>
-          Run and roll back PostgreSQL migrations, watch cursor-window progress,
-          and inspect durable item messages while Vercel Workflow owns the
-          execution. The complete TUI is one command away in your terminal.
+          Authors and books migrate through a durable workflow, so a run can
+          take hours, retry transient errors, and keep going after you close
+          this page. Reopen it—or open a second window—to follow the same live
+          progress.
         </p>
         <div className={styles.runtimeLine}>
           <span>[ Vercel Workflow ]</span>
           <span>[ Effect RPC ]</span>
           <span>[ PostgreSQL ]</span>
-          <span>[ Browser Migrate Client ]</span>
+          <span>[ Bring Your Own Client ]</span>
         </div>
       </div>
 
-      <section aria-label="Migration clients" className={styles.clients}>
+      <section aria-label="Workflow migration demo" className={styles.clients}>
         <MigrationWidget bearerToken={demoMigrateServerToken} />
       </section>
 
       <section className={styles.grid}>
         <article>
-          <span>01 / browser</span>
-          <h2>A focused web client</h2>
+          <span>01 / clients</span>
+          <h2>Bring your own client</h2>
           <p>
-            This page uses the public browser client directly. It keeps the demo
-            small while showing the same remote protocol used by the TUI.
+            This page is one small example of what you can build with the
+            Migrate Server protocol. Your application only needs the server URL
+            and credentials; migration code and data access stay where they run.
           </p>
         </article>
         <article>
-          <span>02 / execution</span>
-          <h2>Durable workflows</h2>
+          <span>02 / workflow</span>
+          <h2>Long-running by design</h2>
           <p>
-            Authors and books migrate in durable cursor windows backed by
-            PostgreSQL and Vercel Workflow.
+            Every run is a Vercel Workflow, not a serverless request. It can run
+            for hours, retry transient errors, start on a cron schedule, and be
+            stopped explicitly. Close this page or open another window—the run
+            continues and every window shows the same progress.
           </p>
         </article>
         <article>
           <span>03 / terminal</span>
-          <h2>The complete TUI</h2>
+          <h2>Full control from your terminal</h2>
           <p>
-            Copy the one-off command above to open the canonical interface in
-            your own terminal. The published demo token exercises the same
-            Bearer authentication as any external client.
+            The Migrate TUI helps you discover, start, stop, retry, and monitor
+            migrations running locally or on a remote Migrate Server. The CLI
+            supports scripts, agents, and cron jobs.
           </p>
         </article>
       </section>
-
-      <footer className={styles.footer}>
-        <span>Migration execution remains provider-owned.</span>
-        <span>Closing this page does not stop a Workflow run.</span>
-      </footer>
     </main>
   );
 }

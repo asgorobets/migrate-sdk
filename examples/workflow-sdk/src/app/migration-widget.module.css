@@ -264,6 +264,45 @@
   color: var(--muted);
 }
 
+.dependencies {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  min-height: 14px;
+  margin-top: 7px;
+  font-size: 8px;
+  color: var(--muted);
+}
+
+.dependencies > span {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.dependencies ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  list-style: none;
+}
+
+.dependencies li {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+
+.dependencies li strong {
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.dependencies li span {
+  color: var(--info);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .progressMeta {
   display: flex;
   gap: 10px;

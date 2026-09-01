@@ -14,10 +14,15 @@ const executableLayer = WorkflowSdkMigrationExecutable.layer({
   workflow: catalogMigrationWorkflow,
 }).pipe(Layer.provide(WorkflowSdkClient.layer));
 
+const environmentLabel =
+  process.env.VERCEL_PROJECT_PRODUCTION_URL === undefined
+    ? "Local Workflow dev server"
+    : `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}/`;
+
 export const migrateServerLayer = RegistryMigrateServer.layer({
   environment: {
     id: process.env.VERCEL_ENV ?? "local",
-    label: process.env.VERCEL_URL ?? "Local Workflow dev server",
+    label: environmentLabel,
   },
   registry: catalogRegistry,
 }).pipe(Layer.provide(executableLayer));

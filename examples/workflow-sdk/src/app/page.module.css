@@ -35,10 +35,6 @@
   color: var(--muted);
 }
 
-.eyebrow span {
-  color: var(--success);
-}
-
 .hero h1 {
   max-width: 900px;
   font-size: clamp(36px, 5.8vw, 68px);
@@ -106,15 +102,6 @@
   color: var(--muted);
 }
 
-.footer {
-  display: flex;
-  justify-content: space-between;
-  padding-top: 24px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--muted);
-}
-
 @media (max-width: 760px) {
   .page {
     width: min(100% - 32px, 1120px);
@@ -141,10 +128,5 @@
 
   .grid article:last-child {
     border-bottom: 0;
-  }
-
-  .footer {
-    flex-direction: column;
-    gap: 10px;
   }
 }

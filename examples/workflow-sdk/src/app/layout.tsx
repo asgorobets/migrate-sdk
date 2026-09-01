@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   description:
-    "Run and observe durable Migrate SDK operations through a browser client",
+    "Run long migrations as durable Vercel Workflows and monitor their progress from any connected client",
   title: "Migrate SDK · Workflow demo",
 };
 
