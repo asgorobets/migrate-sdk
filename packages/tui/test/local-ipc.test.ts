@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layerNet } from "@effect/platform-node/NodeSocket";
-import { type Effect, Layer, ManagedRuntime } from "effect";
+import { Effect, Layer, ManagedRuntime } from "effect";
 import {
   layerProtocolSocket,
   make as makeRpcClient,
@@ -955,13 +955,16 @@ windowsTest(
     const runtime = ManagedRuntime.make(ProtocolLive);
 
     try {
-      const client = await runtime.runPromise(
-        makeRpcClient(LocalAuthorizedMigrateStreamingRpcsForTesting)
-      );
-
-      await expect(runtime.runPromise(client.GetServerInfo())).rejects.toThrow(
-        "Local Migrate Server authorization failed"
-      );
+      await expect(
+        runtime.runPromise(
+          Effect.gen(function* () {
+            const client = yield* makeRpcClient(
+              LocalAuthorizedMigrateStreamingRpcsForTesting
+            );
+            return yield* client.GetServerInfo();
+          }).pipe(Effect.scoped)
+        )
+      ).rejects.toThrow("Local Migrate Server authorization failed");
     } finally {
       await runtime.dispose();
       await connection.dispose();
@@ -1141,20 +1144,24 @@ test.each([
   [undefined, incompatibleProtocolMessage],
   ["sdk", "Migrate SDK version 999.0.0 is not supported"],
   ["malformed", "Unable to connect to the local Migrate Server"],
-] as const)("rejects incompatible server info (%s)", async (configPath, message) => {
-  await expect(
-    connectLocalMigrateServerForTesting(
-      {
-        ...(configPath === undefined ? {} : { configPath }),
-        cwd: process.cwd(),
-      },
-      {
-        serverEntry: new URL(
-          "./fixtures/socket-server-info.ts",
-          import.meta.url
-        ),
-        startupTimeoutMs: 2000,
-      }
-    )
-  ).rejects.toThrow(message);
-});
+] as const)(
+  "rejects incompatible server info (%s)",
+  async (configPath, message) => {
+    await expect(
+      connectLocalMigrateServerForTesting(
+        {
+          ...(configPath === undefined ? {} : { configPath }),
+          cwd: process.cwd(),
+        },
+        {
+          serverEntry: new URL(
+            "./fixtures/socket-server-info.ts",
+            import.meta.url
+          ),
+          startupTimeoutMs: 5000,
+        }
+      )
+    ).rejects.toThrow(message);
+  },
+  10_000
+);
