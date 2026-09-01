@@ -9,7 +9,10 @@ import {
   remoteMigrateServerIdentity as serverIdentity,
   remoteMigrateServerInfo as serverInfo,
 } from "../../../test/fixtures/remote-server.ts";
-import type { MigrateDashboard } from "../../protocol/index.ts";
+import {
+  MIGRATE_PROTOCOL_VERSION,
+  type MigrateDashboard,
+} from "../../protocol/index.ts";
 import { MigrateServer } from "../../server/index.ts";
 import { connectRemoteMigrateServer } from "./remote-connection.ts";
 
@@ -181,7 +184,7 @@ describe("remote Migrate Server connection", () => {
     }
   });
 
-  it("rejects a remote server with a different SDK version", async () => {
+  it("connects to a remote server with the same protocol and a different SDK version", async () => {
     const mismatchedServerLayer = Layer.effect(
       MigrateServer,
       MigrateServer.make({ backend, ...serverIdentity }).pipe(
@@ -199,12 +202,50 @@ describe("remote Migrate Server connection", () => {
     const http = makeRemoteMigrateServerHttp(mismatchedServerLayer);
 
     try {
+      const connection = await connectRemoteMigrateServer({
+        fetch: (input, init) => http.handler(new Request(input, init)),
+        url: "https://migrate.example/rpc",
+      });
+
+      try {
+        expect(connection.serverInfo.sdkVersion).toBe("999.0.0");
+        await expect(
+          connection.runPromise(connection.client.GetDashboard())
+        ).resolves.toMatchObject({ dashboard });
+      } finally {
+        await connection.dispose();
+      }
+    } finally {
+      await http.dispose();
+    }
+  });
+
+  it("rejects a remote server with a different protocol version", async () => {
+    const mismatchedServerLayer = Layer.effect(
+      MigrateServer,
+      MigrateServer.make({ backend, ...serverIdentity }).pipe(
+        Effect.map((server) =>
+          MigrateServer.of({
+            ...server,
+            getServerInfo: Effect.succeed({
+              ...serverInfo,
+              protocolVersion: MIGRATE_PROTOCOL_VERSION + 1,
+            }),
+          })
+        )
+      )
+    );
+    const http = makeRemoteMigrateServerHttp(mismatchedServerLayer);
+
+    try {
       await expect(
         connectRemoteMigrateServer({
           fetch: (input, init) => http.handler(new Request(input, init)),
           url: "https://migrate.example/rpc",
         })
-      ).rejects.toThrow("Migrate SDK version 999.0.0 is not supported");
+      ).rejects.toThrow(
+        `Migrate Protocol version ${MIGRATE_PROTOCOL_VERSION + 1} is not supported`
+      );
     } finally {
       await http.dispose();
     }

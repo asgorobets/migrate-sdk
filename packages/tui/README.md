@@ -64,6 +64,11 @@ discovery, source-identity history, and run controls. Availability that depends
 on a selected migration or run is reported in its data—for example, whether
 rollback or stopping is supported.
 
+Remote clients and servers may use different Migrate SDK releases when they
+advertise the same Migrate Protocol version. The server's SDK version remains
+available in connection metadata for diagnostics; protocol compatibility is the
+remote connection gate.
+
 Transport and server hosts can integrate directly with the Effect services
 exported as `MigrateClient` from `migrate-sdk/client` and `MigrateServer` from
 `migrate-sdk/server`. The local TUI supplies a child-process transport and a
