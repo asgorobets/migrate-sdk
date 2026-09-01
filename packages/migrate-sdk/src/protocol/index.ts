@@ -34,8 +34,14 @@ export const MigrateEnvironmentInfo = Schema.Struct({
 });
 export type MigrateEnvironmentInfo = typeof MigrateEnvironmentInfo.Type;
 
+export const MigrateServerInstanceId = Schema.NonEmptyString.pipe(
+  Schema.brand("MigrateServerInstanceId")
+);
+export type MigrateServerInstanceId = typeof MigrateServerInstanceId.Type;
+
 export const MigrateServerInfo = Schema.Struct({
   environment: MigrateEnvironmentInfo,
+  instanceId: Schema.optional(MigrateServerInstanceId),
   protocolVersion: MigrateProtocolVersion,
   registryId: Schema.optional(MigrationDefinitionRegistryId),
   sdkVersion: Schema.String,

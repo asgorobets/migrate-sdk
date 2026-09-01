@@ -23,55 +23,18 @@ import {
   type MigrateProtocolError,
   MigrateStreamingRpcs,
 } from "../protocol/index.ts";
+import {
+  type MigrateClientService,
+  makeMigrateClientService,
+  makeStreamingMigrateClientService,
+} from "./internal/client-service.ts";
 
-type MigrateStreamingRpcClient = RpcClient<
-  Rpcs<typeof MigrateStreamingRpcs>,
-  RpcClientError
->;
 type MigrateHttpRpcClient = RpcClient<
   Rpcs<typeof MigrateHttpRpcs>,
   RpcClientError
 >;
-type MigrateControlRpcClient = Omit<
-  MigrateStreamingRpcClient,
-  "ObserveDashboard" | "ObserveRun"
->;
 
-export type MigrateClientService = MigrateControlRpcClient & {
-  readonly observeDashboard: (input: {
-    readonly after?: MigrateDashboardResumeToken | undefined;
-  }) => Stream.Stream<
-    MigrateDashboardSnapshot,
-    MigrateProtocolError | RpcClientError
-  >;
-  readonly observeRun: (input: {
-    readonly runId: MigrationRunId;
-  }) => Stream.Stream<
-    MigrateObservationEvent,
-    MigrateProtocolError | RpcClientError
-  >;
-};
-
-const clientService = (
-  client: MigrateControlRpcClient,
-  observeDashboard: MigrateClientService["observeDashboard"],
-  observeRun: MigrateClientService["observeRun"]
-): MigrateClientService => ({
-  BreakLock: client.BreakLock,
-  GetActiveRuns: client.GetActiveRuns,
-  GetDashboard: client.GetDashboard,
-  GetMessages: client.GetMessages,
-  GetServerInfo: client.GetServerInfo,
-  GetSourceIdentityHistory: client.GetSourceIdentityHistory,
-  GetSourceItemTotals: client.GetSourceItemTotals,
-  NormalizeSourceIdentity: client.NormalizeSourceIdentity,
-  PrepareOperation: client.PrepareOperation,
-  ScanSource: client.ScanSource,
-  StartOperation: client.StartOperation,
-  StopRun: client.StopRun,
-  observeDashboard,
-  observeRun,
-});
+export type { MigrateClientService } from "./internal/client-service.ts";
 
 const transientHttpStatuses = new Set([408, 429, 500, 502, 503, 504]);
 
@@ -182,18 +145,12 @@ const leasedDashboardObservation = (
   );
 
 const makeStreamingClient = makeRpcClient(MigrateStreamingRpcs).pipe(
-  Effect.map((client) =>
-    clientService(
-      client,
-      (input) => client.ObserveDashboard(input),
-      ({ runId }) => client.ObserveRun({ runId })
-    )
-  )
+  Effect.map(makeStreamingMigrateClientService)
 );
 
 const makeHttpClient = makeRpcClient(MigrateHttpRpcs).pipe(
   Effect.map((client) =>
-    clientService(
+    makeMigrateClientService(
       client,
       ({ after }) => leasedDashboardObservation(client, after),
       ({ runId }) => leasedObservation(client, runId)

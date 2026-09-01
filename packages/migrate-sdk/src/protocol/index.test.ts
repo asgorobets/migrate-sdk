@@ -181,6 +181,7 @@ const contractCases: readonly {
     schema: MigrateServerInfo,
     value: {
       environment: { id: "production" },
+      instanceId: "server-123",
       protocolVersion: 1,
       registryId: "catalog",
       sdkVersion: "0.6.0",

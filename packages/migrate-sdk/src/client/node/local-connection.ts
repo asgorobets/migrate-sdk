@@ -1,24 +1,36 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layerNet } from "@effect/platform-node/NodeSocket";
-import { Layer, ManagedRuntime } from "effect";
+import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { layerProtocolSocket } from "effect/unstable/rpc/RpcClient";
 import { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
-import type { MigrateServerInfo } from "../../protocol/index.ts";
+import type {
+  MigrateServerInfo,
+  MigrateServerInstanceId,
+} from "../../protocol/index.ts";
 import { MIGRATE_SDK_VERSION } from "../../version.ts";
 import type { MigrateConnection } from "../connection.ts";
 import { validateMigrateServerInfo } from "../connection.ts";
 import { MigrateClient, type MigrateClientService } from "../index.ts";
 import {
+  isLocalMigrateServerAuthorizationFailure,
+  LocalMigrateServerHandshakeClient,
+  localAuthorizedMigrateClientLayer,
+} from "./local-authorization.ts";
+import {
+  ensurePrivateWindowsLocalMigrateServerDirectory,
+  LocalMigrateServerTcpDiscoveryJson,
+  localMigrateServerLoopbackHost,
   makeLocalMigrateServerEndpoint,
   removeLocalMigrateServerEndpoint,
 } from "./local-endpoint.ts";
 
 const defaultStartupTimeoutMs = 10_000;
+const windowsHandshakeTimeoutMs = 3000;
 
 export interface LocalMigrateConnectionInput {
   /**
@@ -69,10 +81,20 @@ const connectionError = (cause: unknown): Error => {
 
 class LocalMigrateServerConnectionFailure extends Error {
   override readonly cause: unknown;
+  readonly discoverySnapshot: string | undefined;
+  readonly removeDiscovery: boolean;
 
-  constructor(cause: unknown) {
+  constructor(
+    cause: unknown,
+    options: {
+      readonly discoverySnapshot?: string | undefined;
+      readonly removeDiscovery?: boolean;
+    } = {}
+  ) {
     super(cause instanceof Error ? cause.message : String(cause));
     this.cause = cause;
+    this.discoverySnapshot = options.discoverySnapshot;
+    this.removeDiscovery = options.removeDiscovery ?? false;
   }
 }
 
@@ -92,11 +114,86 @@ const isSocketTransportFailure = (cause: unknown): boolean =>
     cause.reason._tag === "SocketReadError" ||
     cause.reason._tag === "SocketWriteError");
 
+interface LocalEndpointTarget {
+  readonly authToken?: string;
+  readonly discoverySnapshot?: string;
+  readonly instanceId?: MigrateServerInstanceId;
+  readonly options:
+    | { readonly path: string }
+    | { readonly host: string; readonly port: number };
+}
+
+const processIsRunning = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (cause) {
+    const error = cause as NodeJS.ErrnoException & { readonly errno?: number };
+
+    return error.code === "EPERM" || error.errno === 1;
+  }
+};
+
+const localEndpointTarget = (endpoint: string): LocalEndpointTarget => {
+  if (process.platform !== "win32") {
+    return { options: { path: endpoint } };
+  }
+
+  let discoverySnapshot: string;
+  try {
+    discoverySnapshot = readFileSync(endpoint, "utf8");
+  } catch (cause) {
+    throw new LocalMigrateServerConnectionFailure(cause);
+  }
+
+  let discovery: typeof LocalMigrateServerTcpDiscoveryJson.Type;
+  try {
+    discovery = Schema.decodeUnknownSync(LocalMigrateServerTcpDiscoveryJson)(
+      discoverySnapshot
+    );
+  } catch (cause) {
+    throw new LocalMigrateServerConnectionFailure(cause, {
+      discoverySnapshot,
+      removeDiscovery: true,
+    });
+  }
+
+  if (
+    !Number.isSafeInteger(discovery.pid) ||
+    discovery.pid < 1 ||
+    !Number.isSafeInteger(discovery.port) ||
+    discovery.port < 1 ||
+    discovery.port > 65_535
+  ) {
+    throw new LocalMigrateServerConnectionFailure(
+      new Error(`Invalid local Migrate Server discovery file: ${endpoint}`),
+      { discoverySnapshot, removeDiscovery: true }
+    );
+  }
+  if (!processIsRunning(discovery.pid)) {
+    throw new LocalMigrateServerConnectionFailure(
+      new Error(`Local Migrate Server owner is not running: ${discovery.pid}`),
+      { discoverySnapshot, removeDiscovery: true }
+    );
+  }
+
+  return {
+    authToken: discovery.authToken,
+    discoverySnapshot,
+    options: { host: localMigrateServerLoopbackHost, port: discovery.port },
+    instanceId: discovery.instanceId,
+  };
+};
+
 export const localMigrateServerEndpoint = (
   { buildId, configPath, cwd }: LocalMigrateConnectionInput,
   options: Pick<LocalMigrateServerBootstrapOptions, "serverIdentity"> = {}
 ): string => {
   const user = typeof process.getuid === "function" ? process.getuid() : "user";
+  const tempDirectory =
+    process.platform === "win32"
+      ? ensurePrivateWindowsLocalMigrateServerDirectory()
+      : tmpdir();
 
   return makeLocalMigrateServerEndpoint(
     {
@@ -110,23 +207,53 @@ export const localMigrateServerEndpoint = (
       ...(options.serverIdentity === undefined
         ? {}
         : { serverIdentity: options.serverIdentity }),
-      tempDirectory: tmpdir(),
+      tempDirectory,
       user,
     }
   );
 };
 
-const connectSocket = async (
-  socketPath: string
+const connectEndpoint = async (
+  endpoint: string
 ): Promise<MigrateConnection> => {
+  const target = localEndpointTarget(endpoint);
   const ProtocolLive = layerProtocolSocket().pipe(
-    Layer.provide(layerNet({ path: socketPath })),
+    Layer.provide(layerNet(target.options)),
     Layer.provide(layerNdjson)
   );
-  const ClientLive = MigrateClient.streamingLayer.pipe(
-    Layer.provide(ProtocolLive)
-  );
+  const StandardClientLive = Layer.effect(
+    LocalMigrateServerHandshakeClient,
+    Effect.map(MigrateClient, (client) => ({
+      GetServerInfo: client.GetServerInfo,
+    }))
+  ).pipe(Layer.provideMerge(MigrateClient.streamingLayer));
+  const ClientLive = (
+    target.authToken === undefined
+      ? StandardClientLive
+      : localAuthorizedMigrateClientLayer(target.authToken)
+  ).pipe(Layer.provide(ProtocolLive));
   const runtime = ManagedRuntime.make(ClientLive);
+  const handshakeController =
+    target.instanceId === undefined ? undefined : new AbortController();
+  const handshakeTimeout =
+    handshakeController === undefined
+      ? undefined
+      : setTimeout(
+          () =>
+            handshakeController.abort(
+              new Error("Local Migrate Server TCP handshake timed out")
+            ),
+          windowsHandshakeTimeoutMs
+        );
+  const clearHandshakeTimeout = () => {
+    if (handshakeTimeout !== undefined) {
+      clearTimeout(handshakeTimeout);
+    }
+  };
+  const handshakeOptions =
+    handshakeController === undefined
+      ? undefined
+      : { signal: handshakeController.signal };
   let disposed = false;
   const dispose = async () => {
     if (disposed) {
@@ -137,17 +264,43 @@ const connectSocket = async (
   };
 
   let client: MigrateClientService;
+  let handshakeClient: typeof LocalMigrateServerHandshakeClient.Service;
   try {
-    client = await runtime.runPromise(MigrateClient);
+    client = await runtime.runPromise(MigrateClient, handshakeOptions);
+    handshakeClient = await runtime.runPromise(
+      LocalMigrateServerHandshakeClient,
+      handshakeOptions
+    );
   } catch (cause) {
+    clearHandshakeTimeout();
     await dispose();
-    throw new LocalMigrateServerConnectionFailure(cause);
+    throw new LocalMigrateServerConnectionFailure(cause, {
+      discoverySnapshot: target.discoverySnapshot,
+    });
   }
 
   let serverInfo: MigrateServerInfo;
   try {
-    serverInfo = await runtime.runPromise(client.GetServerInfo());
+    serverInfo = await runtime.runPromise(
+      handshakeClient.GetServerInfo(),
+      handshakeOptions
+    );
+    if (
+      target.instanceId !== undefined &&
+      serverInfo.instanceId !== target.instanceId
+    ) {
+      throw new LocalMigrateServerConnectionFailure(
+        new Error(
+          "Local Migrate Server identity does not match its TCP discovery file"
+        ),
+        {
+          discoverySnapshot: target.discoverySnapshot,
+          removeDiscovery: true,
+        }
+      );
+    }
     validateMigrateServerInfo(serverInfo);
+    clearHandshakeTimeout();
     return {
       client,
       dispose,
@@ -156,11 +309,36 @@ const connectSocket = async (
       serverInfo,
     };
   } catch (cause) {
+    clearHandshakeTimeout();
     await dispose();
-    throw isSocketTransportFailure(cause)
-      ? new LocalMigrateServerConnectionFailure(cause)
+    const authorizationFailure =
+      isLocalMigrateServerAuthorizationFailure(cause);
+    if (cause instanceof LocalMigrateServerConnectionFailure) {
+      throw cause;
+    }
+    throw handshakeController?.signal.aborted ||
+      isSocketTransportFailure(cause) ||
+      authorizationFailure
+      ? new LocalMigrateServerConnectionFailure(cause, {
+          discoverySnapshot: target.discoverySnapshot,
+          removeDiscovery: authorizationFailure,
+        })
       : new LocalMigrateServerCompatibilityFailure(cause);
   }
+};
+
+const removeFailedEndpoint = (endpoint: string, cause: unknown): void => {
+  const expectedDiscovery =
+    cause instanceof LocalMigrateServerConnectionFailure &&
+    cause.removeDiscovery
+      ? cause.discoverySnapshot
+      : undefined;
+
+  removeLocalMigrateServerEndpoint(
+    endpoint,
+    process.platform,
+    expectedDiscovery
+  );
 };
 
 const terminateOwnedServer = async (child: ChildProcess): Promise<void> => {
@@ -192,7 +370,7 @@ const connectPersistentMigrateServer = async (
     startupTimeoutMs = defaultStartupTimeoutMs,
   }: LocalMigrateServerBootstrapOptions = {}
 ): Promise<MigrateConnection> => {
-  const socketPath = localMigrateServerEndpoint(
+  const endpointPath = localMigrateServerEndpoint(
     {
       ...(buildId === undefined ? {} : { buildId }),
       ...(configPath === undefined ? {} : { configPath }),
@@ -204,12 +382,12 @@ const connectPersistentMigrateServer = async (
   );
 
   try {
-    return await connectSocket(socketPath);
+    return await connectEndpoint(endpointPath);
   } catch (cause) {
     if (cause instanceof LocalMigrateServerCompatibilityFailure) {
       throw connectionError(cause.cause);
     }
-    removeLocalMigrateServerEndpoint(socketPath);
+    removeFailedEndpoint(endpointPath, cause);
   }
 
   const child = spawn(
@@ -218,8 +396,8 @@ const connectPersistentMigrateServer = async (
       fileURLToPath(serverEntry),
       "--cwd",
       cwd,
-      "--socket",
-      socketPath,
+      "--endpoint",
+      endpointPath,
       ...(configPath === undefined ? [] : ["--config", configPath]),
     ],
     {
@@ -243,24 +421,35 @@ const connectPersistentMigrateServer = async (
       if (startupError !== undefined) {
         throw startupError;
       }
+
+      try {
+        return await connectEndpoint(endpointPath);
+      } catch (cause) {
+        if (cause instanceof LocalMigrateServerCompatibilityFailure) {
+          throw cause.cause;
+        }
+        removeFailedEndpoint(endpointPath, cause);
+        lastError =
+          cause instanceof LocalMigrateServerConnectionFailure
+            ? cause.cause
+            : cause;
+      }
+
       if (child.exitCode !== null || child.signalCode !== null) {
+        try {
+          return await connectEndpoint(endpointPath);
+        } catch (cause) {
+          if (cause instanceof LocalMigrateServerCompatibilityFailure) {
+            throw cause.cause;
+          }
+          removeFailedEndpoint(endpointPath, cause);
+        }
         throw new Error(
           `Local Migrate Server exited before startup completed (${child.exitCode ?? child.signalCode})`
         );
       }
 
-      try {
-        return await connectSocket(socketPath);
-      } catch (cause) {
-        if (cause instanceof LocalMigrateServerCompatibilityFailure) {
-          throw cause.cause;
-        }
-        lastError =
-          cause instanceof LocalMigrateServerConnectionFailure
-            ? cause.cause
-            : cause;
-        await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
-      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 50));
     }
 
     throw (

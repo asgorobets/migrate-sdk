@@ -1,14 +1,21 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   makeLocalMigrateServerEndpoint,
+  publishLocalMigrateServerTcpDiscovery,
   removeLocalMigrateServerEndpoint,
 } from "./local-endpoint.ts";
 
 const POSIX_SOCKET_NAME = /^migrate-501-[a-f0-9]{24}\.sock$/;
-const WINDOWS_PIPE_NAME = /^\\\\\.\\pipe\\migrate-user-[a-f0-9]{24}$/;
+const WINDOWS_DISCOVERY_NAME = /^migrate-user-[a-f0-9]{24}\.json$/;
 
 describe("local Migrate Server endpoint", () => {
   it("uses a filesystem socket on POSIX", () => {
@@ -27,7 +34,7 @@ describe("local Migrate Server endpoint", () => {
     expect(basename(endpoint)).toMatch(POSIX_SOCKET_NAME);
   });
 
-  it("uses a named pipe on Windows", () => {
+  it("uses a TCP discovery file on Windows", () => {
     const endpoint = makeLocalMigrateServerEndpoint(
       { configPath: "migrate.config.ts", cwd: "C:\\workspace" },
       {
@@ -39,7 +46,8 @@ describe("local Migrate Server endpoint", () => {
       }
     );
 
-    expect(endpoint).toMatch(WINDOWS_PIPE_NAME);
+    expect(dirname(endpoint)).toBe("C:\\Temp");
+    expect(basename(endpoint)).toMatch(WINDOWS_DISCOVERY_NAME);
   });
 
   it("uses the build id to isolate immutable application builds", () => {
@@ -69,15 +77,37 @@ describe("local Migrate Server endpoint", () => {
     ).toBe(first);
   });
 
-  it("does not unlink Windows named pipes", () => {
+  it("only unlinks the Windows discovery file owned by the caller", () => {
     const directory = mkdtempSync(join(tmpdir(), "migrate-endpoint-test-"));
-    const endpoint = join(directory, "named-pipe-marker");
+    const endpoint = join(directory, "discovery.json");
     writeFileSync(endpoint, "live", "utf8");
 
     try {
       removeLocalMigrateServerEndpoint(endpoint, "win32");
+      removeLocalMigrateServerEndpoint(endpoint, "win32", "replaced");
 
-      expect(existsSync(endpoint)).toBe(true);
+      expect(readFileSync(endpoint, "utf8")).toBe("live");
+
+      removeLocalMigrateServerEndpoint(endpoint, "win32", "live");
+
+      expect(existsSync(endpoint)).toBe(false);
+    } finally {
+      rmSync(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("publishes complete Windows discovery without replacing an owner", () => {
+    const directory = mkdtempSync(join(tmpdir(), "migrate-endpoint-test-"));
+    const endpoint = join(directory, "discovery.json");
+
+    try {
+      publishLocalMigrateServerTcpDiscovery(endpoint, "first");
+
+      expect(readFileSync(endpoint, "utf8")).toBe("first");
+      expect(() =>
+        publishLocalMigrateServerTcpDiscovery(endpoint, "second")
+      ).toThrow();
+      expect(readFileSync(endpoint, "utf8")).toBe("first");
     } finally {
       rmSync(directory, { force: true, recursive: true });
     }

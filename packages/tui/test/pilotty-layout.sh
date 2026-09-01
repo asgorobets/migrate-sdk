@@ -83,6 +83,13 @@ report_failure() {
   local line="$2"
   local command="$3"
   echo "Pilotty layout failed at line ${line}: ${command}" >&2
+  echo "Standalone catalog session status:" >&2
+  "${PILOTTY_BIN}" status -s "${CATALOG_STANDALONE_SESSION}" >&2 || true
+  echo "Standalone catalog terminal:" >&2
+  "${PILOTTY_BIN}" snapshot -s "${CATALOG_STANDALONE_SESSION}" \
+    --format text >&2 || true
+  echo "Standalone catalog retained output:" >&2
+  "${PILOTTY_BIN}" output -s "${CATALOG_STANDALONE_SESSION}" >&2 || true
   exit "${status}"
 }
 

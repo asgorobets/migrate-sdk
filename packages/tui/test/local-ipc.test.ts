@@ -10,11 +10,16 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Effect } from "effect";
+import { layerNet } from "@effect/platform-node/NodeSocket";
+import { type Effect, Layer, ManagedRuntime } from "effect";
+import { layerProtocolSocket } from "effect/unstable/rpc/RpcClient";
+import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
 import { toMigrationDefinitionId } from "migrate-sdk";
+import { MigrateClient } from "migrate-sdk/client";
 import type { MigrateConnection } from "migrate-sdk/client/node";
 import {
   connectLocalMigrateServerForTesting,
@@ -744,7 +749,7 @@ test("Node server bootstrap failures exit unsuccessfully", () => {
       process.cwd(),
       "--config",
       resolve("test/fixtures/missing.config.ts"),
-      "--socket",
+      "--endpoint",
       join(tmpdir(), `migrate-bootstrap-${randomUUID()}.sock`),
     ],
     { encoding: "utf8" }
@@ -823,61 +828,298 @@ test("reports an invalid Node executable without crashing the TUI", async () => 
   ).rejects.toThrow("Unable to connect to the local Migrate Server");
 });
 
-const unixTest = process.platform === "win32" ? test.skip : test;
+const windowsTest = process.platform === "win32" ? test : test.skip;
 
-for (const variant of ["protocol", "malformed"] as const) {
-  unixTest(
-    `does not unlink a live server socket after ${variant} incompatibility`,
+for (const [variant, discovery] of [
+  [
+    "dead",
+    JSON.stringify({
+      authToken: "stale-token",
+      host: "127.0.0.1",
+      instanceId: "stale-server",
+      pid: 2_147_483_647,
+      port: 9,
+    }),
+  ],
+  ["malformed", "not-json"],
+] as const) {
+  windowsTest(
+    `recovers from a ${variant} Windows TCP discovery file`,
     async () => {
-      const configPath = `incompatible-${variant}.config.ts`;
-      const cwd = process.cwd();
-      const socketPath = localMigrateServerEndpoint({ configPath, cwd });
-      const child = spawn(
-        process.env.MIGRATE_TUI_NODE_EXECUTABLE ?? "node",
-        [
-          fileURLToPath(
-            new URL("./fixtures/socket-server-info.ts", import.meta.url)
-          ),
-          "--socket",
-          socketPath,
-          "--variant",
-          variant,
-        ],
-        { cwd, stdio: "ignore" }
-      );
-      const childPid = child.pid;
-
-      if (childPid === undefined) {
-        throw new Error("Incompatible server fixture did not start");
-      }
+      const serverIdentity = `stale-windows-discovery-${randomUUID()}`;
+      const input = {
+        configPath: serverFixturePath("cancellation.config.ts"),
+        cwd: resolve("../.."),
+      };
+      const endpoint = localMigrateServerEndpoint(input, { serverIdentity });
+      await writeFile(endpoint, discovery, {
+        encoding: "utf8",
+        flag: "wx",
+      });
+      let runtime:
+        | Awaited<ReturnType<typeof makeMigrationTuiRuntime>>
+        | undefined;
 
       try {
-        await waitForPath(socketPath, 3000);
-        await expect(
-          connectLocalMigrateServerForTesting(
-            { configPath, cwd },
-            { startupTimeoutMs: 1000 }
-          )
-        ).rejects.toThrow(
-          variant === "protocol"
-            ? incompatibleProtocolMessage
-            : "Unable to connect to the local Migrate Server"
+        runtime = await makeMigrationTuiRuntimeWithLocalConnection(
+          input,
+          (connectionInput) =>
+            connectLocalMigrateServerForTesting(connectionInput, {
+              serverIdentity,
+            })
         );
-
-        expect(existsSync(socketPath)).toBe(true);
-        expect(processIsRunning(childPid)).toBe(true);
+        expect(runtime.rows.map((row) => row.entry.id)).toEqual([
+          "cancellable",
+        ]);
       } finally {
-        if (child.exitCode === null && child.signalCode === null) {
-          await new Promise<void>((resolveExit) => {
-            child.once("exit", () => resolveExit());
-            child.kill("SIGKILL");
-          });
-        }
-        await unlink(socketPath).catch(() => undefined);
+        await runtime?.dispose?.();
+        await unlink(endpoint).catch(() => undefined);
       }
     },
-    10_000
+    20_000
   );
+}
+
+windowsTest(
+  "preserves live-owner discovery after a transient TCP failure",
+  async () => {
+    const serverIdentity = `live-windows-discovery-${randomUUID()}`;
+    const input = {
+      configPath: serverFixturePath("cancellation.config.ts"),
+      cwd: resolve("../.."),
+    };
+    const endpoint = localMigrateServerEndpoint(input, { serverIdentity });
+    const rejectingServer = createServer((socket) => socket.destroy());
+    await new Promise<void>((resolveListening, rejectListening) => {
+      rejectingServer.once("error", rejectListening);
+      rejectingServer.listen(0, "127.0.0.1", resolveListening);
+    });
+    const address = rejectingServer.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("Transient TCP fixture did not bind a loopback port");
+    }
+    const discovery = JSON.stringify({
+      authToken: "live-token",
+      host: "127.0.0.1",
+      instanceId: "live-server",
+      pid: process.pid,
+      port: address.port,
+    });
+    try {
+      await writeFile(endpoint, discovery, { encoding: "utf8", flag: "wx" });
+
+      await expect(
+        connectLocalMigrateServerForTesting(input, {
+          serverEntry: new URL(
+            "./fixtures/crashing-server.ts",
+            import.meta.url
+          ),
+          serverIdentity,
+          startupTimeoutMs: 1000,
+        })
+      ).rejects.toThrow("Unable to connect to the local Migrate Server");
+
+      expect(await readFile(endpoint, "utf8")).toBe(discovery);
+    } finally {
+      await new Promise<void>((resolveClose) =>
+        rejectingServer.close(() => resolveClose())
+      );
+      await unlink(endpoint).catch(() => undefined);
+    }
+  },
+  5000
+);
+
+windowsTest(
+  "rejects an unauthenticated Windows TCP client",
+  async () => {
+    const serverIdentity = `windows-authorization-${randomUUID()}`;
+    const input = {
+      configPath: serverFixturePath("cancellation.config.ts"),
+      cwd: resolve("../.."),
+    };
+    const endpoint = localMigrateServerEndpoint(input, { serverIdentity });
+    const connection = await connectLocalMigrateServerForTesting(input, {
+      serverIdentity,
+    });
+    const discovery = JSON.parse(await readFile(endpoint, "utf8")) as {
+      readonly port: number;
+    };
+    const ProtocolLive = layerProtocolSocket().pipe(
+      Layer.provide(layerNet({ host: "127.0.0.1", port: discovery.port })),
+      Layer.provide(layerNdjson)
+    );
+    const runtime = ManagedRuntime.make(
+      MigrateClient.streamingLayer.pipe(Layer.provide(ProtocolLive))
+    );
+
+    try {
+      const client = await runtime.runPromise(MigrateClient);
+
+      await expect(runtime.runPromise(client.GetServerInfo())).rejects.toThrow(
+        "Local Migrate Server authorization failed"
+      );
+    } finally {
+      await runtime.dispose();
+      await connection.dispose();
+      await unlink(endpoint).catch(() => undefined);
+    }
+  },
+  20_000
+);
+
+windowsTest(
+  "does not attach to a server that fails TCP discovery identity",
+  async () => {
+    const serverIdentity = `wrong-windows-server-${randomUUID()}`;
+    const input = {
+      configPath: serverFixturePath("cancellation.config.ts"),
+      cwd: resolve("../.."),
+    };
+    const endpoint = localMigrateServerEndpoint(input, { serverIdentity });
+    const child = spawn(
+      process.env.MIGRATE_TUI_NODE_EXECUTABLE ?? "node",
+      [
+        fileURLToPath(
+          new URL("./fixtures/socket-server-info.ts", import.meta.url)
+        ),
+        "--endpoint",
+        endpoint,
+        "--variant",
+        "identity",
+      ],
+      { cwd: process.cwd(), stdio: "ignore" }
+    );
+    let connection: MigrateConnection | undefined;
+
+    try {
+      await waitForPath(endpoint, 3000);
+      connection = await connectLocalMigrateServerForTesting(input, {
+        serverIdentity,
+      });
+
+      expect(connection.serverInfo.environment.label).toBe(
+        "cancellation.config.ts"
+      );
+    } finally {
+      await connection?.dispose();
+      if (child.exitCode === null && child.signalCode === null) {
+        await new Promise<void>((resolveExit) => {
+          child.once("exit", () => resolveExit());
+          child.kill("SIGKILL");
+        });
+      }
+      await unlink(endpoint).catch(() => undefined);
+    }
+  },
+  20_000
+);
+
+windowsTest(
+  "concurrent Windows connectors converge on one TCP server",
+  async () => {
+    const serverIdentity = `concurrent-windows-connectors-${randomUUID()}`;
+    const input = {
+      configPath: resolve("test/fixtures/concurrent-runs.config.ts"),
+      cwd: process.cwd(),
+    };
+    const connect = (connectionInput: typeof input) =>
+      connectLocalMigrateServerForTesting(connectionInput, { serverIdentity });
+    const [firstResult, secondResult] = await Promise.allSettled([
+      makeMigrationTuiRuntimeWithLocalConnection(input, connect),
+      makeMigrationTuiRuntimeWithLocalConnection(input, connect),
+    ]);
+    if (
+      firstResult.status === "rejected" ||
+      secondResult.status === "rejected"
+    ) {
+      if (firstResult.status === "fulfilled") {
+        await firstResult.value.dispose?.();
+      }
+      if (secondResult.status === "fulfilled") {
+        await secondResult.value.dispose?.();
+      }
+      throw firstResult.status === "rejected"
+        ? firstResult.reason
+        : secondResult.reason;
+    }
+    const firstRuntime = firstResult.value;
+    const secondRuntime = secondResult.value;
+
+    try {
+      const target = {
+        definitionIds: [toMigrationDefinitionId("locked")],
+        kind: "definitions" as const,
+      };
+      const firstRun = await firstRuntime.start(
+        await firstRuntime.prepare(target, "run")
+      );
+      const overlappingOperation = await secondRuntime.prepare(target, "run");
+
+      await expect(secondRuntime.start(overlappingOperation)).rejects.toThrow(
+        LOCK_ERROR_PATTERN
+      );
+      await firstRuntime.stopRun(firstRun.runId);
+      await expect(
+        firstRuntime.observeRun(firstRun.runId)
+      ).resolves.toMatchObject({ outcome: "cancelled", runId: firstRun.runId });
+    } finally {
+      await firstRuntime.dispose?.();
+      await secondRuntime.dispose?.();
+    }
+  },
+  20_000
+);
+
+for (const variant of ["protocol", "malformed"] as const) {
+  test(`does not unlink a live server socket after ${variant} incompatibility`, async () => {
+    const configPath = `incompatible-${variant}.config.ts`;
+    const cwd = process.cwd();
+    const endpointPath = localMigrateServerEndpoint({ configPath, cwd });
+    const child = spawn(
+      process.env.MIGRATE_TUI_NODE_EXECUTABLE ?? "node",
+      [
+        fileURLToPath(
+          new URL("./fixtures/socket-server-info.ts", import.meta.url)
+        ),
+        "--endpoint",
+        endpointPath,
+        "--variant",
+        variant,
+      ],
+      { cwd, stdio: "ignore" }
+    );
+    const childPid = child.pid;
+
+    if (childPid === undefined) {
+      throw new Error("Incompatible server fixture did not start");
+    }
+
+    try {
+      await waitForPath(endpointPath, 3000);
+      await expect(
+        connectLocalMigrateServerForTesting(
+          { configPath, cwd },
+          { startupTimeoutMs: 1000 }
+        )
+      ).rejects.toThrow(
+        variant === "protocol"
+          ? incompatibleProtocolMessage
+          : "Unable to connect to the local Migrate Server"
+      );
+
+      expect(existsSync(endpointPath)).toBe(true);
+      expect(processIsRunning(childPid)).toBe(true);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) {
+        await new Promise<void>((resolveExit) => {
+          child.once("exit", () => resolveExit());
+          child.kill("SIGKILL");
+        });
+      }
+      await unlink(endpointPath).catch(() => undefined);
+    }
+  }, 10_000);
 }
 
 test("reports when the socket server exits during startup", async () => {

@@ -48,6 +48,7 @@ import {
   type MigrateRunStartResult,
   type MigrateRunStopResult,
   type MigrateServerInfo,
+  type MigrateServerInstanceId,
   type MigrateSourceIdentityHistoryEntry,
   type MigrateTarget,
   type MigrateTerminalSummary,
@@ -214,6 +215,7 @@ export interface MigrateServerInput<ExecutableOperation> {
   readonly dashboardFallbackInterval?: Duration.Input | undefined;
   readonly dashboardProjectionInterval?: Duration.Input | undefined;
   readonly environment: MigrateEnvironmentInfo;
+  readonly instanceId?: MigrateServerInstanceId | undefined;
   readonly observationLeaseDuration?: Duration.Input | undefined;
   readonly registryId?: MigrationDefinitionRegistryId | undefined;
 }
@@ -555,6 +557,7 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
     dashboardFallbackInterval = "5 seconds",
     dashboardProjectionInterval = "1 second",
     environment,
+    instanceId,
     observationLeaseDuration = "20 seconds",
     registryId,
   }: MigrateServerInput<ExecutableOperation>,
@@ -564,6 +567,7 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
 ): Effect.Effect<MigrateServerService, never, Scope> => {
   const serverInfo: MigrateServerInfo = {
     environment,
+    ...(instanceId === undefined ? {} : { instanceId }),
     protocolVersion: MIGRATE_PROTOCOL_VERSION,
     ...(registryId === undefined ? {} : { registryId }),
     sdkVersion: MIGRATE_SDK_VERSION,

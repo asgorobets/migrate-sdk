@@ -226,6 +226,12 @@ An execution adapter that starts an Effect workflow from a migration execution e
 **Migrate Server**:
 An environment-bound application that serves migration operations backed by an authoritative Migration Definition Registry and the capabilities required to inspect, plan, execute, observe, and control its migrations.
 
+**Migrate Server Instance**:
+One running incarnation of a Migrate Server. Its identity changes when the server process is replaced; unlike a Migrate Environment, Migration Definition Registry, or Migrate Server Build, it is not a stable deployment or content identity.
+
+**Migrate Server Instance Id**:
+The ephemeral identity of one Migrate Server Instance, used by a connection to verify that a discovered transport still reaches the instance that published it.
+
 **Migrate Client**:
 A user-facing or automated caller, such as the TUI, that uses a Migrate Server without owning the server environment's source, destination, migration store, or execution capabilities.
 
