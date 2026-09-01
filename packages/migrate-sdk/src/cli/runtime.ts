@@ -17,13 +17,19 @@ import {
   type MigrateServerConnectionInput,
 } from "../client/node/index.ts";
 import type { MigrationRunId } from "../domain/ids.ts";
+import type { MigrationDefinitionLock } from "../domain/lock.ts";
+import type { MigrationMessage } from "../domain/message.ts";
 import type {
   MigrateActiveRun,
+  MigrateBreakLockResult,
+  MigrateDashboard,
+  MigrateDashboardSnapshot,
   MigrateObservationEvent,
   MigrateOperationRequest,
   MigratePreparedOperation,
   MigrateRunStartResult,
   MigrateRunStopResult,
+  MigrateTarget,
 } from "../protocol/index.ts";
 import type { SqlMigrationStoreSchemaPlan } from "../stores/sql/sql-migration-store-schema.ts";
 import {
@@ -47,14 +53,25 @@ export class MigrationCliConnectionError extends Schema.TaggedError<MigrationCli
 ) {}
 
 export interface MigrationCliServerConnection {
+  readonly breakLock: (
+    lock: MigrationDefinitionLock
+  ) => Effect.Effect<MigrateBreakLockResult, unknown>;
   readonly dispose: () => Promise<void>;
   readonly getActiveRuns: Effect.Effect<readonly MigrateActiveRun[], unknown>;
+  readonly getDashboard: Effect.Effect<MigrateDashboardSnapshot, unknown>;
+  readonly getMessages: (
+    target: MigrateTarget
+  ) => Effect.Effect<readonly MigrationMessage[], unknown>;
   readonly observeRun: (
     runId: MigrationRunId
   ) => Stream.Stream<MigrateObservationEvent, unknown>;
   readonly prepareOperation: (
     request: MigrateOperationRequest
   ) => Effect.Effect<MigratePreparedOperation, unknown>;
+  readonly scanSource: (input: {
+    readonly concurrency?: number;
+    readonly target: MigrateTarget;
+  }) => Effect.Effect<MigrateDashboard, unknown>;
   readonly startOperation: (input: {
     readonly acceptedFingerprint: MigratePreparedOperation["fingerprint"];
     readonly request: MigrateOperationRequest;
@@ -167,14 +184,19 @@ export class MigrationCliRuntime extends Service<
             try: () => connectMigrateServer(input),
           }).pipe(
             Effect.map((connection) => ({
+              breakLock: (lock) => connection.client.BreakLock({ lock }),
               dispose: connection.dispose,
               getActiveRuns: connection.client.GetActiveRuns(),
+              getDashboard: connection.client.GetDashboard(),
+              getMessages: (target) =>
+                connection.client.GetMessages({ target }),
               observeRun: (runId: MigrationRunId) =>
                 connection.client.observeRun({ runId }),
               prepareOperation: (request) =>
                 connection.client.PrepareOperation(request),
               startOperation: (input) =>
                 connection.client.StartOperation(input),
+              scanSource: (input) => connection.client.ScanSource(input),
               stopRun: (runId: MigrationRunId) =>
                 connection.client.StopRun({ runId }),
             }))

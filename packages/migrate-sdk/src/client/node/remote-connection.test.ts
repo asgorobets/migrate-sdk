@@ -178,10 +178,24 @@ describe("remote Migrate Server connection", () => {
           fetch: (input, init) => http.handler(new Request(input, init)),
           url: "https://migrate.example/rpc",
         })
-      ).rejects.toThrow("Unable to connect to Migrate Server");
+      ).rejects.toThrow(
+        "Permission denied by Migrate Server (HTTP 401 Unauthorized). Check MIGRATE_SERVER_TOKEN."
+      );
     } finally {
       await http.dispose();
     }
+  });
+
+  it("reports forbidden remote connections as permission errors", async () => {
+    await expect(
+      connectRemoteMigrateServer({
+        fetch: () =>
+          Promise.resolve(new Response("Forbidden", { status: 403 })),
+        url: "https://migrate.example/rpc",
+      })
+    ).rejects.toThrow(
+      "Permission denied by Migrate Server (HTTP 403 Forbidden)."
+    );
   });
 
   it("connects to a remote server with the same protocol and a different SDK version", async () => {

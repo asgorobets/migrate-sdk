@@ -88,6 +88,18 @@ pnpm exec migrate rollback articles --plan
 pnpm exec migrate rollback articles
 ```
 
+The same server-backed commands can target a remote Migrate Server without a
+local migration configuration:
+
+```sh
+MIGRATE_SERVER_TOKEN=secret pnpm exec migrate \
+  --server https://migrate.example.com/api/migrate \
+  list
+```
+
+Remote mode supports `list`, `graph`, `status`, `messages`, `unlock`, `run`,
+`rollback`, and `runs`. Migration Store schema administration remains local.
+
 ## Full and incremental source discovery
 
 Sources default to full discovery. Cursors let interrupted runs resume, but a

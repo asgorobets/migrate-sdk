@@ -1,12 +1,14 @@
-import { Effect, Layer, ManagedRuntime } from "effect";
+import { Cause, Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { layerProtocolHttp } from "effect/unstable/rpc/RpcClient";
+import { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
 import {
   type MigrateConnection,
   validateMigrateServerProtocol,
 } from "../connection.ts";
 import { MigrateClient } from "../index.ts";
+import { rpcClientHttpStatusCode } from "./rpc-client-error.ts";
 
 export interface MigrateHttpConnectionOptions {
   readonly bearerToken?: string | undefined;
@@ -14,6 +16,53 @@ export interface MigrateHttpConnectionOptions {
   readonly signal?: AbortSignal | undefined;
   readonly url: string;
 }
+
+class MigrateHttpRpcConnectionError extends Schema.TaggedError<MigrateHttpRpcConnectionError>()(
+  "MigrateHttpRpcConnectionError",
+  {
+    cause: Schema.Defect(),
+    message: Schema.String,
+  }
+) {}
+
+const rpcConnectionFailureMessage = (error: RpcClientError): string =>
+  Option.match(rpcClientHttpStatusCode(error), {
+    onNone: () => error.message,
+    onSome: (status) => {
+      switch (status) {
+        case 401:
+          return "Permission denied by Migrate Server (HTTP 401 Unauthorized). Check MIGRATE_SERVER_TOKEN.";
+        case 403:
+          return "Permission denied by Migrate Server (HTTP 403 Forbidden).";
+        default:
+          return `Migrate Server returned HTTP ${status}.`;
+      }
+    },
+  });
+
+const mapRpcClientConnectionCause = (
+  cause: Cause.Cause<RpcClientError>
+): Effect.Effect<never, MigrateHttpRpcConnectionError | RpcClientError> => {
+  const rpcClientError = Cause.findErrorOption(cause).pipe(
+    Option.orElse(() =>
+      Cause.findDefect(cause).pipe(
+        Option.getSuccess,
+        Option.filter(Schema.is(RpcClientError))
+      )
+    )
+  );
+
+  return Option.match(rpcClientError, {
+    onNone: () => Effect.failCause(cause),
+    onSome: (error) =>
+      Effect.fail(
+        new MigrateHttpRpcConnectionError({
+          cause: error,
+          message: rpcConnectionFailureMessage(error),
+        })
+      ),
+  });
+};
 
 const ipv4Part = /^\d{1,3}$/;
 
@@ -81,7 +130,9 @@ const connectMigrateHttpServerUnsafe = ({
     .runPromise(
       Effect.gen(function* () {
         const client = yield* MigrateClient;
-        const serverInfo = yield* client.GetServerInfo();
+        const serverInfo = yield* client
+          .GetServerInfo()
+          .pipe(Effect.catchCause(mapRpcClientConnectionCause));
         validateMigrateServerProtocol(serverInfo);
 
         return {

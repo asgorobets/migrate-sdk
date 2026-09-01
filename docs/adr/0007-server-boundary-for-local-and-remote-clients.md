@@ -265,20 +265,27 @@ infrastructure-only commands may remain outside that interface.
 The CLI adopts that seam incrementally through a shared Node Migrate Connection
 owned by Migrate SDK rather than by the TUI package. Both clients use the same
 local socket or remote HTTPS connection, version checks, authentication header,
-and logical `MigrateClient`; renderer concerns remain in the TUI. The first CLI
-surface over this connection is run lifecycle management:
+and logical `MigrateClient`; renderer concerns remain in the TUI. CLI surfaces
+over this connection include registry inspection, migration control, and run
+lifecycle management:
 
+- `migrate list` lists registered Migration Definitions.
+- `migrate graph` renders Migration Definition dependencies.
+- `migrate status` and `migrate messages` inspect durable server state.
+- `migrate unlock` requests a lock break through the server.
+- `migrate run` and `migrate rollback` plan and start operations.
 - `migrate runs list` discovers active Migration Runs.
 - `migrate runs observe <run-id>` observes one run until it is terminal or the
   caller detaches.
 - `migrate runs stop <run-id>` explicitly requests durable cooperative
   cancellation.
 
-`migrate list` continues to mean registered Migration Definitions. Remote CLI
-commands accept a Migrate Server URL and read its bearer token from
-`MIGRATE_SERVER_TOKEN`; secrets are not accepted as command-line flags. Local
-commands discover the local migration configuration and connect to the same
-reconnectable Node Migrate Server used by the TUI.
+Remote CLI commands accept a Migrate Server URL and read its bearer token from
+`MIGRATE_SERVER_TOKEN`; secrets are not accepted as command-line flags. Store
+schema commands remain local infrastructure operations because the Migrate
+Protocol does not expose Migration Store administration. Local commands
+discover the local migration configuration and may continue using direct SDK
+services while the shared server seam is adopted incrementally.
 
 While observing in an interactive terminal, the first Ctrl+C offers three
 distinct choices: detach the observation, stop safely and keep observing while
