@@ -29,19 +29,18 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
   input: LoadMigrationTuiInput,
   connectLocal: ConnectLocalMigrateServer
 ): Promise<MigrationTuiRuntime> => {
-  let connection: MigrateConnection;
+  const connect = (): Promise<MigrateConnection> => {
+    if (input.server === undefined) {
+      const nodeExecutable = process.env.MIGRATE_TUI_NODE_EXECUTABLE;
+      return connectLocal({
+        ...input,
+        ...(nodeExecutable === undefined ? {} : { nodeExecutable }),
+      });
+    }
 
-  if (input.server === undefined) {
-    const nodeExecutable = process.env.MIGRATE_TUI_NODE_EXECUTABLE;
-    const localConnectionInput = {
-      ...input,
-      ...(nodeExecutable === undefined ? {} : { nodeExecutable }),
-    };
-
-    connection = await connectLocal(localConnectionInput);
-  } else {
-    connection = await connectRemoteMigrateServer(input.server);
-  }
+    return connectRemoteMigrateServer(input.server);
+  };
+  const connection = await connect();
   const { client, runPromise, serverInfo } = connection;
   const initialDashboard = await runPromise(client.GetDashboard()).catch(
     async (cause) => {
@@ -56,6 +55,7 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
         readonly token: symbol;
       }
     | undefined;
+  const runtimeController = new AbortController();
   const sourceScanSnapshot = (
     dashboard: Pick<MigrateDashboard, "activeRuns" | "rows" | "scannedSource">
   ) => ({
@@ -72,6 +72,7 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
   });
 
   const consumeObservation = async <ObservationError>(
+    observationConnection: MigrateConnection,
     stream: Stream.Stream<MigrateObservationEvent, ObservationError>,
     runId: MigrationRunId,
     options?: MigrationTuiExecuteOptions,
@@ -86,7 +87,7 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
         }
       | undefined;
 
-    await runPromise(
+    await observationConnection.runPromise(
       stream.pipe(
         Stream.runForEach((event) =>
           Effect.sync(() => {
@@ -180,13 +181,22 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
     return Promise.resolve({ kind: "idle" });
   };
 
+  const dispose = async (): Promise<void> => {
+    runtimeController.abort();
+    detachRunObservation();
+    await connection.dispose();
+  };
+
+  // Keep long-lived streams off the command transport. Bun's Windows named
+  // pipes cannot reliably multiplex a stream with concurrent command RPCs.
+
   return {
     breakLock: (lock: MigrationDefinitionLock) =>
       runPromise(client.BreakLock({ lock })),
     environmentLabel: serverInfo.environment.label ?? serverInfo.environment.id,
     detachForExit,
     detachRunObservation,
-    dispose: connection.dispose,
+    dispose,
     groups: initialDashboard.dashboard.groups,
     listActiveRuns: () => runPromise(client.GetActiveRuns()),
     listMessages: (target) => runPromise(client.GetMessages({ target })),
@@ -198,35 +208,53 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
       runPromise(
         client.NormalizeSourceIdentity({ definitionId, sourceIdentity })
       ),
-    observeDashboard: ({
+    observeDashboard: async ({
       after,
       onSnapshot,
       signal,
-    }: MigrationTuiDashboardObservationOptions) =>
-      runPromise(
-        client
-          .observeDashboard(after === undefined ? {} : { after })
-          .pipe(
-            Stream.runForEach((dashboardSnapshot) =>
-              Effect.sync(() => onSnapshot(snapshot(dashboardSnapshot)))
-            )
-          ),
-        signal === undefined ? undefined : { signal }
-      ),
+    }: MigrationTuiDashboardObservationOptions) => {
+      const observationConnection = await connect();
+      const observationSignal =
+        signal === undefined
+          ? runtimeController.signal
+          : AbortSignal.any([runtimeController.signal, signal]);
+
+      try {
+        await observationConnection.runPromise(
+          observationConnection.client
+            .observeDashboard(after === undefined ? {} : { after })
+            .pipe(
+              Stream.runForEach((dashboardSnapshot) =>
+                Effect.sync(() => onSnapshot(snapshot(dashboardSnapshot)))
+              )
+            ),
+          { signal: observationSignal }
+        );
+      } finally {
+        await observationConnection.dispose();
+      }
+    },
     observeRun: async (runId, options) => {
       detachRunObservation();
 
       const controller = new AbortController();
       const observationSignal =
         options?.signal === undefined
-          ? controller.signal
-          : AbortSignal.any([controller.signal, options.signal]);
+          ? AbortSignal.any([controller.signal, runtimeController.signal])
+          : AbortSignal.any([
+              controller.signal,
+              runtimeController.signal,
+              options.signal,
+            ]);
       const token = Symbol("MigrationTuiRunObservation");
       activeRunObservation = { controller, runId, token };
+      let observationConnection: MigrateConnection | undefined;
 
       try {
+        observationConnection = await connect();
         return await consumeObservation(
-          client.observeRun({ runId }),
+          observationConnection,
+          observationConnection.client.observeRun({ runId }),
           runId,
           options,
           observationSignal
@@ -246,6 +274,7 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
         if (activeRunObservation?.token === token) {
           activeRunObservation = undefined;
         }
+        await observationConnection?.dispose();
       }
     },
     prepare: (selection, action, options = {}) =>

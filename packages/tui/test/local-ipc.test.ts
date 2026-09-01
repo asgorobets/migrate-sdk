@@ -176,6 +176,39 @@ test("Bun operates a Node-only migration through local Effect RPC", async () => 
   }
 }, 20_000);
 
+test("live dashboard observation does not block dashboard reads", async () => {
+  const runtime = await makeMigrationTuiRuntime({
+    configPath: serverFixturePath("cancellation.config.ts"),
+    cwd: resolve("../.."),
+  });
+  const controller = new AbortController();
+  let observationSettled = Promise.resolve();
+
+  try {
+    let resolveFirstSnapshot: (() => void) | undefined;
+    const firstSnapshot = new Promise<void>((resolveSnapshot) => {
+      resolveFirstSnapshot = resolveSnapshot;
+    });
+    const observation = runtime.observeDashboard({
+      onSnapshot: () => resolveFirstSnapshot?.(),
+      signal: controller.signal,
+    });
+    observationSettled = observation.then(
+      () => undefined,
+      () => undefined
+    );
+
+    await within(firstSnapshot, LIVE_DASHBOARD_READ_TIMEOUT_MS);
+    await expect(
+      within(runtime.refresh(), LIVE_DASHBOARD_READ_TIMEOUT_MS)
+    ).resolves.toBeDefined();
+  } finally {
+    controller.abort();
+    await runtime.dispose?.();
+    await observationSettled;
+  }
+}, 20_000);
+
 test("live observation does not block dashboard reads or explicit cancellation", async () => {
   const runtime = await makeMigrationTuiRuntime({
     configPath: serverFixturePath("cancellation.config.ts"),
