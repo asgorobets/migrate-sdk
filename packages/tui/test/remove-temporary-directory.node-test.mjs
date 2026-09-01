@@ -14,7 +14,7 @@ test("retries while Windows releases a temporary directory", {
   const directory = await mkdtemp(join(tmpdir(), "migrate-rm-ebusy-"));
   const child = spawn(
     process.execPath,
-    ["-e", "setTimeout(() => undefined, 400)"],
+    ["-e", "setTimeout(() => undefined, 2000)"],
     { cwd: directory, stdio: "ignore" }
   );
   await once(child, "spawn");
