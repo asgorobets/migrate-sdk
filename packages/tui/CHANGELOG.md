@@ -1,5 +1,12 @@
 # @migrate-sdk/tui
 
+## 0.9.0
+
+### Patch Changes
+
+- Updated dependencies [612c3b2]
+  - migrate-sdk@0.9.0
+
 ## 0.8.2
 
 ## 0.8.1
