@@ -13,9 +13,10 @@ For each source item the runtime:
 1. Decodes source payload and source identity.
 2. Checks previous item state and source-version comparability.
 3. Creates a scoped tracking service for the item.
-4. Runs `process` inside that scope.
+4. Runs `process`, or one returned `processBatch` settlement, inside that scope.
 5. Persists skipped, failed, migrated, unchanged, or needs-update item state.
-6. Stores any process journal segment or tracking record produced by the scope.
+6. Stores any process journal segment, helper-owned journal extensions, or
+   tracking record produced by the scope.
 
 Rollback uses the same scoped tracking service shape with a separate attempt
 scope. A successful rollback deletes item state. A failed rollback appends the

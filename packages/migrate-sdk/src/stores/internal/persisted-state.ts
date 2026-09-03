@@ -9,6 +9,7 @@ import { SourceVersionContractFingerprint } from "../../domain/migration-contrac
 import { MigrationItemError } from "../../domain/state.ts";
 import {
   DestinationJournalEntry,
+  DestinationJournalExtensions,
   DestinationJournalRollbackAttemptError,
   TrackingRecord,
 } from "../../domain/tracking.ts";
@@ -44,6 +45,7 @@ const PersistedDestinationRollbackAttemptJournalSegment = Schema.Struct({
 });
 
 const PersistedDestinationJournal = Schema.Struct({
+  extensions: Schema.optional(DestinationJournalExtensions),
   process: PersistedDestinationJournalSegment,
   rollbackAttempts: Schema.Array(
     PersistedDestinationRollbackAttemptJournalSegment

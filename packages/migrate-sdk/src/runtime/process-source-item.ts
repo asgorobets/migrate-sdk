@@ -1,9 +1,17 @@
 import { DateTime, Effect, Layer, Predicate, Schema } from "effect";
 import type {
   MigrationDefinition,
+  ProcessBatchItem,
+  ProcessBatchPipeline,
+  ProcessBatchSettlement,
+  ProcessPipeline,
   SourcePayloadSchema,
 } from "../domain/definition.ts";
-import type { MigrationStoreError, SkipItem } from "../domain/errors.ts";
+import {
+  type MigrationStoreError,
+  ProcessBatchContractError,
+  type SkipItem,
+} from "../domain/errors.ts";
 import type {
   MigrationDefinitionId,
   MigrationRunId,
@@ -24,6 +32,7 @@ import type {
   SkippedItemState,
 } from "../domain/state.ts";
 import type {
+  DestinationJournalExtensions,
   DestinationJournalSegment,
   TrackingRecord,
   TrackingRecordContract,
@@ -33,6 +42,7 @@ import { TrackingRecord as TrackingRecordSchema } from "../domain/tracking.ts";
 import type { MigrationReferenceLookup } from "../services/migration-reference-lookup.ts";
 import { MigrationStore } from "../services/migration-store.ts";
 import {
+  applyJournalExtensions,
   makeProcessScope,
   Tracking,
   type TrackingProcessScope,
@@ -74,6 +84,32 @@ export interface ProcessSourceItemOptions<
   readonly sourceSchema: SourcePayloadSchema<Payload, EncodedPayload>;
 }
 
+export interface ProcessSourceItemsBatchOptions<
+  Payload,
+  PipelineError,
+  Cursor = unknown,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+  EncodedPayload = unknown,
+  SourceImplementationError = never,
+  SourceRequirements = never,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
+> extends Omit<
+    ProcessSourceItemOptions<
+      Payload,
+      PipelineError,
+      Cursor,
+      IdentityKey,
+      EncodedPayload,
+      SourceImplementationError,
+      SourceRequirements,
+      TrackingContract
+    >,
+    "sourceItem"
+  > {
+  readonly concurrency: number | "unbounded";
+  readonly sourceItems: readonly SourceItem<EncodedPayload, IdentityKey>[];
+}
+
 export type ProcessSourceItemError = MigrationStoreError;
 
 type ProcessOutcome =
@@ -94,11 +130,61 @@ const isSkipItem = (error: unknown): error is SkipItem =>
 const isMigrationStoreError = (error: unknown): error is MigrationStoreError =>
   Predicate.isTagged(error, "MigrationStoreError");
 
+const isProcessBatchContractError = (
+  error: unknown
+): error is ProcessBatchContractError =>
+  Predicate.isTagged(error, "ProcessBatchContractError");
+
+const recoverProcessError = (
+  error: unknown,
+  allowSkip: boolean
+): Effect.Effect<ProcessOutcome, MigrationStoreError> => {
+  if (allowSkip && isSkipItem(error)) {
+    return Effect.succeed({
+      kind: "skipped",
+      reason: error.reason,
+    });
+  }
+  if (isMigrationStoreError(error)) {
+    return Effect.fail(error);
+  }
+  return Effect.succeed({
+    kind: "failed",
+    error: normalizeItemError("process", error),
+  });
+};
+
 interface ItemStateContractContext {
   readonly definitionId: MigrationDefinitionId;
   readonly lastSourceInventoryRunId?: MigrationRunId;
   readonly sourceVersionContractFingerprint: SourceVersionContractFingerprint;
 }
+
+interface AdmittedSourceItem<
+  Payload,
+  TrackingContract extends TrackingRecordContract | undefined,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> {
+  readonly decodedSourceItem: SourceItem<Payload, IdentityKey>;
+  readonly previousState: MigrationItemState | null;
+  readonly processContext: ProcessContext<TrackingContract>;
+  readonly runId: MigrationRunId;
+  readonly sourceVersionContractContext: ItemStateContractContext;
+}
+
+type SourceItemAdmission<
+  Payload,
+  TrackingContract extends TrackingRecordContract | undefined,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> =
+  | {
+      readonly kind: "admitted";
+      readonly item: AdmittedSourceItem<Payload, TrackingContract, IdentityKey>;
+    }
+  | {
+      readonly kind: "completed";
+      readonly outcome: MigrationItemOutcome;
+    };
 
 const makeItemStateBase = <Payload>(
   sourceVersionContractContext: ItemStateContractContext,
@@ -135,9 +221,17 @@ const makeSkippedItemState = <Payload>(
   updatedAt: Date,
   reason: string,
   previousState: MigrationItemState | null = null,
-  journal?: SkippedItemState["journal"]
+  journal?: SkippedItemState["journal"],
+  journalExtensions?: DestinationJournalExtensions
 ): SkippedItemState => {
-  const preservedJournal = previousState?.journal ?? journal;
+  const preservedJournal =
+    journalExtensions === undefined
+      ? (previousState?.journal ?? journal)
+      : applyJournalExtensions(
+          previousState?.journal ?? journal,
+          journalExtensions,
+          runId
+        );
   const trackingRecord = previousTrackingRecord(previousState);
 
   return {
@@ -161,9 +255,17 @@ const makeFailedItemState = <Payload>(
   updatedAt: Date,
   error: MigrationItemError,
   previousState: MigrationItemState | null = null,
-  journal?: FailedItemState["journal"]
+  journal?: FailedItemState["journal"],
+  journalExtensions?: DestinationJournalExtensions
 ): FailedItemState => {
-  const preservedJournal = previousState?.journal ?? journal;
+  const preservedJournal =
+    journalExtensions === undefined
+      ? (previousState?.journal ?? journal)
+      : applyJournalExtensions(
+          previousState?.journal ?? journal,
+          journalExtensions,
+          runId
+        );
   const trackingRecord = previousTrackingRecord(previousState);
 
   return {
@@ -253,6 +355,7 @@ const resolveProcessTrackingRecord = <Payload>({
   definition,
   previousState,
   processJournal,
+  processJournalExtensions,
   runId,
   sourceVersionContractContext,
   store,
@@ -264,6 +367,7 @@ const resolveProcessTrackingRecord = <Payload>({
   };
   readonly previousState: MigrationItemState | null;
   readonly processJournal?: FailedItemState["journal"];
+  readonly processJournalExtensions: DestinationJournalExtensions;
   readonly runId: MigrationRunId;
   readonly sourceVersionContractContext: ItemStateContractContext;
   readonly store: typeof MigrationStore.Service;
@@ -287,7 +391,8 @@ const resolveProcessTrackingRecord = <Payload>({
               updatedAt,
               error,
               previousState,
-              processJournal
+              processJournal,
+              processJournalExtensions
             )
           );
           return null;
@@ -301,6 +406,7 @@ const persistProcessOutcome = <Payload>({
   outcome,
   previousState,
   processJournal,
+  processJournalExtensions,
   runId,
   sourceVersionContractContext,
   store,
@@ -309,6 +415,7 @@ const persistProcessOutcome = <Payload>({
   readonly outcome: ProcessOutcome;
   readonly previousState: MigrationItemState | null;
   readonly processJournal?: FailedItemState["journal"];
+  readonly processJournalExtensions: DestinationJournalExtensions;
   readonly runId: MigrationRunId;
   readonly sourceVersionContractContext: ItemStateContractContext;
   readonly store: typeof MigrationStore.Service;
@@ -325,7 +432,8 @@ const persistProcessOutcome = <Payload>({
           updatedAt,
           outcome.reason,
           previousState,
-          processJournal
+          processJournal,
+          processJournalExtensions
         )
       );
       return "skipped" as const;
@@ -339,7 +447,8 @@ const persistProcessOutcome = <Payload>({
         updatedAt,
         outcome.error,
         previousState,
-        processJournal
+        processJournal,
+        processJournalExtensions
       )
     );
     return "failed" as const;
@@ -421,29 +530,20 @@ const decodeSourceItemOrPersistFailure = <
 const runProcess = <
   Payload,
   PipelineError,
-  Cursor = unknown,
   IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
-  EncodedPayload = Payload,
-  SourceImplementationError = never,
-  SourceRequirements = never,
   TrackingContract extends TrackingRecordContract | undefined = undefined,
 >(
-  definition: MigrationDefinition<
+  process: ProcessPipeline<
     Payload,
     PipelineError,
-    Cursor,
     IdentityKey,
-    unknown,
-    EncodedPayload,
-    SourceImplementationError,
-    SourceRequirements,
     TrackingContract
   >,
   sourceItem: SourceItem<Payload, IdentityKey>,
   context: ProcessContext<TrackingContract>
 ) =>
   Effect.try({
-    try: () => definition.process?.(sourceItem, context),
+    try: () => process(sourceItem, context),
     catch: (error) => error as PipelineError | SkipItem,
   }).pipe(
     Effect.flatMap((voidOrEffect) =>
@@ -457,7 +557,7 @@ const runProcess = <
     )
   );
 
-const processWithProcessPipeline = <
+const settleAdmittedSourceItem = <
   Payload,
   PipelineError,
   Cursor,
@@ -467,15 +567,13 @@ const processWithProcessPipeline = <
   SourceRequirements,
   TrackingContract extends TrackingRecordContract | undefined,
 >({
-  decodedSourceItem,
+  admitted,
+  allowSkip = true,
   definition,
-  processContext,
-  previousState,
-  runId,
-  sourceVersionContractContext,
-  store,
+  effect,
 }: {
-  readonly decodedSourceItem: SourceItem<Payload, IdentityKey>;
+  readonly admitted: AdmittedSourceItem<Payload, TrackingContract, IdentityKey>;
+  readonly allowSkip?: boolean;
   readonly definition: MigrationDefinition<
     Payload,
     PipelineError,
@@ -487,44 +585,39 @@ const processWithProcessPipeline = <
     SourceRequirements,
     TrackingContract
   >;
-  readonly processContext: ProcessContext<TrackingContract>;
-  readonly previousState: MigrationItemState | null;
-  readonly runId: MigrationRunId;
-  readonly sourceVersionContractContext: ItemStateContractContext;
-  readonly store: typeof MigrationStore.Service;
+  readonly effect: Effect.Effect<
+    void,
+    PipelineError | SkipItem,
+    MigrationReferenceLookup | Tracking
+  >;
 }): Effect.Effect<
   MigrationItemOutcome,
   ProcessSourceItemError,
-  MigrationReferenceLookup
+  MigrationReferenceLookup | MigrationStore
 > =>
   Effect.gen(function* () {
+    const {
+      decodedSourceItem,
+      previousState,
+      runId,
+      sourceVersionContractContext,
+    } = admitted;
+    const store = yield* MigrationStore;
     const tracking = yield* makeProcessScope({
+      ...(previousState?.journal?.extensions === undefined
+        ? {}
+        : { extensions: previousState.journal.extensions }),
       runId,
       sourceIdentity: decodedSourceItem.identity.encoded,
     });
-    const processOutcome = yield* runProcess(
-      definition,
-      decodedSourceItem,
-      processContext
-    ).pipe(
+    const processOutcome = yield* effect.pipe(
       Effect.provide(Layer.succeed(Tracking, tracking.service)),
       Effect.as({ kind: "migrated" as const }),
-      Effect.catchIf(isSkipItem, (skip) =>
-        Effect.succeed({
-          kind: "skipped",
-          reason: skip.reason,
-        } satisfies ProcessOutcome)
-      ),
-      Effect.catchIf(isMigrationStoreError, (error) => Effect.fail(error)),
-      Effect.catch((error) =>
-        Effect.succeed({
-          kind: "failed",
-          error: normalizeItemError("process", error),
-        } satisfies ProcessOutcome)
-      )
+      Effect.catch((error) => recoverProcessError(error, allowSkip))
     );
     const processJournalSegment = yield* tracking.snapshot;
     const processJournal = makeProcessJournal(processJournalSegment);
+    const processJournalExtensions = yield* tracking.extensions;
 
     if (processOutcome.kind !== "migrated") {
       return yield* persistProcessOutcome({
@@ -532,6 +625,7 @@ const processWithProcessPipeline = <
         outcome: processOutcome,
         previousState,
         processJournal,
+        processJournalExtensions,
         runId,
         sourceVersionContractContext,
         store,
@@ -543,6 +637,7 @@ const processWithProcessPipeline = <
       definition,
       previousState,
       processJournal,
+      processJournalExtensions,
       runId,
       sourceVersionContractContext,
       store,
@@ -554,6 +649,11 @@ const processWithProcessPipeline = <
     }
 
     const updatedAt = yield* DateTime.nowAsDate;
+    const migratedJournal = applyJournalExtensions(
+      processJournal,
+      processJournalExtensions,
+      runId
+    );
     yield* store.upsertItemState(
       makeMigratedItemState(
         sourceVersionContractContext,
@@ -561,13 +661,134 @@ const processWithProcessPipeline = <
         decodedSourceItem,
         updatedAt,
         {
-          ...(processJournal === undefined ? {} : { journal: processJournal }),
+          ...(migratedJournal === undefined
+            ? {}
+            : { journal: migratedJournal }),
           ...(trackingRecord === undefined ? {} : { trackingRecord }),
         }
       )
     );
 
     return "migrated" as const;
+  });
+
+const admitSourceItem = <
+  Payload,
+  PipelineError,
+  Cursor,
+  IdentityKey extends SourceIdentitySnapshotKey,
+  EncodedPayload,
+  SourceImplementationError,
+  SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
+>({
+  definition,
+  reprocessUnchangedTerminal = false,
+  runId,
+  sourceInventoryRunId,
+  sourceSchema,
+  sourceItem,
+}: ProcessSourceItemOptions<
+  Payload,
+  PipelineError,
+  Cursor,
+  IdentityKey,
+  EncodedPayload,
+  SourceImplementationError,
+  SourceRequirements,
+  TrackingContract
+>): Effect.Effect<
+  SourceItemAdmission<Payload, TrackingContract, IdentityKey>,
+  ProcessSourceItemError,
+  MigrationStore
+> =>
+  Effect.gen(function* () {
+    const store = yield* MigrationStore;
+    const previousState = yield* store.getItemState(
+      definition.id,
+      sourceItem.identity.encoded
+    );
+    const lastSourceInventoryRunId =
+      sourceInventoryRunId ?? previousState?.lastSourceInventoryRunId;
+    const sourceVersionContractContext = {
+      definitionId: definition.id,
+      ...(lastSourceInventoryRunId === undefined
+        ? {}
+        : { lastSourceInventoryRunId }),
+      sourceVersionContractFingerprint:
+        definition.source.sourceVersionContractFingerprint,
+    };
+    const decodedSourceItem = yield* decodeSourceItemOrPersistFailure({
+      previousState,
+      runId,
+      sourceItem,
+      sourceSchema,
+      sourceVersionContractContext,
+      store,
+    });
+
+    if (decodedSourceItem === null) {
+      return { kind: "completed" as const, outcome: "failed" as const };
+    }
+
+    const typedPreviousState: MigrationItemStateForTrackingContract<TrackingContract> | null =
+      previousState === null
+        ? null
+        : yield* decodeStoredItemStateForTrackingContract<TrackingContract>(
+            previousState,
+            definition.tracking
+          ).pipe(
+            Effect.catch((error) =>
+              Effect.gen(function* () {
+                const updatedAt = yield* DateTime.nowAsDate;
+                yield* store.upsertItemState(
+                  makeFailedItemState(
+                    sourceVersionContractContext,
+                    runId,
+                    decodedSourceItem,
+                    updatedAt,
+                    error,
+                    previousState
+                  )
+                );
+                return null;
+              })
+            )
+          );
+
+    if (previousState !== null && typedPreviousState === null) {
+      return { kind: "completed" as const, outcome: "failed" as const };
+    }
+
+    if (
+      !reprocessUnchangedTerminal &&
+      isUnchangedTerminalState(
+        sourceVersionContractContext.sourceVersionContractFingerprint,
+        previousState,
+        decodedSourceItem
+      )
+    ) {
+      return { kind: "completed" as const, outcome: "unchanged" as const };
+    }
+
+    const processContext: ProcessContext<TrackingContract> = {
+      definitionId: definition.id,
+      runId,
+      ...(typedPreviousState === null
+        ? {}
+        : { previousState: typedPreviousState }),
+    };
+
+    return {
+      kind: "admitted" as const,
+      item: {
+        decodedSourceItem,
+        previousState,
+        processContext,
+        runId,
+        sourceVersionContractContext,
+      },
+    };
   });
 
 export const processSourceItem = <
@@ -601,89 +822,458 @@ export const processSourceItem = <
   MigrationReferenceLookup | MigrationStore
 > =>
   Effect.gen(function* () {
-    const store = yield* MigrationStore;
-    const previousState = yield* store.getItemState(
-      definition.id,
-      sourceItem.identity.encoded
-    );
-    const lastSourceInventoryRunId =
-      sourceInventoryRunId ?? previousState?.lastSourceInventoryRunId;
-    const sourceVersionContractContext = {
-      definitionId: definition.id,
-      ...(lastSourceInventoryRunId === undefined
-        ? {}
-        : { lastSourceInventoryRunId }),
-      sourceVersionContractFingerprint:
-        definition.source.sourceVersionContractFingerprint,
-    };
-    const decodedSourceItem = yield* decodeSourceItemOrPersistFailure({
-      previousState,
+    const admission = yield* admitSourceItem({
+      definition,
+      reprocessUnchangedTerminal,
       runId,
+      ...(sourceInventoryRunId === undefined ? {} : { sourceInventoryRunId }),
       sourceItem,
       sourceSchema,
-      sourceVersionContractContext,
-      store,
     });
 
-    if (decodedSourceItem === null) {
-      return "failed" as const;
+    if (admission.kind === "completed") {
+      return admission.outcome;
     }
+
+    const process = definition.process;
+
+    if (process === undefined) {
+      return yield* Effect.die(
+        "processSourceItem requires a Process Pipeline definition"
+      );
+    }
+
+    return yield* settleAdmittedSourceItem({
+      admitted: admission.item,
+      definition,
+      effect: runProcess(
+        process,
+        admission.item.decodedSourceItem,
+        admission.item.processContext
+      ),
+    });
+  });
+
+interface ProcessBatchSettlementMetadata {
+  readonly batchToken: object;
+  readonly itemToken: object;
+}
+
+const processBatchSettlementMetadata = new WeakMap<
+  object,
+  ProcessBatchSettlementMetadata
+>();
+
+interface PreparedProcessBatchItem<
+  Payload,
+  TrackingContract extends TrackingRecordContract | undefined,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> {
+  readonly admitted: AdmittedSourceItem<Payload, TrackingContract, IdentityKey>;
+  readonly itemToken: object;
+}
+
+interface ValidatedProcessBatchSettlement<
+  Payload,
+  PipelineError,
+  TrackingContract extends TrackingRecordContract | undefined,
+  IdentityKey extends SourceIdentitySnapshotKey,
+> {
+  readonly admitted: AdmittedSourceItem<Payload, TrackingContract, IdentityKey>;
+  readonly effect: Effect.Effect<
+    void,
+    PipelineError | SkipItem,
+    MigrationReferenceLookup | Tracking
+  >;
+}
+
+const makeProcessBatchItems = <
+  Payload,
+  PipelineError,
+  TrackingContract extends TrackingRecordContract | undefined,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>(
+  admittedItems: readonly AdmittedSourceItem<
+    Payload,
+    TrackingContract,
+    IdentityKey
+  >[]
+) => {
+  const batchToken = {};
+  const effectsBySettlement = new Map<
+    ProcessBatchSettlement,
+    Effect.Effect<
+      void,
+      PipelineError | SkipItem,
+      MigrationReferenceLookup | Tracking
+    >
+  >();
+  const prepared = admittedItems.map(
+    (
+      admitted
+    ): PreparedProcessBatchItem<Payload, TrackingContract, IdentityKey> => ({
+      admitted,
+      itemToken: {},
+    })
+  );
+  const items = prepared.map(
+    ({
+      admitted,
+      itemToken,
+    }): ProcessBatchItem<
+      Payload,
+      PipelineError,
+      IdentityKey,
+      TrackingContract
+    > => ({
+      context: admitted.processContext,
+      settle: (effect) => {
+        const settlement = {} as ProcessBatchSettlement;
+        processBatchSettlementMetadata.set(settlement, {
+          batchToken,
+          itemToken,
+        });
+        effectsBySettlement.set(settlement, effect);
+        return Object.freeze(settlement);
+      },
+      source: admitted.decodedSourceItem,
+    })
+  ) as unknown as readonly [
+    ProcessBatchItem<Payload, PipelineError, IdentityKey, TrackingContract>,
+    ...ProcessBatchItem<
+      Payload,
+      PipelineError,
+      IdentityKey,
+      TrackingContract
+    >[],
+  ];
+
+  return { batchToken, effectsBySettlement, items, prepared };
+};
+
+const processBatchContractError = (
+  definitionId: MigrationDefinitionId,
+  cause: unknown
+) =>
+  new ProcessBatchContractError({
+    message: "Process Batch settlements did not match admitted Source Items",
+    cause: { definitionId, contract: cause },
+  });
+
+const validateProcessBatchSettlements = <
+  Payload,
+  PipelineError,
+  TrackingContract extends TrackingRecordContract | undefined,
+  IdentityKey extends SourceIdentitySnapshotKey,
+>({
+  batchToken,
+  definitionId,
+  effectsBySettlement,
+  prepared,
+  settlements,
+}: {
+  readonly batchToken: object;
+  readonly definitionId: MigrationDefinitionId;
+  readonly effectsBySettlement: ReadonlyMap<
+    ProcessBatchSettlement,
+    Effect.Effect<
+      void,
+      PipelineError | SkipItem,
+      MigrationReferenceLookup | Tracking
+    >
+  >;
+  readonly prepared: readonly PreparedProcessBatchItem<
+    Payload,
+    TrackingContract,
+    IdentityKey
+  >[];
+  readonly settlements: readonly ProcessBatchSettlement[];
+}): Effect.Effect<
+  readonly ValidatedProcessBatchSettlement<
+    Payload,
+    PipelineError,
+    TrackingContract,
+    IdentityKey
+  >[],
+  ProcessBatchContractError
+> =>
+  Effect.gen(function* () {
+    if (!Array.isArray(settlements)) {
+      return yield* processBatchContractError(definitionId, {
+        reason: "settlements-not-array",
+      });
+    }
+
+    const metadataByItemToken = new Map<
+      object,
+      ProcessBatchSettlementMetadata
+    >();
+    const settlementByItemToken = new Map<object, ProcessBatchSettlement>();
+    let foreignCount = 0;
+    const duplicateSourceIdentities: string[] = [];
+
+    for (const settlement of settlements) {
+      const metadata =
+        typeof settlement === "object" && settlement !== null
+          ? processBatchSettlementMetadata.get(settlement)
+          : undefined;
+
+      if (metadata === undefined || metadata.batchToken !== batchToken) {
+        foreignCount += 1;
+        continue;
+      }
+
+      if (metadataByItemToken.has(metadata.itemToken)) {
+        const duplicate = prepared.find(
+          (item) => item.itemToken === metadata.itemToken
+        );
+        if (duplicate !== undefined) {
+          duplicateSourceIdentities.push(
+            duplicate.admitted.decodedSourceItem.identity.encoded
+          );
+        }
+        continue;
+      }
+
+      metadataByItemToken.set(metadata.itemToken, metadata);
+      settlementByItemToken.set(metadata.itemToken, settlement);
+    }
+
+    const missingSourceIdentities = prepared
+      .filter((item) => !metadataByItemToken.has(item.itemToken))
+      .map((item) => item.admitted.decodedSourceItem.identity.encoded);
 
     if (
-      !reprocessUnchangedTerminal &&
-      isUnchangedTerminalState(
-        sourceVersionContractContext.sourceVersionContractFingerprint,
-        previousState,
-        decodedSourceItem
-      )
+      foreignCount > 0 ||
+      duplicateSourceIdentities.length > 0 ||
+      missingSourceIdentities.length > 0
     ) {
-      return "unchanged" as const;
+      return yield* processBatchContractError(definitionId, {
+        duplicateSourceIdentities,
+        foreignCount,
+        missingSourceIdentities,
+      });
     }
 
-    const typedPreviousState: MigrationItemStateForTrackingContract<TrackingContract> | null =
-      previousState === null
-        ? null
-        : yield* decodeStoredItemStateForTrackingContract<TrackingContract>(
-            previousState,
-            definition.tracking
-          ).pipe(
-            Effect.catch((error) =>
-              Effect.gen(function* () {
-                const updatedAt = yield* DateTime.nowAsDate;
-                yield* store.upsertItemState(
-                  makeFailedItemState(
-                    sourceVersionContractContext,
-                    runId,
-                    decodedSourceItem,
-                    updatedAt,
-                    error,
-                    previousState
-                  )
-                );
-                return null;
-              })
-            )
-          );
+    return prepared.map((item) => {
+      const metadata = metadataByItemToken.get(item.itemToken);
+      const settlement = settlementByItemToken.get(item.itemToken);
+      const effect =
+        settlement === undefined
+          ? undefined
+          : effectsBySettlement.get(settlement);
 
-    if (previousState !== null && typedPreviousState === null) {
-      return "failed" as const;
+      if (metadata === undefined || effect === undefined) {
+        throw new Error("Validated Process Batch settlement was missing");
+      }
+
+      return {
+        admitted: item.admitted,
+        effect,
+      };
+    });
+  });
+
+const runProcessBatch = <
+  Payload,
+  PipelineError,
+  IdentityKey extends SourceIdentitySnapshotKey,
+  TrackingContract extends TrackingRecordContract | undefined,
+>(
+  processBatch: ProcessBatchPipeline<
+    Payload,
+    PipelineError,
+    IdentityKey,
+    TrackingContract
+  >,
+  items: readonly [
+    ProcessBatchItem<Payload, PipelineError, IdentityKey, TrackingContract>,
+    ...ProcessBatchItem<
+      Payload,
+      PipelineError,
+      IdentityKey,
+      TrackingContract
+    >[],
+  ]
+) =>
+  Effect.try({
+    try: () => processBatch(items),
+    catch: (error) => error as PipelineError,
+  }).pipe(
+    Effect.flatMap((settlementsOrEffect) =>
+      Effect.isEffect(settlementsOrEffect)
+        ? settlementsOrEffect
+        : Effect.succeed(settlementsOrEffect)
+    )
+  );
+
+type ProcessBatchInvocationResult =
+  | {
+      readonly error: unknown;
+      readonly kind: "failed";
     }
-
-    const processContext: ProcessContext<TrackingContract> = {
-      definitionId: definition.id,
-      runId,
-      ...(typedPreviousState === null
-        ? {}
-        : { previousState: typedPreviousState }),
+  | {
+      readonly kind: "settlements";
+      readonly settlements: readonly ProcessBatchSettlement[];
     };
 
-    return yield* processWithProcessPipeline({
-      decodedSourceItem,
-      definition,
-      processContext,
-      previousState,
-      runId,
-      sourceVersionContractContext,
-      store,
+const recoverProcessBatchError = (
+  error: unknown
+): Effect.Effect<
+  ProcessBatchInvocationResult,
+  MigrationStoreError | ProcessBatchContractError
+> =>
+  isMigrationStoreError(error) || isProcessBatchContractError(error)
+    ? Effect.fail(error)
+    : Effect.succeed({ kind: "failed", error });
+
+export type ProcessSourceItemsBatchError =
+  | MigrationStoreError
+  | ProcessBatchContractError;
+
+export const processSourceItemsBatch = <
+  Payload,
+  PipelineError,
+  Cursor,
+  IdentityKey extends SourceIdentitySnapshotKey,
+  EncodedPayload,
+  SourceImplementationError,
+  SourceRequirements,
+  TrackingContract extends TrackingRecordContract | undefined,
+>({
+  concurrency,
+  definition,
+  reprocessUnchangedTerminal = false,
+  runId,
+  sourceInventoryRunId,
+  sourceItems,
+  sourceSchema,
+}: ProcessSourceItemsBatchOptions<
+  Payload,
+  PipelineError,
+  Cursor,
+  IdentityKey,
+  EncodedPayload,
+  SourceImplementationError,
+  SourceRequirements,
+  TrackingContract
+>): Effect.Effect<
+  readonly MigrationItemOutcome[],
+  ProcessSourceItemsBatchError,
+  MigrationReferenceLookup | MigrationStore
+> =>
+  Effect.gen(function* () {
+    if (sourceItems.length === 0) {
+      return [];
+    }
+
+    const admissions = yield* Effect.forEach(
+      sourceItems,
+      (sourceItem) =>
+        admitSourceItem({
+          definition,
+          reprocessUnchangedTerminal,
+          runId,
+          ...(sourceInventoryRunId === undefined
+            ? {}
+            : { sourceInventoryRunId }),
+          sourceItem,
+          sourceSchema,
+        }),
+      { concurrency }
+    );
+    const admittedItems = admissions.flatMap((admission) =>
+      admission.kind === "admitted" ? [admission.item] : []
+    );
+
+    if (admittedItems.length === 0) {
+      return admissions.map((admission) => {
+        if (admission.kind === "admitted") {
+          throw new Error("Admitted Process Batch Item was not settled");
+        }
+        return admission.outcome;
+      });
+    }
+
+    const processBatch = definition.processBatch;
+
+    if (processBatch === undefined) {
+      return yield* new ProcessBatchContractError({
+        message: "Migration Definition does not declare processBatch",
+        cause: { definitionId: definition.id },
+      });
+    }
+
+    const preparedBatch = makeProcessBatchItems<
+      Payload,
+      PipelineError,
+      TrackingContract,
+      IdentityKey
+    >(admittedItems);
+    const invocation = yield* runProcessBatch(
+      processBatch,
+      preparedBatch.items
+    ).pipe(
+      Effect.map(
+        (settlements): ProcessBatchInvocationResult => ({
+          kind: "settlements",
+          settlements,
+        })
+      ),
+      Effect.catch(recoverProcessBatchError)
+    );
+    const settledOutcomes =
+      invocation.kind === "failed"
+        ? yield* Effect.forEach(
+            admittedItems,
+            (admitted) =>
+              settleAdmittedSourceItem({
+                admitted,
+                allowSkip: false,
+                definition,
+                effect: Effect.fail(invocation.error),
+              }),
+            { concurrency }
+          )
+        : yield* validateProcessBatchSettlements<
+            Payload,
+            PipelineError,
+            TrackingContract,
+            IdentityKey
+          >({
+            batchToken: preparedBatch.batchToken,
+            definitionId: definition.id,
+            effectsBySettlement: preparedBatch.effectsBySettlement,
+            prepared: preparedBatch.prepared,
+            settlements: invocation.settlements,
+          }).pipe(
+            Effect.flatMap((settlements) =>
+              Effect.forEach(
+                settlements,
+                (settlement) =>
+                  settleAdmittedSourceItem({
+                    admitted: settlement.admitted,
+                    definition,
+                    effect: settlement.effect,
+                  }),
+                { concurrency }
+              )
+            )
+          );
+    let settledIndex = 0;
+
+    return admissions.map((admission) => {
+      if (admission.kind === "completed") {
+        return admission.outcome;
+      }
+
+      const outcome = settledOutcomes[settledIndex];
+      settledIndex += 1;
+
+      if (outcome === undefined) {
+        throw new Error("Process Batch settlement outcome was missing");
+      }
+
+      return outcome;
     });
   });

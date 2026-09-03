@@ -984,14 +984,27 @@ describe("CommercetoolsMigrationStore", () => {
       {
         definitionId,
         journal: {
+          extensions: {
+            "commercetools.product-draft.import-operation@v1": {
+              operationId: "import-operation-123",
+              resourceKey: "sku-123",
+              state: "processing",
+            },
+          },
           process: {
             entries: [
+              {
+                kind: "diagnostic",
+                message: "The product import changed the destination",
+                sequence: 0,
+                severity: "warning",
+              },
               {
                 descriptorId: DestinationChangeDescriptorId.make(
                   "commercetools.product.upserted"
                 ),
                 kind: "change",
-                sequence: 0,
+                sequence: 1,
                 value: {
                   id: "ct-product-123",
                   key: "sku-123",

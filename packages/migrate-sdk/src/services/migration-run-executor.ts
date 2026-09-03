@@ -13,12 +13,15 @@ import {
 import { Service } from "effect/Context";
 import type {
   MigrationDefinition,
+  MigrationDefinitionSourceImplementationError,
+  MigrationDefinitionSourceRequirements,
   MigrationDefinitionTrackingContract,
 } from "../domain/definition.ts";
 import {
   MigrationReferenceLookupError,
   MigrationRuntimeError,
   MigrationStoreError,
+  type ProcessBatchContractError,
   RollbackPreflightError,
   RollbackRequestError,
   type SkipItem,
@@ -86,6 +89,7 @@ import type {
 } from "../domain/state.ts";
 import type {
   DestinationJournal,
+  DestinationJournalExtensions,
   DestinationRollbackAttemptJournalSegment,
   TrackingRecord,
   TrackingRecordContract,
@@ -103,6 +107,7 @@ import {
 import {
   makeProcessJournal,
   processSourceItem,
+  processSourceItemsBatch,
   validateStagedTrackingRecord,
 } from "../runtime/process-source-item.ts";
 import { decodeStoredItemStateForTrackingContract } from "../runtime/stored-item-state-decode.ts";
@@ -113,15 +118,42 @@ import { MigrationStore } from "./migration-store.ts";
 import { RollbackProgress } from "./rollback-progress.ts";
 import type { SourceRuntime as SourceRuntimeContract } from "./source.ts";
 import {
+  applyJournalExtensions,
   makeProcessScope,
   Tracking,
   type TrackingProcessScope,
 } from "./tracking.ts";
 
+type RuntimeMigrationDefinition = MigrationDefinition<
+  // biome-ignore lint/suspicious/noExplicitAny: Runtime boundary restores an existential payload.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Runtime boundary restores an existential pipeline error.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Runtime boundary restores an existential cursor.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Runtime boundary restores an existential identity key.
+  any,
+  unknown,
+  // biome-ignore lint/suspicious/noExplicitAny: Runtime boundary restores an existential encoded payload.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Runtime boundary restores an existential source error.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Runtime boundary restores existential source requirements.
+  any,
+  // biome-ignore lint/suspicious/noExplicitAny: Runtime boundary restores an existential tracking contract.
+  any
+>;
+
+/** Restores the author-validated definition branch erased by registry storage. */
+const restoreRuntimeMigrationDefinition = (
+  definition: AnyMigrationDefinition
+): RuntimeMigrationDefinition => definition as RuntimeMigrationDefinition;
+
 export type RunMigrationDefinitionError = SourceError | MigrationStoreError;
 
 export type RunMigrationError =
   | MigrationRuntimeError
+  | ProcessBatchContractError
   | RunMigrationDefinitionError
   | RollbackPreflightError;
 
@@ -1499,6 +1531,7 @@ const makeFailedStubReferenceState = ({
   definitionId,
   error,
   journal,
+  journalExtensions,
   previousState,
   runId,
   sourceIdentity,
@@ -1507,12 +1540,17 @@ const makeFailedStubReferenceState = ({
   readonly definitionId: MigrationDefinitionId;
   readonly error: MigrationItemError;
   readonly journal?: FailedItemState["journal"];
+  readonly journalExtensions: DestinationJournalExtensions;
   readonly previousState: MigrationItemState | null;
   readonly runId: MigrationRunId;
   readonly sourceIdentity: SourceIdentityValue;
   readonly updatedAt: Date;
 }): FailedItemState => {
-  const preservedJournal = previousState?.journal ?? journal;
+  const preservedJournal = applyJournalExtensions(
+    previousState?.journal ?? journal,
+    journalExtensions,
+    runId
+  );
   const trackingRecord = previousTrackingRecord(previousState);
 
   return {
@@ -1583,10 +1621,12 @@ type TrackingStubOutcome =
   | {
       readonly error: MigrationItemError;
       readonly journal?: FailedItemState["journal"];
+      readonly journalExtensions: DestinationJournalExtensions;
       readonly kind: "failed";
     }
   | {
       readonly journal?: NeedsUpdateItemState["journal"];
+      readonly journalExtensions: DestinationJournalExtensions;
       readonly kind: "succeeded";
       readonly trackingRecord: TrackingRecord;
     };
@@ -1594,7 +1634,8 @@ type TrackingStubOutcome =
 const executeTrackingStub = (
   definition: AnyMigrationDefinition,
   runId: MigrationRunId,
-  sourceIdentity: EncodedSourceIdentity
+  sourceIdentity: EncodedSourceIdentity,
+  previousJournal: DestinationJournal | undefined
 ): Effect.Effect<TrackingStubOutcome, MigrationReferenceLookupError> =>
   Effect.gen(function* () {
     const contract = definition.tracking as TrackingRecordContract | undefined;
@@ -1610,6 +1651,9 @@ const executeTrackingStub = (
     }
 
     const tracking = yield* makeProcessScope({
+      ...(previousJournal?.extensions === undefined
+        ? {}
+        : { extensions: previousJournal.extensions }),
       runId,
       sourceIdentity,
     });
@@ -1659,13 +1703,19 @@ const executeTrackingStub = (
     );
 
     const processJournalSegment = yield* tracking.snapshot;
-    const journal = makeProcessJournal(processJournalSegment);
+    const journalExtensions = yield* tracking.extensions;
+    const journal = applyJournalExtensions(
+      makeProcessJournal(processJournalSegment),
+      journalExtensions,
+      runId
+    );
 
     if (stubOutcome.kind === "failed") {
       return {
         kind: "failed" as const,
         error: stubOutcome.error,
         ...(journal === undefined ? {} : { journal }),
+        journalExtensions,
       };
     }
 
@@ -1675,6 +1725,7 @@ const executeTrackingStub = (
       Effect.map((trackingRecord) => ({
         kind: "succeeded" as const,
         ...(journal === undefined ? {} : { journal }),
+        journalExtensions,
         trackingRecord: trackingRecord as TrackingRecord,
       })),
       Effect.catch((error) =>
@@ -1682,6 +1733,7 @@ const executeTrackingStub = (
           kind: "failed" as const,
           error,
           ...(journal === undefined ? {} : { journal }),
+          journalExtensions,
         })
       )
     );
@@ -1910,6 +1962,7 @@ const appendFailedRollbackAttempt = (
 ): Effect.Effect<MigrationItemState> =>
   Effect.gen(function* () {
     const rollbackJournal = yield* tracking.snapshot;
+    const journalExtensions = yield* tracking.extensions;
     const failedAt = yield* DateTime.nowAsDate;
     const rollbackAttempt: DestinationRollbackAttemptJournalSegment = {
       entries: rollbackJournal?.entries ?? [],
@@ -1918,9 +1971,8 @@ const appendFailedRollbackAttempt = (
       runId,
     };
 
-    return {
-      ...itemState,
-      journal: {
+    const journal = applyJournalExtensions(
+      {
         process:
           itemState.journal?.process ?? emptyProcessJournalSegment(itemState),
         rollbackAttempts: [
@@ -1928,6 +1980,13 @@ const appendFailedRollbackAttempt = (
           rollbackAttempt,
         ],
       },
+      journalExtensions,
+      runId
+    );
+
+    return {
+      ...itemState,
+      ...(journal === undefined ? {} : { journal }),
     };
   });
 
@@ -1959,6 +2018,9 @@ const rollbackItemState = <Definition extends AnyRollbackMigrationDefinition>({
     }
 
     const tracking = yield* makeProcessScope({
+      ...(itemState.journal?.extensions === undefined
+        ? {}
+        : { extensions: itemState.journal.extensions }),
       runId,
       sourceIdentity: itemState.sourceIdentity.encoded,
     });
@@ -2207,7 +2269,7 @@ const processTargetedSourceIdentities = <
       (sourceIdentity) =>
         Effect.gen(function* () {
           if (!(yield* canScheduleRunWork)) {
-            return false;
+            return { kind: "cancelled" as const };
           }
 
           const previousState =
@@ -2269,7 +2331,14 @@ const processTargetedSourceIdentities = <
               outcome,
               runId,
             });
-            return true;
+            return { kind: "completed" as const };
+          }
+
+          if (definition.processBatch !== undefined) {
+            return {
+              kind: "batch-item" as const,
+              sourceItem: lookup.sourceItem,
+            };
           }
 
           const outcome = yield* processSourceItem({
@@ -2286,13 +2355,48 @@ const processTargetedSourceIdentities = <
             outcome,
             runId,
           });
-          return true;
+          return { kind: "completed" as const };
         }),
       { concurrency: processConcurrency }
     );
 
+    if (scheduled.some((result) => result.kind === "cancelled")) {
+      return { completed: false, sourceIdentities };
+    }
+
+    const batchItems = scheduled.flatMap((result) =>
+      result.kind === "batch-item" ? [result.sourceItem] : []
+    );
+
+    if (definition.processBatch !== undefined && batchItems.length > 0) {
+      if (!(yield* canScheduleRunWork)) {
+        return { completed: false, sourceIdentities };
+      }
+
+      const outcomes = yield* processSourceItemsBatch({
+        concurrency: processConcurrency,
+        definition,
+        reprocessUnchangedTerminal: shouldReprocessUnchangedTerminal(mode),
+        runId,
+        sourceItems: batchItems,
+        sourceSchema: source.sourceSchema,
+      });
+
+      yield* Effect.forEach(
+        outcomes,
+        (outcome) =>
+          recordMigrationOutcome({
+            counts,
+            definitionId: definition.id,
+            outcome,
+            runId,
+          }),
+        { discard: true }
+      );
+    }
+
     return {
-      completed: scheduled.every(Boolean),
+      completed: true,
       sourceIdentities,
     };
   });
@@ -2392,39 +2496,76 @@ const processNextCursorWindow = <
       );
     }
 
-    const scheduled = yield* Effect.forEach(
-      readResult.items,
+    const sourceItems = readResult.items.filter(
       (sourceItem) =>
-        excludedSourceIdentities.includes(sourceItem.identity.encoded)
-          ? Effect.succeed(true)
-          : Effect.gen(function* () {
-              if (!(yield* canScheduleRunWork)) {
-                return false;
-              }
-
-              const outcome = yield* processSourceItem({
-                definition,
-                reprocessUnchangedTerminal,
-                runId,
-                ...(sourceInventoryRunId === undefined
-                  ? {}
-                  : { sourceInventoryRunId }),
-                sourceSchema: source.sourceSchema,
-                sourceItem,
-              });
-              yield* recordMigrationOutcome({
-                counts,
-                definitionId: definition.id,
-                outcome,
-                runId,
-              });
-              return true;
-            }),
-      { concurrency: processConcurrency }
+        !excludedSourceIdentities.includes(sourceItem.identity.encoded)
     );
 
-    if (!scheduled.every(Boolean)) {
-      return { kind: "cancelled" as const };
+    if (definition.processBatch === undefined) {
+      const scheduled = yield* Effect.forEach(
+        sourceItems,
+        (sourceItem) =>
+          Effect.gen(function* () {
+            if (!(yield* canScheduleRunWork)) {
+              return false;
+            }
+
+            const outcome = yield* processSourceItem({
+              definition,
+              reprocessUnchangedTerminal,
+              runId,
+              ...(sourceInventoryRunId === undefined
+                ? {}
+                : { sourceInventoryRunId }),
+              sourceSchema: source.sourceSchema,
+              sourceItem,
+            });
+            yield* recordMigrationOutcome({
+              counts,
+              definitionId: definition.id,
+              outcome,
+              runId,
+            });
+            return true;
+          }),
+        { concurrency: processConcurrency }
+      );
+
+      if (!scheduled.every(Boolean)) {
+        return { kind: "cancelled" as const };
+      }
+    } else if (sourceItems.length > 0) {
+      const scheduled = yield* Effect.forEach(
+        sourceItems,
+        () => canScheduleRunWork,
+        { concurrency: processConcurrency }
+      );
+
+      if (!(scheduled.every(Boolean) && (yield* canScheduleRunWork))) {
+        return { kind: "cancelled" as const };
+      }
+
+      const outcomes = yield* processSourceItemsBatch({
+        concurrency: processConcurrency,
+        definition,
+        reprocessUnchangedTerminal,
+        runId,
+        ...(sourceInventoryRunId === undefined ? {} : { sourceInventoryRunId }),
+        sourceItems,
+        sourceSchema: source.sourceSchema,
+      });
+
+      yield* Effect.forEach(
+        outcomes,
+        (outcome) =>
+          recordMigrationOutcome({
+            counts,
+            definitionId: definition.id,
+            outcome,
+            runId,
+          }),
+        { discard: true }
+      );
     }
 
     if (readResult.nextCursor === undefined) {
@@ -2566,7 +2707,8 @@ const processStubSourceIdentity = ({
     const stubOutcome = yield* executeTrackingStub(
       definition,
       runId,
-      sourceIdentity
+      sourceIdentity,
+      previousState?.journal
     );
     const updatedAt = yield* DateTime.nowAsDate;
 
@@ -2578,6 +2720,7 @@ const processStubSourceIdentity = ({
           ...(stubOutcome.journal === undefined
             ? {}
             : { journal: stubOutcome.journal }),
+          journalExtensions: stubOutcome.journalExtensions,
           previousState,
           runId,
           sourceIdentity: sourceIdentitySnapshot,
@@ -3261,34 +3404,15 @@ const runMigrationDefinitionCursorWindow = <
 };
 
 const executeMigrationRunDefinitionCursorWindow = <
-  Source,
-  PipelineError,
-  Cursor,
-  IdentityKey extends SourceIdentitySnapshotKey,
-  EncodedPayload,
-  SourceImplementationError,
-  SourceRequirements,
-  TrackingContract extends TrackingRecordContract | undefined =
-    | TrackingRecordContract
-    | undefined,
+  Definition extends AnyMigrationDefinition,
 >(
-  definition: MigrationDefinition<
-    Source,
-    PipelineError,
-    Cursor,
-    IdentityKey,
-    unknown,
-    EncodedPayload,
-    SourceImplementationError,
-    SourceRequirements,
-    TrackingContract
-  >,
+  definition: Definition,
   input: MigrationRunDefinitionCursorWindowInput,
   processExecution?: PipelineExecutionOptions
 ): Effect.Effect<
   MigrationRunCursorWindowResult,
-  RunMigrationError | SourceImplementationError,
-  SourceRequirements
+  RunMigrationError | MigrationDefinitionSourceImplementationError<Definition>,
+  MigrationDefinitionSourceRequirements<Definition>
 > =>
   Effect.gen(function* () {
     const store = yield* MigrationStore;
@@ -3313,7 +3437,7 @@ const executeMigrationRunDefinitionCursorWindow = <
         },
         (stubRunScope) =>
           runMigrationDefinitionCursorWindow(
-            definition,
+            restoreRuntimeMigrationDefinition(definition),
             input,
             stubRunScope.createStubReference,
             processExecution
@@ -4081,7 +4205,7 @@ const executePreparedRunDefinitions = <
                 const mode = runModeForDefinition(input, definition.id);
                 activeDefinitionId = definition.id;
                 const summary = yield* runMigrationDefinition(
-                  definition,
+                  restoreRuntimeMigrationDefinition(definition),
                   runId,
                   mode,
                   {
@@ -4499,35 +4623,15 @@ export interface MigrationRunExecutorService {
     input: MigrationRunCompletionInput
   ) => Effect.Effect<MigrationRunSummary, RunMigrationError>;
 
-  readonly executeCursorWindow: <
-    Source,
-    PipelineError,
-    Cursor,
-    IdentityKey extends SourceIdentitySnapshotKey,
-    EncodedPayload,
-    SourceImplementationError,
-    SourceRequirements,
-    TrackingContract extends TrackingRecordContract | undefined =
-      | TrackingRecordContract
-      | undefined,
-  >(
-    definition: MigrationDefinition<
-      Source,
-      PipelineError,
-      Cursor,
-      IdentityKey,
-      unknown,
-      EncodedPayload,
-      SourceImplementationError,
-      SourceRequirements,
-      TrackingContract
-    >,
+  readonly executeCursorWindow: <Definition extends AnyMigrationDefinition>(
+    definition: Definition,
     input: MigrationRunDefinitionCursorWindowInput,
     processExecution?: PipelineExecutionOptions
   ) => Effect.Effect<
     MigrationRunCursorWindowResult,
-    RunMigrationError | SourceImplementationError,
-    SourceRequirements
+    | RunMigrationError
+    | MigrationDefinitionSourceImplementationError<Definition>,
+    MigrationDefinitionSourceRequirements<Definition>
   >;
 
   readonly executePlan: <Definitions extends readonly AnyMigrationDefinition[]>(
@@ -4616,28 +4720,9 @@ export class MigrationRunExecutor extends Service<
     );
 
   static readonly executeCursorWindow = <
-    Source,
-    PipelineError,
-    Cursor,
-    IdentityKey extends SourceIdentitySnapshotKey,
-    EncodedPayload,
-    SourceImplementationError,
-    SourceRequirements,
-    TrackingContract extends TrackingRecordContract | undefined =
-      | TrackingRecordContract
-      | undefined,
+    Definition extends AnyMigrationDefinition,
   >(
-    definition: MigrationDefinition<
-      Source,
-      PipelineError,
-      Cursor,
-      IdentityKey,
-      unknown,
-      EncodedPayload,
-      SourceImplementationError,
-      SourceRequirements,
-      TrackingContract
-    >,
+    definition: Definition,
     input: MigrationRunDefinitionCursorWindowInput,
     processExecution?: PipelineExecutionOptions
   ) =>

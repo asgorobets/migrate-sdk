@@ -118,3 +118,6 @@ export type {
   MigrationRunRollbackOrphansPageResult,
   MigrationRunRollbackOrphansState,
 } from "./runtime/run-migrations.ts";
+
+/** Shared persisted item-state codec for first-party Migration Store adapters. */
+export { PersistedMigrationItemState } from "./stores/internal/persisted-state.ts";

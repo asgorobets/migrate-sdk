@@ -4,10 +4,14 @@ import type { EncodedSourceIdentity, MigrationRunId } from "../domain/ids.ts";
 import type {
   DestinationChangeDescriptor,
   DestinationChangeValue,
+  DestinationJournal,
   DestinationJournalChangeEntry,
   DestinationJournalDiagnosticEntry,
   DestinationJournalDiagnosticInput,
   DestinationJournalEntry,
+  DestinationJournalExtension,
+  DestinationJournalExtensions,
+  DestinationJournalExtensionValue,
   DestinationJournalSegment,
   TrackingRecordContractInput,
   TrackingRecordValue,
@@ -18,12 +22,14 @@ import {
 } from "../domain/tracking.ts";
 
 interface TrackingProcessContext {
+  readonly extensions?: DestinationJournalExtensions | undefined;
   readonly runId: MigrationRunId;
   readonly sourceIdentity: EncodedSourceIdentity;
 }
 
 interface TrackingState {
   readonly entries: readonly DestinationJournalEntry[];
+  readonly extensions: DestinationJournalExtensions;
   readonly nextSequence: number;
   readonly records: readonly TrackingRecordValue[];
 }
@@ -62,12 +68,26 @@ interface TrackingService {
     descriptor: DestinationChangeDescriptor<Value, Encoded>,
     value: Value
   ) => Effect.Effect<DestinationJournalChangeEntry<Value>, Schema.SchemaError>;
+  readonly removeExtension: <
+    Value extends DestinationJournalExtensionValue,
+    Encoded extends Schema.Json,
+  >(
+    extension: DestinationJournalExtension<Value, Encoded>
+  ) => Effect.Effect<void>;
+  readonly setExtension: <
+    Value extends DestinationJournalExtensionValue,
+    Encoded extends Schema.Json,
+  >(
+    extension: DestinationJournalExtension<Value, Encoded>,
+    value: Value
+  ) => Effect.Effect<void, Schema.SchemaError>;
   readonly setRecord: <Value extends TrackingRecordValue>(
     value: Value
   ) => Effect.Effect<void>;
 }
 
 export interface TrackingProcessScope {
+  readonly extensions: Effect.Effect<DestinationJournalExtensions>;
   readonly records: Effect.Effect<readonly TrackingRecordValue[]>;
   readonly service: TrackingService;
   readonly snapshot: Effect.Effect<DestinationJournalSegment | null>;
@@ -95,6 +115,14 @@ export class Tracking extends Service<Tracking, TrackingService>()(
   static readonly logDiagnostic = (input: DestinationJournalDiagnosticInput) =>
     Effect.flatMap(Tracking, (tracking) => tracking.logDiagnostic(input));
 
+  static readonly removeExtension = <
+    Value extends DestinationJournalExtensionValue,
+    Encoded extends Schema.Json,
+  >(
+    extension: DestinationJournalExtension<Value, Encoded>
+  ) =>
+    Effect.flatMap(Tracking, (tracking) => tracking.removeExtension(extension));
+
   static readonly record = <
     Value extends TrackingRecordValue,
     Encoded extends TrackingRecordValue,
@@ -105,7 +133,47 @@ export class Tracking extends Service<Tracking, TrackingService>()(
   static readonly setRecord = <Value extends TrackingRecordValue>(
     value: Value
   ) => Effect.flatMap(Tracking, (tracking) => tracking.setRecord(value));
+
+  static readonly setExtension = <
+    Value extends DestinationJournalExtensionValue,
+    Encoded extends Schema.Json,
+  >(
+    extension: DestinationJournalExtension<Value, Encoded>,
+    value: Value
+  ) =>
+    Effect.flatMap(Tracking, (tracking) =>
+      tracking.setExtension(extension, value)
+    );
 }
+
+export const applyJournalExtensions = (
+  journal: DestinationJournal | undefined,
+  extensions: DestinationJournalExtensions,
+  runId: MigrationRunId
+): DestinationJournal | undefined => {
+  if (journal === undefined && Object.keys(extensions).length === 0) {
+    return;
+  }
+
+  const baseJournal = journal ?? {
+    process: {
+      entries: [],
+      runId,
+    },
+    rollbackAttempts: [],
+  };
+  const journalWithoutExtensions: DestinationJournal = {
+    process: baseJournal.process,
+    rollbackAttempts: baseJournal.rollbackAttempts,
+  };
+
+  return Object.keys(extensions).length === 0
+    ? journalWithoutExtensions
+    : {
+        ...journalWithoutExtensions,
+        extensions,
+      };
+};
 
 export const makeProcessScope = (
   context: TrackingProcessContext
@@ -113,6 +181,7 @@ export const makeProcessScope = (
   Effect.gen(function* () {
     const stateRef = yield* Ref.make<TrackingState>({
       entries: [],
+      extensions: { ...(context.extensions ?? {}) },
       nextSequence: 0,
       records: [],
     });
@@ -151,6 +220,7 @@ export const makeProcessScope = (
                   decodedEntry,
                   {
                     entries: [...state.entries, entry],
+                    extensions: state.extensions,
                     nextSequence: state.nextSequence + 1,
                     records: state.records,
                   },
@@ -181,6 +251,7 @@ export const makeProcessScope = (
               entry,
               {
                 entries: [...state.entries, entry],
+                extensions: state.extensions,
                 nextSequence: state.nextSequence + 1,
                 records: state.records,
               },
@@ -188,6 +259,49 @@ export const makeProcessScope = (
           })
         ),
         Effect.tap(logDiagnosticEvent)
+      );
+
+    const removeExtension = <
+      Value extends DestinationJournalExtensionValue,
+      Encoded extends Schema.Json,
+    >(
+      extension: DestinationJournalExtension<Value, Encoded>
+    ) =>
+      Ref.update(stateRef, (state) => ({
+        ...state,
+        extensions: Object.fromEntries(
+          Object.entries(state.extensions).filter(
+            ([extensionId]) => extensionId !== extension.id
+          )
+        ),
+      }));
+
+    const setExtension = <
+      Value extends DestinationJournalExtensionValue,
+      Encoded extends Schema.Json,
+    >(
+      extension: DestinationJournalExtension<Value, Encoded>,
+      value: Value
+    ) =>
+      Schema.encodeEffect(extension.schema, { errors: "all" })(value).pipe(
+        Effect.flatMap((encoded) =>
+          Schema.decodeUnknownEffect(Schema.Json, { errors: "all" })(encoded)
+        ),
+        Effect.flatMap((encodedValue) =>
+          Schema.decodeUnknownEffect(extension.schema, { errors: "all" })(
+            encodedValue
+          ).pipe(
+            Effect.flatMap(() =>
+              Ref.update(stateRef, (state) => ({
+                ...state,
+                extensions: {
+                  ...state.extensions,
+                  [extension.id]: encodedValue,
+                },
+              }))
+            )
+          )
+        )
       );
 
     const setRecord = <Value extends TrackingRecordValue>(value: Value) =>
@@ -198,6 +312,10 @@ export const makeProcessScope = (
 
     const records = Ref.get(stateRef).pipe(
       Effect.map((state) => state.records)
+    );
+
+    const extensions = Ref.get(stateRef).pipe(
+      Effect.map((state) => state.extensions)
     );
 
     const snapshot = Ref.get(stateRef).pipe(
@@ -214,12 +332,15 @@ export const makeProcessScope = (
     const service: TrackingService = {
       logDiagnostic,
       recordChange,
+      removeExtension,
+      setExtension,
       setRecord,
     };
 
     scopedSourceIdentities.set(service, context.sourceIdentity);
 
     return {
+      extensions,
       records,
       service,
       snapshot,

@@ -2,6 +2,7 @@ import {
   beginMigrationRunExecutionEnvelope,
   cancelMigrationRunExecutionEnvelope,
   completeMigrationRunExecutionEnvelope,
+  disableWorkflowStepRetries,
   executeMigrationRollbackExecutionEnvelope,
   executeMigrationRunCursorWindow,
   executeMigrationRunRollbackOrphansPage,
@@ -142,3 +143,6 @@ export async function executeMigrationRollbackStep(
 
   return await runEffect(executeMigrationRollbackExecutionEnvelope(envelope));
 }
+
+disableWorkflowStepRetries(executeMigrationRunCursorWindowStep);
+disableWorkflowStepRetries(executeMigrationRunRollbackOrphansPageStep);

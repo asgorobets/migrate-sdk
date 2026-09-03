@@ -9,6 +9,7 @@ import {
   type MigrationItemStateFor,
   type MigrationStore,
   type MigrationStoreError,
+  type ProcessBatchPipelineFor,
   type ProcessPipelineFor,
   type SourceItem,
   type TrackingRecord,
@@ -49,6 +50,22 @@ const articleProcessPipeline: ProcessPipelineFor<
     ArticleTrackingRecord | undefined
   >();
   yield* Effect.void;
+});
+const articleProcessBatchPipeline: ProcessBatchPipelineFor<
+  typeof source,
+  never,
+  typeof articleTracking
+> = Effect.fn("articles.processBatch")(function* (items) {
+  for (const item of items) {
+    expectTypeOf(item.source).toEqualTypeOf<
+      SourceItem<ArticleSource, string>
+    >();
+    expectTypeOf(item.context.previousState).toEqualTypeOf<
+      MigrationItemStateFor<typeof articleTracking> | undefined
+    >();
+  }
+
+  return items.map((item) => item.settle(Effect.void));
 });
 const articleStubPipeline: DestinationStubPipeline = (input, context) => {
   expectTypeOf(input).toEqualTypeOf<DestinationStubInput>();
@@ -104,6 +121,41 @@ describe("MigrationDefinition", () => {
     });
 
     expect(definition.process).toBe(articleProcessPipeline);
+  });
+
+  it("derives reusable processBatch callbacks from the source and tracking contract", () => {
+    const definition = MigrationDefinition.make({
+      id: "articles",
+      source,
+      store,
+      tracking: articleTracking,
+      processBatch: articleProcessBatchPipeline,
+    });
+
+    expect(definition.processBatch).toBe(articleProcessBatchPipeline);
+  });
+
+  it("requires exactly one process authoring primitive", () => {
+    expect(() =>
+      // @ts-expect-error definitions cannot declare both process primitives.
+      MigrationDefinition.make({
+        id: "articles",
+        source,
+        store,
+        tracking: articleTracking,
+        process: () => Effect.void,
+        processBatch: articleProcessBatchPipeline,
+      })
+    ).toThrow("exactly one of process or processBatch");
+
+    expect(() =>
+      // @ts-expect-error definitions must declare one process primitive.
+      MigrationDefinition.make({
+        id: "articles",
+        source,
+        store,
+      })
+    ).toThrow("exactly one of process or processBatch");
   });
 
   it("types extracted destination stub callbacks", () => {

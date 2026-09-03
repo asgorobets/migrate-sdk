@@ -1,11 +1,13 @@
 import { Effect, Layer } from "effect";
 import { Service } from "effect/Context";
-import type { MigrationDefinition } from "../domain/definition.ts";
+import type {
+  AnyMigrationDefinition,
+  MigrationDefinitionSourceImplementationError,
+  MigrationDefinitionSourceRequirements,
+} from "../domain/definition.ts";
 import type { PipelineExecutionOptions } from "../domain/execution.ts";
-import type { SourceIdentitySnapshotKey } from "../domain/ids.ts";
 import type { AnyRollbackMigrationDefinition } from "../domain/rollback.ts";
 import type { MigrationRunState, MigrationRunSummary } from "../domain/run.ts";
-import type { TrackingRecordContract } from "../domain/tracking.ts";
 import {
   type MigrationRunBeginInput,
   type MigrationRunCancellationInput,
@@ -33,33 +35,15 @@ export interface MigrationRunStepExecutorService {
     input: MigrationRunCompletionInput
   ) => Effect.Effect<MigrationRunSummary, RunMigrationError>;
 
-  readonly executeCursorWindow: <
-    Source,
-    PipelineError,
-    Cursor,
-    IdentityKey extends SourceIdentitySnapshotKey,
-    EncodedPayload,
-    SourceImplementationError,
-    SourceRequirements,
-    TrackingContract extends TrackingRecordContract | undefined,
-  >(
-    definition: MigrationDefinition<
-      Source,
-      PipelineError,
-      Cursor,
-      IdentityKey,
-      unknown,
-      EncodedPayload,
-      SourceImplementationError,
-      SourceRequirements,
-      TrackingContract
-    >,
+  readonly executeCursorWindow: <Definition extends AnyMigrationDefinition>(
+    definition: Definition,
     input: MigrationRunDefinitionCursorWindowInput,
     processExecution?: PipelineExecutionOptions
   ) => Effect.Effect<
     MigrationRunCursorWindowResult,
-    RunMigrationError | SourceImplementationError,
-    SourceRequirements
+    | RunMigrationError
+    | MigrationDefinitionSourceImplementationError<Definition>,
+    MigrationDefinitionSourceRequirements<Definition>
   >;
 
   readonly executeRollbackOrphansPage: (
@@ -108,32 +92,16 @@ export class MigrationRunStepExecutor extends Service<
     );
 
   static readonly executeCursorWindow = <
-    Source,
-    PipelineError,
-    Cursor,
-    IdentityKey extends SourceIdentitySnapshotKey,
-    EncodedPayload,
-    SourceImplementationError,
-    SourceRequirements,
-    TrackingContract extends TrackingRecordContract | undefined,
+    Definition extends AnyMigrationDefinition,
   >(
-    definition: MigrationDefinition<
-      Source,
-      PipelineError,
-      Cursor,
-      IdentityKey,
-      unknown,
-      EncodedPayload,
-      SourceImplementationError,
-      SourceRequirements,
-      TrackingContract
-    >,
+    definition: Definition,
     input: MigrationRunDefinitionCursorWindowInput,
     processExecution?: PipelineExecutionOptions
   ): Effect.Effect<
     MigrationRunCursorWindowResult,
-    RunMigrationError | SourceImplementationError,
-    SourceRequirements | MigrationRunStepExecutor
+    | RunMigrationError
+    | MigrationDefinitionSourceImplementationError<Definition>,
+    MigrationDefinitionSourceRequirements<Definition> | MigrationRunStepExecutor
   > =>
     Effect.flatMap(MigrationRunStepExecutor, (executor) =>
       executor.executeCursorWindow(definition, input, processExecution)

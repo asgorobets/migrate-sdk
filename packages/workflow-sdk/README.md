@@ -51,8 +51,49 @@ reattachment begins with the most recent buffered checkpoint before following
 live updates. Clients can render those counts directly or refresh the affected
 migration in batches.
 The migration store remains authoritative for migration status and item
-progress. Process Pipeline concurrency from the executable plan is applied
-inside every cursor-window step.
+progress. Processing concurrency from the executable plan is applied to item
+admission and per-item work inside every cursor-window step. A `processBatch`
+callback may separately choose the concurrency of its own destination requests.
+
+## Why cursor-work steps should not retry automatically
+
+Workflow SDK normally retries a step when the worker fails or its result is
+lost. That is useful for lifecycle work, but a cursor-window step has a special
+boundary: it can save item outcomes and the next source cursor before Workflow
+SDK stores the step's return value. Those two writes are not atomic. Repeating
+the step at that point could consume the next source window while the workflow
+still holds the previous window's counts.
+
+Use `disableWorkflowStepRetries` on the two steps that consume cursor work:
+
+```ts
+import { disableWorkflowStepRetries } from "@migrate-sdk/workflow-sdk/steps";
+
+disableWorkflowStepRetries(executeMigrationRunCursorWindowStep);
+disableWorkflowStepRetries(executeMigrationRunRollbackOrphansPageStep);
+```
+
+Keep begin, complete, cancel, failure-finalization, and whole-run rollback steps
+on Workflow SDK's normal retry policy. Finalization releases migration locks,
+so it must remain retryable when its result is lost.
+
+If an existing application defines its own Workflow SDK step functions, add
+the two calls above. This is not a breaking API change, but it deliberately
+changes retry behavior for those cursor-work steps: a failed step now fails the
+run, and the next migration run resumes from the item states and source cursor
+already saved in the Migration Store.
+
+This reduces unsafe replay; it does not promise exactly-once delivery. A worker
+can still stop after a destination accepts work but before the item's outcome
+is saved. Migrations should use stable destination identities, tolerate replay,
+and journal accepted operation ids when they can be used to resume unfinished
+work.
+
+`processBatch` follows the same cursor rule as `process`. One callback receives
+either eligible items from one source cursor window or items from the retry
+backlog, and it may divide them into any smaller requests it needs. The SDK
+waits for every item settlement before it commits the source cursor, and no
+unsettled item is carried into a later cursor window.
 
 ## Local World test
 

@@ -14,6 +14,21 @@ export const DestinationChangeDescriptorId = Schema.NonEmptyString.pipe(
 export type DestinationChangeDescriptorId =
   typeof DestinationChangeDescriptorId.Type;
 
+export const DestinationJournalExtensionId = Schema.NonEmptyString.pipe(
+  Schema.brand("DestinationJournalExtensionId")
+);
+export type DestinationJournalExtensionId =
+  typeof DestinationJournalExtensionId.Type;
+
+export type DestinationJournalExtensionValue = Schema.Json;
+
+export const DestinationJournalExtensions = Schema.Record(
+  DestinationJournalExtensionId,
+  Schema.Json
+);
+export type DestinationJournalExtensions =
+  typeof DestinationJournalExtensions.Type;
+
 export type DestinationChangeValue = Schema.Json;
 
 export interface DestinationJournalChangeEntry<
@@ -120,10 +135,12 @@ export interface DestinationRollbackAttemptJournalSegment
 }
 
 export const DestinationJournal = Schema.Struct({
+  extensions: Schema.optional(DestinationJournalExtensions),
   process: DestinationJournalSegment,
   rollbackAttempts: Schema.Array(DestinationRollbackAttemptJournalSegment),
 });
 export interface DestinationJournal {
+  readonly extensions?: DestinationJournalExtensions | undefined;
   readonly process: DestinationJournalSegment;
   readonly rollbackAttempts: readonly DestinationRollbackAttemptJournalSegment[];
 }
@@ -161,6 +178,17 @@ export interface DestinationChangeDescriptor<
   readonly is: (
     entry: DestinationJournalEntry
   ) => entry is DestinationJournalChangeEntry;
+  readonly schema: Schema.Codec<Value, Encoded, never, never>;
+}
+
+export interface DestinationJournalExtension<
+  Value extends DestinationJournalExtensionValue,
+  Encoded extends Schema.Json = Schema.Json,
+> {
+  readonly id: DestinationJournalExtensionId;
+  readonly read: (
+    journal: DestinationJournal | undefined
+  ) => Effect.Effect<Value | undefined, Schema.SchemaError>;
   readonly schema: Schema.Codec<Value, Encoded, never, never>;
 }
 
@@ -206,6 +234,35 @@ const make = <
 
 export const DestinationChangeDescriptor = {
   make,
+} as const;
+
+const makeJournalExtension = <
+  Value extends DestinationJournalExtensionValue,
+  Encoded extends Schema.Json,
+>(
+  id: string,
+  schema: Schema.Codec<Value, Encoded, never, never>
+): DestinationJournalExtension<Value, Encoded> => {
+  const extensionId = DestinationJournalExtensionId.make(id);
+  const read = (
+    journal: DestinationJournal | undefined
+  ): Effect.Effect<Value | undefined, Schema.SchemaError> => {
+    const encodedValue = journal?.extensions?.[extensionId];
+
+    return encodedValue === undefined
+      ? Effect.succeed(undefined)
+      : Schema.decodeUnknownEffect(schema, { errors: "all" })(encodedValue);
+  };
+
+  return {
+    id: extensionId,
+    read,
+    schema,
+  };
+};
+
+export const DestinationJournalExtension = {
+  make: makeJournalExtension,
 } as const;
 
 const record = <

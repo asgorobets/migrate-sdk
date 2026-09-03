@@ -2,6 +2,7 @@ import {
   beginMigrationRunExecutionEnvelope,
   cancelMigrationRunExecutionEnvelope,
   completeMigrationRunExecutionEnvelope,
+  disableWorkflowStepRetries,
   executeMigrationRollbackExecutionEnvelope,
   executeMigrationRunCursorWindow,
   executeMigrationRunRollbackOrphansPage,
@@ -199,14 +200,6 @@ const runEffect = <A, E>(
   >
 ) => Effect.runPromise(effect.pipe(Effect.provide(runtimeLayer)));
 
-interface WorkflowRetryMetadata {
-  maxRetries: number;
-}
-
-const disableWorkflowRetries = <Step>(step: Step) => {
-  (step as Step & WorkflowRetryMetadata).maxRetries = 0;
-};
-
 export async function beginMigrationRunStep(
   envelope: WorkflowSdkMigrationRunEnvelope
 ): Promise<{ readonly rollbackOrphans: boolean }> {
@@ -309,12 +302,8 @@ export async function failMigrationRunStep(input: {
   );
 }
 
-disableWorkflowRetries(beginMigrationRunStep);
-disableWorkflowRetries(cancelMigrationRunStep);
-disableWorkflowRetries(executeMigrationRunCursorWindowStep);
-disableWorkflowRetries(executeMigrationRunRollbackOrphansPageStep);
-disableWorkflowRetries(completeMigrationRunStep);
-disableWorkflowRetries(failMigrationRunStep);
+disableWorkflowStepRetries(executeMigrationRunCursorWindowStep);
+disableWorkflowStepRetries(executeMigrationRunRollbackOrphansPageStep);
 
 export async function executeMigrationRollbackStep(
   envelope: WorkflowSdkMigrationRollbackEnvelope
@@ -323,8 +312,6 @@ export async function executeMigrationRollbackStep(
 
   return await runEffect(executeMigrationRollbackExecutionEnvelope(envelope));
 }
-
-disableWorkflowRetries(executeMigrationRollbackStep);
 
 export async function inspectMigrationStoreStep(): Promise<{
   readonly definitionLockCount: number;

@@ -248,10 +248,13 @@ describe("getMigrationStatuses", () => {
       const store = InMemoryMigrationStore.layer(storeState);
       const authors = makeStatusOnlyDefinition(store, "authors");
       const articles = MigrationDefinition.make({
-        ...makeStatusOnlyDefinition(store, "articles"),
         dependencies: {
           required: ["authors"],
         },
+        id: "articles",
+        process: () => Effect.void,
+        source: failingSource,
+        store,
       });
 
       const report = yield* getMigrationStatuses({
