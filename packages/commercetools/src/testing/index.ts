@@ -23,3 +23,15 @@ export {
   makeScriptedCommercetoolsSdkLayer,
   scriptedCommercetoolsSdkRoute,
 } from "./sdk.ts";
+export type {
+  ScriptedCommercetoolsImportSdk,
+  ScriptedCommercetoolsImportSdkOptions,
+  ScriptedCommercetoolsImportSdkRequest,
+  ScriptedCommercetoolsImportSdkRoute,
+  ScriptedCommercetoolsImportSdkRouteBuilder,
+} from "./import-sdk.ts";
+export {
+  makeScriptedCommercetoolsImportSdk,
+  makeScriptedCommercetoolsImportSdkLayer,
+  scriptedCommercetoolsImportSdkRoute,
+} from "./import-sdk.ts";

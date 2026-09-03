@@ -8,9 +8,8 @@
     "types": ["node"],
     "paths": {
       "@migrate-sdk/commercetools": ["./src/index.ts"],
-      "@migrate-sdk/commercetools/destination": [
-        "./src/destination/index.ts"
-      ],
+      "@migrate-sdk/commercetools/destination": ["./src/destination/index.ts"],
+      "@migrate-sdk/commercetools/import-api": ["./src/import-api/index.ts"],
       "@migrate-sdk/commercetools/migration-store": [
         "./src/migration-store/index.ts"
       ],

@@ -1,23 +1,24 @@
 import type { ApiRoot } from "@commercetools/platform-sdk";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Layer, Schema } from "effect";
+import {
+  bindSdkRequest,
+  type ExecutableSdkRequest,
+  makeSdkExecute,
+  type SdkExecute,
+  type SdkRequest,
+} from "./internal/sdk-binding.ts";
 
 export type CommercetoolsProject = ReturnType<ApiRoot["withProjectKey"]>;
 
-export interface ExecutableCommercetoolsSdkRequest<A> {
-  readonly execute: () => Promise<{ readonly body: A }>;
-}
+export interface ExecutableCommercetoolsSdkRequest<A>
+  extends ExecutableSdkRequest<A> {}
 
-export type CommercetoolsSdkExecute = <A>(
-  operation: string,
-  request: ExecutableCommercetoolsSdkRequest<A>
-) => Effect.Effect<A, CommercetoolsSdkError>;
+export type CommercetoolsSdkExecute = SdkExecute<CommercetoolsSdkError>;
 
-export type CommercetoolsSdkRequest = <A>(
-  operation: string,
-  buildRequest: (
-    project: CommercetoolsProject
-  ) => ExecutableCommercetoolsSdkRequest<A>
-) => Effect.Effect<A, CommercetoolsSdkError>;
+export type CommercetoolsSdkRequest = SdkRequest<
+  CommercetoolsProject,
+  CommercetoolsSdkError
+>;
 
 export type CommercetoolsSdkLayer = Layer.Layer<CommercetoolsSdk>;
 
@@ -42,16 +43,7 @@ const sdkError = (operation: string, cause: unknown): CommercetoolsSdkError =>
     operation,
   });
 
-const executeSdkRequest: CommercetoolsSdkExecute = (operation, request) =>
-  Effect.tryPromise({
-    try: () => request.execute(),
-    catch: (cause) => sdkError(operation, cause),
-  }).pipe(Effect.map((response) => response.body));
-
-const makeSdkRequest =
-  (project: CommercetoolsProject): CommercetoolsSdkRequest =>
-  (operation, buildRequest) =>
-    executeSdkRequest(operation, buildRequest(project));
+const executeSdkRequest: CommercetoolsSdkExecute = makeSdkExecute(sdkError);
 
 export class CommercetoolsSdk extends Context.Service<
   CommercetoolsSdk,
@@ -72,7 +64,7 @@ export class CommercetoolsSdk extends Context.Service<
       return {
         execute: executeSdkRequest,
         project,
-        request: makeSdkRequest(project),
+        request: bindSdkRequest(project, executeSdkRequest),
       };
     });
 }

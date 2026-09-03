@@ -23,6 +23,9 @@ safely more than once.
   runs continue instead of starting over.
 - **Retry only what needs attention.** Re-run failed or skipped items, update
   records you already moved, or target one item.
+- **Use bulk APIs when they fit.** Process a source window together for
+  destinations that accept bulk writes while tracking, retrying, and rolling
+  back every source item independently.
 - **See what happened.** Preview a run, check its status, follow progress, and
   inspect errors without digging through a wall of logs.
 - **Undo changes when needed.** Keep track of destination changes while the
@@ -33,18 +36,18 @@ safely more than once.
 ## How it works
 
 ```text
-Read content -> Define the move -> Process each item -> Write content
+Read content -> Define the move -> Process items or batches -> Write content
                          |
                          v
-                  Save progress
-          position, results, changes,
-               locks, and run history
+                    Save progress
+            position, item results,
+             changes, and run history
 ```
 
-A **Migration Definition** says where content comes from, how each item should
-be handled, and where progress should be saved. Put definitions in a
-**Migration Definition Registry** when content types need to run together or in
-a certain order.
+A **Migration Definition** says where content comes from, whether it should be
+processed one item at a time or by source window, and where progress should be
+saved. Put definitions in a **Migration Definition Registry** when content
+types need to run together or in a certain order.
 
 ## Install
 
@@ -80,7 +83,7 @@ pnpm exec migrate run articles --id article-1042
 # Scan from the beginning but skip entries whose source version still matches
 pnpm exec migrate run articles --rescan
 
-# Scan from the beginning and force migrated entries through process again
+# Scan from the beginning and force migrated entries through processing again
 pnpm exec migrate run articles --update
 
 # Preview a rollback before executing it
@@ -92,8 +95,7 @@ pnpm exec migrate rollback articles
 
 Sources default to full discovery. Cursors let interrupted runs resume, but a
 completed run clears its cursor so the next run scans from the beginning.
-Existing Source Versions still keep unchanged items out of the Process
-Pipeline.
+Existing Source Versions still keep unchanged items out of processing.
 
 Use incremental discovery only when the source has a valid high-water cursor
 and every new or changed item is guaranteed to sort after it:
@@ -125,7 +127,9 @@ look up durable item state directly instead of traversing the source cursor.
 - [`migrate-sdk`](./packages/migrate-sdk) — TypeScript API, CLI, built-in data
   sources, and places to save progress.
 - [`@migrate-sdk/commercetools`](./packages/commercetools) — Commercetools
-  source, write helpers, and migration progress stored in Custom Objects.
+  sources, write helpers,
+  [bulk Product Draft imports](./packages/commercetools/docs/import-api.md), and
+  migration progress stored in Custom Objects.
 - [`@migrate-sdk/workflow-sdk`](./packages/workflow-sdk) — run migrations with
   Workflow SDK.
 - [`@migrate-sdk/tui`](./packages/tui) — discover, inspect, run, retry, and roll

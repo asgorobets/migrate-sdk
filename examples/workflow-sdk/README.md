@@ -18,6 +18,10 @@ directly in TypeScript; it never discovers or loads a `migrate.config.*` file.
   daily using the schedule in `vercel.json`.
 - `catalogMigrationWorkflow` owns durable execution and splits each cursor
   window into Workflow SDK steps.
+- The two steps that consume source cursor windows disable automatic retries.
+  This prevents a lost step result from replaying work after its item outcomes
+  and cursor have already been saved. Lifecycle and finalization steps keep
+  Workflow SDK retries enabled.
 - PostgreSQL contains the sources seeded from the [shared checked-in Wikidata
   catalog fixture](../../fixtures/catalog/books.csv), the demo destinations,
   and the SQL Migration Store.
@@ -33,6 +37,14 @@ execution, and remote observation path as TUI-started imports.
 
 The app uses workspace dependencies because the Migrate SDK packages are not
 published yet.
+
+Disabling automatic retries on cursor-work steps keeps a repeated step from
+consuming another source window with stale workflow state. It does not provide
+exactly-once delivery: a worker can still stop after a destination accepts work
+but before the item outcome is saved. External work should tolerate replay;
+use stable identities or idempotency keys and journal resumable operation ids
+when the destination supports them. A later run resumes from the Migration
+Store's saved item states and source cursor.
 
 ## Run locally
 

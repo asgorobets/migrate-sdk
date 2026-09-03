@@ -108,6 +108,27 @@ operation, its durable journal append is not suppressed by Effect's configured
 minimum log level. Ordinary logs remain observability output and do not become
 migration item state.
 
+Some helpers need to keep durable information that is neither a compensating
+change nor a diagnostic. An asynchronous import helper, for example, may need
+to remember the remote operation it submitted so it can inspect that operation
+on the next run. Treating that receipt as a destination change gives it the
+wrong meaning, while teaching the SDK about every remote operation model would
+make the tracking interface destination-specific.
+
+The Destination Journal therefore has an `extensions` area. A helper declares
+a named, schema-validated extension and can set, replace, remove, and read its
+own value. The SDK persists and returns the value but does not interpret it.
+Extensions are isolated by id, so one helper can update its information without
+replacing compensation evidence or another helper's extension. They are not an
+SDK-owned attempt log: replacing an extension replaces its current value, and a
+helper that wants a history must model that history inside its own schema.
+
+Extension mutations follow the item outcome rather than the process-entry
+replacement rule. They are persisted when processing migrates, fails, or skips
+the item, and untouched extensions survive reprocessing until their helper
+removes them. A successful rollback still deletes the entire Migration Item
+State, including all journal extensions.
+
 Retries are authored inline at the destination helper call site. A process pipeline can retry exactly the effect it wants to retry, such as `ct.products.upsert(input).pipe(RetryOnNetwork)`, instead of relying on a destination-removed destination retry loop outside the process.
 
 The migration store records a migration contract for each migration definition.

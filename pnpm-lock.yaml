@@ -160,6 +160,9 @@ importers:
 
   packages/commercetools:
     dependencies:
+      '@commercetools/importapi-sdk':
+        specifier: ^7.1.1
+        version: 7.1.1
       '@commercetools/platform-sdk':
         specifier: ^8.27.0
         version: 8.27.0
@@ -179,6 +182,9 @@ importers:
       '@types/node':
         specifier: ^24.13.1
         version: 24.13.3
+      '@types/papaparse':
+        specifier: ^5.5.2
+        version: 5.5.2
       '@typescript/native':
         specifier: npm:typescript@7.0.2
         version: typescript@7.0.2
@@ -188,6 +194,9 @@ importers:
       migrate-sdk:
         specifier: workspace:*
         version: link:../migrate-sdk
+      papaparse:
+        specifier: ^5.5.3
+        version: 5.5.3
       tsx:
         specifier: ^4.22.4
         version: 4.22.4
@@ -663,6 +672,10 @@ packages:
     resolution: {integrity: sha512-y7/yvZ2TPAnR9+jnc00klvNNLkJiXFFrQA/hlLCcxA9a2A4zQIOimyFQ9XfwYKiGD1fb5GY8vbKIIgO8d5Tb2A==}
     engines: {node: '>= 20.12.0'}
 
+  '@commercetools/importapi-sdk@7.1.1':
+    resolution: {integrity: sha512-0W2PEpGEIv7QpuG3FNdCWjGHs9iK6e+DAvh/M+wgW+Z4SZgQfu0yFNGVtuhPcfoexsygfGAOxTkrh5WQZpPsBA==}
+    engines: {node: '>=22'}
+
   '@commercetools/platform-sdk@8.27.0':
     resolution: {integrity: sha512-yjFrBnUo+WKuAuKueRwv6xha6mUEORxPfC78ZjF+hlX2URtsH2w8i0UowHYnvrgYY+WBEEYEb6UK412zWqU/sw==}
     engines: {node: '>=18'}
@@ -674,6 +687,10 @@ packages:
   '@commercetools/ts-client@4.10.0':
     resolution: {integrity: sha512-iFeibX+SBLgtkCUVEo83bO2LFZlSdeOqTGwpZ71dcQnfQ1IOVHAVLIG5Z60Qi+KLwWnH4Kp8vZZJU7EteNevRw==}
     engines: {node: '>=18'}
+
+  '@commercetools/ts-client@5.0.2':
+    resolution: {integrity: sha512-HoPmgfXM+NAORmENvfXzxdB5EafBY6guQ7/8iigTpKcWEWP3m34W4bvmrPC+zBxrixCMMWXV3OZyHfJ2BN84/w==}
+    engines: {node: '>=22'}
 
   '@effect/language-service@0.86.2':
     resolution: {integrity: sha512-SaPln+8srOqDJDUwNTDmP5e+IYpEDr9+1epGznnsLqu8xvo6VnxyWARdeLpqvZJlb0Pgy9ca7ppqvvdWbHPXAg==}
@@ -4723,6 +4740,10 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
+  '@commercetools/importapi-sdk@7.1.1':
+    dependencies:
+      '@commercetools/ts-client': 5.0.2
+
   '@commercetools/platform-sdk@8.27.0':
     dependencies:
       '@commercetools/ts-client': 4.10.0
@@ -4732,6 +4753,10 @@ snapshots:
       buffer: 6.0.3
 
   '@commercetools/ts-client@4.10.0':
+    dependencies:
+      buffer: 6.0.3
+
+  '@commercetools/ts-client@5.0.2':
     dependencies:
       buffer: 6.0.3
 

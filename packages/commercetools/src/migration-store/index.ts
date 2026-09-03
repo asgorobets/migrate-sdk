@@ -7,8 +7,6 @@ import type {
 import { Data, Effect, Layer, Schema } from "effect";
 import {
   canReplaceLatestMigrationDefinitionRun,
-  DestinationJournalEntry,
-  DestinationJournalRollbackAttemptError,
   EncodedSourceCursor as EncodedSourceCursorSchema,
   type EncodedSourceIdentity as EncodedSourceIdentitySchema,
   isActiveMigrationRunStatus,
@@ -22,7 +20,6 @@ import {
   type MigrationDefinitionRunState,
   MigrationDefinitionRunStatus,
   type MigrationExecutionHandle,
-  MigrationItemError,
   type MigrationItemState as MigrationItemStateSchema,
   MigrationRunId as MigrationRunIdSchema,
   type MigrationRunState,
@@ -32,14 +29,12 @@ import {
   migrationDefinitionRunStatus,
   resolveMigrationRunTransition,
   SourceIdentitySnapshotSchema,
-  SourceVersionContractFingerprint,
-  SourceVersion as SourceVersionSchema,
-  TrackingRecord,
   toMigrationDefinitionLockToken,
   toMigrationRunId,
   validateMigrationDefinitionRunOutcomes,
   validateMigrationRunDefinitionIds,
 } from "migrate-sdk";
+import { PersistedMigrationItemState } from "migrate-sdk/core";
 import {
   CommercetoolsSdk,
   type CommercetoolsSdkError,
@@ -162,91 +157,6 @@ const MigrationContractRecord = Schema.Struct({
   state: MigrationContractSchema,
 });
 type MigrationContractRecord = typeof MigrationContractRecord.Type;
-
-const PersistedMigrationItemStateBaseFields = {
-  definitionId: MigrationDefinitionIdSchema,
-  lastRunId: MigrationRunIdSchema,
-  lastSourceInventoryRunId: Schema.optional(MigrationRunIdSchema),
-  sourceIdentity: SourceIdentitySnapshotSchema,
-  updatedAt: Schema.DateFromString,
-} as const;
-
-const PersistedObservedSourceVersionFields = {
-  sourceVersionContractFingerprint: Schema.optional(
-    SourceVersionContractFingerprint
-  ),
-  sourceVersion: SourceVersionSchema,
-} as const;
-
-const PersistedDestinationJournalSegmentFields = {
-  entries: Schema.Array(DestinationJournalEntry),
-  runId: MigrationRunIdSchema,
-} as const;
-
-const PersistedDestinationJournalSegment = Schema.Struct(
-  PersistedDestinationJournalSegmentFields
-);
-
-const PersistedDestinationRollbackAttemptJournalSegment = Schema.Struct({
-  ...PersistedDestinationJournalSegmentFields,
-  error: DestinationJournalRollbackAttemptError,
-  failedAt: Schema.DateFromString,
-});
-
-const PersistedDestinationJournal = Schema.Struct({
-  process: PersistedDestinationJournalSegment,
-  rollbackAttempts: Schema.Array(
-    PersistedDestinationRollbackAttemptJournalSegment
-  ),
-});
-
-const PersistedMigratedItemState = Schema.Struct({
-  ...PersistedMigrationItemStateBaseFields,
-  ...PersistedObservedSourceVersionFields,
-  journal: Schema.optional(PersistedDestinationJournal),
-  status: Schema.Literal("migrated"),
-  trackingRecord: Schema.optional(TrackingRecord),
-});
-
-const PersistedSkippedItemState = Schema.Struct({
-  ...PersistedMigrationItemStateBaseFields,
-  ...PersistedObservedSourceVersionFields,
-  journal: Schema.optional(PersistedDestinationJournal),
-  skipReason: Schema.String,
-  status: Schema.Literal("skipped"),
-  trackingRecord: Schema.optional(TrackingRecord),
-});
-
-const PersistedFailedItemState = Schema.Struct({
-  ...PersistedMigrationItemStateBaseFields,
-  sourceVersionContractFingerprint: Schema.optional(
-    SourceVersionContractFingerprint
-  ),
-  sourceVersion: Schema.optional(SourceVersionSchema),
-  error: MigrationItemError,
-  journal: Schema.optional(PersistedDestinationJournal),
-  status: Schema.Literal("failed"),
-  trackingRecord: Schema.optional(TrackingRecord),
-});
-
-const PersistedNeedsUpdateItemState = Schema.Struct({
-  ...PersistedMigrationItemStateBaseFields,
-  sourceVersionContractFingerprint: Schema.optional(
-    SourceVersionContractFingerprint
-  ),
-  sourceVersion: Schema.optional(SourceVersionSchema),
-  journal: Schema.optional(PersistedDestinationJournal),
-  reason: Schema.String,
-  status: Schema.Literal("needs-update"),
-  trackingRecord: Schema.optional(TrackingRecord),
-});
-
-const PersistedMigrationItemState = Schema.Union([
-  PersistedMigratedItemState,
-  PersistedSkippedItemState,
-  PersistedFailedItemState,
-  PersistedNeedsUpdateItemState,
-]);
 
 const MigrationItemStateRecord = Schema.Struct({
   formatVersion: Schema.Literal(formatVersion),

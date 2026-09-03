@@ -1,6 +1,6 @@
 import type { ClientRequest } from "@commercetools/platform-sdk";
 import { ApiRoot as PlatformApiRoot } from "@commercetools/platform-sdk";
-import { Effect, Layer } from "effect";
+import { type Effect, Layer } from "effect";
 import {
   type CommercetoolsProject,
   CommercetoolsSdk,
@@ -8,8 +8,16 @@ import {
   type CommercetoolsSdkLayer,
   type ExecutableCommercetoolsSdkRequest,
 } from "../sdk.ts";
+import {
+  dispatchScriptedSdkRequest,
+  isRecord,
+  makeScriptedSdkRouteBuilder,
+  type ScriptedSdkRequest,
+  type ScriptedSdkRoute,
+  type ScriptedSdkRouteBuilder,
+} from "./internal/scripted-sdk.ts";
 
-export interface ScriptedCommercetoolsSdkRequest {
+export interface ScriptedCommercetoolsSdkRequest extends ScriptedSdkRequest {
   readonly body?: ClientRequest["body"];
   readonly method: ClientRequest["method"];
   readonly operation: string;
@@ -19,35 +27,14 @@ export interface ScriptedCommercetoolsSdkRequest {
   readonly uriTemplate?: string;
 }
 
-export interface ScriptedCommercetoolsSdkRoute {
-  readonly description: string;
-  readonly matches: (request: ScriptedCommercetoolsSdkRequest) => boolean;
-  readonly respond: (
-    request: ScriptedCommercetoolsSdkRequest
-  ) => Promise<unknown> | unknown;
-}
+export interface ScriptedCommercetoolsSdkRoute
+  extends ScriptedSdkRoute<ScriptedCommercetoolsSdkRequest> {}
 
-export interface ScriptedCommercetoolsSdkRouteBuilder {
-  readonly fail: (cause: unknown) => ScriptedCommercetoolsSdkRoute;
-  readonly match: (
-    predicate: (request: ScriptedCommercetoolsSdkRequest) => boolean
-  ) => ScriptedCommercetoolsSdkRouteBuilder;
-  readonly matchBody: (
-    predicate: (body: ClientRequest["body"] | undefined) => boolean
-  ) => ScriptedCommercetoolsSdkRouteBuilder;
-  readonly matchPath: (
-    expected: Readonly<Record<string, unknown>>
-  ) => ScriptedCommercetoolsSdkRouteBuilder;
-  readonly matchQuery: (
-    expected: Readonly<Record<string, unknown>>
-  ) => ScriptedCommercetoolsSdkRouteBuilder;
-  readonly reply: (body: unknown) => ScriptedCommercetoolsSdkRoute;
-  readonly replyWith: (
-    respond: (
-      request: ScriptedCommercetoolsSdkRequest
-    ) => Promise<unknown> | unknown
-  ) => ScriptedCommercetoolsSdkRoute;
-}
+export interface ScriptedCommercetoolsSdkRouteBuilder
+  extends ScriptedSdkRouteBuilder<
+    ScriptedCommercetoolsSdkRequest,
+    ClientRequest["body"]
+  > {}
 
 export interface ScriptedCommercetoolsSdkOptions {
   readonly projectKey: string;
@@ -58,9 +45,6 @@ export interface ScriptedCommercetoolsSdk {
   readonly layer: CommercetoolsSdkLayer;
   readonly requests: readonly ScriptedCommercetoolsSdkRequest[];
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
 
 const isClientRequest = (value: unknown): value is ClientRequest =>
   isRecord(value) &&
@@ -102,27 +86,6 @@ const scriptedRequest = (
     : { uriTemplate: request.uriTemplate }),
 });
 
-const recordMatches = (
-  actual: Readonly<Record<string, unknown>> | undefined,
-  expected: Readonly<Record<string, unknown>>
-): boolean =>
-  Object.entries(expected).every(([key, value]) => actual?.[key] === value);
-
-const requestSummary = (request: ScriptedCommercetoolsSdkRequest): string =>
-  JSON.stringify(
-    {
-      body: request.body,
-      method: request.method,
-      operation: request.operation,
-      pathVariables: request.pathVariables,
-      queryParams: request.queryParams,
-      uri: request.uri,
-      uriTemplate: request.uriTemplate,
-    },
-    null,
-    2
-  );
-
 const sdkError = (operation: string, cause: unknown): CommercetoolsSdkError =>
   new CommercetoolsSdkError({
     cause,
@@ -130,59 +93,13 @@ const sdkError = (operation: string, cause: unknown): CommercetoolsSdkError =>
     operation,
   });
 
-const makeRouteBuilder = (
-  operation: string,
-  predicates: readonly ((
-    request: ScriptedCommercetoolsSdkRequest
-  ) => boolean)[] = []
-): ScriptedCommercetoolsSdkRouteBuilder => {
-  const matches = (request: ScriptedCommercetoolsSdkRequest): boolean =>
-    request.operation === operation &&
-    predicates.every((predicate) => predicate(request));
-
-  const builder: ScriptedCommercetoolsSdkRouteBuilder = {
-    fail: (cause) => ({
-      description: operation,
-      matches,
-      respond: () => {
-        throw cause;
-      },
-    }),
-    match: (predicate) =>
-      makeRouteBuilder(operation, [...predicates, predicate]),
-    matchBody: (predicate) =>
-      makeRouteBuilder(operation, [
-        ...predicates,
-        (request) => predicate(request.body),
-      ]),
-    matchPath: (expected) =>
-      makeRouteBuilder(operation, [
-        ...predicates,
-        (request) => recordMatches(request.pathVariables, expected),
-      ]),
-    matchQuery: (expected) =>
-      makeRouteBuilder(operation, [
-        ...predicates,
-        (request) => recordMatches(request.queryParams, expected),
-      ]),
-    reply: (body) => ({
-      description: operation,
-      matches,
-      respond: () => body,
-    }),
-    replyWith: (respond) => ({
-      description: operation,
-      matches,
-      respond,
-    }),
-  };
-
-  return builder;
-};
-
 export const scriptedCommercetoolsSdkRoute = (
   operation: string
-): ScriptedCommercetoolsSdkRouteBuilder => makeRouteBuilder(operation);
+): ScriptedCommercetoolsSdkRouteBuilder =>
+  makeScriptedSdkRouteBuilder<
+    ScriptedCommercetoolsSdkRequest,
+    ClientRequest["body"]
+  >(operation);
 
 export const makeScriptedCommercetoolsSdk = (
   options: ScriptedCommercetoolsSdkOptions
@@ -207,26 +124,16 @@ export const makeScriptedCommercetoolsSdk = (
       operation,
       requestFromExecutable(sdkRequest)
     );
-    requests.push(request);
-
-    const route = options.routes.find((candidate) =>
-      candidate.matches(request)
-    );
-
-    if (route === undefined) {
-      return Effect.fail(
-        sdkError(
-          operation,
-          new Error(
-            `No scripted Commercetools SDK route matched request:\n${requestSummary(request)}`
-          )
-        )
-      );
-    }
-
-    return Effect.tryPromise({
-      catch: (cause) => sdkError(operation, cause),
-      try: async () => (await route.respond(request)) as A,
+    return dispatchScriptedSdkRequest<
+      A,
+      ScriptedCommercetoolsSdkRequest,
+      CommercetoolsSdkError
+    >({
+      makeError: sdkError,
+      request,
+      requests,
+      routes: options.routes,
+      sdkName: "Commercetools SDK",
     });
   };
 

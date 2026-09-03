@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { configDefaults, defineConfig } from "vitest/config";
+import { defineConfig } from "vitest/config";
 
 const sourcePath = (path: string) =>
   fileURLToPath(new URL(`./src/${path}`, import.meta.url));
@@ -18,6 +18,8 @@ export default defineConfig({
     ],
   },
   test: {
-    exclude: [...configDefaults.exclude, "**/*.live.test.ts"],
+    hookTimeout: 600_000,
+    include: ["examples/**/*.live.test.ts"],
+    testTimeout: 600_000,
   },
 });

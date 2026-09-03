@@ -598,6 +598,12 @@ describe("FileMigrationStore", () => {
           const itemState = {
             definitionId,
             journal: {
+              extensions: {
+                "test.import-operation@v1": {
+                  operationId: "operation-1",
+                  state: "processing",
+                },
+              },
               process: {
                 entries: [
                   {

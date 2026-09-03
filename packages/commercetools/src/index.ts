@@ -2,5 +2,6 @@
 // biome-ignore-all lint/performance/noBarrelFile: Public package entrypoint intentionally re-exports the Commercetools capability surface.
 
 export * from "./destination/index.ts";
+export * from "./import-api/index.ts";
 export * from "./sdk.ts";
 export * from "./source/index.ts";

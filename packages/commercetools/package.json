@@ -34,6 +34,12 @@
       "source": "./src/destination/index.ts",
       "import": "./dist/destination/index.js"
     },
+    "./import-api": {
+      "types": "./dist/import-api/index.d.ts",
+      "bun": "./src/import-api/index.ts",
+      "source": "./src/import-api/index.ts",
+      "import": "./dist/import-api/index.js"
+    },
     "./migration-store": {
       "types": "./dist/migration-store/index.d.ts",
       "bun": "./src/migration-store/index.ts",
@@ -66,6 +72,7 @@
     "example:product-catalog-store:live": "pnpm run build && tsx examples/product-catalog-store-migration.live.ts",
     "example:products": "pnpm run build && tsx examples/product-destination.ts",
     "test": "vitest run",
+    "test:product-import:live": "vitest run --config vitest.live.config.ts examples/product-import-batch-migration.live.test.ts",
     "test:watch": "vitest"
   },
   "peerDependencies": {
@@ -77,14 +84,17 @@
     "@effect/vitest": "catalog:",
     "@repo/typescript-config": "workspace:*",
     "@types/node": "^24.13.1",
+    "@types/papaparse": "^5.5.2",
+    "@typescript/native": "npm:typescript@7.0.2",
     "effect": "catalog:",
     "migrate-sdk": "workspace:*",
+    "papaparse": "^5.5.3",
     "tsx": "^4.22.4",
-    "@typescript/native": "npm:typescript@7.0.2",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "vitest": "^4.1.8"
   },
   "dependencies": {
+    "@commercetools/importapi-sdk": "^7.1.1",
     "@commercetools/platform-sdk": "^8.27.0",
     "@commercetools/sdk-client-v2": "^3.5.0"
   }

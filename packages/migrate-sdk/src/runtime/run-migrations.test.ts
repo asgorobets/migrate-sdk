@@ -31,6 +31,7 @@ import {
 import {
   type ConfiguredSource,
   DestinationChangeDescriptor,
+  DestinationJournalExtension,
   MigrationDefinition,
   MigrationDefinitionLock,
   MigrationDefinitionRegistryConstructionError,
@@ -48,6 +49,9 @@ import {
   type MigrationRunSummary,
   MigrationStore,
   MigrationStoreError,
+  ProcessBatchContractError,
+  type ProcessBatchPipelineFor,
+  type ProcessBatchSettlement,
   type RollbackContext,
   RollbackPreflightError,
   RollbackProgress,
@@ -2204,6 +2208,432 @@ describe("runInlineDefinition", () => {
         })
       );
     })
+  );
+
+  it.effect(
+    "settles mixed Process Batch outcomes per item and retries only failures",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const tracking = Tracking.record({
+          id: "article-batch-entry@v1",
+          schema: ArticleTrackingRecord,
+        });
+        const imported = DestinationChangeDescriptor.make(
+          "test.article.batch-imported",
+          Schema.Struct({ sourceIdentity: Schema.String })
+        );
+        const processError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          code: "batch-item-rejected",
+          message: "Batch item was rejected",
+        };
+        const batchCalls: string[][] = [];
+        let rejectArticleC = true;
+        const source = makeTestInMemorySource({
+          items: ["article-a", "article-b", "article-c", "article-d"].map(
+            (identityKey) => ({
+              identityKey,
+              version: "source-version-1",
+              item: { title: identityKey },
+            })
+          ),
+        });
+        const processBatch: ProcessBatchPipelineFor<
+          typeof source,
+          PipelineFailureTestError | Schema.SchemaError,
+          typeof tracking
+        > = (items) => {
+          batchCalls.push(items.map((item) => item.source.identity.encoded));
+
+          return items.map((item) =>
+            item.settle(
+              Effect.gen(function* () {
+                yield* Tracking.recordChange(imported, {
+                  sourceIdentity: item.source.identity.encoded,
+                });
+
+                if (
+                  rejectArticleC &&
+                  item.source.identity.encoded === "article-c"
+                ) {
+                  return yield* Effect.fail(processError);
+                }
+
+                yield* Tracking.setRecord({
+                  entryId: `entry-${item.source.identity.encoded}`,
+                  locale: "en-US",
+                });
+              })
+            )
+          );
+        };
+
+        const definition = MigrationDefinition.make({
+          id: "articles",
+          source,
+          store: InMemoryMigrationStore.layer(storeState),
+          tracking,
+          processBatch,
+        });
+
+        const firstSummary = yield* runInlineDefinition(definition);
+        const firstArticleC = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-c")
+        );
+        const secondSummary = yield* runInlineDefinition(definition);
+        const secondArticleC = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-c")
+        );
+        rejectArticleC = false;
+        const thirdSummary = yield* runInlineDefinition(definition);
+        const articleC = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-c")
+        );
+
+        expect(firstSummary.definitions[0]?.counts).toEqual({
+          failed: 1,
+          migrated: 3,
+          needsUpdate: 0,
+          skipped: 0,
+          unchanged: 0,
+        });
+        expect(secondSummary.definitions[0]?.counts).toEqual({
+          failed: 1,
+          migrated: 0,
+          needsUpdate: 0,
+          skipped: 0,
+          unchanged: 3,
+        });
+        expect(thirdSummary.definitions[0]?.counts).toEqual({
+          failed: 0,
+          migrated: 1,
+          needsUpdate: 0,
+          skipped: 0,
+          unchanged: 3,
+        });
+        expect(batchCalls).toEqual([
+          ["article-a", "article-b", "article-c", "article-d"],
+          ["article-c"],
+          ["article-c"],
+        ]);
+        expect(firstArticleC?.journal?.process.runId).toBe(firstSummary.runId);
+        expect(firstArticleC?.journal?.process.entries).toHaveLength(1);
+        expect(secondArticleC?.journal?.process.runId).toBe(firstSummary.runId);
+        expect(secondArticleC?.journal?.process.entries).toHaveLength(1);
+        expect(articleC).toEqual(
+          expect.objectContaining({
+            status: "migrated",
+            trackingRecord: {
+              entryId: "entry-article-c",
+              locale: "en-US",
+            },
+          })
+        );
+        expect(articleC?.journal?.process).toEqual({
+          entries: [
+            expect.objectContaining({
+              descriptorId: imported.id,
+              sequence: 0,
+            }),
+          ],
+          runId: thirdSummary.runId,
+        });
+      })
+  );
+
+  it.effect(
+    "rejects incomplete Process Batch settlements before executing any item effect",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        let settlementRuns = 0;
+        const definition = MigrationDefinition.make({
+          id: "articles",
+          source: makeTestInMemorySource({
+            batchSize: 2,
+            items: ["article-a", "article-b", "article-c"].map(
+              (identityKey) => ({
+                identityKey,
+                version: "source-version-1",
+                item: { title: identityKey },
+              })
+            ),
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          processBatch: (items) => [
+            items[0].settle(
+              Effect.sync(() => {
+                settlementRuns += 1;
+              })
+            ),
+          ],
+        });
+
+        const error = yield* Effect.flip(runInlineDefinition(definition));
+
+        expect(error).toBeInstanceOf(ProcessBatchContractError);
+        expect(settlementRuns).toBe(0);
+        expect(storeState.itemStates.size).toBe(0);
+        expect(storeState.sourceCursors.has(definition.id)).toBe(false);
+      })
+  );
+
+  it.effect(
+    "rejects duplicate Process Batch settlements before executing any item effect",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        let settlementRuns = 0;
+        const definition = MigrationDefinition.make({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: ["article-a", "article-b"].map((identityKey) => ({
+              identityKey,
+              version: "source-version-1",
+              item: { title: identityKey },
+            })),
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          processBatch: (items) => {
+            const firstSettlement = items[0].settle(
+              Effect.sync(() => {
+                settlementRuns += 1;
+              })
+            );
+
+            return [firstSettlement, firstSettlement];
+          },
+        });
+
+        const error = yield* Effect.flip(runInlineDefinition(definition));
+
+        expect(error).toBeInstanceOf(ProcessBatchContractError);
+        expect(error.cause).toEqual(
+          expect.objectContaining({
+            contract: expect.objectContaining({
+              duplicateSourceIdentities: ["article-a"],
+              missingSourceIdentities: ["article-b"],
+            }),
+          })
+        );
+        expect(settlementRuns).toBe(0);
+        expect(storeState.itemStates.size).toBe(0);
+        expect(storeState.sourceCursors.has(definition.id)).toBe(false);
+      })
+  );
+
+  it.effect(
+    "rejects a settlement created for a different Process Batch invocation",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        let previousSettlement: ProcessBatchSettlement | undefined;
+        let settlementRuns = 0;
+        const definition = MigrationDefinition.make({
+          id: "articles",
+          source: makeTestInMemorySource({
+            batchSize: 1,
+            items: ["article-a", "article-b"].map((identityKey) => ({
+              identityKey,
+              version: "source-version-1",
+              item: { title: identityKey },
+            })),
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          processBatch: (items) => {
+            const currentSettlement = items[0].settle(
+              Effect.sync(() => {
+                settlementRuns += 1;
+              })
+            );
+
+            if (previousSettlement === undefined) {
+              previousSettlement = currentSettlement;
+              return [currentSettlement];
+            }
+
+            return [previousSettlement];
+          },
+        });
+
+        const error = yield* Effect.flip(runInlineDefinition(definition));
+
+        expect(error).toBeInstanceOf(ProcessBatchContractError);
+        expect(error.cause).toEqual(
+          expect.objectContaining({
+            contract: expect.objectContaining({
+              foreignCount: 1,
+              missingSourceIdentities: ["article-b"],
+            }),
+          })
+        );
+        expect(settlementRuns).toBe(1);
+        expect(
+          storeState.itemStates.get(
+            InMemoryMigrationStore.itemStateKey("articles", "article-a")
+          )?.status
+        ).toBe("migrated");
+        expect(
+          storeState.itemStates.has(
+            InMemoryMigrationStore.itemStateKey("articles", "article-b")
+          )
+        ).toBe(false);
+      })
+  );
+
+  it.effect(
+    "broadcasts an outer Process Batch failure without treating SkipItem as a settlement skip",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const source = makeTestInMemorySource({
+          items: ["article-a", "article-b"].map((identityKey) => ({
+            identityKey,
+            version: "source-version-1",
+            item: { title: identityKey },
+          })),
+        });
+        const outerFailure = skipItem("batch request was rejected");
+        const processBatch: ProcessBatchPipelineFor<
+          typeof source,
+          typeof outerFailure
+        > = () => Effect.fail(outerFailure);
+        const definition = MigrationDefinition.make({
+          id: "articles",
+          source,
+          store: InMemoryMigrationStore.layer(storeState),
+          processBatch,
+        });
+
+        const summary = yield* runInlineDefinition(definition);
+
+        expect(summary.definitions[0]?.counts).toEqual({
+          failed: 2,
+          migrated: 0,
+          needsUpdate: 0,
+          skipped: 0,
+          unchanged: 0,
+        });
+        expect(
+          [...storeState.itemStates.values()].map((state) => state.status)
+        ).toEqual(["failed", "failed"]);
+      })
+  );
+
+  it.effect(
+    "fails the cursor window without settlement when Process Batch reports a contract failure",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const definition = MigrationDefinition.make({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: ["article-a", "article-b"].map((identityKey) => ({
+              identityKey,
+              version: "source-version-1",
+              item: { title: identityKey },
+            })),
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          processBatch: () =>
+            Effect.fail(
+              new ProcessBatchContractError({
+                message: "Provider response could not be correlated",
+              })
+            ),
+        });
+
+        const error = yield* Effect.flip(runInlineDefinition(definition));
+
+        expect(error).toBeInstanceOf(ProcessBatchContractError);
+        expect(storeState.itemStates.size).toBe(0);
+        expect(storeState.sourceCursorCommits).toEqual([]);
+        expect(storeState.sourceCursors.has(definition.id)).toBe(false);
+      })
+  );
+
+  it.effect(
+    "broadcasts a synchronous Process Batch callback throw to every admitted item",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const callbackError = new Error("Process Batch callback failed");
+        const definition = MigrationDefinition.make({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: ["article-a", "article-b"].map((identityKey) => ({
+              identityKey,
+              version: "source-version-1",
+              item: { title: identityKey },
+            })),
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          processBatch: () => {
+            throw callbackError;
+          },
+        });
+
+        const summary = yield* runInlineDefinition(definition);
+
+        expect(summary.definitions[0]?.counts).toEqual({
+          failed: 2,
+          migrated: 0,
+          needsUpdate: 0,
+          skipped: 0,
+          unchanged: 0,
+        });
+        expect(
+          [...storeState.itemStates.values()].map((state) => state.status)
+        ).toEqual(["failed", "failed"]);
+        expect([...storeState.itemStates.values()]).toEqual([
+          expect.objectContaining({
+            error: expect.objectContaining({
+              kind: "process",
+              message: callbackError.message,
+            }),
+            status: "failed",
+          }),
+          expect.objectContaining({
+            error: expect.objectContaining({
+              kind: "process",
+              message: callbackError.message,
+            }),
+            status: "failed",
+          }),
+        ]);
+      })
+  );
+
+  it.effect(
+    "keeps Process Batch invocations within source cursor windows",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const batchCalls: string[][] = [];
+        const definition = MigrationDefinition.make({
+          id: "articles",
+          source: makeTestInMemorySource({
+            batchSize: 2,
+            items: ["article-a", "article-b", "article-c"].map(
+              (identityKey) => ({
+                identityKey,
+                version: "source-version-1",
+                item: { title: identityKey },
+              })
+            ),
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          processBatch: (items) => {
+            batchCalls.push(items.map((item) => item.source.identity.encoded));
+            return items.map((item) => item.settle(Effect.void));
+          },
+        });
+
+        yield* runInlineDefinition(definition);
+
+        expect(batchCalls).toEqual([["article-a", "article-b"], ["article-c"]]);
+      })
   );
 
   it.effect("treats progress-only Process Pipeline state as unchanged", () =>
@@ -5955,6 +6385,161 @@ describe("runInlineDefinition", () => {
   );
 
   it.effect(
+    "updates helper-owned journal extensions independently from process evidence",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const processError: PipelineFailureTestError = {
+          _tag: "PipelineFailureTestError",
+          code: "operation-pending",
+          message: "Destination operation is still pending",
+        };
+        const importOperation = DestinationJournalExtension.make(
+          "test.import-operation@v1",
+          Schema.Struct({
+            attempt: Schema.Int,
+            state: Schema.Literals(["pending", "completed"]),
+          })
+        );
+        const auditContext = DestinationJournalExtension.make(
+          "test.audit-context@v1",
+          Schema.Struct({ correlationId: Schema.String })
+        );
+        const previousRunId = toMigrationRunId("run-previous");
+        const previousJournal = {
+          extensions: {
+            [importOperation.id]: {
+              attempt: 0,
+              state: "pending" as const,
+            },
+            [auditContext.id]: {
+              correlationId: "correlation-1",
+            },
+          },
+          process: {
+            runId: previousRunId,
+            entries: [
+              {
+                kind: "diagnostic" as const,
+                sequence: 0,
+                severity: "info" as const,
+                message: "Original compensation evidence",
+              },
+            ],
+          },
+          rollbackAttempts: [],
+        };
+        const observedPreviousOperations: unknown[] = [];
+        let attempt = 0;
+
+        const definition = MigrationDefinition.make({
+          id: "articles",
+          source: makeTestInMemorySource({
+            items: [
+              {
+                identityKey: "article-extension",
+                version: "source-version-2",
+                item: { title: "Journal extension" },
+              },
+            ],
+          }),
+          store: InMemoryMigrationStore.layer(storeState),
+          process: (_source, context) =>
+            Effect.gen(function* () {
+              attempt += 1;
+              observedPreviousOperations.push(
+                yield* importOperation.read(context.previousState?.journal)
+              );
+
+              if (attempt === 1) {
+                yield* Tracking.setExtension(importOperation, {
+                  attempt,
+                  state: "pending",
+                });
+                return yield* Effect.fail(processError);
+              }
+
+              yield* Tracking.setExtension(importOperation, {
+                attempt,
+                state: "completed",
+              });
+              yield* Tracking.removeExtension(auditContext);
+              yield* Tracking.logDiagnostic({
+                message: "Retry completed",
+                severity: "info",
+              });
+            }),
+        });
+
+        seedArticleMigrationContract(storeState);
+        storeState.itemStates.set(
+          InMemoryMigrationStore.itemStateKey("articles", "article-extension"),
+          {
+            definitionId: toMigrationDefinitionId("articles"),
+            sourceIdentity: articleSourceIdentity("article-extension"),
+            sourceVersion: toSourceVersion("source-version-1"),
+            sourceVersionContractFingerprint:
+              defaultSourceVersionContractFingerprint,
+            lastRunId: previousRunId,
+            updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+            journal: previousJournal,
+            status: "migrated",
+          }
+        );
+
+        const failedSummary = yield* runInlineRegistry({
+          definitions: [definition],
+          update: true,
+        });
+        const failedState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-extension")
+        );
+
+        expect(failedSummary.status).toBe("failed");
+        expect(failedState?.journal).toEqual({
+          ...previousJournal,
+          extensions: {
+            [importOperation.id]: {
+              attempt: 1,
+              state: "pending",
+            },
+            [auditContext.id]: {
+              correlationId: "correlation-1",
+            },
+          },
+        });
+
+        const retrySummary = yield* runInlineDefinition(definition);
+        const migratedState = storeState.itemStates.get(
+          InMemoryMigrationStore.itemStateKey("articles", "article-extension")
+        );
+
+        expect(retrySummary.status).toBe("succeeded");
+        expect(observedPreviousOperations).toEqual([
+          { attempt: 0, state: "pending" },
+          { attempt: 1, state: "pending" },
+        ]);
+        expect(migratedState?.journal?.extensions).toEqual({
+          [importOperation.id]: {
+            attempt: 2,
+            state: "completed",
+          },
+        });
+        expect(migratedState?.journal?.process).toEqual({
+          entries: [
+            {
+              kind: "diagnostic",
+              message: "Retry completed",
+              sequence: 0,
+              severity: "info",
+            },
+          ],
+          runId: retrySummary.runId,
+        });
+      })
+  );
+
+  it.effect(
     "preserves prior evidence when update attempts skip or fail tracking validation",
     () =>
       Effect.gen(function* () {
@@ -8688,12 +9273,20 @@ describe("rollbackInlineDefinition", () => {
           id: "article-views@v1",
           schema: ArticleViewsTrackingRecord,
         });
+        const previousRunId = toMigrationRunId("run-previous");
         let rollbackCalled = false;
 
         seedTrackingMigrationContract(storeState, "articles", tracking);
         storeState.itemStates.set(itemStateKey, {
           definitionId,
-          lastRunId: toMigrationRunId("run-previous"),
+          journal: {
+            process: {
+              entries: [],
+              runId: previousRunId,
+            },
+            rollbackAttempts: [],
+          },
+          lastRunId: previousRunId,
           sourceIdentity: SourceIdentity.fromEncoded(
             ArticleSourceIdentity,
             sourceIdentity

@@ -548,6 +548,77 @@ export type ProcessPipelineFor<
   TrackingContract
 >;
 
+declare const processBatchSettlementTypeId: unique symbol;
+
+/**
+ * A deferred item result returned by a Process Batch Pipeline.
+ *
+ * Create settlements through `ProcessBatchItem.settle`. The SDK checks that
+ * every item has exactly one before it runs any settlement Effect.
+ */
+export interface ProcessBatchSettlement {
+  readonly [processBatchSettlementTypeId]: true;
+}
+
+/**
+ * One source item that is ready for coordinated batch processing.
+ *
+ * `settle` packages the item-level Effect; it does not run that Effect or mark
+ * the item complete until the complete settlement set has been returned.
+ */
+export interface ProcessBatchItem<
+  Payload,
+  ProcessError,
+  IdentityKey extends SourceIdentitySnapshotKey,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
+> {
+  readonly context: ProcessContext<TrackingContract>;
+  readonly settle: (
+    effect: Effect.Effect<
+      void,
+      ProcessError | SkipItem,
+      MigrationReferenceLookup | Tracking
+    >
+  ) => ProcessBatchSettlement;
+  readonly source: SourceItem<Payload, IdentityKey>;
+}
+
+/**
+ * Coordinates one non-empty group of eligible source items.
+ *
+ * The callback may group, split, or inspect the items as needed, but must
+ * return exactly one settlement created by each item's `settle` function.
+ */
+export type ProcessBatchPipeline<
+  Payload,
+  ProcessError,
+  IdentityKey extends SourceIdentitySnapshotKey,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
+> = (
+  items: readonly [
+    ProcessBatchItem<Payload, ProcessError, IdentityKey, TrackingContract>,
+    ...ProcessBatchItem<Payload, ProcessError, IdentityKey, TrackingContract>[],
+  ]
+) =>
+  | readonly ProcessBatchSettlement[]
+  | Effect.Effect<
+      readonly ProcessBatchSettlement[],
+      ProcessError,
+      MigrationReferenceLookup
+    >;
+
+/** Infers a Process Batch Pipeline directly from a configured Source. */
+export type ProcessBatchPipelineFor<
+  SourceDefinition extends AnyConfiguredSource,
+  ProcessError = never,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
+> = ProcessBatchPipeline<
+  ConfiguredSourcePayload<SourceDefinition>,
+  ProcessError,
+  ConfiguredSourceIdentityKey<SourceDefinition>,
+  TrackingContract
+>;
+
 export interface DestinationStubInput {
   readonly sourceIdentity: EncodedSourceIdentity;
 }
@@ -562,7 +633,7 @@ export type DestinationStubPipeline<PipelineError = never> = (
   context: DestinationStubContext
 ) => void | Effect.Effect<void, PipelineError | SkipItem, Tracking>;
 
-export interface MigrationDefinitionBase<
+export interface MigrationDefinitionCommon<
   Payload,
   PipelineError = never,
   Cursor = unknown,
@@ -577,12 +648,6 @@ export interface MigrationDefinitionBase<
   readonly execution?: NormalizedMigrationExecutionOptions;
   readonly group?: MigrationDefinitionGroupId;
   readonly id: MigrationDefinitionId;
-  readonly process: ProcessPipeline<
-    Payload,
-    PipelineError,
-    IdentityKey,
-    TrackingContract
-  >;
   readonly rollback?: RollbackPipeline<
     RollbackPipelineError,
     MigrationItemStateForTrackingContract<TrackingContract>
@@ -613,6 +678,59 @@ export interface MigrationDefinitionBase<
     readonly tracking: TrackingContract;
   };
 }
+
+type MigrationDefinitionProcessAuthoring<
+  Payload,
+  PipelineError,
+  IdentityKey extends SourceIdentitySnapshotKey,
+  TrackingContract extends TrackingRecordContract | undefined,
+> =
+  | {
+      readonly process: ProcessPipeline<
+        Payload,
+        PipelineError,
+        IdentityKey,
+        TrackingContract
+      >;
+      readonly processBatch?: never;
+    }
+  | {
+      readonly process?: never;
+      readonly processBatch: ProcessBatchPipeline<
+        Payload,
+        PipelineError,
+        IdentityKey,
+        TrackingContract
+      >;
+    };
+
+export type MigrationDefinitionBase<
+  Payload,
+  PipelineError = never,
+  Cursor = unknown,
+  IdentityKey extends SourceIdentitySnapshotKey = SourceIdentitySnapshotKey,
+  RollbackPipelineError = PipelineError,
+  EncodedPayload = Payload,
+  SourceImplementationError = never,
+  SourceRequirements = never,
+  TrackingContract extends TrackingRecordContract | undefined = undefined,
+> = MigrationDefinitionCommon<
+  Payload,
+  PipelineError,
+  Cursor,
+  IdentityKey,
+  RollbackPipelineError,
+  EncodedPayload,
+  SourceImplementationError,
+  SourceRequirements,
+  TrackingContract
+> &
+  MigrationDefinitionProcessAuthoring<
+    Payload,
+    PipelineError,
+    IdentityKey,
+    TrackingContract
+  >;
 
 type MigrationDefinitionTracking<
   TrackingContract extends TrackingRecordContract | undefined,
@@ -650,7 +768,7 @@ export type MigrationDefinition<
   MigrationDefinitionTracking<TrackingContract>;
 
 type AnyMigrationDefinitionWithSourceRequirements<SourceRequirements> = Omit<
-  MigrationDefinitionBase<
+  MigrationDefinitionCommon<
     // biome-ignore lint/suspicious/noExplicitAny: Payload is existential across heterogeneous definition collections.
     any,
     // biome-ignore lint/suspicious/noExplicitAny: Process error is recovered through MigrationDefinitionProcessError.
@@ -670,11 +788,21 @@ type AnyMigrationDefinitionWithSourceRequirements<SourceRequirements> = Omit<
     any
   >,
   "rollback"
-> & {
-  // biome-ignore lint/suspicious/noExplicitAny: Any definition is the heterogeneous registry boundary; concrete rollback state is preserved on individual definitions.
-  readonly rollback?: RollbackPipeline<any, any>;
-  readonly tracking?: TrackingRecordContract | undefined;
-};
+> &
+  MigrationDefinitionProcessAuthoring<
+    // biome-ignore lint/suspicious/noExplicitAny: Any definition is the heterogeneous registry boundary.
+    any,
+    // biome-ignore lint/suspicious/noExplicitAny: Any definition is the heterogeneous registry boundary.
+    any,
+    // biome-ignore lint/suspicious/noExplicitAny: Any definition is the heterogeneous registry boundary.
+    any,
+    // biome-ignore lint/suspicious/noExplicitAny: Any definition is the heterogeneous registry boundary.
+    any
+  > & {
+    // biome-ignore lint/suspicious/noExplicitAny: Any definition is the heterogeneous registry boundary; concrete rollback state is preserved on individual definitions.
+    readonly rollback?: RollbackPipeline<any, any>;
+    readonly tracking?: TrackingRecordContract | undefined;
+  };
 
 export type AnyMigrationDefinition =
   // biome-ignore lint/suspicious/noExplicitAny: Source requirements are recovered through the definition source.
@@ -749,7 +877,7 @@ export type MigrationDefinitionInput<
   SourceRequirements = never,
   TrackingContract extends TrackingRecordContract | undefined = undefined,
 > = Omit<
-  MigrationDefinitionBase<
+  MigrationDefinitionCommon<
     Payload,
     PipelineError,
     Cursor,
@@ -766,6 +894,12 @@ export type MigrationDefinitionInput<
   | "id"
   | typeof migrationDefinitionTypeId
 > &
+  MigrationDefinitionProcessAuthoring<
+    Payload,
+    PipelineError,
+    IdentityKey,
+    TrackingContract
+  > &
   MigrationDefinitionTrackingInput<TrackingContract> & {
     readonly dependencies?: MigrationDefinitionDependenciesInput;
     readonly execution?: MigrationExecutionOptions;
@@ -775,9 +909,15 @@ export type MigrationDefinitionInput<
 
 const validateProcessAuthoring = (definition: {
   readonly process?: unknown;
+  readonly processBatch?: unknown;
 }) => {
-  if (definition.process === undefined) {
-    throw new Error("Migration Definition must declare a process");
+  const hasProcess = definition.process !== undefined;
+  const hasProcessBatch = definition.processBatch !== undefined;
+
+  if (hasProcess === hasProcessBatch) {
+    throw new Error(
+      "Migration Definition must declare exactly one of process or processBatch"
+    );
   }
 };
 

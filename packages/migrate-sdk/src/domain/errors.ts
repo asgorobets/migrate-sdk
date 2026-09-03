@@ -30,6 +30,12 @@ export class MigrationRuntimeError extends Schema.TaggedError<MigrationRuntimeEr
   ErrorFields
 ) {}
 
+/** A Process Batch Pipeline did not return exactly one settlement per item. */
+export class ProcessBatchContractError extends Schema.TaggedError<ProcessBatchContractError>()(
+  "ProcessBatchContractError",
+  ErrorFields
+) {}
+
 export class RollbackRequestError extends Schema.TaggedError<RollbackRequestError>()(
   "RollbackRequestError",
   ErrorFields

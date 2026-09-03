@@ -10,6 +10,7 @@ import { expect, test } from "vitest";
 import { getRun } from "workflow/api";
 import { getWorld } from "workflow/runtime";
 import { workflowSdkMigrationProgressStreamNamespace } from "./migration-progress.ts";
+import type { WorkflowStepRetryMetadata } from "./steps.ts";
 import {
   beginMigrationRunStep,
   cancelMigrationRunStep,
@@ -158,11 +159,15 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
     executeMigrationRunRollbackOrphansPageStep,
     completeMigrationRunStep,
     failMigrationRunStep,
-  ] as readonly (typeof beginMigrationRunStep & {
-    readonly maxRetries?: number;
-  })[];
+  ] as readonly (typeof beginMigrationRunStep &
+    Partial<WorkflowStepRetryMetadata>)[];
   expect(migrationExecutionSteps.map((step) => step.maxRetries)).toEqual([
-    0, 0, 0, 0, 0, 0,
+    undefined,
+    undefined,
+    0,
+    0,
+    undefined,
+    undefined,
   ]);
 
   removeInMemoryMigrationTestSourceItem("article-100");
@@ -297,11 +302,10 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
   ]);
   expect(
     (
-      executeMigrationRollbackStep as typeof executeMigrationRollbackStep & {
-        readonly maxRetries?: number;
-      }
+      executeMigrationRollbackStep as typeof executeMigrationRollbackStep &
+        Partial<WorkflowStepRetryMetadata>
     ).maxRetries
-  ).toBe(0);
+  ).toBeUndefined();
 });
 
 test("Workflow SDK applies planned Process Pipeline concurrency inside cursor-window steps", async () => {

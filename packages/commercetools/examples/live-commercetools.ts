@@ -1,5 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { ApiRoot as ImportApiRoot } from "@commercetools/importapi-sdk";
+import { createApiBuilderFromCtpClient as createImportApiBuilderFromCtpClient } from "@commercetools/importapi-sdk";
 import type { ApiRoot } from "@commercetools/platform-sdk";
 import { createApiBuilderFromCtpClient } from "@commercetools/platform-sdk";
 import {
@@ -15,6 +17,11 @@ export const requiredLiveCommercetoolsEnvNames = [
   "CTP_CLIENT_SECRET",
   "CTP_AUTH_URL",
   "CTP_API_URL",
+] as const;
+
+export const requiredLiveCommercetoolsImportEnvNames = [
+  ...requiredLiveCommercetoolsEnvNames,
+  "CTP_IMPORT_API_URL",
 ] as const;
 
 const liveCommercetoolsEnvFilePath = join(
@@ -109,6 +116,18 @@ export const LiveCommercetoolsConfig = Schema.Struct({
 });
 export type LiveCommercetoolsConfig = typeof LiveCommercetoolsConfig.Type;
 
+export const LiveCommercetoolsImportConfig = Schema.Struct({
+  apiUrl: Schema.NonEmptyString,
+  authUrl: Schema.NonEmptyString,
+  clientId: Schema.NonEmptyString,
+  clientSecret: Schema.NonEmptyString,
+  importApiUrl: Schema.NonEmptyString,
+  projectKey: Schema.NonEmptyString,
+  scopes: Schema.Array(Schema.NonEmptyString),
+});
+export type LiveCommercetoolsImportConfig =
+  typeof LiveCommercetoolsImportConfig.Type;
+
 export const loadLiveCommercetoolsConfig = Effect.fn(
   "loadLiveCommercetoolsConfig"
 )(function* () {
@@ -121,6 +140,20 @@ export const loadLiveCommercetoolsConfig = Effect.fn(
     clientSecret: yield* requiredLiveEnv("CTP_CLIENT_SECRET"),
     projectKey: yield* requiredLiveEnv("CTP_PROJECT_KEY"),
     scopes: optionalCommaSeparatedList(readLiveEnv("CTP_SCOPES")),
+  });
+});
+
+export const loadLiveCommercetoolsImportConfig = Effect.fn(
+  "loadLiveCommercetoolsImportConfig"
+)(function* () {
+  const config = yield* loadLiveCommercetoolsConfig();
+
+  return yield* Schema.decodeUnknownEffect(LiveCommercetoolsImportConfig)({
+    ...config,
+    importApiUrl: yield* requiredLiveEnv(
+      "CTP_IMPORT_API_URL",
+      `Missing CTP_IMPORT_API_URL. Set ${requiredLiveCommercetoolsImportEnvNames.join(", ")} before running the live Commercetools Import API test.`
+    ),
   });
 });
 
@@ -148,7 +181,7 @@ export const loadLiveCommercetoolsConfigSync = (): LiveCommercetoolsConfig =>
     scopes: optionalCommaSeparatedList(readLiveEnv("CTP_SCOPES")),
   });
 
-export const makeLiveApiRoot = (config: LiveCommercetoolsConfig): ApiRoot => {
+const makeLiveClient = (config: LiveCommercetoolsConfig, httpUrl: string) => {
   const scopes = [...config.scopes];
   const authMiddleware = createAuthForClientCredentialsFlow({
     credentials: {
@@ -162,11 +195,24 @@ export const makeLiveApiRoot = (config: LiveCommercetoolsConfig): ApiRoot => {
   });
   const httpMiddleware = createHttpClient({
     fetch,
-    host: config.apiUrl,
-  });
-  const client = createClient({
-    middlewares: [authMiddleware, httpMiddleware],
+    host: httpUrl,
   });
 
+  return createClient({
+    middlewares: [authMiddleware, httpMiddleware],
+  });
+};
+
+export const makeLiveApiRoot = (config: LiveCommercetoolsConfig): ApiRoot => {
+  const client = makeLiveClient(config, config.apiUrl);
+
   return createApiBuilderFromCtpClient(client);
+};
+
+export const makeLiveImportApiRoot = (
+  config: LiveCommercetoolsImportConfig
+): ImportApiRoot => {
+  const client = makeLiveClient(config, config.importApiUrl);
+
+  return createImportApiBuilderFromCtpClient(client);
 };

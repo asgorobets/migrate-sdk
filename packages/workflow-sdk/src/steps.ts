@@ -26,6 +26,21 @@ import {
 } from "migrate-sdk/core";
 import { workflowSdkMigrationProgressLayer } from "./migration-progress.ts";
 
+export interface WorkflowStepRetryMetadata {
+  readonly maxRetries: number;
+}
+
+/**
+ * Disables Workflow SDK's automatic retries for a step whose durable work
+ * cannot be atomically committed with Workflow SDK's step result.
+ *
+ * Apply this to cursor-window and orphan-reconciliation page steps. Keep
+ * lifecycle and finalization steps retryable.
+ */
+export const disableWorkflowStepRetries = <Step extends object>(
+  step: Step
+): Step & WorkflowStepRetryMetadata => Object.assign(step, { maxRetries: 0 });
+
 export type WorkflowSdkMigrationRunStepError =
   | MigrationDefinitionRegistryCatalogLookupError
   | MigrationDefinitionRegistryPlanningError

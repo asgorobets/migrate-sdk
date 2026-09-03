@@ -98,7 +98,7 @@ A pluggable capability that exposes destination-owned helpers, typed destination
 The pluggable durable backend for a migration definition.
 
 **Migration Definition**:
-The configured workflow that connects a source, scoped process pipeline, optional tracking record contract, and migration store.
+The configured migration that connects a source, one processing style (`process` or `processBatch`), an optional tracking record contract, and a migration store.
 
 **Migration Contract**:
 The stored compatibility agreement for the identity, version, and optional tracking record contract of a migration definition.
@@ -260,7 +260,19 @@ The single migration definition or migration definition group currently addresse
 A process capability for reading migrated tracking state or destination references from migration item states.
 
 **Process Pipeline**:
-The scoped Effect that processes one source item and performs destination-side work.
+The user-authored Effect that processes one source item and performs destination-side work.
+
+**Process Batch Pipeline**:
+The alternative processing style that receives a non-empty window of eligible source items so a migration can coordinate work across them. It returns one Process Batch Settlement per item.
+
+**Admitted Source Item**:
+A source item ready for processing after the SDK has decoded it, checked its previous state, and determined that it needs work.
+
+**Process Batch Item**:
+One Admitted Source Item together with the context needed to process it as part of a batch.
+
+**Process Batch Settlement**:
+The deferred completion of one Process Batch Item. It preserves that item's own Tracking, journal, and durable outcome even when its work was coordinated with siblings.
 
 **Pipeline Execution Scope**:
 The per-source-item runtime boundary shared by a process pipeline and framework-owned services.
@@ -296,7 +308,10 @@ A typed, destination-native outcome recorded by a successful destination helper 
 A destination-owned typed descriptor for one kind of destination change.
 
 **Destination Journal**:
-The per-source-item ordered collection of destination journal entries observed during process or rollback execution.
+The per-source-item durable journal containing ordered process and rollback entries plus optional helper-owned extensions.
+
+**Destination Journal Extension**:
+A named, schema-validated value owned by a helper and persisted inside the Destination Journal. The SDK stores and returns the value without assigning domain meaning to it.
 
 **Destination Journal Segment**:
 The ordered journal entries captured from one process or rollback execution.
@@ -364,7 +379,7 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Source Identity Part** name is schema metadata for diagnostics, CLI targeting, status reports, reset/rekey tooling, and contract mismatch errors.
 - A **Migration Item State** preserves the structured **Source Identity**, including composite identity fields.
 - An **Encoded Source Identity** is the only source identity form used for durable lookup keys and operator targeting.
-- A **Source** derives **Source Identity** before the **Process Pipeline** receives the **Source Item**.
+- A **Source** derives **Source Identity** before a **Source Item** reaches the selected **Process Pipeline** or **Process Batch Pipeline**.
 - A **Source Item** must have a **Source Version** supplied by a source field, source metadata, or a hash of the item contents.
 - A **Source Cursor** selects which source items to inspect during a migration run.
 - A **Source Cursor** shape is owned by the **Source** and must be described by a **Source Cursor Schema**.
@@ -375,8 +390,8 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Source Inventory Scan** validates source item payloads with the **Source Payload Schema**.
 - A **Source Inventory Scan** may return **Migration Diagnostics** for invalid source payloads or duplicate **Source Identities**.
 - A **Source Rescan** resets the persisted **Source Cursor** before normal source discovery.
-- A **Source Rescan** leaves matching **Source Versions** unchanged and does not force the **Process Pipeline** to run.
-- An **Update Run** resets the persisted **Source Cursor** and forces discovered migrated source items back through the **Process Pipeline**.
+- A **Source Rescan** leaves matching **Source Versions** unchanged and does not force unchanged items back through processing.
+- An **Update Run** resets the persisted **Source Cursor** and forces discovered migrated source items back through the selected processing pipeline.
 - A **Source Rescan** and an **Update Run** are mutually exclusive because an **Update Run** already restarts source discovery.
 - A **Migration Item State** records source identity, migration status, and may record observed source version, destination tracking changes, or failure metadata.
 - A **Migration Item State** is modeled as discriminated variants by status.
@@ -396,9 +411,9 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Source** emits **Source Items**; it does not own **Migration Item State**.
 - A **Source** reads source items by cursor and by source identity.
 - A **Source** must expose a **Source Payload Schema**.
-- A **Source Payload Schema** may decode source-native raw values, such as CSV strings, into the process-facing TypeScript values the **Process Pipeline** receives.
+- A **Source Payload Schema** may decode source-native raw values, such as CSV strings, into the TypeScript values the selected processing pipeline receives.
 - A **Source Payload Schema** may be supplied directly by a user or derived by a source from a source-native schema.
-- A **Migration Run** decodes each source item payload with the **Source Payload Schema** before unchanged-terminal checks, process pipeline execution, and destination-side work.
+- A **Migration Run** decodes each source item payload with the **Source Payload Schema** before unchanged-terminal checks, processing, and destination-side work.
 - A source item with a valid identity and version but invalid payload becomes a failed **Migration Item State** with durable **Migration Item Error Details**.
 - A **Source Lookup Strategy** may be direct or scan-based.
 - A **Migration Definition** may select separate **Source Cursor Retry Strategy** and **Source Lookup Retry Strategy** wrappers.
@@ -409,7 +424,7 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - In the legacy command-plan model, a **Destination Plugin** exposes **Destination Commands** to process and rollback pipelines.
 - A legacy **Destination Plugin** does not decide whether destination tracking is persisted.
 - A legacy **Destination Plugin** exposes or uses a **Destination Command Schema**.
-- A **Migration Definition** declares the source, process, migration store, optional tracking record contract, and dependencies for a migration workflow.
+- A **Migration Definition** declares the source, processing style, migration store, optional tracking record contract, and dependencies for a migration workflow.
 - A **Migration Definition** may belong to one **Migration Definition Group**.
 - A **Migration Definition Group** selects a workload; **Migration Definition Dependencies** connect and order workloads.
 - Reuse across **Migration Definition Groups** is modeled as a dependency, not multiple group membership.
@@ -521,7 +536,7 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Migration Reference Lookup** may target one **Migration Definition** or an ordered list of **Migration Definitions**.
 - A **Migration Reference Lookup** over multiple **Migration Definitions** returns the first migrated reference found in lookup order.
 - A declared **Migration Definition Dependency** gives same-run ordering and locking guarantees for reference lookup, but is not required to perform a reference lookup.
-- A missing migrated reference may be handled as no value or as an item-level process failure by the **Process Pipeline**.
+- A missing migrated reference may be handled as no value or as an item-level processing failure.
 - A missing migrated reference may create a **Destination Stub** when the **Migration Reference Lookup** is configured to allow stubs.
 - A referenced **Migration Definition** owns how its **Destination Stubs** are created.
 - A referenced **Migration Definition** creates **Destination Stubs** from a **Source Identity**, not from the full referenced **Source Item** payload.
@@ -532,6 +547,15 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Migration Reference Lookup** may return a **Needs Update** item state as a usable reference because tracked destination state already exists.
 - A **Process Pipeline** processes exactly one **Source Item** within one **Pipeline Execution Scope**.
 - A **Process Pipeline** may invoke one or more destination helpers or other destination Effects.
+- A **Migration Definition** declares exactly one **Process Pipeline** or **Process Batch Pipeline**.
+- A **Process Batch Pipeline** receives only **Admitted Source Items**.
+- A **Process Batch Pipeline** invocation never spans **Source Cursor Windows**.
+- A failed or needs-update backlog and a newly read **Source Cursor Window** are separate **Process Batch Pipeline** populations even when one workflow step processes both.
+- A **Process Batch Pipeline** may group, split, inspect, or coordinate its items in any way required by the migration.
+- Internal requests, jobs, and chunks are temporary execution details; they do not become durable migration units.
+- Every **Process Batch Item** has exactly one **Process Batch Settlement**.
+- Every **Process Batch Settlement** preserves its own **Pipeline Execution Scope**, Tracking, and durable **Migration Item State** outcome.
+- The **Source Cursor** advances only after every item in its window has a durable outcome.
 - A **Rollback Pipeline** processes exactly one **Rollbackable Migration Item State** within one **Pipeline Execution Scope**.
 - A **Rollback Pipeline** is explicit compensation, not an inferred inverse of a **Process Pipeline** or previous destination effects.
 - A **Rollback Pipeline** uses durable **Migration Item State** and does not require reading the **Source Item**.
@@ -557,6 +581,10 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Destination Journal** separates the **Process Pipeline** segment from failed **Rollback Pipeline** attempt segments.
 - A **Destination Journal Segment** belongs to either a **Process Pipeline** execution or one failed **Rollback Pipeline** attempt.
 - A **Destination Journal** survives item-level process failure so partial destination effects and diagnostics can be recorded in **Migration Item State**.
+- A helper may own a typed **Destination Journal Extension** when it needs durable data that does not have the SDK-defined semantics of a destination change or diagnostic.
+- Setting a **Destination Journal Extension** replaces only that named extension; removing it leaves other extensions and standard journal entries unchanged.
+- Untouched **Destination Journal Extensions** survive reprocessing. Extension updates are persisted with migrated, failed, or skipped item outcomes.
+- A **Destination Journal Extension** has no SDK-defined history or interpretation. A helper may store a receipt, correlation data, recovery state, an event collection, or another JSON value that conforms to its declared schema.
 - A failed **Rollback Pipeline** attempt may add a **Destination Journal Segment** to preserved **Migration Item State**.
 - A successful **Rollback Pipeline** deletes the **Migration Item State**, including destination journal evidence.
 - Repeated **Destination Changes** with the same **Destination Change Descriptor** are interpreted through typed payload data and **Destination Journal** order.
