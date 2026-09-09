@@ -1,8 +1,9 @@
-import { Effect } from "effect";
+import { Effect, Layer, Option } from "effect";
+import { MigrationStore } from "migrate-sdk";
 import {
   isRollbackMigrationDefinition,
   type MigrationDefinitionId,
-  type MigrationDefinitionRegistryCatalog,
+  MigrationDefinitionRegistryCatalog,
   type MigrationDefinitionRegistryCatalogLookupError,
   MigrationDefinitionRegistryExecutableError,
   type MigrationDefinitionRegistryPlanningError,
@@ -21,6 +22,7 @@ import {
   type MigrationRunRollbackOrphansState,
   MigrationRunStepExecutor,
   type MigrationRunSummary,
+  migrationRunModeForDefinition,
   type RollbackRunSummary,
   toMigrationDefinitionId,
 } from "migrate-sdk/core";
@@ -78,16 +80,18 @@ const missingLocksError = (envelope: MigrationExecutionEnvelopeType) =>
     ],
   });
 
-const unsupportedRunPlanError = (envelope: MigrationRunExecutionEnvelopeType) =>
+const missingFinalizationStoreError = (
+  envelope: MigrationRunExecutionEnvelopeType
+) =>
   new MigrationDefinitionRegistryExecutableError({
     definitionId: firstScopeDefinitionId(envelope),
     message:
-      "Workflow SDK cursor-window execution currently supports only normal run plans without update or source identity targets",
+      "Workflow SDK finalization requires the original MigrationStore; provide it to the step runtime when the registry has no unambiguous store",
     missingRequirements: [
       {
-        key: "workflow-sdk-normal-cursor-run",
-        label: "Normal cursor-discovery run",
-        owner: "definition",
+        key: "workflow-sdk-finalization-store",
+        label: "Original Migration Store for run finalization",
+        owner: "store",
       },
     ],
   });
@@ -107,17 +111,53 @@ const resolveRunJob = (envelope: MigrationRunExecutionEnvelopeType) =>
   Effect.gen(function* () {
     const job = yield* MigrationExecutionJob.fromEnvelope(envelope);
 
-    if (
-      job.plan.target !== undefined ||
-      job.plan.update === true ||
-      (job.plan.mode !== undefined && job.plan.mode.kind !== "normal")
-    ) {
-      return yield* unsupportedRunPlanError(envelope);
-    }
-
     const lease = yield* requireExecutionLease(envelope, job);
 
     return { job, lease };
+  });
+
+const resolveRunFinalizationStore = (
+  envelope: MigrationRunExecutionEnvelopeType
+) =>
+  Effect.gen(function* () {
+    const store = yield* Effect.serviceOption(MigrationStore);
+    if (Option.isSome(store)) {
+      return Layer.succeed(MigrationStore, store.value);
+    }
+    const registry = yield* MigrationDefinitionRegistryCatalog.get(
+      envelope.registryId
+    );
+    const definitions = registry.definitions();
+    const scopedDefinitions = definitions.filter((definition) =>
+      envelope.scopeDefinitionIds.includes(definition.id)
+    );
+    const stores = new Set(
+      (scopedDefinitions.length === 0 ? definitions : scopedDefinitions).map(
+        (definition) => definition.store
+      )
+    );
+    const [storeLayer] = stores;
+    if (stores.size !== 1 || storeLayer === undefined) {
+      return yield* missingFinalizationStoreError(envelope);
+    }
+    return storeLayer;
+  });
+
+// Cleanup must survive definition removal or registry replacement. The store
+// validates the original lease before any run transition or lock release.
+const resolveRunFinalization = (envelope: MigrationRunExecutionEnvelopeType) =>
+  Effect.gen(function* () {
+    if (envelope.locks === undefined) {
+      return yield* missingLocksError(envelope);
+    }
+    return {
+      lease: {
+        locks: envelope.locks,
+        runId: envelope.runId,
+        scopeDefinitionIds: envelope.scopeDefinitionIds,
+      },
+      storeLayer: yield* resolveRunFinalizationStore(envelope),
+    };
   });
 
 export const beginMigrationRunExecutionEnvelope = (
@@ -177,6 +217,8 @@ export const executeMigrationRunCursorWindow = (input: {
         definitionId: input.definitionId,
         definitionIds: job.plan.executionDefinitionIds,
         lease,
+        mode: migrationRunModeForDefinition(job.plan, definition.id),
+        ...(job.plan.update === undefined ? {} : { update: job.plan.update }),
         ...(job.plan.rollbackOrphans === true ? { rollbackOrphans: true } : {}),
         runId: input.runId,
         state: input.state,
@@ -250,17 +292,12 @@ export const completeMigrationRunExecutionEnvelope = (input: {
   WorkflowSdkMigrationRunStepRequirements
 > =>
   Effect.gen(function* () {
-    const { job, lease } = yield* resolveRunJob(input.envelope);
-    const firstDefinition = job.plan.definitions[0];
-
-    if (firstDefinition === undefined) {
-      return yield* unsupportedRunPlanError(input.envelope);
-    }
+    const { lease, storeLayer } = yield* resolveRunFinalization(input.envelope);
 
     return yield* MigrationRunStepExecutor.complete({
       definitions: input.definitions,
       lease,
-      storeLayer: firstDefinition.store,
+      storeLayer,
     });
   });
 
@@ -273,17 +310,12 @@ export const cancelMigrationRunExecutionEnvelope = (input: {
   WorkflowSdkMigrationRunStepRequirements
 > =>
   Effect.gen(function* () {
-    const { job, lease } = yield* resolveRunJob(input.envelope);
-    const firstDefinition = job.plan.definitions[0];
-
-    if (firstDefinition === undefined) {
-      return yield* unsupportedRunPlanError(input.envelope);
-    }
+    const { lease, storeLayer } = yield* resolveRunFinalization(input.envelope);
 
     return yield* MigrationRunStepExecutor.cancel({
       definitions: input.definitions,
       lease,
-      storeLayer: firstDefinition.store,
+      storeLayer,
     });
   });
 
@@ -298,15 +330,10 @@ export const failMigrationRunExecutionEnvelope = (input: {
   WorkflowSdkMigrationRunStepRequirements
 > =>
   Effect.gen(function* () {
-    const { job, lease } = yield* resolveRunJob(input.envelope);
-    const firstDefinition = job.plan.definitions[0];
-
-    if (firstDefinition === undefined) {
-      return yield* unsupportedRunPlanError(input.envelope);
-    }
+    const { lease, storeLayer } = yield* resolveRunFinalization(input.envelope);
 
     return yield* MigrationRunStepExecutor.fail({
-      definitionOutcomes: job.plan.executionDefinitionIds.map(
+      definitionOutcomes: input.envelope.executionDefinitionIds.map(
         (definitionId) => {
           const completed = input.definitions.find(
             (definition) => definition.definitionId === definitionId
@@ -321,10 +348,10 @@ export const failMigrationRunExecutionEnvelope = (input: {
           };
         }
       ),
-      definitionIds: job.plan.executionDefinitionIds,
+      definitionIds: input.envelope.executionDefinitionIds,
       error: input.error,
       lease,
-      storeLayer: firstDefinition.store,
+      storeLayer,
     });
   });
 

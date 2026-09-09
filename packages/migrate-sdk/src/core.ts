@@ -96,6 +96,7 @@ export type { MigrationDefinitionRegistryCatalogLookupError } from "./services/m
 export {
   MigrationRollbackExecutor,
   MigrationRunExecutor,
+  migrationRunModeForDefinition,
   isRollbackMigrationDefinition,
   validateMigrationRunDependencyPreflight,
   validateMigrationRunRollbackOrphansDependencyPreflight,

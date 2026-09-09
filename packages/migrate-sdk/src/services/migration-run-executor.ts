@@ -681,8 +681,17 @@ export interface MigrationRunExecutionLease {
 export interface MigrationRunCursorWindowState {
   readonly counts: MigrationDefinitionRunSummary["counts"];
   readonly excludedSourceIdentities: readonly EncodedSourceIdentity[];
+  /** Run preparation and backlog lookup have completed, even with a saved cursor. */
+  readonly initialized?: boolean;
   readonly phase: "scan";
 }
+
+const isInitialCursorWindow = (
+  state: MigrationRunCursorWindowState
+): boolean =>
+  state.initialized === undefined
+    ? state.excludedSourceIdentities.length === 0 && isEmptyCounts(state.counts)
+    : !state.initialized;
 
 export type MigrationRunCursorWindowResult =
   | {
@@ -701,9 +710,11 @@ export type MigrationRunCursorWindowResult =
 
 export interface MigrationRunCursorWindowInput {
   readonly definitionId: MigrationDefinitionId;
+  readonly mode?: RunMode;
   readonly rollbackOrphans?: boolean;
   readonly runId: MigrationRunId;
   readonly state: MigrationRunCursorWindowState;
+  readonly update?: boolean;
 }
 
 export interface MigrationRunBeginInput {
@@ -3267,6 +3278,11 @@ const runMigrationDefinitionCursorWindow = <
   RunMigrationError | SourceImplementationError,
   SourceRequirements
 > => {
+  const mode = input.mode ?? normalRunMode;
+  if (input.update === true && mode.kind !== "normal") {
+    return Effect.fail(invalidUpdateRunModeError(mode));
+  }
+
   const program = Effect.gen(function* () {
     const store = yield* MigrationStore;
 
@@ -3284,11 +3300,7 @@ const runMigrationDefinitionCursorWindow = <
       "Process Pipeline Execution"
     ).concurrency;
     const counts = mutableCounts(input.state.counts);
-    const storedCursor = yield* store.getSourceCursor(definition.id);
-    const isFirstWindow =
-      storedCursor === null &&
-      input.state.excludedSourceIdentities.length === 0 &&
-      isEmptyCounts(input.state.counts);
+    const isFirstWindow = isInitialCursorWindow(input.state);
     let excludedSourceIdentities = input.state.excludedSourceIdentities;
 
     if (isFirstWindow) {
@@ -3299,21 +3311,35 @@ const runMigrationDefinitionCursorWindow = <
       });
       yield* countDefinitionSourceItemTotal({
         definitionId: definition.id,
+        ...(mode.kind === "item"
+          ? { itemLimit: mode.encodedSourceIdentities.length }
+          : {}),
         runId: input.runId,
         source,
       });
-      const targeted = input.rollbackOrphans
-        ? { completed: true, sourceIdentities: [] }
-        : yield* processTargetedSourceIdentities({
-            counts,
-            definition,
-            itemStates: yield* store.listItemStates(definition.id),
-            mode: normalRunMode,
-            processConcurrency,
-            runId: input.runId,
-            source,
-            store,
-          });
+
+      if (input.update === true) {
+        yield* prepareUpdateRunDefinition({
+          definitionId: definition.id,
+          itemStates: yield* store.listItemStates(definition.id),
+          runId: input.runId,
+          store,
+        });
+      }
+
+      const targeted =
+        input.rollbackOrphans || input.update
+          ? { completed: true, sourceIdentities: [] }
+          : yield* processTargetedSourceIdentities({
+              counts,
+              definition,
+              itemStates: yield* store.listItemStates(definition.id),
+              mode,
+              processConcurrency,
+              runId: input.runId,
+              source,
+              store,
+            });
       excludedSourceIdentities = targeted.sourceIdentities;
 
       if (!targeted.completed) {
@@ -3322,6 +3348,7 @@ const runMigrationDefinitionCursorWindow = <
           state: {
             counts: snapshotCounts(counts),
             excludedSourceIdentities,
+            initialized: true,
             phase: "scan" as const,
           },
         };
@@ -3334,24 +3361,31 @@ const runMigrationDefinitionCursorWindow = <
         state: {
           counts: snapshotCounts(counts),
           excludedSourceIdentities,
+          initialized: true,
           phase: "scan" as const,
         },
       };
     }
 
-    const windowResult = yield* processNextCursorWindow({
-      counts,
-      definition,
-      excludedSourceIdentities,
-      processConcurrency,
-      runId: input.runId,
-      ...(input.rollbackOrphans ? { sourceInventoryRunId: input.runId } : {}),
-      source,
-      store,
-    });
+    const windowResult = isTargetedMode(mode)
+      ? { kind: "completed" as const }
+      : yield* processNextCursorWindow({
+          counts,
+          definition,
+          excludedSourceIdentities,
+          processConcurrency,
+          reprocessUnchangedTerminal: input.update === true,
+          runId: input.runId,
+          ...(input.rollbackOrphans
+            ? { sourceInventoryRunId: input.runId }
+            : {}),
+          source,
+          store,
+        });
     const state = {
       counts: snapshotCounts(counts),
       excludedSourceIdentities,
+      initialized: true,
       phase: "scan" as const,
     };
 
@@ -3369,7 +3403,9 @@ const runMigrationDefinitionCursorWindow = <
       };
     }
 
-    yield* finalizeCompletedSourceDiscovery(definition, store);
+    if (!isTargetedMode(mode)) {
+      yield* finalizeCompletedSourceDiscovery(definition, store);
+    }
 
     const summary = {
       counts: state.counts,
@@ -4013,8 +4049,13 @@ interface PreparedPlannedRunDefinitions<
   ) => Effect.Effect<void, RunMigrationError>;
 }
 
-const runModeForDefinition = (
-  input: PlannedRunDefinitionsInput<readonly AnyMigrationDefinition[]>,
+export const migrationRunModeForDefinition = (
+  input: {
+    readonly mode?: RunMode;
+    readonly target?: MigrationDefinitionExecutableRunPlan["target"];
+    readonly withDependencies: boolean;
+    readonly requestedDefinitionIds: MigrationDefinitionExecutableRunPlan["requestedDefinitionIds"];
+  },
   definitionId: MigrationDefinitionId
 ): RunMode => {
   if (input.target?.definitionId === definitionId) {
@@ -4032,7 +4073,7 @@ const runModeForDefinition = (
     return normalRunMode;
   }
 
-  return input.mode;
+  return input.mode ?? normalRunMode;
 };
 
 const preparePlannedRunDefinitions = <
@@ -4202,7 +4243,10 @@ const executePreparedRunDefinitions = <
                   break;
                 }
 
-                const mode = runModeForDefinition(input, definition.id);
+                const mode = migrationRunModeForDefinition(
+                  input,
+                  definition.id
+                );
                 activeDefinitionId = definition.id;
                 const summary = yield* runMigrationDefinition(
                   restoreRuntimeMigrationDefinition(definition),

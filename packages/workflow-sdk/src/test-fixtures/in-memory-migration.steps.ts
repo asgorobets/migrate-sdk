@@ -183,6 +183,7 @@ const registry = MigrationDefinitionRegistry.make({
   id: "workflow-in-memory-catalog",
 });
 const runtimeLayer = Layer.mergeAll(
+  storeLayer,
   MigrationDefinitionRegistryCatalog.layer({
     registries: [registry],
   }),
