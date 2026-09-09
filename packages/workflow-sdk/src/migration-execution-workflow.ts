@@ -74,6 +74,7 @@ const emptyCursorWindowState: WorkflowSdkMigrationRunCursorWindowState = {
     unchanged: 0,
   },
   excludedSourceIdentities: [],
+  initialized: false,
   phase: "scan",
 };
 

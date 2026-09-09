@@ -55,6 +55,31 @@ progress. Processing concurrency from the executable plan is applied to item
 admission and per-item work inside every cursor-window step. A `processBatch`
 callback may separately choose the concurrency of its own destination requests.
 
+Run requests support source identity selection, failed-only and skipped-only
+modes, update runs, rescans, and orphan rollback. Identity selections include
+composite identities and use the same registry input as inline execution.
+Included dependencies run with the same mode policy as inline execution.
+
+Targeted runs look up the selected identities without scanning or changing the
+source cursor. Update runs schedule migrated items as `needs-update`, preserve
+their tracking evidence, reset discovery, and reprocess unchanged source items.
+Preparation happens once per definition inside its first cursor-work step.
+Subsequent steps carry an `initialized` marker alongside counts. After a failed
+or cancelled run, a normal run processes the persisted retry/update backlog
+before resuming discovery, including when a source cursor is already saved.
+
+Run finalization does not re-plan the request. Provide the original
+`MigrationStore` layer in the step runtime (as in the example) so cleanup can
+still mark the run failed and release its locks after a definition or registry
+is removed in a later deployment. The store verifies ownership of the original
+lock lease before making changes.
+
+For existing runtimes without a supplied store, finalization uses the store
+shared by surviving scoped definitions, or the registry's sole store layer
+when none survive. A mixed-store registry without surviving scoped definitions
+must supply the original store to its finalization steps; cleanup fails rather
+than guessing between stores. Store layers are compared by reference identity.
+
 ## Why cursor-work steps should not retry automatically
 
 Workflow SDK normally retries a step when the worker fails or its result is
@@ -108,3 +133,5 @@ The test starts a real adapter-backed Workflow SDK run in the in-process Local
 World, scans 100 source entries, asserts that the scan is split into two
 completed Workflow SDK steps of 50 entries each, and verifies planned Process
 Pipeline concurrency inside those steps.
+It also covers identity targeting, update runs, and recovery from an interrupted
+update after a cursor window has committed.

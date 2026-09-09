@@ -507,6 +507,7 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A started **Execution Start Result** may include adapter execution identity for observing the adapter-owned execution.
 - A durable **Execution Adapter** returns an **Execution Start Result** after accepting or scheduling execution; waiting for completion is a separate observation concern.
 - A Workflow SDK **Execution Adapter** returns a started **Execution Start Result** after the Workflow SDK run is accepted.
+- A Workflow SDK **Execution Adapter** applies the same **Run Mode**, source identity targeting, and **Update Run** policies as inline execution; step initialization is independent of the persisted **Source Cursor**, so resumed runs process retry and update backlog before continuing discovery.
 - An Effect Workflow **Execution Adapter** returns a started **Execution Start Result** after the Effect workflow execution is accepted.
 - A workflow execution context updates existing **Migration Run State**; it does not create the first state record for the **Migration Run**.
 - An executable plan is an in-process object and is not required to be serializable.

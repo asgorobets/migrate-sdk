@@ -1,5 +1,6 @@
 import { Effect, Layer } from "effect";
 import {
+  type MigrationDefinitionRegistryRunInput,
   MigrationExecutable,
   type MigrationExecutableProgressCheckpoint,
   MigrationStore,
@@ -45,7 +46,11 @@ const makeWorkflowSdkMigrationExecutableLayer = (
 
 const startInMemoryMigrationRun = async (
   rollbackOrphans = false,
-  processConcurrency?: number
+  processConcurrency?: number,
+  request: Omit<
+    MigrationDefinitionRegistryRunInput,
+    "definitionIds" | "all" | "group"
+  > = {}
 ) => {
   const plan = await Effect.runPromise(
     inMemoryMigrationTestRegistry.executable().planRun({
@@ -54,6 +59,7 @@ const startInMemoryMigrationRun = async (
         ? {}
         : { execution: { process: { concurrency: processConcurrency } } }),
       ...(rollbackOrphans ? { rollbackOrphans: true } : {}),
+      ...request,
     })
   );
   const executable = await Effect.runPromise(
@@ -80,6 +86,70 @@ const startInMemoryMigrationRun = async (
     started,
   };
 };
+
+test("Workflow SDK targets identities and updates unchanged entries in real steps", async () => {
+  resetInMemoryMigrationTestState();
+  await (await startInMemoryMigrationRun()).run.returnValue;
+
+  const targeted = await startInMemoryMigrationRun(false, undefined, {
+    sourceIdentities: ["article-001", "article-003"],
+  });
+  const targetedResult = await targeted.run.returnValue;
+  expect(targetedResult.summary.definitions[0]?.counts).toMatchObject({
+    migrated: 2,
+    unchanged: 0,
+  });
+  expect(targetedResult.snapshot.itemStateCount).toBe(100);
+  expect(targetedResult.snapshot.definitionLockCount).toBe(0);
+
+  const update = await startInMemoryMigrationRun(false, undefined, {
+    update: true,
+  });
+  const updatedResult = await update.run.returnValue;
+  expect(updatedResult.summary.definitions[0]?.counts).toMatchObject({
+    migrated: 100,
+    unchanged: 0,
+  });
+  const steps = await getWorld().steps.list({
+    resolveData: "none",
+    runId: update.run.runId,
+  });
+  expect(
+    steps.data.filter((step) =>
+      step.stepName.endsWith("//executeMigrationRunCursorWindowStep")
+    )
+  ).toHaveLength(2);
+  expect(updatedResult.snapshot.definitionLockCount).toBe(0);
+
+  const normal = await (await startInMemoryMigrationRun()).run.returnValue;
+  expect(normal.summary.definitions[0]?.counts).toMatchObject({
+    migrated: 0,
+    unchanged: 100,
+  });
+});
+
+test("Workflow SDK resumes persisted update backlog after a step fails", async () => {
+  resetInMemoryMigrationTestState();
+  await (await startInMemoryMigrationRun()).run.returnValue;
+  interruptInMemoryMigrationTestWorkflowAt("after-source-window");
+  const update = await startInMemoryMigrationRun(false, undefined, {
+    update: true,
+  });
+  await expect(update.run.returnValue).rejects.toThrow();
+  expect(inMemoryMigrationTestStoreState.definitionLocks.size).toBe(0);
+  expect(
+    [...inMemoryMigrationTestStoreState.itemStates.values()].filter(
+      (item) => item.status === "needs-update"
+    )
+  ).toHaveLength(50);
+  const resumed = await (await startInMemoryMigrationRun()).run.returnValue;
+  expect(resumed.summary.definitions[0]?.counts).toMatchObject({
+    migrated: 50,
+    failed: 0,
+  });
+  expect(resumed.snapshot.migratedItemStateCount).toBe(100);
+  expect(resumed.snapshot.definitionLockCount).toBe(0);
+});
 
 test("Workflow SDK executes a real in-memory migration run and rollback", async () => {
   resetInMemoryMigrationTestState();

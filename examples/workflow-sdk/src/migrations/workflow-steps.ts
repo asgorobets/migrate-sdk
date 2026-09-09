@@ -25,8 +25,10 @@ import {
   MigrationRunStepExecutor,
 } from "migrate-sdk/core";
 import { catalogRegistry } from "./catalog";
+import { migrationStore } from "./database";
 
 const RuntimeLive = Layer.mergeAll(
+  migrationStore,
   MigrationDefinitionRegistryCatalog.layer({
     registries: [catalogRegistry],
   }),
