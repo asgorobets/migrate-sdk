@@ -1,5 +1,70 @@
 # migrate-sdk
 
+## 0.11.0
+
+### Minor Changes
+
+- 8af1c85: Intentionally skipped items no longer appear as errors in traces. Skipped items
+  keep their reason and history of changes. Skipping does not undo changes already
+  made.
+  
+  **Breaking change:** Update migration code that skips items:
+  
+  - In a pipeline, replace `return yield* skipItem(reason)` with
+    `return skipItem(reason)`.
+  - For a batch item, replace `Effect.fail(skipItem(reason))` with
+    `Effect.succeed(skipItem(reason))`.
+  - Replace `new SkipItem({ reason })` with `skipItem(reason)`.
+  - If a helper returns a skip, return that value from the calling pipeline too.
+    Returning a skip only exits the function that returns it.
+  
+  Processing must finish with either no return value (`undefined`) or
+  `skipItem(reason)` with a string reason. Other results now fail the item, including
+  in JavaScript configurations. If your pipeline returns a write operation's result,
+  use `.pipe(Effect.asVoid)` to discard that result after the operation finishes.
+  
+  Skipping creation of a required reference still fails the item that needs it.
+- 315434a: Add optional OpenTelemetry tracing to see where migrations spend time reading
+  sources, processing batches, waiting, and saving results. Use traces to find slow
+  steps and compare batch sizes or the number of items processed at once.
+  
+  To try it locally, start a trace receiver, then add `--otel` to the CLI or TUI:
+  
+  ```sh
+  migrate run articles --otel --config migrate.config.ts
+  migrate-tui --otel --config migrate.config.ts
+  ```
+  
+  The default address is `http://localhost:4318/v1/traces`, with service name
+  `migrate-sdk`. Existing `OTEL_*` environment variables override these defaults.
+  Use any compatible service that accepts OTLP/HTTP JSON traces; no particular
+  viewer is required.
+  
+  For scheduled scripts or applications using the SDK directly, provide
+  `migrationTelemetryLayer` from `migrate-sdk/telemetry` and configure it with
+  OpenTelemetry environment variables. Existing Effect tracing setups work too.
+  See the [tracing setup guide](https://github.com/asgorobets/migrate-sdk/blob/main/docs/telemetry.md)
+  for service configuration and examples.
+  
+  Tracing is optional. No configuration changes are needed if you do not use it.
+
+### Patch Changes
+
+- d3a0686: Update the Effect packages together to 4.0.0-rc.113. This fixes fresh SDK and TUI
+  installations failing at startup with a missing `effect/ByteSize` module.
+  
+  If your project installs `effect` or `@effect/*` runtime packages directly, update
+  them to 4.0.0-rc.113 alongside this release. Effect renamed some helpers in this
+  release; for example, use `Config.String` instead of `Config.string` and
+  `Flag.Boolean` instead of `Flag.boolean` in code that calls Effect directly.
+  
+  Migration CLI flags and OpenTelemetry environment variables stay the same. No
+  global Effect or Bun installation is required.
+- ff73771: Keep SQLite migration progress responsive while a migration is writing results.
+  Opening an existing migration store now checks its schema without requesting a
+  write lock, preventing dashboard updates from blocking the migration or causing
+  connection timeouts. No configuration changes are needed.
+
 ## 0.10.0
 
 ### Minor Changes
