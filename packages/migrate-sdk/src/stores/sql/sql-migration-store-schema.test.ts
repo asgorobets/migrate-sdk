@@ -1,8 +1,10 @@
+import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSystem";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Deferred, Effect, Fiber } from "effect";
+import { FileSystem } from "effect/FileSystem";
 import { SqlClient } from "effect/unstable/sql";
-import { MigrationStore } from "migrate-sdk";
+import { MigrationStore, toMigrationDefinitionId } from "migrate-sdk";
 import { SqlMigrationStore } from "migrate-sdk/stores/sql";
 
 interface SqliteNameRow {
@@ -25,6 +27,48 @@ const withSqlite = <A, E>(effect: Effect.Effect<A, E, SqlClient.SqlClient>) =>
   effect.pipe(Effect.provide(sqliteClientLayer));
 
 describe("SqlMigrationStore schema migrations", () => {
+  it.effect(
+    "opens an existing store while another connection holds a write transaction",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped();
+        const filename = `${directory}/state.sqlite`;
+        const writerLayer = SqliteClient.layer({ filename });
+        const readerStore = SqlMigrationStore.layerFromClient(
+          SqliteClient.layer({ filename, busyTimeout: 0 }),
+          { initialize: false }
+        );
+
+        yield* Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const plan = yield* SqlMigrationStore.planSchema();
+          yield* SqlMigrationStore.applySchemaPlan(plan);
+          const locked = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const writer = yield* sql
+            .withTransaction(
+              Deferred.succeed(locked, undefined).pipe(
+                Effect.andThen(Deferred.await(release))
+              )
+            )
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(locked);
+
+          const latest = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+            return yield* store.getLatestRunState(
+              toMigrationDefinitionId("articles")
+            );
+          }).pipe(Effect.provide(readerStore));
+
+          expect(latest).toBeNull();
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(writer);
+        }).pipe(Effect.provide(writerLayer));
+      }).pipe(Effect.scoped, Effect.provide(nodeFileSystemLayer))
+  );
+
   it.effect("plans a fresh schema without changing the database", () =>
     withSqlite(
       Effect.gen(function* () {
