@@ -6,7 +6,6 @@ import {
   Effect,
   Exit,
   Layer,
-  Predicate,
   Ref,
   Schema,
 } from "effect";
@@ -24,7 +23,6 @@ import {
   type ProcessBatchContractError,
   RollbackPreflightError,
   RollbackRequestError,
-  type SkipItem,
   SourceError,
 } from "../domain/errors.ts";
 import {
@@ -43,6 +41,10 @@ import type {
 } from "../domain/ids.ts";
 import { SourceIdentity, toEncodedSourceCursor } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
+import {
+  type ProcessResult,
+  ProcessResultSchema,
+} from "../domain/process-result.ts";
 import type {
   MigrationDefinitionExecutableRollbackPlan,
   MigrationDefinitionExecutableRunPlan,
@@ -1535,9 +1537,6 @@ const missingTrackingRecordContractError = (
     cause: { definitionId },
   });
 
-const isSkipItem = (error: unknown): error is SkipItem =>
-  Predicate.isTagged(error, "SkipItem");
-
 const makeFailedStubReferenceState = ({
   definitionId,
   error,
@@ -1679,31 +1678,27 @@ const executeTrackingStub = (
           }
         ),
       catch: (error) =>
-        isSkipItem(error)
-          ? error
-          : new MigrationReferenceLookupError({
-              message: "Migration Reference Stub creation threw",
-              cause: error,
-            }),
+        new MigrationReferenceLookupError({
+          message: "Migration Reference Stub creation threw",
+          cause: error,
+        }),
     }).pipe(
-      Effect.flatMap((voidOrEffect) =>
-        Effect.isEffect(voidOrEffect)
-          ? (voidOrEffect as Effect.Effect<void, unknown, Tracking>)
-          : Effect.void
+      Effect.flatMap((result) =>
+        Effect.isEffect(result)
+          ? (result as Effect.Effect<ProcessResult, unknown, Tracking>)
+          : Effect.succeed(result)
       ),
       Effect.provide(Layer.succeed(Tracking, tracking.service)),
-      Effect.as({ kind: "succeeded" as const }),
-      Effect.catchIf(isSkipItem, (error) =>
-        Effect.succeed({
-          kind: "failed" as const,
-          error: normalizeItemError(
-            "process",
-            new MigrationReferenceLookupError({
-              message: "Migration Reference Stub creation skipped",
-              cause: error,
-            })
-          ),
-        })
+      Effect.flatMap(Schema.decodeUnknownEffect(ProcessResultSchema)),
+      Effect.flatMap((result) =>
+        result?.kind === "skipped"
+          ? Effect.fail(
+              new MigrationReferenceLookupError({
+                message: "Migration Reference Stub creation skipped",
+                cause: result,
+              })
+            )
+          : Effect.succeed({ kind: "succeeded" as const })
       ),
       Effect.catch((error) =>
         Effect.succeed({

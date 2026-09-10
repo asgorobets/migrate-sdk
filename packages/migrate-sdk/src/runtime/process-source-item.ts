@@ -10,7 +10,6 @@ import type {
 import {
   type MigrationStoreError,
   ProcessBatchContractError,
-  type SkipItem,
 } from "../domain/errors.ts";
 import type {
   MigrationDefinitionId,
@@ -20,6 +19,10 @@ import type {
 } from "../domain/ids.ts";
 import type { SourceVersionContractFingerprint } from "../domain/migration-contract.ts";
 import type { ProcessContext } from "../domain/pipeline.ts";
+import {
+  type ProcessResult,
+  ProcessResultSchema,
+} from "../domain/process-result.ts";
 import type { SourceItem } from "../domain/source.ts";
 import type {
   FailedItemState,
@@ -122,11 +125,6 @@ type ProcessOutcome =
       readonly error: MigrationItemError;
     };
 
-const isSkipItem = (error: unknown): error is SkipItem =>
-  Predicate.isTagged(error, "SkipItem") &&
-  "reason" in error &&
-  typeof error.reason === "string";
-
 const isMigrationStoreError = (error: unknown): error is MigrationStoreError =>
   Predicate.isTagged(error, "MigrationStoreError");
 
@@ -136,15 +134,8 @@ const isProcessBatchContractError = (
   Predicate.isTagged(error, "ProcessBatchContractError");
 
 const recoverProcessError = (
-  error: unknown,
-  allowSkip: boolean
+  error: unknown
 ): Effect.Effect<ProcessOutcome, MigrationStoreError> => {
-  if (allowSkip && isSkipItem(error)) {
-    return Effect.succeed({
-      kind: "skipped",
-      reason: error.reason,
-    });
-  }
   if (isMigrationStoreError(error)) {
     return Effect.fail(error);
   }
@@ -544,16 +535,16 @@ const runProcess = <
 ) =>
   Effect.try({
     try: () => process(sourceItem, context),
-    catch: (error) => error as PipelineError | SkipItem,
+    catch: (error) => error as PipelineError,
   }).pipe(
-    Effect.flatMap((voidOrEffect) =>
-      Effect.isEffect(voidOrEffect)
-        ? (voidOrEffect as Effect.Effect<
-            void,
-            PipelineError | SkipItem,
+    Effect.flatMap((result) =>
+      Effect.isEffect(result)
+        ? (result as Effect.Effect<
+            ProcessResult,
+            PipelineError,
             MigrationReferenceLookup | Tracking
           >)
-        : Effect.void
+        : Effect.succeed(result)
     )
   );
 
@@ -568,12 +559,10 @@ const settleAdmittedSourceItem = <
   TrackingContract extends TrackingRecordContract | undefined,
 >({
   admitted,
-  allowSkip = true,
   definition,
   effect,
 }: {
   readonly admitted: AdmittedSourceItem<Payload, TrackingContract, IdentityKey>;
-  readonly allowSkip?: boolean;
   readonly definition: MigrationDefinition<
     Payload,
     PipelineError,
@@ -586,8 +575,8 @@ const settleAdmittedSourceItem = <
     TrackingContract
   >;
   readonly effect: Effect.Effect<
-    void,
-    PipelineError | SkipItem,
+    ProcessResult,
+    PipelineError,
     MigrationReferenceLookup | Tracking
   >;
 }): Effect.Effect<
@@ -612,8 +601,11 @@ const settleAdmittedSourceItem = <
     });
     const processOutcome = yield* effect.pipe(
       Effect.provide(Layer.succeed(Tracking, tracking.service)),
-      Effect.as({ kind: "migrated" as const }),
-      Effect.catch((error) => recoverProcessError(error, allowSkip))
+      Effect.flatMap(Schema.decodeUnknownEffect(ProcessResultSchema)),
+      Effect.map((result) =>
+        result?.kind === "skipped" ? result : { kind: "migrated" as const }
+      ),
+      Effect.catch(recoverProcessError)
     );
     const processJournalSegment = yield* tracking.snapshot;
     const processJournal = makeProcessJournal(processJournalSegment);
@@ -881,8 +873,8 @@ interface ValidatedProcessBatchSettlement<
 > {
   readonly admitted: AdmittedSourceItem<Payload, TrackingContract, IdentityKey>;
   readonly effect: Effect.Effect<
-    void,
-    PipelineError | SkipItem,
+    ProcessResult,
+    PipelineError,
     MigrationReferenceLookup | Tracking
   >;
 }
@@ -903,8 +895,8 @@ const makeProcessBatchItems = <
   const effectsBySettlement = new Map<
     ProcessBatchSettlement,
     Effect.Effect<
-      void,
-      PipelineError | SkipItem,
+      ProcessResult,
+      PipelineError,
       MigrationReferenceLookup | Tracking
     >
   >();
@@ -977,8 +969,8 @@ const validateProcessBatchSettlements = <
   readonly effectsBySettlement: ReadonlyMap<
     ProcessBatchSettlement,
     Effect.Effect<
-      void,
-      PipelineError | SkipItem,
+      ProcessResult,
+      PipelineError,
       MigrationReferenceLookup | Tracking
     >
   >;
@@ -1229,7 +1221,6 @@ export const processSourceItemsBatch = <
             (admitted) =>
               settleAdmittedSourceItem({
                 admitted,
-                allowSkip: false,
                 definition,
                 effect: Effect.fail(invocation.error),
               }),

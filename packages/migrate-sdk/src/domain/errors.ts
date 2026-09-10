@@ -45,11 +45,3 @@ export class RollbackPreflightError extends Schema.TaggedError<RollbackPreflight
   "RollbackPreflightError",
   ErrorFields
 ) {}
-
-export class SkipItem extends Schema.TaggedError<SkipItem>()("SkipItem", {
-  reason: Schema.String,
-}) {}
-
-export const makeSkipItem = (reason: string) => new SkipItem({ reason });
-
-export const skipItem = makeSkipItem;

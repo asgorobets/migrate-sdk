@@ -434,11 +434,11 @@ const makeArticlesMigration = (options: {
       ...(options.platform === undefined ? {} : { platform: options.platform }),
     }),
     process: (source) =>
-      Effect.gen(function* () {
+      Effect.sync(() => {
         options.onProcess?.();
 
         if (source.item.publish === false) {
-          return yield* skipItem("Article is not published");
+          return skipItem("Article is not published");
         }
 
         options.processCalls?.push(source.identity.encoded);

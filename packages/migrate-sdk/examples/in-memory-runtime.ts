@@ -69,7 +69,7 @@ export const makeInMemoryArticlesMigration = () => {
     store: InMemoryMigrationStore.layer(),
     process: Effect.fn("articles.process")(function* (source) {
       if (!source.item.publish) {
-        return yield* skipItem("Article is not published");
+        return skipItem("Article is not published");
       }
 
       yield* destination.entries.upsert({

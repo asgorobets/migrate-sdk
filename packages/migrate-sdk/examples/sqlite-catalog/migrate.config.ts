@@ -298,7 +298,7 @@ const books = MigrationDefinition.make({
   id: "books",
   process: Effect.fn("sqliteCatalog.books.process")(function* (source) {
     if (source.item.disposition === "skip") {
-      return yield* skipItem("Book is outside the catalog publishing scope");
+      return skipItem("Book is outside the catalog publishing scope");
     }
 
     yield* delay;
