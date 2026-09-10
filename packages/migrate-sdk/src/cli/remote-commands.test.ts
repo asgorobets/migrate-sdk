@@ -142,6 +142,43 @@ const withServer = (args: readonly string[]) => [
 ];
 
 describe("remote CLI inspection commands", () => {
+  it.effect("passes --otel to the local execution host", () =>
+    Command.runWith(migrateCommand, { version: "0.0.0" })([
+      "list",
+      "--otel",
+      "--config",
+      "migrate.config.ts",
+    ]).pipe(
+      Effect.provide(
+        makeLayer({
+          cwd: "/workspace",
+          connectMigrateServer: (input) => {
+            expect(input).toEqual({
+              kind: "local",
+              cwd: "/workspace",
+              configPath: "migrate.config.ts",
+              otel: true,
+            });
+            return Effect.succeed(makeConnection());
+          },
+        })
+      )
+    )
+  );
+
+  it.effect("rejects --otel for remote execution", () =>
+    Effect.gen(function* () {
+      const result = yield* runCli(
+        withServer(["list", "--otel"]),
+        makeConnection()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(
+        "configure OTEL_* on the remote Migrate Server"
+      );
+    })
+  );
+
   it.effect(
     "reads list and graph metadata without loading dashboard state",
     () =>

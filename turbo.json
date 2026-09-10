@@ -2,6 +2,10 @@
   "$schema": "https://turborepo.dev/schema.json",
   "ui": "tui",
   "tasks": {
+    "demo:telemetry": {
+      "cache": false,
+      "passThroughEnv": ["OTEL_*", "MIGRATE_DEMO_*"]
+    },
     "build": {
       "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],

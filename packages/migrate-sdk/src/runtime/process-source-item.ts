@@ -611,6 +611,13 @@ const settleAdmittedSourceItem = <
     const processJournal = makeProcessJournal(processJournalSegment);
     const processJournalExtensions = yield* tracking.extensions;
 
+    if (processOutcome.kind === "skipped") {
+      yield* Effect.annotateCurrentSpan(
+        "migration.item.skip.reason",
+        processOutcome.reason
+      );
+    }
+
     if (processOutcome.kind !== "migrated") {
       return yield* persistProcessOutcome({
         decodedSourceItem,
@@ -662,7 +669,17 @@ const settleAdmittedSourceItem = <
     );
 
     return "migrated" as const;
-  });
+  }).pipe(
+    Effect.tap((outcome) =>
+      Effect.annotateCurrentSpan("migration.item.outcome", outcome)
+    ),
+    Effect.withSpan("migration.item.settle", {
+      attributes: {
+        "migration.run.id": admitted.runId,
+        "migration.definition.id": definition.id,
+      },
+    })
+  );
 
 const admitSourceItem = <
   Payload,
@@ -781,7 +798,14 @@ const admitSourceItem = <
         sourceVersionContractContext,
       },
     };
-  });
+  }).pipe(
+    Effect.withSpan("migration.item.admit", {
+      attributes: {
+        "migration.run.id": runId,
+        "migration.definition.id": definition.id,
+      },
+    })
+  );
 
 export const processSourceItem = <
   Payload,
@@ -844,7 +868,14 @@ export const processSourceItem = <
         admission.item.processContext
       ),
     });
-  });
+  }).pipe(
+    Effect.withSpan("migration.item", {
+      attributes: {
+        "migration.run.id": runId,
+        "migration.definition.id": definition.id,
+      },
+    })
+  );
 
 interface ProcessBatchSettlementMetadata {
   readonly batchToken: object;
@@ -1178,6 +1209,11 @@ export const processSourceItemsBatch = <
       admission.kind === "admitted" ? [admission.item] : []
     );
 
+    yield* Effect.annotateCurrentSpan(
+      "migration.batch.admitted_items",
+      admittedItems.length
+    );
+
     if (admittedItems.length === 0) {
       return admissions.map((admission) => {
         if (admission.kind === "admitted") {
@@ -1206,6 +1242,7 @@ export const processSourceItemsBatch = <
       processBatch,
       preparedBatch.items
     ).pipe(
+      Effect.withSpan("migration.batch.process"),
       Effect.map(
         (settlements): ProcessBatchInvocationResult => ({
           kind: "settlements",
@@ -1267,4 +1304,13 @@ export const processSourceItemsBatch = <
 
       return outcome;
     });
-  });
+  }).pipe(
+    Effect.withSpan("migration.batch", {
+      attributes: {
+        "migration.run.id": runId,
+        "migration.definition.id": definition.id,
+        "migration.batch.source_items": sourceItems.length,
+        "migration.process.concurrency": concurrency,
+      },
+    })
+  );

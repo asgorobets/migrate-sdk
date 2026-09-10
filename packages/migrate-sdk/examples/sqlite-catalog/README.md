@@ -73,6 +73,39 @@ Use Concurrency settings in the TUI to compare 1, 4, 16, and Unbounded. SQLite
 still serializes writes; the delay makes process-pipeline concurrency visible
 without claiming linear database throughput.
 
+## Inspect performance with OpenTelemetry
+
+With an OTLP/HTTP JSON receiver running on the standard local port, add `--otel`:
+
+```sh
+node packages/tui/bin/migrate-tui.js --otel \
+  --config packages/migrate-sdk/examples/sqlite-catalog/migrate.config.ts
+```
+
+This exports to `http://localhost:4318/v1/traces` with service name `migrate-sdk`.
+For Motel, start `motel` in another terminal and override its nonstandard port:
+
+```sh
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:27686 \
+  node packages/tui/bin/migrate-tui.js --otel \
+  --config packages/migrate-sdk/examples/sqlite-catalog/migrate.config.ts
+```
+
+Run the Catalog group, then select `migrate-sdk` in the trace viewer. Compare
+`migration.run`, `migration.source.window`, `migration.source.read`,
+`migration.item.admit`, `sqliteCatalog.books.process`, and
+`migration.source.cursor.commit`. This example reads 100-row CSV windows and
+performs individual SQL writes; it does not use a bulk `processBatch` callback.
+
+Compare concurrency 1, 4, and 16 with the same fixture and delay. After each
+completed run, close the TUI and reset the fixture before the next comparison;
+otherwise the next run encounters already-processed state. Repeat with
+`MIGRATE_SQLITE_CATALOG_DELAY_MS=0` to remove the simulated wait. Failures and
+skips are intentional fixture cases.
+
+For custom service names, headers, and other settings, see the
+[OpenTelemetry guide](../../../../docs/telemetry.md).
+
 ## Retry, update, and rollback scenarios
 
 The generated Books source includes deterministic skips, missing author

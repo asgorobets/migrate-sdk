@@ -2,6 +2,7 @@ import { layer as nodeFileSystemLayer } from "@effect/platform-node/NodeFileSyst
 import { layer as nodePathLayer } from "@effect/platform-node/NodePath";
 import { runMain } from "@effect/platform-node/NodeRuntime";
 import { Console, Effect, Layer } from "effect";
+import { migrationTelemetryLayer } from "../src/telemetry.ts";
 import { formatApiSourceExampleResult } from "./api-source/format.ts";
 import { runApiSourceExampleWithInspection } from "./api-source/inspection.ts";
 import {
@@ -24,12 +25,17 @@ import {
   formatNestedArticleSchemaExampleResult,
   runNestedArticleSchemaExample,
 } from "./nested-article-schema.ts";
+import { runTelemetryExample } from "./telemetry.ts";
 
 const example = process.argv[2] ?? "in-memory";
 const shouldReset = process.argv.includes("--reset");
 const nodePlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
 
 const makeProgram = (): Effect.Effect<string, unknown, never> => {
+  if (example === "telemetry") {
+    return runTelemetryExample.pipe(Effect.map(formatMigrationRunSummary));
+  }
+
   if (example === "file-store") {
     return runFileStoreExample({ reset: shouldReset }).pipe(
       Effect.provide(nodePlatformLayer),
@@ -66,4 +72,9 @@ const makeProgram = (): Effect.Effect<string, unknown, never> => {
 
 const program = makeProgram();
 
-runMain(program.pipe(Effect.flatMap(Console.log)));
+runMain(
+  program.pipe(
+    Effect.flatMap(Console.log),
+    Effect.provide(migrationTelemetryLayer)
+  )
+);

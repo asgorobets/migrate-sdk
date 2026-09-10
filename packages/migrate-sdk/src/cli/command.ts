@@ -82,8 +82,15 @@ const server = Flag.string("server").pipe(
   Flag.withDescription("URL of a remote Migrate Server")
 );
 
+const otel = Flag.boolean("otel").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription(
+    "Enable local OpenTelemetry traces (localhost:4318; customize with OTEL_* variables)"
+  )
+);
+
 const migrateBaseCommand = Command.make("migrate").pipe(
-  Command.withSharedFlags({ config, server })
+  Command.withSharedFlags({ config, otel, server })
 );
 
 const useColor = Effect.map(
@@ -233,6 +240,9 @@ const acquireCliMigrateConnection = (
     } else if (configPath !== undefined) {
       sharedFlags = ` --config ${quoteCliArgument(configPath, commandShell)}`;
     }
+    if (root.otel) {
+      sharedFlags += " --otel";
+    }
 
     const observeAgain = (runId: string) =>
       `migrate${sharedFlags} runs observe ${quoteCliArgument(runId, commandShell)}`;
@@ -253,6 +263,12 @@ const acquireCliMigrateConnection = (
       );
     }
 
+    if (root.otel && serverUrl !== undefined) {
+      return yield* failReportedCliMessage(
+        "--otel configures local execution; configure OTEL_* on the remote Migrate Server instead"
+      );
+    }
+
     const connection = yield* runtime
       .connectMigrateServer(
         serverUrl === undefined
@@ -263,6 +279,7 @@ const acquireCliMigrateConnection = (
                 : { buildId: runtime.migrateServerBuildId }),
               ...(configPath === undefined ? {} : { configPath }),
               cwd: runtime.cwd,
+              ...(root.otel ? { otel: true } : {}),
             }
           : {
               kind: "remote",
@@ -342,7 +359,7 @@ const withCliRegistryOperations = <A, Error, Requirements>(
   Effect.gen(function* () {
     const root = yield* migrateBaseCommand;
 
-    if (Option.isSome(root.server)) {
+    if (Option.isSome(root.server) || root.otel) {
       return yield* withCliMigrateConnection(({ connection }) =>
         use(makeRemoteMigrationCliRegistryOperations(connection))
       );

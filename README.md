@@ -193,6 +193,9 @@ pnpm validate-packages
 Run `pnpm dev` to start the local apps. The documentation site lives in
 [`apps/docs`](./apps/docs).
 
+To inspect scanning, batch processing, and wait times, follow the
+[OpenTelemetry exporter configuration and tracing guide](./docs/telemetry.md).
+
 ## Status
 
 Migrate SDK is used in real migration projects, but it has not reached 1.0. For

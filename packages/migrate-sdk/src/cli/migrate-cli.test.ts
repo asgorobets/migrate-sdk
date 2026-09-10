@@ -79,12 +79,16 @@ const runCliWithRuntime = (
 const runCli = (args: readonly string[], cwd: string) =>
   runCliWithRuntime(args, cwd);
 
-const runCliProcess = (args: readonly string[], cwd: string) =>
+const runCliProcess = (
+  args: readonly string[],
+  cwd: string,
+  env?: NodeJS.ProcessEnv
+) =>
   Effect.gen(function* () {
     const handle = yield* ChildProcess.make(
       process.execPath,
       [binPath, ...args],
-      { cwd }
+      { cwd, ...(env === undefined ? {} : { env }) }
     );
 
     return yield* Effect.all(
@@ -1489,6 +1493,43 @@ describe("migrate CLI", () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain("USAGE\n  migrate <subcommand> [flags]");
     }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer))
+  );
+
+  it.effect(
+    "applies --otel before initializing telemetry through the package bin",
+    () =>
+      Effect.gen(function* () {
+        const env = {
+          ...Object.fromEntries(
+            Object.entries(process.env).filter(
+              ([key]) => !key.startsWith("OTEL_")
+            )
+          ),
+          OTEL_TRACES_EXPORTER: "otlp",
+          OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4318",
+        };
+        const help = yield* runCliProcess(
+          ["--otel", "--help"],
+          packageRoot,
+          env
+        );
+        expect(help.exitCode).toBe(ChildProcessSpawner.ExitCode(0));
+        expect(help.stderr).toBe("");
+        expect(help.stdout).toContain("migrate <subcommand> [flags]");
+
+        // Exercise a command handler without starting a server or migration.
+        const run = yield* runCliProcess(
+          ["run", "articles", "--otel", "--server", "http://127.0.0.1:3000"],
+          packageRoot,
+          env
+        );
+        expect(run.exitCode).toBe(ChildProcessSpawner.ExitCode(1));
+        expect(run.stderr).toContain(
+          "configure OTEL_* on the remote Migrate Server"
+        );
+        expect(run.stderr).not.toContain("ConfigError");
+      }).pipe(Effect.scoped, Effect.provide(nodeServicesLayer)),
+    10_000
   );
 
   it.effect(

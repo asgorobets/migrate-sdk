@@ -110,12 +110,14 @@ export interface LoadLocalMigrationTuiInput {
   readonly buildId?: string;
   readonly configPath?: string;
   readonly cwd: string;
+  readonly otel?: boolean;
   readonly server?: never;
 }
 
 export interface LoadRemoteMigrationTuiInput {
   readonly configPath?: never;
   readonly cwd?: never;
+  readonly otel?: never;
   readonly server: {
     readonly bearerToken?: string | undefined;
     readonly url: string;
