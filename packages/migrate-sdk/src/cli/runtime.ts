@@ -123,14 +123,14 @@ export class MigrationCliRuntime extends Service<
   static readonly live = Layer.effect(
     MigrationCliRuntime,
     Effect.gen(function* () {
-      const ci = yield* Config.option(Config.string("CI"));
-      const forceColor = yield* Config.option(Config.string("FORCE_COLOR"));
-      const noColor = yield* Config.option(Config.string("NO_COLOR"));
+      const ci = yield* Config.option(Config.String("CI"));
+      const forceColor = yield* Config.option(Config.String("FORCE_COLOR"));
+      const noColor = yield* Config.option(Config.String("NO_COLOR"));
       const migrateServerToken = yield* Config.option(
-        Config.redacted("MIGRATE_SERVER_TOKEN")
+        Config.Redacted("MIGRATE_SERVER_TOKEN")
       );
       const migrateServerBuildId = yield* Config.option(
-        Config.string("MIGRATE_SERVER_BUILD_ID")
+        Config.String("MIGRATE_SERVER_BUILD_ID")
       );
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -142,7 +142,7 @@ export class MigrationCliRuntime extends Service<
       const stdoutColumns = process.stdout.columns;
       return {
         chooseRunObservationInterrupt: (runId, { stopRequested }) =>
-          Prompt.select({
+          Prompt.Select({
             choices: [
               {
                 description: "Leave the Migration Run active",
@@ -176,7 +176,7 @@ export class MigrationCliRuntime extends Service<
             Effect.orElseSucceed(() => "detach" as const)
           ),
         confirmSchemaUpgrade: (plan) =>
-          Prompt.confirm({
+          Prompt.Confirm({
             initial: false,
             message: `Upgrade SQL Migration Store schema from ${plan.currentVersion === null ? "not installed" : `version ${plan.currentVersion}`} to version ${plan.targetVersion}?`,
           }).pipe(
@@ -217,7 +217,7 @@ export class MigrationCliRuntime extends Service<
           ),
         cwd: process.cwd(),
         interrupts: makeMigrationCliInterruptController({
-          confirmUnsafeExit: Prompt.confirm({
+          confirmUnsafeExit: Prompt.Confirm({
             initial: false,
             message:
               "Force shutdown now? This may leave destination changes without matching migration state, so a later run may retry partially applied work.",

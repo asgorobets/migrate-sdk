@@ -40,6 +40,33 @@ describe("local telemetry startup", () => {
     );
   });
 
+  it("uses the decoded service name from resource attributes", () => {
+    const environment = localTelemetryEnvironment({
+      OTEL_RESOURCE_ATTRIBUTES: "service.name=nightly%20catalog,env=local",
+    });
+    expect(environment.OTEL_SERVICE_NAME).toBe("nightly catalog");
+    expect(localTelemetryMessage(environment)).toBe(
+      'OpenTelemetry traces: http://localhost:4318/v1/traces (service: "nightly catalog").'
+    );
+  });
+
+  it("prefers an explicit service name over resource attributes", () => {
+    expect(
+      localTelemetryEnvironment({
+        OTEL_RESOURCE_ATTRIBUTES: "service.name=resource-name",
+        OTEL_SERVICE_NAME: "explicit-name",
+      }).OTEL_SERVICE_NAME
+    ).toBe("explicit-name");
+  });
+
+  it("rejects malformed resource attributes through Effect configuration", () => {
+    expect(() =>
+      localTelemetryEnvironment({
+        OTEL_RESOURCE_ATTRIBUTES: "service.name=%invalid",
+      })
+    ).toThrow();
+  });
+
   it("reports a custom trace path without exposing endpoint credentials", () => {
     const environment = localTelemetryEnvironment({
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:

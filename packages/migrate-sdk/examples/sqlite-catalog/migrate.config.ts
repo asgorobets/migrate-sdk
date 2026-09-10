@@ -45,10 +45,10 @@ const fixtureSettings = await Effect.runPromise(
   Effect.gen(function* () {
     const fs = yield* FileSystem;
     const path = yield* Path;
-    const dataDirectory = yield* Config.string(
+    const dataDirectory = yield* Config.String(
       "MIGRATE_SQLITE_CATALOG_DIR"
     ).pipe(Config.withDefault(path.join(fixtureDirectory, ".data")));
-    const requestedDelay = yield* Config.int(
+    const requestedDelay = yield* Config.Int(
       "MIGRATE_SQLITE_CATALOG_DELAY_MS"
     ).pipe(Config.withDefault(10));
 

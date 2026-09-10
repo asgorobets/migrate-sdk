@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { NodeSocketServer } from "@effect/platform-node";
 import { Effect, Layer, Schema } from "effect";
+import { NetAddress } from "effect/unstable/net";
 import type * as Rpc from "effect/unstable/rpc/Rpc";
 import type { Rpcs } from "effect/unstable/rpc/RpcGroup";
 import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
@@ -82,7 +83,7 @@ const publishWindowsDiscovery = ({
   Effect.gen(function* () {
     const socketServer = yield* SocketServer.SocketServer;
 
-    if (socketServer.address._tag !== "TcpAddress") {
+    if (!NetAddress.isInetAddress(socketServer.address)) {
       return yield* new LocalMigrateServerTransportError({
         message: "Windows Migrate Server requires a TCP listener",
       });

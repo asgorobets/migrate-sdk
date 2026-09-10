@@ -16,7 +16,7 @@ export class MigrateServerAccess extends Context.Service<
 >()("@migrate-sdk/examples/workflow-sdk/MigrateServerAccess") {
   static readonly layer = Layer.effect(
     MigrateServerAccess,
-    Config.string("MIGRATE_SERVER_TOKEN").pipe(
+    Config.String("MIGRATE_SERVER_TOKEN").pipe(
       Config.withDefault(""),
       Effect.map(makeMigrateServerAccess)
     )

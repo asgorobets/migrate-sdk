@@ -11,10 +11,10 @@ import { completedInlineExecution } from "./inline-execution.ts";
 
 /** A synthetic workload for comparing cursor windows and settlement concurrency. */
 export const runTelemetryExample = Effect.gen(function* () {
-  const batchSize = yield* Config.int("MIGRATE_DEMO_BATCH_SIZE").pipe(
+  const batchSize = yield* Config.Int("MIGRATE_DEMO_BATCH_SIZE").pipe(
     Config.withDefault(8)
   );
-  const concurrency = yield* Config.int("MIGRATE_DEMO_CONCURRENCY").pipe(
+  const concurrency = yield* Config.Int("MIGRATE_DEMO_CONCURRENCY").pipe(
     Config.withDefault(2)
   );
   const definition = MigrationDefinition.make({

@@ -14,7 +14,7 @@ export class DemoSetupAccess extends Context.Service<
 >()("@migrate-sdk/examples/workflow-sdk/DemoSetupAccess") {
   static readonly layer = Layer.effect(
     DemoSetupAccess,
-    Config.string("DEMO_SETUP_TOKEN").pipe(
+    Config.String("DEMO_SETUP_TOKEN").pipe(
       Config.withDefault(""),
       Effect.map(makeDemoSetupAccess)
     )

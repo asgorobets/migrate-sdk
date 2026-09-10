@@ -1,17 +1,16 @@
 import { createHash } from "node:crypto";
 import { Config, ConfigProvider, Effect, Schema } from "effect";
 
-const ResourceAttributes = Config.Record(
+const resourceAttributes = Config.Record(
   Schema.StringFromUriComponent,
-  Schema.StringFromUriComponent
-);
+  Schema.StringFromUriComponent,
+  "OTEL_RESOURCE_ATTRIBUTES"
+).pipe(Config.withDefault(undefined));
 
 const resourceServiceName = (environment: NodeJS.ProcessEnv) =>
-  environment.OTEL_RESOURCE_ATTRIBUTES === undefined
-    ? undefined
-    : Schema.decodeUnknownSync(ResourceAttributes)(
-        environment.OTEL_RESOURCE_ATTRIBUTES
-      )["service.name"];
+  Effect.runSync(
+    resourceAttributes.parse(ConfigProvider.fromUnknown(environment))
+  )?.["service.name"];
 
 /** Apply local tracing defaults without mutating the client's environment. */
 export const localTelemetryEnvironment = (
@@ -46,9 +45,9 @@ export const localTelemetryIdentity = (
     )
     .digest("hex");
 
-const traceEndpoint = Config.url("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").pipe(
+const traceEndpoint = Config.URL("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").pipe(
   Config.orElse(() =>
-    Config.url("OTEL_EXPORTER_OTLP_ENDPOINT").pipe(
+    Config.URL("OTEL_EXPORTER_OTLP_ENDPOINT").pipe(
       Config.map((url) => {
         const separator = url.pathname.endsWith("/") ? "" : "/";
         url.pathname += `${separator}v1/traces`;
@@ -61,12 +60,9 @@ const traceEndpoint = Config.url("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").pipe(
 
 // Match OtlpTracer.layerFromConfig using the same Effect configuration codecs.
 const traceConfiguration = Config.all({
-  disabled: Config.boolean("OTEL_SDK_DISABLED").pipe(Config.withDefault(false)),
+  disabled: Config.Boolean("OTEL_SDK_DISABLED").pipe(Config.withDefault(false)),
   endpoint: traceEndpoint,
-  exporters: Config.schema(
-    Config.Array(Schema.String),
-    "OTEL_TRACES_EXPORTER"
-  ).pipe(
+  exporters: Config.Array(Schema.String, "OTEL_TRACES_EXPORTER").pipe(
     Config.map((values) => values.map((value) => value.toLowerCase().trim())),
     Config.withDefault<readonly string[]>([])
   ),
