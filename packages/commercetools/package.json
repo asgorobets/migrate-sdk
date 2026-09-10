@@ -91,7 +91,7 @@
     "papaparse": "^5.5.3",
     "tsx": "^4.22.4",
     "typescript": "npm:@typescript/typescript6@6.0.2",
-    "vitest": "^4.1.8"
+    "vitest": "^5.0.0"
   },
   "dependencies": {
     "@commercetools/importapi-sdk": "^7.1.1",

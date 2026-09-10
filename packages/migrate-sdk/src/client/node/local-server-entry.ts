@@ -14,6 +14,7 @@ import {
   MigrateStreamingServerHandlers,
   makeRegistryMigrateServerBackend,
 } from "../../server/index.ts";
+import { migrationTelemetryLayer } from "../../telemetry.ts";
 import { waitForLocalMigrateServerIdle } from "./local-server-lifecycle.ts";
 import { runLocalMigrateServerTransport } from "./local-server-transport.ts";
 
@@ -156,4 +157,4 @@ const main = Effect.scoped(
   })
 );
 
-runMain(main);
+runMain(main.pipe(Effect.provide(migrationTelemetryLayer)));

@@ -157,6 +157,12 @@
       "source": "./src/stores/sql/index.ts",
       "import": "./dist/stores/sql/index.js"
     },
+    "./telemetry": {
+      "types": "./dist/telemetry.d.ts",
+      "bun": "./src/telemetry.ts",
+      "source": "./src/telemetry.ts",
+      "import": "./dist/telemetry.js"
+    },
     "./testing": {
       "types": "./dist/testing.d.ts",
       "bun": "./src/testing.ts",
@@ -177,6 +183,7 @@
     "dev:file-store": "pnpm run build && tsx examples/dev.ts file-store",
     "dev:nested-article": "pnpm run build && tsx examples/dev.ts nested-article",
     "demo:sqlite-catalog:setup": "tsx examples/sqlite-catalog/setup.ts",
+    "demo:telemetry": "tsx --conditions=source examples/dev.ts telemetry",
     "demo:sqlite-catalog:mutate": "tsx examples/sqlite-catalog/mutate.ts",
     "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
     "check-types": "tsc --noEmit -p tsconfig.check.json",
@@ -198,7 +205,7 @@
     "@types/proper-lockfile": "^4.1.4",
     "@typescript/native": "npm:typescript@7.0.2",
     "typescript": "npm:@typescript/typescript6@6.0.2",
-    "vitest": "^4.1.8"
+    "vitest": "^5.0.0"
   },
   "dependencies": {
     "@effect/platform-node": "catalog:",

@@ -353,7 +353,7 @@ The Effect schema used by a source to validate, decode, and infer source item pa
 The Effect codec used by a source to validate, encode, and decode source cursors.
 
 **Skip Item**:
-A typed process error that records a source item as skipped without invoking destination-side work.
+A successful Process Pipeline result with a reason that records a source item as skipped. Returning it before destination-side work prevents that work from running.
 
 **Migration Item Error**:
 A normalized error record stored for a failed migration item state.
@@ -616,8 +616,8 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Destination Stub** is incomplete and must be updated by a later migration run.
 - A **Needs Update** item state is not terminal and must be reprocessed even when source version is unchanged.
 - A **Destination** or legacy **Destination Plugin** may classify retryable errors, but the **Process Pipeline** selects where to apply a **Destination Retry Strategy**.
-- A **Process Pipeline** may fail with **Skip Item** to record a skipped **Migration Item State**.
-- Destination helpers and destination Effects are not invoked when a **Process Pipeline** fails with **Skip Item** before destination-side work.
+- A **Process Pipeline** may return **Skip Item** through the success channel to record a skipped **Migration Item State**. Normal completion returns void; actual failures use the error channel.
+- Destination helpers and destination Effects are not invoked when a **Process Pipeline** returns **Skip Item** before destination-side work.
 
 ## Example dialogue
 
@@ -634,7 +634,7 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - "migration state store" was considered, but rejected because the store contains item state, run state, and cursors, not a single kind of migration state.
 - "migration" was used for both configuration and execution — resolved: use **Migration Definition** for configuration and **Migration Run** for execution.
 - Pipeline splitting was considered as possible item fan-out — resolved: first version keeps migration items one-to-one; splitting means reshaping fields, not producing multiple destination items.
-- Separate item eligibility hooks were considered, but rejected for the first version; resolved: use **Skip Item** as a typed process error.
+- Separate item eligibility hooks were considered, but rejected; use **Skip Item** as a successful process result. It must be returned explicitly and does not automatically short-circuit nested callers.
 - "destination item" was used for pipeline output, but rejected because pipeline output may be an operation such as update, publish, or update-and-publish — resolved: use **Destination Command**.
 - Hashing the entire source item was considered as an identity strategy — resolved: content hashes are usually **Source Version**, not **Source Identity**.
 - "highwater mark" was used for incremental source selection — resolved: use **Source Cursor**.

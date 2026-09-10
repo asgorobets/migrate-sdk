@@ -103,6 +103,29 @@ MIGRATE_SERVER_TOKEN=secret pnpm exec migrate \
 Remote mode supports `list`, `graph`, `status`, `messages`, `unlock`, `run`,
 `rollback`, and `runs`. Migration Store schema administration remains local.
 
+## Skip an item intentionally
+
+Return `skipItem(reason)` from a process pipeline to save a skipped outcome.
+Normal completion returns `void`; actual failures use Effect's error channel.
+The SDK validates returned results, including from JavaScript configurations.
+Use `Effect.asVoid` to discard a destination helper's unrelated return value.
+
+```ts
+process: Effect.fn("articles.process")(function* (source) {
+  if (!source.item.publish) {
+    return skipItem("Article is not published");
+  }
+  yield* writeArticle(source.item);
+});
+```
+
+For a batch item, return `item.settle(Effect.succeed(skipItem(reason)))` as its
+settlement. A nested helper's skip result must be explicitly returned by its
+caller. Skipping does not undo any destination work already performed.
+
+This replaces `return yield* skipItem(...)` and `Effect.fail(skipItem(...))`.
+See [the skip-result decision](docs/adr/0010-successful-skip-results.md).
+
 ## Full and incremental source discovery
 
 Sources default to full discovery. Cursors let interrupted runs resume, but a
@@ -169,6 +192,9 @@ pnpm validate-packages
 
 Run `pnpm dev` to start the local apps. The documentation site lives in
 [`apps/docs`](./apps/docs).
+
+To inspect scanning, batch processing, and wait times, follow the
+[OpenTelemetry exporter configuration and tracing guide](./docs/telemetry.md).
 
 ## Status
 

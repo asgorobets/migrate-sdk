@@ -7,7 +7,7 @@ import {
   type SourceRuntime as SourceRuntimeService,
 } from "../services/source.ts";
 import type { Tracking } from "../services/tracking.ts";
-import type { MigrationStoreError, SkipItem, SourceError } from "./errors.ts";
+import type { MigrationStoreError, SourceError } from "./errors.ts";
 import type {
   MigrationExecutionOptions,
   NormalizedMigrationExecutionOptions,
@@ -30,6 +30,7 @@ import {
   type SourceVersionContractFingerprint,
 } from "./migration-contract.ts";
 import type { ProcessContext } from "./pipeline.ts";
+import type { ProcessResult } from "./process-result.ts";
 import type { RollbackPipeline } from "./rollback.ts";
 import type { SourceItem, SourceItemInput } from "./source.ts";
 import type { MigrationItemStateForTrackingContract } from "./state.ts";
@@ -531,11 +532,13 @@ export type ProcessPipeline<
 > = (
   source: SourceItem<Payload, IdentityKey>,
   context: ProcessContext<TrackingContract>
-) => void | Effect.Effect<
-  void,
-  ProcessError | SkipItem,
-  MigrationReferenceLookup | Tracking
->;
+) =>
+  | ProcessResult
+  | Effect.Effect<
+      ProcessResult,
+      ProcessError,
+      MigrationReferenceLookup | Tracking
+    >;
 
 export type ProcessPipelineFor<
   SourceDefinition extends AnyConfiguredSource,
@@ -575,8 +578,8 @@ export interface ProcessBatchItem<
   readonly context: ProcessContext<TrackingContract>;
   readonly settle: (
     effect: Effect.Effect<
-      void,
-      ProcessError | SkipItem,
+      ProcessResult,
+      ProcessError,
       MigrationReferenceLookup | Tracking
     >
   ) => ProcessBatchSettlement;
@@ -631,7 +634,7 @@ export interface DestinationStubContext {
 export type DestinationStubPipeline<PipelineError = never> = (
   input: DestinationStubInput,
   context: DestinationStubContext
-) => void | Effect.Effect<void, PipelineError | SkipItem, Tracking>;
+) => ProcessResult | Effect.Effect<ProcessResult, PipelineError, Tracking>;
 
 export interface MigrationDefinitionCommon<
   Payload,

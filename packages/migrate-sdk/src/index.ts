@@ -38,17 +38,17 @@ export {
 
 export {
   DestinationError,
-  makeSkipItem,
   MigrationReferenceLookupError,
   MigrationRuntimeError,
   MigrationStoreError,
   ProcessBatchContractError,
   RollbackPreflightError,
   RollbackRequestError,
-  skipItem,
-  SkipItem,
   SourceError,
 } from "./domain/errors.ts";
+
+export { makeSkipItem, skipItem, SkipItem } from "./domain/process-result.ts";
+export type { ProcessResult } from "./domain/process-result.ts";
 
 export type {
   MigrationExecutionOptions,

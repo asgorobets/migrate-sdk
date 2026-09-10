@@ -25,7 +25,7 @@ Serializable `MigrationSpec` documents are reserved for future YAML, database, U
 
 Destination behavior is represented as destination-specific commands rather than generic core `create` or `update` operations. This lets plugins model operations such as upsert, update, publish, update-and-publish, or future stubbing without forcing every destination system into the same lifecycle.
 
-Public and persisted data uses domain-friendly discriminators such as `kind` and `status`, not Effect's internal `_tag` convention. Effect `_tag` remains appropriate for Effect-native typed errors such as `SkipItem`, where APIs like `Effect.catchTag` provide useful ergonomics. Public examples should use helpers such as `skipItem(...)` so users do not author `_tag` directly.
+Public and persisted data uses domain-friendly discriminators such as `kind` and `status`, not Effect's internal `_tag` convention. Effect `_tag` remains appropriate for typed failures handled with `Effect.catchTag`. Intentional skips are successful results with `kind: "skipped"`, constructed with `skipItem(reason)` and returned explicitly from the pipeline. This replaces the earlier typed-error representation of `SkipItem`, which caused normal skips to appear as failures in tracing. See [ADR-0010](0010-successful-skip-results.md).
 
 The migration store owns durable item state, run state, source cursors, and migration definition locks. Source and destination plugins do not own migration progress.
 

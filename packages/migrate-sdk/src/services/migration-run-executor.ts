@@ -6,7 +6,6 @@ import {
   Effect,
   Exit,
   Layer,
-  Predicate,
   Ref,
   Schema,
 } from "effect";
@@ -24,7 +23,6 @@ import {
   type ProcessBatchContractError,
   RollbackPreflightError,
   RollbackRequestError,
-  type SkipItem,
   SourceError,
 } from "../domain/errors.ts";
 import {
@@ -43,6 +41,10 @@ import type {
 } from "../domain/ids.ts";
 import { SourceIdentity, toEncodedSourceCursor } from "../domain/ids.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
+import {
+  type ProcessResult,
+  ProcessResultSchema,
+} from "../domain/process-result.ts";
 import type {
   MigrationDefinitionExecutableRollbackPlan,
   MigrationDefinitionExecutableRunPlan,
@@ -1013,6 +1015,7 @@ const executeMigrationRun = <A, E, R = never>(
       lease?.runId ??
       ("runId" in options ? options.runId : undefined) ??
       (yield* store.createRunId);
+    yield* Effect.annotateCurrentSpan("migration.run.id", runId);
     let runStatePersisted = preparedInlineRun;
     const acquireLocks = (() => {
       if (lease === undefined) {
@@ -1200,8 +1203,13 @@ const executeMigrationRun = <A, E, R = never>(
       (locks, exit) => releaseDefinitionLocks(store, locks, exit)
     );
 
+    yield* Effect.annotateCurrentSpan("migration.run.status", execution.status);
     return execution;
-  });
+  }).pipe(
+    Effect.withSpan("migration.run", {
+      attributes: { "migration.definition.count": definitionIds.length },
+    })
+  );
 
 const encodeSourceCursor = <Cursor>(
   cursorSchema: Schema.Codec<Cursor, unknown, never, never>,
@@ -1535,9 +1543,6 @@ const missingTrackingRecordContractError = (
     cause: { definitionId },
   });
 
-const isSkipItem = (error: unknown): error is SkipItem =>
-  Predicate.isTagged(error, "SkipItem");
-
 const makeFailedStubReferenceState = ({
   definitionId,
   error,
@@ -1679,31 +1684,27 @@ const executeTrackingStub = (
           }
         ),
       catch: (error) =>
-        isSkipItem(error)
-          ? error
-          : new MigrationReferenceLookupError({
-              message: "Migration Reference Stub creation threw",
-              cause: error,
-            }),
+        new MigrationReferenceLookupError({
+          message: "Migration Reference Stub creation threw",
+          cause: error,
+        }),
     }).pipe(
-      Effect.flatMap((voidOrEffect) =>
-        Effect.isEffect(voidOrEffect)
-          ? (voidOrEffect as Effect.Effect<void, unknown, Tracking>)
-          : Effect.void
+      Effect.flatMap((result) =>
+        Effect.isEffect(result)
+          ? (result as Effect.Effect<ProcessResult, unknown, Tracking>)
+          : Effect.succeed(result)
       ),
       Effect.provide(Layer.succeed(Tracking, tracking.service)),
-      Effect.as({ kind: "succeeded" as const }),
-      Effect.catchIf(isSkipItem, (error) =>
-        Effect.succeed({
-          kind: "failed" as const,
-          error: normalizeItemError(
-            "process",
-            new MigrationReferenceLookupError({
-              message: "Migration Reference Stub creation skipped",
-              cause: error,
-            })
-          ),
-        })
+      Effect.flatMap(Schema.decodeUnknownEffect(ProcessResultSchema)),
+      Effect.flatMap((result) =>
+        result?.kind === "skipped"
+          ? Effect.fail(
+              new MigrationReferenceLookupError({
+                message: "Migration Reference Stub creation skipped",
+                cause: result,
+              })
+            )
+          : Effect.succeed({ kind: "succeeded" as const })
       ),
       Effect.catch((error) =>
         Effect.succeed({
@@ -2297,13 +2298,15 @@ const processTargetedSourceIdentities = <
                 cause,
               }),
           }).pipe(
-            Effect.flatMap((identity) => source.readByIdentity(identity))
+            Effect.flatMap((identity) => source.readByIdentity(identity)),
+            Effect.withSpan("migration.source.lookup.attempt")
           );
           const readByIdentityWithRetry =
             definition.sourceLookupRetry === undefined
               ? readByIdentity
               : definition.sourceLookupRetry(readByIdentity);
           const lookup = yield* readByIdentityWithRetry.pipe(
+            Effect.withSpan("migration.source.lookup"),
             Effect.map((sourceItem) =>
               sourceItem === null
                 ? ({
@@ -2410,7 +2413,15 @@ const processTargetedSourceIdentities = <
       completed: true,
       sourceIdentities,
     };
-  });
+  }).pipe(
+    Effect.withSpan("migration.source.targeted", {
+      attributes: {
+        "migration.run.id": runId,
+        "migration.definition.id": definition.id,
+        "migration.process.concurrency": processConcurrency,
+      },
+    })
+  );
 
 interface ProcessCursorDiscoveryOptions<
   Source,
@@ -2487,12 +2498,20 @@ const processNextCursorWindow = <
       storedCursor === null
         ? null
         : yield* decodeSourceCursor(source.cursorSchema, storedCursor);
-    const read = source.read(cursor);
+    const read = source
+      .read(cursor)
+      .pipe(Effect.withSpan("migration.source.read.attempt"));
     const readWithRetry =
       definition.sourceCursorRetry === undefined
         ? read
         : definition.sourceCursorRetry(read);
-    const readResult = yield* readWithRetry;
+    const readResult = yield* readWithRetry.pipe(
+      Effect.withSpan("migration.source.read")
+    );
+    yield* Effect.annotateCurrentSpan(
+      "migration.source.items_read",
+      readResult.items.length
+    );
 
     if (sourceInventoryRunId !== undefined) {
       yield* Effect.forEach(
@@ -2596,7 +2615,9 @@ const processNextCursorWindow = <
       source.cursorSchema,
       readResult.nextCursor
     );
-    yield* store.setSourceCursor(definition.id, encodedCursor);
+    yield* store
+      .setSourceCursor(definition.id, encodedCursor)
+      .pipe(Effect.withSpan("migration.source.cursor.commit"));
 
     yield* MigrationProgress.emit({
       counts: snapshotCounts(counts),
@@ -2610,7 +2631,15 @@ const processNextCursorWindow = <
       kind: "continue" as const,
       committedCursor: readResult.nextCursor,
     };
-  });
+  }).pipe(
+    Effect.withSpan("migration.source.window", {
+      attributes: {
+        "migration.run.id": runId,
+        "migration.definition.id": definition.id,
+        "migration.process.concurrency": processConcurrency,
+      },
+    })
+  );
 
 const processCursorDiscovery = <
   Source,
@@ -3244,7 +3273,22 @@ const runMigrationDefinition = <
   const dependencyLayer = Layer.mergeAll(storeLayer, lookupLayer);
   const layer = sourceLayer.pipe(Layer.provideMerge(dependencyLayer));
 
-  return program.pipe(Effect.provide(layer));
+  return program.pipe(
+    Effect.provide(layer),
+    Effect.tap((summary) =>
+      Effect.annotateCurrentSpan(
+        "migration.definition.status",
+        summary?.status ?? "cancelled"
+      )
+    ),
+    Effect.withSpan("migration.definition", {
+      attributes: {
+        "migration.run.id": runId,
+        "migration.definition.id": definition.id,
+        "migration.run.mode": mode.kind,
+      },
+    })
+  );
 };
 
 const runMigrationDefinitionCursorWindow = <

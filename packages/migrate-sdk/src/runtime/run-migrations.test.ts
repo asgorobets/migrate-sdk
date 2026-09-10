@@ -52,6 +52,7 @@ import {
   ProcessBatchContractError,
   type ProcessBatchPipelineFor,
   type ProcessBatchSettlement,
+  type ProcessResult,
   type RollbackContext,
   RollbackPreflightError,
   RollbackProgress,
@@ -331,7 +332,7 @@ interface PipelineFailureTestError {
 }
 
 interface StructuralSkipItem {
-  readonly _tag: "SkipItem";
+  readonly kind: "skipped";
   readonly reason: string;
 }
 
@@ -1481,7 +1482,7 @@ describe("runInlineDefinition", () => {
             Tracking.logDiagnostic({
               severity: "fatal" as never,
               message: "Invalid diagnostic severity",
-            }),
+            }).pipe(Effect.asVoid),
         });
 
         const summary = yield* runInlineDefinition(definition);
@@ -1526,7 +1527,7 @@ describe("runInlineDefinition", () => {
           process: () =>
             Tracking.logDiagnostic({
               message: "Missing diagnostic severity",
-            } as never),
+            } as never).pipe(Effect.asVoid),
         });
 
         const summary = yield* runInlineDefinition(definition);
@@ -1682,9 +1683,11 @@ describe("runInlineDefinition", () => {
           }),
           store: InMemoryMigrationStore.layer(storeState),
           process: (source) =>
-            destination.entries.upsert({
-              title: source.item.title,
-            }),
+            destination.entries
+              .upsert({
+                title: source.item.title,
+              })
+              .pipe(Effect.asVoid),
         });
 
         const summary = yield* runInlineDefinition(definition);
@@ -1741,7 +1744,7 @@ describe("runInlineDefinition", () => {
               yield* destination.entries.upsert({
                 title: source.item.title,
               });
-              return yield* skipItem("No longer eligible");
+              return skipItem("No longer eligible");
             }),
         });
 
@@ -1799,9 +1802,11 @@ describe("runInlineDefinition", () => {
           }),
           store: InMemoryMigrationStore.layer(storeState),
           process: (source) =>
-            destination.entries.upsert({
-              title: source.item.title,
-            }),
+            destination.entries
+              .upsert({
+                title: source.item.title,
+              })
+              .pipe(Effect.asVoid),
         });
 
         const summary = yield* runInlineDefinition(definition);
@@ -2014,7 +2019,7 @@ describe("runInlineDefinition", () => {
           process: () =>
             Tracking.recordChange(malformedChange, {
               id: 123,
-            } as never),
+            } as never).pipe(Effect.asVoid),
         });
 
         const summary = yield* runInlineDefinition(definition);
@@ -2127,7 +2132,7 @@ describe("runInlineDefinition", () => {
           ],
         }),
         store: InMemoryMigrationStore.layer(storeState),
-        process: () => Effect.fail(skipItem("Not ready")),
+        process: () => Effect.succeed(skipItem("Not ready")),
       });
 
       const summary = yield* runInlineDefinition(definition);
@@ -3955,6 +3960,91 @@ describe("runInlineDefinition", () => {
       })
   );
 
+  for (const testCase of [
+    {
+      name: "a valid skip",
+      result: skipItem("Author cannot be created"),
+      error: { message: "Migration Reference Stub creation skipped" },
+    },
+    {
+      name: "an invalid skip reason",
+      result: { kind: "skipped", reason: 123 } as unknown as ProcessResult,
+      error: { errorTag: "SchemaError" },
+    },
+    {
+      name: "a missing skip reason",
+      result: { kind: "skipped" } as unknown as ProcessResult,
+      error: { errorTag: "SchemaError" },
+    },
+  ]) {
+    it.effect(
+      `treats ${testCase.name} from a required reference stub as a reference failure`,
+      () =>
+        Effect.gen(function* () {
+          const state = InMemoryMigrationStore.makeState();
+          const store = InMemoryMigrationStore.layer(state);
+          const authors = MigrationDefinition.make({
+            id: "authors",
+            source: makeTestInMemorySource({ items: [] }),
+            store,
+            tracking: Tracking.record({
+              id: "author-entry@v1",
+              schema: ArticleTrackingRecord,
+            }),
+            stub: () => testCase.result,
+            process: () => Effect.void,
+          });
+          let wroteArticle = false;
+          const articles = MigrationDefinition.make({
+            id: "articles",
+            source: makeTestInMemorySource({
+              items: [
+                {
+                  identityKey: "article-1",
+                  item: { title: "Needs author" },
+                  version: "v1",
+                },
+              ],
+            }),
+            store,
+            process: () =>
+              Effect.gen(function* () {
+                const references = yield* MigrationReferenceLookup;
+                yield* references.lookup({
+                  definition: authors,
+                  sourceIdentityKey: "author-1",
+                  stub: true,
+                });
+                wroteArticle = true;
+              }),
+          });
+          const summary = yield* runInlineRegistry({
+            definitions: [articles, authors],
+            definitionIds: ["articles"],
+            withDependencies: true,
+          });
+          expect(summary.status).toBe("failed");
+          expect(wroteArticle).toBe(false);
+          expect(
+            state.itemStates.get(
+              InMemoryMigrationStore.itemStateKey("articles", "article-1")
+            )
+          ).toMatchObject({
+            status: "failed",
+            error: { errorTag: "MigrationReferenceLookupError" },
+          });
+          expect(
+            state.itemStates.get(
+              InMemoryMigrationStore.itemStateKey("authors", "author-1")
+            )
+          ).toMatchObject({
+            status: "failed",
+            error: testCase.error,
+          });
+        })
+    );
+  }
+
   it.effect(
     "creates reference stubs with destination work for record-backed Process definitions",
     () =>
@@ -4396,9 +4486,9 @@ describe("runInlineDefinition", () => {
           }),
           store: InMemoryMigrationStore.layer(storeState),
           process: (source) =>
-            Effect.gen(function* () {
+            Effect.sync(() => {
               if (!source.item.publish) {
-                return yield* skipItem("Article is not published");
+                return skipItem("Article is not published");
               }
 
               processCalls.push(source.identity.encoded);
@@ -4432,7 +4522,70 @@ describe("runInlineDefinition", () => {
       })
   );
 
-  it.effect("recognizes structurally tagged Skip Item errors", () =>
+  for (const mode of ["sync", "effect", "batch"] as const) {
+    it.effect(
+      `rejects malformed successful results from ${mode} pipelines`,
+      () =>
+        Effect.gen(function* () {
+          for (const invalid of [
+            { kind: "skipped", reason: 123 },
+            { kind: "skipped" },
+            { kind: "skippedd", reason: "typo" },
+            null,
+            { destinationId: "unexpected return value" },
+          ]) {
+            // Simulate a JavaScript callback that bypasses the TypeScript contract.
+            const result = invalid as unknown as ProcessResult;
+            const state = InMemoryMigrationStore.makeState();
+            const common = {
+              id: "articles",
+              source: makeTestInMemorySource({
+                items: [
+                  {
+                    identityKey: "article-1",
+                    version: "v1",
+                    item: { title: "Invalid result" },
+                  },
+                ],
+              }),
+              store: InMemoryMigrationStore.layer(state),
+            };
+            const definition =
+              mode === "batch"
+                ? MigrationDefinition.make({
+                    ...common,
+                    processBatch: (items) =>
+                      items.map((item) => item.settle(Effect.succeed(result))),
+                  })
+                : MigrationDefinition.make({
+                    ...common,
+                    process: () =>
+                      mode === "sync" ? result : Effect.succeed(result),
+                  });
+            const summary = yield* runInlineDefinition(definition);
+            expect(summary.status).toBe("failed");
+            expect(summary.definitions[0]?.counts).toMatchObject({
+              failed: 1,
+              skipped: 0,
+              migrated: 0,
+            });
+            const item = state.itemStates.get(
+              InMemoryMigrationStore.itemStateKey("articles", "article-1")
+            );
+            expect(item).toMatchObject({
+              status: "failed",
+              error: { errorTag: "SchemaError" },
+            });
+            expect(item).not.toHaveProperty("skipReason");
+            expect(() =>
+              Schema.decodeUnknownSync(MigrationItemState)(item)
+            ).not.toThrow();
+          }
+        })
+    );
+  }
+
+  it.effect("recognizes structural Skip Item success results", () =>
     Effect.gen(function* () {
       const storeState = InMemoryMigrationStore.makeState();
 
@@ -4448,9 +4601,9 @@ describe("runInlineDefinition", () => {
           ],
         }),
         store: InMemoryMigrationStore.layer(storeState),
-        process: (): Effect.Effect<void, StructuralSkipItem> =>
-          Effect.fail({
-            _tag: "SkipItem",
+        process: (): Effect.Effect<StructuralSkipItem> =>
+          Effect.succeed({
+            kind: "skipped",
             reason: "Structurally tagged skip",
           }),
       });
@@ -7680,11 +7833,11 @@ describe("runInlineDefinition", () => {
         }),
         store: InMemoryMigrationStore.layer(storeState),
         process: (source) =>
-          Effect.gen(function* () {
+          Effect.sync(() => {
             pipelineCalls.push(source.identity.encoded);
 
             if (source.identity.encoded === "article-2") {
-              return yield* skipItem("Still skipped");
+              return skipItem("Still skipped");
             }
           }),
       });

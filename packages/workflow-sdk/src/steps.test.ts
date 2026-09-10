@@ -100,7 +100,7 @@ const makeFixture = (
       case "failed":
         return yield* new MigrationRuntimeError({ message: "Rejected" });
       case "skipped":
-        return yield* skipItem("Not ready");
+        return skipItem("Not ready");
       default:
         return yield* Tracking.setRecord({ id: `destination-${id}` });
     }

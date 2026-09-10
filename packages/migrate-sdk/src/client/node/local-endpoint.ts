@@ -154,6 +154,7 @@ export interface LocalMigrateServerEndpointInput {
   readonly buildId?: string;
   readonly configPath?: string;
   readonly cwd: string;
+  readonly telemetryIdentity?: string;
 }
 
 export interface LocalMigrateServerEndpointEnvironment {
@@ -278,7 +279,12 @@ export const settleLocalMigrateServerEndpointClaim = (
 };
 
 export const makeLocalMigrateServerEndpoint = (
-  { buildId, configPath, cwd }: LocalMigrateServerEndpointInput,
+  {
+    buildId,
+    configPath,
+    cwd,
+    telemetryIdentity,
+  }: LocalMigrateServerEndpointInput,
   environment: LocalMigrateServerEndpointEnvironment
 ): string => {
   const identity = JSON.stringify({
@@ -287,6 +293,7 @@ export const makeLocalMigrateServerEndpoint = (
     cwd: resolve(cwd),
     sdkVersion: environment.sdkVersion,
     serverIdentity: environment.serverIdentity,
+    telemetryIdentity,
   });
   const digest = createHash("sha256")
     .update(identity)

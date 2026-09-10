@@ -30,9 +30,15 @@ import {
   readLocalMigrateServerPosixEndpointIdentity,
   removeLocalMigrateServerEndpoint,
 } from "./local-endpoint.ts";
+import {
+  localTelemetryEnvironment,
+  localTelemetryIdentity,
+  localTelemetryMessage,
+} from "./local-telemetry.ts";
 
 const defaultStartupTimeoutMs = 15_000;
 const windowsHandshakeTimeoutMs = 3000;
+const announcedTelemetryEndpoints = new Set<string>();
 
 export interface LocalMigrateConnectionInput {
   /**
@@ -44,6 +50,8 @@ export interface LocalMigrateConnectionInput {
   readonly configPath?: string;
   readonly cwd: string;
   readonly nodeExecutable?: string;
+  /** Enable local OTLP/HTTP tracing with defaults overridden by OTEL_* variables. */
+  readonly otel?: boolean;
 }
 
 export interface LocalMigrateServerBootstrapOptions {
@@ -216,7 +224,7 @@ const localEndpointTarget = (endpoint: string): LocalEndpointTarget => {
 };
 
 export const localMigrateServerEndpoint = (
-  { buildId, configPath, cwd }: LocalMigrateConnectionInput,
+  { buildId, configPath, cwd, otel }: LocalMigrateConnectionInput,
   options: Pick<LocalMigrateServerBootstrapOptions, "serverIdentity"> = {}
 ): string => {
   const user = typeof process.getuid === "function" ? process.getuid() : "user";
@@ -230,6 +238,13 @@ export const localMigrateServerEndpoint = (
       ...(buildId === undefined ? {} : { buildId }),
       ...(configPath === undefined ? {} : { configPath }),
       cwd,
+      ...(otel
+        ? {
+            telemetryIdentity: localTelemetryIdentity(
+              localTelemetryEnvironment(process.env)
+            ),
+          }
+        : {}),
     },
     {
       platform: process.platform,
@@ -431,6 +446,7 @@ const connectPersistentMigrateServer = async (
     configPath,
     cwd,
     nodeExecutable = "node",
+    otel,
   }: LocalMigrateConnectionInput,
   {
     serverIdentity,
@@ -443,11 +459,20 @@ const connectPersistentMigrateServer = async (
       ...(buildId === undefined ? {} : { buildId }),
       ...(configPath === undefined ? {} : { configPath }),
       cwd,
+      ...(otel ? { otel } : {}),
     },
     {
       ...(serverIdentity === undefined ? {} : { serverIdentity }),
     }
   );
+
+  const environment = otel
+    ? localTelemetryEnvironment(process.env)
+    : process.env;
+  if (otel && !announcedTelemetryEndpoints.has(endpointPath)) {
+    process.stderr.write(`${localTelemetryMessage(environment)}\n`);
+    announcedTelemetryEndpoints.add(endpointPath);
+  }
 
   try {
     return await connectEndpoint(endpointPath);
@@ -471,7 +496,7 @@ const connectPersistentMigrateServer = async (
     {
       cwd,
       detached: true,
-      env: process.env,
+      env: environment,
       stdio: "ignore",
     }
   );

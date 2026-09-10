@@ -72,18 +72,25 @@ import {
   type MigrationRunObservationInterruptDecision,
 } from "./runtime.ts";
 
-const config = Flag.string("config").pipe(
+const config = Flag.String("config").pipe(
   Flag.optional,
   Flag.withDescription("Path to a migrate.config.ts, .mts, .js, or .mjs file")
 );
 
-const server = Flag.string("server").pipe(
+const server = Flag.String("server").pipe(
   Flag.optional,
   Flag.withDescription("URL of a remote Migrate Server")
 );
 
+const otel = Flag.Boolean("otel").pipe(
+  Flag.withDefault(false),
+  Flag.withDescription(
+    "Enable local OpenTelemetry traces (localhost:4318; customize with OTEL_* variables)"
+  )
+);
+
 const migrateBaseCommand = Command.make("migrate").pipe(
-  Command.withSharedFlags({ config, server })
+  Command.withSharedFlags({ config, otel, server })
 );
 
 const useColor = Effect.map(
@@ -233,6 +240,9 @@ const acquireCliMigrateConnection = (
     } else if (configPath !== undefined) {
       sharedFlags = ` --config ${quoteCliArgument(configPath, commandShell)}`;
     }
+    if (root.otel) {
+      sharedFlags += " --otel";
+    }
 
     const observeAgain = (runId: string) =>
       `migrate${sharedFlags} runs observe ${quoteCliArgument(runId, commandShell)}`;
@@ -253,6 +263,12 @@ const acquireCliMigrateConnection = (
       );
     }
 
+    if (root.otel && serverUrl !== undefined) {
+      return yield* failReportedCliMessage(
+        "--otel configures local execution; configure OTEL_* on the remote Migrate Server instead"
+      );
+    }
+
     const connection = yield* runtime
       .connectMigrateServer(
         serverUrl === undefined
@@ -263,6 +279,7 @@ const acquireCliMigrateConnection = (
                 : { buildId: runtime.migrateServerBuildId }),
               ...(configPath === undefined ? {} : { configPath }),
               cwd: runtime.cwd,
+              ...(root.otel ? { otel: true } : {}),
             }
           : {
               kind: "remote",
@@ -342,7 +359,7 @@ const withCliRegistryOperations = <A, Error, Requirements>(
   Effect.gen(function* () {
     const root = yield* migrateBaseCommand;
 
-    if (Option.isSome(root.server)) {
+    if (Option.isSome(root.server) || root.otel) {
       return yield* withCliMigrateConnection(({ connection }) =>
         use(makeRemoteMigrationCliRegistryOperations(connection))
       );
@@ -384,17 +401,17 @@ const withConfiguredSqlStore = <A, Error>(
     );
   });
 
-const schemaJson = Flag.boolean("json").pipe(
+const schemaJson = Flag.Boolean("json").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Print the schema plan as JSON")
 );
 
-const messagesJson = Flag.boolean("json").pipe(
+const messagesJson = Flag.Boolean("json").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Print Migration Messages as JSON")
 );
 
-const acceptSchemaPlan = Flag.string("accept-plan").pipe(
+const acceptSchemaPlan = Flag.String("accept-plan").pipe(
   Flag.optional,
   Flag.withDescription(
     "Apply only when the current schema plan has this exact plan ID"
@@ -524,7 +541,7 @@ const listCommand = Command.make("list", {}, () =>
   )
 ).pipe(Command.withDescription("List registered Migration Definitions"));
 
-const graphDefinition = Argument.string("definition").pipe(Argument.optional);
+const graphDefinition = Argument.String("definition").pipe(Argument.optional);
 
 const graphCommand = Command.make(
   "graph",
@@ -557,43 +574,47 @@ const graphCommand = Command.make(
     )
 ).pipe(Command.withDescription("Inspect Migration Definition dependencies"));
 
-const plan = Flag.boolean("plan").pipe(
+const plan = Flag.Boolean("plan").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Print the execution plan without running migrations")
 );
 
-const progress = Flag.choice("progress", ["auto", "log", "none"] as const).pipe(
+const progress = Flag.Literals("progress", [
+  "auto",
+  "log",
+  "none",
+] as const).pipe(
   Flag.withDefault<CliProgressMode>("auto"),
   Flag.withDescription("Render live progress: auto, log, or none")
 );
 
-const all = Flag.boolean("all").pipe(
+const all = Flag.Boolean("all").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Select every registered Migration Definition")
 );
 
-const group = Flag.string("group").pipe(
+const group = Flag.String("group").pipe(
   Flag.optional,
   Flag.withDescription("Select a Migration Definition group")
 );
 
-const withDependencies = Flag.boolean("with-dependencies").pipe(
+const withDependencies = Flag.Boolean("with-dependencies").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Expand required Migration Definition dependencies")
 );
 
-const scanSource = Flag.boolean("scan-source").pipe(
+const scanSource = Flag.Boolean("scan-source").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Scan source inventory while reading status")
 );
 
-const statusConcurrency = Flag.integer("concurrency").pipe(
+const statusConcurrency = Flag.Int("concurrency").pipe(
   Flag.optional,
   Flag.withAlias("c"),
   Flag.withDescription("Maximum concurrent source scans")
 );
 
-const processConcurrency = Flag.string("concurrency").pipe(
+const processConcurrency = Flag.String("concurrency").pipe(
   Flag.optional,
   Flag.withAlias("c"),
   Flag.withDescription(
@@ -601,7 +622,7 @@ const processConcurrency = Flag.string("concurrency").pipe(
   )
 );
 
-const rollbackConcurrency = Flag.string("concurrency").pipe(
+const rollbackConcurrency = Flag.String("concurrency").pipe(
   Flag.optional,
   Flag.withAlias("c"),
   Flag.withDescription(
@@ -609,45 +630,45 @@ const rollbackConcurrency = Flag.string("concurrency").pipe(
   )
 );
 
-const failed = Flag.boolean("failed").pipe(
+const failed = Flag.Boolean("failed").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Plan a rerun of failed items")
 );
 
-const skipped = Flag.boolean("skipped").pipe(
+const skipped = Flag.Boolean("skipped").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Plan a rerun of skipped items")
 );
 
-const rescan = Flag.boolean("rescan").pipe(
+const rescan = Flag.Boolean("rescan").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Reset the Source Cursor and scan from the beginning")
 );
 
-const rollbackOrphans = Flag.boolean("rollback-orphans").pipe(
+const rollbackOrphans = Flag.Boolean("rollback-orphans").pipe(
   Flag.withDefault(false),
   Flag.withDescription(
     "Rollback Migration Item States absent from a completed source scan"
   )
 );
 
-const update = Flag.boolean("update").pipe(
+const update = Flag.Boolean("update").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Plan an update run")
 );
 
-const force = Flag.boolean("force").pipe(
+const force = Flag.Boolean("force").pipe(
   Flag.withDefault(false),
   Flag.withDescription("Bypass Migration Definition dependency preflight")
 );
 
-const id = Flag.string("id").pipe(
+const id = Flag.String("id").pipe(
   Flag.atMost(Number.MAX_SAFE_INTEGER),
   Flag.optional,
   Flag.withDescription("Repeatable source identity target")
 );
 
-const runDefinitions = Argument.string("definition").pipe(Argument.variadic());
+const runDefinitions = Argument.String("definition").pipe(Argument.variadic());
 
 const decodeSourceIdentityTarget = (
   segment: string
@@ -905,7 +926,7 @@ const messagesCommand = Command.make(
     )
 ).pipe(Command.withDescription("Inspect durable Migration Messages"));
 
-const unlockDefinition = Argument.string("definition").pipe(
+const unlockDefinition = Argument.String("definition").pipe(
   Argument.withDescription(
     "Migration Definition id whose lock should be cleared"
   )
@@ -945,7 +966,7 @@ const unlockCommand = Command.make(
     )
 ).pipe(Command.withDescription("Break a Migration Definition lock"));
 
-const runIdArgument = Argument.string("run-id").pipe(
+const runIdArgument = Argument.String("run-id").pipe(
   Argument.withDescription("Migration Run id")
 );
 

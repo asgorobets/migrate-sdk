@@ -36,6 +36,7 @@ const main = async () => {
             ? {}
             : { configPath: parsed.configPath }),
           cwd: process.cwd(),
+          ...(parsed.otel ? { otel: true } : {}),
         }
       : {
           server: {

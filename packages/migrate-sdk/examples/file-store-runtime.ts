@@ -92,7 +92,7 @@ export const makeFileStoreArticlesMigration = ({
     id: definitionId,
     process: Effect.fn("fileStoreArticles.process")(function* (source) {
       if (!source.item.publish) {
-        return yield* skipItem("Article is not published");
+        return skipItem("Article is not published");
       }
 
       processedEntries.push({

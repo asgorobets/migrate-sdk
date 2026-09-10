@@ -803,7 +803,8 @@ export const prepareSqlMigrationStore = (options: {
 > =>
   Effect.gen(function* () {
     const context = yield* makeContext(options.tablePrefix);
-    yield* assertTransactionSupport(context.sql);
+    // Opening a current store must not take a write lock during observation.
+    // Transaction support is checked when applying a schema plan.
     const plan = yield* planSqlMigrationStoreSchemaWithContext(context);
 
     if (plan.status === "not-installed" && options.initialize !== false) {

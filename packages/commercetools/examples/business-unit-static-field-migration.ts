@@ -41,7 +41,7 @@ export const makeBusinessUnitStaticFieldMigration = (
         const contactEmail = businessUnit.contactEmail;
 
         if (contactEmail === undefined) {
-          return yield* skipItem(
+          return skipItem(
             `Business Unit ${businessUnit.key} does not have a contactEmail to set back`
           );
         }

@@ -24,6 +24,8 @@ import {
   MigrationRollbackExecutor,
   MigrationRunStepExecutor,
 } from "migrate-sdk/core";
+import { migrationTelemetryLayer } from "migrate-sdk/telemetry";
+import { getStepMetadata, getWorkflowMetadata } from "workflow";
 import { catalogRegistry } from "./catalog";
 import { migrationStore } from "./database";
 
@@ -43,15 +45,46 @@ const runEffect = <A, E>(
     | MigrationDefinitionRegistryCatalog
     | MigrationRollbackExecutor
     | MigrationRunStepExecutor
-  >
-) => Effect.runPromise(effect.pipe(Effect.provide(RuntimeLive)));
+  >,
+  name: string,
+  envelope:
+    | WorkflowSdkMigrationRunEnvelope
+    | WorkflowSdkMigrationRollbackEnvelope,
+  definitionId?: string
+) => {
+  const step = getStepMetadata();
+  const workflow = getWorkflowMetadata();
+  return Effect.runPromise(
+    effect.pipe(
+      Effect.provide(RuntimeLive),
+      Effect.withSpan(`workflow.step.${name}`, {
+        attributes: {
+          "migration.run.id": envelope.runId,
+          ...(definitionId === undefined
+            ? {}
+            : { "migration.definition.id": definitionId }),
+          "workflow.run.id": workflow.workflowRunId,
+          "workflow.name": workflow.workflowName,
+          "workflow.step.id": step.stepId,
+          "workflow.step.name": step.stepName,
+          "workflow.step.attempt": step.attempt,
+        },
+      }),
+      Effect.provide(migrationTelemetryLayer)
+    )
+  );
+};
 
 export async function beginMigrationRunStep(
   envelope: WorkflowSdkMigrationRunEnvelope
 ): Promise<{ readonly rollbackOrphans: boolean }> {
   "use step";
 
-  return await runEffect(beginMigrationRunExecutionEnvelope(envelope));
+  return await runEffect(
+    beginMigrationRunExecutionEnvelope(envelope),
+    "begin",
+    envelope
+  );
 }
 
 export async function executeMigrationRunCursorWindowStep(input: {
@@ -68,7 +101,10 @@ export async function executeMigrationRunCursorWindowStep(input: {
       envelope: input.envelope,
       runId: input.runId,
       state: input.state,
-    })
+    }),
+    "cursor-window",
+    input.envelope,
+    input.definitionId
   );
 }
 
@@ -86,7 +122,10 @@ export async function executeMigrationRunRollbackOrphansPageStep(input: {
       envelope: input.envelope,
       runId: input.runId,
       state: input.state,
-    })
+    }),
+    "rollback-orphans-page",
+    input.envelope,
+    input.definitionId
   );
 }
 
@@ -100,7 +139,9 @@ export async function completeMigrationRunStep(input: {
     completeMigrationRunExecutionEnvelope({
       definitions: input.definitions,
       envelope: input.envelope,
-    })
+    }),
+    "complete",
+    input.envelope
   );
 }
 
@@ -114,7 +155,9 @@ export async function cancelMigrationRunStep(input: {
     cancelMigrationRunExecutionEnvelope({
       definitions: input.definitions,
       envelope: input.envelope,
-    })
+    }),
+    "cancel",
+    input.envelope
   );
 }
 
@@ -134,7 +177,10 @@ export async function failMigrationRunStep(input: {
       ...(input.failedDefinitionId === undefined
         ? {}
         : { failedDefinitionId: input.failedDefinitionId }),
-    })
+    }),
+    "fail",
+    input.envelope,
+    input.failedDefinitionId
   );
 }
 
@@ -143,7 +189,11 @@ export async function executeMigrationRollbackStep(
 ): Promise<WorkflowSdkMigrationRollbackSummary> {
   "use step";
 
-  return await runEffect(executeMigrationRollbackExecutionEnvelope(envelope));
+  return await runEffect(
+    executeMigrationRollbackExecutionEnvelope(envelope),
+    "rollback",
+    envelope
+  );
 }
 
 disableWorkflowStepRetries(executeMigrationRunCursorWindowStep);

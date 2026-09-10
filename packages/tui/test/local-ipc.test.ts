@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
@@ -10,10 +10,12 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { layerNet } from "@effect/platform-node/NodeSocket";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import {
@@ -47,6 +49,90 @@ const serverFixtureUrl = new URL(
 );
 const serverFixturePath = (fileName: string): string =>
   fileURLToPath(new URL(fileName, serverFixtureUrl));
+
+test("--otel exports the completed local run with only an endpoint override", async () => {
+  const spans: string[] = [];
+  const services: unknown[] = [];
+  const paths: (string | undefined)[] = [];
+  const receiver = createHttpServer((request, response) => {
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk: string) => {
+      body += chunk;
+    });
+    request.on("end", () => {
+      const payload = JSON.parse(body) as {
+        resourceSpans: {
+          resource: { attributes: { key: string; value: unknown }[] };
+          scopeSpans: { spans: { name: string }[] }[];
+        }[];
+      };
+      paths.push(request.url);
+      for (const resource of payload.resourceSpans) {
+        services.push(
+          resource.resource.attributes.find(
+            (attribute) => attribute.key === "service.name"
+          )?.value
+        );
+        for (const scope of resource.scopeSpans) {
+          spans.push(...scope.spans.map((span) => span.name));
+        }
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+  });
+  await new Promise<void>((resolveListen, rejectListen) => {
+    receiver.once("error", rejectListen);
+    receiver.listen(0, "127.0.0.1", resolveListen);
+  });
+  try {
+    const address = receiver.address();
+    if (address === null || typeof address === "string") {
+      throw new Error("Expected a local OTLP HTTP port");
+    }
+    const environment = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => !key.startsWith("OTEL_"))
+    );
+    const result = await promisify(execFile)(
+      process.execPath,
+      [
+        fileURLToPath(
+          new URL("../../migrate-sdk/bin/migrate-sdk.mjs", import.meta.url)
+        ),
+        "run",
+        "authors",
+        "--update",
+        "--otel",
+        "--progress",
+        "none",
+        "--config",
+        serverFixturePath("migrate.config.ts"),
+      ],
+      {
+        env: {
+          ...environment,
+          MIGRATE_SERVER_BUILD_ID: `otel-test-${randomUUID()}`,
+          OTEL_EXPORTER_OTLP_ENDPOINT: `http://127.0.0.1:${address.port}`,
+        },
+        timeout: 20_000,
+      }
+    );
+    expect(result.stderr).toContain('service: "migrate-sdk"');
+    expect(result.stdout).toContain("succeeded");
+    await expect
+      .poll(() => spans.includes("migration.run"), { timeout: 10_000 })
+      .toBe(true);
+    expect(spans).toContain("migration.definition");
+    expect(paths.every((path) => path === "/v1/traces")).toBe(true);
+    expect(services).toContainEqual({ stringValue: "migrate-sdk" });
+  } finally {
+    receiver.closeAllConnections();
+    await new Promise<void>((resolveClose) =>
+      receiver.close(() => resolveClose())
+    );
+  }
+}, 30_000);
 
 const within = <Value>(promise: Promise<Value>, milliseconds: number) =>
   Promise.race([

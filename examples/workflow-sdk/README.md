@@ -80,6 +80,45 @@ curl \
   http://127.0.0.1:3100/api/cron/import
 ```
 
+## Inspect local Workflow steps with OpenTelemetry
+
+The example provides `migrationTelemetryLayer` inside each Workflow step. Export
+is disabled unless configured. With the local database prepared and an OTLP/HTTP
+JSON receiver running, start the app from this directory:
+
+```bash
+WORKFLOW_TARGET_WORLD=local \
+OTEL_TRACES_EXPORTER=otlp \
+OTEL_SERVICE_NAME=migrate-sdk-workflow-local \
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 \
+OTEL_EXPORTER_OTLP_TRACES_TIMEOUT=30000 \
+  pnpm dev
+```
+
+Use `http://127.0.0.1:27686` as the endpoint for Motel. Trigger the cron route
+shown above or start a migration from the browser or TUI. In Motel, use `[` and
+`]` to select `migrate-sdk-workflow-local`, then `r` to refresh. Configure these
+variables on the Next.js process that executes the steps; the remote TUI does
+not need `--otel`.
+
+Each executed step has a `workflow.step.*` span containing the migration source,
+item-processing, and SQL spans. Its attributes identify the Workflow run, step,
+attempt, and Migrate run (`workflow.run.id`, `workflow.step.id`,
+`workflow.step.attempt`, and `migration.run.id`). Cursor-work steps also include
+`migration.definition.id`.
+
+Each step exports a separate trace and flushes before returning. Correlate steps
+using those run IDs. The spans measure work inside the step; they do not include
+Workflow queueing, suspension, replay, or the exporter flush itself. Use Workflow's
+run history for the full elapsed timeline. Exporting many spans to a local viewer
+adds overhead, so compare equivalent runs with the same tracing configuration.
+
+`WORKFLOW_TARGET_WORLD=local` keeps Workflow execution local. A deployed worker
+needs a receiver reachable from its own host; a localhost endpoint on Vercel
+cannot reach the viewer on your laptop. See the
+[telemetry guide](../../docs/telemetry.md) for other collectors and exporter
+configuration.
+
 ## Deploy to Vercel and Neon
 
 1. Create a Neon PostgreSQL database and copy its pooled connection string.

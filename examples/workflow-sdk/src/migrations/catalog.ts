@@ -300,7 +300,7 @@ const processBook: ProcessPipelineFor<
   typeof bookTracking
 > = Effect.fn("workflowSdkExample.processBook")(function* (sourceItem) {
   if (sourceItem.item.disposition === "skip") {
-    return yield* skipItem("Book is outside the catalog publishing scope");
+    return skipItem("Book is outside the catalog publishing scope");
   }
 
   const publicationYear = Number.parseInt(sourceItem.item.publication_year, 10);
