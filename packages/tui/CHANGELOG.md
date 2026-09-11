@@ -1,5 +1,51 @@
 # @migrate-sdk/tui
 
+## 0.11.0
+
+### Minor Changes
+
+- 315434a: Add optional OpenTelemetry tracing to see where migrations spend time reading
+  sources, processing batches, waiting, and saving results. Use traces to find slow
+  steps and compare batch sizes or the number of items processed at once.
+  
+  To try it locally, start a trace receiver, then add `--otel` to the CLI or TUI:
+  
+  ```sh
+  migrate run articles --otel --config migrate.config.ts
+  migrate-tui --otel --config migrate.config.ts
+  ```
+  
+  The default address is `http://localhost:4318/v1/traces`, with service name
+  `migrate-sdk`. Existing `OTEL_*` environment variables override these defaults.
+  Use any compatible service that accepts OTLP/HTTP JSON traces; no particular
+  viewer is required.
+  
+  For scheduled scripts or applications using the SDK directly, provide
+  `migrationTelemetryLayer` from `migrate-sdk/telemetry` and configure it with
+  OpenTelemetry environment variables. Existing Effect tracing setups work too.
+  See the [tracing setup guide](https://github.com/asgorobets/migrate-sdk/blob/main/docs/telemetry.md)
+  for service configuration and examples.
+  
+  Tracing is optional. No configuration changes are needed if you do not use it.
+
+### Patch Changes
+
+- d3a0686: Update the Effect packages together to 4.0.0-rc.113. This fixes fresh SDK and TUI
+  installations failing at startup with a missing `effect/ByteSize` module.
+  
+  If your project installs `effect` or `@effect/*` runtime packages directly, update
+  them to 4.0.0-rc.113 alongside this release. Effect renamed some helpers in this
+  release; for example, use `Config.String` instead of `Config.string` and
+  `Flag.Boolean` instead of `Flag.boolean` in code that calls Effect directly.
+  
+  Migration CLI flags and OpenTelemetry environment variables stay the same. No
+  global Effect or Bun installation is required.
+- Updated dependencies [d3a0686]
+- Updated dependencies [8af1c85]
+- Updated dependencies [ff73771]
+- Updated dependencies [315434a]
+  - migrate-sdk@0.11.0
+
 ## 0.10.0
 
 ### Patch Changes
