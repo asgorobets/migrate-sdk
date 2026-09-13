@@ -7,6 +7,7 @@ export const sqlMigrationStoreTablePrefixPattern = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 export const makeSqlMigrationStoreTableNames = (
   prefix: string
 ): SqlMigrationStoreTableNames => ({
+  completions: `${prefix}_completions`,
   contracts: `${prefix}_contracts`,
   cursors: `${prefix}_cursors`,
   itemStates: `${prefix}_item_states`,

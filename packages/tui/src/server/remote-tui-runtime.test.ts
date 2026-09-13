@@ -1,6 +1,9 @@
 import { createServer, type Server } from "node:http";
-import { Effect } from "effect";
-import type { MigrateOperationRequest } from "migrate-sdk/protocol";
+import { Effect, Layer } from "effect";
+import type {
+  MigrateOperationRequest,
+  MigrateStoreSchemaPlan,
+} from "migrate-sdk/protocol";
 import { MigrateServer, type MigrateServerBackend } from "migrate-sdk/server";
 import { describe, expect, it } from "vitest";
 import {
@@ -90,9 +93,114 @@ const listenOnLocalhost = async (
 };
 
 describe("remote TUI runtime", () => {
+  it("connects and reviews an upgrade before requesting the remote dashboard", async () => {
+    const plan: MigrateStoreSchemaPlan = {
+      applied: [
+        { id: 1, name: "initial_schema" },
+        { id: 2, name: "definition_run_status" },
+      ],
+      currentVersion: 2,
+      database: "sqlite",
+      issues: [],
+      pending: [
+        {
+          id: 3,
+          name: "operation_history_and_completion",
+          description:
+            "Record operation history and migration completion separately",
+        },
+      ],
+      planId: "schema-plan",
+      status: "upgrade-required",
+      tablePrefix: "migrate_sdk",
+      targetVersion: 3,
+      warnings: [],
+    };
+    let schema = plan;
+    let dashboardReads = 0;
+    const serverLayer = Layer.effect(
+      MigrateServer,
+      Effect.gen(function* () {
+        const server = yield* MigrateServer.make({
+          backend,
+          ...serverIdentity,
+        });
+        return {
+          ...server,
+          getStoreSchema: Effect.sync(() => schema),
+          upgradeStoreSchema: ({
+            acceptedPlanId,
+          }: {
+            readonly acceptedPlanId: string;
+          }) =>
+            Effect.sync(() => {
+              expect(acceptedPlanId).toBe(plan.planId);
+              schema = {
+                ...plan,
+                currentVersion: 3,
+                status: "current",
+                pending: [],
+              };
+              return schema;
+            }),
+          getDashboard: Effect.sync(() => {
+            dashboardReads += 1;
+            expect(schema.status).toBe("current");
+          }).pipe(Effect.andThen(server.getDashboard)),
+        };
+      })
+    );
+    const http = makeRemoteMigrateServerHttp(serverLayer);
+    const { server, url } = await listenOnLocalhost(http.handler);
+    try {
+      const runtime = await makeMigrationTuiRuntime({ server: { url } });
+      try {
+        expect(runtime.storeSchema).toEqual(plan);
+        expect(dashboardReads).toBe(0);
+        expect(runtime.rows[0]?.entry.id).toBe(definitionId);
+        await expect(
+          runtime.upgradeStoreSchema(plan.planId)
+        ).resolves.toMatchObject({ currentVersion: 3, status: "current" });
+        expect(runtime.storeSchema?.status).toBe("current");
+        await runtime.refresh();
+        expect(dashboardReads).toBe(1);
+      } finally {
+        await runtime.dispose?.();
+      }
+    } finally {
+      await closeServer(server);
+      await http.dispose();
+    }
+  });
+
   it("connects the TUI runtime to a running localhost Migrate Server over HTTP", async () => {
+    const completedAt = new Date("2026-09-11T00:00:00.000Z");
+    const completionBackend = {
+      ...backend,
+      getDashboard: backend.getDashboard.pipe(
+        Effect.map((dashboard) => ({
+          ...dashboard,
+          rows: dashboard.rows.map((row) =>
+            row.status === undefined
+              ? row
+              : {
+                  ...row,
+                  status: {
+                    ...row.status,
+                    completion: {
+                      definitionId,
+                      runId,
+                      completedAt,
+                      sourceCursor: null,
+                    },
+                  },
+                }
+          ),
+        }))
+      ),
+    };
     const http = makeAuthorizedRemoteMigrateServerHttp(
-      MigrateServer.layer({ backend, ...serverIdentity }),
+      MigrateServer.layer({ backend: completionBackend, ...serverIdentity }),
       (request) =>
         Effect.succeed(request.headers.authorization === "Bearer local-secret")
     );
@@ -113,6 +221,12 @@ describe("remote TUI runtime", () => {
         const snapshot = await runtime.refresh();
 
         expect(runtime.environmentLabel).toBe("Production");
+        expect(snapshot.rows[0]?.status?.completion).toEqual({
+          definitionId,
+          runId,
+          completedAt,
+          sourceCursor: null,
+        });
         expect(snapshot.rows[0]?.status?.durable).toEqual({
           failed: 0,
           migrated: 12,

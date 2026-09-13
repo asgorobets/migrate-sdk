@@ -11,6 +11,7 @@ import {
   GetRegistryStatus,
   GetServerInfo,
   GetSourceIdentityHistory,
+  GetStoreSchema,
   MIGRATE_PROTOCOL_VERSION,
   MigrateAction,
   MigrateActiveRun,
@@ -61,6 +62,7 @@ import {
   ScanSource,
   StartOperation,
   StopRun,
+  UpgradeStoreSchema,
 } from "./index.ts";
 
 type ServiceFreeSchema = Schema.ConstraintDecoder<unknown> &
@@ -697,6 +699,16 @@ const rpcPayloadCases: readonly {
     value: undefined,
   },
   {
+    name: "GetStoreSchema",
+    schema: GetStoreSchema.payloadSchema,
+    value: undefined,
+  },
+  {
+    name: "UpgradeStoreSchema",
+    schema: UpgradeStoreSchema.payloadSchema,
+    value: { acceptedPlanId: "plan-v3" },
+  },
+  {
     name: "GetDashboard",
     schema: GetDashboard.payloadSchema,
     value: undefined,
@@ -893,6 +905,8 @@ const rpcUnarySuccessCases: readonly {
 ];
 
 const rpcErrorCases = [
+  GetStoreSchema,
+  UpgradeStoreSchema,
   GetActiveRuns,
   GetDashboard,
   GetRegistry,
@@ -964,7 +978,7 @@ describe("Migrate Protocol", () => {
 
     expect(encoded).toEqual(preparedOperationValue);
     expect("definitions" in prepared.plan).toBe(false);
-    expect(MIGRATE_PROTOCOL_VERSION).toBe(1);
+    expect(MIGRATE_PROTOCOL_VERSION).toBe(2);
   });
 
   it("rejects an active run without any definitions", () => {

@@ -6,8 +6,10 @@ import {
   MigrationStatusRequestError,
   MigrationStatusWarning,
   makeMigrationStatusRequest,
+  migrationDependencyIsSatisfied,
   toEncodedSourceIdentity,
   toMigrationDefinitionId,
+  toMigrationRunId,
 } from "migrate-sdk";
 
 describe("migration status public API", () => {
@@ -83,4 +85,18 @@ describe("migration status public API", () => {
       expect(decoded).toEqual(warnings);
     })
   );
+  it("requires source-pass completion rather than successful operation history", () => {
+    expect(migrationDependencyIsSatisfied({})).toBe(false);
+    expect(migrationDependencyIsSatisfied({ completion: null })).toBe(false);
+    expect(
+      migrationDependencyIsSatisfied({
+        completion: {
+          definitionId: toMigrationDefinitionId("authors"),
+          runId: toMigrationRunId("source-pass"),
+          completedAt: new Date(),
+          sourceCursor: null,
+        },
+      })
+    ).toBe(true);
+  });
 });

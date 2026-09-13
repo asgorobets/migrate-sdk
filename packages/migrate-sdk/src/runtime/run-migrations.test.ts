@@ -394,9 +394,11 @@ describe("MigrationStore durable records", () => {
     Effect.gen(function* () {
       const store = yield* MigrationStore;
       const runId = yield* store.createRunId;
-      const runState = yield* store.beginRun(runId, [
-        toMigrationDefinitionId("articles"),
-      ]);
+      const runState = yield* store.beginRun({
+        runId,
+        definitionIds: [toMigrationDefinitionId("articles")],
+        operation: "run",
+      });
 
       const decoded = yield* roundTripRunState(runState);
 
@@ -408,9 +410,11 @@ describe("MigrationStore durable records", () => {
     Effect.gen(function* () {
       const store = yield* MigrationStore;
       const runId = yield* store.createRunId;
-      const runState = yield* store.beginRun(runId, [
-        toMigrationDefinitionId("articles"),
-      ]);
+      const runState = yield* store.beginRun({
+        runId,
+        definitionIds: [toMigrationDefinitionId("articles")],
+        operation: "run",
+      });
 
       const definitionId = toMigrationDefinitionId("articles");
       const completed = yield* store.completeRun(
@@ -430,9 +434,11 @@ describe("MigrationStore durable records", () => {
     Effect.gen(function* () {
       const store = yield* MigrationStore;
       const runId = yield* store.createRunId;
-      const runState = yield* store.beginRun(runId, [
-        toMigrationDefinitionId("articles"),
-      ]);
+      const runState = yield* store.beginRun({
+        runId,
+        definitionIds: [toMigrationDefinitionId("articles")],
+        operation: "run",
+      });
 
       const definitionId = toMigrationDefinitionId("articles");
       const failed = yield* store.failRun(
@@ -517,7 +523,7 @@ describe("MigrationStore durable records", () => {
       };
 
       yield* store.upsertItemState(itemState);
-      yield* store.deleteItemState(definitionId, sourceIdentity);
+      yield* store.removeRolledBackItem({ definitionId, sourceIdentity });
 
       const stored = yield* store.getItemState(definitionId, sourceIdentity);
       expect(stored).toBeNull();
@@ -6135,6 +6141,9 @@ describe("runInlineDefinition", () => {
       yield* runInlineDefinition(definition);
 
       expect(storeState.sourceCursors.has(definition.id)).toBe(true);
+      expect(
+        storeState.definitionCompletions.get(definition.id)?.sourceCursor
+      ).toBe(storeState.sourceCursors.get(definition.id));
 
       items.push({
         identityKey: "article-3",
@@ -6146,6 +6155,9 @@ describe("runInlineDefinition", () => {
 
       expect(processCalls).toEqual(["article-1", "article-2", "article-3"]);
       expect(storeState.sourceCursors.has(definition.id)).toBe(true);
+      expect(
+        storeState.definitionCompletions.get(definition.id)?.sourceCursor
+      ).toBe(storeState.sourceCursors.get(definition.id));
     })
   );
 
@@ -8312,11 +8324,18 @@ describe("runInlineDefinition", () => {
         const executionOrder: string[] = [];
 
         storeState.latestRunStates.set(authorsId, {
+          operation: "run",
           definitionIds: [authorsId],
           finishedAt: previousDate,
           runId: previousRunId,
           startedAt: previousDate,
           status: "succeeded",
+        });
+        storeState.definitionCompletions.set(authorsId, {
+          definitionId: authorsId,
+          runId: previousRunId,
+          completedAt: previousDate,
+          sourceCursor: null,
         });
 
         const authors = MigrationDefinition.make({
@@ -8377,7 +8396,7 @@ describe("runInlineDefinition", () => {
   );
 
   it.effect(
-    "rejects omitted run dependencies with failed durable state unless forced",
+    "rejects omitted run dependencies without completed coverage unless forced",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
@@ -8389,6 +8408,7 @@ describe("runInlineDefinition", () => {
         const executionOrder: string[] = [];
 
         storeState.latestRunStates.set(authorsId, {
+          operation: "run",
           definitionIds: [authorsId],
           finishedAt: previousDate,
           runId: previousRunId,
@@ -8449,7 +8469,7 @@ describe("runInlineDefinition", () => {
         expect(String(error.message)).toContain(
           "required dependency state is not satisfied"
         );
-        expect(String(error.message)).toContain("authors latest run is failed");
+        expect(String(error.message)).toContain("no completed source pass");
         expect(String(error.message)).toContain("--force");
         expect(executionOrder).toEqual([]);
         expect(storeState.latestRunStates.get(articlesId)).toBeUndefined();
@@ -9502,54 +9522,59 @@ describe("rollbackInlineDefinition", () => {
       })
   );
 
-  it.effect("clears the Source Cursor when rollback finds no item state", () =>
-    Effect.gen(function* () {
-      const storeState = InMemoryMigrationStore.makeState();
-      const store = InMemoryMigrationStore.layer(storeState);
-      const definitionId = toMigrationDefinitionId("articles");
-      const processCalls: string[] = [];
+  it.effect(
+    "preserves the Source Cursor when rollback finds no item state",
+    () =>
+      Effect.gen(function* () {
+        const storeState = InMemoryMigrationStore.makeState();
+        const store = InMemoryMigrationStore.layer(storeState);
+        const definitionId = toMigrationDefinitionId("articles");
+        const processCalls: string[] = [];
 
-      storeState.sourceCursors.set(definitionId, encodedInMemoryCursor(1));
+        storeState.sourceCursors.set(definitionId, encodedInMemoryCursor(1));
 
-      const definition = MigrationDefinition.make({
-        id: definitionId,
-        source: makeTestInMemorySource({
-          batchSize: 1,
-          items: [
-            {
-              identityKey: "article-rollback",
-              version: "source-version-1",
-              item: { title: "Rollback source cursor" },
-            },
-          ],
-        }),
-        store,
-        process: (source) =>
-          Effect.sync(() => {
-            processCalls.push(source.identity.encoded);
+        const definition = MigrationDefinition.make({
+          id: definitionId,
+          source: makeTestInMemorySource({
+            batchSize: 1,
+            items: [
+              {
+                identityKey: "article-rollback",
+                version: "source-version-1",
+                item: { title: "Rollback source cursor" },
+              },
+            ],
           }),
-        rollback: () => Effect.void,
-      });
+          store,
+          process: (source) =>
+            Effect.sync(() => {
+              processCalls.push(source.identity.encoded);
+            }),
+          rollback: () => Effect.void,
+        });
 
-      const rollbackSummary = yield* rollbackInlineDefinition(definition, {
-        sourceIdentityKeys: ["article-rollback"],
-      });
-      const runSummary = yield* runInlineDefinition(definition);
+        const rollbackSummary = yield* rollbackInlineDefinition(definition, {
+          sourceIdentityKeys: ["article-rollback"],
+        });
+        expect(storeState.sourceCursors.get(definitionId)).toBe(
+          encodedInMemoryCursor(1)
+        );
+        const runSummary = yield* runInlineDefinition(definition);
 
-      expect(rollbackSummary.definitions[0]?.counts).toEqual({
-        rolledBack: 0,
-        failed: 0,
-        skipped: 1,
-      });
-      expect(runSummary.definitions[0]?.counts).toEqual({
-        migrated: 1,
-        skipped: 0,
-        failed: 0,
-        unchanged: 0,
-        needsUpdate: 0,
-      });
-      expect(processCalls).toEqual(["article-rollback"]);
-    })
+        expect(rollbackSummary.definitions[0]?.counts).toEqual({
+          rolledBack: 0,
+          failed: 0,
+          skipped: 1,
+        });
+        expect(runSummary.definitions[0]?.counts).toEqual({
+          migrated: 0,
+          skipped: 0,
+          failed: 0,
+          unchanged: 0,
+          needsUpdate: 0,
+        });
+        expect(processCalls).toEqual([]);
+      })
   );
 
   it.effect(

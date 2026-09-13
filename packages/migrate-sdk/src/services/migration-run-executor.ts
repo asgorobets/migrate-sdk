@@ -61,7 +61,6 @@ import type {
   AnyMigrationDefinition,
   ExecutionStartResult,
   MigrationDefinitionRunOutcome,
-  MigrationDefinitionRunStatus,
   MigrationDefinitionRunSummary,
   MigrationExecutionHandle,
   MigrationRunHandle,
@@ -89,6 +88,7 @@ import type {
   MigrationItemStateForTrackingContract,
   NeedsUpdateItemState,
 } from "../domain/state.ts";
+import { migrationDependencyIsSatisfied } from "../domain/status.ts";
 import type {
   DestinationJournal,
   DestinationJournalExtensions,
@@ -216,7 +216,8 @@ const unsafeDependentRollbackError = (
     message: [
       "Rollback would leave dependent Migration Definition item state",
       `${definitionId} cannot be rolled back while dependent ${dependentDefinitionId} still has item state.`,
-      `Rollback ${dependentDefinitionId} first, rerun with --with-dependencies, or use --force.`,
+      `Rollback ${dependentDefinitionId} first, or include dependent migrations with --with-dependencies.`,
+      "--force skips this safety check without including dependent migrations. Their records remain; references may break or rollback may fail.",
     ].join("\n"),
     cause: { definitionId, dependentDefinitionId },
   });
@@ -802,7 +803,11 @@ const beginMigrationRunExecution = (
       definitionIds
     );
     yield* validateMigrationContracts(store, input.definitions);
-    const runState = yield* store.beginRun(input.lease.runId, definitionIds);
+    const runState = yield* store.beginRun({
+      runId: input.lease.runId,
+      definitionIds,
+      operation: "run",
+    });
 
     if (
       runState.status === "running" &&
@@ -1006,7 +1011,8 @@ const executeMigrationRun = <A, E, R = never>(
     | ((runId: MigrationRunId) => Effect.Effect<void, E | MigrationStoreError>)
     | undefined,
   failureOutcomes: () => readonly MigrationDefinitionRunOutcome[],
-  options: InternalMigrationRuntimeExecutionOptions = {}
+  options: InternalMigrationRuntimeExecutionOptions = {},
+  operation: "run" | "rollback" = "run"
 ): Effect.Effect<MigrationRunExecutionResult<A>, E | MigrationStoreError, R> =>
   Effect.gen(function* () {
     const preparedInlineRun = "preparedLease" in options;
@@ -1063,7 +1069,7 @@ const executeMigrationRun = <A, E, R = never>(
         read: store.getRunState(runId),
         repairMessage:
           "Unable to repair latest Migration Definition Run State projections",
-        transition: store.beginRun(runId, definitionIds),
+        transition: store.beginRun({ runId, definitionIds, operation }),
       });
       runStatePersisted = true;
       if (runState.status === "running") {
@@ -1318,29 +1324,16 @@ const validateRollbackOrphansRunRequest = (request: {
 
 const runDependencyPreflightFailure = (input: {
   readonly dependencyId: MigrationDefinitionId;
-  readonly failedItems?: number;
   readonly requiredByDefinitionId: MigrationDefinitionId;
-  readonly status?: MigrationDefinitionRunStatus;
-}) => {
-  let reason: string;
-
-  if (input.status === undefined) {
-    reason = `${input.dependencyId} has no completed Migration Run State`;
-  } else if (input.failedItems !== undefined && input.failedItems > 0) {
-    reason = `${input.dependencyId} has failed Migration Item State (failed=${input.failedItems})`;
-  } else {
-    reason = `${input.dependencyId} latest run is ${input.status}`;
-  }
-
-  return new MigrationRuntimeError({
+}) =>
+  new MigrationRuntimeError({
     message: [
       "Migration Definition required dependency state is not satisfied",
-      `${input.requiredByDefinitionId} requires ${input.dependencyId}, but ${reason}.`,
-      `Run ${input.dependencyId} without failures, rerun with --with-dependencies, or use --force.`,
+      `${input.requiredByDefinitionId} requires ${input.dependencyId}, but it has no completed source pass (or completion was invalidated by rollback).`,
+      `Run ${input.dependencyId}, rerun with --with-dependencies, or use --force.`,
     ].join("\n"),
     cause: input,
   });
-};
 
 const missingRunDependencyDefinitionError = (
   dependencyId: MigrationDefinitionId,
@@ -1392,26 +1385,11 @@ export const validateMigrationRunDependencyPreflight = (
 
       yield* Effect.gen(function* () {
         const store = yield* MigrationStore;
-        const latestRun = yield* store.getLatestRunState(dependency.id);
-
-        if (latestRun?.status !== "succeeded") {
+        const completion = yield* store.getDefinitionCompletion(dependency.id);
+        if (!migrationDependencyIsSatisfied({ completion })) {
           return yield* runDependencyPreflightFailure({
             dependencyId: dependency.id,
             requiredByDefinitionId: edge.fromDefinitionId,
-            ...(latestRun === null ? {} : { status: latestRun.status }),
-          });
-        }
-
-        const itemStateSummary = yield* store.getItemStateSummary(
-          dependency.id
-        );
-
-        if (itemStateSummary.failed > 0) {
-          return yield* runDependencyPreflightFailure({
-            dependencyId: dependency.id,
-            failedItems: itemStateSummary.failed,
-            requiredByDefinitionId: edge.fromDefinitionId,
-            status: latestRun.status,
           });
         }
       }).pipe(Effect.provide(dependency.store));
@@ -2084,10 +2062,10 @@ const rollbackItemState = <Definition extends AnyRollbackMigrationDefinition>({
       return "failed" as const;
     }
 
-    yield* store.deleteItemState(
-      definition.id,
-      typedItemState.sourceIdentity.encoded
-    );
+    yield* store.removeRolledBackItem({
+      definitionId: definition.id,
+      sourceIdentity: typedItemState.sourceIdentity.encoded,
+    });
     return "rolled-back" as const;
   });
 
@@ -2708,11 +2686,22 @@ const processCursorDiscovery = <
 
 function finalizeCompletedSourceDiscovery(
   definition: AnyMigrationDefinition,
-  store: typeof MigrationStore.Service
+  store: typeof MigrationStore.Service,
+  runId: MigrationRunId
 ): Effect.Effect<void, MigrationStoreError> {
-  return definition.source.discovery === "full"
-    ? store.deleteSourceCursor(definition.id)
-    : Effect.void;
+  return Effect.gen(function* () {
+    const sourceCursor = yield* store.getSourceCursor(definition.id);
+    const completedAt = DateTime.toDate(yield* DateTime.now);
+    yield* store.recordSourcePassCompletion({
+      definitionId: definition.id,
+      runId,
+      completedAt,
+      sourceCursor,
+    });
+    if (definition.source.discovery === "full") {
+      yield* store.deleteSourceCursor(definition.id);
+    }
+  });
 }
 
 const processStubSourceIdentity = ({
@@ -2857,7 +2846,7 @@ const startStubDefinitionRun = (
     );
 
     const runState = yield* store
-      .beginRun(runId, [definition.id])
+      .beginRun({ runId, definitionIds: [definition.id], operation: "run" })
       .pipe(
         Effect.catch((error) =>
           releaseDefinitionLocks(store, locks, Exit.fail(error)).pipe(
@@ -3175,7 +3164,7 @@ const runMigrationDefinition = <
         return null;
       }
 
-      yield* finalizeCompletedSourceDiscovery(definition, store);
+      yield* finalizeCompletedSourceDiscovery(definition, store, runId);
 
       const summary = {
         definitionId: definition.id,
@@ -3246,7 +3235,7 @@ const runMigrationDefinition = <
       return null;
     }
 
-    yield* finalizeCompletedSourceDiscovery(definition, store);
+    yield* finalizeCompletedSourceDiscovery(definition, store, runId);
 
     const summary = {
       definitionId: definition.id,
@@ -3448,7 +3437,7 @@ const runMigrationDefinitionCursorWindow = <
     }
 
     if (!isTargetedMode(mode)) {
-      yield* finalizeCompletedSourceDiscovery(definition, store);
+      yield* finalizeCompletedSourceDiscovery(definition, store, input.runId);
     }
 
     const summary = {
@@ -3548,13 +3537,23 @@ const executeMigrationRunDefinitionRollbackOrphansPage = (
     return yield* withDurableRunScheduling(
       store,
       input.runId,
-      rollbackOrphansPage(
-        definition,
-        input.runId,
-        store,
-        input.state,
-        rollbackExecution
-      )
+      Effect.gen(function* () {
+        const result = yield* rollbackOrphansPage(
+          definition,
+          input.runId,
+          store,
+          input.state,
+          rollbackExecution
+        );
+        if (result.kind === "completed" && result.state.rollbackFailed === 0) {
+          yield* finalizeCompletedSourceDiscovery(
+            definition,
+            store,
+            input.runId
+          );
+        }
+        return result;
+      })
     );
   }).pipe(Effect.provide(definition.store));
 
@@ -3659,8 +3658,6 @@ const runRollbackMigrationDefinition = (
         return null;
       }
     }
-
-    yield* store.deleteSourceCursor(definition.id);
 
     const status =
       counts.failed > 0 ? ("failed" as const) : ("succeeded" as const);
@@ -4021,7 +4018,8 @@ const executePreparedRollbackDefinitions = <
           summaries,
           activeDefinitionId
         ),
-      executionOptions
+      executionOptions,
+      "rollback"
     );
     if (run.status === "cancelled") {
       yield* RollbackProgress.emit({
@@ -4245,6 +4243,9 @@ const rollbackOrphansForDefinitions = (
       if (!rollback.completed) {
         break;
       }
+      if (rollback.counts.rollbackFailed === 0) {
+        yield* finalizeCompletedSourceDiscovery(definition, store, runId);
+      }
 
       onCompletedDefinition?.(completedSummary);
       onActiveDefinition?.(undefined);
@@ -4431,9 +4432,11 @@ const terminalResultFromSummary = <
 >(
   summary: Summary,
   execution: MigrationExecutionHandle,
-  definitionIds: readonly MigrationDefinitionId[]
+  definitionIds: readonly MigrationDefinitionId[],
+  operation: "run" | "rollback"
 ): MigrationRunTerminalResult<Summary> => {
   const state = {
+    operation,
     definitionIds,
     execution,
     finishedAt: summary.finishedAt,
@@ -4458,6 +4461,7 @@ const superviseInlinePlan = <
   ExecutionError,
   Requirements,
 >(input: {
+  readonly operation: "run" | "rollback";
   readonly definitionIds: readonly MigrationDefinitionId[];
   readonly execute: (
     lease: MigrationRunExecutionLease
@@ -4492,7 +4496,11 @@ const superviseInlinePlan = <
           read: store.getRunState(runId),
           repairMessage:
             "Unable to repair latest Migration Definition Run State projections",
-          transition: store.queueRun(runId, input.definitionIds),
+          transition: store.queueRun({
+            runId,
+            definitionIds: input.definitionIds,
+            operation: input.operation,
+          }),
         });
         const queued = yield* restore(
           input.preflight(store).pipe(Effect.andThen(queueRun))
@@ -4560,7 +4568,8 @@ const superviseInlinePlan = <
           const result = terminalResultFromSummary(
             summary,
             execution,
-            input.definitionIds
+            input.definitionIds,
+            input.operation
           );
 
           return Ref.set(stateRef, result.state).pipe(
@@ -4639,6 +4648,7 @@ export const startMigrationRunPlanSupervised = <
 
   return Effect.flatMap(preparePlannedRunDefinitions(input), (preparation) =>
     superviseInlinePlan({
+      operation: "run",
       definitionIds: input.definitionIds,
       execute: (lease) =>
         executePreparedRunDefinitions(input, preparation, {
@@ -4687,6 +4697,7 @@ export const startMigrationRollbackPlanSupervised = (
     preparePlannedRollbackDefinitions(input),
     (preparation) =>
       superviseInlinePlan({
+        operation: "rollback",
         definitionIds: preparation.definitionIds,
         execute: (lease) =>
           executePreparedRollbackDefinitions(input, preparation, {

@@ -14,6 +14,7 @@ import {
   MigrateStreamingServerHandlers,
   makeRegistryMigrateServerBackend,
 } from "../../server/index.ts";
+import { makeStoreSchemaOperations } from "../../server/store-schema.ts";
 import { migrationTelemetryLayer } from "../../telemetry.ts";
 import { waitForLocalMigrateServerIdle } from "./local-server-lifecycle.ts";
 import { runLocalMigrateServerTransport } from "./local-server-transport.ts";
@@ -119,6 +120,7 @@ const main = Effect.scoped(
     const authToken = randomBytes(32).toString("base64url");
     const ServerApplication = MigrateServer.layer({
       backend: makeRegistryMigrateServerBackend(runtime),
+      sqlStore: runtime.sqlStore,
       environment: {
         id: `local:${parsed.cwd}`,
         label: basename(runtime.configPath),
@@ -136,7 +138,17 @@ const main = Effect.scoped(
       return yield* waitForLocalMigrateServerIdle({
         clientIds: protocol.clientIds,
         hasActiveExecutions: runtime.hasActiveExecutions,
-        listActiveRuns: runtime.listActiveRuns,
+        // No local execution is active here. An incompatible store cannot be
+        // observed by this server, so dismissing setup must still let it exit.
+        listActiveRuns: makeStoreSchemaOperations(
+          runtime.sqlStore
+        ).getSchema.pipe(
+          Effect.flatMap((plan) =>
+            plan !== null && plan.status !== "current"
+              ? Effect.succeed([])
+              : runtime.listActiveRuns
+          )
+        ),
       });
     });
 

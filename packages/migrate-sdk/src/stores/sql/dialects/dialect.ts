@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import type { SqlError } from "effect/unstable/sql";
 
 export interface SqlMigrationStoreTableNames {
+  readonly completions: string;
   readonly contracts: string;
   readonly cursors: string;
   readonly itemStates: string;
@@ -9,6 +10,14 @@ export interface SqlMigrationStoreTableNames {
   readonly locks: string;
   readonly runDefinitions: string;
   readonly runs: string;
+}
+
+export interface SqlCompletionWriteRow {
+  readonly completedAt: string;
+  readonly definitionId: string;
+  readonly definitionKey: string;
+  readonly runId: string;
+  readonly sourceCursor: string | null;
 }
 
 export interface SqlCursorWriteRow {
@@ -56,6 +65,7 @@ export interface SqlRunWriteRow {
   readonly executionAdapter: string | null;
   readonly executionId: string | null;
   readonly finishedAt: string | null;
+  readonly operation: string | null;
   readonly runId: string;
   readonly runKey: string;
   readonly startedAt: string;
@@ -96,6 +106,9 @@ export interface SqlMigrationStoreDialect {
   readonly tryAcquireLock: (
     row: SqlLockWriteRow
   ) => Effect.Effect<boolean, SqlError.SqlError>;
+  readonly upsertCompletion: (
+    row: SqlCompletionWriteRow
+  ) => Effect.Effect<void, SqlError.SqlError>;
   readonly upsertContract: (
     row: SqlContractWriteRow
   ) => Effect.Effect<void, SqlError.SqlError>;
@@ -171,6 +184,16 @@ export const indexDefinitions = (
   },
 ];
 
+export const completionRecord = (
+  row: SqlCompletionWriteRow
+): SqlWriteRecord => ({
+  definition_key: row.definitionKey,
+  definition_id: row.definitionId,
+  run_id: row.runId,
+  completed_at: row.completedAt,
+  source_cursor: row.sourceCursor,
+});
+
 export const cursorRecord = (row: SqlCursorWriteRow): SqlWriteRecord => ({
   cursor_value: row.cursorValue,
   definition_id: row.definitionId,
@@ -204,6 +227,7 @@ export const itemStateRecord = (row: SqlItemStateWriteRow): SqlWriteRecord => ({
 });
 
 export const runRecord = (row: SqlRunWriteRow): SqlWriteRecord => ({
+  operation: row.operation,
   execution_adapter: row.executionAdapter,
   execution_id: row.executionId,
   finished_at: row.finishedAt,

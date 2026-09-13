@@ -342,16 +342,38 @@ runner and a new runner cannot write state and destination side effects
 concurrently. Force-unlock should verify operator intent and lock ownership
 metadata; it is future maintenance tooling, not part of the store runtime.
 
+## Completion and operation history
+
+Completion is stored in a separate `definition-completion` Custom Object. A
+forward source pass reaching its end records completion even when some items
+failed. Dependencies read that record independently of operation history.
+New history records explicitly identify `run` or `rollback`; legacy records
+without an operation remain readable with unknown intent.
+
+After a successful rollback callback, `removeRolledBackItem` invalidates
+completion and the source cursor before deleting the tracked item. Custom
+Objects do not support a transaction across these records, so an interrupted
+write may leave a migration incomplete and require another source pass. An
+ambiguous network failure never restores completion: item deletion may already
+have reached the server. Concurrent items can safely clear the shared records.
+A missing item or a failed rollback callback preserves existing completion.
+
+These additions do not require a store upgrade command. Historical records do
+not establish completion automatically; run a full forward pass once to record
+it. No source scan is performed when checking dependencies.
+
 ## Store Operations
 
 The implementation maps the core `MigrationStore` service onto Custom Objects:
 
 ```txt
+getDefinitionCompletion -> GET completion object, decode value
+recordSourcePassCompletion -> POST completion object
 getSourceCursor       -> GET cursor object, decode value
 setSourceCursor       -> POST cursor object
 getItemState          -> GET item object, decode value
 upsertItemState       -> POST item object
-deleteItemState       -> GET item object, DELETE by version
+removeRolledBackItem  -> GET item, invalidate completion and cursor, DELETE item by version
 listItemStates        -> query item records by namespace and definition id
 observeItemState      -> GET item object, POST current state with inventory run id
 listOrphanItemStates  -> query item records not observed by the inventory run

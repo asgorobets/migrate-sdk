@@ -1449,7 +1449,11 @@ describe("MigrationDefinitionRegistry", () => {
 
         yield* Effect.gen(function* () {
           const migrationStore = yield* MigrationStore;
-          yield* migrationStore.beginRun(runId, [authorsId, articlesId]);
+          yield* migrationStore.beginRun({
+            runId,
+            definitionIds: [authorsId, articlesId],
+            operation: "run",
+          });
           yield* migrationStore.acquireDefinitionLock(authorsId, runId);
           yield* migrationStore.acquireDefinitionLock(articlesId, runId);
           yield* migrationStore.attachRunExecution(
@@ -1508,7 +1512,11 @@ describe("MigrationDefinitionRegistry", () => {
 
       yield* Effect.gen(function* () {
         const migrationStore = yield* MigrationStore;
-        yield* migrationStore.beginRun(runId, [articlesId]);
+        yield* migrationStore.beginRun({
+          runId,
+          definitionIds: [articlesId],
+          operation: "run",
+        });
         yield* migrationStore.acquireDefinitionLock(articlesId, runId);
       }).pipe(Effect.provide(metadataOnlyStoreLayer));
 
@@ -1541,7 +1549,11 @@ describe("MigrationDefinitionRegistry", () => {
 
         yield* Effect.gen(function* () {
           const migrationStore = yield* MigrationStore;
-          yield* migrationStore.beginRun(activeRunId, [articlesId, authorsId]);
+          yield* migrationStore.beginRun({
+            runId: activeRunId,
+            definitionIds: [articlesId, authorsId],
+            operation: "run",
+          });
           yield* migrationStore.acquireDefinitionLock(authorsId, activeRunId);
           yield* migrationStore.attachRunExecution(
             activeRunId,
@@ -1551,7 +1563,11 @@ describe("MigrationDefinitionRegistry", () => {
               executionId: "workflow-run-active",
             }
           );
-          yield* migrationStore.beginRun(laterRunId, [articlesId]);
+          yield* migrationStore.beginRun({
+            runId: laterRunId,
+            definitionIds: [articlesId],
+            operation: "run",
+          });
           yield* migrationStore.completeRun(
             laterRunId,
             [articlesId],
@@ -1582,7 +1598,11 @@ describe("MigrationDefinitionRegistry", () => {
 
       yield* Effect.gen(function* () {
         const migrationStore = yield* MigrationStore;
-        yield* migrationStore.beginRun(runId, [articlesId]);
+        yield* migrationStore.beginRun({
+          runId,
+          definitionIds: [articlesId],
+          operation: "run",
+        });
         yield* migrationStore.acquireDefinitionLock(articlesId, runId);
         yield* migrationStore.completeRun(
           runId,

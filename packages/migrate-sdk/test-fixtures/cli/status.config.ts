@@ -7,9 +7,9 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
+import { defineMigrationCliConfig } from "migrate-sdk/cli";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
-import { defineMigrationCliConfig } from "migrate-sdk/cli";
 
 const EntrySource = Schema.Struct({ title: Schema.String });
 const EntrySourceIdentity = SourceIdentity.make({
@@ -22,12 +22,19 @@ const runId = toMigrationRunId("run-status");
 const updatedAt = new Date("2026-01-01T00:00:02.000Z");
 const store = InMemoryMigrationStore.layer(storeState);
 
+storeState.definitionCompletions.set(definitionId, {
+  definitionId,
+  runId,
+  completedAt: updatedAt,
+  sourceCursor: null,
+});
 storeState.latestRunStates.set(definitionId, {
   definitionIds: [definitionId],
   finishedAt: new Date("2026-01-01T00:00:01.000Z"),
   runId,
   startedAt: new Date("2026-01-01T00:00:00.000Z"),
   status: "succeeded",
+  operation: "run",
 });
 storeState.itemStates.set(
   InMemoryMigrationStore.itemStateKey(definitionId, "article-1"),

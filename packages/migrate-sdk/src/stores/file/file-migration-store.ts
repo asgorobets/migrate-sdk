@@ -29,17 +29,21 @@ import type {
 } from "../../domain/run.ts";
 import {
   MigrationDefinitionRunStatus,
+  MigrationRunOperation,
   makeMigrationDefinitionRunState,
 } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
 import {
   addMigrationItemStateToSummary,
   emptyMigrationItemStateSummary,
+  type MigrationDefinitionCompletion,
 } from "../../domain/status.ts";
 import {
   canReplaceLatestMigrationDefinitionRun,
   isActiveMigrationRunStatus,
   type MigrationDefinitionRunOutcomeMap,
+  type MigrationItemRollbackInput,
+  type MigrationRunStartInput,
   MigrationStore,
   migrationDefinitionRunStatus,
   resolveMigrationRunTransition,
@@ -76,6 +80,7 @@ const PersistedMigrationRunState = Schema.Struct({
       executionId: Schema.optional(Schema.String),
     })
   ),
+  operation: Schema.optional(MigrationRunOperation),
   finishedAt: Schema.optional(Schema.DateFromString),
   runId: MigrationRunIdSchema,
   startedAt: Schema.DateFromString,
@@ -116,6 +121,17 @@ const EncodedSourceCursorRecord = Schema.Struct({
   formatVersion: Schema.Literal(formatVersion),
   recordKind: Schema.Literal("encoded-source-cursor"),
   state: EncodedSourceCursor,
+});
+
+const DefinitionCompletionRecord = Schema.Struct({
+  formatVersion: Schema.Literal(formatVersion),
+  recordKind: Schema.Literal("definition-completion"),
+  state: Schema.Struct({
+    definitionId: MigrationDefinitionIdSchema,
+    runId: MigrationRunIdSchema,
+    completedAt: Schema.DateFromString,
+    sourceCursor: Schema.NullOr(EncodedSourceCursor),
+  }),
 });
 
 const MigrationContractRecord = Schema.Struct({
@@ -396,6 +412,8 @@ const makePaths = (path: Path, directory: string) => {
       definitionDirectory(definitionId),
     runState: (runId: MigrationRunId) =>
       path.join(directory, "runs", `${encodePathSegment(runId)}.json`),
+    definitionCompletion: (definitionId: MigrationDefinitionId) =>
+      path.join(definitionDirectory(definitionId), "completion.json"),
     sourceCursor: (definitionId: MigrationDefinitionId) =>
       path.join(definitionDirectory(definitionId), "cursor.json"),
     migrationContract: (definitionId: MigrationDefinitionId) =>
@@ -492,6 +510,34 @@ const makeLayerWithoutPlatform = (
       const paths = makePaths(path, options.directory);
 
       yield* ensureManifest(fs, path, paths.manifest);
+
+      const getDefinitionCompletion = (definitionId: MigrationDefinitionId) =>
+        readRecordOptional(
+          fs,
+          paths.definitionCompletion(definitionId),
+          DefinitionCompletionRecord
+        ).pipe(Effect.map((record) => record?.state ?? null));
+      const writeDefinitionCompletion = (
+        completion: MigrationDefinitionCompletion
+      ) =>
+        writeRecordAtomic(
+          fs,
+          path,
+          paths.definitionCompletion(completion.definitionId),
+          DefinitionCompletionRecord,
+          {
+            formatVersion,
+            recordKind: "definition-completion",
+            state: completion,
+          }
+        );
+      const recordSourcePassCompletion = (
+        completion: MigrationDefinitionCompletion
+      ) =>
+        withProjectionLocks(
+          [completion.definitionId],
+          writeDefinitionCompletion(completion)
+        );
 
       const getSourceCursor = Effect.fn("FileMigrationStore.getSourceCursor")(
         function* (definitionId: MigrationDefinitionId) {
@@ -624,11 +670,58 @@ const makeLayerWithoutPlatform = (
         return summary;
       });
 
-      const deleteItemState = Effect.fn("FileMigrationStore.deleteItemState")(
-        (
-          definitionId: MigrationDefinitionId,
-          identity: EncodedSourceIdentity
-        ) => removeFileIfExists(fs, paths.itemState(definitionId, identity))
+      const removeRolledBackItem = Effect.fn(
+        "FileMigrationStore.removeRolledBackItem"
+      )(
+        ({
+          definitionId,
+          sourceIdentity: identity,
+        }: MigrationItemRollbackInput) =>
+          withProjectionLocks(
+            [definitionId],
+            Effect.gen(function* () {
+              const exists = yield* fs
+                .exists(paths.itemState(definitionId, identity))
+                .pipe(
+                  Effect.mapError((cause) =>
+                    storeError(
+                      "Unable to check Migration Item State before deletion",
+                      cause
+                    )
+                  )
+                );
+              if (!exists) {
+                return;
+              }
+              const completion = yield* getDefinitionCompletion(definitionId);
+              const cursor = yield* getSourceCursor(definitionId);
+              // Invalidate before item removal. A crash can conservatively lose
+              // completion, but cannot leave removed data complete or skipped.
+              yield* Effect.gen(function* () {
+                yield* removeFileIfExists(
+                  fs,
+                  paths.definitionCompletion(definitionId)
+                );
+                yield* deleteSourceCursor(definitionId);
+                yield* removeFileIfExists(
+                  fs,
+                  paths.itemState(definitionId, identity)
+                );
+              }).pipe(
+                Effect.catch((error) =>
+                  Effect.gen(function* () {
+                    if (cursor !== null) {
+                      yield* setSourceCursor(definitionId, cursor);
+                    }
+                    if (completion !== null) {
+                      yield* writeDefinitionCompletion(completion);
+                    }
+                    return yield* error;
+                  })
+                )
+              );
+            }).pipe(Effect.uninterruptible)
+          )
       );
 
       const upsertItemState = Effect.fn("FileMigrationStore.upsertItemState")(
@@ -858,6 +951,7 @@ const makeLayerWithoutPlatform = (
         readonly current: MigrationRunState | undefined;
         readonly definitionIds: readonly MigrationDefinitionId[];
         readonly requestedStatus: MigrationRunState["status"];
+        readonly operation: MigrationRunStartInput["operation"];
         readonly runId: MigrationRunId;
         readonly startedAt: Date;
       }): MigrationRunState => {
@@ -871,6 +965,9 @@ const makeLayerWithoutPlatform = (
           : {
               ...(input.current ?? {}),
               runId: input.runId,
+              ...(input.current === undefined
+                ? { operation: input.operation }
+                : {}),
               definitionIds: input.definitionIds,
               status: transition.status ?? input.requestedStatus,
               startedAt: input.current?.startedAt ?? input.startedAt,
@@ -880,7 +977,8 @@ const makeLayerWithoutPlatform = (
       const writeRunState = (
         runId: MigrationRunId,
         definitionIds: readonly MigrationDefinitionId[],
-        status: MigrationRunState["status"]
+        status: MigrationRunState["status"],
+        operation: MigrationRunStartInput["operation"]
       ) =>
         withProjectionLocks(
           definitionIds,
@@ -929,6 +1027,7 @@ const makeLayerWithoutPlatform = (
               runId,
               definitionIds,
               requestedStatus: status,
+              operation,
               startedAt: yield* DateTime.nowAsDate,
             });
 
@@ -983,17 +1082,13 @@ const makeLayerWithoutPlatform = (
         );
 
       const beginRun = Effect.fn("FileMigrationStore.beginRun")(
-        (
-          runId: MigrationRunId,
-          definitionIds: readonly MigrationDefinitionId[]
-        ) => writeRunState(runId, definitionIds, "running")
+        ({ runId, definitionIds, operation }: MigrationRunStartInput) =>
+          writeRunState(runId, definitionIds, "running", operation)
       );
 
       const queueRun = Effect.fn("FileMigrationStore.queueRun")(
-        (
-          runId: MigrationRunId,
-          definitionIds: readonly MigrationDefinitionId[]
-        ) => writeRunState(runId, definitionIds, "queued")
+        ({ runId, definitionIds, operation }: MigrationRunStartInput) =>
+          writeRunState(runId, definitionIds, "queued", operation)
       );
 
       const updateCurrentLatestRunProjections = (
@@ -1309,6 +1404,8 @@ const makeLayerWithoutPlatform = (
       return {
         listOrphanItemStates,
         observeItemState,
+        getDefinitionCompletion,
+        recordSourcePassCompletion,
         getSourceCursor,
         setSourceCursor,
         deleteSourceCursor,
@@ -1317,7 +1414,7 @@ const makeLayerWithoutPlatform = (
         getItemState,
         listItemStates,
         getItemStateSummary,
-        deleteItemState,
+        removeRolledBackItem,
         upsertItemState,
         createRunId,
         getRunState,

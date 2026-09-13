@@ -27,11 +27,19 @@ describe("MigrationStore definition outcomes", () => {
         const definitionId = toMigrationDefinitionId("durable-stop");
         const runId = toMigrationRunId("run-durable-stop");
 
-        yield* store.queueRun(runId, [definitionId]);
+        yield* store.queueRun({
+          runId,
+          definitionIds: [definitionId],
+          operation: "run",
+        });
         const requested = yield* store.requestRunCancellation(runId, [
           definitionId,
         ]);
-        const begun = yield* store.beginRun(runId, [definitionId]);
+        const begun = yield* store.beginRun({
+          runId,
+          definitionIds: [definitionId],
+          operation: "run",
+        });
         const completed = yield* store.completeRun(
           runId,
           [definitionId],
@@ -40,8 +48,16 @@ describe("MigrationStore definition outcomes", () => {
         const repeated = yield* store.requestRunCancellation(runId, [
           definitionId,
         ]);
-        const lateQueue = yield* store.queueRun(runId, [definitionId]);
-        const lateBegin = yield* store.beginRun(runId, [definitionId]);
+        const lateQueue = yield* store.queueRun({
+          runId,
+          definitionIds: [definitionId],
+          operation: "run",
+        });
+        const lateBegin = yield* store.beginRun({
+          runId,
+          definitionIds: [definitionId],
+          operation: "run",
+        });
         const lateFailure = yield* store.failRun(
           runId,
           [definitionId],
@@ -124,7 +140,7 @@ describe("MigrationStore definition outcomes", () => {
       const definitionIds = [authorsId, articlesId] as const;
       const runId = toMigrationRunId("run-incomplete-outcomes");
 
-      yield* store.beginRun(runId, definitionIds);
+      yield* store.beginRun({ runId, definitionIds, operation: "run" });
       yield* Effect.flip(
         store.failRun(runId, definitionIds, [
           { definitionId: articlesId, status: "failed" },
@@ -237,10 +253,10 @@ describe("MigrationStore orphan methods", () => {
         ).toEqual(["article-a"]);
         expect(firstPage.nextAfterIdentity).toBe("article-a");
 
-        yield* store.deleteItemState(
+        yield* store.removeRolledBackItem({
           definitionId,
-          toEncodedSourceIdentity("article-a")
-        );
+          sourceIdentity: toEncodedSourceIdentity("article-a"),
+        });
 
         const secondPage = yield* store.listOrphanItemStates(
           definitionId,

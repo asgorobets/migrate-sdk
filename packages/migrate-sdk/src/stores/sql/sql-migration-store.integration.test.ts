@@ -119,10 +119,10 @@ function registerProviderSuite(
 
           for (const item of page.items) {
             orphanIdentities.push(item.sourceIdentity.encoded);
-            yield* store.deleteItemState(
+            yield* store.removeRolledBackItem({
               definitionId,
-              item.sourceIdentity.encoded
-            );
+              sourceIdentity: item.sourceIdentity.encoded,
+            });
           }
 
           afterIdentity = page.nextAfterIdentity;
@@ -177,7 +177,11 @@ function registerProviderSuite(
           executionId: `execution-${runId}`,
         };
 
-        const queued = yield* store.queueRun(runId, definitionIds);
+        const queued = yield* store.queueRun({
+          runId,
+          definitionIds,
+          operation: "run",
+        });
         expect(queued).toEqual(
           expect.objectContaining({ runId, status: "queued" })
         );
@@ -191,7 +195,11 @@ function registerProviderSuite(
           expect.objectContaining({ execution, runId, status: "queued" })
         );
 
-        const running = yield* store.beginRun(runId, definitionIds);
+        const running = yield* store.beginRun({
+          runId,
+          definitionIds,
+          operation: "run",
+        });
         expect(running).toEqual(
           expect.objectContaining({ execution, runId, status: "running" })
         );

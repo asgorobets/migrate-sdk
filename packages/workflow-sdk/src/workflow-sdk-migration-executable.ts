@@ -482,7 +482,11 @@ const startDurablePlan = <Summary>({
     );
 
     yield* store
-      .queueRun(runId, scopeDefinitionIds)
+      .queueRun({
+        runId,
+        definitionIds: scopeDefinitionIds,
+        operation: envelope.kind,
+      })
       .pipe(
         Effect.catch((error) =>
           releaseLocks(store, locks, error).pipe(

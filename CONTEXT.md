@@ -180,6 +180,15 @@ _Avoid_: Pause run, detach run, resume run
 **Migration Definition Run State**:
 The durable state of one migration definition's participation in a migration run.
 
+**Migration Run Operation**:
+The durable intent of a run: `run` processes source items and `rollback` compensates tracked destination work. Historical records without an operation have unknown intent.
+
+**Migration Dependency Readiness**:
+Presence of a Migration Definition Completion record. A completed source pass unlocks required dependencies even with failed or needs-update items; dependent items can fail and be retried if references are missing. Operation history and item error counts do not determine readiness.
+
+### Migration Definition Completion
+Durable evidence in Migration Store that a forward source pass reached its end, with the run ID, completion time, and source cursor. Targeted runs, retries alone, inventory scans, and stubs cannot establish it. Removing an existing tracked entry invalidates it and resets the discovery cursor immediately, including partial rollback. Successful forward orphan cleanup reestablishes it after all cleanup pages finish without rollback failures. No-op rollback and later failed operations without removal preserve it. For incremental discovery it covers the last completed checkpoint, not a live assertion about new source data.
+
 **Migration Run Handle**:
 A run-scoped capability for observing and cooperatively cancelling work owned by
 the current execution host.
@@ -484,7 +493,7 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Migration Run** continues processing source items after an item failure in the first version.
 - A **Migration Run** is marked failed when one or more source items fail, even if other items complete.
 - A failed **Migration Run** does not make every participating **Migration Definition Run State** failed; each definition records its own outcome.
-- Dependency readiness uses the dependency's latest **Migration Definition Run State**, not the aggregate status of a shared **Migration Run**.
+- Dependency readiness uses **Migration Definition Completion**, independently of operation history and item failure counts.
 - A completed **Migration Run** produces a **Migration Run Summary** for SDK callers and CLI rendering.
 - A completed rollback run produces a **Rollback Run Summary** for SDK callers and CLI rendering.
 - A **Rollback Run Summary** is distinct from a **Migration Run Summary**.

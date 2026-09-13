@@ -197,7 +197,10 @@ describe("SqlMigrationStore", () => {
           );
         }
 
-        yield* store.deleteItemState(definitionId, firstIdentity);
+        yield* store.removeRolledBackItem({
+          definitionId,
+          sourceIdentity: firstIdentity,
+        });
 
         const secondPage = yield* store.listOrphanItemStates(
           definitionId,
@@ -320,6 +323,7 @@ describe("SqlMigrationStore", () => {
       `;
 
       expect(tables.map(({ name }) => name)).toEqual([
+        "migrate_sdk_completions",
         "migrate_sdk_contracts",
         "migrate_sdk_cursors",
         "migrate_sdk_item_states",
@@ -356,10 +360,10 @@ describe("SqlMigrationStore", () => {
       ]);
 
       yield* store.deleteSourceCursor(definitionId);
-      yield* store.deleteItemState(
+      yield* store.removeRolledBackItem({
         definitionId,
-        migrated.sourceIdentity.encoded
-      );
+        sourceIdentity: migrated.sourceIdentity.encoded,
+      });
 
       expect(yield* store.getSourceCursor(definitionId)).toBeNull();
       expect(
@@ -383,13 +387,17 @@ describe("SqlMigrationStore", () => {
           executionId: "workflow-run-1",
         };
 
-        yield* store.queueRun(runId, definitionIds);
+        yield* store.queueRun({ runId, definitionIds, operation: "run" });
         yield* store.attachRunExecution(runId, definitionIds, execution);
         const requested = yield* store.requestRunCancellation(
           runId,
           definitionIds
         );
-        const begun = yield* store.beginRun(runId, definitionIds);
+        const begun = yield* store.beginRun({
+          runId,
+          definitionIds,
+          operation: "run",
+        });
         const cancelled = yield* store.completeRun(
           runId,
           definitionIds,
@@ -398,8 +406,16 @@ describe("SqlMigrationStore", () => {
             status: "succeeded" as const,
           }))
         );
-        const lateQueue = yield* store.queueRun(runId, definitionIds);
-        const lateBegin = yield* store.beginRun(runId, definitionIds);
+        const lateQueue = yield* store.queueRun({
+          runId,
+          definitionIds,
+          operation: "run",
+        });
+        const lateBegin = yield* store.beginRun({
+          runId,
+          definitionIds,
+          operation: "run",
+        });
         const states = yield* Effect.forEach(definitionIds, (definitionId) =>
           store.getLatestRunState(definitionId)
         );
@@ -433,8 +449,8 @@ describe("SqlMigrationStore", () => {
         const definitionIds = [definitionId] as const;
         const runId = toMigrationRunId("run-concurrent-cancellation-sql");
 
-        yield* store.queueRun(runId, definitionIds);
-        yield* store.beginRun(runId, definitionIds);
+        yield* store.queueRun({ runId, definitionIds, operation: "run" });
+        yield* store.beginRun({ runId, definitionIds, operation: "run" });
         const [requested, completed] = yield* Effect.all(
           [
             store.requestRunCancellation(runId, definitionIds),
@@ -489,7 +505,7 @@ describe("SqlMigrationStore", () => {
       const definitionIds = [authorsId, articlesId] as const;
       const runId = toMigrationRunId("run-mixed-sql");
 
-      yield* store.beginRun(runId, definitionIds);
+      yield* store.beginRun({ runId, definitionIds, operation: "run" });
       const failedRun = yield* store.failRun(runId, definitionIds, [
         { definitionId: authorsId, status: "succeeded" },
         { definitionId: articlesId, status: "failed" },
@@ -546,6 +562,32 @@ describe("SqlMigrationStore", () => {
       yield* store.assertDefinitionLocks([lock]);
       expect(yield* store.breakDefinitionLock(definitionId)).toEqual(lock);
       expect(yield* store.getDefinitionLock(definitionId)).toBeNull();
+    }).pipe(Effect.provide(sqlStoreLayer))
+  );
+  it.effect("preserves rollback operation through its lifecycle", () =>
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const id = toMigrationDefinitionId("operation-history");
+      const runId = toMigrationRunId("rollback-operation-history");
+      yield* store.queueRun({
+        runId,
+        definitionIds: [id],
+        operation: "rollback",
+      });
+      yield* store.beginRun({ runId, definitionIds: [id], operation: "run" });
+      yield* store.completeRun(
+        runId,
+        [id],
+        [{ definitionId: id, status: "succeeded" }]
+      );
+      expect(yield* store.getRunState(runId)).toMatchObject({
+        operation: "rollback",
+        status: "succeeded",
+      });
+      expect(yield* store.getLatestRunState(id)).toMatchObject({
+        operation: "rollback",
+        status: "succeeded",
+      });
     }).pipe(Effect.provide(sqlStoreLayer))
   );
 });

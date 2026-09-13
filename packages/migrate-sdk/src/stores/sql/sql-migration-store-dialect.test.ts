@@ -16,6 +16,7 @@ interface SqlCall {
 }
 
 const names: SqlMigrationStoreTableNames = {
+  completions: "migrate_sdk_completions",
   contracts: "test_contracts",
   cursors: "test_cursors",
   itemStates: "test_item_states",

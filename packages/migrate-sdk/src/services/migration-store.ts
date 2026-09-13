@@ -13,10 +13,25 @@ import type {
   MigrationDefinitionRunOutcome,
   MigrationDefinitionRunState,
   MigrationExecutionHandle,
+  MigrationRunOperation,
   MigrationRunState,
 } from "../domain/run.ts";
 import type { MigrationItemState } from "../domain/state.ts";
-import type { MigrationItemStateSummary } from "../domain/status.ts";
+import type {
+  MigrationDefinitionCompletion,
+  MigrationItemStateSummary,
+} from "../domain/status.ts";
+
+export interface MigrationRunStartInput {
+  readonly definitionIds: readonly MigrationDefinitionId[];
+  readonly operation: MigrationRunOperation;
+  readonly runId: MigrationRunId;
+}
+
+export interface MigrationItemRollbackInput {
+  readonly definitionId: MigrationDefinitionId;
+  readonly sourceIdentity: EncodedSourceIdentity;
+}
 
 export interface OrphanItemStatePage {
   readonly items: readonly MigrationItemState[];
@@ -225,6 +240,18 @@ export class MigrationStore extends Service<
 
     readonly observeItemState: MigrationStoreOrphanMethods["observeItemState"];
 
+    /** Completion is established only by a forward source pass reaching its end. */
+    readonly getDefinitionCompletion: (
+      definitionId: MigrationDefinitionId
+    ) => Effect.Effect<
+      MigrationDefinitionCompletion | null,
+      MigrationStoreError
+    >;
+
+    readonly recordSourcePassCompletion: (
+      completion: MigrationDefinitionCompletion
+    ) => Effect.Effect<void, MigrationStoreError>;
+
     readonly getSourceCursor: (
       definitionId: MigrationDefinitionId
     ) => Effect.Effect<EncodedSourceCursor | null, MigrationStoreError>;
@@ -259,9 +286,13 @@ export class MigrationStore extends Service<
       definitionId: MigrationDefinitionId
     ) => Effect.Effect<MigrationItemStateSummary, MigrationStoreError>;
 
-    readonly deleteItemState: (
-      definitionId: MigrationDefinitionId,
-      identity: EncodedSourceIdentity
+    /** Records a successful rollback by removing the tracked item, completion,
+     * and source cursor together. A missing item preserves completion and cursor.
+     * Nontransactional adapters must invalidate before removal so interrupted
+     * writes cannot leave removed data marked complete or skipped on rerun.
+     */
+    readonly removeRolledBackItem: (
+      input: MigrationItemRollbackInput
     ) => Effect.Effect<void, MigrationStoreError>;
 
     readonly upsertItemState: (
@@ -279,13 +310,11 @@ export class MigrationStore extends Service<
     ) => Effect.Effect<MigrationDefinitionRunState | null, MigrationStoreError>;
 
     readonly beginRun: (
-      runId: MigrationRunId,
-      definitionIds: readonly MigrationDefinitionId[]
+      input: MigrationRunStartInput
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
     readonly queueRun: (
-      runId: MigrationRunId,
-      definitionIds: readonly MigrationDefinitionId[]
+      input: MigrationRunStartInput
     ) => Effect.Effect<MigrationRunState, MigrationStoreError>;
 
     readonly attachRunExecution: (

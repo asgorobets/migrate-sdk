@@ -5,8 +5,10 @@ import type {
   MigrationDefinitionIdInput,
 } from "./ids.ts";
 import {
+  EncodedSourceCursor,
   EncodedSourceIdentity,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
+  MigrationRunId,
   SourceIdentityKeyScalar,
   toMigrationDefinitionId,
 } from "./ids.ts";
@@ -71,16 +73,34 @@ export const MigrationStatusWarning = Schema.Union([
 ]);
 export type MigrationStatusWarning = typeof MigrationStatusWarning.Type;
 
+/** Evidence that forward execution reached the end of a source pass.
+ * Item errors do not erase coverage. Removing a tracked entry invalidates it.
+ */
+export const MigrationDefinitionCompletion = Schema.Struct({
+  definitionId: MigrationDefinitionIdSchema,
+  runId: MigrationRunId,
+  completedAt: Schema.Date,
+  sourceCursor: Schema.NullOr(EncodedSourceCursor),
+});
+export type MigrationDefinitionCompletion =
+  typeof MigrationDefinitionCompletion.Type;
+
 export const MigrationDefinitionStatus = Schema.Struct({
   definitionId: MigrationDefinitionIdSchema,
   discovery: Schema.Literals(["full", "incremental"]),
   durable: MigrationItemStateSummary,
+  completion: Schema.optional(Schema.NullOr(MigrationDefinitionCompletion)),
   lastRun: Schema.NullOr(MigrationDefinitionRunState),
   lock: Schema.NullOr(MigrationDefinitionLock),
   source: Schema.optional(MigrationDefinitionSourceStatus),
   warnings: Schema.Array(MigrationStatusWarning),
 });
 export type MigrationDefinitionStatus = typeof MigrationDefinitionStatus.Type;
+
+/** Completion is independent of operation outcomes and individual item failures. */
+export const migrationDependencyIsSatisfied = (
+  status: Pick<MigrationDefinitionStatus, "completion">
+): boolean => status.completion != null;
 
 export const MigrationStatusReport = Schema.Struct({
   definitions: Schema.Array(MigrationDefinitionStatus),

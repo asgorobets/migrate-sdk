@@ -86,6 +86,10 @@ server before using the new remote CLI inspection commands. This is a one-time
 baseline correction, not precedent for adding required operations to an adopted
 protocol version. Existing TUI operations and payloads remain unchanged.
 
+Protocol v2 adds required `GetStoreSchema` and `UpgradeStoreSchema` operations.
+Clients and servers must be updated together for this contract. This protocol
+version is independent of the SQL store schema version, which is v3.
+
 The currently implemented local connection uses a Node Migrate Server process
 started by the TUI. The Bun renderer communicates with that process over a
 reconnectable local Effect RPC socket, while the Node process loads the same
@@ -266,8 +270,9 @@ the process and protocol boundary.
 The CLI may continue loading configuration and invoking the SDK directly during
 an incremental refactor. The intended seam for migration-control commands is
 the Migrate Server interface: local commands may call it in-process, while
-remote commands use a Migrate Connection. Store schema and other
-infrastructure-only commands may remain outside that interface.
+remote commands use a Migrate Connection. SQL store schema inspection and
+upgrade are also available through this interface so an outdated store does
+not prevent clients from connecting.
 
 The CLI adopts that seam incrementally through a shared Node Migrate Connection
 owned by Migrate SDK rather than by the TUI package. Both clients use the same
@@ -287,6 +292,25 @@ lifecycle management:
 - `migrate runs stop <run-id>` explicitly requests durable cooperative
   cancellation.
 
+`GetStoreSchema` reads the SQL schema plan through the server's configured
+`sqlStore` client, without opening a Migration Store. The same target is used
+by `UpgradeStoreSchema`; clients submit only the reviewed `acceptedPlanId` and
+cannot select a database or table prefix. The server rechecks the plan before
+applying it. A server with no configured SQL administration target returns
+`null`, so file, memory, and Commercetools stores keep their normal startup.
+Remote hosts configure `sqlStore` on `RegistryMigrateServer.layer` or
+`MigrateServer.layer`; local servers reuse the CLI config's existing target.
+The host's RPC authorization also covers schema administration.
+
+The TUI checks the schema immediately after connecting. When an upgrade is
+needed, it mounts a setup popup and defers dashboard reads and observation.
+The popup displays the pending changes and applies them only after the user
+chooses **Upgrade store**. It then loads the dashboard without reconnecting the
+TUI. Cancelling leaves the connection available for reviewing the plan again.
+Divergent, future, partial, and untracked schemas display their issues without
+an automatic upgrade action. Upgrade failures stay in the popup with the
+refreshed plan available for review and retry.
+
 `GetRegistry` returns static registry entries and groups without reading
 Migration Stores. `GetRegistryStatus` and `GetRegistryMessages` accept the same
 selection and dependency-expansion inputs as their local registry operations;
@@ -297,8 +321,8 @@ per-definition requests.
 
 Remote CLI commands accept a Migrate Server URL and read its bearer token from
 `MIGRATE_SERVER_TOKEN`; secrets are not accepted as command-line flags. Store
-schema commands remain local infrastructure operations because the Migrate
-Protocol does not expose Migration Store administration. Local commands
+schema CLI commands continue to support direct local administration; the TUI
+uses the server schema operations for both local and remote connections. Local commands
 discover the local migration configuration and may continue using direct SDK
 services while the shared server seam is adopted incrementally.
 
@@ -319,6 +343,21 @@ Migration Run id through `MigrateClient`. A client interrupted after dispatch
 but before receiving `StartOperation` waits for the Run ID before applying its
 detach or stop decision. If acknowledgement fails and dispatch outcome is
 unknown, active-run discovery is the recovery path.
+
+Rollback requests default to the explicit selection: omitting
+`withDependencies` is equivalent to `false`, including for a single definition.
+Clients must request dependent expansion explicitly. The TUI guides this choice
+with two radio options: **Include dependencies**, recommended and selected by
+default, and **Selected only**. Selected-only preparation reads current durable
+dependent counts; when omitted dependents have tracked items, the TUI prepares
+with force and explains that dependent records remain and references may break.
+When no dependent records remain, selected-only preparation keeps force off.
+The API retains independent inclusion and force controls, and execution still
+performs server preflight. Changing scope prepares a new server plan in place.
+Confirmation is disabled during preparation or after a failed update, and
+cancelling discards any pending response. **Rollback selected** executes the
+displayed plan once. Selected-entry rollbacks cannot include dependencies and
+use the same conditional force behavior while preserving the selected identities.
 
 ## Consequences
 

@@ -63,8 +63,16 @@ const makeSucceededRunWithRetainedLock = Effect.fn(function* () {
       runId
     );
 
-    yield* migrationStore.queueRun(runId, [definitionId]);
-    yield* migrationStore.beginRun(runId, [definitionId]);
+    yield* migrationStore.queueRun({
+      runId,
+      definitionIds: [definitionId],
+      operation: "run",
+    });
+    yield* migrationStore.beginRun({
+      runId,
+      definitionIds: [definitionId],
+      operation: "run",
+    });
     yield* migrationStore.completeRun(
       runId,
       [definitionId],

@@ -162,6 +162,7 @@ export {
   MigrationDefinitionRunState,
   MigrationDefinitionRunStatus,
   MigrationDefinitionRunSummary,
+  MigrationRunOperation,
   MigrationRunState,
   MigrationRunStatus,
   MigrationRunSummary,
@@ -179,7 +180,9 @@ export {
   DuplicateSourceIdentityStatusWarning,
   InvalidSourceItemStatusWarning,
   makeMigrationStatusRequest,
+  migrationDependencyIsSatisfied,
   MigrationDefinitionSourceStatus,
+  MigrationDefinitionCompletion,
   MigrationDefinitionStatus,
   MigrationItemStateSummary,
   MigrationStatusReport,
@@ -369,6 +372,8 @@ export {
 } from "./services/migration-store.ts";
 export type {
   MigrationDefinitionRunOutcomeMap,
+  MigrationItemRollbackInput,
+  MigrationRunStartInput,
   OrphanItemStatePage,
   OrphanItemStatePageInput,
 } from "./services/migration-store.ts";

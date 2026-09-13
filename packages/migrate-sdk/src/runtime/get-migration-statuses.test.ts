@@ -221,6 +221,7 @@ describe("getMigrationStatuses", () => {
           {
             definitionId,
             discovery: "full",
+            completion: null,
             durable: {
               failed: 1,
               migrated: 1,
@@ -289,6 +290,12 @@ describe("getMigrationStatuses", () => {
         listOrphanItemStates: () => fail("listOrphanItemStates"),
         observeItemState: () => fail("observeItemState"),
         getRunState: () => fail("getRunState"),
+        recordSourcePassCompletion: () => fail("recordSourcePassCompletion"),
+        getDefinitionCompletion: (id) =>
+          Effect.sync(() => {
+            calls.push(`getDefinitionCompletion:${id}`);
+            return null;
+          }),
         getLatestRunState: (id) =>
           Effect.sync(() => {
             calls.push(`getLatestRunState:${id}`);
@@ -316,7 +323,7 @@ describe("getMigrationStatuses", () => {
         upsertMigrationContract: () => fail("upsertMigrationContract"),
         getItemState: () => fail("getItemState"),
         listItemStates: () => fail("listItemStates"),
-        deleteItemState: () => fail("deleteItemState"),
+        removeRolledBackItem: () => fail("removeRolledBackItem"),
         upsertItemState: () => fail("upsertItemState"),
         createRunId: fail("createRunId"),
         beginRun: () => fail("beginRun"),
@@ -340,6 +347,7 @@ describe("getMigrationStatuses", () => {
 
       expect(report.definitions[0]?.definitionId).toBe(definitionId);
       expect(calls).toEqual([
+        "getDefinitionCompletion:articles",
         "getLatestRunState:articles",
         "getDefinitionLock:articles",
         "getItemStateSummary:articles",
@@ -423,6 +431,7 @@ describe("getMigrationStatuses", () => {
             {
               definitionId,
               discovery: "full",
+              completion: null,
               durable: {
                 failed: 0,
                 migrated: 1,
@@ -468,6 +477,12 @@ describe("getMigrationStatuses", () => {
         listOrphanItemStates: () => fail("listOrphanItemStates"),
         observeItemState: () => fail("observeItemState"),
         getRunState: () => fail("getRunState"),
+        recordSourcePassCompletion: () => fail("recordSourcePassCompletion"),
+        getDefinitionCompletion: (id) =>
+          Effect.sync(() => {
+            calls.push(`getDefinitionCompletion:${id}`);
+            return null;
+          }),
         getLatestRunState: (id) =>
           Effect.sync(() => {
             calls.push(`getLatestRunState:${id}`);
@@ -490,7 +505,7 @@ describe("getMigrationStatuses", () => {
         getMigrationContract: () => fail("getMigrationContract"),
         upsertMigrationContract: () => fail("upsertMigrationContract"),
         getItemState: () => fail("getItemState"),
-        deleteItemState: () => fail("deleteItemState"),
+        removeRolledBackItem: () => fail("removeRolledBackItem"),
         upsertItemState: () => fail("upsertItemState"),
         createRunId: fail("createRunId"),
         beginRun: () => fail("beginRun"),
@@ -535,6 +550,7 @@ describe("getMigrationStatuses", () => {
         unprocessed: 1,
       });
       expect(calls).toEqual([
+        "getDefinitionCompletion:articles",
         "getLatestRunState:articles",
         "getDefinitionLock:articles",
         "listItemStates:articles",

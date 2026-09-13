@@ -19,7 +19,10 @@ import {
   toMigrationRunId,
   toSourceVersion,
 } from "migrate-sdk";
-import { runSupersededMigrationRunScenario } from "migrate-sdk/testing";
+import {
+  runMigrationCompletionScenario,
+  runSupersededMigrationRunScenario,
+} from "migrate-sdk/testing";
 import { CommercetoolsSdk } from "../sdk.ts";
 
 const runIdPattern = /^run-/u;
@@ -250,6 +253,129 @@ const makeStoreLayer = (
   });
 
 describe("CommercetoolsMigrationStore", () => {
+  for (const sharedKind of ["definition-completion", "encoded-source-cursor"]) {
+    it.effect(
+      `allows concurrent rollback items to clear shared ${sharedKind}`,
+      () => {
+        let deletes = 0;
+        let release: (() => void) | undefined;
+        const barrier = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const recording = makeRecordingCustomObjectApiRoot({
+          beforeRequest: async (request) => {
+            if (
+              request.method === "DELETE" &&
+              String(request.pathVariables?.key).includes(`__${sharedKind}__`)
+            ) {
+              deletes += 1;
+              if (deletes === 2) {
+                release?.();
+              }
+              await barrier;
+            }
+          },
+        });
+        return Effect.gen(function* () {
+          const store = yield* MigrationStore;
+          const runId = toMigrationRunId("concurrent-rollback");
+          const identities = [
+            sourceIdentityFor("one"),
+            sourceIdentityFor("two"),
+          ];
+          for (const identity of identities) {
+            yield* store.upsertItemState({
+              definitionId,
+              lastRunId: runId,
+              sourceIdentity: identity,
+              sourceVersion: toSourceVersion("v1"),
+              status: "migrated",
+              updatedAt: new Date(),
+            });
+          }
+          yield* store.recordSourcePassCompletion({
+            definitionId,
+            runId,
+            completedAt: new Date(),
+            sourceCursor: null,
+          });
+          yield* store.setSourceCursor(
+            definitionId,
+            toEncodedSourceCursor("saved-cursor")
+          );
+          yield* Effect.forEach(
+            identities,
+            (identity) =>
+              store.removeRolledBackItem({
+                definitionId,
+                sourceIdentity: identity.encoded,
+              }),
+            { concurrency: 2 }
+          );
+          expect(deletes).toBe(2);
+          expect(yield* store.listItemStates(definitionId)).toEqual([]);
+          expect(yield* store.getDefinitionCompletion(definitionId)).toBeNull();
+          expect(yield* store.getSourceCursor(definitionId)).toBeNull();
+        }).pipe(Effect.provide(makeStoreLayer(recording)));
+      }
+    );
+  }
+
+  it.effect("conforms to completion and rollback history transitions", () => {
+    const recording = makeRecordingCustomObjectApiRoot();
+    return Effect.gen(function* () {
+      const result = yield* runMigrationCompletionScenario("commercetools");
+      expect(result.initial).toEqual({
+        completion: null,
+        cursor: null,
+        item: null,
+      });
+      expect(result.afterNoop).toEqual({
+        completion: result.completion,
+        cursor: result.completion.sourceCursor,
+        item: result.item,
+      });
+      expect(result.afterRemoval).toEqual(result.initial);
+      expect(result.latest).toMatchObject({
+        operation: "rollback",
+        status: "succeeded",
+      });
+      expect(result.restored).toEqual(result.completion);
+    }).pipe(Effect.provide(makeStoreLayer(recording)));
+  });
+
+  it.effect(
+    "keeps legacy operation unknown when advancing queued history",
+    () => {
+      const recording = makeRecordingCustomObjectApiRoot();
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const runId = toMigrationRunId("legacy-operation");
+        yield* seedRunState(recording, {
+          runId,
+          definitionIds: [definitionId],
+          status: "queued",
+          startedAt: new Date(),
+        });
+        const begun = yield* store.beginRun({
+          runId,
+          definitionIds: [definitionId],
+          operation: "run",
+        });
+        expect(begun.operation).toBeUndefined();
+        yield* store.completeRun(
+          runId,
+          [definitionId],
+          [{ definitionId, status: "succeeded" }]
+        );
+        expect((yield* store.getRunState(runId))?.operation).toBeUndefined();
+        expect(
+          (yield* store.getLatestRunState(definitionId))?.operation
+        ).toBeUndefined();
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
   it.effect("records Custom Object create-only writes with version 0", () => {
     const recording = makeRecordingCustomObjectApiRoot();
     const project = recording.apiRoot.withProjectKey({
@@ -960,7 +1086,11 @@ describe("CommercetoolsMigrationStore", () => {
         toEncodedSourceCursor("cursor-no-explicit-nulls")
       );
       yield* store.upsertItemState(itemState);
-      yield* store.beginRun(runId, [definitionId]);
+      yield* store.beginRun({
+        runId,
+        definitionIds: [definitionId],
+        operation: "run",
+      });
       yield* store.acquireDefinitionLock(definitionId, runId);
 
       const upserts = recording.requests.filter(
@@ -1300,10 +1430,10 @@ describe("CommercetoolsMigrationStore", () => {
           nextAfterIdentity: firstOrphan.sourceIdentity.encoded,
         });
 
-        yield* store.deleteItemState(
+        yield* store.removeRolledBackItem({
           definitionId,
-          firstOrphan.sourceIdentity.encoded
-        );
+          sourceIdentity: firstOrphan.sourceIdentity.encoded,
+        });
 
         const secondPage = yield* store.listOrphanItemStates(
           definitionId,
@@ -1847,9 +1977,15 @@ describe("CommercetoolsMigrationStore", () => {
       return Effect.gen(function* () {
         const store = yield* MigrationStore;
 
-        yield* store.deleteItemState(definitionId, sourceIdentity.encoded);
+        yield* store.removeRolledBackItem({
+          definitionId,
+          sourceIdentity: sourceIdentity.encoded,
+        });
         yield* store.upsertItemState(itemState);
-        yield* store.deleteItemState(definitionId, sourceIdentity.encoded);
+        yield* store.removeRolledBackItem({
+          definitionId,
+          sourceIdentity: sourceIdentity.encoded,
+        });
 
         expect(
           yield* store.getItemState(definitionId, sourceIdentity.encoded)
@@ -2083,7 +2219,11 @@ describe("CommercetoolsMigrationStore", () => {
     return Effect.gen(function* () {
       const store = yield* MigrationStore;
 
-      const running = yield* store.beginRun(runId, definitionIds);
+      const running = yield* store.beginRun({
+        runId,
+        definitionIds,
+        operation: "run",
+      });
       const succeeded = yield* store.completeRun(
         runId,
         definitionIds,
@@ -2093,7 +2233,11 @@ describe("CommercetoolsMigrationStore", () => {
         }))
       );
       const rerun = toMigrationRunId("run-latest-state-retry");
-      const retryRunning = yield* store.beginRun(rerun, definitionIds);
+      const retryRunning = yield* store.beginRun({
+        runId: rerun,
+        definitionIds,
+        operation: "run",
+      });
       const failed = yield* store.failRun(
         rerun,
         definitionIds,
@@ -2103,7 +2247,11 @@ describe("CommercetoolsMigrationStore", () => {
         }))
       );
       const cancelledRunId = toMigrationRunId("run-latest-state-cancelled");
-      yield* store.beginRun(cancelledRunId, definitionIds);
+      yield* store.beginRun({
+        runId: cancelledRunId,
+        definitionIds,
+        operation: "run",
+      });
       const cancelled = yield* store.markRunCancelled(
         cancelledRunId,
         definitionIds
@@ -2188,17 +2336,29 @@ describe("CommercetoolsMigrationStore", () => {
     return Effect.gen(function* () {
       const store = yield* MigrationStore;
 
-      yield* store.queueRun(runId, definitionIds);
+      yield* store.queueRun({ runId, definitionIds, operation: "run" });
       const requested = yield* store.requestRunCancellation(
         runId,
         definitionIds
       );
-      const begun = yield* store.beginRun(runId, definitionIds);
+      const begun = yield* store.beginRun({
+        runId,
+        definitionIds,
+        operation: "run",
+      });
       const cancelled = yield* store.completeRun(runId, definitionIds, [
         { definitionId, status: "succeeded" },
       ]);
-      const lateQueue = yield* store.queueRun(runId, definitionIds);
-      const lateBegin = yield* store.beginRun(runId, definitionIds);
+      const lateQueue = yield* store.queueRun({
+        runId,
+        definitionIds,
+        operation: "run",
+      });
+      const lateBegin = yield* store.beginRun({
+        runId,
+        definitionIds,
+        operation: "run",
+      });
       const latest = yield* store.getLatestRunState(definitionId);
 
       expect(requested.status).toBe("cancelling");
@@ -2245,8 +2405,8 @@ describe("CommercetoolsMigrationStore", () => {
       return Effect.gen(function* () {
         const store = yield* MigrationStore;
 
-        yield* store.queueRun(runId, definitionIds);
-        yield* store.beginRun(runId, definitionIds);
+        yield* store.queueRun({ runId, definitionIds, operation: "run" });
+        yield* store.beginRun({ runId, definitionIds, operation: "run" });
         blockCompletionWrite = true;
 
         const completionFiber = yield* store
@@ -2311,7 +2471,7 @@ describe("CommercetoolsMigrationStore", () => {
     return Effect.gen(function* () {
       const store = yield* MigrationStore;
 
-      yield* store.beginRun(runId, definitionIds);
+      yield* store.beginRun({ runId, definitionIds, operation: "run" });
       const failedRun = yield* store.failRun(runId, definitionIds, [
         { definitionId, status: "succeeded" },
         { definitionId: additionalDefinitionId, status: "failed" },
@@ -2364,7 +2524,11 @@ describe("CommercetoolsMigrationStore", () => {
       return Effect.gen(function* () {
         const store = yield* MigrationStore;
 
-        yield* store.beginRun(runId, [recoveryDefinitionId]);
+        yield* store.beginRun({
+          runId,
+          definitionIds: [recoveryDefinitionId],
+          operation: "run",
+        });
         armed = true;
         yield* store
           .completeRun(
@@ -2420,10 +2584,22 @@ describe("CommercetoolsMigrationStore", () => {
         const store = yield* MigrationStore;
 
         yield* store
-          .beginRun(originalRunId, [dependencyId, selectedId])
+          .beginRun({
+            runId: originalRunId,
+            definitionIds: [dependencyId, selectedId],
+            operation: "run",
+          })
           .pipe(Effect.flip);
-        yield* store.beginRun(newerRunId, [selectedId]);
-        yield* store.beginRun(originalRunId, [dependencyId, selectedId]);
+        yield* store.beginRun({
+          runId: newerRunId,
+          definitionIds: [selectedId],
+          operation: "run",
+        });
+        yield* store.beginRun({
+          runId: originalRunId,
+          definitionIds: [dependencyId, selectedId],
+          operation: "run",
+        });
 
         expect(
           yield* Effect.all([
@@ -2473,14 +2649,22 @@ describe("CommercetoolsMigrationStore", () => {
 
           interleaved = true;
           await Effect.runPromise(
-            store.beginRun(newerRunId, [raceDefinitionId])
+            store.beginRun({
+              runId: newerRunId,
+              definitionIds: [raceDefinitionId],
+              operation: "run",
+            })
           );
         },
       });
 
       return Effect.gen(function* () {
         store = yield* MigrationStore;
-        yield* store.beginRun(originalRunId, [raceDefinitionId]);
+        yield* store.beginRun({
+          runId: originalRunId,
+          definitionIds: [raceDefinitionId],
+          operation: "run",
+        });
         armed = true;
         yield* store.completeRun(
           originalRunId,

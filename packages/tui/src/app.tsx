@@ -1,5 +1,6 @@
 import { type KeyEvent, RGBA } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { RadioGroup } from "@tuiparts/react/radio-group";
 import type {
   MigrationDefinitionId,
   MigrationExecutionOptions,
@@ -42,6 +43,7 @@ import {
   SessionActivityView,
   type SessionActivityViewMode,
 } from "./components/session-activity-view.tsx";
+import { StoreSchemaSetup } from "./components/store-schema-setup.tsx";
 import { Badge } from "./components/ui/badge.tsx";
 import { Button } from "./components/ui/button.tsx";
 import {
@@ -50,8 +52,11 @@ import {
   DialogDescription,
   DialogTitle,
 } from "./components/ui/dialog.tsx";
+import { Radio } from "./components/ui/radio.tsx";
 import type { MigrationTuiExecutionResult } from "./execution.ts";
 import { nextListSelection } from "./list-navigation.ts";
+import { rollbackConfirmation } from "./rollback-confirmation.ts";
+import { prepareRollbackScope, type RollbackScope } from "./rollback-scope.ts";
 import type { MigrationTuiRuntime } from "./runtime.ts";
 import {
   appendSessionActivity,
@@ -256,31 +261,37 @@ const selectionLabel = (selection: MigrateSelection): string => {
 const actionCopy = {
   rescan: {
     button: "rescan",
+    dependencyDescription: "Rescan migrations with dependencies",
     preparing: "Preparing to rescan",
     progress: "Rescanning",
   },
   "retry-failed": {
     button: "retry",
+    dependencyDescription: "Retry failed items with dependencies",
     preparing: "Preparing to retry failed items for",
     progress: "Retrying failed items for",
   },
   "retry-skipped": {
     button: "retry",
+    dependencyDescription: "Retry skipped items with dependencies",
     preparing: "Preparing to retry skipped items for",
     progress: "Retrying skipped items for",
   },
   rollback: {
     button: "rollback",
-    preparing: "Preparing to roll back",
-    progress: "Rolling back",
+    dependencyDescription: "Rollback migrations with dependencies",
+    preparing: "Preparing rollback for",
+    progress: "Rollback in progress for",
   },
   run: {
     button: "run",
+    dependencyDescription: "Run migrations with dependencies",
     preparing: "Preparing to run",
     progress: "Running",
   },
   update: {
     button: "update",
+    dependencyDescription: "Update migrations with dependencies",
     preparing: "Preparing to update",
     progress: "Updating",
   },
@@ -288,6 +299,7 @@ const actionCopy = {
   MigrateAction,
   {
     readonly button: string;
+    readonly dependencyDescription: string;
     readonly preparing: string;
     readonly progress: string;
   }
@@ -309,188 +321,26 @@ const preparedOperationCopy = (operation: MigratePreparedOperation) =>
   operationRollsBackOrphans(operation)
     ? {
         button: "rollback orphans",
-        preparing: "Preparing to roll back orphans for",
-        progress: "Rolling back orphans for",
+        preparing: "Preparing orphan rollback for",
+        progress: "Orphan rollback in progress for",
       }
     : actionCopy[operation.action];
 
-const forcedRollbackOptions = (
-  operation: MigratePreparedOperation
-): MigratePrepareOptions => ({
-  ...(operation.plan.execution === undefined
-    ? {}
-    : { execution: operation.plan.execution }),
-  force: true,
-  ...(operation.sourceIdentities === undefined
-    ? {}
-    : { sourceIdentities: operation.sourceIdentities }),
-  withDependencies: operation.plan.withDependencies,
-});
-
-type PlanHierarchyRow = MigratePreparedOperation["planRows"][number];
-
-interface PlanHierarchyItem {
-  readonly ancestorsAreLast: readonly boolean[];
-  readonly depth: number;
-  readonly executionStep?: number;
-  readonly id: MigrateDashboardRow["entry"]["id"];
-  readonly isLast: boolean;
-  readonly relation?: "optional" | "required";
-  readonly row?: PlanHierarchyRow;
-}
-
-const planHierarchyItems = (
-  operation: MigratePreparedOperation
-): readonly PlanHierarchyItem[] => {
-  const rowsById = new Map(
-    operation.planRows.map((row) => [row.entry.id, row])
-  );
-
-  for (const dependency of operation.dependencyChecks) {
-    if (dependency.row !== undefined) {
-      rowsById.set(dependency.dependencyId, dependency.row);
-    }
-  }
-
-  const nodeIds = new Set(rowsById.keys());
-  for (const dependency of operation.dependencyChecks) {
-    nodeIds.add(dependency.dependencyId);
-    nodeIds.add(dependency.requiredByDefinitionId);
-  }
-
-  const executionSteps = new Map(
-    operation.plan.executionDefinitionIds.map((definitionId, index) => [
-      definitionId,
-      index + 1,
-    ])
-  );
-  const executionPosition = (id: MigrateDashboardRow["entry"]["id"]): number =>
-    executionSteps.get(id) ?? Number.MAX_SAFE_INTEGER;
-  const children = new Map<
-    MigrateDashboardRow["entry"]["id"],
-    Map<MigrateDashboardRow["entry"]["id"], "optional" | "required">
-  >();
-  const addEdge = (
-    dependentId: MigrateDashboardRow["entry"]["id"],
-    dependencyId: MigrateDashboardRow["entry"]["id"],
-    relation: "optional" | "required"
-  ) => {
-    if (!(nodeIds.has(dependentId) && nodeIds.has(dependencyId))) {
-      return;
-    }
-
-    const parentId =
-      operation.action === "rollback" ? dependencyId : dependentId;
-    const childId =
-      operation.action === "rollback" ? dependentId : dependencyId;
-    const current = children.get(parentId) ?? new Map();
-    current.set(childId, relation);
-    children.set(parentId, current);
-  };
-
-  for (const row of rowsById.values()) {
-    for (const dependencyId of row.entry.dependencies.required) {
-      addEdge(row.entry.id, dependencyId, "required");
-    }
-    for (const dependencyId of row.entry.dependencies.optional) {
-      addEdge(row.entry.id, dependencyId, "optional");
-    }
-  }
-
-  for (const dependency of operation.dependencyChecks) {
-    addEdge(
-      dependency.requiredByDefinitionId,
-      dependency.dependencyId,
-      "required"
-    );
-  }
-
-  const requestedIds =
-    operation.plan.requestedDefinitionIds === "all"
-      ? [...nodeIds]
-      : operation.plan.requestedDefinitionIds.filter((id) => nodeIds.has(id));
-  const childIds = new Set(
-    [...children.values()].flatMap((entries) => [...entries.keys()])
-  );
-  const requestedRoots = requestedIds.filter((id) => !childIds.has(id));
-  const roots = [
-    ...(requestedRoots.length === 0 ? requestedIds : requestedRoots),
-  ].sort((left, right) => executionPosition(left) - executionPosition(right));
-  const items: PlanHierarchyItem[] = [];
-  const visited = new Set<MigrateDashboardRow["entry"]["id"]>();
-  const groupDepth = operation.selection.kind === "group" ? 1 : 0;
-
-  const visit = (
-    id: MigrateDashboardRow["entry"]["id"],
-    relation: "optional" | "required" | undefined,
-    depth: number,
-    isLast: boolean,
-    ancestorsAreLast: readonly boolean[]
-  ) => {
-    if (visited.has(id)) {
-      return;
-    }
-    visited.add(id);
-    const executionStep = executionSteps.get(id);
-    const row = rowsById.get(id);
-
-    items.push({
-      ancestorsAreLast,
-      depth,
-      ...(executionStep === undefined ? {} : { executionStep }),
-      id,
-      isLast,
-      ...(relation === undefined ? {} : { relation }),
-      ...(row === undefined ? {} : { row }),
-    });
-
-    const nodeChildren = [...(children.get(id)?.entries() ?? [])].sort(
-      ([left], [right]) => executionPosition(left) - executionPosition(right)
-    );
-    const childAncestors =
-      depth === 0 ? ancestorsAreLast : [...ancestorsAreLast, isLast];
-
-    nodeChildren.forEach(([childId, childRelation], index) => {
-      visit(
-        childId,
-        childRelation,
-        depth + 1,
-        index === nodeChildren.length - 1,
-        childAncestors
-      );
-    });
-  };
-
-  roots.forEach((rootId, index) => {
-    visit(rootId, undefined, groupDepth, index === roots.length - 1, []);
-  });
-
-  const remainingIds = [...nodeIds]
-    .filter((id) => !visited.has(id))
-    .sort((left, right) => executionPosition(left) - executionPosition(right));
-  remainingIds.forEach((id, index) => {
-    visit(id, undefined, groupDepth, index === remainingIds.length - 1, []);
-  });
-
-  return items;
+const executionPlanItems = (operation: MigratePreparedOperation) => {
+  const rows = new Map(operation.planRows.map((row) => [row.entry.id, row]));
+  return operation.plan.executionDefinitionIds.map((id, index) => ({
+    id,
+    executionStep: index + 1,
+    row: rows.get(id),
+  }));
 };
 
-const hierarchyPrefix = (item: PlanHierarchyItem): string => {
-  if (item.depth === 0) {
-    return "";
-  }
-
-  return `${item.ancestorsAreLast
-    .map((ancestorIsLast) => (ancestorIsLast ? "   " : "│  "))
-    .join("")}${item.isLast ? "└─ " : "├─ "}`;
-};
-
-const PlanHierarchy = ({
+const ExecutionPlan = ({
   operation,
 }: {
   readonly operation: MigratePreparedOperation;
 }) => {
-  const items = planHierarchyItems(operation);
+  const items = executionPlanItems(operation);
   const hasGroupRoot = operation.selection.kind === "group";
 
   return (
@@ -516,25 +366,18 @@ const PlanHierarchy = ({
           item.row === undefined
             ? "status unavailable"
             : migrationStatusLabel(item.row);
-        const prefix = hierarchyPrefix(item);
 
         return (
           <box
             key={item.id}
             style={{ flexDirection: "row", flexShrink: 0, height: 1 }}
           >
-            <text fg={colors.dim}>{prefix}</text>
+            <text fg={colors.dim}>{item.executionStep}. </text>
             <text fg={migrationStatusColor(label)}>
               {migrationStatusIcon(label)}{" "}
             </text>
             <text fg={colors.foreground}>{item.id}</text>
-            {item.executionStep === undefined ? null : (
-              <text fg={colors.dim}> step {item.executionStep}</text>
-            )}
             <box style={{ flexGrow: 1 }} />
-            {item.relation === undefined ? null : (
-              <text fg={colors.dim}>{item.relation} </text>
-            )}
             <text fg={migrationStatusColor(label)}>{label.toUpperCase()}</text>
           </box>
         );
@@ -551,8 +394,15 @@ const SafetyDialog = ({
   onIncludeDependencies,
   onKeyDown,
   operation,
+  preview,
+  rollbackPlanError,
+  rollbackPlanUpdating,
+  onRollbackScopeChange,
   width,
 }: {
+  readonly rollbackPlanError: string | null;
+  readonly rollbackPlanUpdating: boolean;
+  readonly onRollbackScopeChange: (scope: RollbackScope) => void;
   readonly height: number;
   readonly onCancel: () => void;
   readonly onForce: () => void;
@@ -560,48 +410,63 @@ const SafetyDialog = ({
   readonly onIncludeDependencies: () => void;
   readonly onKeyDown: (key: KeyEvent) => void;
   readonly operation: MigratePreparedOperation;
+  readonly preview: MigratePreparedOperation | null;
   readonly width: number;
 }) => {
   const compact = width < 80;
   const dialogWidth = Math.max(1, Math.min(76, width - (compact ? 8 : 4)));
-  const hierarchyItems = planHierarchyItems(operation);
+  const hierarchyItems = executionPlanItems(preview ?? operation);
   const hierarchyRows =
     hierarchyItems.length + (operation.selection.kind === "group" ? 1 : 0);
+  const rollback = operation.action === "rollback";
+  const rollbackExtraRows = operation.plan.force === true ? 13 : 12;
   const dialogHeight = Math.max(
     1,
-    Math.min(Math.max(11, hierarchyRows + 9), height - 4)
+    Math.min(
+      Math.max(
+        rollback ? 14 : 13,
+        hierarchyRows + (rollback ? rollbackExtraRows : 10)
+      ),
+      height - 4
+    )
   );
-  const hierarchyScrollable = hierarchyRows + 9 > dialogHeight;
   const dialogPadding = compact ? 1 : 2;
-  const rollback = operation.action === "rollback";
   const rollbackOrphans = operationRollsBackOrphans(operation);
-  const destructive = rollback || rollbackOrphans;
+  const dependencyDecision = operationNeedsDependencyDecision(operation);
+  const destructive = rollback || (rollbackOrphans && !dependencyDecision);
   const forcedRollback = rollback && operation.plan.force === true;
-  let title = "Required dependencies not ready";
-  let description = `${selectionLabel(operation.selection)} · Some required dependencies have not succeeded.`;
+  let title = "Dependencies incomplete";
+  let description: string = rollbackOrphans
+    ? "Rollback orphaned items with dependencies"
+    : actionCopy[operation.action].dependencyDescription;
   let badgeLabel = "ACTION REQUIRED";
+  let planLabel = rollbackOrphans ? "Migration plan" : "Run order";
   let confirmationButtonLabel = "";
   let destructiveShortcut = "";
 
+  const rollbackCopy = rollback ? rollbackConfirmation(operation) : undefined;
+  const rollbackScopeHint =
+    rollbackPlanError ?? (rollbackPlanUpdating ? "Updating plan…" : null);
+
   if (rollback) {
-    title = forcedRollback ? "Confirm forced rollback" : "Confirm rollback";
-    description = forcedRollback
-      ? `${selectionLabel(operation.selection)} · Dependent migration state checks will be bypassed. Step numbers show rollback order.`
-      : `${selectionLabel(operation.selection)} · Step numbers show rollback execution order.`;
-    badgeLabel = forcedRollback ? "FORCED" : "DESTRUCTIVE";
-    confirmationButtonLabel = forcedRollback
-      ? "y Force rollback"
-      : "y Rollback";
-    destructiveShortcut = forcedRollback
-      ? "y force rollback"
-      : "f force rollback · y rollback";
-  } else if (rollbackOrphans) {
+    title = "Confirm rollback";
+    planLabel = "Rollback order";
+    badgeLabel = forcedRollback ? "UNSAFE" : "DESTRUCTIVE";
+    confirmationButtonLabel =
+      rollbackCopy?.buttonLabel ?? "y Rollback selected";
+    destructiveShortcut = "i include · s selected only · y confirm";
+  } else if (rollbackOrphans && !dependencyDecision) {
     title = "Confirm orphan rollback";
-    description = `${selectionLabel(operation.selection)} · Destination items missing from the latest source inventory will be rolled back.`;
+    description = "Rollback destination items missing from source";
     badgeLabel = "DESTRUCTIVE";
     confirmationButtonLabel = "y Rollback orphans";
     destructiveShortcut = "y rollback orphans";
   }
+
+  const paragraphs = rollbackCopy?.paragraphs ?? [description];
+  const forceWarning = destructive
+    ? null
+    : "Force skips dependencies; some items may fail.";
 
   return (
     <Dialog
@@ -641,15 +506,9 @@ const SafetyDialog = ({
             label={badgeLabel}
           />
         </box>
-        <DialogDescription content={description} wrapMode="none" />
-        <box style={{ flexShrink: 0, height: 1, marginTop: 1 }}>
-          <text fg={colors.foreground}>
-            {destructive ? "Affected migration hierarchy" : "Run order"}
-          </text>
-        </box>
         <scrollbox
-          focusable={hierarchyScrollable}
-          focused={hierarchyScrollable}
+          focusable
+          focused
           scrollX={false}
           scrollY
           style={{
@@ -660,8 +519,72 @@ const SafetyDialog = ({
           }}
           viewportCulling
         >
-          <PlanHierarchy operation={operation} />
+          <box
+            style={{ flexDirection: "column", flexShrink: 0, width: "100%" }}
+          >
+            {paragraphs.map((paragraph) => (
+              <DialogDescription
+                content={paragraph}
+                flexShrink={0}
+                key={paragraph}
+                wrapMode="word"
+              />
+            ))}
+            {forceWarning !== null && (
+              <DialogDescription
+                content={forceWarning}
+                flexShrink={0}
+                wrapMode="word"
+              />
+            )}
+            <text fg={colors.foreground} marginTop={1}>
+              {planLabel}
+            </text>
+          </box>
+          <ExecutionPlan operation={preview ?? operation} />
         </scrollbox>
+        {rollback && (
+          <box flexDirection="column" flexShrink={0} marginTop={1}>
+            <RadioGroup
+              disabled={rollbackPlanUpdating}
+              flexDirection="column"
+              flexShrink={0}
+              onValueChange={(scope) => {
+                if (
+                  scope === "include-dependencies" ||
+                  scope === "selected-only"
+                ) {
+                  onRollbackScopeChange(scope);
+                }
+              }}
+              value={
+                operation.plan.withDependencies
+                  ? "include-dependencies"
+                  : "selected-only"
+              }
+            >
+              <Radio
+                accentColor={colors.info}
+                disabled={operation.sourceIdentities !== undefined}
+                label="i Include dependencies (recommended)"
+                value="include-dependencies"
+              />
+              <Radio
+                accentColor={colors.info}
+                label="s Selected only"
+                value="selected-only"
+              />
+            </RadioGroup>
+            {rollbackScopeHint !== null && (
+              <text
+                fg={rollbackPlanError === null ? colors.dim : colors.danger}
+                wrapMode="word"
+              >
+                {rollbackScopeHint}
+              </text>
+            )}
+          </box>
+        )}
         <box
           style={{
             flexDirection: "row-reverse",
@@ -673,20 +596,12 @@ const SafetyDialog = ({
           }}
         >
           {destructive ? (
-            <>
-              <Button
-                intent="warning"
-                label={confirmationButtonLabel}
-                onPress={onConfirm}
-              />
-              {rollback && !forcedRollback ? (
-                <Button
-                  intent="warning"
-                  label="f Force rollback"
-                  onPress={onForce}
-                />
-              ) : null}
-            </>
+            <Button
+              disabled={rollbackPlanUpdating || rollbackPlanError !== null}
+              intent="warning"
+              label={confirmationButtonLabel}
+              onPress={onConfirm}
+            />
           ) : (
             <>
               <Button
@@ -695,7 +610,7 @@ const SafetyDialog = ({
               />
               <Button
                 intent="warning"
-                label={`f Force ${actionCopy[operation.action].button}`}
+                label={`f Force ${preparedOperationCopy(operation).button}`}
                 onPress={onForce}
               />
             </>
@@ -712,7 +627,7 @@ const SafetyDialog = ({
           }}
         >
           <text fg={colors.dim}>
-            {hierarchyScrollable ? "↑↓ scroll · " : ""}
+            {"↑↓ scroll · "}
             {destructive
               ? `${destructiveShortcut} · n/esc cancel`
               : "i include · f force · n/esc cancel"}
@@ -723,17 +638,40 @@ const SafetyDialog = ({
   );
 };
 
-export const MigrationTuiApp = ({
-  initialRows,
-  lifecycle,
-  recoveryNotice,
-  runtime,
-}: {
+interface MigrationTuiAppProps {
   readonly initialRows?: readonly MigrateDashboardRow[];
   readonly lifecycle: MigrationTuiShutdownController;
   readonly recoveryNotice?: string;
   readonly runtime: MigrationTuiRuntime;
-}) => {
+}
+
+export const MigrationTuiApp = (props: MigrationTuiAppProps) => {
+  const [readyRows, setReadyRows] = useState<
+    readonly MigrateDashboardRow[] | null
+  >(() =>
+    props.runtime.storeSchema === null ||
+    props.runtime.storeSchema.status === "current"
+      ? (props.initialRows ?? props.runtime.rows)
+      : null
+  );
+  if (readyRows === null) {
+    return (
+      <StoreSchemaSetup
+        onExit={props.lifecycle.requestExit}
+        onReady={setReadyRows}
+        runtime={props.runtime}
+      />
+    );
+  }
+  return <MigrationTuiDashboardApp {...props} initialRows={readyRows} />;
+};
+
+const MigrationTuiDashboardApp = ({
+  initialRows,
+  lifecycle,
+  recoveryNotice,
+  runtime,
+}: MigrationTuiAppProps) => {
   const dimensions = useTerminalDimensions();
   const [sourceScanStatuses, setSourceScanStatuses] = useState<
     ReadonlyMap<string, NonNullable<MigrateDashboardRow["status"]>>
@@ -744,6 +682,13 @@ export const MigrationTuiApp = ({
   const [view, setView] = useState<View>("dashboard");
   const [pendingOperation, setPendingOperation] =
     useState<MigratePreparedOperation | null>(null);
+  const [dependencyPreview, setDependencyPreview] =
+    useState<MigratePreparedOperation | null>(null);
+  const [rollbackPlanUpdating, setRollbackPlanUpdating] = useState(false);
+  const [rollbackPlanError, setRollbackPlanError] = useState<string | null>(
+    null
+  );
+  const rollbackPlanUpdateRef = useRef<symbol | null>(null);
   const [pendingLockRow, setPendingLockRow] =
     useState<MigrateDashboardRow | null>(null);
   const [selectiveAction, setSelectiveAction] = useState<"rollback" | "run">(
@@ -1250,18 +1195,31 @@ export const MigrationTuiApp = ({
       }
 
       setPendingOperation(null);
+      setDependencyPreview(null);
       setView("dashboard");
       setBusy(
-        `${options.rollbackOrphans === true ? "Preparing to roll back orphans for" : actionCopy[action].preparing} ${selectionLabel(selection)}…`
+        `${options.rollbackOrphans === true ? "Preparing orphan rollback for" : actionCopy[action].preparing} ${selectionLabel(selection)}…`
       );
       setError(null);
 
       try {
         const execution = migrationExecutionOptions(executionSettings);
-        const operation = await runtime.prepare(selection, action, {
+        const prepareOptions = {
           ...options,
           ...(execution === undefined ? {} : { execution }),
-        });
+        };
+        const operation =
+          action === "rollback"
+            ? await prepareRollbackScope(
+                runtime,
+                selection,
+                options.sourceIdentities !== undefined ||
+                  options.withDependencies === false
+                  ? "selected-only"
+                  : "include-dependencies",
+                prepareOptions
+              )
+            : await runtime.prepare(selection, action, prepareOptions);
 
         if (lifecycle.isExitRequested()) {
           return;
@@ -1272,6 +1230,17 @@ export const MigrationTuiApp = ({
           operationRollsBackOrphans(operation) ||
           operationNeedsDependencyDecision(operation)
         ) {
+          if (operationNeedsDependencyDecision(operation)) {
+            const preview = await runtime.prepare(selection, action, {
+              ...options,
+              ...(execution === undefined ? {} : { execution }),
+              withDependencies: true,
+            });
+            if (lifecycle.isExitRequested()) {
+              return;
+            }
+            setDependencyPreview(preview);
+          }
           setBusy("");
           setPendingOperation(operation);
           setView("confirm");
@@ -1848,7 +1817,53 @@ export const MigrationTuiApp = ({
     }
   }, [selectedTarget]);
 
+  const changeRollbackScope = useCallback(
+    async (scope: RollbackScope) => {
+      const operation = pendingOperation;
+      if (
+        operation?.action !== "rollback" ||
+        rollbackPlanUpdateRef.current !== null ||
+        lifecycle.isExitRequested()
+      ) {
+        return;
+      }
+      const token = Symbol("RollbackPlanUpdate");
+      rollbackPlanUpdateRef.current = token;
+      setRollbackPlanUpdating(true);
+      setRollbackPlanError(null);
+      try {
+        const updated = await prepareRollbackScope(
+          runtime,
+          operation.selection,
+          scope,
+          operation.request.options
+        );
+        if (
+          rollbackPlanUpdateRef.current !== token ||
+          lifecycle.isExitRequested()
+        ) {
+          return;
+        }
+        setPendingOperation(updated);
+        setDependencyPreview(null);
+      } catch (cause) {
+        if (rollbackPlanUpdateRef.current === token) {
+          setRollbackPlanError(errorMessage(cause));
+        }
+      } finally {
+        if (rollbackPlanUpdateRef.current === token) {
+          rollbackPlanUpdateRef.current = null;
+          setRollbackPlanUpdating(false);
+        }
+      }
+    },
+    [pendingOperation, runtime, lifecycle]
+  );
+
   const cancelConfirmation = useCallback(() => {
+    rollbackPlanUpdateRef.current = null;
+    setRollbackPlanUpdating(false);
+    setRollbackPlanError(null);
     setPendingOperation(null);
     setView("dashboard");
   }, []);
@@ -1904,6 +1919,27 @@ export const MigrationTuiApp = ({
     [cancelBreakLock, executeBreakLock, startTask]
   );
 
+  const chooseDependencies = useCallback(
+    (withDependencies: boolean) => {
+      const operation = pendingOperation;
+      if (operation === null || !operationNeedsDependencyDecision(operation)) {
+        return;
+      }
+      startTask(
+        prepareOperation(
+          operation.action,
+          {
+            ...operation.request.options,
+            force: !withDependencies,
+            withDependencies,
+          },
+          operation.selection
+        )
+      );
+    },
+    [pendingOperation, prepareOperation, startTask]
+  );
+
   const handleConfirmationKey = useCallback(
     (key: KeyEvent) => {
       const operation = pendingOperation;
@@ -1913,68 +1949,37 @@ export const MigrationTuiApp = ({
 
       if (key.name === "n" || key.name === "escape") {
         cancelConfirmation();
+      } else if (operation?.action === "rollback") {
+        if (rollbackPlanUpdateRef.current !== null) {
+          return;
+        }
+        if (key.name === "i" && operation.sourceIdentities === undefined) {
+          startTask(changeRollbackScope("include-dependencies"));
+        } else if (key.name === "s") {
+          startTask(changeRollbackScope("selected-only"));
+        } else if (key.name === "y" && rollbackPlanError === null) {
+          startTask(executeOperation(operation));
+        }
       } else if (
         operation !== null &&
-        (operation.action === "rollback" ||
-          operationRollsBackOrphans(operation)) &&
+        operationRollsBackOrphans(operation) &&
+        !operationNeedsDependencyDecision(operation) &&
         key.name === "y"
       ) {
         startTask(executeOperation(operation));
-      } else if (
-        operation !== null &&
-        operation.action === "rollback" &&
-        operation.plan.force !== true &&
-        key.name === "f"
-      ) {
-        startTask(
-          prepareOperation(
-            operation.action,
-            forcedRollbackOptions(operation),
-            operation.selection
-          )
-        );
-      } else if (
-        operation !== null &&
-        operation.action !== "rollback" &&
-        key.name === "i"
-      ) {
-        startTask(
-          prepareOperation(
-            operation.action,
-            {
-              ...(operation.sourceIdentities === undefined
-                ? {}
-                : { sourceIdentities: operation.sourceIdentities }),
-              withDependencies: true,
-            },
-            operation.selection
-          )
-        );
-      } else if (
-        operation !== null &&
-        operation.action !== "rollback" &&
-        key.name === "f"
-      ) {
-        startTask(
-          prepareOperation(
-            operation.action,
-            {
-              force: true,
-              ...(operation.sourceIdentities === undefined
-                ? {}
-                : { sourceIdentities: operation.sourceIdentities }),
-              withDependencies: false,
-            },
-            operation.selection
-          )
-        );
+      } else if (key.name === "i") {
+        chooseDependencies(true);
+      } else if (key.name === "f") {
+        chooseDependencies(false);
       }
     },
     [
       cancelConfirmation,
+      changeRollbackScope,
+      chooseDependencies,
+      rollbackPlanError,
       executeOperation,
       pendingOperation,
-      prepareOperation,
       startTask,
     ]
   );
@@ -2132,6 +2137,7 @@ export const MigrationTuiApp = ({
       view === "confirm" &&
       (key.name === "f" ||
         key.name === "i" ||
+        (key.name === "s" && pendingOperation?.action === "rollback") ||
         key.name === "y" ||
         key.name === "n" ||
         key.name === "escape")
@@ -2333,62 +2339,29 @@ export const MigrationTuiApp = ({
           onCancel={cancelConfirmation}
           onConfirm={() => {
             if (
+              rollbackPlanUpdateRef.current !== null ||
+              rollbackPlanError !== null
+            ) {
+              return;
+            }
+            if (
               pendingOperation.action === "rollback" ||
-              operationRollsBackOrphans(pendingOperation)
+              (operationRollsBackOrphans(pendingOperation) &&
+                !operationNeedsDependencyDecision(pendingOperation))
             ) {
               startTask(executeOperation(pendingOperation));
             }
           }}
-          onForce={() => {
-            if (
-              pendingOperation.action === "rollback" &&
-              pendingOperation.plan.force !== true
-            ) {
-              startTask(
-                prepareOperation(
-                  pendingOperation.action,
-                  forcedRollbackOptions(pendingOperation),
-                  pendingOperation.selection
-                )
-              );
-            } else if (pendingOperation.action !== "rollback") {
-              startTask(
-                prepareOperation(
-                  pendingOperation.action,
-                  {
-                    force: true,
-                    ...(pendingOperation.sourceIdentities === undefined
-                      ? {}
-                      : {
-                          sourceIdentities: pendingOperation.sourceIdentities,
-                        }),
-                    withDependencies: false,
-                  },
-                  pendingOperation.selection
-                )
-              );
-            }
-          }}
-          onIncludeDependencies={() => {
-            if (pendingOperation.action !== "rollback") {
-              startTask(
-                prepareOperation(
-                  pendingOperation.action,
-                  {
-                    ...(pendingOperation.sourceIdentities === undefined
-                      ? {}
-                      : {
-                          sourceIdentities: pendingOperation.sourceIdentities,
-                        }),
-                    withDependencies: true,
-                  },
-                  pendingOperation.selection
-                )
-              );
-            }
-          }}
+          onForce={() => chooseDependencies(false)}
+          onIncludeDependencies={() => chooseDependencies(true)}
           onKeyDown={handleConfirmationKey}
+          onRollbackScopeChange={(scope) =>
+            startTask(changeRollbackScope(scope))
+          }
           operation={pendingOperation}
+          preview={dependencyPreview}
+          rollbackPlanError={rollbackPlanError}
+          rollbackPlanUpdating={rollbackPlanUpdating}
           width={dimensions.width}
         />
       ) : null}

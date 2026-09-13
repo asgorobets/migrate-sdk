@@ -76,7 +76,14 @@ for (const definitionId of ["authors", "articles", "assets"]) {
 
 const seedRun = (id: string, status: "failed" | "succeeded") => {
   const definitionId = toMigrationDefinitionId(id);
+  state.definitionCompletions.set(definitionId, {
+    definitionId,
+    runId: previousRunId,
+    completedAt: finishedAt,
+    sourceCursor: null,
+  });
   state.latestRunStates.set(definitionId, {
+    operation: "run",
     definitionIds: [definitionId],
     finishedAt,
     runId: previousRunId,

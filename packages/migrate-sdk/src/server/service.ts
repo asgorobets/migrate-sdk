@@ -55,10 +55,14 @@ import {
   type MigrateServerInfo,
   type MigrateServerInstanceId,
   type MigrateSourceIdentityHistoryEntry,
+  type MigrateStoreSchema,
+  type MigrateStoreSchemaPlan,
   type MigrateTarget,
   type MigrateTerminalSummary,
 } from "../protocol/index.ts";
+import type { SqlMigrationStoreSchemaConfig } from "../stores/sql/sql-migration-store-schema-plan.ts";
 import { MIGRATE_SDK_VERSION } from "../version.ts";
+import { makeStoreSchemaOperations } from "./store-schema.ts";
 
 export type MigratePrepareOperationInput = MigrateOperationRequest;
 
@@ -97,6 +101,10 @@ export interface MigrateServerService {
     readonly MigrateDefinitionSourceItemTotal[],
     MigrateProtocolError
   >;
+  readonly getStoreSchema: Effect.Effect<
+    MigrateStoreSchema,
+    MigrateProtocolError
+  >;
   readonly normalizeSourceIdentity: (input: {
     readonly definitionId: MigrationDefinitionId;
     readonly sourceIdentity: string;
@@ -128,6 +136,9 @@ export interface MigrateServerService {
   readonly stopRun: (input: {
     readonly runId: MigrationRunId;
   }) => Effect.Effect<MigrateRunStopResult, MigrateProtocolError>;
+  readonly upgradeStoreSchema: (input: {
+    readonly acceptedPlanId: string;
+  }) => Effect.Effect<MigrateStoreSchemaPlan, MigrateProtocolError>;
 }
 
 export interface MigrateServerExecutionObserver {
@@ -237,6 +248,7 @@ export interface MigrateServerInput<ExecutableOperation> {
   readonly instanceId?: MigrateServerInstanceId | undefined;
   readonly observationLeaseDuration?: Duration.Input | undefined;
   readonly registryId?: MigrationDefinitionRegistryId | undefined;
+  readonly sqlStore?: SqlMigrationStoreSchemaConfig | undefined;
 }
 
 interface ExecutionListener {
@@ -573,6 +585,7 @@ const resumeEventToken = (
 const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
   {
     backend,
+    sqlStore,
     dashboardFallbackInterval = "5 seconds",
     dashboardProjectionInterval = "1 second",
     environment,
@@ -584,6 +597,7 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
   dashboardInvalidations: Queue.Queue<void>,
   dashboardReadSemaphore: Semaphore.Semaphore
 ): Effect.Effect<MigrateServerService, never, Scope> => {
+  const storeSchema = makeStoreSchemaOperations(sqlStore);
   const serverInfo: MigrateServerInfo = {
     environment,
     ...(instanceId === undefined ? {} : { instanceId }),
@@ -1327,6 +1341,11 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
     getRegistryStatus: (input) =>
       backend.getRegistryStatus(input).pipe(Effect.mapError(operationError)),
     getServerInfo: Effect.succeed(serverInfo),
+    getStoreSchema: storeSchema.getSchema.pipe(Effect.mapError(operationError)),
+    upgradeStoreSchema: ({ acceptedPlanId }) =>
+      storeSchema
+        .upgradeSchema(acceptedPlanId)
+        .pipe(Effect.tap(invalidateDashboard), Effect.mapError(operationError)),
     getSourceIdentityHistory: ({ definitionId }) =>
       backend
         .getSourceIdentityHistory(definitionId)
