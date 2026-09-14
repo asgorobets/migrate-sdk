@@ -151,10 +151,26 @@ Targeted failed, skipped, and item retries do not emit this warning because they
 look up durable item state directly instead of traversing the source cursor.
 
 Normal runs select eligible items in source order. Failed and needs-update items
-are handled when the scan encounters them. `--limit N` caps eligible attempts in
-one explicitly selected migration: unchanged migrated items do not count, while
-failures and skips do. Repeating `--limit 1` skips previous successful items; an
-earlier failure or skip may be attempted again.
+are handled when the scan encounters them. `--limit N` caps eligible attempts
+separately for each migration in the run: unchanged migrated items do not count,
+while failures and skips do. Repeating `--limit 1` skips previous successful
+items; an earlier failure or skip may be attempted again.
+
+The same limit applies to every selected migration and every included dependency:
+
+```sh
+pnpm exec migrate run authors articles --limit 1
+pnpm exec migrate run --group catalog --limit 1
+pnpm exec migrate run --all --limit 1
+pnpm exec migrate run articles --with-dependencies --limit 1
+```
+
+For example, three selected migrations can each attempt one item with `--limit 1`.
+Included dependencies run first, even when their limited pass is incomplete.
+A required dependency left out of the run still needs prior completion, unless
+`--force` is used. Independently selected items may not reference each other;
+the usual missing-reference handling applies. The limit does not cap destination
+operations or reference-created stubs.
 
 A run stopped by its limit reports `succeeded` when its attempts succeed, just
 as a successful `--id` run does. Item failures still report `failed`.
@@ -163,9 +179,10 @@ page on the next run. Use `--rescan --limit N` to start at the beginning explici
 Stopping early does not establish migration completion. An earlier completion
 record remains valid unless rollback invalidates it. Reaching the end records
 completion even if individual items failed, following the normal run rules.
-The source still controls how many items it reads per page. Limits cannot be
-combined with all/group selection, dependencies, update, targeted retries, or
-orphan rollback. SDK callers can pass `limit` to the registry run request.
+The source still controls how many items it reads per page. Limits support normal
+runs, including `--rescan`; they cannot be combined with update, targeted retries,
+explicit identity targets, or orphan rollback. SDK callers can pass `limit` to
+the registry run request.
 
 ## What is included
 

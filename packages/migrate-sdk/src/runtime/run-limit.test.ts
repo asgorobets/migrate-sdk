@@ -340,7 +340,6 @@ describe("normal source scans with a run limit", () => {
           { limit: Number.MAX_SAFE_INTEGER + 1 },
           { limit: 1, update: true },
           { limit: 1, rollbackOrphans: true },
-          { limit: 1, withDependencies: true },
           { limit: 1, mode: { kind: "failed" as const } },
           { limit: 1, mode: { kind: "skipped" as const } },
           { limit: 1, sourceIdentities: ["a"] },
@@ -353,12 +352,6 @@ describe("normal source scans with a run limit", () => {
           }).pipe(Effect.result);
           expect(result._tag).toBe("Failure");
         }
-        const all = yield* runInlineRegistry({
-          definitions: [fixture.definition],
-          all: true,
-          limit: 1,
-        }).pipe(Effect.result);
-        expect(all._tag).toBe("Failure");
         expect(fixture.sourceState.readAttempts).toBe(0);
         expect(fixture.state.runStates.size).toBe(0);
         expect(fixture.state.itemStates.size).toBe(0);

@@ -99,7 +99,7 @@ export type MigrationDefinitionRegistrySelectionInput =
 
 export type MigrationDefinitionRegistryRunInput =
   MigrationDefinitionRegistrySelectionInput & {
-    /** Maximum eligible source-item attempts in one normal, single-definition run. */
+    /** Maximum eligible source-item attempts per migration in a normal run. */
     readonly limit?: number;
     readonly execution?: MigrationExecutionOptions;
     readonly force?: boolean;
@@ -1683,10 +1683,6 @@ export class MigrationDefinitionRegistry<
       );
       const limitError = runLimitValidationMessage({
         ...input,
-        definitionCount: includedDefinitionIds.size,
-        broadSelection:
-          selection.requestedDefinitionIds === "all" ||
-          selection.requestedGroup !== undefined,
         targeted: input.sourceIdentities !== undefined,
       });
       if (limitError !== undefined) {

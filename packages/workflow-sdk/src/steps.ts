@@ -349,7 +349,6 @@ export const failMigrationRunExecutionEnvelope = (input: {
           };
         }
       ),
-      definitionIds: input.envelope.executionDefinitionIds,
       error: input.error,
       lease,
       storeLayer,

@@ -531,7 +531,7 @@ const renderPlanScope = (
   ...(input.force === true ? ["Force      yes"] : []),
   ...(input.limit === undefined
     ? []
-    : [`Limit      ${input.limit} eligible attempts`]),
+    : [`Limit      ${input.limit} eligible attempts per migration`]),
   ...(input.mode === undefined ? [] : [`Mode       ${input.mode}`]),
   ...(input.rescan === true ? ["Rescan     yes"] : []),
   ...(input.rollbackOrphans === true ? ["Rollback orphans  yes"] : []),

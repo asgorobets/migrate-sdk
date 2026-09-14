@@ -1,6 +1,7 @@
 import { Effect, Layer, Schema } from "effect";
 import {
   type MigrationDefinitionRegistryRunInput,
+  MigrationExecutable,
   MigrationRuntimeError,
   MigrationStore,
   type ProcessBatchPipelineFor,
@@ -12,6 +13,7 @@ import {
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationDefinitionRegistryCatalog,
+  MigrationRollbackExecutor,
   MigrationRunExecutor,
   MigrationRunStepExecutor,
   makeMigrationRunExecutionEnvelope,
@@ -20,8 +22,10 @@ import {
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { describe, expect, it } from "vitest";
+import { Run } from "workflow/api";
 import {
   runMigrationExecutionWorkflow,
+  type WorkflowSdkMigrationRunEnvelope,
   type WorkflowSdkMigrationRunSteps,
 } from "./migration-execution-workflow.ts";
 import {
@@ -32,6 +36,8 @@ import {
   executeMigrationRunRollbackOrphansPage,
   failMigrationRunExecutionEnvelope,
 } from "./steps.ts";
+import { WorkflowSdkClient } from "./workflow-sdk-client.ts";
+import { WorkflowSdkMigrationExecutable } from "./workflow-sdk-migration-executable.ts";
 
 const makeSteps = (
   registry: MigrationDefinitionRegistry,
@@ -112,6 +118,7 @@ const makeFixture = (
   });
   const baseDefinition = {
     id: "articles",
+    group: "catalog",
     source,
     store,
     tracking,
@@ -132,54 +139,72 @@ const makeFixture = (
         ...baseDefinition,
         process: (item) => process(item.identity.encoded),
       });
+  const authorItems = sourceItems.map((item) => ({ ...item }));
   const authors = MigrationDefinition.make({
     id: "authors",
-    source,
+    group: "catalog",
+    source: InMemorySource.make({
+      identity,
+      sourceSchema: Schema.String,
+      batchSize: 3,
+      items: authorItems,
+    }),
     store,
-    process: (item) =>
-      Effect.sync(() => {
-        calls.push(`author-${item.identity.encoded}`);
-      }),
+    tracking,
+    rollback: () => Effect.void,
+    process: (item) => process(`author-${item.identity.encoded}`),
   });
   const registry = MigrationDefinitionRegistry.make({
     id: "workflow-modes",
-    definitions: [authors, definition],
+    definitions: [definition, authors],
   });
   const steps = makeSteps(registry);
-  const prepare = (request: RunOptions = {}) =>
+  const prepareSelection = (request: MigrationDefinitionRegistryRunInput) =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const plan = yield* registry
-          .executable()
-          .planRun({ definitionIds: ["articles"], ...request });
-        const service = yield* MigrationStore;
-        const runId = yield* service.createRunId;
-        const locks = yield* Effect.forEach(plan.includedDefinitionIds, (id) =>
-          service.acquireDefinitionLock(id, runId)
+        const plan = yield* registry.executable().planRun(request);
+        let envelope: WorkflowSdkMigrationRunEnvelope | undefined;
+        const executableLayer = WorkflowSdkMigrationExecutable.layer({
+          workflow: async () => undefined,
+        }).pipe(
+          Layer.provide(
+            Layer.succeed(WorkflowSdkClient, {
+              getRun: (id) => Effect.succeed(new Run<unknown>(id)),
+              start: (input) =>
+                Effect.sync(() => {
+                  if (input.envelope.kind === "run") {
+                    envelope = input.envelope;
+                  }
+                  return new Run<unknown>(`workflow-${input.envelope.runId}`);
+                }),
+            })
+          )
         );
-        yield* service.queueRun({
-          runId,
-          definitionIds: plan.includedDefinitionIds,
-          operation: "run",
-        });
-        const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
-          runId,
-          locks,
-        });
-        return { ...envelope, locks };
-      }).pipe(Effect.provide(store))
+        yield* Effect.flatMap(MigrationExecutable, (executable) =>
+          executable.startRun(plan)
+        ).pipe(Effect.provide(executableLayer));
+        if (envelope === undefined) {
+          return yield* Effect.die(
+            "Expected the Workflow adapter to dispatch a run"
+          );
+        }
+        return envelope;
+      })
     );
-  const run = async (request: RunOptions = {}) =>
-    runMigrationExecutionWorkflow(await prepare(request), steps);
-  const runInline = (request: RunOptions = {}) =>
+  const prepare = (request: RunOptions = {}) =>
+    prepareSelection({ definitionIds: ["articles"], ...request });
+  const runSelection = async (request: MigrationDefinitionRegistryRunInput) =>
+    runMigrationExecutionWorkflow(await prepareSelection(request), steps);
+  const run = (request: RunOptions = {}) =>
+    runSelection({ definitionIds: ["articles"], ...request });
+  const runInlineSelection = (request: MigrationDefinitionRegistryRunInput) =>
     Effect.runPromise(
-      Effect.flatMap(
-        registry
-          .executable()
-          .planRun({ definitionIds: ["articles"], ...request }),
-        (plan) => MigrationRunExecutor.executePlan(plan)
+      Effect.flatMap(registry.executable().planRun(request), (plan) =>
+        MigrationRunExecutor.executePlan(plan)
       ).pipe(Effect.provide(MigrationRunExecutor.layer))
     );
+  const runInline = (request: RunOptions = {}) =>
+    runInlineSelection({ definitionIds: ["articles"], ...request });
   const cancel = (runId: Parameters<typeof state.runStates.get>[0]) =>
     Effect.runPromise(
       Effect.flatMap(MigrationStore, (service) =>
@@ -187,13 +212,18 @@ const makeFixture = (
       ).pipe(Effect.provide(store))
     );
   return {
+    authorItems,
+    authors,
     calls,
     cancel,
     definition,
     outcomes,
     prepare,
+    registry,
     run,
     runInline,
+    runInlineSelection,
+    runSelection,
     sourceState,
     sourceItems,
     state,
@@ -203,6 +233,227 @@ const makeFixture = (
 };
 
 describe("Workflow migration run modes", () => {
+  it("finalizes a failed limited workflow when registration and execution order differ", async () => {
+    const fixture = makeFixture({ withDependency: true });
+    const envelope = await fixture.prepare({
+      limit: 1,
+      withDependencies: true,
+    });
+    expect(envelope.scopeDefinitionIds).toEqual([
+      fixture.definition.id,
+      fixture.authors.id,
+    ]);
+    expect(envelope.executionDefinitionIds).toEqual([
+      fixture.authors.id,
+      fixture.definition.id,
+    ]);
+    await expect(
+      runMigrationExecutionWorkflow(envelope, {
+        ...fixture.steps,
+        executeCursorWindow: async (input) => {
+          await fixture.steps.executeCursorWindow(input);
+          throw new Error("Worker stopped after first limited migration");
+        },
+      })
+    ).rejects.toThrow("Worker stopped after first limited migration");
+    expect(fixture.calls).toEqual(["author-a"]);
+    expect(fixture.state.runStates.get(envelope.runId)).toMatchObject({
+      definitionIds: envelope.scopeDefinitionIds,
+      status: "failed",
+    });
+    expect(fixture.state.definitionCompletions.size).toBe(0);
+    expect(fixture.state.definitionLocks.size).toBe(0);
+  });
+
+  for (const adapter of ["inline", "workflow"] as const) {
+    it(`preserves prior completion during limited group work and respects rollback invalidation (${adapter})`, async () => {
+      const fixture = makeFixture({ withDependency: true });
+      const run =
+        adapter === "inline"
+          ? fixture.runInlineSelection
+          : fixture.runSelection;
+      await run({ all: true });
+      const previous = new Map(fixture.state.definitionCompletions);
+      for (const items of [fixture.authorItems, fixture.sourceItems]) {
+        items.push(
+          ...["d", "e"].map((id) => ({
+            identityKey: id,
+            item: id,
+            version: "v1",
+          }))
+        );
+      }
+      await run({ group: "catalog", limit: 1 });
+      expect(fixture.state.definitionCompletions).toEqual(previous);
+      await Effect.runPromise(
+        Effect.flatMap(
+          fixture.registry.executable().planRollback({
+            definitionIds: ["authors"],
+            sourceIdentities: ["a"],
+            force: true,
+          }),
+          (plan) => MigrationRollbackExecutor.executePlan(plan)
+        ).pipe(Effect.provide(MigrationRollbackExecutor.layer))
+      );
+      expect(fixture.state.definitionCompletions.has(fixture.authors.id)).toBe(
+        false
+      );
+      const next = await run({ group: "catalog", limit: 1 });
+      expect(
+        next.definitions.map((definition) => definition.counts.migrated)
+      ).toEqual([1, 1]);
+      expect(fixture.calls.slice(-2)).toEqual(["author-a", "e"]);
+      expect(fixture.state.definitionCompletions.has(fixture.authors.id)).toBe(
+        false
+      );
+      await expect(
+        run({ definitionIds: ["articles"], limit: 1 })
+      ).rejects.toThrow("no completed source pass");
+      expect(fixture.state.definitionLocks.size).toBe(0);
+    });
+
+    for (const batch of [false, true]) {
+      for (const selection of [
+        { definitionIds: ["articles", "authors"] },
+        { all: true },
+        { group: "catalog" },
+        { definitionIds: ["articles"], withDependencies: true },
+      ] satisfies MigrationDefinitionRegistryRunInput[]) {
+        it(`gives each selected migration its own limit (${adapter}, ${batch ? "batch" : "item"}, ${JSON.stringify(selection)})`, async () => {
+          const fixture = makeFixture({
+            batch,
+            batchSize: 2,
+            withDependency: true,
+          });
+          const run =
+            adapter === "inline"
+              ? fixture.runInlineSelection
+              : fixture.runSelection;
+          const request = {
+            ...selection,
+            limit: 1,
+            execution: { process: { concurrency: "unbounded" as const } },
+          };
+          const first = await run(request);
+          expect(fixture.calls).toEqual(["author-a", "a"]);
+          expect(
+            first.definitions.map((definition) => definition.counts.migrated)
+          ).toEqual([1, 1]);
+          expect(fixture.state.definitionCompletions.size).toBe(0);
+          expect(fixture.state.sourceCursors.size).toBe(0);
+
+          const second = await run(request);
+          expect(fixture.calls).toEqual(["author-a", "a", "author-b", "b"]);
+          expect(
+            second.definitions.map((definition) => definition.counts)
+          ).toEqual([
+            expect.objectContaining({ migrated: 1, unchanged: 1 }),
+            expect.objectContaining({ migrated: 1, unchanged: 1 }),
+          ]);
+          expect(fixture.state.sourceCursors.get(fixture.definition.id)).toBe(
+            toEncodedSourceCursor('{"offset":2}')
+          );
+          expect(fixture.state.sourceCursors.has(fixture.authors.id)).toBe(
+            false
+          );
+
+          const third = await run(request);
+          expect(fixture.calls).toEqual([
+            "author-a",
+            "a",
+            "author-b",
+            "b",
+            "author-c",
+            "c",
+          ]);
+          expect(
+            third.definitions.map((definition) => definition.counts.migrated)
+          ).toEqual([1, 1]);
+          for (const definition of [fixture.authors, fixture.definition]) {
+            expect(
+              fixture.state.definitionCompletions.get(definition.id)?.runId
+            ).toBe(third.runId);
+          }
+          expect(fixture.state.sourceCursors.size).toBe(0);
+          expect(fixture.state.definitionLocks.size).toBe(0);
+        });
+      }
+
+      it(`counts failures and skips without consuming the next migration's budget (${adapter}, ${batch ? "batch" : "item"})`, async () => {
+        const fixture = makeFixture({ batch, withDependency: true });
+        const run =
+          adapter === "inline"
+            ? fixture.runInlineSelection
+            : fixture.runSelection;
+        fixture.outcomes.set("author-a", "failed");
+        fixture.outcomes.set("author-b", "skipped");
+        const result = await run({ all: true, limit: 2 });
+        expect(fixture.calls).toEqual(["author-a", "author-b", "a", "b"]);
+        expect(result.status).toBe("failed");
+        expect(result.definitions).toMatchObject([
+          {
+            definitionId: fixture.authors.id,
+            status: "failed",
+            counts: { failed: 1, skipped: 1, migrated: 0 },
+          },
+          {
+            definitionId: fixture.definition.id,
+            status: "succeeded",
+            counts: { migrated: 2 },
+          },
+        ]);
+        expect(fixture.state.definitionCompletions.size).toBe(0);
+        expect(fixture.state.definitionLocks.size).toBe(0);
+      });
+    }
+
+    it(`requires completion for an omitted prerequisite after a limited group run (${adapter})`, async () => {
+      const fixture = makeFixture({ withDependency: true });
+      const run =
+        adapter === "inline"
+          ? fixture.runInlineSelection
+          : fixture.runSelection;
+      await run({ group: "catalog", limit: 1 });
+      await expect(
+        run({ definitionIds: ["articles"], limit: 1 })
+      ).rejects.toThrow("no completed source pass");
+      expect(fixture.calls).toEqual(["author-a", "a"]);
+      expect(fixture.state.definitionCompletions.size).toBe(0);
+      expect(fixture.state.definitionLocks.size).toBe(0);
+      await run({ definitionIds: ["articles"], limit: 1, force: true });
+      expect(fixture.calls).toEqual(["author-a", "a", "b"]);
+    });
+
+    for (const authorCount of [0, 1]) {
+      it(`continues after a prerequisite exhausts its source and records completion separately (${adapter}, ${authorCount} authors)`, async () => {
+        const fixture = makeFixture({ withDependency: true });
+        fixture.authorItems.splice(authorCount);
+        const run =
+          adapter === "inline"
+            ? fixture.runInlineSelection
+            : fixture.runSelection;
+        const first = await run({
+          definitionIds: ["articles"],
+          withDependencies: true,
+          limit: 1,
+        });
+        expect(fixture.calls).toEqual(
+          authorCount === 0 ? ["a"] : ["author-a", "a"]
+        );
+        expect(
+          fixture.state.definitionCompletions.get(fixture.authors.id)?.runId
+        ).toBe(first.runId);
+        expect(
+          fixture.state.definitionCompletions.has(fixture.definition.id)
+        ).toBe(false);
+        const second = await run({ definitionIds: ["articles"], limit: 1 });
+        expect(second.definitions[0]?.counts.migrated).toBe(1);
+        expect(fixture.calls.at(-1)).toBe("b");
+        expect(fixture.state.definitionLocks.size).toBe(0);
+      });
+    }
+  }
+
   it.each([
     0, 1,
   ])("restores completion after orphan cleanup only with no earlier failures (%s)", async (earlierFailures) => {

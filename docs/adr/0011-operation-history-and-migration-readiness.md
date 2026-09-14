@@ -22,6 +22,12 @@ Failed, skipped, and needs-update items do not prevent completion. Dependency
 preflight checks this record, not the latest operation result or item error counts.
 Missing references may still cause dependent items to fail and can be retried.
 
+Completion preflight applies to required dependencies omitted from the run plan.
+Included dependencies execute before their dependents without a completion
+recheck between definitions. A limited pass can therefore be followed by its
+dependent in the same plan while remaining incomplete for later standalone runs.
+Per-migration limits follow [ADR 0012](0012-source-order-and-limited-runs.md).
+
 Targeted runs, retry-only runs, source inventory inspection, and stubs do not
 independently establish whole-migration completion. An interrupted initial pass
 must resume and reach the end before dependencies unlock. Later failed or

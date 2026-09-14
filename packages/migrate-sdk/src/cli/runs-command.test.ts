@@ -224,36 +224,65 @@ const interruptRuntime = (
 });
 
 describe("migrate runs", () => {
-  it.effect(
-    "passes --limit through the request and displays it in the plan",
-    () =>
-      Effect.gen(function* () {
-        const requests: MigrateOperationRequest[] = [];
-        const connection = makeConnection({
-          prepareOperation: (request) =>
-            Effect.sync(() => {
-              requests.push(request);
-              return preparedOperation(request);
-            }),
-        });
-        const result = yield* runCli(
-          ["run", "articles", "--limit", "1", "--plan"],
-          {
-            connectMigrateServer: () => Effect.succeed(connection),
-            cwd: "/workspace",
-          }
-        );
-        expect(result.exitCode).toBe(0);
-        expect(requests).toMatchObject([
-          {
-            action: "run",
-            options: { limit: 1 },
-            selection: { kind: "definitions", definitionIds: ["articles"] },
-          },
-        ]);
-        expect(result.stdout).toContain("Limit      1 eligible attempts");
-      })
-  );
+  for (const { args, selection, options } of [
+    {
+      args: ["articles"],
+      selection: { kind: "definitions", definitionIds: ["articles"] },
+      options: {},
+    },
+    {
+      args: ["authors", "articles"],
+      selection: {
+        kind: "definitions",
+        definitionIds: ["authors", "articles"],
+      },
+      options: {},
+    },
+    { args: ["--all"], selection: { kind: "all" }, options: {} },
+    {
+      args: ["--group", "catalog"],
+      selection: { kind: "group", groupId: "catalog" },
+      options: {},
+    },
+    {
+      args: ["articles", "--with-dependencies"],
+      selection: { kind: "definitions", definitionIds: ["articles"] },
+      options: { withDependencies: true },
+    },
+  ]) {
+    it.effect(
+      `passes a per-migration --limit through ${args.join(" ")} and displays it in the plan`,
+      () =>
+        Effect.gen(function* () {
+          const requests: MigrateOperationRequest[] = [];
+          const connection = makeConnection({
+            prepareOperation: (request) =>
+              Effect.sync(() => {
+                requests.push(request);
+                return preparedOperation(request);
+              }),
+          });
+          const result = yield* runCli(
+            ["run", ...args, "--limit", "1", "--plan"],
+            {
+              connectMigrateServer: () => Effect.succeed(connection),
+              cwd: "/workspace",
+            }
+          );
+          expect(result.exitCode).toBe(0);
+          expect(requests).toMatchObject([
+            {
+              action: "run",
+              options: { limit: 1, ...options },
+              selection,
+            },
+          ]);
+          expect(result.stdout).toContain(
+            "Limit      1 eligible attempts per migration"
+          );
+        })
+    );
+  }
 
   for (const returnedLimit of [undefined, 2]) {
     it.effect(

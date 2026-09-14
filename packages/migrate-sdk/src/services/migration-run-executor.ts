@@ -814,9 +814,10 @@ const beginMigrationRunExecution = (
       definitionIds
     );
     yield* validateMigrationContracts(store, input.definitions);
+    // Queueing uses the lease order; dependency execution may use a different order.
     const runState = yield* store.beginRun({
       runId: input.lease.runId,
-      definitionIds,
+      definitionIds: input.lease.scopeDefinitionIds,
       operation: "run",
     });
 
@@ -3358,10 +3359,7 @@ const runMigrationDefinitionCursorWindow = <
   SourceRequirements
 > => {
   const mode = input.mode ?? normalRunMode;
-  const limitError = runLimitValidationMessage({
-    ...input,
-    definitionCount: 1,
-  });
+  const limitError = runLimitValidationMessage(input);
   if (limitError !== undefined) {
     return Effect.fail(new MigrationRuntimeError({ message: limitError }));
   }
@@ -4185,8 +4183,6 @@ const preparePlannedRunDefinitions = <
 
   const limitError = runLimitValidationMessage({
     ...input,
-    definitionCount: input.definitions.length,
-    broadSelection: input.requestedDefinitionIds === "all",
     targeted: input.target !== undefined,
   });
   if (limitError !== undefined) {

@@ -627,7 +627,7 @@ const processConcurrency = Flag.String("concurrency").pipe(
 const limit = Flag.Int("limit").pipe(
   Flag.optional,
   Flag.withDescription(
-    "Stop after this many eligible source-item attempts in one migration"
+    "Maximum eligible source-item attempts per migration, including dependencies"
   )
 );
 

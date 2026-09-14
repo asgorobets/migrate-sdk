@@ -4,6 +4,8 @@
 
 Accepted, 2026-09-11
 
+Amended, 2026-09-14: apply the limit independently to every migration in a run.
+
 Supersedes the normal-run backlog priority in the original POC and update-run
 specifications, and the backlog recovery assumption in ADR 0009. The original
 decision and Drupal comparison are recorded in
@@ -34,16 +36,31 @@ also encounters that work. Explicit failed, skipped, and identity-targeted runs
 continue to use identity lookup.
 
 `migrate run articles --limit N` and registry run input `{ limit: N }` cap the
-number of eligible source-item attempts. N must be a positive safe integer.
-Unchanged items do not consume the budget. Migrated, failed, skipped, and
+number of eligible source-item attempts per migration. N must be a positive safe
+integer. Unchanged items do not consume the budget. Migrated, failed, skipped, and
 needs-update outcomes do. A failure can therefore be selected again by the next
 `--limit 1` run; the option does not promise one successful migration per run.
 
-This version supports one explicitly selected migration, optionally with
-`--rescan`. It rejects all/group selection, dependency expansion, update,
-targeted retry modes, explicit identity targets, and orphan rollback. The limit
-applies to source-item attempts, not the destination operations performed by a
-pipeline or reference lookup.
+The limit supports explicit migration lists, all/group selection, and dependency
+expansion, optionally with `--rescan`. Every included definition receives its own
+budget of N attempts; unused capacity is not transferred between definitions.
+For example, `--all --limit 1` can attempt one item per migration, and
+`articles --with-dependencies --limit 1` also applies one attempt to each included
+dependency. It rejects update, targeted retry modes, explicit identity targets,
+and orphan rollback. The limit applies to source-item attempts, not the
+destination operations performed by a pipeline or reference lookup.
+
+Included dependencies run in dependency order. Finishing their requested limited
+work permits the plan to continue to dependent definitions without requiring a
+completed source pass in between. Item failures in one definition do not consume
+another definition's budget. Required dependencies omitted from the plan still
+need prior Migration Definition Completion, unless force bypasses preflight.
+This preserves existing SDK plan execution and preflight behavior. It does not
+turn a partial pass into durable completion or guarantee that independently
+selected samples contain every referenced item. The normal missing-reference
+behavior applies. The
+[multi-migration Drupal comparison](../research/drupal-per-migration-limits.md)
+records the per-migration CLI convention and the differences in dependency checks.
 
 The source still owns page size. The runner schedules no more source items at a
 time than the remaining attempt budget, processes them using the configured
@@ -76,9 +93,9 @@ that the source has no newer items. Reaching a budget on a nonterminal page
 does not prove exhaustion, even if the next page would be empty.
 
 Inline and Workflow SDK execution use the same cursor-window logic and
-cumulative attempt counts. Workflow cursor-window steps
-must continue to disable automatic retries, as their effects and step results
-cannot be committed atomically.
+cumulative attempt counts, reset independently for each definition. Workflow
+cursor-window steps must continue to disable automatic retries, as their effects
+and step results cannot be committed atomically.
 
 CLI/server plans expose the limit, and the server plan fingerprint includes it.
 The CLI rejects a prepared operation that omits or changes the requested limit,

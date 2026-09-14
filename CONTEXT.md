@@ -528,7 +528,8 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A normal **Migration Run** attempts failed, needs-update, and skipped items when the source iterator encounters them. Skipped-item eligibility follows ADR 0010.
 - A **Run Mode** can select normal processing, failed items, skipped items, or one item by source identity.
 - A normal **Run Mode** selects eligible items in source order, with no failed or needs-update priority (ADR 0012).
-- A **Run Request** may limit eligible attempts for one explicitly selected migration. Unchanged items do not consume the limit; failures and skips do.
+- A **Run Request** may limit eligible attempts independently for every selected **Migration Definition**, including groups, all definitions, and included dependencies. Each definition receives the full limit. Unchanged items do not consume it; failures and skips do.
+- Included **Required Migration Definition Dependencies** run before their dependents, even if their limited source pass is incomplete. Required dependencies omitted from the plan still need **Migration Definition Completion**, unless force bypasses preflight.
 - A limit stops scheduling new work without committing a partially processed source page. The next run rereads that page and checks eligibility again.
 - A successful run stopped by its limit records definition status `succeeded`, as a targeted `--id` run does. Stopping before source exhaustion does not create or refresh **Migration Definition Completion**, but preserves earlier completion unless tracked data is removed. A limited run that reaches the actual source end records completion even with item failures, following ADR 0011. The runner distinguishes limit reached from source exhaustion internally for checkpoint and completion handling.
 - A failed **Run Mode** reprocesses only failed item states.

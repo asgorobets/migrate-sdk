@@ -866,7 +866,6 @@ describe("Local Migrate Server runtime", () => {
           });
           for (const options of [
             { limit: 0 },
-            { limit: 1, withDependencies: true },
             { limit: 1, rollbackOrphans: true },
           ]) {
             const invalid = yield* backend
