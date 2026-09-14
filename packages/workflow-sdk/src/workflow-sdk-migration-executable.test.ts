@@ -688,6 +688,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
             executionId: "wrun_rollback",
           },
           runId: toMigrationRunId("run-1"),
+          operation: "rollback",
           status: "queued",
         })
       );
@@ -907,7 +908,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
         expect(error).toEqual(
           expect.objectContaining({
             message:
-              "Rollback would leave dependent Migration Definition item state\nauthors cannot be rolled back while dependent articles still has item state.\nRollback articles first, rerun with --with-dependencies, or use --force.",
+              "Rollback would leave dependent Migration Definition item state\nauthors cannot be rolled back while dependent articles still has item state.\nRollback articles first, or include dependent migrations with --with-dependencies.\n--force skips this safety check without including dependent migrations. Their records remain; references may break or rollback may fail.",
           })
         );
         expect(calls).toHaveLength(0);

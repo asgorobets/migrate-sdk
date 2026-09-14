@@ -1,6 +1,7 @@
 import { Effect } from "effect";
 import type { SqlClient, SqlError } from "effect/unstable/sql";
 import {
+  completionRecord,
   contractRecord,
   cursorRecord,
   itemStateRecord,
@@ -159,6 +160,8 @@ export const makeMysqlDialect = (
         LIMIT ${limit}
       `;
     },
+    upsertCompletion: (row) =>
+      upsert(names.completions, completionRecord(row), ["definition_key"]),
     upsertCursor: (row) =>
       upsert(names.cursors, cursorRecord(row), ["definition_key"]),
     upsertContract: (row) =>

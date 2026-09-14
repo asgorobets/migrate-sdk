@@ -4,7 +4,11 @@ import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber } from "effect";
 import { FileSystem } from "effect/FileSystem";
 import { SqlClient } from "effect/unstable/sql";
-import { MigrationStore, toMigrationDefinitionId } from "migrate-sdk";
+import {
+  MigrationStore,
+  toMigrationDefinitionId,
+  toMigrationRunId,
+} from "migrate-sdk";
 import { SqlMigrationStore } from "migrate-sdk/stores/sql";
 
 interface SqliteNameRow {
@@ -99,10 +103,16 @@ describe("SqlMigrationStore schema migrations", () => {
                 id: 2,
                 name: "definition_run_status",
               },
+              {
+                description:
+                  "Record operation history and migration completion separately",
+                id: 3,
+                name: "operation_history_and_completion",
+              },
             ],
             status: "not-installed",
             tablePrefix: "migrate_sdk",
-            targetVersion: 2,
+            targetVersion: 3,
             warnings: [],
           })
         );
@@ -130,17 +140,19 @@ describe("SqlMigrationStore schema migrations", () => {
             applied: [
               { id: 1, name: "initial_schema" },
               { id: 2, name: "definition_run_status" },
+              { id: 3, name: "operation_history_and_completion" },
             ],
-            currentVersion: 2,
+            currentVersion: 3,
             issues: [],
             pending: [],
             status: "current",
-            targetVersion: 2,
+            targetVersion: 3,
           })
         );
         expect(migrations).toEqual([
           { migration_id: 1, name: "initial_schema" },
           { migration_id: 2, name: "definition_run_status" },
+          { migration_id: 3, name: "operation_history_and_completion" },
         ]);
         expect(yield* SqlMigrationStore.planSchema()).toEqual(completedPlan);
       })
@@ -176,13 +188,15 @@ describe("SqlMigrationStore schema migrations", () => {
         yield* SqlMigrationStore.applySchemaPlan(initialPlan);
         yield* sql`
           DELETE FROM migrate_sdk_schema_migrations
-          WHERE migration_id = 2
+          WHERE migration_id >= 2
         `;
         yield* sql`
           ALTER TABLE migrate_sdk_run_definitions
           DROP COLUMN definition_status
         `;
 
+        yield* sql`DROP TABLE migrate_sdk_completions`;
+        yield* sql`ALTER TABLE migrate_sdk_runs DROP COLUMN operation`;
         const upgradePlan = yield* SqlMigrationStore.planSchema();
 
         expect(upgradePlan).toEqual(
@@ -195,9 +209,15 @@ describe("SqlMigrationStore schema migrations", () => {
                 id: 2,
                 name: "definition_run_status",
               },
+              {
+                description:
+                  "Record operation history and migration completion separately",
+                id: 3,
+                name: "operation_history_and_completion",
+              },
             ],
             status: "upgrade-required",
-            targetVersion: 2,
+            targetVersion: 3,
           })
         );
 
@@ -206,7 +226,7 @@ describe("SqlMigrationStore schema migrations", () => {
 
         expect(completedPlan).toEqual(
           expect.objectContaining({
-            currentVersion: 2,
+            currentVersion: 3,
             pending: [],
             status: "current",
           })
@@ -293,7 +313,7 @@ describe("SqlMigrationStore schema migrations", () => {
         yield* SqlMigrationStore.applySchemaPlan(futureInitialPlan);
         yield* sql`
           INSERT INTO future_store_schema_migrations (migration_id, name)
-          VALUES (3, 'future_schema')
+          VALUES (4, 'future_schema')
         `;
         expect(
           yield* SqlMigrationStore.planSchema({ tablePrefix: "future_store" })
@@ -315,5 +335,55 @@ describe("SqlMigrationStore schema migrations", () => {
         ).toEqual(expect.objectContaining({ status: "divergent" }));
       })
     )
+  );
+  it.effect(
+    "upgrades version 2 in one migration without inventing operation or completion history",
+    () =>
+      withSqlite(
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          const initial = yield* SqlMigrationStore.planSchema();
+          yield* SqlMigrationStore.applySchemaPlan(initial);
+          const id = toMigrationDefinitionId("legacy-authors");
+          const runId = toMigrationRunId("legacy-success");
+          yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+            yield* store.beginRun({
+              runId,
+              definitionIds: [id],
+              operation: "rollback",
+            });
+            yield* store.completeRun(
+              runId,
+              [id],
+              [{ definitionId: id, status: "succeeded" }]
+            );
+          }).pipe(Effect.provide(SqlMigrationStore.layer()));
+          yield* sql`DROP TABLE migrate_sdk_completions`;
+          yield* sql`ALTER TABLE migrate_sdk_runs DROP COLUMN operation`;
+          yield* sql`DELETE FROM migrate_sdk_schema_migrations WHERE migration_id >= 3`;
+          const upgrade = yield* SqlMigrationStore.planSchema();
+          expect(upgrade).toMatchObject({
+            currentVersion: 2,
+            targetVersion: 3,
+            status: "upgrade-required",
+            pending: [{ id: 3, name: "operation_history_and_completion" }],
+          });
+          expect(upgrade.pending).toHaveLength(1);
+          const completed = yield* SqlMigrationStore.applySchemaPlan(upgrade);
+          expect(completed).toMatchObject({
+            currentVersion: 3,
+            status: "current",
+            pending: [],
+          });
+          const history = yield* Effect.gen(function* () {
+            const store = yield* MigrationStore;
+            expect(yield* store.getDefinitionCompletion(id)).toBeNull();
+            return yield* store.getLatestRunState(id);
+          }).pipe(Effect.provide(SqlMigrationStore.layer()));
+          expect(history).toMatchObject({ runId, status: "succeeded" });
+          expect(history?.operation).toBeUndefined();
+        })
+      )
   );
 });

@@ -8,6 +8,7 @@ import {
   type AnySelfContainedMigrationDefinition,
   MigrationExecutable,
 } from "../index.ts";
+import type { SqlMigrationStoreSchemaConfig } from "../stores/sql/sql-migration-store-schema-plan.ts";
 import {
   makeRegistryMigrateServerRuntime,
   type RegistryMigrateServerRuntime,
@@ -27,6 +28,7 @@ export interface LoadLocalMigrateServerRuntimeInput
 export interface LocalMigrateServerRuntime
   extends RegistryMigrateServerRuntime {
   readonly configPath: string;
+  readonly sqlStore?: SqlMigrationStoreSchemaConfig;
 }
 
 export const loadLocalMigrateServerRuntime = (
@@ -61,5 +63,9 @@ export const loadLocalMigrateServerRuntime = (
         : { terminalPollIntervalMs: input.terminalPollIntervalMs }),
     });
 
-    return { ...runtime, configPath: loaded.configPath };
+    return {
+      ...runtime,
+      configPath: loaded.configPath,
+      ...(config.sqlStore === undefined ? {} : { sqlStore: config.sqlStore }),
+    };
   });

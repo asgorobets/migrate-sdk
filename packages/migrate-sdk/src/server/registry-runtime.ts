@@ -1,4 +1,5 @@
 import { Deferred, Effect, Fiber, Layer, Option, Ref, Schema } from "effect";
+import { migrationDependencyIsSatisfied } from "../domain/status.ts";
 import {
   type ActiveMigrationRun,
   type AnySelfContainedMigrationDefinition,
@@ -963,10 +964,7 @@ export const makeRegistryMigrateServerRuntime = (
     options: MigrateServerPrepareOptions
   ): Effect.Effect<ExecutableMigrationOperation, unknown> =>
     Effect.gen(function* () {
-      const withDependencies =
-        options.withDependencies ??
-        (selection.kind === "definitions" &&
-          selection.definitionIds.length === 1);
+      const withDependencies = options.withDependencies ?? false;
       const commonOptions = {
         ...(options.execution === undefined
           ? {}
@@ -1079,8 +1077,7 @@ export const makeRegistryMigrateServerRuntime = (
           requiredByDefinitionId: edge.fromDefinitionId,
           ...(row === undefined ? {} : { row }),
           satisfied:
-            status?.lastRun?.status === "succeeded" &&
-            status.durable.failed === 0,
+            status !== undefined && migrationDependencyIsSatisfied(status),
         };
       }
     );

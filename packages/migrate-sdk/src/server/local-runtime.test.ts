@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { Deferred, Effect, Fiber } from "effect";
 import {
   type MigrationRunId,
+  toEncodedSourceIdentity,
   toMigrationDefinitionGroupId,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
@@ -673,14 +674,34 @@ describe("Local Migrate Server runtime", () => {
     );
   });
 
-  it("prepares rollback dependencies in reverse execution order", async () => {
+  it("does not expand rollback scope unless explicitly requested", async () => {
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "migrate.config.ts",
+      cwd: fixtureDirectory,
+    });
+    const selection = {
+      definitionIds: [authorsId],
+      kind: "definitions",
+    } as const;
+    for (const options of [{}, { force: true }]) {
+      const operation = await runtime.prepare(selection, "rollback", options);
+      expect(operation.plan).toMatchObject({
+        executionDefinitionIds: ["authors"],
+        includedDefinitionIds: ["authors"],
+        withDependencies: false,
+      });
+    }
+  });
+
+  it("prepares explicitly included rollback dependents in reverse execution order", async () => {
     const runtime = await loadLocalMigrateServerRuntime({
       configPath: "migrate.config.ts",
       cwd: fixtureDirectory,
     });
     const operation = await runtime.prepare(
       { definitionIds: [authorsId], kind: "definitions" },
-      "rollback"
+      "rollback",
+      { withDependencies: true }
     );
 
     expect(operation).toMatchObject({
@@ -865,5 +886,57 @@ describe("Local Migrate Server runtime", () => {
     await expect(
       runtime.scanSource(target, { concurrency: 0 })
     ).rejects.toThrow("positive integer");
+  });
+  it("requires a forward migration again after a successful rollback", async () => {
+    const runtime = await loadLocalMigrateServerRuntime({
+      configPath: "rollback-readiness.config.ts",
+      cwd: fixtureDirectory,
+    });
+    const authors = {
+      definitionIds: [authorsId],
+      kind: "definitions",
+    } as const;
+    const articles = {
+      definitionIds: [articlesId],
+      kind: "definitions",
+    } as const;
+    await executeRegistryMigration(
+      runtime,
+      await runtime.prepare(authors, "run")
+    );
+    expect(
+      (await runtime.prepare(articles, "run")).dependencyChecks[0]?.satisfied
+    ).toBe(true);
+    await executeRegistryMigration(
+      runtime,
+      await runtime.prepare(authors, "rollback", {
+        sourceIdentities: [toEncodedSourceIdentity("authors-1")],
+        withDependencies: false,
+      })
+    );
+    const afterPartialRollback = await runtime.prepare(articles, "run");
+    expect(afterPartialRollback.dependencyChecks[0]?.satisfied).toBe(false);
+    expect(afterPartialRollback.dependencyChecks[0]?.row?.status).toMatchObject(
+      {
+        durable: { migrated: 1 },
+        lastRun: { operation: "rollback", status: "succeeded" },
+      }
+    );
+    await executeRegistryMigration(
+      runtime,
+      await runtime.prepare(authors, "rollback")
+    );
+    const afterRollback = await runtime.prepare(articles, "run");
+    expect(afterRollback.dependencyChecks[0]?.satisfied).toBe(false);
+    await expect(
+      executeRegistryMigration(runtime, afterRollback)
+    ).rejects.toThrow("completion was invalidated by rollback");
+    await executeRegistryMigration(
+      runtime,
+      await runtime.prepare(authors, "run")
+    );
+    expect(
+      (await runtime.prepare(articles, "run")).dependencyChecks[0]?.satisfied
+    ).toBe(true);
   });
 });

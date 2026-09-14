@@ -132,7 +132,7 @@ ACTIVE_SESSION="${SESSION}"
   "[ Overview ]" >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" Down >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
-  "articles  FAILED" >/dev/null
+  "articles  COMPLETE" >/dev/null
 "${PILOTTY_BIN}" resize -s "${SESSION}" 120 28 >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SESSION}" \
   --settle 150 \
@@ -182,7 +182,7 @@ ACTIVE_SESSION="${SESSION}"
   --format text >"${ARTIFACT_DIR}/wide-dashboard.txt"
 "${PILOTTY_BIN}" key -s "${SESSION}" Up >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
-  "authors  SUCCEEDED" >/dev/null
+  "authors  COMPLETE" >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" b >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
   "Confirm rollback" >/dev/null
@@ -198,7 +198,7 @@ ACTIVE_SESSION="${SESSION}"
 "${PILOTTY_BIN}" key -s "${SESSION}" Down >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" Down >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
-  "assets  SUCCEEDED" >/dev/null
+  "assets  COMPLETE" >/dev/null
 "${PILOTTY_BIN}" key -s "${SESSION}" Enter >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SESSION}" -t 5000 \
   "All actions · assets" >/dev/null
@@ -310,7 +310,7 @@ ACTIVE_SESSION="${CATALOG_SESSION}"
   --strict \
   --format text >"${ARTIFACT_DIR}/sqlite-catalog-progress.txt"
 "${PILOTTY_BIN}" wait-for -s "${CATALOG_SESSION}" -t 60000 \
-  "GROUP   FAILED" >/dev/null
+  "GROUP   COMPLETE" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${CATALOG_SESSION}" \
   --settle 300 \
   --strict \
@@ -461,7 +461,7 @@ ACTIVE_SESSION="${GROUP_SESSION}"
   "[ Overview ]" >/dev/null
 "${PILOTTY_BIN}" key -s "${GROUP_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${GROUP_SESSION}" -t 5000 \
-  "GROUP   SUCCEEDED" >/dev/null
+  "5 migrated" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${GROUP_SESSION}" \
   --settle 500 \
   --strict \
@@ -482,7 +482,7 @@ ACTIVE_SESSION="${DEPENDENCY_SESSION}"
   "articles  NOT RUN" >/dev/null
 "${PILOTTY_BIN}" key -s "${DEPENDENCY_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${DEPENDENCY_SESSION}" -t 5000 \
-  "Required dependencies not ready" >/dev/null
+  "Dependencies incomplete" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${DEPENDENCY_SESSION}" \
   --settle 150 \
   --strict \
@@ -516,7 +516,7 @@ ACTIVE_SESSION="${FORCE_SESSION}"
   "articles  NOT RUN" >/dev/null
 "${PILOTTY_BIN}" key -s "${FORCE_SESSION}" r >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${FORCE_SESSION}" -t 5000 \
-  "Required dependencies not ready" >/dev/null
+  "Dependencies incomplete" >/dev/null
 "${PILOTTY_BIN}" key -s "${FORCE_SESSION}" f >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${FORCE_SESSION}" -t 5000 \
   "1 migrated" >/dev/null
@@ -557,7 +557,7 @@ ACTIVE_SESSION="${LARGE_HIERARCHY_SESSION}"
   "Status reloaded" >/dev/null
 "${PILOTTY_BIN}" key -s "${LARGE_HIERARCHY_SESSION}" b >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LARGE_HIERARCHY_SESSION}" -t 5000 \
-  "↑↓ scroll · f force rollback · y rollback · n/esc cancel" >/dev/null
+  "y Rollback selected" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${LARGE_HIERARCHY_SESSION}" \
   --settle 150 \
   --strict \
@@ -583,7 +583,7 @@ ACTIVE_SESSION="${SELECTIVE_SESSION}"
   "Status reloaded" >/dev/null
 "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" Down >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
-  "articles  FAILED" >/dev/null
+  "articles  COMPLETE" >/dev/null
 "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" e >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
   "2 items" >/dev/null
@@ -806,24 +806,32 @@ assert_contains \
   "rollback confirmation remains readable"
 assert_contains \
   "${ARTIFACT_DIR}/rollback-confirmation.txt" \
-  "authors · Step numbers show rollback execution order." \
-  "rollback confirmation explains how to read execution order"
+  "Rollback migrations with dependencies" \
+  "rollback confirmation describes the selected scope"
 assert_contains \
   "${ARTIFACT_DIR}/rollback-confirmation.txt" \
-  "Affected migration hierarchy" \
-  "rollback confirmation distinguishes hierarchy from execution order"
+  "Rollback order" \
+  "rollback confirmation identifies its execution order"
 assert_contains \
   "${ARTIFACT_DIR}/rollback-confirmation.txt" \
-  "articles" \
-  "rollback hierarchy includes the affected dependent first"
+  "1. ✓ articles" \
+  "rollback plan includes the affected dependent first"
 assert_contains \
   "${ARTIFACT_DIR}/rollback-confirmation.txt" \
-  "required SUCCEEDED" \
-  "rollback hierarchy uses detail-panel dependency and status vocabulary"
+  "2. ✓ authors" \
+  "rollback plan puts the selected migration after its dependent"
 assert_contains \
   "${ARTIFACT_DIR}/rollback-confirmation.txt" \
-  "f force rollback · y rollback · n/esc cancel" \
+  "y Rollback selected" \
   "rollback controls remain readable"
+assert_contains \
+  "${ARTIFACT_DIR}/rollback-confirmation.txt" \
+  "● i Include dependencies (recommended)" \
+  "rollback recommends including dependencies"
+assert_contains \
+  "${ARTIFACT_DIR}/rollback-confirmation.txt" \
+  "○ s Selected only" \
+  "rollback exposes selected-only scope"
 assert_contains \
   "${ARTIFACT_DIR}/button-dashboard-after-run.txt" \
   "2 migrated" \
@@ -835,11 +843,15 @@ assert_not_contains \
 assert_contains \
   "${ARTIFACT_DIR}/button-dashboard.txt" \
   "✓ authors" \
-  "migration list displays the succeeded status icon before the name"
+  "migration list displays the completion icon before the name"
 assert_contains \
   "${ARTIFACT_DIR}/button-dashboard.txt" \
-  "✕ articles" \
-  "migration list displays the failed status icon before the name"
+  "✓ articles" \
+  "migration list shows completion independently of item failures"
+assert_contains \
+  "${ARTIFACT_DIR}/button-dashboard.txt" \
+  "1 migrated · 1 failed" \
+  "completed migrations retain visible item failure counts"
 assert_contains \
   "${ARTIFACT_DIR}/group-dashboard.txt" \
   "[ Groups 1 ]" \
@@ -850,8 +862,8 @@ assert_contains \
   "group details display the selected group"
 assert_contains \
   "${ARTIFACT_DIR}/group-dashboard.txt" \
-  "FAILED" \
-  "group details display aggregate status"
+  "GROUP   COMPLETE" \
+  "group details display aggregate completion independently of failures"
 assert_contains \
   "${ARTIFACT_DIR}/group-dashboard.txt" \
   "3 migrations · dependencies outside this group are not included" \
@@ -962,8 +974,8 @@ assert_contains \
   "successful catalog dependencies retain their terminal status"
 assert_contains \
   "${ARTIFACT_DIR}/sqlite-catalog-completed.txt" \
-  "✕ books" \
-  "only the catalog migration with item failures is marked failed"
+  "✓ books" \
+  "catalog source-pass completion is independent of its item failures"
 assert_matches \
   "${ARTIFACT_DIR}/sqlite-catalog-standalone-progress.txt" \
   "${CATALOG_RUNNING_PROGRESS_PATTERN}" \
@@ -986,20 +998,24 @@ assert_contains \
   "standalone books execution reaches its persisted terminal totals"
 assert_contains \
   "${ARTIFACT_DIR}/dependency-decision.txt" \
-  "Required dependencies not ready" \
+  "Dependencies incomplete" \
   "blocked Run opens a dependency decision"
 assert_contains \
   "${ARTIFACT_DIR}/dependency-decision.txt" \
-  "articles · Some required dependencies have not succeeded." \
-  "blocked Run explains its SDK preflight failure"
+  "Run migrations with dependencies" \
+  "blocked Run describes the action without duplicating migration names"
 assert_contains \
   "${ARTIFACT_DIR}/dependency-decision.txt" \
   "Run order" \
-  "dependency decision uses the detail-panel hierarchy"
+  "dependency decision identifies the execution order"
 assert_contains \
   "${ARTIFACT_DIR}/dependency-decision.txt" \
-  "required NOT RUN" \
-  "dependency decision pairs the relationship with durable status"
+  "1. ○ authors" \
+  "dependency decision lists the unmet dependency first"
+assert_contains \
+  "${ARTIFACT_DIR}/dependency-decision.txt" \
+  "2. ○ articles" \
+  "dependency decision includes the selected migration in the plan"
 assert_contains \
   "${ARTIFACT_DIR}/dependency-decision.txt" \
   "i Include dependencies" \
@@ -1018,7 +1034,7 @@ assert_contains \
   "include resolution executes the expanded plan"
 assert_not_contains \
   "${ARTIFACT_DIR}/dependency-after-include.txt" \
-  "Required dependencies not ready" \
+  "Dependencies incomplete" \
   "include resolution closes the decision"
 assert_contains \
   "${ARTIFACT_DIR}/dependency-after-force.txt" \
@@ -1030,28 +1046,32 @@ assert_contains \
   "force resolution executes only the selected migration"
 assert_contains \
   "${ARTIFACT_DIR}/transitive-rollback-hierarchy.txt" \
-  "authors step 3" \
-  "rollback hierarchy labels the selected migration with its execution step"
+  "3. ○ authors" \
+  "rollback plan puts the selected migration last"
 assert_contains \
   "${ARTIFACT_DIR}/transitive-rollback-hierarchy.txt" \
-  "└─ ○ articles step 2" \
-  "rollback hierarchy nests a direct dependent under the selected migration"
+  "2. ○ articles" \
+  "rollback plan places a direct dependent before the selected migration"
 assert_contains \
   "${ARTIFACT_DIR}/transitive-rollback-hierarchy.txt" \
-  "   └─ ○ pages step 1" \
-  "rollback hierarchy preserves transitive dependency depth"
+  "1. ○ pages" \
+  "rollback plan puts the transitive dependent first"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy.txt" \
-  "↑↓ scroll · f force rollback · y rollback · n/esc cancel" \
-  "large rollback hierarchy keeps its controls visible"
+  "y Rollback selected" \
+  "large rollback plan keeps its confirmation visible"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy-scrolled.txt" \
-  "migration-02 step 17" \
-  "large rollback hierarchy scrolls to its final entry"
+  "18. ○ migration-01" \
+  "large rollback plan scrolls to its final entry"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy-scrolled.txt" \
-  "↑↓ scroll · f force rollback · y rollback · n/esc cancel" \
-  "large rollback hierarchy keeps controls fixed while scrolling"
+  "y Rollback selected" \
+  "large rollback plan keeps confirmation fixed while scrolling"
+assert_contains \
+  "${ARTIFACT_DIR}/large-rollback-hierarchy-scrolled.txt" \
+  "s Selected only" \
+  "large rollback plan keeps scope controls fixed while scrolling"
 assert_contains \
   "${ARTIFACT_DIR}/selective-run-history.txt" \
   "[x] ✓ article-welcome" \

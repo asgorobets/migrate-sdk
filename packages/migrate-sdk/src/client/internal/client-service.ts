@@ -48,6 +48,8 @@ export const makeMigrateClientService = (
   GetRegistryMessages: client.GetRegistryMessages,
   GetRegistryStatus: client.GetRegistryStatus,
   GetServerInfo: client.GetServerInfo,
+  GetStoreSchema: client.GetStoreSchema,
+  UpgradeStoreSchema: client.UpgradeStoreSchema,
   GetSourceIdentityHistory: client.GetSourceIdentityHistory,
   GetSourceItemTotals: client.GetSourceItemTotals,
   NormalizeSourceIdentity: client.NormalizeSourceIdentity,

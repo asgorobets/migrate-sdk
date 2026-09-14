@@ -25,8 +25,9 @@ const binPath = fileURLToPath(
 );
 
 const activeLockedStatusRowPattern =
-  /running\s+active\s+full\s+running\s+locked/;
-const staleRunningStatusRowPattern = /warning\s+stale\s+full\s+running\s+clear/;
+  /running\s+active\s+full\s+incomplete\s+run running\s+locked/;
+const staleRunningStatusRowPattern =
+  /warning\s+stale\s+full\s+incomplete\s+run running\s+clear/;
 const JsonString = Schema.fromJsonString(Schema.String);
 const MigrationMessagesFromJson = Schema.fromJsonString(
   Schema.Array(MigrationMessage)
@@ -709,7 +710,7 @@ describe("migrate CLI", () => {
       expect(result.stdout).toContain("Migration ID");
       expect(result.stdout).toContain("Discovery");
       expect(result.stdout).toContain("full");
-      expect(result.stdout).toContain("Last Run");
+      expect(result.stdout).toContain("Last Operation");
       expect(result.stdout).toContain("Migrated");
       expect(result.stdout).toContain("articles");
       expect(result.stdout).toContain("succeeded");
@@ -1146,7 +1147,7 @@ describe("migrate CLI", () => {
               needsUpdate: 0,
               skipped: 0,
             },
-            lastRun: { status: "succeeded" },
+            lastRun: { operation: "run", status: "succeeded" },
             lock: null,
             source: {
               duplicate: 0,
@@ -1167,7 +1168,7 @@ describe("migrate CLI", () => {
     );
 
     expect(output).toContain("\x1b[36mpending");
-    expect(output).toContain("\x1b[32msucceeded");
+    expect(output).toContain("\x1b[32mrun succeeded");
   });
 
   it("renders lock state separately from latest run state", () => {
@@ -1185,7 +1186,7 @@ describe("migrate CLI", () => {
               needsUpdate: 0,
               skipped: 0,
             },
-            lastRun: { status: "running" },
+            lastRun: { operation: "run", status: "running" },
             lock: {
               createdAt: new Date("2026-06-23T00:00:00.000Z"),
               definitionId: activeDefinitionId,
@@ -1203,7 +1204,7 @@ describe("migrate CLI", () => {
               needsUpdate: 0,
               skipped: 0,
             },
-            lastRun: { status: "running" },
+            lastRun: { operation: "run", status: "running" },
             lock: null,
             warnings: [],
           },
@@ -1323,7 +1324,7 @@ describe("migrate CLI", () => {
           currentVersion: null,
           status: "not-installed",
           tablePrefix: "cli_schema",
-          targetVersion: 2,
+          targetVersion: 3,
         })
       );
       expect(repeatedPlan).toEqual(initialPlan);
@@ -1356,10 +1357,10 @@ describe("migrate CLI", () => {
       expect(upgraded.stderr).toBe("");
       expect(currentPlan).toEqual(
         expect.objectContaining({
-          currentVersion: 2,
+          currentVersion: 3,
           status: "current",
           tablePrefix: "cli_schema",
-          targetVersion: 2,
+          targetVersion: 3,
         })
       );
 

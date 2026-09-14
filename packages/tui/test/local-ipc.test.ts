@@ -50,6 +50,66 @@ const serverFixtureUrl = new URL(
 const serverFixturePath = (fileName: string): string =>
   fileURLToPath(new URL(fileName, serverFixtureUrl));
 
+test.each([
+  false,
+  true,
+])("connects with an outdated SQL schema and exits after setup (upgrade=%s)", async (upgrade) => {
+  const directory = await mkdtemp(join(tmpdir(), "migrate-schema-"));
+  const previousDirectory = process.env.MIGRATE_TUI_SCHEMA_FIXTURE_DIR;
+  process.env.MIGRATE_TUI_SCHEMA_FIXTURE_DIR = directory;
+  try {
+    const runtime = await makeMigrationTuiRuntime({
+      buildId: `schema-${randomUUID()}`,
+      configPath: serverFixturePath("schema-upgrade.config.ts"),
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
+    });
+    const pid = Number(await readFile(join(directory, "server.pid"), "utf8"));
+    // Let the idle supervisor observe the setup connection before dismissing it.
+    await new Promise((resolveReady) => setTimeout(resolveReady, 250));
+    try {
+      const plan = runtime.storeSchema;
+      expect(plan).toMatchObject({
+        currentVersion: 2,
+        targetVersion: 3,
+        status: "upgrade-required",
+      });
+      expect(runtime.rows[0]?.entry.id).toBe("authors");
+      expect(runtime.rows[0]?.status).toBeUndefined();
+      if (upgrade) {
+        if (plan === null) {
+          throw new Error("Expected upgrade plan");
+        }
+        await expect(
+          runtime.upgradeStoreSchema(plan.planId)
+        ).resolves.toMatchObject({ status: "current", currentVersion: 3 });
+        expect((await runtime.refresh()).rows[0]?.status).toBeDefined();
+      }
+    } finally {
+      await runtime.dispose?.();
+    }
+    await expect
+      .poll(
+        () => {
+          try {
+            process.kill(pid, 0);
+            return false;
+          } catch {
+            return true;
+          }
+        },
+        { timeout: 10_000 }
+      )
+      .toBe(true);
+  } finally {
+    if (previousDirectory === undefined) {
+      delete process.env.MIGRATE_TUI_SCHEMA_FIXTURE_DIR;
+    } else {
+      process.env.MIGRATE_TUI_SCHEMA_FIXTURE_DIR = previousDirectory;
+    }
+    await rm(directory, { force: true, recursive: true });
+  }
+}, 20_000);
+
 test("--otel exports the completed local run with only an endpoint override", async () => {
   const spans: string[] = [];
   const services: unknown[] = [];

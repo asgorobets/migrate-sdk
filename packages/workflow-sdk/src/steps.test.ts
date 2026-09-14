@@ -79,16 +79,17 @@ const makeFixture = (
     id: "workflow-modes@v1",
     schema: SourceIdentity.key("id", Schema.NonEmptyString),
   });
+  const sourceItems = ["a", "b", "c"].map((id) => ({
+    identityKey: id,
+    item: id,
+    version: "v1",
+  }));
   const source = InMemorySource.make({
     identity,
     sourceSchema: Schema.String,
     batchSize: 1,
     state: sourceState,
-    items: ["a", "b", "c"].map((id) => ({
-      identityKey: id,
-      item: id,
-      version: "v1",
-    })),
+    items: sourceItems,
   });
   const tracking = Tracking.record({
     id: "workflow-tracking@v1",
@@ -110,6 +111,7 @@ const makeFixture = (
     source,
     store,
     tracking,
+    rollback: () => Effect.void,
     ...(options.withDependency
       ? { dependencies: { required: ["authors"] } }
       : {}),
@@ -151,7 +153,11 @@ const makeFixture = (
         const locks = yield* Effect.forEach(plan.includedDefinitionIds, (id) =>
           service.acquireDefinitionLock(id, runId)
         );
-        yield* service.queueRun(runId, plan.includedDefinitionIds);
+        yield* service.queueRun({
+          runId,
+          definitionIds: plan.includedDefinitionIds,
+          operation: "run",
+        });
         const envelope = yield* makeMigrationRunExecutionEnvelope(plan, {
           runId,
           locks,
@@ -185,6 +191,7 @@ const makeFixture = (
     run,
     runInline,
     sourceState,
+    sourceItems,
     state,
     steps,
     store,
@@ -192,6 +199,77 @@ const makeFixture = (
 };
 
 describe("Workflow migration run modes", () => {
+  it.each([
+    0, 1,
+  ])("restores completion after orphan cleanup only with no earlier failures (%s)", async (earlierFailures) => {
+    const fixture = makeFixture();
+    await fixture.run();
+    fixture.sourceItems.pop();
+    const envelope = await fixture.prepare({ rollbackOrphans: true });
+    const result = await runMigrationExecutionWorkflow(envelope, {
+      ...fixture.steps,
+      executeRollbackOrphansPage: (input) =>
+        fixture.steps.executeRollbackOrphansPage({
+          ...input,
+          state: { ...input.state, rollbackFailed: earlierFailures },
+        }),
+    });
+    expect(result.definitions[0]?.counts).toMatchObject({
+      rolledBack: 1,
+      rollbackFailed: earlierFailures,
+    });
+    expect(fixture.state.definitionCompletions.has(fixture.definition.id)).toBe(
+      earlierFailures === 0
+    );
+    if (earlierFailures === 0) {
+      expect(
+        fixture.state.definitionCompletions.get(fixture.definition.id)?.runId
+      ).toBe(result.runId);
+    }
+  });
+
+  it("records a completed source pass despite item failures and preserves it through retries", async () => {
+    const fixture = makeFixture();
+    fixture.outcomes.set("b", "failed");
+    const result = await fixture.run();
+    expect(result.status).toBe("failed");
+    const completion = fixture.state.definitionCompletions.get(
+      fixture.definition.id
+    );
+    expect(completion?.runId).toBe(result.runId);
+    await fixture.run({ mode: { kind: "failed" } });
+    expect(
+      fixture.state.definitionCompletions.get(fixture.definition.id)
+    ).toEqual(completion);
+  });
+
+  it("does not establish whole-migration completion from targeted work", async () => {
+    const fixture = makeFixture();
+    await fixture.run({ sourceIdentities: ["a"] });
+    expect(fixture.state.definitionCompletions.size).toBe(0);
+    await fixture.run({ mode: { kind: "failed" } });
+    expect(fixture.state.definitionCompletions.size).toBe(0);
+  });
+
+  it("requires reaching the end of the source after a worker stops mid-pass", async () => {
+    const fixture = makeFixture();
+    const envelope = await fixture.prepare();
+    await expect(
+      runMigrationExecutionWorkflow(envelope, {
+        ...fixture.steps,
+        executeCursorWindow: async (input) => {
+          await fixture.steps.executeCursorWindow(input);
+          throw new Error("Worker stopped mid-pass");
+        },
+      })
+    ).rejects.toThrow("Worker stopped mid-pass");
+    expect(fixture.state.definitionCompletions.size).toBe(0);
+    const resumed = await fixture.run();
+    expect(
+      fixture.state.definitionCompletions.get(fixture.definition.id)?.runId
+    ).toBe(resumed.runId);
+  });
+
   it("rehydrates composite source identities inside the step", async () => {
     const state = InMemoryMigrationStore.makeState();
     const store = InMemoryMigrationStore.layer(state);
@@ -233,7 +311,11 @@ describe("Workflow migration run modes", () => {
         const locks = [
           yield* service.acquireDefinitionLock(definition.id, runId),
         ];
-        yield* service.queueRun(runId, [definition.id]);
+        yield* service.queueRun({
+          runId,
+          definitionIds: [definition.id],
+          operation: "run",
+        });
         return {
           ...(yield* makeMigrationRunExecutionEnvelope(plan, { runId, locks })),
           locks,
@@ -492,6 +574,9 @@ describe("Workflow migration run modes", () => {
   it("preserves update tracking and backlog after cancellation between windows", async () => {
     const fixture = makeFixture();
     await fixture.run();
+    const completion = fixture.state.definitionCompletions.get(
+      fixture.definition.id
+    );
     const envelope = await fixture.prepare({ update: true });
     const result = await runMigrationExecutionWorkflow(envelope, {
       ...fixture.steps,
@@ -502,6 +587,9 @@ describe("Workflow migration run modes", () => {
       },
     });
     expect(result.status).toBe("cancelled");
+    expect(
+      fixture.state.definitionCompletions.get(fixture.definition.id)
+    ).toEqual(completion);
     expect([...fixture.state.itemStates.values()]).toMatchObject([
       { status: "migrated", trackingRecord: { id: "destination-a" } },
       { status: "needs-update", trackingRecord: { id: "destination-b" } },

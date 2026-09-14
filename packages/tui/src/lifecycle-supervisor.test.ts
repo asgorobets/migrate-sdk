@@ -32,6 +32,7 @@ describe("Migration TUI lifecycle supervisor", () => {
       },
       forceExit: vi.fn(),
       runtime: {
+        getStoreSchema: () => Promise.resolve(null),
         detachForExit: () => Promise.resolve({ kind: "idle" }),
         refresh: vi.fn(() => Promise.resolve(snapshot)),
       },
@@ -79,6 +80,7 @@ describe("Migration TUI lifecycle supervisor", () => {
       },
       forceExit,
       runtime: {
+        getStoreSchema: () => Promise.resolve(null),
         detachForExit,
         refresh: () =>
           Promise.resolve({
@@ -126,6 +128,7 @@ describe("Migration TUI lifecycle supervisor", () => {
       forceExit,
       forceExitTimeoutMs: 1,
       runtime: {
+        getStoreSchema: () => Promise.resolve(null),
         detachForExit: () => new Promise(() => undefined),
         refresh: () =>
           Promise.resolve({

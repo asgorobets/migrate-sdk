@@ -105,7 +105,7 @@ export const SelectiveRunDialog = ({
   const historyRows = Math.max(1, visibleHistory.length);
   const dialogHeight = Math.max(
     1,
-    Math.min(16 + visibleEntries.length + historyRows, height - 4)
+    Math.min(17 + visibleEntries.length + historyRows, height - 4)
   );
   const actionLabel = action === "rollback" ? "Rollback" : "Run";
 
@@ -149,12 +149,9 @@ export const SelectiveRunDialog = ({
           <DialogTitle content={`${actionLabel} selected entries`} />
           <Badge intent="neutral" label="SOURCE IDS" />
         </box>
-        <DialogDescription
-          content={`${definitionId} · ${actionLabel} only the source identities below.`}
-          wrapMode="none"
-        />
+        <DialogDescription content={definitionId} wrapMode="word" />
         <box style={{ flexShrink: 0, height: 1, marginTop: 1 }}>
-          <text fg={colors.foreground}>Source identity</text>
+          <text fg={colors.foreground}>Source ID</text>
         </box>
         <box
           style={{
@@ -171,7 +168,7 @@ export const SelectiveRunDialog = ({
           <Input
             onInput={onDraftChange}
             onSubmit={onSubmit}
-            placeholder="Enter source identity"
+            placeholder="Enter source ID"
             placeholderColor={colors.dim}
             ref={inputRef}
             textColor={colors.foreground}
@@ -223,7 +220,7 @@ export const SelectiveRunDialog = ({
         </box>
         {historyLoading ? <text fg={colors.dim}>Loading history…</text> : null}
         {!historyLoading && visibleHistory.length === 0 ? (
-          <text fg={colors.dim}>No previous source identities.</text>
+          <text fg={colors.dim}>No entries in history.</text>
         ) : null}
         {visibleHistory.map((entry, index) => {
           const absoluteIndex = historyStart + index;
@@ -273,7 +270,7 @@ export const SelectiveRunDialog = ({
           }}
         >
           <text fg={colors.dim}>
-            ↑↓ history · space toggle · enter add/run · ctrl+⌫ remove
+            ↑↓ history · space toggle · enter add/confirm · ctrl+⌫ remove
           </text>
         </box>
       </DialogContent>

@@ -341,15 +341,23 @@ describe("registry migration server runtime", () => {
 
         yield* MigrationStore.pipe(
           Effect.flatMap((store) =>
-            store.queueRun(runId, [definitionId]).pipe(
-              Effect.andThen(store.acquireDefinitionLock(definitionId, runId)),
-              Effect.andThen(
-                store.attachRunExecution(runId, [definitionId], {
-                  adapter: "workflow-sdk",
-                  executionId: "workflow-run-1",
-                })
+            store
+              .queueRun({
+                runId,
+                definitionIds: [definitionId],
+                operation: "run",
+              })
+              .pipe(
+                Effect.andThen(
+                  store.acquireDefinitionLock(definitionId, runId)
+                ),
+                Effect.andThen(
+                  store.attachRunExecution(runId, [definitionId], {
+                    adapter: "workflow-sdk",
+                    executionId: "workflow-run-1",
+                  })
+                )
               )
-            )
           ),
           Effect.provide(storeLayer)
         );

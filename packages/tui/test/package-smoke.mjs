@@ -90,14 +90,7 @@ const runPackedMigration = async ({ command, fixtureDirectory }) => {
     });
     run(
       pilotty,
-      [
-        "wait-for",
-        "-s",
-        session,
-        "-t",
-        "20000",
-        "packaging-fixture  SUCCEEDED",
-      ],
+      ["wait-for", "-s", session, "-t", "20000", "packaging-fixture  COMPLETE"],
       { capture: true, cwd: fixtureDirectory, env }
     );
     const snapshot = run(
@@ -115,7 +108,7 @@ const runPackedMigration = async ({ command, fixtureDirectory }) => {
       { capture: true, cwd: fixtureDirectory, env }
     );
 
-    if (!snapshot.includes("packaging-fixture  SUCCEEDED")) {
+    if (!snapshot.includes("packaging-fixture  COMPLETE")) {
       throw new Error(
         `Packed TUI did not execute the fixture migration\n${snapshot}`
       );
@@ -167,8 +160,12 @@ try {
   const result = await runtime.observeRun(reference.runId);
   const status = (await runtime.refresh()).rows[0]?.status;
 
-  if (result.outcome !== "completed" || status?.durable.migrated !== 1) {
-    throw new Error("Packed RPC migration did not reach durable migrated state");
+  if (
+    result.outcome !== "completed" ||
+    status?.durable.migrated !== 1 ||
+    status.completion == null
+  ) {
+    throw new Error("Packed RPC migration did not persist migrated items and source-pass completion");
   }
 } finally {
   await runtime.dispose?.();

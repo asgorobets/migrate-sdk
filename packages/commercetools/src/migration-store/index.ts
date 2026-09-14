@@ -12,6 +12,7 @@ import {
   isActiveMigrationRunStatus,
   MigrationContractSchema,
   type MigrationContract as MigrationContractType,
+  type MigrationDefinitionCompletion,
   MigrationDefinitionId as MigrationDefinitionIdSchema,
   type MigrationDefinitionLock as MigrationDefinitionLockSchema,
   MigrationDefinitionLockToken as MigrationDefinitionLockTokenSchema,
@@ -20,8 +21,11 @@ import {
   type MigrationDefinitionRunState,
   MigrationDefinitionRunStatus,
   type MigrationExecutionHandle,
+  type MigrationItemRollbackInput,
   type MigrationItemState as MigrationItemStateSchema,
   MigrationRunId as MigrationRunIdSchema,
+  MigrationRunOperation,
+  type MigrationRunStartInput,
   type MigrationRunState,
   MigrationStore,
   MigrationStoreError,
@@ -76,6 +80,7 @@ const maxCustomObjectNamespaceLength = 64;
 const maxCustomObjectPageSize = 500;
 
 const PersistedMigrationRunState = Schema.Struct({
+  operation: Schema.optional(MigrationRunOperation),
   definitionIds: Schema.Array(MigrationDefinitionIdSchema),
   definitionStatus: Schema.optional(MigrationDefinitionRunStatus),
   execution: Schema.optional(
@@ -147,6 +152,19 @@ const EncodedSourceCursorRecord = Schema.Struct({
 });
 type EncodedSourceCursorRecord = typeof EncodedSourceCursorRecord.Type;
 
+const MigrationDefinitionCompletionRecord = Schema.Struct({
+  formatVersion: Schema.Literal(formatVersion),
+  index: Schema.Struct({ definitionId: MigrationDefinitionIdSchema }),
+  namespace: Schema.String,
+  recordKind: Schema.Literal("definition-completion"),
+  state: Schema.Struct({
+    definitionId: MigrationDefinitionIdSchema,
+    runId: MigrationRunIdSchema,
+    completedAt: Schema.DateFromString,
+    sourceCursor: Schema.NullOr(EncodedSourceCursorSchema),
+  }),
+});
+
 const MigrationContractRecord = Schema.Struct({
   formatVersion: Schema.Literal(formatVersion),
   index: Schema.Struct({
@@ -213,6 +231,12 @@ const sourceCursorKey = (
   definitionId: MigrationDefinitionId
 ): string =>
   `${namespace}__encoded-source-cursor__${definitionHashSegment(definitionId)}`;
+
+const definitionCompletionKey = (
+  namespace: string,
+  definitionId: MigrationDefinitionId
+): string =>
+  `${namespace}__definition-completion__${definitionHashSegment(definitionId)}`;
 
 const migrationContractKey = (
   namespace: string,
@@ -963,7 +987,8 @@ const deleteCustomObject = (
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions,
   key: string,
-  version: number
+  version: number,
+  ignoreMissing = false
 ): Effect.Effect<void, MigrationStoreError> =>
   sdk
     .request("customObjects.deleteMigrationStoreRecord", (project) =>
@@ -973,6 +998,10 @@ const deleteCustomObject = (
         .delete({ queryArgs: { version } })
     )
     .pipe(
+      Effect.catchIf(
+        (cause) => ignoreMissing && isNotFoundSdkError(cause),
+        () => Effect.void
+      ),
       Effect.asVoid,
       Effect.mapError((cause) =>
         storeError(
@@ -1640,6 +1669,7 @@ const writeOrTransitionLatestRunState = (
   runId: MigrationRunId,
   definitionIds: readonly MigrationDefinitionId[],
   status: MigrationRunStateType["status"],
+  operation: MigrationRunStartInput["operation"],
   remainingAttempts = maximumMigrationRunStateWriteAttempts
 ): Effect.Effect<MigrationRunStateType, MigrationStoreError> =>
   Effect.gen(function* () {
@@ -1689,6 +1719,7 @@ const writeOrTransitionLatestRunState = (
 
     const runState: MigrationRunStateType = {
       ...(currentRunState ?? {}),
+      ...(currentRunState === null ? { operation } : {}),
       definitionIds,
       runId,
       startedAt: currentRunState?.startedAt ?? new Date(),
@@ -1712,6 +1743,7 @@ const writeOrTransitionLatestRunState = (
               runId,
               definitionIds,
               status,
+              operation,
               remainingAttempts - 1
             )
           : Effect.fail(
@@ -1728,6 +1760,52 @@ const makeService = (
   sdk: typeof CommercetoolsSdk.Service,
   options: ResolvedCommercetoolsMigrationStoreOptions
 ): (typeof MigrationStore)["Service"] => {
+  const getDefinitionCompletion = Effect.fn(
+    "CommercetoolsMigrationStore.getDefinitionCompletion"
+  )((definitionId: MigrationDefinitionId) => {
+    const key = definitionCompletionKey(options.namespace, definitionId);
+    return readRecordOptional(
+      sdk,
+      options,
+      key,
+      MigrationDefinitionCompletionRecord,
+      (record) =>
+        Effect.gen(function* () {
+          yield* validateRecordNamespace(options, key, record);
+          yield* validateMetadata(
+            key,
+            "index.definitionId",
+            definitionId,
+            record.index.definitionId
+          );
+          yield* validateMetadata(
+            key,
+            "state.definitionId",
+            definitionId,
+            record.state.definitionId
+          );
+        })
+    ).pipe(Effect.map((record) => record?.state ?? null));
+  });
+
+  const recordSourcePassCompletion = Effect.fn(
+    "CommercetoolsMigrationStore.recordSourcePassCompletion"
+  )((completion: MigrationDefinitionCompletion) =>
+    writeRecord(
+      sdk,
+      options,
+      definitionCompletionKey(options.namespace, completion.definitionId),
+      MigrationDefinitionCompletionRecord,
+      {
+        formatVersion,
+        index: { definitionId: completion.definitionId },
+        namespace: options.namespace,
+        recordKind: "definition-completion",
+        state: completion,
+      }
+    )
+  );
+
   const getSourceCursor = Effect.fn(
     "CommercetoolsMigrationStore.getSourceCursor"
   )((definitionId: MigrationDefinitionId) => {
@@ -1766,7 +1844,7 @@ const makeService = (
       return;
     }
 
-    yield* deleteCustomObject(sdk, options, key, customObject.version);
+    yield* deleteCustomObject(sdk, options, key, customObject.version, true);
   });
 
   const getMigrationContract = Effect.fn(
@@ -1824,12 +1902,12 @@ const makeService = (
     return summarizeItemStates(itemStates);
   });
 
-  const deleteItemState = Effect.fn(
-    "CommercetoolsMigrationStore.deleteItemState"
-  )(function* (
-    definitionId: MigrationDefinitionId,
-    identity: EncodedSourceIdentity
-  ) {
+  const removeRolledBackItem = Effect.fn(
+    "CommercetoolsMigrationStore.removeRolledBackItem"
+  )(function* ({
+    definitionId,
+    sourceIdentity: identity,
+  }: MigrationItemRollbackInput) {
     const key = itemStateKey(options.namespace, definitionId, identity);
     const customObject = yield* readCustomObjectOptional(sdk, options, key);
 
@@ -1847,6 +1925,27 @@ const makeService = (
       definitionId,
       sourceIdentity: identity,
     });
+    // Custom Objects have no cross-record transaction. Invalidate first and
+    // retain the conservative state on an ambiguous network failure.
+    const completionKey = definitionCompletionKey(
+      options.namespace,
+      definitionId
+    );
+    const completion = yield* readCustomObjectOptional(
+      sdk,
+      options,
+      completionKey
+    );
+    if (completion !== null) {
+      yield* deleteCustomObject(
+        sdk,
+        options,
+        completionKey,
+        completion.version,
+        true
+      );
+    }
+    yield* deleteSourceCursor(definitionId);
     yield* deleteCustomObject(sdk, options, key, customObject.version);
   });
 
@@ -1975,24 +2074,26 @@ const makeService = (
     );
 
   const beginRun = Effect.fn("CommercetoolsMigrationStore.beginRun")(
-    (runId: MigrationRunId, definitionIds: readonly MigrationDefinitionId[]) =>
+    ({ runId, definitionIds, operation }: MigrationRunStartInput) =>
       writeOrTransitionLatestRunState(
         sdk,
         options,
         runId,
         definitionIds,
-        "running"
+        "running",
+        operation
       )
   );
 
   const queueRun = Effect.fn("CommercetoolsMigrationStore.queueRun")(
-    (runId: MigrationRunId, definitionIds: readonly MigrationDefinitionId[]) =>
+    ({ runId, definitionIds, operation }: MigrationRunStartInput) =>
       writeOrTransitionLatestRunState(
         sdk,
         options,
         runId,
         definitionIds,
-        "queued"
+        "queued",
+        operation
       )
   );
 
@@ -2222,6 +2323,8 @@ const makeService = (
   return {
     listOrphanItemStates,
     observeItemState,
+    getDefinitionCompletion,
+    recordSourcePassCompletion,
     getSourceCursor,
     setSourceCursor,
     deleteSourceCursor,
@@ -2231,7 +2334,7 @@ const makeService = (
     listItemStates: (definitionId: MigrationDefinitionId) =>
       listItemStates(sdk, options, definitionId),
     getItemStateSummary,
-    deleteItemState,
+    removeRolledBackItem,
     upsertItemState,
     createRunId: Effect.sync(() => toMigrationRunId(`run-${randomUUID()}`)),
     getLatestRunState,

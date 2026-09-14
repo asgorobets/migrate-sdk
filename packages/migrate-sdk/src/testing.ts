@@ -19,4 +19,7 @@ export {
   runInlineDefinition,
   runInlineRegistry,
 } from "./testing/inline-registry-execution.ts";
-export { runSupersededMigrationRunScenario } from "./testing/migration-store-conformance.ts";
+export {
+  runMigrationCompletionScenario,
+  runSupersededMigrationRunScenario,
+} from "./testing/migration-store-conformance.ts";

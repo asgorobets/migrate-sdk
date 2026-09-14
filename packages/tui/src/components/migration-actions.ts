@@ -157,8 +157,7 @@ export const migrationTuiAvailableActions = (
 
   if (!isGroup) {
     options.push({
-      description:
-        "Run specific source identities, including identities from history",
+      description: "Run entries by source ID or select from history",
       id: "selective-run",
       key: "e",
       label: "Run selected entries",
@@ -222,10 +221,11 @@ export const migrationTuiAvailableActions = (
       action: "rollback",
       description: isGroup
         ? "Rollback every migration in this group"
-        : "Rollback this migration and affected dependents in safe order",
+        : "Choose migrations for rollback",
       id: "rollback",
       key: "b",
       label: isGroup ? "Rollback group" : "Rollback",
+      options: { withDependencies: true },
       primary: {
         compactLabel: "b Rollback",
         intent: "neutral",
@@ -237,8 +237,7 @@ export const migrationTuiAvailableActions = (
 
     if (!isGroup) {
       options.push({
-        description:
-          "Rollback specific source identities, including identities from history",
+        description: "Rollback entries by source ID or select from history",
         id: "selective-rollback",
         key: "",
         label: "Rollback selected entries",

@@ -24,9 +24,14 @@ import type {
 } from "../../domain/run.ts";
 import { makeMigrationDefinitionRunState } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
-import { summarizeMigrationItemStates } from "../../domain/status.ts";
+import {
+  type MigrationDefinitionCompletion,
+  summarizeMigrationItemStates,
+} from "../../domain/status.ts";
 import {
   isActiveMigrationRunStatus,
+  type MigrationItemRollbackInput,
+  type MigrationRunStartInput,
   MigrationStore,
   migrationDefinitionRunStatus,
   resolveMigrationRunTransition,
@@ -35,6 +40,10 @@ import {
 } from "../../services/migration-store.ts";
 
 export interface InMemoryMigrationStoreState {
+  readonly definitionCompletions: Map<
+    MigrationDefinitionId,
+    MigrationDefinitionCompletion
+  >;
   readonly definitionLocks: Map<MigrationDefinitionId, MigrationDefinitionLock>;
   readonly itemStates: Map<string, MigrationItemState>;
   readonly latestRunStates: Map<
@@ -61,6 +70,7 @@ const itemStateKey = (
   `${toMigrationDefinitionId(definitionId)}\u0000${toEncodedSourceIdentity(identity)}`;
 
 const makeState = (): InMemoryMigrationStoreState => ({
+  definitionCompletions: new Map(),
   itemStates: new Map(),
   latestRunStates: new Map(),
   migrationContracts: new Map(),
@@ -176,6 +186,15 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
           }
         });
 
+    const getDefinitionCompletion = (definitionId: MigrationDefinitionId) =>
+      Effect.sync(() => state.definitionCompletions.get(definitionId) ?? null);
+    const recordSourcePassCompletion = (
+      completion: MigrationDefinitionCompletion
+    ) =>
+      Effect.sync(() => {
+        state.definitionCompletions.set(completion.definitionId, completion);
+      });
+
     const getSourceCursor = Effect.fn("InMemoryMigrationStore.getSourceCursor")(
       (definitionId: MigrationDefinitionId) =>
         Effect.sync(() => state.sourceCursors.get(definitionId) ?? null)
@@ -236,10 +255,18 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       return summarizeMigrationItemStates(itemStates);
     });
 
-    const deleteItemState = Effect.fn("InMemoryMigrationStore.deleteItemState")(
-      (definitionId: MigrationDefinitionId, identity: EncodedSourceIdentity) =>
+    const removeRolledBackItem = Effect.fn(
+      "InMemoryMigrationStore.removeRolledBackItem"
+    )(
+      ({
+        definitionId,
+        sourceIdentity: identity,
+      }: MigrationItemRollbackInput) =>
         Effect.sync(() => {
-          state.itemStates.delete(itemStateKey(definitionId, identity));
+          if (state.itemStates.delete(itemStateKey(definitionId, identity))) {
+            state.definitionCompletions.delete(definitionId);
+            state.sourceCursors.delete(definitionId);
+          }
         })
     );
 
@@ -292,7 +319,8 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
     const writeRunState = (
       runId: MigrationRunId,
       definitionIds: readonly MigrationDefinitionId[],
-      status: MigrationRunState["status"]
+      status: MigrationRunState["status"],
+      operation: MigrationRunStartInput["operation"]
     ) =>
       Effect.gen(function* () {
         const startedAt = yield* DateTime.nowAsDate;
@@ -313,6 +341,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
 
         const runState: MigrationRunState = {
           ...(current ?? {}),
+          ...(current === undefined ? { operation } : {}),
           runId,
           definitionIds,
           status: transition.status ?? status,
@@ -332,17 +361,13 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       });
 
     const beginRun = Effect.fn("InMemoryMigrationStore.beginRun")(
-      (
-        runId: MigrationRunId,
-        definitionIds: readonly MigrationDefinitionId[]
-      ) => writeRunState(runId, definitionIds, "running")
+      ({ runId, definitionIds, operation }: MigrationRunStartInput) =>
+        writeRunState(runId, definitionIds, "running", operation)
     );
 
     const queueRun = Effect.fn("InMemoryMigrationStore.queueRun")(
-      (
-        runId: MigrationRunId,
-        definitionIds: readonly MigrationDefinitionId[]
-      ) => writeRunState(runId, definitionIds, "queued")
+      ({ runId, definitionIds, operation }: MigrationRunStartInput) =>
+        writeRunState(runId, definitionIds, "queued", operation)
     );
 
     const attachRunExecution = Effect.fn(
@@ -658,6 +683,8 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
     return {
       listOrphanItemStates,
       observeItemState,
+      getDefinitionCompletion,
+      recordSourcePassCompletion,
       getSourceCursor,
       setSourceCursor,
       deleteSourceCursor,
@@ -666,7 +693,7 @@ const makeLayer = (state = makeState()): Layer.Layer<MigrationStore> =>
       getItemState,
       listItemStates,
       getItemStateSummary,
-      deleteItemState,
+      removeRolledBackItem,
       upsertItemState,
       createRunId,
       getRunState,

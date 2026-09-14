@@ -28,13 +28,19 @@ import type {
 } from "../../domain/run.ts";
 import {
   MigrationDefinitionRunStatus,
+  MigrationRunOperation,
   makeMigrationDefinitionRunState,
 } from "../../domain/run.ts";
 import type { MigrationItemState } from "../../domain/state.ts";
-import { emptyMigrationItemStateSummary } from "../../domain/status.ts";
+import {
+  emptyMigrationItemStateSummary,
+  type MigrationDefinitionCompletion,
+} from "../../domain/status.ts";
 import {
   isActiveMigrationRunStatus,
   type MigrationDefinitionRunOutcomeMap,
+  type MigrationItemRollbackInput,
+  type MigrationRunStartInput,
   MigrationStore,
   migrationDefinitionRunStatus,
   resolveMigrationRunTransition,
@@ -55,6 +61,13 @@ export interface SqlMigrationStoreOptions {
   readonly tablePrefix?: string;
 }
 
+const SqlCompletionRow = Schema.Struct({
+  definition_id: MigrationDefinitionId,
+  run_id: MigrationRunId,
+  completed_at: Schema.DateFromString,
+  source_cursor: Schema.NullOr(EncodedSourceCursor),
+});
+
 const SqlCursorRow = Schema.Struct({
   cursor_value: EncodedSourceCursor,
 });
@@ -74,6 +87,7 @@ const SqlItemStateRow = Schema.Struct({
 });
 
 const SqlRunRow = Schema.Struct({
+  operation: Schema.NullOr(MigrationRunOperation),
   definition_status: Schema.NullOr(MigrationDefinitionRunStatus),
   execution_adapter: Schema.NullOr(Schema.String),
   execution_id: Schema.NullOr(Schema.String),
@@ -237,6 +251,7 @@ const makeLayer = (
     Effect.gen(function* () {
       const { dialect, names, sql } = yield* prepareSqlMigrationStore(options);
 
+      const completions = sql(names.completions);
       const contracts = sql(names.contracts);
       const cursors = sql(names.cursors);
       const itemStates = sql(names.itemStates);
@@ -271,6 +286,47 @@ const makeLayer = (
               )
             )
           );
+
+      const getDefinitionCompletion = (
+        definitionId: MigrationDefinitionIdType
+      ) =>
+        Effect.gen(function* () {
+          const rows = yield* runSql(
+            "read definition completion",
+            sql`
+          SELECT definition_id, run_id, completed_at, source_cursor FROM ${completions}
+          WHERE definition_key = ${sqlKey(definitionId)} AND definition_id = ${definitionId}
+        `
+          );
+          const row = rows[0];
+          if (row === undefined) {
+            return null;
+          }
+          const decoded = yield* decodeRow(
+            SqlCompletionRow,
+            row,
+            `Definition completion for ${definitionId}`
+          );
+          return {
+            definitionId: decoded.definition_id,
+            runId: decoded.run_id,
+            completedAt: decoded.completed_at,
+            sourceCursor: decoded.source_cursor,
+          };
+        });
+      const recordSourcePassCompletion = (
+        completion: MigrationDefinitionCompletion
+      ) =>
+        runSql(
+          "record definition completion",
+          dialect.upsertCompletion({
+            definitionId: completion.definitionId,
+            definitionKey: sqlKey(completion.definitionId),
+            runId: completion.runId,
+            completedAt: completion.completedAt.toISOString(),
+            sourceCursor: completion.sourceCursor,
+          })
+        );
 
       const getSourceCursor = Effect.fn("SqlMigrationStore.getSourceCursor")(
         function* (definitionId: MigrationDefinitionIdType) {
@@ -499,21 +555,51 @@ const makeLayer = (
         return summary;
       });
 
-      const deleteItemState = Effect.fn("SqlMigrationStore.deleteItemState")(
-        (
-          definitionId: MigrationDefinitionIdType,
-          identity: EncodedSourceIdentity
-        ) =>
-          runSql(
-            "delete Migration Item State",
-            sql`
-            DELETE FROM ${itemStates}
-            WHERE definition_key = ${sqlKey(definitionId)}
-              AND source_identity_key = ${sqlKey(identity)}
-              AND definition_id = ${definitionId}
-              AND source_identity = ${identity}
+      const removeRolledBackItem = Effect.fn(
+        "SqlMigrationStore.removeRolledBackItem"
+      )(
+        ({
+          definitionId,
+          sourceIdentity: identity,
+        }: MigrationItemRollbackInput) =>
+          withTransaction(
+            "remove item and invalidate completion",
+            Effect.gen(function* () {
+              const existing = yield* runSql(
+                "check Migration Item State before deletion",
+                sql`
+                SELECT 1 AS present FROM ${itemStates}
+                WHERE definition_key = ${sqlKey(definitionId)}
+                  AND source_identity_key = ${sqlKey(identity)}
+                  AND definition_id = ${definitionId} AND source_identity = ${identity}
+              `
+              );
+              if (existing.length === 0) {
+                return;
+              }
+              yield* runSql(
+                "delete Migration Item State",
+                sql`
+              DELETE FROM ${itemStates}
+              WHERE definition_key = ${sqlKey(definitionId)}
+                AND source_identity_key = ${sqlKey(identity)}
+                AND definition_id = ${definitionId} AND source_identity = ${identity}
             `
-          ).pipe(Effect.asVoid)
+              );
+              yield* runSql(
+                "invalidate definition completion",
+                sql`
+              DELETE FROM ${completions}
+              WHERE definition_key = ${sqlKey(definitionId)} AND definition_id = ${definitionId}
+            `
+              );
+              yield* runSql(
+                "reset source cursor after rollback",
+                sql`DELETE FROM ${cursors}
+                  WHERE definition_key = ${sqlKey(definitionId)} AND definition_id = ${definitionId}`
+              );
+            })
+          )
       );
 
       const upsertItemState = Effect.fn("SqlMigrationStore.upsertItemState")(
@@ -660,6 +746,9 @@ const makeLayer = (
           return {
             definitionStatus: first.definition_status,
             runState: {
+              ...(first.operation === null
+                ? {}
+                : { operation: first.operation }),
               definitionIds,
               runId: first.run_id,
               startedAt: first.started_at,
@@ -700,6 +789,7 @@ const makeLayer = (
                   r.status,
                   r.started_at,
                   r.finished_at,
+                  r.operation,
                   r.execution_adapter,
                   r.execution_id,
                   selected_rd.definition_status,
@@ -721,6 +811,7 @@ const makeLayer = (
                   r.status,
                   r.started_at,
                   r.finished_at,
+                  r.operation,
                   r.execution_adapter,
                   r.execution_id,
                   NULL AS definition_status,
@@ -766,6 +857,7 @@ const makeLayer = (
         runSql(
           "upsert Migration Run State",
           dialect.upsertRun({
+            operation: state.operation ?? null,
             executionAdapter: state.execution?.adapter ?? null,
             executionId: state.execution?.executionId ?? null,
             finishedAt: state.finishedAt?.toISOString() ?? null,
@@ -792,7 +884,8 @@ const makeLayer = (
       const writeRunState = (
         runId: MigrationRunIdType,
         definitionIds: readonly MigrationDefinitionIdType[],
-        status: MigrationRunState["status"]
+        status: MigrationRunState["status"],
+        operation: MigrationRunStartInput["operation"]
       ): Effect.Effect<MigrationRunState, MigrationStoreError> =>
         withTransaction(
           "write Migration Run State",
@@ -815,6 +908,7 @@ const makeLayer = (
 
             const nextStatus = transition.status ?? status;
             const runState: MigrationRunState = {
+              ...(current === undefined ? { operation } : {}),
               ...(current ?? {}),
               definitionIds,
               runId,
@@ -877,17 +971,13 @@ const makeLayer = (
         );
 
       const beginRun = Effect.fn("SqlMigrationStore.beginRun")(
-        (
-          runId: MigrationRunIdType,
-          definitionIds: readonly MigrationDefinitionIdType[]
-        ) => writeRunState(runId, definitionIds, "running")
+        ({ runId, definitionIds, operation }: MigrationRunStartInput) =>
+          writeRunState(runId, definitionIds, "running", operation)
       );
 
       const queueRun = Effect.fn("SqlMigrationStore.queueRun")(
-        (
-          runId: MigrationRunIdType,
-          definitionIds: readonly MigrationDefinitionIdType[]
-        ) => writeRunState(runId, definitionIds, "queued")
+        ({ runId, definitionIds, operation }: MigrationRunStartInput) =>
+          writeRunState(runId, definitionIds, "queued", operation)
       );
 
       const updateRunState = (
@@ -1162,6 +1252,8 @@ const makeLayer = (
       return {
         listOrphanItemStates,
         observeItemState,
+        getDefinitionCompletion,
+        recordSourcePassCompletion,
         getSourceCursor,
         setSourceCursor,
         deleteSourceCursor,
@@ -1170,7 +1262,7 @@ const makeLayer = (
         getItemState,
         listItemStates,
         getItemStateSummary,
-        deleteItemState,
+        removeRolledBackItem,
         upsertItemState,
         createRunId,
         getRunState,

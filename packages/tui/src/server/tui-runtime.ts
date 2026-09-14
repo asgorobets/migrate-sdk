@@ -42,12 +42,23 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
   };
   const connection = await connect();
   const { client, runPromise, serverInfo } = connection;
-  const initialDashboard = await runPromise(client.GetDashboard()).catch(
-    async (cause) => {
-      await connection.dispose();
-      throw cause;
+  const bootstrap = await (async () => {
+    const schema = await runPromise(client.GetStoreSchema());
+    if (schema === null || schema.status === "current") {
+      const { dashboard } = await runPromise(client.GetDashboard());
+      return { schema, groups: dashboard.groups, rows: dashboard.rows };
     }
-  );
+    const registry = await runPromise(client.GetRegistry());
+    return {
+      schema,
+      groups: registry.groups,
+      rows: registry.entries.map((entry) => ({ entry })),
+    };
+  })().catch(async (cause) => {
+    await connection.dispose();
+    throw cause;
+  });
+  let storeSchema = bootstrap.schema;
   let activeRunObservation:
     | {
         readonly controller: AbortController;
@@ -237,7 +248,23 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
     detachForExit,
     detachRunObservation,
     dispose,
-    groups: initialDashboard.dashboard.groups,
+    groups: bootstrap.groups,
+    get storeSchema() {
+      return storeSchema;
+    },
+    getStoreSchema: async () => {
+      storeSchema = await runCommand((commandClient) =>
+        commandClient.GetStoreSchema()
+      );
+      return storeSchema;
+    },
+    upgradeStoreSchema: async (acceptedPlanId) => {
+      const updated = await runCommand((commandClient) =>
+        commandClient.UpgradeStoreSchema({ acceptedPlanId })
+      );
+      storeSchema = updated;
+      return updated;
+    },
     listActiveRuns: () =>
       runCommand((commandClient) => commandClient.GetActiveRuns()),
     listMessages: (target) =>
@@ -335,7 +362,7 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
       runCommand((commandClient) => commandClient.GetDashboard()).then(
         snapshot
       ),
-    rows: initialDashboard.dashboard.rows,
+    rows: bootstrap.rows,
     scanSource: (target, options = {}) =>
       runCommand((commandClient) =>
         commandClient.ScanSource({

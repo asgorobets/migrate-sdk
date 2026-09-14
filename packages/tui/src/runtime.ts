@@ -19,6 +19,8 @@ import type {
   MigrateRunStopResult,
   MigrateSelection,
   MigrateSourceIdentityHistoryEntry,
+  MigrateStoreSchema,
+  MigrateStoreSchemaPlan,
   MigrateTarget,
 } from "migrate-sdk/protocol";
 import type { MigrationTuiExecutionResult } from "./execution.ts";
@@ -70,6 +72,7 @@ export interface MigrationTuiRuntime {
   readonly getSourceItemTotals: (
     definitionIds: MigrateDefinitionIds
   ) => Promise<readonly MigrateDefinitionSourceItemTotal[]>;
+  readonly getStoreSchema: () => Promise<MigrateStoreSchema>;
   readonly groups: readonly MigrateRegistryGroup[];
   readonly listActiveRuns: () => Promise<readonly MigrateActiveRun[]>;
   readonly listMessages: (
@@ -104,6 +107,10 @@ export interface MigrationTuiRuntime {
     operation: MigratePreparedOperation
   ) => Promise<MigrateRunStartResult>;
   readonly stopRun: (runId: MigrationRunId) => Promise<MigrateRunStopResult>;
+  readonly storeSchema: MigrateStoreSchema;
+  readonly upgradeStoreSchema: (
+    acceptedPlanId: string
+  ) => Promise<MigrateStoreSchemaPlan>;
 }
 
 export interface LoadLocalMigrationTuiInput {

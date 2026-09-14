@@ -578,23 +578,13 @@ export const renderPreparedOperationDependencyFailure = (
 
   return [
     "Migration Definition required dependency state is not satisfied",
-    ...failures.map((dependency) => {
-      const state = dependency.row?.status;
-      let reason: string;
-
-      if (state?.lastRun === null || state === undefined) {
-        reason = `${dependency.dependencyId} has no completed Migration Run State`;
-      } else if (state.durable.failed > 0) {
-        reason = `${dependency.dependencyId} has failed Migration Item State (failed=${state.durable.failed})`;
-      } else {
-        reason = `${dependency.dependencyId} latest run is ${state.lastRun.status}`;
-      }
-
-      return `${dependency.requiredByDefinitionId} requires ${dependency.dependencyId}, but ${reason}.`;
-    }),
+    ...failures.map(
+      (dependency) =>
+        `${dependency.requiredByDefinitionId} requires ${dependency.dependencyId}, but it has no completed source pass (or completion was invalidated by rollback).`
+    ),
     `Run ${[...new Set(failures.map((failure) => failure.dependencyId))].join(
       ", "
-    )} without failures, rerun with --with-dependencies, or use --force.`,
+    )}, rerun with --with-dependencies, or use --force.`,
   ].join("\n");
 };
 
@@ -764,7 +754,9 @@ type DefinitionState =
   | "warning";
 
 const latestStatus = (definition: StatusDefinition): string =>
-  definition.lastRun === null ? "none" : definition.lastRun.status;
+  definition.lastRun === null
+    ? "none"
+    : `${definition.lastRun.operation ?? "unknown"} ${definition.lastRun.status}`;
 
 const lockStatus = (definition: StatusDefinition): "clear" | "locked" =>
   definition.lock == null ? "clear" : "locked";
@@ -813,11 +805,10 @@ const definitionState = (definition: StatusDefinition): DefinitionState => {
     return "pending";
   }
 
-  if (definition.lastRun === null && !hasDurableItems(definition)) {
-    return "new";
+  if (definition.completion != null) {
+    return "ok";
   }
-
-  return "ok";
+  return hasDurableItems(definition) ? "pending" : "new";
 };
 
 const styleDefinitionState = (
@@ -852,7 +843,7 @@ const styleLatestStatus = (
   definition: StatusDefinition,
   options: RenderOptions
 ): string => {
-  switch (latestStatus(definition)) {
+  switch (definition.lastRun?.status) {
     case "succeeded":
       return green(value, options);
     case "failed":
@@ -1085,7 +1076,12 @@ const durableStatusColumns = [
     render: (definition: StatusDefinition) => definition.discovery,
   },
   {
-    header: "Last Run",
+    header: "Completion",
+    render: (definition: StatusDefinition) =>
+      definition.completion == null ? "incomplete" : "complete",
+  },
+  {
+    header: "Last Operation",
     render: latestStatus,
     style: styleLatestStatus,
   },

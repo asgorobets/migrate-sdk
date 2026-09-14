@@ -62,6 +62,8 @@ const serverLayer = Layer.succeed(
   MigrateServer.of({
     breakLock: () => Effect.die("not used"),
     getActiveRuns: Effect.succeed(activeRuns),
+    getStoreSchema: Effect.succeed(null),
+    upgradeStoreSchema: () => Effect.die("not used"),
     getDashboard: Effect.succeed(dashboardSnapshot),
     getMessages: () => Effect.succeed([]),
     getRegistry: Effect.succeed({

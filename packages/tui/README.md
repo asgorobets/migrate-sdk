@@ -67,7 +67,19 @@ rollback or stopping is supported.
 Remote clients and servers may use different Migrate SDK releases when they
 advertise the same Migrate Protocol version. The server's SDK version remains
 available in connection metadata for diagnostics; protocol compatibility is the
-remote connection gate.
+remote connection gate. Schema administration requires Migrate Protocol v2, so
+update the TUI and server together.
+
+If the configured SQL store needs an upgrade, the TUI connects and opens a
+**Store schema upgrade required** popup before loading the dashboard. Review
+the pending changes and choose **Upgrade store** (`u`). The server applies the
+reviewed plan, then the dashboard opens. **Cancel** keeps the connection open;
+`r` reopens the plan and `q` quits. Errors remain visible for retry.
+
+Local connections reuse `sqlStore` in `migrate.config.*`. Remote hosts supply
+the same SQL client layer and table prefix as `sqlStore` on
+`RegistryMigrateServer.layer` or `MigrateServer.layer`. The database credentials
+stay on the server. Non-SQL stores do not need this setup.
 
 Transport and server hosts can integrate directly with the Effect services
 exported as `MigrateClient` from `migrate-sdk/client` and `MigrateServer` from
@@ -195,10 +207,21 @@ the Messages tab and CLI after the TUI closes.
 
 Runs start directly when their dependencies are ready. A group concurrency
 override controls item processing within each migration; migration definitions
-still execute in SDK plan order. If required dependencies
-have not succeeded, the TUI asks whether to include them or force the selected
-run. Rollback always shows the affected migrations in execution order and asks
-for confirmation. While a run is active, committed cursor-window checkpoints
+still execute in SDK plan order. If required dependencies lack completion,
+the TUI asks whether to include them or force the selected run.
+
+Rollback offers two scope choices in one confirmation dialog. **Include
+dependencies** (`i`) is selected by default and recommended; the plan rolls back
+dependent migrations first. **Selected only** (`s`) leaves those migrations
+outside the plan. If they still have tracked items, the dialog explains that
+their records will remain and references may break; confirming this choice
+authorizes forced rollback. If they have no tracked items, force is unnecessary.
+Review the updated plan and choose **Rollback selected** (`y`) to execute it
+once. Selected-entry rollback keeps dependency inclusion disabled and preserves
+the selected identities. A failed plan or status update stays in the dialog
+for retry; confirmation waits for a successfully prepared plan.
+
+While a run is active, committed cursor-window checkpoints
 carry cumulative run counts and trigger targeted durable-status refreshes for
 the migration that made progress.
 Inline runs and runs managed by an Execution Adapter therefore update in committed batches without

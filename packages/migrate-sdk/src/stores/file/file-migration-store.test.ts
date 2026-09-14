@@ -751,7 +751,7 @@ describe("FileMigrationStore", () => {
             yield* store.getItemState(definitionId, sourceIdentity)
           ).toEqual(itemState);
 
-          yield* store.deleteItemState(definitionId, sourceIdentity);
+          yield* store.removeRolledBackItem({ definitionId, sourceIdentity });
 
           expect(
             yield* store.getItemState(definitionId, sourceIdentity)
@@ -846,10 +846,10 @@ describe("FileMigrationStore", () => {
           yield* Effect.gen(function* () {
             const store = yield* MigrationStore;
 
-            yield* store.deleteItemState(
+            yield* store.removeRolledBackItem({
               definitionId,
-              toEncodedSourceIdentity("article-a")
-            );
+              sourceIdentity: toEncodedSourceIdentity("article-a"),
+            });
           }).pipe(Effect.provide(fileStoreLayer(directory)));
 
           const secondPage = yield* Effect.gen(function* () {
@@ -1553,7 +1553,11 @@ describe("FileMigrationStore", () => {
           const store = yield* MigrationStore;
 
           expect(yield* store.getLatestRunState(definitionId)).toBeNull();
-          yield* store.beginRun(runId, [definitionId]);
+          yield* store.beginRun({
+            runId,
+            definitionIds: [definitionId],
+            operation: "run",
+          });
           const completedRun = yield* store.completeRun(
             runId,
             [definitionId],
@@ -1664,7 +1668,7 @@ describe("FileMigrationStore", () => {
 
         const states = yield* Effect.gen(function* () {
           const store = yield* MigrationStore;
-          yield* store.beginRun(runId, definitionIds);
+          yield* store.beginRun({ runId, definitionIds, operation: "run" });
           const failedRun = yield* store.failRun(runId, definitionIds, [
             { definitionId: authorsId, status: "succeeded" },
             { definitionId: articlesId, status: "failed" },
@@ -1710,7 +1714,13 @@ describe("FileMigrationStore", () => {
           });
 
           yield* MigrationStore.pipe(
-            Effect.flatMap((store) => store.beginRun(runId, [definitionId])),
+            Effect.flatMap((store) =>
+              store.beginRun({
+                runId,
+                definitionIds: [definitionId],
+                operation: "run",
+              })
+            ),
             Effect.provide(normalStore)
           );
           injected.arm();
@@ -1780,7 +1790,11 @@ describe("FileMigrationStore", () => {
         yield* Effect.gen(function* () {
           const store = yield* MigrationStore;
 
-          const queued = yield* store.queueRun(runId, [definitionId]);
+          const queued = yield* store.queueRun({
+            runId,
+            definitionIds: [definitionId],
+            operation: "run",
+          });
           expect(queued).toEqual(
             expect.objectContaining({
               runId,
@@ -1849,18 +1863,32 @@ describe("FileMigrationStore", () => {
           injected.arm();
           yield* MigrationStore.pipe(
             Effect.flatMap((store) =>
-              store.beginRun(originalRunId, [dependencyId, selectedId])
+              store.beginRun({
+                runId: originalRunId,
+                definitionIds: [dependencyId, selectedId],
+                operation: "run",
+              })
             ),
             Effect.provide(storeLayer),
             Effect.flip
           );
           yield* MigrationStore.pipe(
-            Effect.flatMap((store) => store.beginRun(newerRunId, [selectedId])),
+            Effect.flatMap((store) =>
+              store.beginRun({
+                runId: newerRunId,
+                definitionIds: [selectedId],
+                operation: "run",
+              })
+            ),
             Effect.provide(storeLayer)
           );
           yield* MigrationStore.pipe(
             Effect.flatMap((store) =>
-              store.beginRun(originalRunId, [dependencyId, selectedId])
+              store.beginRun({
+                runId: originalRunId,
+                definitionIds: [dependencyId, selectedId],
+                operation: "run",
+              })
             ),
             Effect.provide(storeLayer)
           );
@@ -1905,7 +1933,11 @@ describe("FileMigrationStore", () => {
 
           yield* MigrationStore.pipe(
             Effect.flatMap((store) =>
-              store.beginRun(originalRunId, [definitionId])
+              store.beginRun({
+                runId: originalRunId,
+                definitionIds: [definitionId],
+                operation: "run",
+              })
             ),
             Effect.provide(storeLayer)
           );
@@ -1923,7 +1955,11 @@ describe("FileMigrationStore", () => {
           yield* Deferred.await(paused);
           const newerStart = yield* MigrationStore.pipe(
             Effect.flatMap((store) =>
-              store.beginRun(newerRunId, [definitionId])
+              store.beginRun({
+                runId: newerRunId,
+                definitionIds: [definitionId],
+                operation: "run",
+              })
             ),
             Effect.provide(storeLayer),
             Effect.forkChild
@@ -1954,7 +1990,11 @@ describe("FileMigrationStore", () => {
 
         yield* Effect.gen(function* () {
           const store = yield* MigrationStore;
-          yield* store.beginRun(runId, [definitionId]);
+          yield* store.beginRun({
+            runId,
+            definitionIds: [definitionId],
+            operation: "run",
+          });
           const cancelled = yield* store.markRunCancelled(runId, [
             definitionId,
           ]);
@@ -1983,7 +2023,11 @@ describe("FileMigrationStore", () => {
 
         yield* Effect.gen(function* () {
           const store = yield* MigrationStore;
-          yield* store.queueRun(runId, [definitionId]);
+          yield* store.queueRun({
+            runId,
+            definitionIds: [definitionId],
+            operation: "run",
+          });
           const requested = yield* store.requestRunCancellation(runId, [
             definitionId,
           ]);
@@ -1993,14 +2037,26 @@ describe("FileMigrationStore", () => {
 
         yield* Effect.gen(function* () {
           const store = yield* MigrationStore;
-          const begun = yield* store.beginRun(runId, [definitionId]);
+          const begun = yield* store.beginRun({
+            runId,
+            definitionIds: [definitionId],
+            operation: "run",
+          });
           const cancelled = yield* store.completeRun(
             runId,
             [definitionId],
             [{ definitionId, status: "succeeded" }]
           );
-          const lateQueue = yield* store.queueRun(runId, [definitionId]);
-          const lateBegin = yield* store.beginRun(runId, [definitionId]);
+          const lateQueue = yield* store.queueRun({
+            runId,
+            definitionIds: [definitionId],
+            operation: "run",
+          });
+          const lateBegin = yield* store.beginRun({
+            runId,
+            definitionIds: [definitionId],
+            operation: "run",
+          });
 
           expect(begun.status).toBe("cancelling");
           expect(cancelled).toEqual(
@@ -2425,9 +2481,11 @@ describe("FileMigrationStore", () => {
         Effect.gen(function* () {
           const store = yield* MigrationStore;
           const runId = yield* store.createRunId;
-          const runState = yield* store.beginRun(runId, [
-            toMigrationDefinitionId("articles"),
-          ]);
+          const runState = yield* store.beginRun({
+            runId,
+            definitionIds: [toMigrationDefinitionId("articles")],
+            operation: "run",
+          });
 
           expect(runState.status).toBe("running");
         }).pipe(
@@ -2442,9 +2500,11 @@ describe("FileMigrationStore", () => {
         const lock = yield* Effect.gen(function* () {
           const store = yield* MigrationStore;
           const runId = yield* store.createRunId;
-          const runState = yield* store.beginRun(runId, [
-            toMigrationDefinitionId("articles"),
-          ]);
+          const runState = yield* store.beginRun({
+            runId,
+            definitionIds: [toMigrationDefinitionId("articles")],
+            operation: "run",
+          });
 
           return yield* store.acquireDefinitionLock(
             toMigrationDefinitionId("articles"),
@@ -2568,6 +2628,34 @@ describe("FileMigrationStore", () => {
 
         expect(reacquiredLock.definitionId).toBe(definitionId);
       })
+    )
+  );
+  it.effect("preserves rollback operation through its lifecycle", () =>
+    withTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        const id = toMigrationDefinitionId("operation-history");
+        const runId = toMigrationRunId("rollback-operation-history");
+        yield* store.queueRun({
+          runId,
+          definitionIds: [id],
+          operation: "rollback",
+        });
+        yield* store.beginRun({ runId, definitionIds: [id], operation: "run" });
+        yield* store.completeRun(
+          runId,
+          [id],
+          [{ definitionId: id, status: "succeeded" }]
+        );
+        expect(yield* store.getRunState(runId)).toMatchObject({
+          operation: "rollback",
+          status: "succeeded",
+        });
+        expect(yield* store.getLatestRunState(id)).toMatchObject({
+          operation: "rollback",
+          status: "succeeded",
+        });
+      }).pipe(Effect.provide(fileStoreLayer(directory)))
     )
   );
 });

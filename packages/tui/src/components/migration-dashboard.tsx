@@ -78,17 +78,14 @@ const statusLabel = (row: {
   if (status.lock !== null) {
     return "running";
   }
-  if (status.durable.failed > 0 || status.lastRun?.status === "failed") {
-    return "failed";
+  if (status.lastRun?.status === "queued") {
+    return "queued";
   }
-  if (status.durable.needsUpdate > 0) {
-    return "needs update";
+  if (status.completion != null) {
+    return "complete";
   }
-  if (status.lastRun === null) {
-    return "not run";
-  }
-
-  return status.lastRun.status;
+  const tracked = Object.values(status.durable).some((count) => count > 0);
+  return tracked ? "incomplete" : "not run";
 };
 
 const statusColor = (label: string): string => {
@@ -96,6 +93,7 @@ const statusColor = (label: string): string => {
     case "error":
     case "failed":
       return migrationColors.danger;
+    case "incomplete":
     case "needs update":
     case "warning":
       return migrationColors.warning;
@@ -103,7 +101,7 @@ const statusColor = (label: string): string => {
     case "cancelling":
     case "running":
       return migrationColors.info;
-    case "succeeded":
+    case "complete":
       return migrationColors.success;
     default:
       return migrationColors.dim;
@@ -114,13 +112,14 @@ const statusIcon = (label: string): string => {
   switch (label) {
     case "failed":
       return "✕";
+    case "incomplete":
     case "needs update":
       return "!";
     case "running":
       return "◉";
     case "cancelling":
       return "◌";
-    case "succeeded":
+    case "complete":
       return "✓";
     case "loading":
       return "◌";
@@ -139,9 +138,10 @@ const statusBadgeIntent = (label: string): BadgeIntent => {
   switch (label) {
     case "failed":
       return "danger";
+    case "incomplete":
     case "needs update":
       return "warning";
-    case "succeeded":
+    case "complete":
       return "success";
     default:
       return "neutral";
@@ -239,14 +239,11 @@ const groupStatusLabel = (rows: readonly MigrateDashboardRow[]): string => {
   if (labels.includes("running")) {
     return "running";
   }
-  if (labels.includes("failed")) {
-    return "failed";
+  if (labels.includes("cancelling")) {
+    return "cancelling";
   }
-  if (labels.includes("needs update")) {
-    return "needs update";
-  }
-  if (labels.every((label) => label === "succeeded")) {
-    return "succeeded";
+  if (labels.every((label) => label === "complete")) {
+    return "complete";
   }
   if (labels.every((label) => label === "loading")) {
     return "loading";
@@ -301,7 +298,7 @@ const lastRunLabel = (row: MigrateDashboardRow): string => {
     return "never run";
   }
 
-  return `${lastRun.status} · ${formatDate(lastRun.finishedAt ?? lastRun.startedAt)}`;
+  return `${lastRun.operation ?? "unknown operation"} ${lastRun.status} · ${formatDate(lastRun.finishedAt ?? lastRun.startedAt)}`;
 };
 
 const progressSegmentColor = (

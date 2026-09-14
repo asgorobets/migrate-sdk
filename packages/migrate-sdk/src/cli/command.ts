@@ -600,7 +600,9 @@ const group = Flag.String("group").pipe(
 
 const withDependencies = Flag.Boolean("with-dependencies").pipe(
   Flag.withDefault(false),
-  Flag.withDescription("Expand required Migration Definition dependencies")
+  Flag.withDescription(
+    "Include required prerequisites for runs or dependent migrations for rollback"
+  )
 );
 
 const scanSource = Flag.Boolean("scan-source").pipe(
@@ -659,7 +661,9 @@ const update = Flag.Boolean("update").pipe(
 
 const force = Flag.Boolean("force").pipe(
   Flag.withDefault(false),
-  Flag.withDescription("Bypass Migration Definition dependency preflight")
+  Flag.withDescription(
+    "Skip dependency safety checks without changing which migrations are selected"
+  )
 );
 
 const id = Flag.String("id").pipe(

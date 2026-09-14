@@ -5,6 +5,7 @@ import {
   MigrationExecutable,
 } from "../index.ts";
 import type { MigrateEnvironmentInfo } from "../protocol/index.ts";
+import type { SqlMigrationStoreSchemaConfig } from "../stores/sql/sql-migration-store-schema-plan.ts";
 import { makeRegistryMigrateServerBackend } from "./registry-backend.ts";
 import {
   makeRegistryMigrateServerRuntime,
@@ -21,6 +22,7 @@ export interface RegistryMigrateServerLayerOptions
   readonly registry: MigrationDefinitionRegistry<
     readonly AnySelfContainedMigrationDefinition[]
   >;
+  readonly sqlStore?: SqlMigrationStoreSchemaConfig;
 }
 
 const layer = (
@@ -54,6 +56,7 @@ const layer = (
         dashboardFallbackInterval: options.dashboardFallbackInterval,
         dashboardProjectionInterval: options.dashboardProjectionInterval,
         environment: options.environment,
+        sqlStore: options.sqlStore,
         observationLeaseDuration: options.observationLeaseDuration,
         ...(registryId === undefined ? {} : { registryId }),
       });

@@ -24,7 +24,9 @@ import {
   MigrationStatusWarning,
 } from "../domain/status.ts";
 
-export const MIGRATE_PROTOCOL_VERSION = 1;
+import { SqlMigrationStoreSchemaPlan } from "../stores/sql/sql-migration-store-schema-plan.ts";
+
+export const MIGRATE_PROTOCOL_VERSION = 2;
 
 const PositiveInteger = Schema.Finite.check(Schema.isInt()).check(
   Schema.isGreaterThan(0)
@@ -572,6 +574,23 @@ export class GetServerInfo extends makeRpc("GetServerInfo", {
   success: MigrateServerInfo,
 }) {}
 
+/** Null means the host has no configured SQL schema administration target. */
+export const MigrateStoreSchema = Schema.NullOr(SqlMigrationStoreSchemaPlan);
+export type MigrateStoreSchema = typeof MigrateStoreSchema.Type;
+export const MigrateStoreSchemaPlan = SqlMigrationStoreSchemaPlan;
+export type MigrateStoreSchemaPlan = typeof MigrateStoreSchemaPlan.Type;
+
+export class GetStoreSchema extends makeRpc("GetStoreSchema", {
+  error: MigrateProtocolError,
+  success: MigrateStoreSchema,
+}) {}
+
+export class UpgradeStoreSchema extends makeRpc("UpgradeStoreSchema", {
+  error: MigrateProtocolError,
+  payload: { acceptedPlanId: Schema.NonEmptyString },
+  success: SqlMigrationStoreSchemaPlan,
+}) {}
+
 export class GetDashboard extends makeRpc("GetDashboard", {
   error: MigrateProtocolError,
   success: MigrateDashboardSnapshot,
@@ -709,6 +728,8 @@ export class BreakLock extends makeRpc("BreakLock", {
 
 const MigrateControlRpcs = makeRpcGroup(
   GetServerInfo,
+  GetStoreSchema,
+  UpgradeStoreSchema,
   GetDashboard,
   GetRegistry,
   GetRegistryMessages,

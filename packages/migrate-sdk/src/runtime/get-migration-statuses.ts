@@ -292,6 +292,7 @@ const getDurableDefinitionStatus = (
 ): Effect.Effect<MigrationDefinitionStatus, GetMigrationStatusesError> =>
   Effect.gen(function* () {
     const store = yield* MigrationStore;
+    const completion = yield* store.getDefinitionCompletion(definition.id);
     const lastRun = yield* store.getLatestRunState(definition.id);
     const lock = yield* store.getDefinitionLock(definition.id);
     const durable = yield* store.getItemStateSummary(definition.id);
@@ -300,6 +301,7 @@ const getDurableDefinitionStatus = (
       definitionId: definition.id,
       discovery: definition.source.discovery,
       durable,
+      completion,
       lastRun,
       lock,
       warnings: [],
@@ -317,6 +319,7 @@ const getScannedDefinitionStatus = <Definition extends AnyMigrationDefinition>(
   const program = Effect.gen(function* () {
     const source = yield* MigrationDefinitionSource.get(definition);
     const store = yield* MigrationStore;
+    const completion = yield* store.getDefinitionCompletion(definition.id);
     const lastRun = yield* store.getLatestRunState(definition.id);
     const lock = yield* store.getDefinitionLock(definition.id);
     const itemStates = yield* store.listItemStates(definition.id);
@@ -327,6 +330,7 @@ const getScannedDefinitionStatus = <Definition extends AnyMigrationDefinition>(
       definitionId: definition.id,
       discovery: definition.source.discovery,
       durable,
+      completion,
       lastRun,
       lock,
       source: scan.source,

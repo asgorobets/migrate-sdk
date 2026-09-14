@@ -1,4 +1,7 @@
-import type { MigrateDashboardRow } from "migrate-sdk/protocol";
+import type {
+  MigrateDashboardRow,
+  MigrateStoreSchema,
+} from "migrate-sdk/protocol";
 import type {
   MigrationTuiDetachResult,
   MigrationTuiSnapshot,
@@ -24,6 +27,7 @@ export interface MigrationTuiRenderSession {
 
 interface MigrationTuiSupervisorRuntime {
   readonly detachForExit: () => Promise<MigrationTuiDetachResult>;
+  readonly getStoreSchema: () => Promise<MigrateStoreSchema>;
   readonly refresh: () => Promise<MigrationTuiSnapshot>;
 }
 
@@ -203,14 +207,18 @@ export const makeMigrationTuiLifecycleSupervisor = (
     );
 
     try {
-      const snapshot = await options.runtime.refresh();
+      const schema = await options.runtime.getStoreSchema();
+      const snapshot =
+        schema === null || schema.status === "current"
+          ? await options.runtime.refresh()
+          : undefined;
 
       if (finished) {
         return;
       }
 
       await openSession({
-        initialRows: snapshot.rows,
+        ...(snapshot === undefined ? {} : { initialRows: snapshot.rows }),
         recoveryNotice: recoveryNotice(cause),
       });
     } catch (recoveryCause) {

@@ -17,6 +17,7 @@ import {
   type MigrateDefinitionSourceItemTotal,
   type MigrateRunStartResult,
   type MigrateSourceIdentityHistoryEntry,
+  type MigrateStoreSchemaPlan,
 } from "migrate-sdk/protocol";
 import {
   loadLocalMigrateServerRuntime,
@@ -44,8 +45,9 @@ const processConcurrencyValuePattern = /│ 3\s+│/;
 const rollbackConcurrencyValuePattern = /│ 5\s+│/;
 const sourceInventoryScanConcurrencyValuePattern = /│ 2\s+│/;
 const liveProgressNotRunPattern = /live-progress\s+NOT RUN/;
-const liveProgressPrerequisiteSucceededPattern =
-  /live-progress-prerequisite\s+SUCCEEDED/;
+const liveProgressPrerequisiteCompletePattern =
+  /live-progress-prerequisite\s+COMPLETE/;
+const rollbackAuthorsRowPattern = /1\. [○✓] authors/u;
 const messageRunId = toMigrationRunId("run-messages");
 const serverFixtureUrl = new URL(
   "../../migrate-sdk/test/fixtures/server/",
@@ -140,6 +142,9 @@ const makeInProcessMigrationTuiRuntime = async (
 
   return {
     ...server,
+    storeSchema: null,
+    getStoreSchema: () => Promise.resolve(null),
+    upgradeStoreSchema: () => Promise.reject(new Error("No SQL store")),
     breakLock: async (lock) => {
       const result = await Effect.runPromise(server.breakLock(lock));
       await publishDashboard();
@@ -248,9 +253,14 @@ const makeInProcessMigrationTuiRuntime = async (
       }
     },
     prepare: ((...input: Parameters<typeof server.prepare>) =>
-      Effect.runPromise(
-        server.prepare(...input)
-      )) as unknown as MigrationTuiRuntime["prepare"],
+      Effect.runPromise(server.prepare(...input)).then((operation) => ({
+        ...operation,
+        request: {
+          selection: input[0],
+          action: input[1],
+          options: input[2] ?? {},
+        },
+      }))) as unknown as MigrationTuiRuntime["prepare"],
     refresh: refreshSnapshot,
     scanSource: (target, options) =>
       Effect.runPromise(server.scanSource(target, options)),
@@ -341,6 +351,29 @@ const makeInProcessMigrationTuiRuntime = async (
   };
 };
 
+const schemaUpgradePlan: MigrateStoreSchemaPlan = {
+  applied: [
+    { id: 1, name: "initial_schema" },
+    { id: 2, name: "definition_run_status" },
+  ],
+  currentVersion: 2,
+  database: "sqlite",
+  issues: [],
+  pending: [
+    {
+      id: 3,
+      name: "operation_history_and_completion",
+      description:
+        "Record operation history and migration completion separately",
+    },
+  ],
+  planId: "v2-to-v3",
+  status: "upgrade-required",
+  tablePrefix: "migrate_sdk",
+  targetVersion: 3,
+  warnings: [],
+};
+
 const settle = async (
   renderOnce: () => Promise<void>,
   predicate: () => boolean,
@@ -370,6 +403,172 @@ afterAll(() => {
 
 describe("MigrationTuiApp", () => {
   const itWithOpenTui = process.versions.bun === undefined ? it.skip : it;
+
+  itWithOpenTui(
+    "shows the schema popup before observing and upgrades only after confirmation",
+    async () => {
+      const base = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const upgrade = Promise.withResolvers<MigrateStoreSchemaPlan>();
+      const upgradeStoreSchema = vi.fn(() => upgrade.promise);
+      const observeDashboard = vi.fn(base.observeDashboard.bind(base));
+      const refresh = vi.fn(base.refresh);
+      const runtime = {
+        ...base,
+        storeSchema: schemaUpgradePlan,
+        upgradeStoreSchema,
+        observeDashboard,
+        refresh,
+      };
+      const setup = await createTestRenderer({ height: 24, width: 80 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Upgrade store")
+          )
+        ).toBe(true);
+        const frame = setup.captureCharFrame();
+        expect(frame).toContain("Store schema upgrade required");
+        expect(frame).toContain("Schema v2 → v3");
+        expect(frame).toContain("Record operation history");
+        expect(observeDashboard).not.toHaveBeenCalled();
+        expect(refresh).not.toHaveBeenCalled();
+        act(() => setup.mockInput.pressKey("ESCAPE"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Review schema")
+          )
+        ).toBe(true);
+        expect(upgradeStoreSchema).not.toHaveBeenCalled();
+        act(() => setup.mockInput.pressKey("r"));
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Upgrade store")
+        );
+        act(() => {
+          setup.mockInput.pressKey("u");
+          setup.mockInput.pressKey("u");
+        });
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Upgrading")
+        );
+        expect(upgradeStoreSchema).toHaveBeenCalledOnce();
+        expect(upgradeStoreSchema).toHaveBeenCalledWith(
+          schemaUpgradePlan.planId
+        );
+        expect(observeDashboard).not.toHaveBeenCalled();
+        await act(async () =>
+          upgrade.resolve({
+            ...schemaUpgradePlan,
+            currentVersion: 3,
+            status: "current",
+            pending: [],
+          })
+        );
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => observeDashboard.mock.calls.length === 1
+          )
+        ).toBe(true);
+        expect(refresh).toHaveBeenCalledOnce();
+        expect(setup.captureCharFrame()).not.toContain("Upgrade store");
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "keeps upgrade failures reviewable and uses the refreshed plan on retry",
+    async () => {
+      const base = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const updated = { ...schemaUpgradePlan, planId: "changed-plan" };
+      const upgradeStoreSchema = vi.fn(() =>
+        Promise.reject(new Error("The store schema plan changed."))
+      );
+      const getStoreSchema = vi.fn(() => Promise.resolve(updated));
+      const observeDashboard = vi.fn(base.observeDashboard.bind(base));
+      const runtime = {
+        ...base,
+        storeSchema: schemaUpgradePlan,
+        upgradeStoreSchema,
+        getStoreSchema,
+        observeDashboard,
+      };
+      const setup = await createTestRenderer({ height: 20, width: 60 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Upgrade store")
+        );
+        act(() => setup.mockInput.pressKey("u"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("The store schema plan changed.")
+          )
+        ).toBe(true);
+        expect(getStoreSchema).toHaveBeenCalledOnce();
+        expect(observeDashboard).not.toHaveBeenCalled();
+        act(() => setup.mockInput.pressKey("u"));
+        await settle(
+          setup.renderOnce,
+          () => upgradeStoreSchema.mock.calls.length === 2
+        );
+        expect(upgradeStoreSchema).toHaveBeenLastCalledWith("changed-plan");
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "shows incompatible schema issues without offering an automatic upgrade",
+    async () => {
+      const base = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const upgradeStoreSchema = vi.fn(base.upgradeStoreSchema);
+      const runtime = {
+        ...base,
+        storeSchema: {
+          ...schemaUpgradePlan,
+          status: "future" as const,
+          currentVersion: 9,
+          pending: [],
+          issues: ["Installed schema is newer than this SDK."],
+        },
+        upgradeStoreSchema,
+      };
+      const setup = await createTestRenderer({ height: 20, width: 60 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Check again")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain("Installed schema is newer");
+        expect(setup.captureCharFrame()).not.toContain("Upgrade store");
+        act(() => setup.mockInput.pressKey("u"));
+        expect(upgradeStoreSchema).not.toHaveBeenCalled();
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
 
   itWithOpenTui(
     "reports an unexpected React failure to the lifecycle supervisor",
@@ -1349,7 +1548,7 @@ describe("MigrationTuiApp", () => {
           await settle(setup.renderOnce, () => {
             const frame = setup.captureCharFrame();
             return (
-              liveProgressPrerequisiteSucceededPattern.test(frame) &&
+              liveProgressPrerequisiteCompletePattern.test(frame) &&
               [1, 2, 3].some((count) => frame.includes(`${count} migrated`))
             );
           })
@@ -2616,7 +2815,11 @@ describe("MigrationTuiApp", () => {
           await settle(setup.renderOnce, () => {
             const frame = setup.captureCharFrame();
             return (
-              frame.includes("Required dependencies not ready") &&
+              frame.includes("Dependencies incomplete") &&
+              frame.includes("Rescan migrations with dependencies") &&
+              frame.includes(
+                "Force skips dependencies; some items may fail."
+              ) &&
               frame.includes("i Include dependencies") &&
               frame.includes("f Force rescan")
             );
@@ -2658,11 +2861,15 @@ describe("MigrationTuiApp", () => {
         act(() => setup.mockInput.pressKey("r"));
         expect(
           await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("Required dependencies not ready")
+            setup.captureCharFrame().includes("Dependencies incomplete")
           )
         ).toBe(true);
 
-        act(() => setup.resize(72, 34));
+        expect(setup.captureCharFrame()).toContain(
+          "Run migrations with dependencies"
+        );
+        expect(setup.captureCharFrame()).toContain("Run order");
+        act(() => setup.resize(72, 24));
         expect(
           await settle(setup.renderOnce, () =>
             setup.captureCharFrame().includes("i include · f force")
@@ -2713,7 +2920,7 @@ describe("MigrationTuiApp", () => {
         act(() => setup.mockInput.pressArrow("down"));
         expect(
           await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("articles  FAILED")
+            setup.captureCharFrame().includes("articles  COMPLETE")
           )
         ).toBe(true);
 
@@ -2850,10 +3057,7 @@ describe("MigrationTuiApp", () => {
         act(() => setup.mockInput.pressKey("j"));
         await act(async () => setup.renderOnce());
         const selectedFrame = setup.captureCharFrame();
-        expect(
-          selectedFrame.includes("│ articles  FAILED") ||
-            selectedFrame.includes("│ articles  SUCCEEDED")
-        ).toBe(true);
+        expect(selectedFrame.includes("│ articles  COMPLETE")).toBe(true);
         act(() => setup.mockInput.pressKey("e"));
         expect(
           await settle(setup.renderOnce, () =>
@@ -2951,6 +3155,115 @@ describe("MigrationTuiApp", () => {
     }
   );
 
+  for (const scope of ["include", "force"] as const) {
+    itWithOpenTui(
+      `preserves orphan cleanup when choosing ${scope} and confirms the displayed plan`,
+      async () => {
+        const runtime = await makeInProcessMigrationTuiRuntime({
+          configPath: serverFixturePath("dependency-preflight.config.ts"),
+          cwd: new URL("..", import.meta.url).pathname,
+        });
+        const reset = await runtime.prepare(
+          {
+            definitionIds: [toMigrationDefinitionId("authors")],
+            kind: "definitions",
+          },
+          "rollback",
+          { withDependencies: true }
+        );
+        const resetRun = await runtime.start(reset);
+        await runtime.observeRun(resetRun.runId);
+        const prepare = vi.spyOn(runtime, "prepare");
+        const start = vi.spyOn(runtime, "start");
+        const setup = await createTestRenderer({ height: 36, width: 120 });
+        const root = createRoot(setup.renderer);
+        act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+        try {
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Status reloaded")
+            )
+          ).toBe(true);
+          act(() => setup.mockInput.pressArrow("down"));
+          act(() => setup.mockInput.pressEnter());
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("All actions · articles")
+            )
+          ).toBe(true);
+          for (let index = 0; index < 6; index += 1) {
+            act(() => setup.mockInput.pressArrow("down"));
+          }
+          act(() => setup.mockInput.pressEnter());
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Dependencies incomplete")
+            )
+          ).toBe(true);
+          expect(setup.captureCharFrame()).toContain(
+            "Rollback orphaned items with dependencies"
+          );
+          expect(setup.captureCharFrame()).toContain(
+            "f Force rollback orphans"
+          );
+          expect(setup.captureCharFrame()).not.toContain("y Rollback orphans");
+          act(() => setup.mockInput.pressKey("y"));
+          await act(async () => setup.renderOnce());
+          expect(start).not.toHaveBeenCalled();
+
+          act(() => setup.mockInput.pressKey(scope === "include" ? "i" : "f"));
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Confirm orphan rollback")
+            )
+          ).toBe(true);
+          expect(start).not.toHaveBeenCalled();
+          expect(prepare).toHaveBeenLastCalledWith(
+            {
+              definitionIds: [toMigrationDefinitionId("articles")],
+              kind: "definitions",
+            },
+            "run",
+            expect.objectContaining({
+              rollbackOrphans: true,
+              withDependencies: scope === "include",
+              force: scope === "force",
+            })
+          );
+          const prepared = await prepare.mock.results.at(-1)?.value;
+          if (prepared === undefined) {
+            throw new Error("Expected a prepared orphan cleanup");
+          }
+          const expectedIds =
+            scope === "include" ? ["authors", "articles"] : ["articles"];
+          expect(prepared.plan.executionDefinitionIds).toEqual(expectedIds);
+          expect(setup.captureCharFrame()).toContain("Migration plan");
+          expect(setup.captureCharFrame()).toContain(
+            scope === "include" ? "2. ○ articles" : "1. ○ articles"
+          );
+          const preparationCount = prepare.mock.calls.length;
+          act(() => setup.mockInput.pressKey("f"));
+          await act(async () => setup.renderOnce());
+          expect(prepare.mock.calls.length).toBe(preparationCount);
+          act(() => setup.mockInput.pressKey("y"));
+          expect(
+            await settle(setup.renderOnce, () => start.mock.calls.length === 1)
+          ).toBe(true);
+          expect(start.mock.calls[0]?.[0]).toEqual(prepared);
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("succeeded")
+            )
+          ).toBe(true);
+        } finally {
+          act(() => root.unmount());
+          setup.renderer.destroy();
+        }
+      }
+    );
+  }
+
   itWithOpenTui(
     "prepares selected source identities for rollback before confirmation",
     async () => {
@@ -3014,26 +3327,22 @@ describe("MigrationTuiApp", () => {
             withDependencies: false,
           })
         );
-        const targetedRollbackOptions = prepare.mock.calls.at(-1)?.[2];
-
-        if (targetedRollbackOptions === undefined) {
-          throw new Error("Expected targeted rollback options");
-        }
-
-        act(() => setup.mockInput.pressKey("f"));
-        expect(
-          await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("Confirm forced rollback")
-          )
-        ).toBe(true);
-        expect(setup.captureCharFrame()).toContain("y Force rollback");
+        expect(setup.captureCharFrame()).toContain("y Rollback selected");
+        expect(setup.captureCharFrame()).toContain("Rollback 1 selected entry");
+        const prepareCount = prepare.mock.calls.length;
+        act(() => setup.mockInput.pressKey("i"));
+        await act(async () => setup.renderOnce());
+        expect(prepare).toHaveBeenCalledTimes(prepareCount);
+        expect(setup.captureCharFrame()).toContain("● s Selected only");
+        expect(setup.captureCharFrame()).not.toContain("Force rollback");
         expect(prepare).toHaveBeenLastCalledWith(
-          {
-            definitionIds: [toMigrationDefinitionId("authors")],
-            kind: "definitions",
-          },
+          expect.anything(),
           "rollback",
-          { ...targetedRollbackOptions, force: true }
+          expect.objectContaining({
+            force: true,
+            sourceIdentities: expect.arrayContaining([expect.any(String)]),
+            withDependencies: false,
+          })
         );
       } finally {
         act(() => root.unmount());
@@ -3043,12 +3352,217 @@ describe("MigrationTuiApp", () => {
   );
 
   itWithOpenTui(
-    "renders transitive rollback dependents as a numbered hierarchy",
+    "blocks confirmation during rollback plan refresh and ignores a cancelled refresh",
+    async () => {
+      const base = await makeInProcessMigrationTuiRuntime({
+        configPath: "examples/transitive-dependency.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const pending =
+        Promise.withResolvers<
+          Awaited<ReturnType<MigrationTuiRuntime["prepare"]>>
+        >();
+      const start = vi.fn(base.start);
+      const prepare = vi.fn<MigrationTuiRuntime["prepare"]>(
+        (selection, action, options) =>
+          options?.withDependencies === false
+            ? pending.promise
+            : base.prepare(selection, action, options)
+      );
+      const runtime = { ...base, prepare, start };
+      const setup = await createTestRenderer({ height: 30, width: 100 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Status reloaded")
+        );
+        act(() => setup.mockInput.pressKey("b"));
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Confirm rollback")
+        );
+        act(() => {
+          setup.mockInput.pressKey("s");
+          setup.mockInput.pressKey("y");
+        });
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Updating plan…")
+          )
+        ).toBe(true);
+        expect(start).not.toHaveBeenCalled();
+        act(() => setup.mockInput.pressKey("n"));
+        await settle(
+          setup.renderOnce,
+          () => !setup.captureCharFrame().includes("Confirm rollback")
+        );
+        const args = prepare.mock.calls[1];
+        if (args === undefined) {
+          throw new Error("Expected plan refresh");
+        }
+        const updated = await base.prepare(...args);
+        await act(async () => {
+          pending.resolve(updated);
+          await setup.renderOnce();
+        });
+        expect(setup.captureCharFrame()).not.toContain("Confirm rollback");
+        expect(start).not.toHaveBeenCalled();
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "keeps rollback plan errors in the dialog and requires a successful retry before confirming",
+    async () => {
+      const base = await makeInProcessMigrationTuiRuntime({
+        configPath: "examples/transitive-dependency.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      let failed = false;
+      const prepare = vi.fn<MigrationTuiRuntime["prepare"]>(
+        (selection, action, options) => {
+          if (options?.withDependencies === false && !failed) {
+            failed = true;
+            return Promise.reject(new Error("Plan unavailable"));
+          }
+          return base.prepare(selection, action, options);
+        }
+      );
+      const start = vi.fn(base.start);
+      const setup = await createTestRenderer({ height: 24, width: 72 });
+      const root = createRoot(setup.renderer);
+      act(() =>
+        root.render(<MigrationTuiApp runtime={{ ...base, prepare, start }} />)
+      );
+      try {
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Status reloaded")
+        );
+        act(() => setup.mockInput.pressKey("b"));
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Confirm rollback")
+        );
+        act(() => setup.mockInput.pressKey("s"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Plan unavailable")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("y"));
+        await act(async () => setup.renderOnce());
+        expect(start).not.toHaveBeenCalled();
+        act(() => setup.mockInput.pressKey("s"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("● s Selected only")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).not.toContain("Plan unavailable");
+        act(() => setup.mockInput.pressKey("y"));
+        expect(
+          await settle(setup.renderOnce, () => start.mock.calls.length === 1)
+        ).toBe(true);
+        expect(start).toHaveBeenCalledWith(
+          expect.objectContaining({
+            plan: expect.objectContaining({
+              executionDefinitionIds: ["authors"],
+              force: false,
+              withDependencies: false,
+            }),
+          })
+        );
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "defaults to recommended rollback scope and allows selected-only without force when dependents are empty",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/transitive-dependency.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
+      const prepare = vi.spyOn(runtime, "prepare");
+      const start = vi.spyOn(runtime, "start");
+      const setup = await createTestRenderer({ height: 30, width: 100 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Status reloaded")
+        );
+        act(() => setup.mockInput.pressKey("b"));
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Confirm rollback")
+        );
+        expect(setup.captureCharFrame()).toContain(
+          "● i Include dependencies (recommended)"
+        );
+        expect(setup.captureCharFrame()).toContain("○ s Selected only");
+        expect(setup.captureCharFrame()).toContain("3. ○ authors");
+        expect(setup.captureCharFrame()).not.toContain("Force rollback");
+        expect(prepare).toHaveBeenLastCalledWith(
+          expect.anything(),
+          "rollback",
+          {
+            force: false,
+            withDependencies: true,
+          }
+        );
+        const lines = setup.captureCharFrame().split("\n");
+        const choiceY = lines.findIndex((line) =>
+          line.includes("○ s Selected only")
+        );
+        const choiceX = lines[choiceY]?.indexOf("○ s Selected only") ?? -1;
+        expect(choiceX).toBeGreaterThanOrEqual(0);
+        await act(async () => setup.mockMouse.click(choiceX + 5, choiceY));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("● s Selected only")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain(
+          "○ i Include dependencies (recommended)"
+        );
+        expect(setup.captureCharFrame()).toMatch(rollbackAuthorsRowPattern);
+        expect(setup.captureCharFrame()).not.toContain("UNSAFE");
+        expect(setup.captureCharFrame()).not.toContain("references may break");
+        expect(start).not.toHaveBeenCalled();
+        act(() => setup.mockInput.pressKey("y"));
+        expect(
+          await settle(setup.renderOnce, () => start.mock.calls.length === 1)
+        ).toBe(true);
+        expect(start).toHaveBeenCalledWith(
+          expect.objectContaining({
+            plan: expect.objectContaining({
+              executionDefinitionIds: ["authors"],
+              force: false,
+              withDependencies: false,
+            }),
+          })
+        );
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "explains and confirms the complete rollback scope once in execution order",
+    async () => {
+      const runtime = await makeInProcessMigrationTuiRuntime({
+        configPath: "examples/transitive-dependency.config.ts",
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const start = vi.spyOn(runtime, "start");
+      const prepare = vi.spyOn(runtime, "prepare");
       const setup = await createTestRenderer({ height: 36, width: 120 });
       const root = createRoot(setup.renderer);
 
@@ -3068,12 +3582,38 @@ describe("MigrationTuiApp", () => {
           )
         ).toBe(true);
 
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("3. ○ authors")
+          )
+        ).toBe(true);
         const frame = setup.captureCharFrame();
-        expect(frame).toContain("Step numbers show rollback execution order");
-        expect(frame).toContain("Affected migration hierarchy");
-        expect(frame).toContain("authors step 3");
-        expect(frame).toContain("└─ ○ articles step 2");
-        expect(frame).toContain("   └─ ○ pages step 1");
+        expect(frame).toContain("Rollback migrations with dependencies");
+        expect(frame).toContain("○ s Selected only");
+        expect(frame).toContain("Rollback order");
+        expect(frame).toContain("1. ○ pages");
+        expect(frame).toContain("2. ○ articles");
+        expect(frame).toContain("3. ○ authors");
+        expect(frame).toContain("y Rollback selected");
+        expect(prepare).toHaveBeenLastCalledWith(
+          expect.anything(),
+          "rollback",
+          { force: false, withDependencies: true }
+        );
+        expect(start).not.toHaveBeenCalled();
+        act(() => setup.mockInput.pressKey("y"));
+        expect(
+          await settle(setup.renderOnce, () => start.mock.calls.length === 1)
+        ).toBe(true);
+        expect(start).toHaveBeenCalledWith(
+          expect.objectContaining({
+            plan: expect.objectContaining({
+              executionDefinitionIds: ["pages", "articles", "authors"],
+              withDependencies: true,
+            }),
+          })
+        );
+        expect(prepare).toHaveBeenCalledTimes(1);
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
@@ -3082,13 +3622,17 @@ describe("MigrationTuiApp", () => {
   );
 
   itWithOpenTui(
-    "requires a second confirmation before forcing a rollback",
+    "confirms an explicit selected-only override once with its consequences",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
         configPath: "examples/transitive-dependency.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
+      const forward = await runtime.prepare({ kind: "all" }, "run");
+      const forwardRun = await runtime.start(forward);
+      await runtime.observeRun(forwardRun.runId);
       const prepare = vi.spyOn(runtime, "prepare");
+      const start = vi.spyOn(runtime, "start");
       const setup = await createTestRenderer({ height: 36, width: 120 });
       const root = createRoot(setup.renderer);
 
@@ -3102,30 +3646,77 @@ describe("MigrationTuiApp", () => {
         ).toBe(true);
 
         act(() => setup.mockInput.pressKey("b"));
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Confirm rollback")
+        );
+        act(() => setup.mockInput.pressKey("s"));
         expect(
           await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("f Force rollback")
-          )
-        ).toBe(true);
-        act(() => setup.mockInput.pressKey("f"));
-
-        expect(
-          await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("Confirm forced rollback")
+            setup.captureCharFrame().includes("● s Selected only")
           )
         ).toBe(true);
         const frame = setup.captureCharFrame();
-        expect(frame).toContain("Dependent migration state checks");
-        expect(frame).toContain("y Force rollback");
-        expect(frame).not.toContain("f Force rollback");
+        expect(frame).toContain("UNSAFE");
+        expect(frame).toContain("Rollback selected migration only");
+        expect(frame).toContain(
+          "Dependent records remain; references may break."
+        );
+        expect(frame).toContain("y Rollback selected");
+        expect(frame).toMatch(rollbackAuthorsRowPattern);
+        expect(frame).not.toContain("2. ○ articles");
         expect(prepare).toHaveBeenLastCalledWith(
           {
             definitionIds: [toMigrationDefinitionId("authors")],
             kind: "definitions",
           },
           "rollback",
-          expect.objectContaining({ force: true })
+          { force: true, withDependencies: false }
         );
+        act(() => setup.mockInput.pressKey("i"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup
+              .captureCharFrame()
+              .includes("● i Include dependencies (recommended)")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).not.toContain("UNSAFE");
+        expect(prepare).toHaveBeenLastCalledWith(
+          expect.anything(),
+          "rollback",
+          {
+            force: false,
+            withDependencies: true,
+          }
+        );
+        act(() => setup.mockInput.pressKey("s"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("● s Selected only")
+          )
+        ).toBe(true);
+        act(() => setup.resize(72, 24));
+        await act(async () => setup.renderOnce());
+        const narrowFrame = setup.captureCharFrame();
+        expect(narrowFrame).toContain(
+          "Dependent records remain; references may break."
+        );
+        expect(narrowFrame).toContain("y Rollback selected");
+        expect(start).not.toHaveBeenCalled();
+        act(() => setup.mockInput.pressKey("y"));
+        expect(
+          await settle(setup.renderOnce, () => start.mock.calls.length === 1)
+        ).toBe(true);
+        expect(start).toHaveBeenCalledWith(
+          expect.objectContaining({
+            plan: expect.objectContaining({
+              executionDefinitionIds: ["authors"],
+              force: true,
+              withDependencies: false,
+            }),
+          })
+        );
+        expect(prepare).toHaveBeenCalledTimes(6);
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
@@ -3153,18 +3744,25 @@ describe("MigrationTuiApp", () => {
         ).toBe(true);
 
         act(() => setup.mockInput.pressKey("b"));
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Confirm rollback")
+        );
+        act(() => setup.mockInput.pressKey("i"));
+        await settle(setup.renderOnce, () =>
+          setup
+            .captureCharFrame()
+            .includes("● i Include dependencies (recommended)")
+        );
         expect(
           await settle(setup.renderOnce, () => {
             const frame = setup.captureCharFrame();
             return (
               frame.includes("Confirm rollback") &&
-              frame.includes(
-                "↑↓ scroll · f force rollback · y rollback · n/esc cancel"
-              )
+              frame.includes("i include · s selected only · y confirm")
             );
           })
         ).toBe(true);
-        expect(setup.captureCharFrame()).not.toContain("migration-02 step 17");
+        expect(setup.captureCharFrame()).not.toContain("17. ○ migration-02");
 
         for (let index = 0; index < 20; index += 1) {
           act(() => {
@@ -3172,10 +3770,68 @@ describe("MigrationTuiApp", () => {
           });
           await act(async () => setup.renderOnce());
         }
-        expect(setup.captureCharFrame()).toContain("migration-02 step 17");
+        expect(setup.captureCharFrame()).toContain("17. ○ migration-02");
         expect(setup.captureCharFrame()).toContain(
-          "↑↓ scroll · f force rollback · y rollback · n/esc cancel"
+          "i include · s selected only · y confirm"
         );
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+  itWithOpenTui(
+    "returns rolled-back migrations to not run and shows the full run plan",
+    async () => {
+      const runtime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("rollback-readiness.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const setup = await createTestRenderer({ height: 36, width: 120 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("r"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("authors  COMPLETE")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("b"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("y Rollback selected")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("y"));
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("authors  NOT RUN") &&
+              frame.includes("rollback succeeded")
+            );
+          })
+        ).toBe(true);
+        act(() => setup.mockInput.pressArrow("down"));
+        act(() => setup.mockInput.pressKey("r"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Dependencies incomplete")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain("1. ○ authors");
+        expect(setup.captureCharFrame()).toContain("2. ○ articles");
+        act(() => setup.resize(72, 24));
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).toContain("1. ○ authors");
+        expect(setup.captureCharFrame()).toContain("2. ○ articles");
+        expect(setup.captureCharFrame()).toContain("i Include dependencies");
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();

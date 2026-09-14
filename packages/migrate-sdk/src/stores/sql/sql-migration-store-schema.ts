@@ -9,6 +9,7 @@ import {
 } from "./dialects/dialect.ts";
 import { makeInitialSqlMigrationStoreSchema } from "./schema/migrations/0001-initial-schema.ts";
 import { addDefinitionRunStatus } from "./schema/migrations/0002-definition-run-status.ts";
+import { addOperationHistoryAndCompletion } from "./schema/migrations/0003-operation-history-and-completion.ts";
 import { makeSqlMigrationStoreDialect } from "./sql-migration-store-dialect.ts";
 import {
   defaultSqlMigrationStoreTablePrefix,
@@ -17,45 +18,21 @@ import {
   sqlMigrationStoreTablePrefixPattern,
 } from "./sql-migration-store-names.ts";
 
-export type SqlMigrationStoreSchemaStatus =
-  | "not-installed"
-  | "current"
-  | "upgrade-required"
-  | "future"
-  | "divergent"
-  | "untracked"
-  | "partial";
+import type {
+  SqlMigrationStoreAppliedSchemaMigration,
+  SqlMigrationStoreSchemaDatabase,
+  SqlMigrationStoreSchemaMigration,
+  SqlMigrationStoreSchemaPlan,
+  SqlMigrationStoreSchemaStatus,
+} from "./sql-migration-store-schema-plan.ts";
 
-export type SqlMigrationStoreSchemaDatabase =
-  | "microsoft-sql-server"
-  | "mysql"
-  | "postgresql"
-  | "sqlite";
-
-export interface SqlMigrationStoreSchemaMigration {
-  readonly description: string;
-  readonly id: number;
-  readonly name: string;
-}
-
-export interface SqlMigrationStoreAppliedSchemaMigration {
-  readonly id: number;
-  readonly name: string;
-}
-
-/** A read-only comparison between the installed SQL schema and this SDK. */
-export interface SqlMigrationStoreSchemaPlan {
-  readonly applied: readonly SqlMigrationStoreAppliedSchemaMigration[];
-  readonly currentVersion: number | null;
-  readonly database: SqlMigrationStoreSchemaDatabase;
-  readonly issues: readonly string[];
-  readonly pending: readonly SqlMigrationStoreSchemaMigration[];
-  readonly planId: string;
-  readonly status: SqlMigrationStoreSchemaStatus;
-  readonly tablePrefix: string;
-  readonly targetVersion: number;
-  readonly warnings: readonly string[];
-}
+export type {
+  SqlMigrationStoreAppliedSchemaMigration,
+  SqlMigrationStoreSchemaDatabase,
+  SqlMigrationStoreSchemaMigration,
+  SqlMigrationStoreSchemaPlan,
+  SqlMigrationStoreSchemaStatus,
+} from "./sql-migration-store-schema-plan.ts";
 
 export interface SqlMigrationStoreSchemaContext {
   readonly database: SqlMigrationStoreSchemaDatabase;
@@ -183,6 +160,28 @@ const schemaV2Shape = (
   };
 };
 
+const schemaV3Shape = (
+  names: SqlMigrationStoreTableNames,
+  prefix: string
+): SqlMigrationStoreSchemaShape => {
+  const shape = schemaV2Shape(names, prefix);
+  return {
+    ...shape,
+    tables: [...shape.tables, names.completions],
+    columns: {
+      ...shape.columns,
+      [names.runs]: [...(shape.columns[names.runs] ?? []), "operation"],
+      [names.completions]: [
+        "definition_key",
+        "definition_id",
+        "run_id",
+        "completed_at",
+        "source_cursor",
+      ],
+    },
+  };
+};
+
 const makeMigrations = (
   context: SqlMigrationStoreSchemaContext
 ): readonly SqlMigrationStoreSchemaMigrationDefinition[] => [
@@ -203,6 +202,13 @@ const makeMigrations = (
     id: 2,
     name: "definition_run_status",
     shape: schemaV2Shape(context.names, context.prefix),
+  },
+  {
+    description: "Record operation history and migration completion separately",
+    effect: addOperationHistoryAndCompletion(context.sql, context.names),
+    id: 3,
+    name: "operation_history_and_completion",
+    shape: schemaV3Shape(context.names, context.prefix),
   },
 ];
 

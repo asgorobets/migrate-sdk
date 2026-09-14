@@ -43,6 +43,11 @@ in separate SQLite databases.
 
 ## Open the TUI
 
+An existing store on an older schema opens an upgrade popup. Choose
+**Upgrade store** to apply the displayed plan and continue to the dashboard.
+The completion and operation history additions are bundled in one v2 → v3
+upgrade. No separate CLI upgrade is needed.
+
 ```sh
 node packages/tui/bin/migrate-tui.js \
   --config packages/migrate-sdk/examples/sqlite-catalog/migrate.config.ts

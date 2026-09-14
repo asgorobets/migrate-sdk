@@ -133,7 +133,11 @@ export const MigrationDefinitionRunStatus = Schema.Literals([
 export type MigrationDefinitionRunStatus =
   typeof MigrationDefinitionRunStatus.Type;
 
+export const MigrationRunOperation = Schema.Literals(["run", "rollback"]);
+export type MigrationRunOperation = typeof MigrationRunOperation.Type;
+
 const MigrationRunStateFields = {
+  operation: Schema.optional(MigrationRunOperation),
   definitionIds: Schema.Array(MigrationDefinitionIdSchema),
   execution: Schema.optional(
     Schema.Struct({
