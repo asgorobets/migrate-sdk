@@ -129,6 +129,7 @@ export const MigrateExecutionOptions = Schema.Struct({
 export type MigrateExecutionOptions = typeof MigrateExecutionOptions.Type;
 
 export const MigratePrepareOptions = Schema.Struct({
+  limit: Schema.optional(Schema.Finite),
   execution: Schema.optional(MigrateExecutionOptions),
   force: Schema.optional(Schema.Boolean),
   rollbackOrphans: Schema.optional(Schema.Boolean),
@@ -267,6 +268,7 @@ export const MigratePlanFingerprint = Schema.NonEmptyString.pipe(
 export type MigratePlanFingerprint = typeof MigratePlanFingerprint.Type;
 
 export const MigratePlanProjection = Schema.Struct({
+  limit: Schema.optional(Schema.Finite),
   execution: Schema.optional(MigrateExecutionOptions),
   executionDefinitionIds: Schema.Array(MigrationDefinitionId),
   executionPolicy: Schema.Array(

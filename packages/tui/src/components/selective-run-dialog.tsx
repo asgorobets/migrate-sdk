@@ -2,8 +2,10 @@
 
 import { type KeyEvent, RGBA } from "@opentui/core";
 import { Input } from "@tuiparts/react/input";
-import type { MigrationDefinitionId } from "migrate-sdk";
-import type { MigrateSourceIdentityHistoryEntry } from "migrate-sdk/protocol";
+import type {
+  MigrateSourceIdentityHistoryEntry,
+  MigrateTarget,
+} from "migrate-sdk/protocol";
 import { type ElementRef, useEffect, useRef } from "react";
 import { migrationColors as colors } from "./migration-dashboard.tsx";
 import { Badge } from "./ui/badge.tsx";
@@ -14,6 +16,10 @@ import {
   DialogDescription,
   DialogTitle,
 } from "./ui/dialog.tsx";
+import { NumberField, type NumberFieldInputRef } from "./ui/number-field.tsx";
+import { Tabs, TabsList, TabsTrigger } from "./ui/tabs.tsx";
+
+export type SelectiveRunMode = "next-items" | "source-ids";
 
 const historyStatusPresentation = (
   status: MigrateSourceIdentityHistoryEntry["status"]
@@ -46,7 +52,6 @@ const countLabel = (
 
 export interface SelectiveRunDialogProps {
   readonly action: "rollback" | "run";
-  readonly definitionId: MigrationDefinitionId;
   readonly draft: string;
   readonly entries: readonly string[];
   readonly feedback?: {
@@ -58,37 +63,45 @@ export interface SelectiveRunDialogProps {
   readonly historyIndex: number;
   readonly historyLoading: boolean;
   readonly inputReady: boolean;
+  readonly limit: number | null;
+  readonly mode: SelectiveRunMode;
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
   readonly onDraftChange: (value: string) => void;
   readonly onKeyDown: (key: KeyEvent) => void;
+  readonly onLimitChange: (value: number | null) => void;
+  readonly onModeChange: (mode: SelectiveRunMode) => void;
   readonly onSubmit: (value: string) => void;
+  readonly target: MigrateTarget;
   readonly width: number;
 }
 
-export const SelectiveRunDialog = ({
-  action,
-  definitionId,
-  draft,
-  entries,
-  feedback,
+const selectiveDialogLayout = ({
+  width,
   height,
+  nextItems,
+  showModes,
+  entries,
   history,
   historyIndex,
-  historyLoading,
-  inputReady,
-  onCancel,
-  onDraftChange,
-  onKeyDown,
-  onConfirm,
-  onSubmit,
-  width,
-}: SelectiveRunDialogProps) => {
-  const inputRef = useRef<ElementRef<typeof Input>>(null);
-  const compact = width < 80;
+}: Pick<
+  SelectiveRunDialogProps,
+  "width" | "height" | "entries" | "history" | "historyIndex"
+> & { readonly nextItems: boolean; readonly showModes: boolean }) => {
+  const compact = width < 80 || height < 28;
   const dialogWidth = Math.max(1, Math.min(76, width - (compact ? 8 : 4)));
-  const visibleEntryLimit = compact ? 3 : 4;
-  const visibleHistoryLimit = compact ? 3 : 4;
+  const baseRows = 17 + (showModes ? 3 : 0) - (compact ? 3 : 0);
+  const availableRows = Math.max(2, height - 4 - baseRows);
+  const visibleEntryLimit = Math.min(
+    compact ? 2 : 4,
+    Math.max(1, Math.floor(availableRows / 2))
+  );
+  const selectedRows = Math.min(entries.length, visibleEntryLimit);
+  const overflowRows = entries.length > visibleEntryLimit ? 1 : 0;
+  const visibleHistoryLimit = Math.max(
+    1,
+    Math.min(compact ? 2 : 4, availableRows - selectedRows - overflowRows)
+  );
   const visibleEntries = entries.slice(-visibleEntryLimit);
   const historyStart = Math.max(
     0,
@@ -105,15 +118,79 @@ export const SelectiveRunDialog = ({
   const historyRows = Math.max(1, visibleHistory.length);
   const dialogHeight = Math.max(
     1,
-    Math.min(17 + visibleEntries.length + historyRows, height - 4)
+    Math.min(
+      nextItems
+        ? 18
+        : baseRows + visibleEntries.length + historyRows + overflowRows,
+      height - 4
+    )
   );
+  return {
+    compact,
+    dialogWidth,
+    dialogHeight,
+    visibleEntries,
+    visibleHistory,
+    selectedOverflow,
+    historyStart,
+  };
+};
+
+export const SelectiveRunDialog = ({
+  action,
+  target,
+  mode,
+  limit,
+  onModeChange,
+  onLimitChange,
+  draft,
+  entries,
+  feedback,
+  height,
+  history,
+  historyIndex,
+  historyLoading,
+  inputReady,
+  onCancel,
+  onDraftChange,
+  onKeyDown,
+  onConfirm,
+  onSubmit,
+  width,
+}: SelectiveRunDialogProps) => {
+  const inputRef = useRef<ElementRef<typeof Input>>(null);
+  const limitRef = useRef<NumberFieldInputRef>(null);
+  const nextItems = action === "run" && mode === "next-items";
+  const showModes = action === "run" && target.kind === "migration";
+  const validLimit = limit !== null && Number.isSafeInteger(limit) && limit > 0;
+  const {
+    compact,
+    dialogWidth,
+    dialogHeight,
+    visibleEntries,
+    visibleHistory,
+    selectedOverflow,
+    historyStart,
+  } = selectiveDialogLayout({
+    width,
+    height,
+    nextItems,
+    showModes,
+    entries,
+    history,
+    historyIndex,
+  });
   const actionLabel = action === "rollback" ? "Rollback" : "Run";
 
   useEffect(() => {
     if (inputReady) {
-      inputRef.current?.focus();
+      if (nextItems) {
+        limitRef.current?.focus();
+      } else {
+        inputRef.current?.focus();
+      }
     }
-  }, [inputReady]);
+  }, [inputReady, nextItems]);
 
   return (
     <Dialog
@@ -147,103 +224,169 @@ export const SelectiveRunDialog = ({
           }}
         >
           <DialogTitle content={`${actionLabel} selected entries`} />
-          <Badge intent="neutral" label="SOURCE IDS" />
-        </box>
-        <DialogDescription content={definitionId} wrapMode="word" />
-        <box style={{ flexShrink: 0, height: 1, marginTop: 1 }}>
-          <text fg={colors.foreground}>Source ID</text>
-        </box>
-        <box
-          style={{
-            border: true,
-            borderColor: colors.info,
-            flexDirection: "row",
-            flexShrink: 0,
-            height: 3,
-            paddingLeft: 1,
-            paddingRight: 1,
-            width: "100%",
-          }}
-        >
-          <Input
-            onInput={onDraftChange}
-            onSubmit={onSubmit}
-            placeholder="Enter source ID"
-            placeholderColor={colors.dim}
-            ref={inputRef}
-            textColor={colors.foreground}
-            value={draft}
-            width="100%"
+          <Badge
+            intent="neutral"
+            label={nextItems ? "NEXT ITEMS" : "SOURCE IDS"}
           />
         </box>
-        <box style={{ flexShrink: 0, height: 1 }}>
-          <text fg={feedback?.tone === "error" ? colors.danger : colors.dim}>
-            {feedback?.message ?? "Press Enter to add."}
-          </text>
-        </box>
-        <box
-          style={{
-            flexDirection: "row",
-            flexShrink: 0,
-            height: 1,
-            justifyContent: "space-between",
-            marginTop: 1,
-          }}
-        >
-          <text fg={colors.foreground}>Selected entries</text>
-          <text fg={colors.dim}>{entries.length} selected</text>
-        </box>
-        {selectedOverflow === 0 ? null : (
-          <text fg={colors.dim}>… {selectedOverflow} more selected</text>
-        )}
-        {visibleEntries.map((entry, index) => (
-          <box
-            key={entry}
-            style={{ flexDirection: "row", flexShrink: 0, height: 1 }}
+        <DialogDescription
+          content={
+            target.kind === "migration"
+              ? target.definitionId
+              : `${target.groupId} · group`
+          }
+          wrapMode="word"
+        />
+        {showModes && (
+          <Tabs
+            flexShrink={0}
+            marginTop={1}
+            onValueChange={(value) => {
+              if (value === "next-items" || value === "source-ids") {
+                onModeChange(value);
+              }
+            }}
+            value={mode}
           >
-            <text fg={colors.info}>✓ </text>
-            <text fg={colors.dim}>{selectedOverflow + index + 1}. </text>
-            <text fg={colors.foreground}>{entry}</text>
-          </box>
-        ))}
-        <box
-          style={{
-            flexDirection: "row",
-            flexShrink: 0,
-            height: 1,
-            justifyContent: "space-between",
-            marginTop: 1,
-          }}
-        >
-          <text fg={colors.foreground}>History</text>
-          <text fg={colors.dim}>{countLabel(history.length, "item")}</text>
-        </box>
-        {historyLoading ? <text fg={colors.dim}>Loading history…</text> : null}
-        {!historyLoading && visibleHistory.length === 0 ? (
-          <text fg={colors.dim}>No entries in history.</text>
-        ) : null}
-        {visibleHistory.map((entry, index) => {
-          const absoluteIndex = historyStart + index;
-          const selected = entries.includes(entry.sourceIdentity);
-          const focused = absoluteIndex === historyIndex;
-          const status = historyStatusPresentation(entry.status);
-
-          return (
-            <box
-              backgroundColor={focused ? colors.selected : colors.surface}
-              key={entry.sourceIdentity}
-              style={{ flexDirection: "row", flexShrink: 0, height: 1 }}
-            >
-              <text fg={selected ? colors.info : colors.dim}>
-                {selected ? "[x] " : "[ ] "}
+            <TabsList>
+              <TabsTrigger label="Next items" value="next-items" />
+              <TabsTrigger label="Source IDs" value="source-ids" />
+            </TabsList>
+          </Tabs>
+        )}
+        {nextItems ? (
+          <box flexDirection="column" flexGrow={1} marginTop={1}>
+            <text fg={colors.foreground}>Items per migration</text>
+            <NumberField
+              inputRef={limitRef}
+              onSubmit={onConfirm}
+              onValueChange={onLimitChange}
+              placeholder="Enter a positive whole number"
+              smallStep={1}
+              value={limit}
+              width="100%"
+            />
+            <text fg={colors.dim} marginTop={1} wrapMode="word">
+              Process the next items that need work, in source order. Unchanged
+              items don’t count. Failed or skipped attempts count toward the
+              limit.
+            </text>
+            <text fg={colors.dim} marginTop={1} wrapMode="word">
+              The limit applies to each migration, including dependencies.
+            </text>
+            {feedback && (
+              <text
+                fg={feedback.tone === "error" ? colors.danger : colors.dim}
+                wrapMode="word"
+              >
+                {feedback.message}
               </text>
-              <text fg={status.color}>{status.icon} </text>
-              <text fg={colors.foreground}>{entry.sourceIdentity}</text>
-              <box style={{ flexGrow: 1 }} />
-              <text fg={status.color}>{status.label}</text>
+            )}
+          </box>
+        ) : (
+          <>
+            <box
+              style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}
+            >
+              <text fg={colors.foreground}>Source ID</text>
             </box>
-          );
-        })}
+            <box
+              style={{
+                border: true,
+                borderColor: colors.info,
+                flexDirection: "row",
+                flexShrink: 0,
+                height: 3,
+                paddingLeft: 1,
+                paddingRight: 1,
+                width: "100%",
+              }}
+            >
+              <Input
+                onInput={onDraftChange}
+                onSubmit={onSubmit}
+                placeholder="Enter source ID"
+                placeholderColor={colors.dim}
+                ref={inputRef}
+                textColor={colors.foreground}
+                value={draft}
+                width="100%"
+              />
+            </box>
+            <box style={{ flexShrink: 0, height: 1 }}>
+              <text
+                fg={feedback?.tone === "error" ? colors.danger : colors.dim}
+              >
+                {feedback?.message ?? "Press Enter to add."}
+              </text>
+            </box>
+            <box
+              style={{
+                flexDirection: "row",
+                flexShrink: 0,
+                height: 1,
+                justifyContent: "space-between",
+                marginTop: compact ? 0 : 1,
+              }}
+            >
+              <text fg={colors.foreground}>Selected entries</text>
+              <text fg={colors.dim}>{entries.length} selected</text>
+            </box>
+            {selectedOverflow === 0 ? null : (
+              <text fg={colors.dim}>… {selectedOverflow} more selected</text>
+            )}
+            {visibleEntries.map((entry, index) => (
+              <box
+                key={entry}
+                style={{ flexDirection: "row", flexShrink: 0, height: 1 }}
+              >
+                <text fg={colors.info}>✓ </text>
+                <text fg={colors.dim}>{selectedOverflow + index + 1}. </text>
+                <text fg={colors.foreground}>{entry}</text>
+              </box>
+            ))}
+            <box
+              style={{
+                flexDirection: "row",
+                flexShrink: 0,
+                height: 1,
+                justifyContent: "space-between",
+                marginTop: compact ? 0 : 1,
+              }}
+            >
+              <text fg={colors.foreground}>History</text>
+              <text fg={colors.dim}>{countLabel(history.length, "item")}</text>
+            </box>
+            {historyLoading ? (
+              <text fg={colors.dim}>Loading history…</text>
+            ) : null}
+            {!historyLoading && visibleHistory.length === 0 ? (
+              <text fg={colors.dim}>No entries in history.</text>
+            ) : null}
+            {visibleHistory.map((entry, index) => {
+              const absoluteIndex = historyStart + index;
+              const selected = entries.includes(entry.sourceIdentity);
+              const focused = absoluteIndex === historyIndex;
+              const status = historyStatusPresentation(entry.status);
+
+              return (
+                <box
+                  backgroundColor={focused ? colors.selected : colors.surface}
+                  key={entry.sourceIdentity}
+                  style={{ flexDirection: "row", flexShrink: 0, height: 1 }}
+                >
+                  <text fg={selected ? colors.info : colors.dim}>
+                    {selected ? "[x] " : "[ ] "}
+                  </text>
+                  <text fg={status.color}>{status.icon} </text>
+                  <text fg={colors.foreground}>{entry.sourceIdentity}</text>
+                  <box style={{ flexGrow: 1 }} />
+                  <text fg={status.color}>{status.label}</text>
+                </box>
+              );
+            })}
+          </>
+        )}
         <box
           style={{
             flexDirection: "row-reverse",
@@ -254,9 +397,13 @@ export const SelectiveRunDialog = ({
           }}
         >
           <Button
-            disabled={entries.length === 0}
+            disabled={nextItems ? !validLimit : entries.length === 0}
             intent={action === "rollback" ? "warning" : "primary"}
-            label={`↵ ${actionLabel} ${countLabel(entries.length, "entry", "entries")}`}
+            label={
+              nextItems
+                ? "↵ Review run"
+                : `↵ ${actionLabel} ${countLabel(entries.length, "entry", "entries")}`
+            }
             onPress={onConfirm}
           />
           <Button intent="neutral" label="esc Cancel" onPress={onCancel} />
@@ -270,9 +417,12 @@ export const SelectiveRunDialog = ({
           }}
         >
           <text fg={colors.dim}>
-            ↑↓ history · space toggle · enter add/confirm · ctrl+⌫ remove
+            {nextItems
+              ? "enter review · esc cancel"
+              : "↑↓ history · space toggle · enter add/run · ctrl+⌫ remove"}
           </text>
         </box>
+        {showModes && <text fg={colors.dim}>f2 switch selection method</text>}
       </DialogContent>
     </Dialog>
   );

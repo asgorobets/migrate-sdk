@@ -229,6 +229,7 @@ export interface MigrateServerScanOptions {
 export interface MigrateServerPrepareOptions {
   readonly execution?: MigrationExecutionOptions;
   readonly force?: boolean;
+  readonly limit?: number;
   readonly rollbackOrphans?: boolean;
   readonly sourceIdentities?: readonly string[];
   readonly withDependencies?: boolean;
@@ -1023,6 +1024,7 @@ export const makeRegistryMigrateServerRuntime = (
     options: MigrateServerPrepareOptions
   ) => {
     const runOptions = {
+      ...(options.limit === undefined ? {} : { limit: options.limit }),
       ...(options.execution === undefined
         ? {}
         : { execution: options.execution }),
@@ -1132,10 +1134,18 @@ export const makeRegistryMigrateServerRuntime = (
     selection: MigrateSelection,
     action: MigrateAction,
     options: MigrateServerPrepareOptions = {}
-  ): Effect.Effect<ExecutableMigrationOperation, unknown> =>
-    action === "rollback"
+  ): Effect.Effect<ExecutableMigrationOperation, unknown> => {
+    if (action === "rollback" && options.limit !== undefined) {
+      return Effect.fail(
+        new RegistryMigrateServerExecutionError({
+          message: "Run limit cannot be used with rollback",
+        })
+      );
+    }
+    return action === "rollback"
       ? prepareRollback(selection, options)
       : prepareRun(selection, action, options);
+  };
 
   const makeExecutionProgress = (
     definitionIds: readonly MigrationDefinitionId[],

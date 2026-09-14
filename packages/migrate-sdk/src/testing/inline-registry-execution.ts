@@ -39,6 +39,7 @@ export type InlineRegistryRunInput<
     readonly AnyMigrationDefinition[] = readonly AnyMigrationDefinition[],
 > = InlineRegistrySelectionInput & {
   readonly definitions: Definitions;
+  readonly limit?: number;
   readonly execution?: MigrationExecutionOptions;
   readonly force?: boolean;
   readonly mode?: RunModeInput<
@@ -134,6 +135,7 @@ const runRequestInput = <Definitions extends readonly AnyMigrationDefinition[]>(
   if (input.mode?.kind === "item") {
     return {
       ...selection,
+      ...(input.limit === undefined ? {} : { limit: input.limit }),
       ...(input.execution === undefined ? {} : { execution: input.execution }),
       ...(input.force === undefined ? {} : { force: input.force }),
       ...(input.rollbackOrphans === undefined
@@ -147,6 +149,7 @@ const runRequestInput = <Definitions extends readonly AnyMigrationDefinition[]>(
 
   return {
     ...selection,
+    ...(input.limit === undefined ? {} : { limit: input.limit }),
     ...(input.execution === undefined ? {} : { execution: input.execution }),
     ...(input.force === undefined ? {} : { force: input.force }),
     ...(input.mode === undefined ? {} : { mode: input.mode }),

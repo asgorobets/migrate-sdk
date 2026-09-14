@@ -76,6 +76,9 @@ pnpm exec migrate run content --plan
 pnpm exec migrate run articles
 pnpm exec migrate status articles
 
+# Try the next eligible item before running a larger migration
+pnpm exec migrate run articles --limit 1
+
 # Retry only failed entries or target one entry
 pnpm exec migrate run articles --failed
 pnpm exec migrate run articles --id article-1042
@@ -146,6 +149,40 @@ Normal cursor-discovery runs warn when a selected source is incremental because
 changes at or before its saved cursor require `--rescan` to be discovered.
 Targeted failed, skipped, and item retries do not emit this warning because they
 look up durable item state directly instead of traversing the source cursor.
+
+Normal runs select eligible items in source order. Failed and needs-update items
+are handled when the scan encounters them. `--limit N` caps eligible attempts
+separately for each migration in the run: unchanged migrated items do not count,
+while failures and skips do. Repeating `--limit 1` skips previous successful
+items; an earlier failure or skip may be attempted again.
+
+The same limit applies to every selected migration and every included dependency:
+
+```sh
+pnpm exec migrate run authors articles --limit 1
+pnpm exec migrate run --group catalog --limit 1
+pnpm exec migrate run --all --limit 1
+pnpm exec migrate run articles --with-dependencies --limit 1
+```
+
+For example, three selected migrations can each attempt one item with `--limit 1`.
+Included dependencies run first, even when their limited pass is incomplete.
+A required dependency left out of the run still needs prior completion, unless
+`--force` is used. Independently selected items may not reference each other;
+the usual missing-reference handling applies. The limit does not cap destination
+operations or reference-created stubs.
+
+A run stopped by its limit reports `succeeded` when its attempts succeed, just
+as a successful `--id` run does. Item failures still report `failed`.
+It keeps the checkpoint for a partial scan and rereads any partially processed
+page on the next run. Use `--rescan --limit N` to start at the beginning explicitly.
+Stopping early does not establish migration completion. An earlier completion
+record remains valid unless rollback invalidates it. Reaching the end records
+completion even if individual items failed, following the normal run rules.
+The source still controls how many items it reads per page. Limits support normal
+runs, including `--rescan`; they cannot be combined with update, targeted retries,
+explicit identity targets, or orphan rollback. SDK callers can pass `limit` to
+the registry run request.
 
 ## What is included
 

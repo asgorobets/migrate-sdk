@@ -1,5 +1,7 @@
 # Implement Run Modes over Migration Item State
 
+> Superseded ordering policy (2026-09-11): [ADR 0012](../../../docs/adr/0012-source-order-and-limited-runs.md) removes normal-run backlog priority and identity-lookup recovery. Normal runs process failed and needs-update items when the source iterator encounters them. Saved checkpoints still resume; use a rescan or explicit target to revisit earlier items. The original acceptance criteria below remain as implementation history.
+
 Status: done
 
 ## Parent

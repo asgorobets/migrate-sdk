@@ -4,6 +4,7 @@ import { createTestRenderer } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
 import { Effect } from "effect";
 import {
+  MigrationExecutable,
   type MigrationMessage,
   type MigrationRunId,
   toEncodedSourceIdentity,
@@ -23,9 +24,11 @@ import {
   loadLocalMigrateServerRuntime,
   type MigrateServerExecutionHandle,
   type MigrateServerExecutionResult,
+  makeRegistryMigrateServerRuntime,
 } from "migrate-sdk/server";
 import { act } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { makeLimitedRunConfig } from "../examples/limited-run.config.ts";
 import { MigrationTuiApp as MigrationTuiAppView } from "./app.tsx";
 import type { MigrationTuiExecutionResult } from "./execution.ts";
 import { MigrationTuiRenderErrorBoundary } from "./render-session.tsx";
@@ -84,11 +87,21 @@ const MigrationTuiApp = ({
 );
 
 const makeInProcessMigrationTuiRuntime = async (
-  ...args: Parameters<typeof loadLocalMigrateServerRuntime>
+  input: Parameters<typeof loadLocalMigrateServerRuntime>[0] & {
+    readonly registry?: Parameters<
+      typeof makeRegistryMigrateServerRuntime
+    >[0]["registry"];
+  }
 ): Promise<MigrationTuiRuntime> => {
-  const server = await Effect.runPromise(
-    Effect.scoped(loadLocalMigrateServerRuntime(...args))
-  );
+  const server =
+    input.registry === undefined
+      ? await Effect.runPromise(
+          Effect.scoped(loadLocalMigrateServerRuntime(input))
+        )
+      : makeRegistryMigrateServerRuntime({
+          registry: input.registry,
+          executable: MigrationExecutable.inlineService,
+        });
   let activeObservation:
     | { readonly controller: AbortController; readonly runId: MigrationRunId }
     | undefined;
@@ -150,7 +163,7 @@ const makeInProcessMigrationTuiRuntime = async (
       await publishDashboard();
       return result;
     },
-    environmentLabel: basename(server.configPath),
+    environmentLabel: basename(input.configPath ?? "test-registry"),
     detachForExit: () => {
       const runId = activeObservation?.runId;
       if (runId === undefined) {
@@ -391,6 +404,32 @@ const settle = async (
   }
 
   return false;
+};
+
+const readySelectiveDialog = async (
+  setup: Awaited<ReturnType<typeof createTestRenderer>>
+) => {
+  expect(
+    await settle(setup.renderOnce, () =>
+      setup.captureCharFrame().includes("Run selected entries")
+    )
+  ).toBe(true);
+  await act(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 120));
+  });
+  await act(async () => setup.renderOnce());
+};
+
+const chooseSourceIds = async (
+  setup: Awaited<ReturnType<typeof createTestRenderer>>
+) => {
+  await readySelectiveDialog(setup);
+  act(() => setup.mockInput.pressKey("F2"));
+  expect(
+    await settle(setup.renderOnce, () =>
+      setup.captureCharFrame().includes("[ Source IDs ]")
+    )
+  ).toBe(true);
 };
 
 beforeAll(() => {
@@ -2898,6 +2937,443 @@ describe("MigrationTuiApp", () => {
     }
   );
 
+  for (const group of [false, true]) {
+    itWithOpenTui(
+      `reviews and runs the next items ${group ? "per migration in a group" : "in a single migration"}`,
+      async () => {
+        const runtime = await makeInProcessMigrationTuiRuntime({
+          registry: makeLimitedRunConfig().registry,
+          cwd: new URL("..", import.meta.url).pathname,
+        });
+        const prepare = vi.spyOn(runtime, "prepare");
+        const start = vi.spyOn(runtime, "start");
+        const history = vi.spyOn(runtime, "listSourceIdentityHistory");
+        const setup = await createTestRenderer({ height: 24, width: 72 });
+        const root = createRoot(setup.renderer);
+        act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+        try {
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Status reloaded")
+            )
+          ).toBe(true);
+          if (group) {
+            act(() => setup.mockInput.pressKey("g"));
+            await act(async () => setup.renderOnce());
+          }
+          for (let run = 1; run <= 2; run += 1) {
+            act(() => setup.mockInput.pressKey("e"));
+            await readySelectiveDialog(setup);
+            expect(setup.captureCharFrame()).toContain("Items per migration");
+            expect(setup.captureCharFrame()).toContain("Review run");
+            if (group) {
+              expect(setup.captureCharFrame()).not.toContain("Source IDs");
+            }
+            expect(history).not.toHaveBeenCalled();
+            // Edit the input instead of relying on the default to prove the value is read.
+            act(() => setup.mockInput.pressBackspace());
+            await act(async () => setup.renderOnce());
+            await act(async () => setup.mockInput.typeText("1"));
+            act(() => setup.mockInput.pressEnter());
+            expect(
+              await settle(setup.renderOnce, () =>
+                setup.captureCharFrame().includes("Confirm run")
+              )
+            ).toBe(true);
+            expect(setup.captureCharFrame()).toContain(
+              "Up to 1 item per migration"
+            );
+            expect(start).toHaveBeenCalledTimes(run - 1);
+            expect(prepare).toHaveBeenLastCalledWith(
+              group
+                ? { kind: "group", groupId: "content" }
+                : { kind: "definitions", definitionIds: ["authors"] },
+              "run",
+              { limit: 1 }
+            );
+            if (group) {
+              act(() => setup.mockInput.pressKey("y"));
+            } else {
+              const lines = setup.captureCharFrame().split("\n");
+              const y = lines.findIndex((line) => line.includes("y Run"));
+              const x = lines[y]?.indexOf("y Run") ?? -1;
+              expect(x).toBeGreaterThanOrEqual(0);
+              await act(async () => setup.mockMouse.click(x + 2, y));
+            }
+            expect(
+              await settle(
+                setup.renderOnce,
+                () =>
+                  setup
+                    .captureCharFrame()
+                    .includes(`${group ? run * 2 : run} migrated`) &&
+                  !setup.captureCharFrame().includes("Stop run")
+              )
+            ).toBe(true);
+            const snapshot = await runtime.refresh();
+            expect(
+              snapshot.rows.map((row) => row.status?.durable.migrated)
+            ).toEqual(group ? [run, run] : [run, 0]);
+            expect(start).toHaveBeenLastCalledWith(
+              expect.objectContaining({
+                request: expect.objectContaining({ options: { limit: 1 } }),
+                plan: expect.objectContaining({ limit: 1 }),
+              })
+            );
+          }
+        } finally {
+          act(() => root.unmount());
+          setup.renderer.destroy();
+        }
+      }
+    );
+  }
+
+  for (const include of [true, false]) {
+    itWithOpenTui(
+      `preserves the limit when choosing to ${include ? "include" : "skip"} dependencies`,
+      async () => {
+        const runtime = await makeInProcessMigrationTuiRuntime({
+          registry: makeLimitedRunConfig().registry,
+          cwd: new URL("..", import.meta.url).pathname,
+        });
+        const start = vi.spyOn(runtime, "start");
+        const setup = await createTestRenderer({ height: 30, width: 100 });
+        const root = createRoot(setup.renderer);
+        act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+        try {
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Status reloaded")
+            )
+          ).toBe(true);
+          act(() => setup.mockInput.pressArrow("down"));
+          await act(async () => setup.renderOnce());
+          act(() => setup.mockInput.pressKey("e"));
+          await readySelectiveDialog(setup);
+          // A non-default limit catches a hard-coded limit of one.
+          act(() => setup.mockInput.pressBackspace());
+          await act(async () => setup.renderOnce());
+          await act(async () => setup.mockInput.typeText("2"));
+          act(() => setup.mockInput.pressEnter());
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Dependencies incomplete")
+            )
+          ).toBe(true);
+          expect(setup.captureCharFrame()).toContain(
+            "Up to 2 items per migration"
+          );
+          act(() => setup.mockInput.pressKey(include ? "i" : "f"));
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Confirm run")
+            )
+          ).toBe(true);
+          expect(setup.captureCharFrame()).toContain(
+            "Up to 2 items per migration"
+          );
+          expect(start).not.toHaveBeenCalled();
+          act(() => setup.mockInput.pressKey("y"));
+          expect(
+            await settle(
+              setup.renderOnce,
+              () =>
+                setup.captureCharFrame().includes("2 migrated") &&
+                !setup.captureCharFrame().includes("Stop run")
+            )
+          ).toBe(true);
+          expect(start).toHaveBeenCalledWith(
+            expect.objectContaining({
+              request: expect.objectContaining({
+                options: {
+                  limit: 2,
+                  force: !include,
+                  withDependencies: include,
+                },
+              }),
+              plan: expect.objectContaining({
+                limit: 2,
+                executionDefinitionIds: include
+                  ? ["authors", "articles"]
+                  : ["articles"],
+              }),
+            })
+          );
+          expect(
+            (await runtime.refresh()).rows.map(
+              (row) => row.status?.durable.migrated
+            )
+          ).toEqual(include ? [2, 2] : [0, 2]);
+        } finally {
+          act(() => root.unmount());
+          setup.renderer.destroy();
+        }
+      }
+    );
+  }
+
+  itWithOpenTui(
+    "keeps the limit out of source ID requests and ordinary runs",
+    async () => {
+      const runtime = await makeInProcessMigrationTuiRuntime({
+        registry: makeLimitedRunConfig().registry,
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const prepare = vi.spyOn(runtime, "prepare");
+      const start = vi.spyOn(runtime, "start");
+      const setup = await createTestRenderer({ height: 30, width: 100 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("e"));
+        await chooseSourceIds(setup);
+        await act(async () => setup.mockInput.typeText("authors-3"));
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("1 selected")
+          )
+        ).toBe(true);
+        // Preserve the ID queue while changing selection methods, but send only the active method.
+        act(() => setup.mockInput.pressKey("F2"));
+        await act(async () => setup.renderOnce());
+        act(() => setup.mockInput.pressKey("F2"));
+        await act(async () => setup.renderOnce());
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(
+            setup.renderOnce,
+            () =>
+              setup.captureCharFrame().includes("1 migrated") &&
+              !setup.captureCharFrame().includes("Stop run")
+          )
+        ).toBe(true);
+        expect(prepare).toHaveBeenLastCalledWith(
+          { kind: "definitions", definitionIds: ["authors"] },
+          "run",
+          { sourceIdentities: ["authors-3"] }
+        );
+        act(() => setup.mockInput.pressKey("e"));
+        await readySelectiveDialog(setup);
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Confirm run")
+          )
+        ).toBe(true);
+        expect(prepare).toHaveBeenLastCalledWith(
+          { kind: "definitions", definitionIds: ["authors"] },
+          "run",
+          { limit: 1 }
+        );
+        act(() => setup.mockInput.pressEscape());
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => !setup.captureCharFrame().includes("Confirm run")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("r"));
+        expect(
+          await settle(
+            setup.renderOnce,
+            () =>
+              setup.captureCharFrame().includes("4 migrated") &&
+              !setup.captureCharFrame().includes("Stop run")
+          ),
+          setup.captureCharFrame()
+        ).toBe(true);
+        expect(start).toHaveBeenCalledTimes(2);
+        expect(prepare).toHaveBeenLastCalledWith(
+          { kind: "definitions", definitionIds: ["authors"] },
+          "run",
+          {}
+        );
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "requires a positive whole number before reviewing a limited run",
+    async () => {
+      const runtime = await makeInProcessMigrationTuiRuntime({
+        registry: makeLimitedRunConfig().registry,
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const prepare = vi.spyOn(runtime, "prepare");
+      const setup = await createTestRenderer({ height: 24, width: 72 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("e"));
+        await readySelectiveDialog(setup);
+        act(() => setup.mockInput.pressBackspace());
+        await act(async () => setup.renderOnce());
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Enter a positive whole number.")
+          )
+        ).toBe(true);
+        expect(prepare).not.toHaveBeenCalled();
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  for (const returnedLimit of [undefined, 2]) {
+    itWithOpenTui(
+      `refuses a limited run when the server returns limit ${returnedLimit}`,
+      async () => {
+        const base = await makeInProcessMigrationTuiRuntime({
+          registry: makeLimitedRunConfig().registry,
+          cwd: new URL("..", import.meta.url).pathname,
+        });
+        const runtime: MigrationTuiRuntime = {
+          ...base,
+          prepare: async (...args) => {
+            const operation = await base.prepare(...args);
+            const { limit: _limit, ...plan } = operation.plan;
+            return {
+              ...operation,
+              plan: {
+                ...plan,
+                ...(returnedLimit === undefined
+                  ? {}
+                  : { limit: returnedLimit }),
+              },
+            };
+          },
+        };
+        const start = vi.spyOn(runtime, "start");
+        const setup = await createTestRenderer({ height: 30, width: 100 });
+        const root = createRoot(setup.renderer);
+        act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+        try {
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Status reloaded")
+            )
+          ).toBe(true);
+          act(() => setup.mockInput.pressKey("e"));
+          await readySelectiveDialog(setup);
+          act(() => setup.mockInput.pressEnter());
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Server did not preserve")
+            )
+          ).toBe(true);
+          expect(start).not.toHaveBeenCalled();
+        } finally {
+          act(() => root.unmount());
+          setup.renderer.destroy();
+        }
+      }
+    );
+  }
+
+  itWithOpenTui(
+    "keeps selected IDs and history controls readable in a compact dialog",
+    async () => {
+      const runtime = await makeInProcessMigrationTuiRuntime({
+        registry: makeLimitedRunConfig().registry,
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const seeded = await runtime.start(
+        await runtime.prepare(
+          {
+            kind: "definitions",
+            definitionIds: [toMigrationDefinitionId("authors")],
+          },
+          "run",
+          { limit: 3 }
+        )
+      );
+      expect((await runtime.observeRun(seeded.runId)).outcome).toBe(
+        "completed"
+      );
+      // History is newest first, so its order need not match the source order.
+      const historyIdentities = (
+        await runtime.listSourceIdentityHistory(
+          toMigrationDefinitionId("authors")
+        )
+      ).map((entry) => entry.sourceIdentity);
+      expect([...historyIdentities].sort()).toEqual([
+        "authors-1",
+        "authors-2",
+        "authors-3",
+      ]);
+      const start = vi.spyOn(runtime, "start");
+      const setup = await createTestRenderer({ width: 72, height: 24 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("e"));
+        await chooseSourceIds(setup);
+        for (const [index, identity] of historyIdentities.entries()) {
+          if (index > 0) {
+            act(() => setup.mockInput.pressArrow("down"));
+            await act(async () => setup.renderOnce());
+          }
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes(identity)
+            ),
+            setup.captureCharFrame()
+          ).toBe(true);
+          act(() => setup.mockInput.pressKey(" "));
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes(`${index + 1} selected`)
+            )
+          ).toBe(true);
+        }
+        expect(setup.captureCharFrame()).toContain("Run 3 entries");
+        expect(setup.captureCharFrame()).toContain("↑↓ history");
+        expect(setup.captureCharFrame()).toContain(
+          "f2 switch selection method"
+        );
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(setup.renderOnce, () => start.mock.calls.length === 1)
+        ).toBe(true);
+        expect(start).toHaveBeenCalledWith(
+          expect.objectContaining({
+            request: expect.objectContaining({
+              options: {
+                sourceIdentities: historyIdentities,
+              },
+            }),
+          })
+        );
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
   itWithOpenTui(
     "preserves selected entries and reruns multiple identities from durable history",
     async () => {
@@ -2925,6 +3401,7 @@ describe("MigrationTuiApp", () => {
         ).toBe(true);
 
         act(() => setup.mockInput.pressKey("e"));
+        await chooseSourceIds(setup);
         expect(
           await settle(setup.renderOnce, () => {
             const frame = setup.captureCharFrame();
@@ -2958,6 +3435,7 @@ describe("MigrationTuiApp", () => {
         ).toBe(true);
 
         act(() => setup.mockInput.pressKey("e"));
+        await chooseSourceIds(setup);
         expect(
           await settle(setup.renderOnce, () => {
             const frame = setup.captureCharFrame();
@@ -2996,7 +3474,6 @@ describe("MigrationTuiApp", () => {
       }
     }
   );
-
   itWithOpenTui(
     "ignores history that resolves after the operator opens another migration",
     async () => {
@@ -3035,6 +3512,7 @@ describe("MigrationTuiApp", () => {
         ).toBe(true);
 
         act(() => setup.mockInput.pressKey("e"));
+        await chooseSourceIds(setup);
         expect(
           await settle(setup.renderOnce, () =>
             setup.captureCharFrame().includes("Run selected entries")
@@ -3059,6 +3537,7 @@ describe("MigrationTuiApp", () => {
         const selectedFrame = setup.captureCharFrame();
         expect(selectedFrame.includes("│ articles  COMPLETE")).toBe(true);
         act(() => setup.mockInput.pressKey("e"));
+        await chooseSourceIds(setup);
         expect(
           await settle(setup.renderOnce, () =>
             setup.captureCharFrame().includes("Loading history…")
@@ -3498,9 +3977,11 @@ describe("MigrationTuiApp", () => {
           setup.captureCharFrame().includes("Status reloaded")
         );
         act(() => setup.mockInput.pressKey("b"));
-        await settle(setup.renderOnce, () =>
-          setup.captureCharFrame().includes("Confirm rollback")
-        );
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("3. ○ authors")
+          )
+        ).toBe(true);
         expect(setup.captureCharFrame()).toContain(
           "● i Include dependencies (recommended)"
         );

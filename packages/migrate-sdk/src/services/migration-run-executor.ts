@@ -77,6 +77,7 @@ import {
   isMigrationRunTerminal,
   mergeRollbackOrphansCounts,
 } from "../domain/run.ts";
+import { runLimitValidationMessage } from "../domain/run-limit.ts";
 import { normalRunMode, type RunMode } from "../domain/run-mode.ts";
 import { normalizeSourceItemTotal, SourceItemTotal } from "../domain/source.ts";
 import type {
@@ -364,6 +365,15 @@ const runStatusForDefinitions = (
   definitions.some((definition) => definition.status === "failed")
     ? "failed"
     : "succeeded";
+
+const summarizeDefinitionRun = (
+  definitionId: MigrationDefinitionId,
+  counts: MutableDefinitionCounts
+): MigrationDefinitionRunSummary => ({
+  definitionId,
+  counts: snapshotCounts(counts),
+  status: counts.failed > 0 ? "failed" : "succeeded",
+});
 
 const rollbackStatusForDefinitions = (
   definitions: readonly RollbackDefinitionRunSummary[]
@@ -684,7 +694,7 @@ export interface MigrationRunExecutionLease {
 export interface MigrationRunCursorWindowState {
   readonly counts: MigrationDefinitionRunSummary["counts"];
   readonly excludedSourceIdentities: readonly EncodedSourceIdentity[];
-  /** Run preparation and backlog lookup have completed, even with a saved cursor. */
+  /** Run preparation and explicit target lookup have completed. */
   readonly initialized?: boolean;
   readonly phase: "scan";
 }
@@ -713,6 +723,7 @@ export type MigrationRunCursorWindowResult =
 
 export interface MigrationRunCursorWindowInput {
   readonly definitionId: MigrationDefinitionId;
+  readonly limit?: number;
   readonly mode?: RunMode;
   readonly rollbackOrphans?: boolean;
   readonly runId: MigrationRunId;
@@ -803,9 +814,10 @@ const beginMigrationRunExecution = (
       definitionIds
     );
     yield* validateMigrationContracts(store, input.definitions);
+    // Queueing uses the lease order; dependency execution may use a different order.
     const runState = yield* store.beginRun({
       runId: input.lease.runId,
-      definitionIds,
+      definitionIds: input.lease.scopeDefinitionIds,
       operation: "run",
     });
 
@@ -1467,10 +1479,7 @@ const selectBacklogStates = (
 ): readonly MigrationItemState[] => {
   switch (mode.kind) {
     case "normal": {
-      return itemStates.filter(
-        (itemState) =>
-          itemState.status === "failed" || itemState.status === "needs-update"
-      );
+      return [];
     }
     case "failed": {
       return itemStates.filter((itemState) => itemState.status === "failed");
@@ -2426,6 +2435,7 @@ interface ProcessCursorDiscoveryOptions<
     TrackingContract
   >;
   readonly excludedSourceIdentities: readonly EncodedSourceIdentity[];
+  readonly limit?: number | undefined;
   readonly processConcurrency: PipelineExecutionConcurrency;
   readonly reprocessUnchangedTerminal?: boolean;
   readonly runId: MigrationRunId;
@@ -2452,6 +2462,7 @@ const processNextCursorWindow = <
     | undefined,
 >({
   counts,
+  limit,
   definition,
   excludedSourceIdentities,
   processConcurrency,
@@ -2471,6 +2482,19 @@ const processNextCursorWindow = <
   TrackingContract
 >) =>
   Effect.gen(function* () {
+    const remainingAttempts = () =>
+      limit === undefined
+        ? Number.POSITIVE_INFINITY
+        : limit -
+          counts.migrated -
+          counts.skipped -
+          counts.failed -
+          counts.needsUpdate;
+
+    if (remainingAttempts() <= 0) {
+      return { kind: "limited" as const };
+    }
+
     const storedCursor = yield* store.getSourceCursor(definition.id);
     const cursor =
       storedCursor === null
@@ -2509,71 +2533,86 @@ const processNextCursorWindow = <
         !excludedSourceIdentities.includes(sourceItem.identity.encoded)
     );
 
-    if (definition.processBatch === undefined) {
-      const scheduled = yield* Effect.forEach(
-        sourceItems,
-        (sourceItem) =>
-          Effect.gen(function* () {
-            if (!(yield* canScheduleRunWork)) {
-              return false;
-            }
+    let offset = 0;
+    while (offset < sourceItems.length) {
+      const remaining = remainingAttempts();
+      if (remaining <= 0) {
+        // Keep the input cursor: the next run rereads this page and applies
+        // normal eligibility checks to its already settled prefix.
+        return { kind: "limited" as const };
+      }
+      // Even if every selected item is eligible, this group cannot exceed
+      // the remaining budget. Unchanged items free capacity for the next group.
+      const scheduledItems = sourceItems.slice(offset, offset + remaining);
+      if (definition.processBatch === undefined) {
+        const scheduled = yield* Effect.forEach(
+          scheduledItems,
+          (sourceItem) =>
+            Effect.gen(function* () {
+              if (!(yield* canScheduleRunWork)) {
+                return false;
+              }
 
-            const outcome = yield* processSourceItem({
-              definition,
-              reprocessUnchangedTerminal,
-              runId,
-              ...(sourceInventoryRunId === undefined
-                ? {}
-                : { sourceInventoryRunId }),
-              sourceSchema: source.sourceSchema,
-              sourceItem,
-            });
-            yield* recordMigrationOutcome({
+              const outcome = yield* processSourceItem({
+                definition,
+                reprocessUnchangedTerminal,
+                runId,
+                ...(sourceInventoryRunId === undefined
+                  ? {}
+                  : { sourceInventoryRunId }),
+                sourceSchema: source.sourceSchema,
+                sourceItem,
+              });
+              yield* recordMigrationOutcome({
+                counts,
+                definitionId: definition.id,
+                outcome,
+                runId,
+              });
+              return true;
+            }),
+          { concurrency: processConcurrency }
+        );
+
+        if (!scheduled.every(Boolean)) {
+          return { kind: "cancelled" as const };
+        }
+      } else {
+        const scheduled = yield* Effect.forEach(
+          scheduledItems,
+          () => canScheduleRunWork,
+          { concurrency: processConcurrency }
+        );
+
+        if (!(scheduled.every(Boolean) && (yield* canScheduleRunWork))) {
+          return { kind: "cancelled" as const };
+        }
+
+        const outcomes = yield* processSourceItemsBatch({
+          concurrency: processConcurrency,
+          definition,
+          reprocessUnchangedTerminal,
+          runId,
+          ...(sourceInventoryRunId === undefined
+            ? {}
+            : { sourceInventoryRunId }),
+          sourceItems: scheduledItems,
+          sourceSchema: source.sourceSchema,
+        });
+
+        yield* Effect.forEach(
+          outcomes,
+          (outcome) =>
+            recordMigrationOutcome({
               counts,
               definitionId: definition.id,
               outcome,
               runId,
-            });
-            return true;
-          }),
-        { concurrency: processConcurrency }
-      );
-
-      if (!scheduled.every(Boolean)) {
-        return { kind: "cancelled" as const };
+            }),
+          { discard: true }
+        );
       }
-    } else if (sourceItems.length > 0) {
-      const scheduled = yield* Effect.forEach(
-        sourceItems,
-        () => canScheduleRunWork,
-        { concurrency: processConcurrency }
-      );
-
-      if (!(scheduled.every(Boolean) && (yield* canScheduleRunWork))) {
-        return { kind: "cancelled" as const };
-      }
-
-      const outcomes = yield* processSourceItemsBatch({
-        concurrency: processConcurrency,
-        definition,
-        reprocessUnchangedTerminal,
-        runId,
-        ...(sourceInventoryRunId === undefined ? {} : { sourceInventoryRunId }),
-        sourceItems,
-        sourceSchema: source.sourceSchema,
-      });
-
-      yield* Effect.forEach(
-        outcomes,
-        (outcome) =>
-          recordMigrationOutcome({
-            counts,
-            definitionId: definition.id,
-            outcome,
-            runId,
-          }),
-        { discard: true }
-      );
+      offset += scheduledItems.length;
     }
 
     if (readResult.nextCursor === undefined) {
@@ -2605,10 +2644,12 @@ const processNextCursorWindow = <
       runId,
     });
 
-    return {
-      kind: "continue" as const,
-      committedCursor: readResult.nextCursor,
-    };
+    return remainingAttempts() <= 0
+      ? { kind: "limited" as const }
+      : {
+          kind: "continue" as const,
+          committedCursor: readResult.nextCursor,
+        };
   }).pipe(
     Effect.withSpan("migration.source.window", {
       attributes: {
@@ -2632,6 +2673,7 @@ const processCursorDiscovery = <
     | undefined,
 >({
   counts,
+  limit,
   definition,
   excludedSourceIdentities,
   processConcurrency,
@@ -2660,6 +2702,7 @@ const processCursorDiscovery = <
 
       const result = yield* processNextCursorWindow({
         counts,
+        limit,
         definition,
         excludedSourceIdentities,
         processConcurrency,
@@ -2672,6 +2715,10 @@ const processCursorDiscovery = <
 
       if (result.kind === "done") {
         break;
+      }
+
+      if (result.kind === "limited") {
+        return { committedCursor, completed: true, limitReached: true };
       }
 
       if (result.kind === "cancelled") {
@@ -3098,6 +3145,7 @@ const runMigrationDefinition = <
   runId: MigrationRunId,
   mode: RunMode,
   runOptions: {
+    readonly limit?: number | undefined;
     readonly rescan: boolean;
     readonly rollbackOrphans: boolean;
     readonly update: boolean;
@@ -3184,9 +3232,8 @@ const runMigrationDefinition = <
       return summary;
     }
 
-    const targeted = runOptions.rollbackOrphans
-      ? { completed: true, sourceIdentities: [] }
-      : yield* processTargetedSourceIdentities({
+    const targeted = isTargetedMode(mode)
+      ? yield* processTargetedSourceIdentities({
           counts,
           definition,
           itemStates: yield* store.listItemStates(definition.id),
@@ -3195,7 +3242,8 @@ const runMigrationDefinition = <
           runId,
           source,
           store,
-        });
+        })
+      : { completed: true, sourceIdentities: [] };
 
     if (!targeted.completed) {
       return null;
@@ -3222,6 +3270,7 @@ const runMigrationDefinition = <
 
     const discovery = yield* processCursorDiscovery({
       counts,
+      limit: runOptions.limit,
       definition,
       excludedSourceIdentities: targeted.sourceIdentities,
       processConcurrency,
@@ -3235,13 +3284,11 @@ const runMigrationDefinition = <
       return null;
     }
 
-    yield* finalizeCompletedSourceDiscovery(definition, store, runId);
+    if (!discovery.limitReached) {
+      yield* finalizeCompletedSourceDiscovery(definition, store, runId);
+    }
 
-    const summary = {
-      definitionId: definition.id,
-      status: counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
-      counts,
-    };
+    const summary = summarizeDefinitionRun(definition.id, counts);
 
     yield* MigrationProgress.emit({
       counts: snapshotCounts(counts),
@@ -3312,6 +3359,10 @@ const runMigrationDefinitionCursorWindow = <
   SourceRequirements
 > => {
   const mode = input.mode ?? normalRunMode;
+  const limitError = runLimitValidationMessage(input);
+  if (limitError !== undefined) {
+    return Effect.fail(new MigrationRuntimeError({ message: limitError }));
+  }
   if (input.update === true && mode.kind !== "normal") {
     return Effect.fail(invalidUpdateRunModeError(mode));
   }
@@ -3360,19 +3411,18 @@ const runMigrationDefinitionCursorWindow = <
         });
       }
 
-      const targeted =
-        input.rollbackOrphans || input.update
-          ? { completed: true, sourceIdentities: [] }
-          : yield* processTargetedSourceIdentities({
-              counts,
-              definition,
-              itemStates: yield* store.listItemStates(definition.id),
-              mode,
-              processConcurrency,
-              runId: input.runId,
-              source,
-              store,
-            });
+      const targeted = isTargetedMode(mode)
+        ? yield* processTargetedSourceIdentities({
+            counts,
+            definition,
+            itemStates: yield* store.listItemStates(definition.id),
+            mode,
+            processConcurrency,
+            runId: input.runId,
+            source,
+            store,
+          })
+        : { completed: true, sourceIdentities: [] };
       excludedSourceIdentities = targeted.sourceIdentities;
 
       if (!targeted.completed) {
@@ -3404,6 +3454,7 @@ const runMigrationDefinitionCursorWindow = <
       ? { kind: "completed" as const }
       : yield* processNextCursorWindow({
           counts,
+          limit: input.limit,
           definition,
           excludedSourceIdentities,
           processConcurrency,
@@ -3436,15 +3487,12 @@ const runMigrationDefinitionCursorWindow = <
       };
     }
 
-    if (!isTargetedMode(mode)) {
+    const limitReached = windowResult.kind === "limited";
+    if (!(isTargetedMode(mode) || limitReached)) {
       yield* finalizeCompletedSourceDiscovery(definition, store, input.runId);
     }
 
-    const summary = {
-      counts: state.counts,
-      definitionId: definition.id,
-      status: counts.failed > 0 ? ("failed" as const) : ("succeeded" as const),
-    };
+    const summary = summarizeDefinitionRun(definition.id, counts);
 
     yield* MigrationProgress.emit({
       counts: state.counts,
@@ -4071,6 +4119,7 @@ interface PlannedRunDefinitionsInput<
   readonly definitions: Definitions;
   readonly execution?: NormalizedMigrationExecutionOptions;
   readonly force?: boolean;
+  readonly limit?: number;
   readonly mode: RunMode;
   readonly registryDefinitions: readonly AnyMigrationDefinition[];
   readonly requestedDefinitionIds: MigrationDefinitionExecutableRunPlan["requestedDefinitionIds"];
@@ -4130,6 +4179,14 @@ const preparePlannedRunDefinitions = <
 
   if (firstDefinition === undefined) {
     return Effect.fail(emptyRunError);
+  }
+
+  const limitError = runLimitValidationMessage({
+    ...input,
+    targeted: input.target !== undefined,
+  });
+  if (limitError !== undefined) {
+    return Effect.fail(new MigrationRuntimeError({ message: limitError }));
   }
 
   const updateRunRequestError = validateUpdateRunRequest(input);
@@ -4298,6 +4355,7 @@ const executePreparedRunDefinitions = <
                   runId,
                   mode,
                   {
+                    limit: input.limit,
                     rescan: input.rescan === true,
                     rollbackOrphans: input.rollbackOrphans === true,
                     update: input.update === true,
@@ -4391,6 +4449,7 @@ const migrationRunPlanInput = <
     ? {}
     : { execution: normalizeMigrationExecutionOptions(plan.execution) }),
   ...(plan.force === undefined ? {} : { force: plan.force }),
+  ...(plan.limit === undefined ? {} : { limit: plan.limit }),
   mode: plan.mode ?? normalRunMode,
   registryDefinitions: plan.registryDefinitions,
   requestedDefinitionIds: plan.requestedDefinitionIds,

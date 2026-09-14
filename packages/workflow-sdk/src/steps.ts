@@ -219,6 +219,7 @@ export const executeMigrationRunCursorWindow = (input: {
         lease,
         mode: migrationRunModeForDefinition(job.plan, definition.id),
         ...(job.plan.update === undefined ? {} : { update: job.plan.update }),
+        ...(job.plan.limit === undefined ? {} : { limit: job.plan.limit }),
         ...(job.plan.rollbackOrphans === true ? { rollbackOrphans: true } : {}),
         runId: input.runId,
         state: input.state,
@@ -348,7 +349,6 @@ export const failMigrationRunExecutionEnvelope = (input: {
           };
         }
       ),
-      definitionIds: input.envelope.executionDefinitionIds,
       error: input.error,
       lease,
       storeLayer,

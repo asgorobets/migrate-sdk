@@ -38,7 +38,10 @@ import {
   migrationStatusIcon,
   migrationStatusLabel,
 } from "./components/migration-dashboard.tsx";
-import { SelectiveRunDialog } from "./components/selective-run-dialog.tsx";
+import {
+  SelectiveRunDialog,
+  type SelectiveRunMode,
+} from "./components/selective-run-dialog.tsx";
 import {
   SessionActivityView,
   type SessionActivityViewMode,
@@ -312,6 +315,21 @@ const operationNeedsDependencyDecision = (
   operation.plan.force !== true &&
   operation.dependencyChecks.some((dependency) => !dependency.satisfied);
 
+const assertRequestedLimit = (
+  operation: MigratePreparedOperation,
+  limit: number | undefined
+): void => {
+  if (
+    limit !== undefined &&
+    (operation.plan.limit !== limit ||
+      operation.request.options.limit !== limit)
+  ) {
+    throw new Error(
+      "Server did not preserve the requested item limit. Upgrade the server before running limited migrations."
+    );
+  }
+};
+
 const operationRollsBackOrphans = (
   operation: MigratePreparedOperation
 ): boolean =>
@@ -386,6 +404,58 @@ const ExecutionPlan = ({
   );
 };
 
+const operationConfirmationCopy = (operation: MigratePreparedOperation) => {
+  const rollback = operation.action === "rollback";
+  const rollbackOrphans = operationRollsBackOrphans(operation);
+  const dependencyDecision = operationNeedsDependencyDecision(operation);
+  const forcedRollback = rollback && operation.plan.force === true;
+  const limited = operation.plan.limit !== undefined;
+  let title = "Dependencies incomplete";
+  let description: string = rollbackOrphans
+    ? "Rollback orphaned items with dependencies"
+    : actionCopy[operation.action].dependencyDescription;
+  let badgeLabel = "ACTION REQUIRED";
+  let planLabel = rollbackOrphans ? "Migration plan" : "Run order";
+  let confirmationButtonLabel = "";
+  let destructiveShortcut = "";
+
+  const rollbackCopy = rollback ? rollbackConfirmation(operation) : undefined;
+  if (rollback) {
+    title = "Confirm rollback";
+    planLabel = "Rollback order";
+    badgeLabel = forcedRollback ? "UNSAFE" : "DESTRUCTIVE";
+    confirmationButtonLabel =
+      rollbackCopy?.buttonLabel ?? "y Rollback selected";
+    destructiveShortcut = "i include · s selected only · y confirm";
+  } else if (limited && !dependencyDecision) {
+    title = "Confirm run";
+    description = "Process the next items that need work, in source order.";
+    badgeLabel = "LIMITED RUN";
+    confirmationButtonLabel = "y Run";
+  } else if (rollbackOrphans && !dependencyDecision) {
+    title = "Confirm orphan rollback";
+    description = "Rollback destination items missing from source";
+    badgeLabel = "DESTRUCTIVE";
+    confirmationButtonLabel = "y Rollback orphans";
+    destructiveShortcut = "y rollback orphans";
+  }
+
+  const paragraphs = rollbackCopy?.paragraphs ?? [description];
+  const forceWarning = dependencyDecision
+    ? "Force skips dependencies; some items may fail."
+    : null;
+
+  return {
+    title,
+    badgeLabel,
+    planLabel,
+    confirmationButtonLabel,
+    destructiveShortcut,
+    paragraphs,
+    forceWarning,
+  };
+};
+
 const SafetyDialog = ({
   height,
   onCancel,
@@ -420,12 +490,13 @@ const SafetyDialog = ({
     hierarchyItems.length + (operation.selection.kind === "group" ? 1 : 0);
   const rollback = operation.action === "rollback";
   const rollbackExtraRows = operation.plan.force === true ? 13 : 12;
+  const limited = operation.plan.limit !== undefined;
   const dialogHeight = Math.max(
     1,
     Math.min(
       Math.max(
         rollback ? 14 : 13,
-        hierarchyRows + (rollback ? rollbackExtraRows : 10)
+        hierarchyRows + (rollback ? rollbackExtraRows : 10) + (limited ? 3 : 0)
       ),
       height - 4
     )
@@ -434,39 +505,17 @@ const SafetyDialog = ({
   const rollbackOrphans = operationRollsBackOrphans(operation);
   const dependencyDecision = operationNeedsDependencyDecision(operation);
   const destructive = rollback || (rollbackOrphans && !dependencyDecision);
-  const forcedRollback = rollback && operation.plan.force === true;
-  let title = "Dependencies incomplete";
-  let description: string = rollbackOrphans
-    ? "Rollback orphaned items with dependencies"
-    : actionCopy[operation.action].dependencyDescription;
-  let badgeLabel = "ACTION REQUIRED";
-  let planLabel = rollbackOrphans ? "Migration plan" : "Run order";
-  let confirmationButtonLabel = "";
-  let destructiveShortcut = "";
-
-  const rollbackCopy = rollback ? rollbackConfirmation(operation) : undefined;
+  const {
+    title,
+    badgeLabel,
+    planLabel,
+    confirmationButtonLabel,
+    destructiveShortcut,
+    paragraphs,
+    forceWarning,
+  } = operationConfirmationCopy(operation);
   const rollbackScopeHint =
     rollbackPlanError ?? (rollbackPlanUpdating ? "Updating plan…" : null);
-
-  if (rollback) {
-    title = "Confirm rollback";
-    planLabel = "Rollback order";
-    badgeLabel = forcedRollback ? "UNSAFE" : "DESTRUCTIVE";
-    confirmationButtonLabel =
-      rollbackCopy?.buttonLabel ?? "y Rollback selected";
-    destructiveShortcut = "i include · s selected only · y confirm";
-  } else if (rollbackOrphans && !dependencyDecision) {
-    title = "Confirm orphan rollback";
-    description = "Rollback destination items missing from source";
-    badgeLabel = "DESTRUCTIVE";
-    confirmationButtonLabel = "y Rollback orphans";
-    destructiveShortcut = "y rollback orphans";
-  }
-
-  const paragraphs = rollbackCopy?.paragraphs ?? [description];
-  const forceWarning = destructive
-    ? null
-    : "Force skips dependencies; some items may fail.";
 
   return (
     <Dialog
@@ -543,6 +592,13 @@ const SafetyDialog = ({
           </box>
           <ExecutionPlan operation={preview ?? operation} />
         </scrollbox>
+        {limited && (
+          <text fg={colors.info} flexShrink={0} marginTop={1} wrapMode="word">
+            Up to {operation.plan.limit}{" "}
+            {operation.plan.limit === 1 ? "item" : "items"} per migration,
+            including dependencies.
+          </text>
+        )}
         {rollback && (
           <box flexDirection="column" flexShrink={0} marginTop={1}>
             <RadioGroup
@@ -595,10 +651,10 @@ const SafetyDialog = ({
             marginTop: 1,
           }}
         >
-          {destructive ? (
+          {destructive || (limited && !dependencyDecision) ? (
             <Button
               disabled={rollbackPlanUpdating || rollbackPlanError !== null}
-              intent="warning"
+              intent={destructive ? "warning" : "primary"}
               label={confirmationButtonLabel}
               onPress={onConfirm}
             />
@@ -628,9 +684,9 @@ const SafetyDialog = ({
         >
           <text fg={colors.dim}>
             {"↑↓ scroll · "}
-            {destructive
-              ? `${destructiveShortcut} · n/esc cancel`
-              : "i include · f force · n/esc cancel"}
+            {dependencyDecision
+              ? "i include · f force · n/esc cancel"
+              : `${limited ? "y run" : destructiveShortcut} · n/esc cancel`}
           </text>
         </box>
       </DialogContent>
@@ -781,10 +837,12 @@ const MigrationTuiDashboardApp = ({
     },
     [appendActivity]
   );
-  const [selectiveTarget, setSelectiveTarget] = useState<Extract<
-    MigrateTarget,
-    { readonly kind: "migration" }
-  > | null>(null);
+  const [selectiveTarget, setSelectiveTarget] = useState<MigrateTarget | null>(
+    null
+  );
+  const [selectiveMode, setSelectiveMode] =
+    useState<SelectiveRunMode>("next-items");
+  const [selectiveLimit, setSelectiveLimit] = useState<number | null>(1);
   const [selectiveDraft, setSelectiveDraft] = useState("");
   const [selectiveEntriesByDefinition, setSelectiveEntriesByDefinition] =
     useState<ReadonlyMap<string, readonly string[]>>(() => new Map());
@@ -942,10 +1000,9 @@ const MigrationTuiDashboardApp = ({
   }, [activeRuns, selectedRows]);
   const selectiveEntries = useMemo(
     () =>
-      selectiveTarget === null
-        ? []
-        : (selectiveEntriesByDefinition.get(selectiveTarget.definitionId) ??
-          []),
+      selectiveTarget?.kind === "migration"
+        ? (selectiveEntriesByDefinition.get(selectiveTarget.definitionId) ?? [])
+        : [],
     [selectiveEntriesByDefinition, selectiveTarget]
   );
   const effectiveBusy = busy;
@@ -1220,6 +1277,7 @@ const MigrationTuiDashboardApp = ({
                 prepareOptions
               )
             : await runtime.prepare(selection, action, prepareOptions);
+        assertRequestedLimit(operation, options.limit);
 
         if (lifecycle.isExitRequested()) {
           return;
@@ -1227,6 +1285,7 @@ const MigrationTuiDashboardApp = ({
 
         if (
           operation.action === "rollback" ||
+          operation.plan.limit !== undefined ||
           operationRollsBackOrphans(operation) ||
           operationNeedsDependencyDecision(operation)
         ) {
@@ -1236,6 +1295,7 @@ const MigrationTuiDashboardApp = ({
               ...(execution === undefined ? {} : { execution }),
               withDependencies: true,
             });
+            assertRequestedLimit(preview, options.limit);
             if (lifecycle.isExitRequested()) {
               return;
             }
@@ -1260,48 +1320,72 @@ const MigrationTuiDashboardApp = ({
     (action: "rollback" | "run", targetOverride?: MigrateTarget) => {
       const target = targetOverride ?? dashboardStateRef.current.selectedTarget;
 
-      if (target?.kind !== "migration") {
+      if (
+        target === undefined ||
+        (action === "rollback" && target.kind !== "migration")
+      ) {
         return;
       }
 
+      setSelectiveMode(action === "run" ? "next-items" : "source-ids");
+      setSelectiveLimit(1);
       setSelectiveAction(action);
       setSelectiveTarget(target);
       setSelectiveDraft("");
       setSelectiveFeedback(undefined);
       setSelectiveHistory([]);
       setSelectiveHistoryIndex(0);
-      setSelectiveHistoryLoading(true);
+      setSelectiveHistoryLoading(false);
       setSelectiveInputReady(false);
       setError(null);
       setView(action === "rollback" ? "selective-rollback" : "selective-run");
-      const requestId = selectiveHistoryRequestRef.current + 1;
-      selectiveHistoryRequestRef.current = requestId;
+    },
+    [setError]
+  );
 
-      runtime
-        .listSourceIdentityHistory(target.definitionId)
-        .then((history) => {
-          if (selectiveHistoryRequestRef.current !== requestId) {
-            return;
-          }
+  useEffect(() => {
+    if (
+      (view !== "selective-run" && view !== "selective-rollback") ||
+      selectiveMode !== "source-ids" ||
+      selectiveTarget?.kind !== "migration"
+    ) {
+      return;
+    }
+    const requestId = ++selectiveHistoryRequestRef.current;
+    setSelectiveHistoryLoading(true);
+    setSelectiveHistory([]);
+    runtime
+      .listSourceIdentityHistory(selectiveTarget.definitionId)
+      .then((history) => {
+        if (selectiveHistoryRequestRef.current === requestId) {
           setSelectiveHistory(history);
           setSelectiveHistoryIndex(0);
-        })
-        .catch((cause: unknown) => {
-          if (selectiveHistoryRequestRef.current !== requestId) {
-            return;
-          }
-          setSelectiveFeedback({
-            message: errorMessage(cause),
-            tone: "error",
-          });
-        })
-        .finally(() => {
-          if (selectiveHistoryRequestRef.current === requestId) {
-            setSelectiveHistoryLoading(false);
-          }
-        });
+        }
+      })
+      .catch((cause: unknown) => {
+        if (selectiveHistoryRequestRef.current === requestId) {
+          setSelectiveFeedback({ message: errorMessage(cause), tone: "error" });
+        }
+      })
+      .finally(() => {
+        if (selectiveHistoryRequestRef.current === requestId) {
+          setSelectiveHistoryLoading(false);
+        }
+      });
+    return () => {
+      selectiveHistoryRequestRef.current += 1;
+    };
+  }, [runtime, selectiveMode, selectiveTarget, view]);
+
+  const changeSelectiveMode = useCallback(
+    (mode: SelectiveRunMode) => {
+      if (selectiveAction !== "run" || selectiveTarget?.kind !== "migration") {
+        return;
+      }
+      setSelectiveMode(mode);
+      setSelectiveFeedback(undefined);
     },
-    [runtime, setError]
+    [selectiveAction, selectiveTarget]
   );
 
   const cancelSelectiveRun = useCallback(() => {
@@ -1317,6 +1401,28 @@ const MigrationTuiDashboardApp = ({
     const target = selectiveTarget;
 
     if (target === null) {
+      return;
+    }
+
+    if (selectiveMode === "next-items") {
+      if (
+        selectiveLimit === null ||
+        !Number.isSafeInteger(selectiveLimit) ||
+        selectiveLimit <= 0
+      ) {
+        setSelectiveFeedback({
+          message: "Enter a positive whole number.",
+          tone: "error",
+        });
+        return;
+      }
+      startTask(
+        prepareOperation(
+          "run",
+          { limit: selectiveLimit },
+          selectionFromTarget(target)
+        )
+      );
       return;
     }
 
@@ -1344,6 +1450,8 @@ const MigrationTuiDashboardApp = ({
     prepareOperation,
     selectiveAction,
     selectiveEntries,
+    selectiveMode,
+    selectiveLimit,
     selectiveTarget,
     startTask,
   ]);
@@ -1353,7 +1461,7 @@ const MigrationTuiDashboardApp = ({
       const target = selectiveTarget;
       const sourceIdentity = value.trim();
 
-      if (target === null) {
+      if (target?.kind !== "migration") {
         return;
       }
 
@@ -1401,7 +1509,7 @@ const MigrationTuiDashboardApp = ({
     const target = selectiveTarget;
     const historyEntry = selectiveHistory[selectiveHistoryIndex];
 
-    if (target === null || historyEntry === undefined) {
+    if (target?.kind !== "migration" || historyEntry === undefined) {
       return;
     }
 
@@ -1443,6 +1551,14 @@ const MigrationTuiDashboardApp = ({
         key.preventDefault();
         key.stopPropagation();
         cancelSelectiveRun();
+      } else if (key.name === "f2") {
+        key.preventDefault();
+        key.stopPropagation();
+        changeSelectiveMode(
+          selectiveMode === "next-items" ? "source-ids" : "next-items"
+        );
+      } else if (selectiveMode === "next-items") {
+        return;
       } else if (key.name === "up" || key.name === "down") {
         key.preventDefault();
         key.stopPropagation();
@@ -1467,7 +1583,10 @@ const MigrationTuiDashboardApp = ({
         key.preventDefault();
         key.stopPropagation();
 
-        if (selectiveTarget !== null && selectiveEntries.length > 0) {
+        if (
+          selectiveTarget?.kind === "migration" &&
+          selectiveEntries.length > 0
+        ) {
           const removed = selectiveEntries.at(-1);
           setSelectiveEntriesByDefinition((current) => {
             const next = new Map(current);
@@ -1486,6 +1605,8 @@ const MigrationTuiDashboardApp = ({
     },
     [
       cancelSelectiveRun,
+      changeSelectiveMode,
+      selectiveMode,
       selectiveDraft,
       selectiveEntries,
       selectiveHistory.length,
@@ -1962,7 +2083,8 @@ const MigrationTuiDashboardApp = ({
         }
       } else if (
         operation !== null &&
-        operationRollsBackOrphans(operation) &&
+        (operationRollsBackOrphans(operation) ||
+          operation.plan.limit !== undefined) &&
         !operationNeedsDependencyDecision(operation) &&
         key.name === "y"
       ) {
@@ -2346,7 +2468,8 @@ const MigrationTuiDashboardApp = ({
             }
             if (
               pendingOperation.action === "rollback" ||
-              (operationRollsBackOrphans(pendingOperation) &&
+              ((operationRollsBackOrphans(pendingOperation) ||
+                pendingOperation.plan.limit !== undefined) &&
                 !operationNeedsDependencyDecision(pendingOperation))
             ) {
               startTask(executeOperation(pendingOperation));
@@ -2413,9 +2536,16 @@ const MigrationTuiDashboardApp = ({
       selectiveTarget !== null ? (
         <SelectiveRunDialog
           action={selectiveAction}
-          definitionId={selectiveTarget.definitionId}
           draft={selectiveDraft}
           entries={selectiveEntries}
+          limit={selectiveLimit}
+          mode={selectiveMode}
+          onLimitChange={(value) => {
+            setSelectiveLimit(value);
+            setSelectiveFeedback(undefined);
+          }}
+          onModeChange={changeSelectiveMode}
+          target={selectiveTarget}
           {...(selectiveFeedback === undefined
             ? {}
             : { feedback: selectiveFeedback })}

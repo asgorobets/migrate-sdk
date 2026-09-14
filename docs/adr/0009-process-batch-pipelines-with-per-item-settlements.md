@@ -7,7 +7,7 @@ that Migrate SDK already provides.
 
 ## Status
 
-Accepted
+Accepted. Normal-run backlog recovery below is superseded by [ADR 0012](0012-source-order-and-limited-runs.md).
 
 ## Why we needed this
 
@@ -82,8 +82,10 @@ before it commits the next cursor.
 The outcomes do not all have to be successful. If a bulk request imports 49
 products and rejects one, the 49 successful items are stored as migrated and
 the rejected item is stored as failed. The cursor can then advance because all
-50 outcomes are durable. On the next migration run, the failed item is retried
-from the backlog; the 49 successful siblings are not repeated. If the item is
+50 outcomes are durable. On a later full scan, the failed item is retried when
+the source iterator encounters it; the 49 unchanged successful siblings are not
+repeated. Interrupted or incremental scans that resume beyond the failed item
+need `--rescan` or a targeted retry to revisit it immediately. If the item is
 still invalid, it fails again until someone corrects the source data. If the
 failure was transient, the same retry path may succeed without any special
 classification.

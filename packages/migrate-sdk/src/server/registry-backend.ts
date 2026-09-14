@@ -45,6 +45,9 @@ const projectOperation = (
     dependencyChecks: operation.dependencyChecks,
     observationDefinitionId: operation.observationDefinitionId,
     plan: {
+      ...(!("limit" in operation.plan) || operation.plan.limit === undefined
+        ? {}
+        : { limit: operation.plan.limit }),
       ...(execution === undefined ? {} : { execution }),
       executionDefinitionIds: operation.plan.executionDefinitionIds,
       executionPolicy: operation.plan.executionPolicy.map((policy) => ({
@@ -85,6 +88,7 @@ const projectOperation = (
 const runtimePrepareOptions = (
   options: MigrateOperationRequest["options"]
 ): MigrateServerPrepareOptions => ({
+  ...(options.limit === undefined ? {} : { limit: options.limit }),
   ...(options.execution === undefined
     ? {}
     : { execution: runtimeExecutionOptions(options.execution) }),

@@ -36,6 +36,7 @@ import {
   type RunRequestSourceImplementationError,
   type RunRequestSourceRequirements,
 } from "./run.ts";
+import { runLimitValidationMessage } from "./run-limit.ts";
 import type { RunModeInput } from "./run-mode.ts";
 import type {
   GetMigrationStatusesError,
@@ -98,6 +99,8 @@ export type MigrationDefinitionRegistrySelectionInput =
 
 export type MigrationDefinitionRegistryRunInput =
   MigrationDefinitionRegistrySelectionInput & {
+    /** Maximum eligible source-item attempts per migration in a normal run. */
+    readonly limit?: number;
     readonly execution?: MigrationExecutionOptions;
     readonly force?: boolean;
     readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
@@ -215,6 +218,7 @@ export interface MigrationDefinitionRunPlan<
   readonly force?: boolean;
   readonly includedDefinitionIds: readonly MigrationDefinitionId[];
   readonly kind: "run";
+  readonly limit?: number;
   readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
   readonly notices: readonly MigrationDefinitionPlanNotice[];
   readonly optionalDependencyEdges: readonly MigrationDefinitionDependencyEdge[];
@@ -1677,6 +1681,15 @@ export class MigrationDefinitionRegistry<
         definitionsById,
         selection
       );
+      const limitError = runLimitValidationMessage({
+        ...input,
+        targeted: input.sourceIdentities !== undefined,
+      });
+      if (limitError !== undefined) {
+        return yield* new MigrationDefinitionRegistryInvalidSelectionError({
+          message: limitError,
+        });
+      }
       const requiredDependencyPreflight = collectRequiredDependencyPreflight(
         definitionsById,
         includedDefinitionIds
@@ -1703,6 +1716,7 @@ export class MigrationDefinitionRegistry<
 
       return {
         kind: "run",
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
         ...(selection.requestedGroup === undefined
           ? {}
           : { requestedGroup: selection.requestedGroup }),
