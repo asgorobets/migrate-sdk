@@ -68,7 +68,11 @@ type RunOptions = Omit<
 >;
 
 const makeFixture = (
-  options: { readonly batch?: boolean; readonly withDependency?: boolean } = {}
+  options: {
+    readonly batch?: boolean;
+    readonly batchSize?: number;
+    readonly withDependency?: boolean;
+  } = {}
 ) => {
   const state = InMemoryMigrationStore.makeState();
   const store = InMemoryMigrationStore.layer(state);
@@ -87,7 +91,7 @@ const makeFixture = (
   const source = InMemorySource.make({
     identity,
     sourceSchema: Schema.String,
-    batchSize: 1,
+    batchSize: options.batchSize ?? 1,
     state: sourceState,
     items: sourceItems,
   });
@@ -383,7 +387,85 @@ describe("Workflow migration run modes", () => {
     expect(fixture.state.sourceCursors.has(fixture.definition.id)).toBe(false);
   });
 
-  it("resumes update backlog before a saved cursor after a worker failure", async () => {
+  for (const batch of [false, true]) {
+    it(`preserves prior completion during failed limited work (${batch ? "batch" : "item"})`, async () => {
+      const fixture = makeFixture({ batch });
+      await fixture.run();
+      const previous = fixture.state.definitionCompletions.get(
+        fixture.definition.id
+      );
+      for (const id of ["d", "e"]) {
+        fixture.sourceItems.push({ identityKey: id, item: id, version: "v1" });
+      }
+      fixture.outcomes.set("d", "failed");
+      const result = await fixture.run({ limit: 1 });
+      expect(result.status).toBe("failed");
+      expect(
+        fixture.state.definitionCompletions.get(fixture.definition.id)
+      ).toEqual(previous);
+    });
+
+    it(`records completion at the source end even when the budgeted work fails (${batch ? "batch" : "item"})`, async () => {
+      const fixture = makeFixture({ batch });
+      fixture.outcomes.set("c", "failed");
+      const result = await fixture.run({ limit: 3 });
+      expect(result.status).toBe("failed");
+      expect(
+        fixture.state.definitionCompletions.get(fixture.definition.id)
+      ).toMatchObject({ runId: result.runId });
+      expect(fixture.state.sourceCursors.size).toBe(0);
+    });
+
+    it(`limits eligible attempts across workflow windows (${batch ? "batch" : "item"})`, async () => {
+      const fixture = makeFixture({ batch });
+      const first = await fixture.run({ limit: 2 });
+      expect(first).toMatchObject({
+        status: "succeeded",
+        definitions: [
+          {
+            status: "succeeded",
+            counts: { migrated: 2 },
+          },
+        ],
+      });
+      expect(fixture.calls).toEqual(["a", "b"]);
+      expect(fixture.state.definitionCompletions.size).toBe(0);
+      expect(fixture.state.sourceCursors.get(fixture.definition.id)).toBe(
+        toEncodedSourceCursor('{"offset":2}')
+      );
+      expect(fixture.state.definitionLocks.size).toBe(0);
+      const second = await fixture.run({ limit: 1 });
+      expect(second.definitions[0]).toMatchObject({
+        status: "succeeded",
+        counts: { migrated: 1 },
+      });
+      expect(fixture.calls).toEqual(["a", "b", "c"]);
+      expect(
+        fixture.state.definitionCompletions.get(fixture.definition.id)
+      ).toMatchObject({ runId: second.runId });
+      expect(fixture.state.sourceCursors.has(fixture.definition.id)).toBe(
+        false
+      );
+    });
+
+    it(`continues a partially processed workflow page (${batch ? "batch" : "item"})`, async () => {
+      const fixture = makeFixture({ batch, batchSize: 3 });
+      await fixture.run({ limit: 1 });
+      const second = await fixture.run({ limit: 1 });
+      expect(second.definitions[0]).toMatchObject({
+        status: "succeeded",
+        counts: { migrated: 1, unchanged: 1 },
+      });
+      expect(fixture.calls).toEqual(["a", "b"]);
+      expect(fixture.state.definitionCompletions.size).toBe(0);
+      expect(fixture.state.sourceCursors.has(fixture.definition.id)).toBe(
+        false
+      );
+      expect(fixture.state.definitionLocks.size).toBe(0);
+    });
+  }
+
+  it("resumes at the saved cursor after failure and revisits earlier failures on the next full scan", async () => {
     const fixture = makeFixture();
     await fixture.run();
     fixture.calls.splice(0);
@@ -406,8 +488,14 @@ describe("Workflow migration run modes", () => {
     fixture.calls.splice(0);
     fixture.outcomes.clear();
     const summary = await fixture.run();
-    expect(fixture.calls).toEqual(["a", "b", "c"]);
-    expect(summary.definitions[0]?.counts.migrated).toBe(3);
+    expect(fixture.calls).toEqual(["b", "c"]);
+    expect(summary.definitions[0]?.counts.migrated).toBe(2);
+    expect(
+      [...fixture.state.itemStates.values()].map((item) => item.status)
+    ).toEqual(["failed", "migrated", "migrated"]);
+    fixture.calls.splice(0);
+    await fixture.run();
+    expect(fixture.calls).toEqual(["a"]);
   });
 
   it("finalizes and releases locks when replanning the request fails", async () => {

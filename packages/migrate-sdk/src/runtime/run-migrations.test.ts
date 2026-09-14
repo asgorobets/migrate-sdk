@@ -5711,7 +5711,7 @@ describe("runInlineDefinition", () => {
   );
 
   it.effect(
-    "processes failed backlog before cursor discovery in normal mode",
+    "resumes the source cursor without fetching earlier failed items in normal mode",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
@@ -5763,18 +5763,21 @@ describe("runInlineDefinition", () => {
 
         expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts).toEqual({
-          migrated: 2,
+          migrated: 1,
           skipped: 0,
           failed: 0,
           unchanged: 0,
           needsUpdate: 0,
         });
-        expect(processCalls).toEqual(["article-failed", "article-new"]);
+        expect(processCalls).toEqual(["article-new"]);
+        const nextRun = yield* runInlineDefinition(definition);
+        expect(nextRun.definitions[0]?.counts.migrated).toBe(1);
+        expect(processCalls).toEqual(["article-new", "article-failed"]);
       })
   );
 
   it.effect(
-    "processes needs-update backlog before cursor discovery in normal mode",
+    "processes new and needs-update items in source order in normal mode",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
@@ -5787,14 +5790,14 @@ describe("runInlineDefinition", () => {
           source: makeTestInMemorySource({
             items: [
               {
-                identityKey: "article-needs-update",
-                version: "source-version-1",
-                item: { title: "Reserved article" },
-              },
-              {
                 identityKey: "article-new",
                 version: "source-version-1",
                 item: { title: "New article" },
+              },
+              {
+                identityKey: "article-needs-update",
+                version: "source-version-1",
+                item: { title: "Reserved article" },
               },
             ],
           }),
@@ -5807,7 +5810,6 @@ describe("runInlineDefinition", () => {
         });
 
         seedArticleMigrationContract(storeState);
-        storeState.sourceCursors.set(definition.id, encodedInMemoryCursor(1));
         storeState.itemStates.set(
           InMemoryMigrationStore.itemStateKey(
             "articles",
@@ -5834,8 +5836,8 @@ describe("runInlineDefinition", () => {
           unchanged: 0,
           needsUpdate: 0,
         });
-        expect(processCalls).toEqual(["article-needs-update", "article-new"]);
-        expect(previousStates[0]).toEqual(
+        expect(processCalls).toEqual(["article-new", "article-needs-update"]);
+        expect(previousStates[1]).toEqual(
           expect.objectContaining({
             status: "needs-update",
             reason: "Destination stub must be completed",
@@ -7175,7 +7177,7 @@ describe("runInlineDefinition", () => {
   );
 
   it.effect(
-    "leaves update-created needs-update backlog visible and resumes it without update intent",
+    "processes update-created needs-update items when the next source scan encounters them",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
@@ -7281,7 +7283,7 @@ describe("runInlineDefinition", () => {
           needsUpdate: 0,
         });
         expect(processCalls).toEqual(["article-missing"]);
-        expect(sourceState.readByIdentityAttempts).toBe(1);
+        expect(sourceState.readByIdentityAttempts).toBe(0);
         expect(durableAfterRetry).toEqual({
           migrated: 2,
           skipped: 0,
@@ -7729,7 +7731,7 @@ describe("runInlineDefinition", () => {
   );
 
   it.effect(
-    "does not rediscover attempted backlog Source Identities in normal mode",
+    "uses scanned source data for failed items without a preliminary identity lookup",
     () =>
       Effect.gen(function* () {
         const storeState = InMemoryMigrationStore.makeState();
@@ -7790,28 +7792,23 @@ describe("runInlineDefinition", () => {
 
         const summary = yield* runInlineDefinition(definition);
 
-        expect(summary.status).toBe("failed");
+        expect(summary.status).toBe("succeeded");
         expect(summary.definitions[0]?.counts).toEqual({
-          migrated: 1,
+          migrated: 2,
           skipped: 0,
-          failed: 1,
+          failed: 0,
           unchanged: 0,
           needsUpdate: 0,
         });
-        expect(processCalls).toEqual(["article-new"]);
+        expect(processCalls).toEqual(["article-failed", "article-new"]);
         expect(
           storeState.itemStates.get(
             InMemoryMigrationStore.itemStateKey("articles", "article-failed")
           )
         ).toEqual(
           expect.objectContaining({
-            status: "failed",
-            sourceVersion: "source-version-1",
-            error: expect.objectContaining({
-              kind: "source",
-              errorTag: "SourceError",
-              message: "Source identity lookup failed",
-            }),
+            status: "migrated",
+            sourceVersion: "source-version-2",
           })
         );
       })

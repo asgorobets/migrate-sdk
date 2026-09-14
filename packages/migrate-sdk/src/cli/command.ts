@@ -624,6 +624,13 @@ const processConcurrency = Flag.String("concurrency").pipe(
   )
 );
 
+const limit = Flag.Int("limit").pipe(
+  Flag.optional,
+  Flag.withDescription(
+    "Stop after this many eligible source-item attempts in one migration"
+  )
+);
+
 const rollbackConcurrency = Flag.String("concurrency").pipe(
   Flag.optional,
   Flag.withAlias("c"),
@@ -1501,9 +1508,17 @@ const prepareCliOperation = (
     });
   };
 
-  return connection
-    .prepareOperation(request)
-    .pipe(Effect.catch((cause) => failReportedCliMessage(renderError(cause))));
+  return connection.prepareOperation(request).pipe(
+    Effect.catch((cause) => failReportedCliMessage(renderError(cause))),
+    Effect.tap((operation) =>
+      request.options.limit !== undefined &&
+      operation.request.options.limit !== request.options.limit
+        ? failReportedCliMessage(
+            "Server did not preserve the requested item limit. Upgrade the server before using --limit."
+          )
+        : Effect.void
+    )
+  );
 };
 
 const runsListCommand = Command.make("list", {}, () =>
@@ -1569,6 +1584,7 @@ const runCommand = Command.make(
   "run",
   {
     all,
+    limit,
     definitions: runDefinitions,
     failed,
     group,
@@ -1599,6 +1615,7 @@ const runCommand = Command.make(
       }
 
       const groupInput = Option.getOrUndefined(input.group);
+      const limitInput = Option.getOrUndefined(input.limit);
       const idsInput = Option.getOrUndefined(input.id);
       const sourceIdentities =
         idsInput === undefined || idsInput.length === 0
@@ -1645,6 +1662,7 @@ const runCommand = Command.make(
       const request: MigrateOperationRequest = {
         action,
         options: {
+          ...(limitInput === undefined ? {} : { limit: limitInput }),
           ...(executionOptions === undefined
             ? {}
             : { execution: executionOptions }),

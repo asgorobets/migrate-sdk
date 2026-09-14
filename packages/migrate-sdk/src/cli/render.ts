@@ -509,6 +509,7 @@ function renderWarningSection(
 
 const renderPlanScope = (
   input: {
+    readonly limit?: number;
     readonly force?: boolean;
     readonly includedDefinitionIds: readonly MigrationDefinitionId[];
     readonly mode?: "failed" | "skipped";
@@ -528,6 +529,9 @@ const renderPlanScope = (
   `Requested  ${renderRequestedDefinitionIdsInline(input.requestedDefinitionIds)}`,
   `Included   ${renderDefinitionIdInlineList(input.includedDefinitionIds)}`,
   ...(input.force === true ? ["Force      yes"] : []),
+  ...(input.limit === undefined
+    ? []
+    : [`Limit      ${input.limit} eligible attempts`]),
   ...(input.mode === undefined ? [] : [`Mode       ${input.mode}`]),
   ...(input.rescan === true ? ["Rescan     yes"] : []),
   ...(input.rollbackOrphans === true ? ["Rollback orphans  yes"] : []),
@@ -699,6 +703,9 @@ export const renderPreparedOperationPlan = (
     "",
     ...renderPlanScope(
       {
+        ...(operation.plan.limit === undefined
+          ? {}
+          : { limit: operation.plan.limit }),
         ...(operation.plan.force === undefined
           ? {}
           : { force: operation.plan.force }),

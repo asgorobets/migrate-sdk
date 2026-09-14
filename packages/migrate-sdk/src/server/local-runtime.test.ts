@@ -830,6 +830,59 @@ describe("Local Migrate Server runtime", () => {
     });
   });
 
+  it("projects and enforces a run limit through the server backend", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const runtime = yield* loadLocalMigrateServerRuntimeEffect({
+            configPath: "migrate.config.ts",
+            cwd: fixtureDirectory,
+          });
+          const backend = makeRegistryMigrateServerBackend(runtime);
+          const request = {
+            action: "run" as const,
+            options: { limit: 1 },
+            selection: {
+              definitionIds: [articlesId] as const,
+              kind: "definitions" as const,
+            },
+          };
+          const prepared = yield* backend.prepareOperation(request);
+          expect(prepared.operation.plan.limit).toBe(1);
+          const operation = yield* runtime.prepare(
+            request.selection,
+            "run",
+            request.options
+          );
+          const execution = yield* runtime.startExecution(operation);
+          const result = yield* execution.result;
+          expect(result.summary).toMatchObject({
+            definitions: [
+              {
+                status: "succeeded",
+                counts: { migrated: 1 },
+              },
+            ],
+          });
+          for (const options of [
+            { limit: 0 },
+            { limit: 1, withDependencies: true },
+            { limit: 1, rollbackOrphans: true },
+          ]) {
+            const invalid = yield* backend
+              .prepareOperation({ ...request, options })
+              .pipe(Effect.result);
+            expect(invalid._tag).toBe("Failure");
+          }
+          const rollback = yield* runtime
+            .prepare(request.selection, "rollback", { limit: 1 })
+            .pipe(Effect.result);
+          expect(rollback._tag).toBe("Failure");
+        })
+      )
+    );
+  });
+
   it("projects the effective rollback-orphans rescan to clients", async () => {
     await Effect.runPromise(
       Effect.scoped(

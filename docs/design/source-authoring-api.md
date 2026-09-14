@@ -394,14 +394,22 @@ which source identities were selected, so it cannot safely record item-specific
 failures for cursor discovery errors.
 
 The next cursor is committed after a cursor window is processed, even when some
-items in that window fail. Failed items are retried later from item state using
-`readByIdentity`. A full-discovery cursor is still retained when discovery is
-cancelled or fails before the terminal window.
+items in that window fail. Normal runs retry failed or needs-update items when
+the source iterator encounters them, without a preliminary identity lookup.
+Explicit failed-item retries use `readByIdentity`. A full-discovery cursor is
+still retained when discovery is cancelled or fails before the terminal window.
+
+A run-level `limit` caps eligible attempts, not reads. The runner may stop partway
+through a page; it then retains the input cursor and rereads that page on the
+next run. Previously migrated items are excluded by normal eligibility checks.
+Only completely settled pages commit a next cursor. Reaching the limit does not
+clear a full-discovery checkpoint or imply source exhaustion. See ADR 0012.
 
 ## Identity Lookup
 
 `readByIdentity(identity)` receives a decoded `SourceIdentityTarget`. It powers
-failed-item reruns, skipped reruns, needs-update backlog, and targeted runs.
+explicit failed-item reruns, skipped reruns, and identity-targeted runs. Normal
+runs use `read(cursor)` for all eligibility states.
 
 If the source system has a direct lookup API, use it and set
 `lookupStrategy: "direct"`. If it does not, implement lookup by scanning and set

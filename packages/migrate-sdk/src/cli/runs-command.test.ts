@@ -109,6 +109,9 @@ const preparedOperation = (
     fingerprint: MigratePlanFingerprint.make("sha256:cli-operation"),
     observationDefinitionId: definitionId,
     plan: {
+      ...(request.options.limit === undefined
+        ? {}
+        : { limit: request.options.limit }),
       ...(request.options.execution === undefined
         ? {}
         : { execution: request.options.execution }),
@@ -221,6 +224,105 @@ const interruptRuntime = (
 });
 
 describe("migrate runs", () => {
+  it.effect(
+    "passes --limit through the request and displays it in the plan",
+    () =>
+      Effect.gen(function* () {
+        const requests: MigrateOperationRequest[] = [];
+        const connection = makeConnection({
+          prepareOperation: (request) =>
+            Effect.sync(() => {
+              requests.push(request);
+              return preparedOperation(request);
+            }),
+        });
+        const result = yield* runCli(
+          ["run", "articles", "--limit", "1", "--plan"],
+          {
+            connectMigrateServer: () => Effect.succeed(connection),
+            cwd: "/workspace",
+          }
+        );
+        expect(result.exitCode).toBe(0);
+        expect(requests).toMatchObject([
+          {
+            action: "run",
+            options: { limit: 1 },
+            selection: { kind: "definitions", definitionIds: ["articles"] },
+          },
+        ]);
+        expect(result.stdout).toContain("Limit      1 eligible attempts");
+      })
+  );
+
+  for (const returnedLimit of [undefined, 2]) {
+    it.effect(
+      `refuses to start when the server ${returnedLimit === undefined ? "drops" : "changes"} the requested limit`,
+      () =>
+        Effect.gen(function* () {
+          const started: MigrateOperationRequest[] = [];
+          const connection = makeConnection({
+            prepareOperation: (request) =>
+              Effect.succeed(
+                preparedOperation({
+                  ...request,
+                  options:
+                    returnedLimit === undefined ? {} : { limit: returnedLimit },
+                })
+              ),
+            startOperation: ({ request }) => {
+              started.push(request);
+              return Effect.succeed({ runId, status: "started" as const });
+            },
+          });
+          const result = yield* runCli(["run", "articles", "--limit", "1"], {
+            connectMigrateServer: () => Effect.succeed(connection),
+            cwd: "/workspace",
+          });
+          expect(result.exitCode).toBe(1);
+          expect(result.stderr).toContain(
+            "Server did not preserve the requested item limit"
+          );
+          expect(started).toEqual([]);
+        })
+    );
+  }
+
+  it.effect("renders a successful operation stopped by its item limit", () =>
+    Effect.gen(function* () {
+      const summary = runTerminalSummary();
+      const connection = makeConnection({
+        observeRun: () =>
+          Stream.make({
+            kind: "terminal" as const,
+            outcome: "completed" as const,
+            message: `Run ${runId} succeeded`,
+            runId,
+            summary: {
+              ...summary,
+              definitions: summary.definitions.map((definition) => ({
+                ...definition,
+                status: "succeeded" as const,
+              })),
+            },
+          }),
+        prepareOperation: (request) =>
+          Effect.succeed(preparedOperation(request)),
+        startOperation: ({ request }) => {
+          expect(request.options.limit).toBe(1);
+          return Effect.succeed({ runId, status: "started" as const });
+        },
+      });
+      const result = yield* runCli(["run", "articles", "--limit", "1"], {
+        connectMigrateServer: () => Effect.succeed(connection),
+        cwd: "/workspace",
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("succeeded");
+      expect(result.stdout).not.toContain("limit reached");
+    })
+  );
+
   it.effect("renders typed remote planning errors with their identifiers", () =>
     Effect.gen(function* () {
       const cases = [

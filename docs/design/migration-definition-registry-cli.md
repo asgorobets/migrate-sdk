@@ -1,5 +1,7 @@
 # Migration Definition Registry and CLI API
 
+The current bounded-run contract is documented in [ADR 0012](../adr/0012-source-order-and-limited-runs.md): `migrate run articles --limit N` processes at most N eligible attempts, in source order, for one explicitly selected migration. Stopping before source exhaustion does not create or refresh completion; existing completion and dependency readiness are preserved.
+
 Audience: SDK users who want registry-backed execution and CLI users running
 application migrations.
 

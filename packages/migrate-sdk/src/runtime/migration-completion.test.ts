@@ -86,6 +86,114 @@ const fixture = (
 };
 
 describe("migration completion", () => {
+  for (const discovery of ["full", "incremental"] as const) {
+    it.effect(
+      `unlocks dependents only when a limited pass reaches the source end (${discovery})`,
+      () =>
+        Effect.gen(function* () {
+          const f = fixture(["one", "two"], discovery);
+          const runLimited = () =>
+            runInlineRegistry({
+              definitions: [f.authors],
+              definitionIds: [f.authors.id],
+              limit: 1,
+            });
+          const first = yield* runLimited();
+          expect(first.status).toBe("succeeded");
+          expect(f.state.definitionCompletions.size).toBe(0);
+          expect((yield* f.runBooks().pipe(Effect.flip)).message).toContain(
+            "no completed source pass"
+          );
+          f.failures.add("two");
+          const last = yield* runLimited();
+          expect(last.status).toBe("failed");
+          expect(f.state.definitionCompletions.get(f.authors.id)?.runId).toBe(
+            last.runId
+          );
+          expect((yield* f.runBooks()).status).toBe("succeeded");
+        })
+    );
+
+    it.effect(
+      `preserves earlier completion through successful and failed limited work (${discovery})`,
+      () =>
+        Effect.gen(function* () {
+          const f = fixture(["one", "two"], discovery);
+          yield* runInlineDefinition(f.authors);
+          const previous = f.state.definitionCompletions.get(f.authors.id);
+          for (const key of ["three", "four", "five"]) {
+            f.items.push({
+              identityKey: key,
+              item: { name: key },
+              version: "v1",
+            });
+          }
+          for (const failed of [false, true]) {
+            f.failures.add("four");
+            const result = yield* runInlineRegistry({
+              definitions: [f.authors],
+              definitionIds: [f.authors.id],
+              limit: 1,
+            });
+            expect(result.status).toBe(failed ? "failed" : "succeeded");
+            expect(f.state.definitionCompletions.get(f.authors.id)).toEqual(
+              previous
+            );
+            expect((yield* f.runBooks()).status).toBe("succeeded");
+          }
+        })
+    );
+
+    it.effect(
+      `requires source exhaustion to restore completion after rollback and limited work (${discovery})`,
+      () =>
+        Effect.gen(function* () {
+          const f = fixture(["one", "two"], discovery);
+          yield* runInlineDefinition(f.authors);
+          yield* rollbackInlineDefinition(f.authors, {
+            sourceIdentities: ["one"],
+          });
+          expect(f.state.definitionCompletions.size).toBe(0);
+          const first = yield* runInlineRegistry({
+            definitions: [f.authors],
+            definitionIds: [f.authors.id],
+            limit: 1,
+          });
+          expect(first.status).toBe("succeeded");
+          expect(f.state.definitionCompletions.size).toBe(0);
+          expect((yield* f.runBooks().pipe(Effect.flip)).message).toContain(
+            "no completed source pass"
+          );
+          const last = yield* runInlineRegistry({
+            definitions: [f.authors],
+            definitionIds: [f.authors.id],
+            limit: 1,
+          });
+          expect(last.definitions[0]?.counts.migrated).toBe(0);
+          expect(f.state.definitionCompletions.get(f.authors.id)?.runId).toBe(
+            last.runId
+          );
+          expect((yield* f.runBooks()).status).toBe("succeeded");
+        })
+    );
+  }
+
+  it.effect("records completion for an empty source with a limit", () =>
+    Effect.gen(function* () {
+      const f = fixture([]);
+      const result = yield* runInlineRegistry({
+        definitions: [f.authors],
+        definitionIds: [f.authors.id],
+        limit: 1,
+      });
+      expect(result.definitions[0]?.counts.migrated).toBe(0);
+      expect(f.state.definitionCompletions.get(f.authors.id)?.runId).toBe(
+        result.runId
+      );
+      expect((yield* f.runBooks()).status).toBe("succeeded");
+    })
+  );
+
   for (const scenario of ["missing item", "failed items"] as const) {
     it.effect(
       `preserves the incremental cursor after rollback of ${scenario}`,

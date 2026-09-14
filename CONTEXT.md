@@ -516,7 +516,7 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A started **Execution Start Result** may include adapter execution identity for observing the adapter-owned execution.
 - A durable **Execution Adapter** returns an **Execution Start Result** after accepting or scheduling execution; waiting for completion is a separate observation concern.
 - A Workflow SDK **Execution Adapter** returns a started **Execution Start Result** after the Workflow SDK run is accepted.
-- A Workflow SDK **Execution Adapter** applies the same **Run Mode**, source identity targeting, and **Update Run** policies as inline execution; step initialization is independent of the persisted **Source Cursor**, so resumed runs process retry and update backlog before continuing discovery.
+- A Workflow SDK **Execution Adapter** applies the same **Run Mode**, source identity targeting, and **Update Run** policies as inline execution; step initialization is independent of the persisted **Source Cursor**. Normal runs select work only from cursor discovery, while explicit targeted modes use source identity lookup.
 - An Effect Workflow **Execution Adapter** returns a started **Execution Start Result** after the Effect workflow execution is accepted.
 - A workflow execution context updates existing **Migration Run State**; it does not create the first state record for the **Migration Run**.
 - An executable plan is an in-process object and is not required to be serializable.
@@ -524,11 +524,13 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Migration Execution Envelope** carries **Planned Order** as diagnostic metadata; it is not a frozen execution plan.
 - A distributed **Execution Adapter** serializes a **Migration Execution Envelope** derived from an executable plan and rehydrates executable definitions by registry id in the workflow execution context.
 - A distributed **Execution Adapter** re-plans from the workflow execution context's **Migration Definition Registry** before executing a **Migration Execution Envelope**.
-- A **Migration Run** treats migrated and skipped item states as terminal for a given source version.
-- A **Migration Run** retries failed item states on rerun.
-- A **Migration Run** requires an explicit run mode to reprocess unchanged skipped items when skip logic changes.
+- A **Migration Run** skips unchanged migrated items when both source version and version-contract fingerprint match.
+- A normal **Migration Run** attempts failed, needs-update, and skipped items when the source iterator encounters them. Skipped-item eligibility follows ADR 0010.
 - A **Run Mode** can select normal processing, failed items, skipped items, or one item by source identity.
-- A normal **Run Mode** processes failed and needs-update backlog before source cursor discovery.
+- A normal **Run Mode** selects eligible items in source order, with no failed or needs-update priority (ADR 0012).
+- A **Run Request** may limit eligible attempts for one explicitly selected migration. Unchanged items do not consume the limit; failures and skips do.
+- A limit stops scheduling new work without committing a partially processed source page. The next run rereads that page and checks eligibility again.
+- A successful run stopped by its limit records definition status `succeeded`, as a targeted `--id` run does. Stopping before source exhaustion does not create or refresh **Migration Definition Completion**, but preserves earlier completion unless tracked data is removed. A limited run that reaches the actual source end records completion even with item failures, following ADR 0011. The runner distinguishes limit reached from source exhaustion internally for checkpoint and completion handling.
 - A failed **Run Mode** reprocesses only failed item states.
 - A skipped **Run Mode** reprocesses skipped item states regardless of source version.
 - A **Run Request** supplies migration definitions, run mode, and optional migration definition selection.
@@ -560,7 +562,7 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Migration Definition** declares exactly one **Process Pipeline** or **Process Batch Pipeline**.
 - A **Process Batch Pipeline** receives only **Admitted Source Items**.
 - A **Process Batch Pipeline** invocation never spans **Source Cursor Windows**.
-- A failed or needs-update backlog and a newly read **Source Cursor Window** are separate **Process Batch Pipeline** populations even when one workflow step processes both.
+- A normal **Process Batch Pipeline** receives eligible items from one **Source Cursor Window**, without a separate backlog population. A run limit may split that window into smaller invocations.
 - A **Process Batch Pipeline** may group, split, inspect, or coordinate its items in any way required by the migration.
 - Internal requests, jobs, and chunks are temporary execution details; they do not become durable migration units.
 - Every **Process Batch Item** has exactly one **Process Batch Settlement**.

@@ -62,6 +62,7 @@ export interface RunRequest<
   readonly definitionIds?: readonly MigrationDefinitionId[];
   readonly definitions: Definitions;
   readonly execution?: NormalizedMigrationExecutionOptions;
+  readonly limit?: number;
   readonly mode?: RunModeInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
@@ -77,6 +78,7 @@ export interface RunRequestInput<
   readonly definitionIds?: readonly MigrationDefinitionIdInput[];
   readonly definitions: Definitions;
   readonly execution?: MigrationExecutionOptions;
+  readonly limit?: number;
   readonly mode?: RunModeInput<
     MigrationDefinitionSourceIdentityKey<Definitions[number]>
   >;
@@ -94,6 +96,7 @@ export const makeRunRequest = <
 
   return {
     definitions: input.definitions,
+    ...(input.limit === undefined ? {} : { limit: input.limit }),
     ...(input.execution === undefined
       ? {}
       : { execution: normalizeMigrationExecutionOptions(input.execution) }),
