@@ -3305,7 +3305,20 @@ describe("MigrationTuiApp", () => {
           { limit: 3 }
         )
       );
-      await runtime.observeRun(seeded.runId);
+      expect((await runtime.observeRun(seeded.runId)).outcome).toBe(
+        "completed"
+      );
+      // History is newest first, so its order need not match the source order.
+      const historyIdentities = (
+        await runtime.listSourceIdentityHistory(
+          toMigrationDefinitionId("authors")
+        )
+      ).map((entry) => entry.sourceIdentity);
+      expect([...historyIdentities].sort()).toEqual([
+        "authors-1",
+        "authors-2",
+        "authors-3",
+      ]);
       const start = vi.spyOn(runtime, "start");
       const setup = await createTestRenderer({ width: 72, height: 24 });
       const root = createRoot(setup.renderer);
@@ -3318,20 +3331,21 @@ describe("MigrationTuiApp", () => {
         ).toBe(true);
         act(() => setup.mockInput.pressKey("e"));
         await chooseSourceIds(setup);
-        expect(
-          await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("authors-1")
-          )
-        ).toBe(true);
-        for (let index = 1; index <= 3; index += 1) {
-          if (index > 1) {
+        for (const [index, identity] of historyIdentities.entries()) {
+          if (index > 0) {
             act(() => setup.mockInput.pressArrow("down"));
             await act(async () => setup.renderOnce());
           }
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes(identity)
+            ),
+            setup.captureCharFrame()
+          ).toBe(true);
           act(() => setup.mockInput.pressKey(" "));
           expect(
             await settle(setup.renderOnce, () =>
-              setup.captureCharFrame().includes(`${index} selected`)
+              setup.captureCharFrame().includes(`${index + 1} selected`)
             )
           ).toBe(true);
         }
@@ -3348,7 +3362,7 @@ describe("MigrationTuiApp", () => {
           expect.objectContaining({
             request: expect.objectContaining({
               options: {
-                sourceIdentities: ["authors-1", "authors-2", "authors-3"],
+                sourceIdentities: historyIdentities,
               },
             }),
           })
