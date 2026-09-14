@@ -586,6 +586,13 @@ ACTIVE_SESSION="${SELECTIVE_SESSION}"
   "articles  COMPLETE" >/dev/null
 "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" e >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
+  "Items per migration" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SELECTIVE_SESSION}" \
+  --settle 250 \
+  --strict \
+  --format compact >/dev/null
+"${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" F2 >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
   "2 items" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SELECTIVE_SESSION}" \
   --settle 250 \
@@ -610,6 +617,13 @@ ACTIVE_SESSION="${SELECTIVE_SESSION}"
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
   "[ Overview ]" >/dev/null
 "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" e >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
+  "Items per migration" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SELECTIVE_SESSION}" \
+  --settle 250 \
+  --strict \
+  --format compact >/dev/null
+"${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" F2 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
   "2 selected" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SELECTIVE_SESSION}" \

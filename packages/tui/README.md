@@ -182,7 +182,7 @@ and Source Inventory Scan; blank values preserve the configured defaults and
 Process or Rollback concurrency can be set to unbounded. Press `c` to open
 Concurrency settings and `g` to switch
 between migration and group tabs, `m` for errors and messages, `r` to run the selected migration or group,
-`e` to run selected source identities, `f` to retry failed items, `b` to
+`e` to open Run selected entries, `f` to retry failed items, `b` to
 rollback, `s` to run a Source Inventory Scan for the current selection and its
 required dependencies, `l` to open Session activity, `R` to reload status, and
 `q` to quit. When applicable, `t`
@@ -195,6 +195,13 @@ message highlighted; use the arrow keys to move through it and `Enter` to open
 the complete message and structured details. For non-interactive inspection or
 export, use `migrate messages <migration>` or
 `migrate messages --all --json` from the same project.
+
+Run selected entries opens **Next items**, where you can enter an item limit for
+this run. Each migration gets its own limit, including any dependencies you add.
+Unchanged items do not count; failed and skipped attempts do. Review the limit
+and migration order before starting. For a single migration, switch to
+**Source IDs** with `F2` or the tabs to use the existing ID input and history
+picker. The ordinary Run action stays unlimited.
 
 Session activity keeps the statuses, notices, warnings, and errors observed by
 the current TUI session in chronological order, including active-run lifecycle

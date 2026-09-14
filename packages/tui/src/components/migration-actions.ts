@@ -155,15 +155,15 @@ export const migrationTuiAvailableActions = (
     }
   }
 
-  if (!isGroup) {
-    options.push({
-      description: "Run entries by source ID or select from history",
-      id: "selective-run",
-      key: "e",
-      label: "Run selected entries",
-      view: "selective-run",
-    });
-  }
+  options.push({
+    description: isGroup
+      ? "Run the next few items in each migration"
+      : "Run the next few items or choose source IDs",
+    id: "selective-run",
+    key: "e",
+    label: "Run selected entries",
+    view: "selective-run",
+  });
 
   if (rows.some((row) => (row.status?.durable.failed ?? 0) > 0)) {
     options.push({
