@@ -3498,9 +3498,11 @@ describe("MigrationTuiApp", () => {
           setup.captureCharFrame().includes("Status reloaded")
         );
         act(() => setup.mockInput.pressKey("b"));
-        await settle(setup.renderOnce, () =>
-          setup.captureCharFrame().includes("Confirm rollback")
-        );
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("3. ○ authors")
+          )
+        ).toBe(true);
         expect(setup.captureCharFrame()).toContain(
           "● i Include dependencies (recommended)"
         );

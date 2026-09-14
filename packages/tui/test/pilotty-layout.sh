@@ -309,8 +309,8 @@ ACTIVE_SESSION="${CATALOG_SESSION}"
 "${PILOTTY_BIN}" snapshot -s "${CATALOG_SESSION}" \
   --strict \
   --format text >"${ARTIFACT_DIR}/sqlite-catalog-progress.txt"
-"${PILOTTY_BIN}" wait-for -s "${CATALOG_SESSION}" -t 60000 \
-  "GROUP   COMPLETE" >/dev/null
+node "${SCRIPT_DIR}/pilotty-wait-for.mjs" \
+  "${PILOTTY_BIN}" "${CATALOG_SESSION}" 60000 "GROUP   COMPLETE"
 "${PILOTTY_BIN}" snapshot -s "${CATALOG_SESSION}" \
   --settle 300 \
   --strict \
@@ -379,8 +379,8 @@ sleep 0.2
   --strict \
   --format text >"${ARTIFACT_DIR}/sqlite-catalog-running-navigation.txt"
 "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" Down >/dev/null
-"${PILOTTY_BIN}" wait-for -s "${CATALOG_STANDALONE_SESSION}" -t 120000 \
-  "480 migrated" >/dev/null
+node "${SCRIPT_DIR}/pilotty-wait-for.mjs" \
+  "${PILOTTY_BIN}" "${CATALOG_STANDALONE_SESSION}" 120000 "480 migrated"
 "${PILOTTY_BIN}" snapshot -s "${CATALOG_STANDALONE_SESSION}" \
   --settle 300 \
   --strict \
@@ -642,7 +642,6 @@ ACTIVE_SESSION="${SOURCE_STATUS_SESSION}"
   --strict \
   --format text >"${ARTIFACT_DIR}/source-status.txt"
 "${PILOTTY_BIN}" resize -s "${SOURCE_STATUS_SESSION}" 72 28 >/dev/null
-"${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" PageDown >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SOURCE_STATUS_SESSION}" \
   --settle 150 \
   --strict \
@@ -657,12 +656,18 @@ ACTIVE_SESSION="${SOURCE_STATUS_SESSION}"
   --settle 150 \
   --strict \
   --format compact >/dev/null
-"${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" PageUp >/dev/null
+"${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" PageDown >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SOURCE_STATUS_SESSION}" \
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
 grep -Fq "Rollback" "${ARTIFACT_DIR}/source-status-compact-scrolled.txt"
+"${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" PageUp >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SOURCE_STATUS_SESSION}" \
+  --settle 150 \
+  --strict \
+  --format text >"${ARTIFACT_DIR}/source-status-compact-returned.txt"
+grep -Fq "3 total · 2 unprocessed" "${ARTIFACT_DIR}/source-status-compact-returned.txt"
 "${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" q >/dev/null
 
 ACTIVE_SESSION="${LOCK_SESSION}"
