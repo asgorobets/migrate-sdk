@@ -1,5 +1,18 @@
 # @migrate-sdk/tui
 
+## 0.13.0
+
+### Minor Changes
+
+- f2e6af8: Run a small sample from the TUI with Run selected entries. Choose Next items and
+  enter a limit for each migration, including groups and dependencies, then review
+  before starting. Switch to Source IDs to choose specific items as before.
+
+### Patch Changes
+
+- Updated dependencies [ec05d4d]
+  - migrate-sdk@0.13.0
+
 ## 0.12.0
 
 ### Patch Changes
