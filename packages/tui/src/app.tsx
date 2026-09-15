@@ -409,7 +409,6 @@ const operationConfirmationCopy = (operation: MigratePreparedOperation) => {
   const rollbackOrphans = operationRollsBackOrphans(operation);
   const dependencyDecision = operationNeedsDependencyDecision(operation);
   const forcedRollback = rollback && operation.plan.force === true;
-  const limited = operation.plan.limit !== undefined;
   let title = "Dependencies incomplete";
   let description: string = rollbackOrphans
     ? "Rollback orphaned items with dependencies"
@@ -427,11 +426,6 @@ const operationConfirmationCopy = (operation: MigratePreparedOperation) => {
     confirmationButtonLabel =
       rollbackCopy?.buttonLabel ?? "y Rollback selected";
     destructiveShortcut = "i include · s selected only · y confirm";
-  } else if (limited && !dependencyDecision) {
-    title = "Confirm run";
-    description = "Process the next items that need work, in source order.";
-    badgeLabel = "LIMITED RUN";
-    confirmationButtonLabel = "y Run";
   } else if (rollbackOrphans && !dependencyDecision) {
     title = "Confirm orphan rollback";
     description = "Rollback destination items missing from source";
@@ -840,8 +834,14 @@ const MigrationTuiDashboardApp = ({
   const [selectiveTarget, setSelectiveTarget] = useState<MigrateTarget | null>(
     null
   );
-  const [selectiveMode, setSelectiveMode] =
+  const [selectiveRunMode, setSelectiveRunMode] =
     useState<SelectiveRunMode>("next-items");
+  let selectiveMode = selectiveRunMode;
+  if (selectiveAction === "rollback") {
+    selectiveMode = "source-ids";
+  } else if (selectiveTarget?.kind === "group") {
+    selectiveMode = "next-items";
+  }
   const [selectiveLimit, setSelectiveLimit] = useState<number | null>(1);
   const [selectiveDraft, setSelectiveDraft] = useState("");
   const [selectiveEntriesByDefinition, setSelectiveEntriesByDefinition] =
@@ -1285,7 +1285,6 @@ const MigrationTuiDashboardApp = ({
 
         if (
           operation.action === "rollback" ||
-          operation.plan.limit !== undefined ||
           operationRollsBackOrphans(operation) ||
           operationNeedsDependencyDecision(operation)
         ) {
@@ -1327,7 +1326,6 @@ const MigrationTuiDashboardApp = ({
         return;
       }
 
-      setSelectiveMode(action === "run" ? "next-items" : "source-ids");
       setSelectiveLimit(1);
       setSelectiveAction(action);
       setSelectiveTarget(target);
@@ -1382,7 +1380,7 @@ const MigrationTuiDashboardApp = ({
       if (selectiveAction !== "run" || selectiveTarget?.kind !== "migration") {
         return;
       }
-      setSelectiveMode(mode);
+      setSelectiveRunMode(mode);
       setSelectiveFeedback(undefined);
     },
     [selectiveAction, selectiveTarget]
@@ -1551,12 +1549,6 @@ const MigrationTuiDashboardApp = ({
         key.preventDefault();
         key.stopPropagation();
         cancelSelectiveRun();
-      } else if (key.name === "f2") {
-        key.preventDefault();
-        key.stopPropagation();
-        changeSelectiveMode(
-          selectiveMode === "next-items" ? "source-ids" : "next-items"
-        );
       } else if (selectiveMode === "next-items") {
         return;
       } else if (key.name === "up" || key.name === "down") {
@@ -1605,7 +1597,6 @@ const MigrationTuiDashboardApp = ({
     },
     [
       cancelSelectiveRun,
-      changeSelectiveMode,
       selectiveMode,
       selectiveDraft,
       selectiveEntries,
@@ -2083,8 +2074,7 @@ const MigrationTuiDashboardApp = ({
         }
       } else if (
         operation !== null &&
-        (operationRollsBackOrphans(operation) ||
-          operation.plan.limit !== undefined) &&
+        operationRollsBackOrphans(operation) &&
         !operationNeedsDependencyDecision(operation) &&
         key.name === "y"
       ) {
@@ -2278,7 +2268,8 @@ const MigrationTuiDashboardApp = ({
     } else if (view === "execution-settings") {
       handleExecutionSettingsKey(key);
     } else if (view === "selective-run" || view === "selective-rollback") {
-      handleSelectiveRunKey(key);
+      // The dialog routes keys using its focused control.
+      return;
     } else if (view === "activity-export") {
       handleActivityExportKey(key);
     } else if (view === "activity" && key.name !== "q") {
@@ -2468,8 +2459,7 @@ const MigrationTuiDashboardApp = ({
             }
             if (
               pendingOperation.action === "rollback" ||
-              ((operationRollsBackOrphans(pendingOperation) ||
-                pendingOperation.plan.limit !== undefined) &&
+              (operationRollsBackOrphans(pendingOperation) &&
                 !operationNeedsDependencyDecision(pendingOperation))
             ) {
               startTask(executeOperation(pendingOperation));

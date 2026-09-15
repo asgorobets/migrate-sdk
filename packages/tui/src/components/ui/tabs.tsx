@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
 import { Tabs as TabsPrimitive } from "@tuiparts/react/tabs";
+import { type ElementRef, useCallback, useRef } from "react";
 import { useTheme } from "./use-theme.tsx";
 
 /** Props for the consumer-owned React Tabs Root. */
@@ -40,15 +41,64 @@ export function TabsList(props: TabsListProps) {
 }
 
 /** Consumer-owned labeled React Tabs Trigger presentation. */
-export function TabsTrigger({ label, ...props }: TabsTriggerProps) {
+export function TabsTrigger({
+  label,
+  onKeyDown,
+  ref: forwardedRef,
+  ...props
+}: TabsTriggerProps) {
   const tokens = useTheme();
+  const tabRef = useRef<ElementRef<typeof TabsPrimitive.Tab>>(null);
+  const setTabRef = useCallback(
+    (tab: ElementRef<typeof TabsPrimitive.Tab> | null) => {
+      tabRef.current = tab;
+      if (typeof forwardedRef === "function") {
+        return forwardedRef(tab);
+      }
+      if (forwardedRef) {
+        forwardedRef.current = tab;
+      }
+    },
+    [forwardedRef]
+  );
   return (
-    <TabsPrimitive.Tab {...props}>
+    <TabsPrimitive.Tab
+      {...props}
+      onKeyDown={(key) => {
+        onKeyDown?.(key);
+        const tab = tabRef.current;
+        if (
+          !key.defaultPrevented &&
+          tab?.focused &&
+          !(
+            key.ctrl ||
+            key.meta ||
+            key.shift ||
+            key.option ||
+            key.super ||
+            key.hyper
+          ) &&
+          ["left", "right", "up", "down", "home", "end"].includes(key.name)
+        ) {
+          // OpenTUI 0.4.5 cannot blur a tab after roving focus makes it
+          // non-focusable. Release its key listener before native navigation.
+          tab.blur();
+          if (!tab.handleKeyPress(key)) {
+            tab.focus();
+          }
+          key.preventDefault();
+          key.stopPropagation();
+        }
+      }}
+      ref={setTabRef}
+    >
       {(state) => {
         let foreground = tokens.colors.mutedForeground;
 
         if (state.disabled) {
           foreground = tokens.colors.disabledForeground;
+        } else if (state.focused) {
+          foreground = tokens.colors.background;
         } else if (state.selected) {
           foreground = tokens.colors.focus;
         }
@@ -56,7 +106,7 @@ export function TabsTrigger({ label, ...props }: TabsTriggerProps) {
         return (
           <box
             backgroundColor={
-              state.focused ? tokens.colors.surface : "transparent"
+              state.focused ? tokens.colors.focus : "transparent"
             }
           >
             <text

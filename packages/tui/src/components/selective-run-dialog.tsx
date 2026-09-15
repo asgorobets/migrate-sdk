@@ -1,6 +1,7 @@
 /** @jsxImportSource @opentui/react */
 
 import { type KeyEvent, RGBA } from "@opentui/core";
+import { useKeyboard } from "@opentui/react";
 import { Input } from "@tuiparts/react/input";
 import type {
   MigrateSourceIdentityHistoryEntry,
@@ -160,6 +161,7 @@ export const SelectiveRunDialog = ({
 }: SelectiveRunDialogProps) => {
   const inputRef = useRef<ElementRef<typeof Input>>(null);
   const limitRef = useRef<NumberFieldInputRef>(null);
+  const focusedInitialInput = useRef(false);
   const nextItems = action === "run" && mode === "next-items";
   const showModes = action === "run" && target.kind === "migration";
   const validLimit = limit !== null && Number.isSafeInteger(limit) && limit > 0;
@@ -183,7 +185,8 @@ export const SelectiveRunDialog = ({
   const actionLabel = action === "rollback" ? "Rollback" : "Run";
 
   useEffect(() => {
-    if (inputReady) {
+    if (inputReady && !focusedInitialInput.current) {
+      focusedInitialInput.current = true;
       if (nextItems) {
         limitRef.current?.focus();
       } else {
@@ -191,6 +194,12 @@ export const SelectiveRunDialog = ({
       }
     }
   }, [inputReady, nextItems]);
+
+  useKeyboard((key) => {
+    if (!inputReady || key.name === "escape" || inputRef.current?.focused) {
+      onKeyDown(key);
+    }
+  });
 
   return (
     <Dialog
@@ -208,7 +217,6 @@ export const SelectiveRunDialog = ({
         focusedBorderColor={colors.info}
         height={dialogHeight}
         maxWidth={dialogWidth}
-        onKeyDown={onKeyDown}
         overflow="hidden"
         paddingLeft={compact ? 1 : 2}
         paddingRight={compact ? 1 : 2}
@@ -401,7 +409,7 @@ export const SelectiveRunDialog = ({
             intent={action === "rollback" ? "warning" : "primary"}
             label={
               nextItems
-                ? "↵ Review run"
+                ? `↵ Run ${countLabel(limit ?? 0, "item")}`
                 : `↵ ${actionLabel} ${countLabel(entries.length, "entry", "entries")}`
             }
             onPress={onConfirm}
@@ -418,11 +426,13 @@ export const SelectiveRunDialog = ({
         >
           <text fg={colors.dim}>
             {nextItems
-              ? "enter review · esc cancel"
+              ? "enter run · esc cancel"
               : "↑↓ history · space toggle · enter add/run · ctrl+⌫ remove"}
           </text>
         </box>
-        {showModes && <text fg={colors.dim}>f2 switch selection method</text>}
+        {showModes && (
+          <text fg={colors.dim}>tab focus · ←→ selection method</text>
+        )}
       </DialogContent>
     </Dialog>
   );
