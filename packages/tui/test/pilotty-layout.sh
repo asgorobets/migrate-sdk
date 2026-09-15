@@ -618,6 +618,8 @@ ACTIVE_SESSION="${LIMITED_SESSION}"
 "${PILOTTY_BIN}" resize -s "${LIMITED_SESSION}" 72 24 >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${LIMITED_SESSION}" --settle 250 --strict --format text >"${ARTIFACT_DIR}/source-id-mode-retained.txt"
 "${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Escape >/dev/null
+# Wait for Escape to close the dialog before another key can form an Alt sequence.
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "[ Migrations 2 ]" >/dev/null
 "${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" g >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "content  GROUP" >/dev/null
 "${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" e >/dev/null
@@ -627,9 +629,11 @@ ACTIVE_SESSION="${LIMITED_SESSION}"
 "${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 10000 "5 migrated" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${LIMITED_SESSION}" --settle 250 --strict --format text >"${ARTIFACT_DIR}/limited-group-completed.txt"
 "${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" g >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "[ Migrations 2 ]" >/dev/null
 "${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" e >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "1 selected" >/dev/null
 "${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "[ Migrations 2 ]" >/dev/null
 "${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" q >/dev/null
 
 ACTIVE_SESSION="${SELECTIVE_SESSION}"
