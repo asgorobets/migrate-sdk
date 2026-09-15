@@ -198,10 +198,15 @@ export, use `migrate messages <migration>` or
 
 Run selected entries opens **Next items**, where you can enter an item limit for
 this run. Each migration gets its own limit, including any dependencies you add.
-Unchanged items do not count; failed and skipped attempts do. Review the limit
-and migration order before starting. For a single migration, switch to
-**Source IDs** with `F2` or the tabs to use the existing ID input and history
-picker. The ordinary Run action stays unlimited.
+Unchanged items do not count; failed and skipped attempts do. Press Enter or
+choose Run to start. If dependencies need attention, choose whether to include
+them or run without them.
+
+For a single migration, use **Next items** or **Source IDs** to choose how to
+select items. From the input, press Shift+Tab to focus the selection control,
+use Left/Right to switch, then Tab to return to the input. You can also click
+the tabs. Adding an ID keeps Source IDs active, and reopening the dialog
+remembers your selection method. The ordinary Run action stays unlimited.
 
 Session activity keeps the statuses, notices, warnings, and errors observed by
 the current TUI session in chronological order, including active-run lifecycle
