@@ -17,6 +17,7 @@ FORCE_SESSION="migrate-tui-force"
 HIERARCHY_SESSION="migrate-tui-hierarchy"
 LARGE_HIERARCHY_SESSION="migrate-tui-large-hierarchy"
 SELECTIVE_SESSION="migrate-tui-selective"
+LIMITED_SESSION="migrate-tui-limited"
 SOURCE_STATUS_SESSION="migrate-tui-source-status"
 LOCK_SESSION="migrate-tui-lock"
 LIVE_PROGRESS_SESSION="migrate-tui-live-progress"
@@ -42,6 +43,7 @@ LOCK_TMP="${PILOTTY_SOCKET_DIR}/11"
 LIVE_PROGRESS_TMP="${PILOTTY_SOCKET_DIR}/12"
 CATALOG_TMP="${PILOTTY_SOCKET_DIR}/13"
 CATALOG_STANDALONE_TMP="${PILOTTY_SOCKET_DIR}/14"
+LIMITED_TMP="${PILOTTY_SOCKET_DIR}/15"
 mkdir -p \
   "${SESSION_TMP}" \
   "${BUTTON_TMP}" \
@@ -56,7 +58,8 @@ mkdir -p \
   "${LOCK_TMP}" \
   "${LIVE_PROGRESS_TMP}" \
   "${CATALOG_TMP}" \
-  "${CATALOG_STANDALONE_TMP}"
+  "${CATALOG_STANDALONE_TMP}" \
+  "${LIMITED_TMP}"
 
 cleanup() {
   "${PILOTTY_BIN}" key -s "${SESSION}" q >/dev/null 2>&1 || true
@@ -77,6 +80,8 @@ cleanup() {
   "${PILOTTY_BIN}" key -s "${LIVE_PROGRESS_SESSION}" q >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" key -s "${CATALOG_SESSION}" q >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" key -s "${CATALOG_STANDALONE_SESSION}" q >/dev/null 2>&1 || true
+  "${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Escape >/dev/null 2>&1 || true
+  "${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" q >/dev/null 2>&1 || true
   "${PILOTTY_BIN}" stop >/dev/null 2>&1 || true
 }
 
@@ -572,6 +577,65 @@ done
 "${PILOTTY_BIN}" key -s "${LARGE_HIERARCHY_SESSION}" Escape >/dev/null
 "${PILOTTY_BIN}" key -s "${LARGE_HIERARCHY_SESSION}" q >/dev/null
 
+ACTIVE_SESSION="${LIMITED_SESSION}"
+"${PILOTTY_BIN}" spawn \
+  --name "${LIMITED_SESSION}" \
+  --cwd "${PACKAGE_DIR}" \
+  env TMPDIR="${LIMITED_TMP}" \
+  node bin/migrate-tui.js --config examples/limited-run.config.ts >/dev/null
+"${PILOTTY_BIN}" resize -s "${LIMITED_SESSION}" 100 30 >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 30000 "Status reloaded" >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" e >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "Items per migration" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LIMITED_SESSION}" --settle 250 --strict --format compact >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Backspace >/dev/null
+"${PILOTTY_BIN}" type -s "${LIMITED_SESSION}" "2" >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Enter >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 10000 "2 migrated" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LIMITED_SESSION}" --settle 250 --strict --format text >"${ARTIFACT_DIR}/limited-run-completed.txt"
+
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" e >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "Items per migration" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LIMITED_SESSION}" --settle 250 --strict --format compact >/dev/null
+# Pilotty 0.0.11 does not encode Shift+Tab; send the terminal reverse-tab sequence.
+"${PILOTTY_BIN}" type -s "${LIMITED_SESSION}" $'\e[Z' >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Right >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "SOURCE IDS" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LIMITED_SESSION}" --settle 150 --strict --format text >"${ARTIFACT_DIR}/selection-method-focused.txt"
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Left >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "Items per migration" >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Right >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LIMITED_SESSION}" --settle 150 --strict --format compact >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Tab >/dev/null
+"${PILOTTY_BIN}" type -s "${LIMITED_SESSION}" "authors-4" >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Enter >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "1 selected" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LIMITED_SESSION}" --settle 150 --strict --format text >"${ARTIFACT_DIR}/source-id-added.txt"
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Enter >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 10000 "3 migrated" >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" e >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "1 selected" >/dev/null
+"${PILOTTY_BIN}" resize -s "${LIMITED_SESSION}" 72 24 >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LIMITED_SESSION}" --settle 250 --strict --format text >"${ARTIFACT_DIR}/source-id-mode-retained.txt"
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Escape >/dev/null
+# Wait for Escape to close the dialog before another key can form an Alt sequence.
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "[ Migrations 2 ]" >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" g >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "content  GROUP" >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" e >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "Items per migration" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LIMITED_SESSION}" --settle 250 --strict --format compact >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Enter >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 10000 "5 migrated" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${LIMITED_SESSION}" --settle 250 --strict --format text >"${ARTIFACT_DIR}/limited-group-completed.txt"
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" g >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "[ Migrations 2 ]" >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" e >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "1 selected" >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" Escape >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 5000 "[ Migrations 2 ]" >/dev/null
+"${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" q >/dev/null
+
 ACTIVE_SESSION="${SELECTIVE_SESSION}"
 "${PILOTTY_BIN}" spawn \
   --name "${SELECTIVE_SESSION}" \
@@ -591,7 +655,11 @@ ACTIVE_SESSION="${SELECTIVE_SESSION}"
   --settle 250 \
   --strict \
   --format compact >/dev/null
-"${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" F2 >/dev/null
+"${PILOTTY_BIN}" type -s "${SELECTIVE_SESSION}" $'\e[Z' >/dev/null
+"${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" Right >/dev/null
+"${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 "SOURCE IDS" >/dev/null
+"${PILOTTY_BIN}" snapshot -s "${SELECTIVE_SESSION}" --settle 150 --strict --format compact >/dev/null
+"${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" Tab >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
   "2 items" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SELECTIVE_SESSION}" \
@@ -617,13 +685,6 @@ ACTIVE_SESSION="${SELECTIVE_SESSION}"
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
   "[ Overview ]" >/dev/null
 "${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" e >/dev/null
-"${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
-  "Items per migration" >/dev/null
-"${PILOTTY_BIN}" snapshot -s "${SELECTIVE_SESSION}" \
-  --settle 250 \
-  --strict \
-  --format compact >/dev/null
-"${PILOTTY_BIN}" key -s "${SELECTIVE_SESSION}" F2 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SELECTIVE_SESSION}" -t 5000 \
   "2 selected" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SELECTIVE_SESSION}" \

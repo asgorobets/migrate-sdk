@@ -420,16 +420,32 @@ const readySelectiveDialog = async (
   await act(async () => setup.renderOnce());
 };
 
+const switchSelectionMethod = async (
+  setup: Awaited<ReturnType<typeof createTestRenderer>>,
+  mode: "Next items" | "Source IDs"
+) => {
+  if (setup.captureCharFrame().includes(`[ ${mode} ]`)) {
+    return;
+  }
+  act(() => setup.mockInput.pressTab({ shift: true }));
+  await act(async () => setup.renderOnce());
+  act(() =>
+    setup.mockInput.pressArrow(mode === "Source IDs" ? "right" : "left")
+  );
+  expect(
+    await settle(setup.renderOnce, () =>
+      setup.captureCharFrame().includes(`[ ${mode} ]`)
+    )
+  ).toBe(true);
+  act(() => setup.mockInput.pressTab());
+  await act(async () => setup.renderOnce());
+};
+
 const chooseSourceIds = async (
   setup: Awaited<ReturnType<typeof createTestRenderer>>
 ) => {
   await readySelectiveDialog(setup);
-  act(() => setup.mockInput.pressKey("F2"));
-  expect(
-    await settle(setup.renderOnce, () =>
-      setup.captureCharFrame().includes("[ Source IDs ]")
-    )
-  ).toBe(true);
+  await switchSelectionMethod(setup, "Source IDs");
 };
 
 beforeAll(() => {
@@ -2939,7 +2955,7 @@ describe("MigrationTuiApp", () => {
 
   for (const group of [false, true]) {
     itWithOpenTui(
-      `reviews and runs the next items ${group ? "per migration in a group" : "in a single migration"}`,
+      `runs the next items directly ${group ? "per migration in a group" : "in a single migration"}`,
       async () => {
         const runtime = await makeInProcessMigrationTuiRuntime({
           registry: makeLimitedRunConfig().registry,
@@ -2965,7 +2981,7 @@ describe("MigrationTuiApp", () => {
             act(() => setup.mockInput.pressKey("e"));
             await readySelectiveDialog(setup);
             expect(setup.captureCharFrame()).toContain("Items per migration");
-            expect(setup.captureCharFrame()).toContain("Review run");
+            expect(setup.captureCharFrame()).toContain("Run 1 item");
             if (group) {
               expect(setup.captureCharFrame()).not.toContain("Source IDs");
             }
@@ -2974,29 +2990,13 @@ describe("MigrationTuiApp", () => {
             act(() => setup.mockInput.pressBackspace());
             await act(async () => setup.renderOnce());
             await act(async () => setup.mockInput.typeText("1"));
-            act(() => setup.mockInput.pressEnter());
-            expect(
-              await settle(setup.renderOnce, () =>
-                setup.captureCharFrame().includes("Confirm run")
-              )
-            ).toBe(true);
-            expect(setup.captureCharFrame()).toContain(
-              "Up to 1 item per migration"
-            );
-            expect(start).toHaveBeenCalledTimes(run - 1);
-            expect(prepare).toHaveBeenLastCalledWith(
-              group
-                ? { kind: "group", groupId: "content" }
-                : { kind: "definitions", definitionIds: ["authors"] },
-              "run",
-              { limit: 1 }
-            );
+            await act(async () => setup.renderOnce());
             if (group) {
-              act(() => setup.mockInput.pressKey("y"));
+              act(() => setup.mockInput.pressEnter());
             } else {
               const lines = setup.captureCharFrame().split("\n");
-              const y = lines.findIndex((line) => line.includes("y Run"));
-              const x = lines[y]?.indexOf("y Run") ?? -1;
+              const y = lines.findIndex((line) => line.includes("Run 1 item"));
+              const x = lines[y]?.indexOf("Run 1 item") ?? -1;
               expect(x).toBeGreaterThanOrEqual(0);
               await act(async () => setup.mockMouse.click(x + 2, y));
             }
@@ -3010,6 +3010,15 @@ describe("MigrationTuiApp", () => {
                   !setup.captureCharFrame().includes("Stop run")
               )
             ).toBe(true);
+            expect(start).toHaveBeenCalledTimes(run);
+            expect(setup.captureCharFrame()).not.toContain("Confirm run");
+            expect(prepare).toHaveBeenLastCalledWith(
+              group
+                ? { kind: "group", groupId: "content" }
+                : { kind: "definitions", definitionIds: ["authors"] },
+              "run",
+              { limit: 1 }
+            );
             const snapshot = await runtime.refresh();
             expect(
               snapshot.rows.map((row) => row.status?.durable.migrated)
@@ -3066,16 +3075,6 @@ describe("MigrationTuiApp", () => {
           );
           act(() => setup.mockInput.pressKey(include ? "i" : "f"));
           expect(
-            await settle(setup.renderOnce, () =>
-              setup.captureCharFrame().includes("Confirm run")
-            )
-          ).toBe(true);
-          expect(setup.captureCharFrame()).toContain(
-            "Up to 2 items per migration"
-          );
-          expect(start).not.toHaveBeenCalled();
-          act(() => setup.mockInput.pressKey("y"));
-          expect(
             await settle(
               setup.renderOnce,
               () =>
@@ -3113,6 +3112,190 @@ describe("MigrationTuiApp", () => {
     );
   }
 
+  for (const method of ["keyboard", "mouse"]) {
+    itWithOpenTui(
+      `keeps source ID mode when selecting by ${method}, adding an identity, and reopening`,
+      async () => {
+        const runtime = await makeInProcessMigrationTuiRuntime({
+          registry: makeLimitedRunConfig().registry,
+          cwd: new URL("..", import.meta.url).pathname,
+        });
+        const start = vi.spyOn(runtime, "start");
+        const setup = await createTestRenderer({ height: 30, width: 100 });
+        const root = createRoot(setup.renderer);
+        act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+        try {
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Status reloaded")
+            )
+          ).toBe(true);
+          act(() => setup.mockInput.pressKey("e"));
+          await readySelectiveDialog(setup);
+          if (method === "mouse") {
+            for (const label of ["Source IDs", "Next items", "Source IDs"]) {
+              const lines = setup.captureCharFrame().split("\n");
+              const y = lines.findIndex((line) => line.includes(label));
+              const x = lines[y]?.indexOf(label) ?? -1;
+              expect(x).toBeGreaterThanOrEqual(0);
+              await act(async () => setup.mockMouse.click(x + 2, y));
+              expect(
+                await settle(setup.renderOnce, () =>
+                  setup.captureCharFrame().includes(`[ ${label} ]`)
+                )
+              ).toBe(true);
+            }
+          } else {
+            act(() => setup.mockInput.pressTab({ shift: true }));
+            await act(async () => setup.renderOnce());
+            act(() => setup.mockInput.pressArrow("right"));
+            await act(async () => setup.renderOnce());
+            expect(setup.captureCharFrame()).toContain("[ Source IDs ]");
+            act(() => setup.mockInput.pressArrow("left"));
+            await act(async () => setup.renderOnce());
+            expect(setup.captureCharFrame()).toContain("[ Next items ]");
+            act(() => setup.mockInput.pressArrow("right"));
+          }
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("[ Source IDs ]")
+            )
+          ).toBe(true);
+          // Tab moves from the selection control into the active input.
+          act(() => setup.mockInput.pressTab());
+          await act(async () => setup.renderOnce());
+          await act(async () => setup.mockInput.typeText("authors-1"));
+          act(() => setup.mockInput.pressEnter());
+          expect(
+            await settle(setup.renderOnce, () => {
+              const frame = setup.captureCharFrame();
+              return (
+                frame.includes("[ Source IDs ]") && frame.includes("1 selected")
+              );
+            }),
+            setup.captureCharFrame()
+          ).toBe(true);
+          expect(start).not.toHaveBeenCalled();
+          act(() => setup.mockInput.pressEnter());
+          expect(
+            await settle(
+              setup.renderOnce,
+              () =>
+                setup.captureCharFrame().includes("1 migrated") &&
+                !setup.captureCharFrame().includes("Stop run")
+            )
+          ).toBe(true);
+          act(() => setup.mockInput.pressKey("e"));
+          await readySelectiveDialog(setup);
+          expect(setup.captureCharFrame()).toContain("[ Source IDs ]");
+          expect(setup.captureCharFrame()).toContain("1 selected");
+        } finally {
+          act(() => root.unmount());
+          setup.renderer.destroy();
+        }
+      }
+    );
+  }
+
+  for (const control of ["selection method", "Cancel", "Run"]) {
+    itWithOpenTui(
+      `handles Space on the focused ${control} control without toggling history`,
+      async () => {
+        const runtime = await makeInProcessMigrationTuiRuntime({
+          registry: makeLimitedRunConfig().registry,
+          cwd: new URL("..", import.meta.url).pathname,
+        });
+        const seeded = await runtime.start(
+          await runtime.prepare(
+            {
+              kind: "definitions",
+              definitionIds: [toMigrationDefinitionId("authors")],
+            },
+            "run",
+            { limit: 1 }
+          )
+        );
+        expect((await runtime.observeRun(seeded.runId)).outcome).toBe(
+          "completed"
+        );
+        const start = vi.spyOn(runtime, "start");
+        const setup = await createTestRenderer({ height: 30, width: 100 });
+        const root = createRoot(setup.renderer);
+        act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+        try {
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Status reloaded")
+            )
+          ).toBe(true);
+          act(() => setup.mockInput.pressKey("e"));
+          await readySelectiveDialog(setup);
+          act(() => setup.mockInput.pressTab({ shift: true }));
+          await act(async () => setup.renderOnce());
+          act(() => setup.mockInput.pressArrow("right"));
+          expect(
+            await settle(setup.renderOnce, () => {
+              const frame = setup.captureCharFrame();
+              return (
+                frame.includes("[ Source IDs ]") && frame.includes("authors-1")
+              );
+            })
+          ).toBe(true);
+
+          if (control !== "selection method") {
+            act(() => setup.mockInput.pressTab());
+            await act(async () => setup.renderOnce());
+            if (control === "Run") {
+              await act(async () => setup.mockInput.typeText("authors-4"));
+              act(() => setup.mockInput.pressEnter());
+              expect(
+                await settle(setup.renderOnce, () =>
+                  setup.captureCharFrame().includes("1 selected")
+                )
+              ).toBe(true);
+            }
+            // Run is skipped when disabled, so an empty queue focuses Cancel.
+            act(() => setup.mockInput.pressTab());
+            await act(async () => setup.renderOnce());
+          }
+
+          act(() => setup.mockInput.pressKey(" "));
+          await act(async () => setup.renderOnce());
+          if (control === "selection method") {
+            expect(setup.captureCharFrame()).toContain("[ Source IDs ]");
+            expect(setup.captureCharFrame()).toContain("0 selected");
+            expect(start).not.toHaveBeenCalled();
+          } else if (control === "Cancel") {
+            expect(
+              await settle(
+                setup.renderOnce,
+                () => !setup.captureCharFrame().includes("Run selected entries")
+              )
+            ).toBe(true);
+            expect(start).not.toHaveBeenCalled();
+          } else {
+            expect(
+              await settle(setup.renderOnce, () =>
+                setup.captureCharFrame().includes("2 migrated")
+              )
+            ).toBe(true);
+            expect(start).toHaveBeenCalledTimes(1);
+            expect(start).toHaveBeenCalledWith(
+              expect.objectContaining({
+                request: expect.objectContaining({
+                  options: { sourceIdentities: ["authors-4"] },
+                }),
+              })
+            );
+          }
+        } finally {
+          act(() => root.unmount());
+          setup.renderer.destroy();
+        }
+      }
+    );
+  }
+
   itWithOpenTui(
     "keeps the limit out of source ID requests and ordinary runs",
     async () => {
@@ -3141,10 +3324,8 @@ describe("MigrationTuiApp", () => {
           )
         ).toBe(true);
         // Preserve the ID queue while changing selection methods, but send only the active method.
-        act(() => setup.mockInput.pressKey("F2"));
-        await act(async () => setup.renderOnce());
-        act(() => setup.mockInput.pressKey("F2"));
-        await act(async () => setup.renderOnce());
+        await switchSelectionMethod(setup, "Next items");
+        await switchSelectionMethod(setup, "Source IDs");
         act(() => setup.mockInput.pressEnter());
         expect(
           await settle(
@@ -3161,10 +3342,14 @@ describe("MigrationTuiApp", () => {
         );
         act(() => setup.mockInput.pressKey("e"));
         await readySelectiveDialog(setup);
+        await switchSelectionMethod(setup, "Next items");
         act(() => setup.mockInput.pressEnter());
         expect(
-          await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("Confirm run")
+          await settle(
+            setup.renderOnce,
+            () =>
+              setup.captureCharFrame().includes("2 migrated") &&
+              !setup.captureCharFrame().includes("Stop run")
           )
         ).toBe(true);
         expect(prepare).toHaveBeenLastCalledWith(
@@ -3172,13 +3357,6 @@ describe("MigrationTuiApp", () => {
           "run",
           { limit: 1 }
         );
-        act(() => setup.mockInput.pressEscape());
-        expect(
-          await settle(
-            setup.renderOnce,
-            () => !setup.captureCharFrame().includes("Confirm run")
-          )
-        ).toBe(true);
         act(() => setup.mockInput.pressKey("r"));
         expect(
           await settle(
@@ -3189,7 +3367,7 @@ describe("MigrationTuiApp", () => {
           ),
           setup.captureCharFrame()
         ).toBe(true);
-        expect(start).toHaveBeenCalledTimes(2);
+        expect(start).toHaveBeenCalledTimes(3);
         expect(prepare).toHaveBeenLastCalledWith(
           { kind: "definitions", definitionIds: ["authors"] },
           "run",
@@ -3203,7 +3381,7 @@ describe("MigrationTuiApp", () => {
   );
 
   itWithOpenTui(
-    "requires a positive whole number before reviewing a limited run",
+    "requires a positive whole number before starting a limited run",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
         registry: makeLimitedRunConfig().registry,
@@ -3352,7 +3530,7 @@ describe("MigrationTuiApp", () => {
         expect(setup.captureCharFrame()).toContain("Run 3 entries");
         expect(setup.captureCharFrame()).toContain("↑↓ history");
         expect(setup.captureCharFrame()).toContain(
-          "f2 switch selection method"
+          "tab focus · ←→ selection method"
         );
         act(() => setup.mockInput.pressEnter());
         expect(
