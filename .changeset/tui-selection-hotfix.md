@@ -2,6 +2,9 @@
 "@migrate-sdk/tui": patch
 ---
 
-Start limited TUI runs directly and remember the selected method when reopening
-Run selected entries. Use Tab and arrow keys to switch methods, and keep history
-shortcuts from interfering with the selector and Run or Cancel buttons.
+Run a small number of items without an extra confirmation. The terminal app
+remembers your choice of **Next items** or **Source IDs** when you reopen
+**Run selected entries**.
+
+Use Tab and the arrow keys to change your choice. Pressing Space on **Run** or
+**Cancel** now activates that button without changing the items you selected.
