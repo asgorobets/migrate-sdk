@@ -333,6 +333,12 @@ live observation until all runs settle. An idle TUI discovers runs started by
 other clients on **R**. This is a TUI subscription policy; the server's shared
 dashboard observation contract and other clients remain unchanged.
 
+The renderer supervisor retains the last dashboard rows, active runs, and
+observation intent. Recovery remounts that state without a blocking status read:
+idle snapshots remain cached, while active observations and pending status reads
+resume in the background. Source Inventory Scans that discover active runs hand
+their snapshot to the dashboard and resume observation as well.
+
 The TUI requests messages only when the user presses **m** or opens Messages,
 for either a migration or a group. It caches successful results, including empty
 lists, per target and runtime. Navigation and unchanged status reads reuse the

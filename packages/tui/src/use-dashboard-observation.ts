@@ -4,7 +4,10 @@ import type {
   MigrateDashboardRow,
 } from "migrate-sdk/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { MigrationTuiRuntime, MigrationTuiSnapshot } from "./runtime.ts";
+import type {
+  MigrationTuiDashboardState,
+  MigrationTuiRuntime,
+} from "./runtime.ts";
 import {
   observedRunActivity,
   type SessionActivityInput,
@@ -19,8 +22,12 @@ interface DashboardObservationState {
 
 interface UseDashboardObservationOptions {
   readonly clearSourceScanStatuses: () => void;
+  readonly initialDashboardState?: MigrationTuiDashboardState | undefined;
   readonly initialRows?: readonly MigrateDashboardRow[] | undefined;
   readonly loadStatusOnStartup?: boolean | undefined;
+  readonly onDashboardStateChange?:
+    | ((state: MigrationTuiDashboardState) => void)
+    | undefined;
   readonly recordActivity: (activity: SessionActivityInput) => void;
   readonly recoveryNotice?: string | undefined;
   readonly runtime: MigrationTuiRuntime;
@@ -38,7 +45,7 @@ interface DashboardObservation {
     nextNotice?: string,
     options?: DashboardRefreshOptions
   ) => Promise<void>;
-  readonly startObservation: () => void;
+  readonly startObservation: (snapshot?: SessionRunActivitySnapshot) => void;
   readonly statusError: string | null;
   readonly statusLoading: boolean;
 }
@@ -48,20 +55,36 @@ const errorMessage = (cause: unknown): string =>
 
 export const useDashboardObservation = ({
   clearSourceScanStatuses,
+  initialDashboardState,
   initialRows,
   loadStatusOnStartup = true,
+  onDashboardStateChange,
   recordActivity,
   recoveryNotice,
   runtime,
   setNotice,
 }: UseDashboardObservationOptions): DashboardObservation => {
-  const [durableRows, setDurableRows] = useState(initialRows ?? runtime.rows);
-  const [activeRuns, setActiveRuns] = useState<readonly MigrateActiveRun[]>([]);
+  const [dashboard, setDashboard] = useState<MigrationTuiDashboardState>(() =>
+    initialDashboardState === undefined
+      ? {
+          rows: initialRows ?? runtime.rows,
+          activeRuns: [],
+          observing: loadStatusOnStartup,
+        }
+      : {
+          ...initialDashboardState,
+          observing:
+            initialDashboardState.observing ||
+            initialDashboardState.activeRuns.length > 0,
+        }
+  );
+  const dashboardRef = useRef(dashboard);
+  const { rows: durableRows, activeRuns } = dashboard;
   const [observationState, setObservationState] =
     useState<DashboardObservationState | null>(
-      loadStatusOnStartup ? { generation: 0, loading: true } : null
+      dashboard.observing ? { generation: 0, loading: true } : null
     );
-  const [statusLoading, setStatusLoading] = useState(loadStatusOnStartup);
+  const [statusLoading, setStatusLoading] = useState(dashboard.observing);
   const [statusError, setStatusError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | undefined>(undefined);
   const generationRef = useRef(0);
@@ -70,11 +93,25 @@ export const useDashboardObservation = ({
   const pendingRefreshRef = useRef<number | undefined>(undefined);
   const mountedRef = useRef(true);
   const observedRunSnapshotRef = useRef<SessionRunActivitySnapshot | undefined>(
-    undefined
+    initialDashboardState
   );
   const observedRuntimeRef = useRef(runtime);
+  const updateDashboard = useCallback(
+    (state: MigrationTuiDashboardState) => {
+      dashboardRef.current = state;
+      onDashboardStateChange?.(state);
+      setDashboard(state);
+    },
+    [onDashboardStateChange]
+  );
+  const setObserving = useCallback(
+    (observing: boolean) => {
+      updateDashboard({ ...dashboardRef.current, observing });
+    },
+    [updateDashboard]
+  );
   const applySnapshot = useCallback(
-    (snapshot: MigrationTuiSnapshot) => {
+    (snapshot: SessionRunActivitySnapshot) => {
       for (const activity of observedRunActivity(
         observedRunSnapshotRef.current,
         snapshot
@@ -83,10 +120,13 @@ export const useDashboardObservation = ({
       }
 
       observedRunSnapshotRef.current = snapshot;
-      setDurableRows(snapshot.rows);
-      setActiveRuns(snapshot.activeRuns);
+      updateDashboard({
+        rows: snapshot.rows,
+        activeRuns: snapshot.activeRuns,
+        observing: snapshot.activeRuns.length > 0,
+      });
     },
-    [recordActivity]
+    [recordActivity, updateDashboard]
   );
 
   const refresh = useCallback(
@@ -105,6 +145,7 @@ export const useDashboardObservation = ({
       pendingRefreshRef.current = requestId;
       refreshRequestRef.current = requestId;
       generationRef.current = nextGeneration;
+      setObserving(true);
       setStatusLoading(true);
       setStatusError(null);
       recordActivity({ kind: "status", message: "Reloading status…" });
@@ -137,6 +178,7 @@ export const useDashboardObservation = ({
         }
       } catch (cause) {
         if (mountedRef.current && requestId === refreshRequestRef.current) {
+          setObserving(false);
           const message = `Unable to load status: ${errorMessage(cause)}. Press R to retry.`;
           setStatusError(message);
           recordActivity({ kind: "error", message });
@@ -150,18 +192,36 @@ export const useDashboardObservation = ({
         }
       }
     },
-    [applySnapshot, clearSourceScanStatuses, runtime, recordActivity, setNotice]
+    [
+      applySnapshot,
+      clearSourceScanStatuses,
+      runtime,
+      recordActivity,
+      setNotice,
+      setObserving,
+    ]
   );
 
-  const startObservation = useCallback(() => {
-    refreshRequestRef.current += 1;
-    const generation = generationRef.current + 1;
-    generationRef.current = generation;
-    controllerRef.current?.abort();
-    setStatusError(null);
-    setStatusLoading(true);
-    setObservationState({ generation, loading: true });
-  }, []);
+  const startObservation = useCallback(
+    (snapshot?: SessionRunActivitySnapshot) => {
+      refreshRequestRef.current += 1;
+      const generation = generationRef.current + 1;
+      generationRef.current = generation;
+      controllerRef.current?.abort();
+      if (snapshot !== undefined) {
+        applySnapshot(snapshot);
+      }
+      setObserving(true);
+      setStatusError(null);
+      setStatusLoading(true);
+      setObservationState({ generation, loading: true });
+    },
+    [applySnapshot, setObserving]
+  );
+
+  useEffect(() => {
+    onDashboardStateChange?.(dashboardRef.current);
+  }, [onDashboardStateChange]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -221,6 +281,8 @@ export const useDashboardObservation = ({
           generation === generationRef.current
         ) {
           setStatusLoading(false);
+          setObserving(false);
+          setObservationState(null);
           const message = `Unable to load status: ${errorMessage(cause)}. Press R to retry.`;
           setStatusError(message);
           recordActivity({ kind: "error", message });
@@ -246,6 +308,7 @@ export const useDashboardObservation = ({
     recordActivity,
     runtime,
     setNotice,
+    setObserving,
   ]);
 
   return {

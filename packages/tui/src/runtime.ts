@@ -36,6 +36,12 @@ export interface MigrationTuiSnapshot {
   readonly scannedSource: boolean;
 }
 
+export interface MigrationTuiDashboardState {
+  readonly activeRuns: readonly MigrateActiveRun[];
+  readonly observing: boolean;
+  readonly rows: readonly MigrateDashboardRow[];
+}
+
 export type MigrationTuiSourceScanSnapshot = Omit<
   MigrationTuiSnapshot,
   "resumeToken"

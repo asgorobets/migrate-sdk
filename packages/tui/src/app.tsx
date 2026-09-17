@@ -61,7 +61,10 @@ import type { MigrationTuiExecutionResult } from "./execution.ts";
 import { nextListSelection } from "./list-navigation.ts";
 import { rollbackConfirmation } from "./rollback-confirmation.ts";
 import { prepareRollbackScope, type RollbackScope } from "./rollback-scope.ts";
-import type { MigrationTuiRuntime } from "./runtime.ts";
+import type {
+  MigrationTuiDashboardState,
+  MigrationTuiRuntime,
+} from "./runtime.ts";
 import {
   appendSessionActivity,
   defaultSessionActivityExportPath,
@@ -697,9 +700,11 @@ const SafetyDialog = ({
 };
 
 interface MigrationTuiAppProps {
+  readonly initialDashboardState?: MigrationTuiDashboardState;
   readonly initialRows?: readonly MigrateDashboardRow[];
   readonly lifecycle: MigrationTuiShutdownController;
   readonly loadStatusOnStartup?: boolean;
+  readonly onDashboardStateChange?: (state: MigrationTuiDashboardState) => void;
   readonly recoveryNotice?: string;
   readonly runtime: MigrationTuiRuntime;
 }
@@ -738,9 +743,11 @@ export const MigrationTuiApp = (props: MigrationTuiAppProps) => {
 };
 
 const MigrationTuiDashboardApp = ({
+  initialDashboardState,
   initialRows,
   loadStatusOnStartup = true,
   lifecycle,
+  onDashboardStateChange,
   recoveryNotice,
   runtime,
 }: MigrationTuiAppProps) => {
@@ -906,8 +913,10 @@ const MigrationTuiDashboardApp = ({
     statusLoading,
   } = useDashboardObservation({
     clearSourceScanStatuses,
+    initialDashboardState,
     initialRows,
     loadStatusOnStartup,
+    onDashboardStateChange,
     recordActivity: appendActivity,
     recoveryNotice,
     runtime,
@@ -1096,6 +1105,9 @@ const MigrationTuiDashboardApp = ({
             )
           )
         );
+        if (snapshot.activeRuns.length > 0) {
+          startObservation(snapshot);
+        }
         setNotice(`Source Inventory Scan complete for ${targetLabel(target)}`);
       } catch (cause) {
         setError(errorMessage(cause));
@@ -1109,6 +1121,7 @@ const MigrationTuiDashboardApp = ({
       setBusy,
       setError,
       setNotice,
+      startObservation,
     ]
   );
 

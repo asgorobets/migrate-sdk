@@ -117,10 +117,12 @@ export const initializeMigrationTuiRenderSession = ({
 };
 
 export const createMigrationTuiRenderSession = async ({
+  initialDashboardState,
   initialRows,
   loadStatusOnStartup = true,
   lifecycle,
   onControlC,
+  onDashboardStateChange,
   onRenderError,
   recoveryNotice,
   runtime,
@@ -139,9 +141,13 @@ export const createMigrationTuiRenderSession = async ({
       createRoot(renderer).render(
         <MigrationTuiRenderErrorBoundary onError={onRenderError}>
           <MigrationTuiApp
+            {...(initialDashboardState === undefined
+              ? {}
+              : { initialDashboardState })}
             {...(initialRows === undefined ? {} : { initialRows })}
             lifecycle={lifecycle}
             loadStatusOnStartup={loadStatusOnStartup}
+            onDashboardStateChange={onDashboardStateChange}
             {...(recoveryNotice === undefined ? {} : { recoveryNotice })}
             runtime={runtime}
           />

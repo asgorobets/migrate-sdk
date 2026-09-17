@@ -33,6 +33,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeLimitedRunConfig } from "../examples/limited-run.config.ts";
 import { MigrationTuiApp as MigrationTuiAppView } from "./app.tsx";
 import type { MigrationTuiExecutionResult } from "./execution.ts";
+import {
+  type MigrationTuiRenderSessionInput,
+  makeMigrationTuiLifecycleSupervisor,
+} from "./lifecycle-supervisor.ts";
 import { MigrationTuiRenderErrorBoundary } from "./render-session.tsx";
 import type {
   MigrationTuiDashboardObservationOptions,
@@ -451,6 +455,43 @@ const chooseSourceIds = async (
 ) => {
   await readySelectiveDialog(setup);
   await switchSelectionMethod(setup, "Source IDs");
+};
+
+const withActiveAuthorsRun = (
+  snapshot: MigrationTuiSnapshot
+): MigrationTuiSnapshot => {
+  const runId = toMigrationRunId("observed-test-run");
+  const definitionId = toMigrationDefinitionId("authors");
+  const startedAt = new Date("2026-09-17T12:00:00Z");
+  return {
+    ...snapshot,
+    activeRuns: [
+      {
+        runId,
+        definitionIds: [definitionId],
+        observationDefinitionId: definitionId,
+        status: "running",
+        startedAt,
+        stopSupported: true,
+      },
+    ],
+    rows: snapshot.rows.map((row) =>
+      row.entry.id !== definitionId || row.status === undefined
+        ? row
+        : {
+            ...row,
+            status: {
+              ...row.status,
+              lock: {
+                definitionId,
+                ownerRunId: runId,
+                token: toMigrationDefinitionLockToken("observed-test-lock"),
+                createdAt: startedAt,
+              },
+            },
+          }
+    ),
+  };
 };
 
 beforeAll(() => {
@@ -912,6 +953,232 @@ describe("MigrationTuiApp", () => {
           )
         ).toBe(true);
         expect(refresh).toHaveBeenCalledOnce();
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui.each(["unloaded", "idle", "active", "pending"] as const)(
+    "recovers a manual session without a hidden status read (%s)",
+    async (mode) => {
+      const base = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const idle = await base.refresh();
+      const running = withActiveAuthorsRun(idle);
+      const pending = Promise.withResolvers<MigrationTuiSnapshot>();
+      const refresh = vi.fn(() =>
+        mode === "pending"
+          ? pending.promise
+          : Promise.resolve(mode === "active" ? running : idle)
+      );
+      const observers: MigrationTuiDashboardObservationOptions[] = [];
+      const observeDashboard = vi.fn<MigrationTuiRuntime["observeDashboard"]>(
+        async (options) => {
+          observers.push(options);
+          if (observers.length === 1) {
+            options.onSnapshot(mode === "active" ? running : idle);
+          }
+          await new Promise<void>((resolve) => {
+            if (options.signal?.aborted) {
+              resolve();
+            } else {
+              options.signal?.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            }
+          });
+        }
+      );
+      const runtime = {
+        ...base,
+        refresh,
+        observeDashboard,
+        observeRun: () =>
+          new Promise<MigrationTuiExecutionResult>(() => undefined),
+      };
+      const sessions: {
+        readonly input: MigrationTuiRenderSessionInput;
+        readonly setup: Awaited<ReturnType<typeof createTestRenderer>>;
+      }[] = [];
+      const supervisor = makeMigrationTuiLifecycleSupervisor({
+        runtime,
+        createSession: async (input) => {
+          const setup = await createTestRenderer({ height: 30, width: 120 });
+          const root = createRoot(setup.renderer);
+          act(() =>
+            root.render(
+              <MigrationTuiAppView
+                {...input}
+                loadStatusOnStartup={false}
+                runtime={runtime}
+              />
+            )
+          );
+          sessions.push({ input, setup });
+          return {
+            destroy: () => {
+              act(() => root.unmount());
+              setup.renderer.destroy();
+            },
+          };
+        },
+        forceExit: vi.fn(),
+        setExitCode: vi.fn(),
+        signalSource: { on: vi.fn(), off: vi.fn() },
+        writeError: vi.fn(),
+      });
+      try {
+        await supervisor.start();
+        const first = sessions[0];
+        if (first === undefined) {
+          throw new Error("Expected initial renderer");
+        }
+        await act(async () => first.setup.renderOnce());
+        if (mode !== "unloaded") {
+          act(() => first.setup.mockInput.pressKey("r", { shift: true }));
+          expect(
+            await settle(first.setup.renderOnce, () => {
+              if (mode === "pending") {
+                return refresh.mock.calls.length === 1;
+              }
+              return first.setup
+                .captureCharFrame()
+                .includes(mode === "active" ? "v View run" : "Status reloaded");
+            })
+          ).toBe(true);
+        }
+        first.input.onRenderError(new Error("Recover this renderer"));
+        expect(
+          await settle(
+            async () => undefined,
+            () => sessions.length === 2
+          )
+        ).toBe(true);
+        const recovered = sessions[1];
+        if (recovered === undefined) {
+          throw new Error("Expected recovered renderer");
+        }
+        await act(async () => recovered.setup.renderOnce());
+        expect(recovered.setup.captureCharFrame()).toContain("authors");
+        expect(recovered.setup.captureCharFrame()).toContain("UI recovered");
+        expect(refresh).toHaveBeenCalledTimes(mode === "unloaded" ? 0 : 1);
+        if (mode === "active") {
+          expect(observeDashboard).toHaveBeenCalledTimes(2);
+          expect(recovered.setup.captureCharFrame()).toContain("v View run");
+          expect(recovered.setup.captureCharFrame()).toContain("x Stop");
+          act(() => observers[1]?.onSnapshot(idle));
+          expect(
+            await settle(
+              recovered.setup.renderOnce,
+              () => !recovered.setup.captureCharFrame().includes("v View run")
+            )
+          ).toBe(true);
+          expect(observers[1]?.signal?.aborted).toBe(true);
+        } else if (mode === "pending") {
+          expect(observeDashboard).toHaveBeenCalledOnce();
+          await act(async () => {
+            pending.resolve(running);
+            await pending.promise;
+          });
+          await act(async () => recovered.setup.renderOnce());
+          expect(recovered.setup.captureCharFrame()).not.toContain(
+            "v View run"
+          );
+          expect(recovered.setup.captureCharFrame()).toContain("run succeeded");
+        } else {
+          expect(observeDashboard).not.toHaveBeenCalled();
+          expect(recovered.setup.captureCharFrame()).toContain(
+            mode === "unloaded" ? "Status not loaded" : "run succeeded"
+          );
+        }
+      } finally {
+        await supervisor.lifecycle.requestExit();
+      }
+    }
+  );
+
+  itWithOpenTui.each([
+    { loadStatusOnStartup: false, group: false },
+    { loadStatusOnStartup: true, group: false },
+    { loadStatusOnStartup: false, group: true },
+    { loadStatusOnStartup: true, group: true },
+  ])(
+    "resumes live updates when a source scan discovers a run (%o)",
+    async ({ loadStatusOnStartup, group }) => {
+      const base = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const idle = await base.refresh();
+      const running = withActiveAuthorsRun(idle);
+      const scanSource = vi.fn(async () => running);
+      let publish:
+        | MigrationTuiDashboardObservationOptions["onSnapshot"]
+        | undefined;
+      let signal: AbortSignal | undefined;
+      const observeDashboard = vi.fn<MigrationTuiRuntime["observeDashboard"]>(
+        async (options) => {
+          publish = options.onSnapshot;
+          signal = options.signal;
+          options.onSnapshot(
+            scanSource.mock.calls.length === 0 ? idle : running
+          );
+          await new Promise<void>((resolve) => {
+            if (options.signal?.aborted) {
+              resolve();
+            } else {
+              options.signal?.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            }
+          });
+        }
+      );
+      const runtime = {
+        ...base,
+        scanSource,
+        observeDashboard,
+        observeRun: () =>
+          new Promise<MigrationTuiExecutionResult>(() => undefined),
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+      act(() =>
+        root.render(
+          <MigrationTuiApp
+            loadStatusOnStartup={loadStatusOnStartup}
+            runtime={runtime}
+          />
+        )
+      );
+      try {
+        await act(async () => setup.renderOnce());
+        const initialCalls = loadStatusOnStartup ? 1 : 0;
+        expect(observeDashboard).toHaveBeenCalledTimes(initialCalls);
+        if (group) {
+          act(() => setup.mockInput.pressKey("g"));
+          await act(async () => setup.renderOnce());
+        }
+        act(() => setup.mockInput.pressKey("s"));
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("v View run")
+        );
+        expect(setup.captureCharFrame()).toContain("v View run");
+        expect(setup.captureCharFrame()).toContain("x Stop");
+        expect(observeDashboard).toHaveBeenCalledTimes(initialCalls + 1);
+        act(() => publish?.(idle));
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => !setup.captureCharFrame().includes("v View run")
+          )
+        ).toBe(true);
+        expect(signal?.aborted).toBe(true);
+        expect(observeDashboard).toHaveBeenCalledTimes(initialCalls + 1);
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();

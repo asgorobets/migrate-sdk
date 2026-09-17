@@ -23,6 +23,10 @@ or you start a run from the TUI, live dashboard updates continue until no runs
 remain active. Runs started elsewhere while the dashboard is idle appear after
 **R**. Status failures leave the list usable and can be retried with **R**.
 
+If the renderer restarts after an error, it reuses the last dashboard state.
+An idle manual session stays idle; an active run resumes live updates. Source
+inventory scans that find active runs also restore live updates and run controls.
+
 Install it in the migration project alongside the SDK:
 
 ```sh
