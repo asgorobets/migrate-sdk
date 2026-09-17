@@ -1111,7 +1111,7 @@ const PrimaryActionButtons = ({
 
     return (
       <Button
-        disabled={disabled}
+        disabled={disabled || action.disabled === true}
         intent={primary.intent}
         key={action.id}
         label={compact ? primary.compactLabel : primary.label}

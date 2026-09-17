@@ -688,6 +688,14 @@ const SafetyDialog = ({
   );
 };
 
+const pendingStopMessage = (
+  runId: MigrationRunId | undefined,
+  pendingRunIds: ReadonlySet<MigrationRunId>
+): string =>
+  runId !== undefined && pendingRunIds.has(runId)
+    ? `Sending stop request for run ${runId}…`
+    : "";
+
 interface MigrationTuiAppProps {
   readonly initialRows?: readonly MigrateDashboardRow[];
   readonly lifecycle: MigrationTuiShutdownController;
@@ -749,6 +757,10 @@ const MigrationTuiDashboardApp = ({
   const [busy, setBusyState] = useState(
     initialRows === undefined ? "Loading status…" : ""
   );
+  const pendingStopRunIdsRef = useRef(new Set<MigrationRunId>());
+  const [pendingStopRunIds, setPendingStopRunIds] = useState<
+    ReadonlySet<MigrationRunId>
+  >(() => new Set());
   const [notice, setNoticeState] = useState<string | null>(
     recoveryNotice ?? null
   );
@@ -801,11 +813,15 @@ const MigrationTuiDashboardApp = ({
   const setStopResult = useCallback(
     (result: MigrateRunStopResult) => {
       const presentation = stopResultPresentation[result.kind];
-      setNoticeState(result.message);
+      const message =
+        result.kind === "requested"
+          ? `Stop requested for run ${result.runId}; waiting for active work to finish…`
+          : result.message;
+      setNoticeState(message);
       setNoticeTone(presentation.noticeTone);
       appendActivity({
         kind: presentation.activityKind,
-        message: result.message,
+        message,
       });
     },
     [appendActivity]
@@ -1006,6 +1022,9 @@ const MigrationTuiDashboardApp = ({
     [selectiveEntriesByDefinition, selectiveTarget]
   );
   const effectiveBusy = busy;
+  const displayedActivity =
+    effectiveBusy ||
+    pendingStopMessage(selectedActiveRun?.runId, pendingStopRunIds);
   const dashboardStateRef = useRef({
     busy: effectiveBusy,
     selectedRows,
@@ -1218,20 +1237,31 @@ const MigrationTuiDashboardApp = ({
 
   const stopRun = useCallback(
     async (runId: MigrationRunId) => {
+      if (pendingStopRunIdsRef.current.has(runId)) {
+        return;
+      }
+      pendingStopRunIdsRef.current.add(runId);
+      setPendingStopRunIds(new Set(pendingStopRunIdsRef.current));
       setView("dashboard");
-      setBusy(`Stopping run ${runId}…`);
+      appendActivity({
+        kind: "status",
+        message: `Sending stop request for run ${runId}…`,
+      });
       setError(null);
 
       try {
         const result = await runtime.stopRun(runId);
         setStopResult(result);
-        setBusy("");
       } catch (cause) {
-        setError(errorMessage(cause));
-        setBusy("");
+        setError(
+          `Unable to request stop for run ${runId}: ${errorMessage(cause)}`
+        );
+      } finally {
+        pendingStopRunIdsRef.current.delete(runId);
+        setPendingStopRunIds(new Set(pendingStopRunIdsRef.current));
       }
     },
-    [runtime, setBusy, setError, setStopResult]
+    [appendActivity, runtime, setError, setStopResult]
   );
 
   const prepareOperation = useCallback(
@@ -1672,7 +1702,7 @@ const MigrationTuiDashboardApp = ({
 
   const chooseOption = useCallback(
     (option: MigrationTuiAvailableAction | undefined) => {
-      if (option === undefined) {
+      if (option === undefined || option.disabled === true) {
         return;
       }
 
@@ -1741,9 +1771,10 @@ const MigrationTuiDashboardApp = ({
         : migrationTuiAvailableActions(
             selectedTarget,
             selectedRows,
-            activeRuns
+            activeRuns,
+            pendingStopRunIds
           ),
-    [activeRuns, selectedRows, selectedTarget]
+    [activeRuns, pendingStopRunIds, selectedRows, selectedTarget]
   );
 
   const openActivity = useCallback(() => {
@@ -2431,13 +2462,14 @@ const MigrationTuiDashboardApp = ({
           flexDirection: "column",
           flexShrink: 0,
           height:
-            effectiveBusy !== "" && (displayedError !== null || notice !== null)
+            displayedActivity !== "" &&
+            (displayedError !== null || notice !== null)
               ? 2
               : 1,
         }}
       >
-        {effectiveBusy === "" ? null : (
-          <text fg={colors.info}>{effectiveBusy}</text>
+        {displayedActivity === "" ? null : (
+          <text fg={colors.info}>{displayedActivity}</text>
         )}
         {displayedError === null ? null : (
           <text fg={colors.danger}>{displayedError}</text>
