@@ -446,6 +446,7 @@ describe("Local Migrate Server runtime", () => {
     });
     expect(liveProgressProviderObservations).toEqual([
       `detached-${detachedRunId}`,
+      `detached-${detachedRunId}`,
     ]);
   });
 

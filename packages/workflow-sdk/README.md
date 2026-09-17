@@ -44,12 +44,20 @@ This package currently implements the durable run boundary: allocate a migration
 run id, acquire definition locks, queue migration run state, start the Workflow
 SDK run, attach the Workflow SDK run id, then let the Workflow SDK workflow
 consume the locked run envelope through cursor-window steps. The executable can
-reattach to that Workflow SDK run id for native terminal observation. Each
-committed cursor window also publishes a checkpoint on the adapter's named
-progress stream. A checkpoint carries cumulative committed run counts, and
-reattachment begins with the most recent buffered checkpoint before following
-live updates. Clients can render those counts directly or refresh the affected
-migration in batches.
+reattach to that Workflow SDK run id for native terminal observation. While a
+step processes items, the adapter publishes the latest accumulated progress on
+its named stream at most once per second. Window completion and step exit flush
+pending progress; lifecycle changes notify observers immediately. Reattachment
+starts with the most recent buffered event before following live updates.
+
+These notifications carry current-run counts, not aggregate migration totals.
+The Migrate Server coalesces notifications before refreshing durable status, so
+clients see progress during long windows without a database read per item.
+Provider status is checked after thirty seconds without progress, immediately
+on lifecycle notifications, and when the stream closes. Without a stream,
+status reads back off from one to thirty seconds. Detaching observation cancels
+both status reconciliation and the progress reader. Publishing is best effort;
+durable reconciliation recovers missed updates.
 The migration store remains authoritative for migration status and item
 progress. Processing concurrency from the executable plan is applied to item
 admission and per-item work inside every cursor-window step. A `processBatch`

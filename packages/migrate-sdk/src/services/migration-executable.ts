@@ -7,6 +7,7 @@ import type {
   MigrationDefinitionExecutableRunPlan,
 } from "../domain/registry.ts";
 import type { RollbackRunSummary } from "../domain/rollback.ts";
+import type { RollbackProgressCounts } from "../domain/rollback-progress.ts";
 import type {
   AnyMigrationDefinition,
   ExecutionStartResult,
@@ -54,16 +55,23 @@ export type MigrationExecutableInlineRunStartError<
 export type MigrationExecutableInlineRollbackStartError =
   MigrationExecutableRollbackError;
 
-export interface MigrationExecutableProgressCheckpoint {
-  readonly counts: MigrationProgressCounts;
-  readonly definitionId: MigrationDefinitionId;
-  readonly kind: "source-cursor-window-completed";
-  readonly runId: MigrationRunId;
-}
+/** Execution updates are notifications, not a replacement for durable status. */
+export type MigrationExecutableObservationEvent =
+  | {
+      readonly counts: MigrationProgressCounts | RollbackProgressCounts;
+      readonly definitionId: MigrationDefinitionId;
+      readonly kind: "progress";
+      readonly runId: MigrationRunId;
+    }
+  | {
+      readonly definitionIds: readonly MigrationDefinitionId[];
+      readonly kind: "state-changed";
+      readonly runId: MigrationRunId;
+    };
 
 export interface MigrationExecutableObservationOptions {
-  readonly onProgressCheckpoint?: (
-    checkpoint: MigrationExecutableProgressCheckpoint
+  readonly onEvent?: (
+    event: MigrationExecutableObservationEvent
   ) => Effect.Effect<void>;
 }
 

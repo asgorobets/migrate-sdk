@@ -383,418 +383,34 @@ describe("Migrate Server", () => {
   );
 
   it.effect(
-    "resumes bounded observation leases after the last resume token",
-    () =>
-      Effect.gen(function* () {
-        const observationStarted = yield* Deferred.make<void>();
-        const thirdObservationStarted = yield* Deferred.make<void>();
-        let observationCount = 0;
-        let observer: MigrateServerExecutionObserver | undefined;
-        let durableDefinitions: Parameters<
-          MigrateServerExecutionObserver["onProgress"]
-        >[0]["definitions"] = [];
-        const progressLocators: Array<MigrationDefinitionId | undefined> = [];
-        const observationLocators: Array<MigrationDefinitionId | undefined> =
-          [];
-        const server = yield* makeServer(
-          makeBackend({
-            getActiveRuns: Effect.die("lease must not list all active runs"),
-            getDashboard: Effect.die("lease must not load the dashboard"),
-            getRunProgress: (_requestedRunId, observationDefinitionId) => {
-              progressLocators.push(observationDefinitionId);
-              return Effect.succeed(runProgress(durableDefinitions));
-            },
-            observeRun: (
-              _requestedRunId,
-              nextObserver,
-              observationDefinitionId
-            ) => {
-              observationCount += 1;
-              observationLocators.push(observationDefinitionId);
-              observer = nextObserver;
-              const started = Deferred.succeed(
-                observationStarted,
-                undefined
-              ).pipe(
-                Effect.andThen(
-                  observationCount === 2
-                    ? Deferred.succeed(thirdObservationStarted, undefined)
-                    : Effect.void
-                )
-              );
-
-              return started.pipe(Effect.andThen(Effect.never));
-            },
-          })
-        );
-        const initial = yield* server.observeRunLease({ runId });
-
-        expect(initial.kind).toBe("continuing");
-        if (initial.kind !== "continuing") {
-          return;
-        }
-        const initialResumeToken = initial.nextResumeToken;
-        expect(initial.events).toHaveLength(1);
-        expect(initial.events[0]?.event).toEqual({
-          definitions: [],
-          kind: "progress",
-        });
-        expect(initialResumeToken).toBeDefined();
-
-        const resumed = yield* server
-          .observeRunLease({ after: initialResumeToken, runId })
-          .pipe(Effect.forkChild);
-        yield* Deferred.await(observationStarted);
-        observer?.onStateChange({
-          adapter: "workflow-sdk",
-          definitionId: articlesId,
-          executionId: "workflow-run-1",
-          kind: "running",
-          ownership: "provider",
-          runId,
-        });
-        observer?.onObservationWarning("Following durable state");
-        durableDefinitions = [
-          {
-            definitionId: articlesId,
-            discovery: "incremental",
-            durable: {
-              failed: 0,
-              migrated: 1,
-              needsUpdate: 0,
-              skipped: 0,
-            },
-            lastRun: null,
-            lock: null,
-            warnings: [],
-          },
-        ];
-        observer?.onProgress({ definitions: durableDefinitions });
-        const next = yield* Fiber.join(resumed);
-
-        expect(next.kind).toBe("continuing");
-        if (next.kind !== "continuing") {
-          return;
-        }
-        expect(next.events.map((entry) => entry.event.kind)).toEqual([
-          "state",
-          "warning",
-          "progress",
-        ]);
-        expect(next.nextResumeToken).not.toBe(initialResumeToken);
-        expect(next.events.at(-1)?.event).toMatchObject({ kind: "progress" });
-        expect(progressLocators).toEqual([undefined, articlesId]);
-        expect(observationLocators).toEqual([articlesId]);
-
-        const heartbeat = yield* server
-          .observeRunLease({ after: next.nextResumeToken, runId })
-          .pipe(Effect.forkChild);
-        yield* Deferred.await(thirdObservationStarted);
-        observer?.onObservationWarning("Following durable state");
-        observer?.onProgress({ definitions: durableDefinitions });
-        yield* TestClock.adjust("20 seconds");
-
-        expect(yield* Fiber.join(heartbeat)).toEqual({ kind: "heartbeat" });
-      })
-  );
-
-  it.effect(
-    "delivers buffered server-owned lifecycle events once before resuming progress",
-    () =>
-      Effect.gen(function* () {
-        let durableMigrated = 0;
-        let observer: MigrateServerExecutionObserver | undefined;
-        const progressLocators: Array<MigrationDefinitionId | undefined> = [];
-        let progressRead: Deferred.Deferred<void> | undefined;
-        const migrationStatus = () => ({
-          definitionId: articlesId,
-          discovery: "incremental" as const,
-          durable: {
-            failed: 0,
-            migrated: durableMigrated,
-            needsUpdate: 0,
-            skipped: 0,
-          },
-          lastRun: null,
-          lock: null,
-          warnings: [],
-        });
-        const dashboardStatus = () => ({
-          activeRuns: [activeRun],
-          groups: [],
-          rows: [
-            {
-              entry: {
-                dependencies: { optional: [], required: [] },
-                hasRollback: true,
-                id: articlesId,
-              },
-              status: migrationStatus(),
-            },
-          ],
-          scannedSource: false,
-        });
-        const backend = makeBackend({
-          executeOperation: (_operation, nextObserver) => {
-            observer = nextObserver;
-            nextObserver.onStateChange({
-              adapter: "inline",
-              definitionId: articlesId,
-              kind: "running",
-              ownership: "server",
-              runId,
-            });
-            nextObserver.onObservationWarning("Execution started inline");
-            nextObserver.onProgress({ definitions: [migrationStatus()] });
-            return executionHandle(Effect.never);
-          },
-          getActiveRuns: Effect.succeed([activeRun]),
-          getDashboard: Effect.sync(dashboardStatus),
-          getRunProgress: (_requestedRunId, observationDefinitionId) => {
-            progressLocators.push(observationDefinitionId);
-            if (progressRead !== undefined) {
-              Deferred.doneUnsafe(progressRead, Effect.void);
-            }
-            return Effect.succeed(runProgress([migrationStatus()]));
-          },
-        });
-        const server = yield* makeServer(backend);
-        const request = {
-          action: "run" as const,
-          options: {},
-          selection: {
-            definitionIds: [articlesId] as const,
-            kind: "definitions" as const,
-          },
-        };
-        const operation = yield* server.prepareOperation(request);
-        yield* server.startOperation({
-          acceptedFingerprint: operation.fingerprint,
-          request,
-        });
-
-        const initial = yield* server.observeRunLease({ runId });
-        expect(initial.kind).toBe("continuing");
-        if (initial.kind !== "continuing") {
-          return;
-        }
-        let resumeToken = initial.nextResumeToken;
-        expect(resumeToken).toBeDefined();
-        expect(resumeToken.startsWith("execution:")).toBe(true);
-
-        progressRead = yield* Deferred.make<void>();
-        const bufferedLease = yield* server
-          .observeRunLease({ after: resumeToken, runId })
-          .pipe(Effect.forkChild);
-        yield* Deferred.await(progressRead);
-        progressRead = undefined;
-        observer?.onProgress({ definitions: [migrationStatus()] });
-        const buffered = yield* Fiber.join(bufferedLease);
-
-        expect(progressLocators).toEqual([undefined, articlesId]);
-        expect(buffered.kind).toBe("continuing");
-        if (buffered.kind !== "continuing") {
-          return;
-        }
-        expect(buffered.events.map((entry) => entry.event.kind)).toEqual([
-          "state",
-          "warning",
-          "progress",
-        ]);
-        resumeToken = buffered.nextResumeToken;
-
-        for (const migrated of [1, 2]) {
-          progressRead = yield* Deferred.make<void>();
-          const lease = yield* server
-            .observeRunLease({ after: resumeToken, runId })
-            .pipe(Effect.forkChild);
-          yield* Deferred.await(progressRead);
-          progressRead = undefined;
-          durableMigrated = migrated;
-          const publisher = yield* Effect.yieldNow.pipe(
-            Effect.andThen(
-              Effect.sync(() =>
-                observer?.onProgress({ definitions: [migrationStatus()] })
-              )
-            ),
-            Effect.forever,
-            Effect.forkChild
-          );
-          const resumed = yield* Fiber.join(lease);
-          yield* Fiber.interrupt(publisher);
-          expect(resumed.kind).toBe("continuing");
-          if (resumed.kind !== "continuing") {
-            return;
-          }
-          expect(resumed.events.map((entry) => entry.event.kind)).toEqual([
-            "progress",
-          ]);
-          expect(resumed.events.at(-1)?.event).toMatchObject({
-            definitions: [{ durable: { migrated } }],
-            kind: "progress",
-          });
-          resumeToken = resumed.nextResumeToken;
-        }
-
-        progressRead = yield* Deferred.make<void>();
-        const thirdLease = yield* server
-          .observeRunLease({ after: resumeToken, runId })
-          .pipe(Effect.forkChild);
-        yield* Deferred.await(progressRead);
-        progressRead = undefined;
-        durableMigrated = 3;
-        const publisher = yield* Effect.yieldNow.pipe(
-          Effect.andThen(
-            Effect.sync(() =>
-              observer?.onProgress({ definitions: [migrationStatus()] })
-            )
-          ),
-          Effect.forever,
-          Effect.forkChild
-        );
-        const third = yield* Fiber.join(thirdLease);
-        yield* Fiber.interrupt(publisher);
-
-        expect(third.kind).toBe("continuing");
-        if (third.kind !== "continuing") {
-          return;
-        }
-        expect(third.events[0]?.event).toMatchObject({
-          definitions: [{ durable: { migrated: 3 } }],
-          kind: "progress",
-        });
-
-        durableMigrated = 4;
-        const replacement = yield* makeServer(backend);
-        const replaced = yield* replacement.observeRunLease({
-          after: third.nextResumeToken,
-          runId,
-        });
-
-        expect(replaced.kind).toBe("continuing");
-        if (replaced.kind !== "continuing") {
-          return;
-        }
-        expect(replaced.events[0]?.event).toMatchObject({
-          definitions: [{ durable: { migrated: 4 } }],
-          kind: "progress",
-        });
-        expect(progressLocators).toEqual([
-          undefined,
-          articlesId,
-          articlesId,
-          articlesId,
-          articlesId,
-          articlesId,
-        ]);
-      })
-  );
-
-  it.effect("recovers changed durable progress after server replacement", () =>
-    Effect.gen(function* () {
-      let completed = false;
-      let durableMigrated = 0;
-      const getDashboard = Effect.sync(() => ({
-        activeRuns: [activeRun],
-        groups: [],
-        rows: [
-          {
-            entry: {
-              dependencies: { optional: [], required: [] },
-              hasRollback: true,
-              id: articlesId,
-            },
-            status: {
-              definitionId: articlesId,
-              discovery: "incremental" as const,
-              durable: {
-                failed: 0,
-                migrated: durableMigrated,
-                needsUpdate: 0,
-                skipped: 0,
-              },
-              lastRun: null,
-              lock: null,
-              warnings: [],
-            },
-          },
-        ],
-        scannedSource: false,
-      }));
-      const backend = makeBackend({
-        getActiveRuns: Effect.succeed([activeRun]),
-        getDashboard,
-        getRunProgress: () =>
-          Effect.map(getDashboard, (current) =>
-            runProgress(
-              current.rows.flatMap((row) =>
-                row.status === undefined ? [] : [row.status]
-              )
-            )
-          ),
-        observeRun: (requestedRunId) =>
-          completed
-            ? Effect.succeed({
-                message: `Run ${requestedRunId} succeeded`,
-                outcome: "completed" as const,
-                runId: requestedRunId,
-              })
-            : Effect.never,
-      });
-      const original = yield* makeServer(backend);
-      const initial = yield* original.observeRunLease({ runId });
-      expect(initial.kind).toBe("continuing");
-      if (initial.kind !== "continuing") {
-        return;
-      }
-
-      durableMigrated = 1;
-      const replacement = yield* makeServer(backend);
-      const resumed = yield* replacement.observeRunLease({
-        after: initial.nextResumeToken,
-        runId,
-      });
-
-      expect(resumed.kind).toBe("continuing");
-      if (resumed.kind !== "continuing") {
-        return;
-      }
-      expect(resumed.events[0]?.event).toMatchObject({
-        definitions: [{ durable: { migrated: 1 } }],
-        kind: "progress",
-      });
-
-      completed = true;
-      durableMigrated = 2;
-      const finalProgress = yield* replacement.observeRunLease({
-        after: resumed.nextResumeToken,
-        runId,
-      });
-
-      expect(finalProgress.kind).toBe("continuing");
-      if (finalProgress.kind !== "continuing") {
-        return;
-      }
-      expect(finalProgress.events[0]?.event).toMatchObject({
-        definitions: [{ durable: { migrated: 2 } }],
-        kind: "progress",
-      });
-
-      const terminal = yield* replacement.observeRunLease({
-        after: finalProgress.nextResumeToken,
-        runId,
-      });
-      expect(terminal.kind).toBe("terminal");
-    })
-  );
-
-  it.effect(
     "delivers final durable progress and lifecycle state before terminal completion",
     () =>
       Effect.gen(function* () {
+        let completed = false;
         const server = yield* makeServer(
           makeBackend({
-            getRunProgress: () => Effect.succeed(runProgress([])),
+            getRunProgress: () =>
+              Effect.sync(() =>
+                runProgress(
+                  completed
+                    ? [
+                        {
+                          definitionId: articlesId,
+                          discovery: "incremental",
+                          durable: {
+                            failed: 0,
+                            migrated: 1,
+                            needsUpdate: 0,
+                            skipped: 0,
+                          },
+                          lastRun: null,
+                          lock: null,
+                          warnings: [],
+                        },
+                      ]
+                    : []
+                )
+              ),
             observeRun: (requestedRunId, observer) => {
               observer.onStateChange({
                 adapter: "workflow-sdk",
@@ -805,6 +421,7 @@ describe("Migrate Server", () => {
                 runId: requestedRunId,
               });
 
+              completed = true;
               return Effect.succeed({
                 message: `Run ${requestedRunId} succeeded`,
                 outcome: "completed" as const,
@@ -813,29 +430,32 @@ describe("Migrate Server", () => {
             },
           })
         );
-        const progress = yield* server.observeRunLease({ runId });
-
-        expect(progress.kind).toBe("continuing");
-        if (progress.kind !== "continuing") {
-          return;
-        }
-        expect(progress.events.map((entry) => entry.event.kind)).toEqual([
-          "progress",
-        ]);
-
-        const terminal = yield* server.observeRunLease({
-          after: progress.nextResumeToken,
-          runId,
+        const frames = yield* server
+          .observeRunSession({ runId })
+          .pipe(Stream.runCollect);
+        const events = frames.flatMap((frame) => {
+          if (frame.kind === "heartbeat") {
+            return [];
+          }
+          return frame.kind === "terminal"
+            ? [...frame.events, frame.event]
+            : frame.events;
         });
-
-        expect(terminal.kind).toBe("terminal");
-        if (terminal.kind !== "terminal") {
-          return;
-        }
-        expect(terminal.events.map((entry) => entry.event.kind)).toEqual([
+        expect(events.map(({ event }) => event.kind)).toEqual([
+          "progress",
           "state",
+          "progress",
+          "terminal",
         ]);
-        expect(terminal.event.event).toMatchObject({
+        expect(events.at(-2)?.event).toMatchObject({
+          kind: "progress",
+          definitions: [{ durable: { migrated: 1 } }],
+        });
+        expect(frames.at(-1)).toMatchObject({
+          kind: "terminal",
+          events: [{ event: { kind: "progress" } }],
+        });
+        expect(events.at(-1)?.event).toMatchObject({
           kind: "terminal",
           outcome: "completed",
           runId,
@@ -846,30 +466,15 @@ describe("Migrate Server", () => {
   it.effect("rejects terminal completion without durable progress", () =>
     Effect.gen(function* () {
       const server = yield* makeServer(makeBackend());
-      const error = yield* Effect.flip(server.observeRunLease({ runId }));
+      const error = yield* Effect.flip(
+        server.observeRunSession({ runId }).pipe(Stream.runDrain)
+      );
 
       expect(error).toMatchObject({
         _tag: "MigrateOperationError",
         code: "operation-failed",
         message: `Unable to read final durable progress for Migration Run ${runId}`,
       });
-    })
-  );
-
-  it.effect("returns a heartbeat when an observation lease has no update", () =>
-    Effect.gen(function* () {
-      const server = yield* MigrateServer.make({
-        backend: makeBackend({ observeRun: () => Effect.never }),
-        observationLeaseDuration: "1 second",
-        ...serverIdentity,
-      });
-      const lease = yield* server
-        .observeRunLease({ runId })
-        .pipe(Effect.forkChild);
-
-      yield* TestClock.adjust("1 second");
-
-      expect(yield* Fiber.join(lease)).toEqual({ kind: "heartbeat" });
     })
   );
 
@@ -1726,10 +1331,11 @@ describe("Migrate Server", () => {
   );
 
   it.effect(
-    "discovers an externally started run through the fallback projection",
+    "reconciles external runs after thirty quiet seconds without five-second reads",
     () =>
       Effect.gen(function* () {
         const initialSnapshot = yield* Deferred.make<void>();
+        let reads = 0;
         let dashboard: MigrateDashboard = {
           activeRuns: [],
           groups: [],
@@ -1738,9 +1344,11 @@ describe("Migrate Server", () => {
         };
         const server = yield* MigrateServer.make({
           backend: makeBackend({
-            getDashboard: Effect.sync(() => dashboard),
+            getDashboard: Effect.sync(() => {
+              reads += 1;
+              return dashboard;
+            }),
           }),
-          dashboardFallbackInterval: "5 seconds",
           ...serverIdentity,
         });
         const snapshotsFiber = yield* server.observeDashboard({}).pipe(
@@ -1753,8 +1361,11 @@ describe("Migrate Server", () => {
 
         dashboard = { ...dashboard, activeRuns: [activeRun] };
         yield* Effect.yieldNow;
-        yield* TestClock.adjust("5 seconds");
+        yield* TestClock.adjust("29 seconds");
+        expect(reads).toBe(1);
+        yield* TestClock.adjust("1 second");
         const snapshots = yield* Fiber.join(snapshotsFiber);
+        expect(reads).toBe(2);
 
         expect(
           snapshots.map((snapshot) => snapshot.dashboard.activeRuns)
@@ -1762,7 +1373,7 @@ describe("Migrate Server", () => {
       })
   );
 
-  it.effect("reattaches a provider watcher after a transient failure", () =>
+  it.effect("backs off before reattaching a failed provider watcher", () =>
     Effect.gen(function* () {
       const initialSnapshot = yield* Deferred.make<void>();
       const secondWatcherAttached = yield* Deferred.make<void>();
@@ -1790,7 +1401,6 @@ describe("Migrate Server", () => {
             );
           },
         }),
-        dashboardFallbackInterval: "5 seconds",
         ...serverIdentity,
       });
       const snapshotsFiber = yield* server.observeDashboard({}).pipe(
@@ -1801,6 +1411,11 @@ describe("Migrate Server", () => {
       );
       yield* Deferred.await(initialSnapshot);
       yield* Effect.yieldNow;
+      yield* TestClock.adjust("29 seconds");
+      expect(watcherAttempts).toBe(1);
+      yield* TestClock.adjust("2 seconds");
+      // Explicit invalidation avoids racing the fallback timer with watcher cleanup.
+      yield* server.breakLock({ lock: definitionLock });
       yield* TestClock.adjust("1 second");
       yield* Deferred.await(secondWatcherAttached);
 
@@ -1808,7 +1423,8 @@ describe("Migrate Server", () => {
 
       dashboard = { ...dashboard, activeRuns: [] };
       yield* Effect.yieldNow;
-      yield* TestClock.adjust("5 seconds");
+      yield* server.breakLock({ lock: definitionLock });
+      yield* TestClock.adjust("1 second");
       const snapshots = yield* Fiber.join(snapshotsFiber);
 
       expect(
@@ -1963,70 +1579,217 @@ describe("Migrate Server", () => {
         yield* Fiber.interrupt(keeper);
       })
   );
+});
 
+describe("bounded HTTP observation sessions", () => {
   it.effect(
-    "resumes a dashboard lease from durable state after server replacement",
+    "retains owned events produced during the snapshot read and detaches without stopping execution",
     () =>
       Effect.gen(function* () {
-        const original = yield* makeServer(
+        const terminal = yield* Deferred.make<void>();
+        let observer: MigrateServerExecutionObserver | undefined;
+        let executionReleased = false;
+        let publishDuringRead = true;
+        const server = yield* makeServer(
           makeBackend({
-            getDashboard: Effect.succeed({
-              activeRuns: [],
-              groups: [],
-              rows: [],
-              scannedSource: false,
-            }),
+            executeOperation: (_operation, nextObserver) => {
+              observer = nextObserver;
+              nextObserver.onStateChange({
+                adapter: "inline",
+                definitionId: articlesId,
+                kind: "running",
+                ownership: "server",
+                runId,
+              });
+              return executionHandle(
+                Deferred.await(terminal).pipe(
+                  Effect.as({
+                    outcome: "completed" as const,
+                    runId,
+                    message: "Finished",
+                  }),
+                  Effect.ensuring(
+                    Effect.sync(() => {
+                      executionReleased = true;
+                    })
+                  )
+                )
+              );
+            },
+            getRunProgress: () =>
+              Effect.sync(() => {
+                if (publishDuringRead) {
+                  publishDuringRead = false;
+                  observer?.onObservationWarning(
+                    "Checkpoint committed during snapshot"
+                  );
+                  observer?.onProgress({ definitions: [] });
+                }
+                return runProgress([]);
+              }),
           })
         );
-        const initial = yield* original.observeDashboardLease({});
+        const request = {
+          action: "run" as const,
+          options: {},
+          selection: {
+            definitionIds: [articlesId] as const,
+            kind: "definitions" as const,
+          },
+        };
+        const operation = yield* server.prepareOperation(request);
+        yield* server.startOperation({
+          acceptedFingerprint: operation.fingerprint,
+          request,
+        });
+        const checkpoints = yield* server.observeRunSession({ runId }).pipe(
+          Stream.filter((frame) => frame.kind === "continuing"),
+          Stream.take(2),
+          Stream.runCollect
+        );
+        expect(
+          checkpoints.map((frame) =>
+            frame.events.map(({ event }) => event.kind)
+          )
+        ).toEqual([["progress"], ["warning"]]);
+        expect(executionReleased).toBe(false);
+        const after = checkpoints.at(-1)?.nextResumeToken;
+        expect(after).toBeDefined();
+        const resumed = yield* server.observeRunSession({ runId, after }).pipe(
+          Stream.filter((frame) => frame.kind !== "heartbeat"),
+          Stream.runCollect,
+          Effect.forkChild
+        );
+        yield* Deferred.succeed(terminal, undefined);
+        const events = yield* Fiber.join(resumed);
+        expect(events.map((frame) => frame.kind)).toEqual([
+          "continuing",
+          "terminal",
+        ]);
+        expect(executionReleased).toBe(true);
 
-        expect(initial.kind).toBe("snapshot");
-        if (initial.kind !== "snapshot") {
-          return;
-        }
-
+        // A replacement instance must recover the locator from an owned cursor.
+        expect(after?.startsWith("execution:")).toBe(true);
+        const locators: Array<MigrationDefinitionId | undefined> = [];
         const replacement = yield* makeServer(
           makeBackend({
-            getDashboard: Effect.succeed({
-              activeRuns: [activeRun],
-              groups: [],
-              rows: [],
-              scannedSource: false,
-            }),
+            getActiveRuns: Effect.die("must not list active runs"),
+            getDashboard: Effect.die("must not read the dashboard"),
+            getRunProgress: (_runId, definitionId) => {
+              locators.push(definitionId);
+              return Effect.succeed(runProgress([]));
+            },
+            observeRun: (_runId, _observer, definitionId) => {
+              expect(definitionId).toBe(articlesId);
+              return Effect.succeed({
+                message: "Finished",
+                outcome: "completed" as const,
+                runId,
+              });
+            },
           })
         );
-        const resumed = yield* replacement.observeDashboardLease({
-          after: initial.snapshot.resumeToken,
-        });
-
-        expect(resumed).toMatchObject({
-          kind: "snapshot",
-          snapshot: { dashboard: { activeRuns: [activeRun] } },
-        });
+        const recovered = yield* replacement
+          .observeRunSession({ runId, after })
+          .pipe(
+            Stream.filter((frame) => frame.kind !== "heartbeat"),
+            Stream.runCollect
+          );
+        expect(recovered.map((frame) => frame.kind)).toEqual([
+          "continuing",
+          "terminal",
+        ]);
+        expect(locators).toEqual([articlesId, articlesId]);
       })
   );
 
-  it.effect("returns a heartbeat when a dashboard lease has not changed", () =>
-    Effect.gen(function* () {
-      const server = yield* MigrateServer.make({
-        backend: makeBackend(),
-        dashboardFallbackInterval: "1 second",
-        observationLeaseDuration: "5 seconds",
-        ...serverIdentity,
-      });
-      const initial = yield* server.observeDashboardLease({});
+  it.effect(
+    "streams lifecycle and warnings immediately when no progress checkpoint follows",
+    () =>
+      Effect.gen(function* () {
+        const server = yield* makeServer(
+          makeBackend({
+            getRunProgress: () => Effect.succeed(runProgress([])),
+            observeRun: (_runId, observer) =>
+              Effect.sync(() => {
+                observer.onStateChange({
+                  definitionId: articlesId,
+                  kind: "cancelling",
+                  runId,
+                });
+                observer.onObservationWarning("Provider is unavailable");
+              }).pipe(Effect.andThen(Effect.never)),
+          })
+        );
+        const events = yield* server.observeRunSession({ runId }).pipe(
+          Stream.filter((frame) => frame.kind === "continuing"),
+          Stream.take(3),
+          Stream.runCollect
+        );
+        expect(
+          events.flatMap((frame) => frame.events.map(({ event }) => event.kind))
+        ).toEqual(["progress", "state", "warning"]);
+      })
+  );
 
-      expect(initial.kind).toBe("snapshot");
-      if (initial.kind !== "snapshot") {
-        return;
-      }
-
-      const heartbeatFiber = yield* server
-        .observeDashboardLease({ after: initial.snapshot.resumeToken })
-        .pipe(Effect.forkChild);
-      yield* TestClock.adjust("5 seconds");
-
-      expect(yield* Fiber.join(heartbeatFiber)).toEqual({ kind: "heartbeat" });
-    })
+  it.effect(
+    "sends heartbeats without reading durable state and stops its provider watcher when the session ends",
+    () =>
+      Effect.gen(function* () {
+        let reads = 0;
+        let attached = 0;
+        let detached = 0;
+        const started = yield* Deferred.make<void>();
+        const server = yield* MigrateServer.make({
+          backend: makeBackend({
+            getDashboard: Effect.sync(() => {
+              reads += 1;
+              return {
+                activeRuns: [activeRun],
+                groups: [],
+                rows: [],
+                scannedSource: false,
+              };
+            }),
+            watchDashboardRun: () =>
+              Effect.sync(() => {
+                attached += 1;
+              }).pipe(
+                Effect.andThen(Effect.never),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    detached += 1;
+                  })
+                )
+              ),
+          }),
+          dashboardFallbackInterval: "1 hour",
+          observationSessionDuration: "31 seconds",
+          ...serverIdentity,
+        });
+        const observer = yield* server.observeDashboardSession({}).pipe(
+          Stream.tap((event) =>
+            event.kind === "snapshot"
+              ? Deferred.succeed(started, undefined)
+              : Effect.void
+          ),
+          Stream.runCollect,
+          Effect.forkChild
+        );
+        yield* Deferred.await(started);
+        yield* TestClock.adjust("31 seconds");
+        const events = yield* Fiber.join(observer);
+        expect(events.map((event) => event.kind)).toEqual([
+          "heartbeat",
+          "snapshot",
+          "heartbeat",
+          "heartbeat",
+        ]);
+        expect(reads).toBe(1);
+        expect(attached).toBe(1);
+        expect(detached).toBe(1);
+        yield* TestClock.adjust("1 hour");
+        expect(reads).toBe(1);
+      })
   );
 });

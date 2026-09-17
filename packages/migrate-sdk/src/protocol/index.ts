@@ -26,7 +26,7 @@ import {
 
 import { SqlMigrationStoreSchemaPlan } from "../stores/sql/sql-migration-store-schema-plan.ts";
 
-export const MIGRATE_PROTOCOL_VERSION = 2;
+export const MIGRATE_PROTOCOL_VERSION = 3;
 
 const PositiveInteger = Schema.Finite.check(Schema.isInt()).check(
   Schema.isGreaterThan(0)
@@ -243,7 +243,7 @@ export const MigrateDashboardSnapshot = Schema.Struct({
 });
 export type MigrateDashboardSnapshot = typeof MigrateDashboardSnapshot.Type;
 
-export const MigrateDashboardLease = Schema.Union([
+export const MigrateDashboardFrame = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("heartbeat"),
   }),
@@ -252,7 +252,7 @@ export const MigrateDashboardLease = Schema.Union([
     snapshot: MigrateDashboardSnapshot,
   }),
 ]);
-export type MigrateDashboardLease = typeof MigrateDashboardLease.Type;
+export type MigrateDashboardFrame = typeof MigrateDashboardFrame.Type;
 
 export const MigrateDependencyCheck = Schema.Struct({
   dependencyId: MigrationDefinitionId,
@@ -500,7 +500,7 @@ const MigrateObservationContinuingEnvelope = Schema.Struct({
   event: MigrateObservationContinuingEvent,
 });
 
-export const MigrateObservationLease = Schema.Union([
+export const MigrateObservationFrame = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("heartbeat"),
   }),
@@ -515,7 +515,7 @@ export const MigrateObservationLease = Schema.Union([
     kind: Schema.Literal("terminal"),
   }),
 ]);
-export type MigrateObservationLease = typeof MigrateObservationLease.Type;
+export type MigrateObservationFrame = typeof MigrateObservationFrame.Type;
 
 export const MigrateRunStopResult = Schema.Union([
   Schema.Struct({
@@ -690,21 +690,24 @@ export class ObserveDashboard extends makeRpc("ObserveDashboard", {
   success: MigrateDashboardSnapshot,
 }) {}
 
-export class ObserveDashboardLease extends makeRpc("ObserveDashboardLease", {
-  error: MigrateProtocolError,
-  payload: {
-    after: Schema.optional(MigrateDashboardResumeToken),
-  },
-  success: MigrateDashboardLease,
-}) {}
+export class ObserveDashboardSession extends makeRpc(
+  "ObserveDashboardSession",
+  {
+    error: MigrateProtocolError,
+    payload: { after: Schema.optional(MigrateDashboardResumeToken) },
+    stream: true,
+    success: MigrateDashboardFrame,
+  }
+) {}
 
-export class ObserveRunLease extends makeRpc("ObserveRunLease", {
+export class ObserveRunSession extends makeRpc("ObserveRunSession", {
   error: MigrateProtocolError,
   payload: {
     after: Schema.optional(MigrateObservationResumeToken),
     runId: MigrationRunId,
   },
-  success: MigrateObservationLease,
+  stream: true,
+  success: MigrateObservationFrame,
 }) {}
 
 export class StopRun extends makeRpc("StopRun", {
@@ -754,8 +757,8 @@ export const MigrateStreamingRpcs = MigrateControlRpcs.add(
   ObserveRun
 );
 
-/** RPC surface used by bounded request/response transports such as HTTPS. */
+/** RPC surface for HTTPS controls and bounded, resumable observation streams. */
 export const MigrateHttpRpcs = MigrateControlRpcs.add(
-  ObserveDashboardLease,
-  ObserveRunLease
+  ObserveDashboardSession,
+  ObserveRunSession
 );

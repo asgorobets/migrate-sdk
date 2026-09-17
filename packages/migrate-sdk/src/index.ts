@@ -332,7 +332,7 @@ export type {
   MigrationExecutableInlineRunStartError,
   MigrationExecutableObservationOptions,
   MigrationExecutableObservationResult,
-  MigrationExecutableProgressCheckpoint,
+  MigrationExecutableObservationEvent,
   MigrationExecutableRollbackError,
   MigrationExecutableRollbackStartError,
   MigrationExecutableRunError,

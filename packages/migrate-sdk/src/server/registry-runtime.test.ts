@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Queue, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import {
   emptyMigrationProgressCounts,
   MigrationDefinition,
@@ -17,6 +18,145 @@ import { InMemoryMigrationStore } from "../stores/in-memory/in-memory-migration-
 import { makeRegistryMigrateServerRuntime } from "./registry-runtime.ts";
 
 describe("registry migration server runtime", () => {
+  it.effect(
+    "coalesces progress bursts without starving quiet definitions and bounds failed refresh retries",
+    () =>
+      Effect.gen(function* () {
+        const definitionId = toMigrationDefinitionId("progress-refresh");
+        const quietDefinitionId = toMigrationDefinitionId("quiet-definition");
+        const runId = toMigrationRunId("run-progress-refresh");
+        const storeLayer = InMemoryMigrationStore.layer(
+          InMemoryMigrationStore.makeState()
+        );
+        let summaryReads = 0;
+        let runStateReads = 0;
+        let quietReads = 0;
+        let failReads = false;
+        const measuredStore = Layer.effect(
+          MigrationStore,
+          MigrationStore.pipe(
+            Effect.map((store) => ({
+              ...store,
+              getRunState: (id) =>
+                Effect.sync(() => {
+                  runStateReads += 1;
+                }).pipe(Effect.andThen(store.getRunState(id))),
+              getItemStateSummary: (id) =>
+                Effect.sync(() => {
+                  if (id === definitionId) {
+                    summaryReads += 1;
+                  } else {
+                    quietReads += 1;
+                  }
+                }).pipe(
+                  Effect.andThen(
+                    Effect.suspend(() =>
+                      failReads
+                        ? Effect.fail(
+                            new MigrationStoreError({ message: "Unavailable" })
+                          )
+                        : store.getItemStateSummary(id)
+                    )
+                  )
+                ),
+            }))
+          )
+        ).pipe(Layer.provide(storeLayer));
+        const definition = MigrationDefinition.make({
+          id: definitionId,
+          process: () => Effect.void,
+          source: Source.make({
+            cursorSchema: Schema.Struct({ offset: Schema.Int }),
+            identity: SourceIdentity.make({
+              id: "progress-refresh@v1",
+              schema: SourceIdentity.key("id", Schema.NonEmptyString),
+            }),
+            lookupStrategy: "direct",
+            read: () => Effect.succeed({ items: [] }),
+            readByIdentity: () => Effect.succeed(null),
+            sourceSchema: Schema.Struct({ title: Schema.String }),
+          }),
+          store: measuredStore,
+        });
+        const quietDefinition = MigrationDefinition.make({
+          id: quietDefinitionId,
+          process: () => Effect.void,
+          source: definition.source,
+          store: measuredStore,
+        });
+        const definitionIds = [definitionId, quietDefinitionId];
+        yield* MigrationStore.pipe(
+          Effect.flatMap((store) =>
+            Effect.gen(function* () {
+              yield* store.queueRun({
+                runId,
+                definitionIds,
+                operation: "run",
+              });
+              yield* store.acquireDefinitionLock(definitionId, runId);
+              yield* store.acquireDefinitionLock(quietDefinitionId, runId);
+              yield* store.attachRunExecution(runId, definitionIds, {
+                adapter: "workflow-sdk",
+                executionId: "workflow-1",
+              });
+            })
+          ),
+          Effect.provide(storeLayer)
+        );
+        const attached = yield* Deferred.make<Effect.Effect<void>>();
+        const runtime = makeRegistryMigrateServerRuntime({
+          executable: {
+            ...MigrationExecutable.inlineService,
+            waitForExecution: (_execution, options) =>
+              Deferred.succeed(
+                attached,
+                options?.onEvent?.({
+                  counts: emptyMigrationProgressCounts,
+                  definitionId,
+                  kind: "progress",
+                  runId,
+                }) ?? Effect.void
+              ).pipe(Effect.andThen(Effect.never)),
+          },
+          registry: MigrationDefinitionRegistry.make({
+            definitions: [definition, quietDefinition],
+          }),
+        });
+        let warnings = 0;
+        const observer = yield* runtime
+          .observeRun(runId, {
+            onProgress: () => undefined,
+            onProgressError: () => {
+              warnings += 1;
+            },
+          })
+          .pipe(Effect.forkChild);
+        const checkpoint = yield* Deferred.await(attached);
+        const initialReads = summaryReads;
+        const initialRunStateReads = runStateReads;
+        const initialQuietReads = quietReads;
+        yield* TestClock.adjust("24 seconds");
+        expect(summaryReads).toBe(initialReads);
+        expect(quietReads).toBe(initialQuietReads);
+        yield* Effect.forEach(Array.from({ length: 100 }), () => checkpoint);
+        expect(summaryReads).toBe(initialReads);
+        yield* TestClock.adjust("24 seconds");
+        yield* checkpoint;
+        yield* TestClock.adjust("24 seconds");
+        expect(summaryReads - initialReads).toBe(2);
+        expect(quietReads - initialQuietReads).toBe(2);
+        yield* TestClock.adjust("7 seconds");
+        expect(summaryReads - initialReads).toBe(3);
+        failReads = true;
+        yield* TestClock.adjust("60 seconds");
+        expect(warnings).toBe(4);
+        expect(summaryReads - initialReads).toBe(5);
+        expect(runStateReads).toBe(initialRunStateReads);
+        yield* Fiber.interrupt(observer);
+        yield* TestClock.adjust("60 seconds");
+        expect(summaryReads - initialReads).toBe(5);
+      })
+  );
   it("constructs directly from an existing registry", () => {
     const runtime = makeRegistryMigrateServerRuntime({
       executable: MigrationExecutable.inlineService,
@@ -468,14 +608,12 @@ describe("registry migration server runtime", () => {
                 const checkpoint = {
                   counts: emptyMigrationProgressCounts,
                   definitionId,
-                  kind: "source-cursor-window-completed",
+                  kind: "progress",
                   runId,
                 } as const;
-                yield* options?.onProgressCheckpoint?.(checkpoint) ??
-                  Effect.void;
+                yield* options?.onEvent?.(checkpoint) ?? Effect.void;
                 yield* Deferred.await(futureCheckpoint);
-                yield* options?.onProgressCheckpoint?.(checkpoint) ??
-                  Effect.void;
+                yield* options?.onEvent?.(checkpoint) ?? Effect.void;
                 return yield* Effect.never;
               }),
           },

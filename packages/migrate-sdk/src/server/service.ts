@@ -28,7 +28,7 @@ import {
   type MigrateActiveRun,
   type MigrateBreakLockResult,
   MigrateDashboard,
-  type MigrateDashboardLease,
+  type MigrateDashboardFrame,
   MigrateDashboardResumeToken,
   type MigrateDashboardSnapshot,
   type MigrateDefinitionIds,
@@ -37,7 +37,7 @@ import {
   type MigrateExecutionState,
   type MigrateObservationContinuingEvent,
   MigrateObservationEvent,
-  type MigrateObservationLease,
+  type MigrateObservationFrame,
   MigrateObservationResumeToken,
   MigrateOperationError,
   type MigrateOperationRequest,
@@ -112,16 +112,16 @@ export interface MigrateServerService {
   readonly observeDashboard: (input: {
     readonly after?: MigrateDashboardResumeToken | undefined;
   }) => Stream.Stream<MigrateDashboardSnapshot, MigrateProtocolError>;
-  readonly observeDashboardLease: (input: {
+  readonly observeDashboardSession: (input: {
     readonly after?: MigrateDashboardResumeToken | undefined;
-  }) => Effect.Effect<MigrateDashboardLease, MigrateProtocolError>;
+  }) => Stream.Stream<MigrateDashboardFrame, MigrateProtocolError>;
   readonly observeRun: (input: {
     readonly runId: MigrationRunId;
   }) => Stream.Stream<MigrateObservationEvent, MigrateProtocolError>;
-  readonly observeRunLease: (input: {
+  readonly observeRunSession: (input: {
     readonly after?: MigrateObservationResumeToken | undefined;
     readonly runId: MigrationRunId;
-  }) => Effect.Effect<MigrateObservationLease, MigrateProtocolError>;
+  }) => Stream.Stream<MigrateObservationFrame, MigrateProtocolError>;
   readonly prepareOperation: (
     input: MigratePrepareOperationInput
   ) => Effect.Effect<MigratePreparedOperation, MigrateProtocolError>;
@@ -246,7 +246,7 @@ export interface MigrateServerInput<ExecutableOperation> {
   readonly dashboardProjectionInterval?: Duration.Input | undefined;
   readonly environment: MigrateEnvironmentInfo;
   readonly instanceId?: MigrateServerInstanceId | undefined;
-  readonly observationLeaseDuration?: Duration.Input | undefined;
+  readonly observationSessionDuration?: Duration.Input | undefined;
   readonly registryId?: MigrationDefinitionRegistryId | undefined;
   readonly sqlStore?: SqlMigrationStoreSchemaConfig | undefined;
 }
@@ -586,11 +586,11 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
   {
     backend,
     sqlStore,
-    dashboardFallbackInterval = "5 seconds",
+    dashboardFallbackInterval = "30 seconds",
     dashboardProjectionInterval = "1 second",
     environment,
     instanceId,
-    observationLeaseDuration = "20 seconds",
+    observationSessionDuration = "4 minutes",
     registryId,
   }: MigrateServerInput<ExecutableOperation>,
   runExecution: (effect: Effect.Effect<void>) => unknown,
@@ -939,12 +939,12 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
       }))
     );
 
-  const continuingLease = (
+  const continuingFrame = (
     events: readonly [
       ContinuingObservationEnvelope,
       ...ContinuingObservationEnvelope[],
     ]
-  ): MigrateObservationLease => {
+  ): MigrateObservationFrame => {
     const nextResumeToken = events.at(-1)?.resumeToken ?? events[0].resumeToken;
 
     return {
@@ -954,10 +954,10 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
     };
   };
 
-  const terminalLease = (
+  const terminalFrame = (
     completion: CompletionObservationEnvelope,
     events: readonly ContinuingObservationEnvelope[] = []
-  ): MigrateObservationLease => ({
+  ): Extract<MigrateObservationFrame, { kind: "terminal" }> => ({
     event: completion,
     events,
     kind: "terminal",
@@ -1008,37 +1008,6 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
   ): next is CompletionObservationEnvelope =>
     next.event.kind === "detached" || next.event.kind === "terminal";
 
-  const isObservationCheckpoint = (next: ObservationEnvelope): boolean =>
-    next.event.kind === "progress" ||
-    next.event.kind === "terminal" ||
-    next.event.kind === "detached";
-
-  const leaseFromObservedEvents = (
-    events: readonly ObservationEnvelope[]
-  ): MigrateObservationLease => {
-    const last = events.at(-1);
-
-    if (
-      last === undefined ||
-      last.event.kind === "state" ||
-      last.event.kind === "warning"
-    ) {
-      return { kind: "heartbeat" };
-    }
-
-    const continuingEvents = events.filter(isContinuingEnvelope);
-
-    if (isCompletionEnvelope(last)) {
-      return terminalLease(last, continuingEvents);
-    }
-
-    const first = continuingEvents[0];
-
-    return first === undefined
-      ? { kind: "heartbeat" }
-      : continuingLease([first, ...continuingEvents.slice(1)]);
-  };
-
   const observationResumePosition = (
     runId: MigrationRunId,
     after: MigrateObservationResumeToken | undefined
@@ -1067,14 +1036,14 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
     };
   };
 
-  const reconcileTerminalObservationLease = (
+  const reconcileTerminalObservationFrame = (
     runId: MigrationRunId,
     observationDefinitionId: MigrationDefinitionId | undefined,
     owned: ExecutionRecord | undefined,
     ownedPosition: ExecutionObservationResumePosition | undefined,
     seenEventToken: MigrateObservationResumeToken | undefined,
-    observedLease: Extract<MigrateObservationLease, { kind: "terminal" }>
-  ): Effect.Effect<MigrateObservationLease, MigrateProtocolError> =>
+    observedFrame: Extract<MigrateObservationFrame, { kind: "terminal" }>
+  ): Effect.Effect<MigrateObservationFrame, MigrateProtocolError> =>
     Effect.gen(function* () {
       const finalProgress = yield* initialRunProgress(
         runId,
@@ -1088,7 +1057,7 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
 
       if (
         finalEnvelope === undefined &&
-        observedLease.event.event.kind === "terminal"
+        observedFrame.event.event.kind === "terminal"
       ) {
         return yield* new MigrateOperationError({
           code: "operation-failed",
@@ -1102,91 +1071,127 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
           : resumeEventToken(finalEnvelope.resumeToken);
 
       if (finalEnvelope === undefined || finalEventToken === seenEventToken) {
-        return observedLease;
+        return observedFrame;
       }
 
-      const firstContinuingEvent = observedLease.events[0];
-
-      return firstContinuingEvent === undefined
-        ? continuingLease([finalEnvelope])
-        : continuingLease([
-            firstContinuingEvent,
-            ...observedLease.events.slice(1),
-            finalEnvelope,
-          ]);
+      return terminalFrame(observedFrame.event, [
+        ...observedFrame.events,
+        finalEnvelope,
+      ]);
     });
 
-  const observeRunLease = ({
+  const observationSession = <A>(
+    updates: Stream.Stream<A, MigrateProtocolError>
+  ): Stream.Stream<A | { readonly kind: "heartbeat" }, MigrateProtocolError> =>
+    Stream.succeed({ kind: "heartbeat" as const }).pipe(
+      Stream.concat(
+        updates.pipe(
+          Stream.merge(
+            Stream.tick("15 seconds").pipe(
+              Stream.drop(1),
+              Stream.map(() => ({ kind: "heartbeat" as const }))
+            ),
+            { haltStrategy: "left" }
+          )
+        )
+      ),
+      Stream.interruptWhen(Effect.sleep(observationSessionDuration))
+    );
+
+  const observeRunSession: MigrateServerService["observeRunSession"] = ({
     after,
     runId,
-  }: {
-    readonly after?: MigrateObservationResumeToken | undefined;
-    readonly runId: MigrationRunId;
-  }): Effect.Effect<MigrateObservationLease, MigrateProtocolError> =>
-    Effect.gen(function* () {
-      const {
-        owned,
-        ownedPosition,
-        requestedObservationDefinitionId,
-        seenEventToken,
-      } = observationResumePosition(runId, after);
-      const initial = yield* initialRunProgress(
-        runId,
-        requestedObservationDefinitionId
-      );
-      const observationDefinitionId =
-        initial?.observationDefinitionId ?? requestedObservationDefinitionId;
-      const initialEnvelope = yield* initialProgressEnvelope(
-        initial,
-        owned,
-        ownedPosition
-      );
-      const initialEventToken =
-        initialEnvelope === undefined
-          ? undefined
-          : resumeEventToken(initialEnvelope.resumeToken);
+  }) =>
+    observationSession(
+      Stream.unwrap(
+        Effect.gen(function* () {
+          const {
+            owned,
+            ownedPosition,
+            requestedObservationDefinitionId,
+            seenEventToken,
+          } = observationResumePosition(runId, after);
+          // Capture the owned event position before reading the snapshot so
+          // events produced during that read remain available for replay.
+          const startIndex =
+            owned === undefined
+              ? 0
+              : ownedObservationStartIndex(owned, ownedPosition);
+          const initial = yield* initialRunProgress(
+            runId,
+            requestedObservationDefinitionId
+          );
+          const observationDefinitionId =
+            initial?.observationDefinitionId ??
+            requestedObservationDefinitionId;
+          const initialEnvelope = yield* initialProgressEnvelope(
+            initial,
+            owned,
+            ownedPosition
+          );
+          let lastEventToken = seenEventToken;
+          const initialFrames: MigrateObservationFrame[] = [];
+          if (
+            initialEnvelope !== undefined &&
+            resumeEventToken(initialEnvelope.resumeToken) !== lastEventToken
+          ) {
+            initialFrames.push(continuingFrame([initialEnvelope]));
+            lastEventToken = resumeEventToken(initialEnvelope.resumeToken);
+          }
 
-      if (
-        initialEnvelope !== undefined &&
-        initialEventToken !== seenEventToken
-      ) {
-        return continuingLease([initialEnvelope]);
-      }
+          const events =
+            owned === undefined
+              ? observeBackendRun(runId, observationDefinitionId).pipe(
+                  Stream.mapEffect((event) =>
+                    observationDefinitionId === undefined
+                      ? envelope(event)
+                      : backendEnvelope(observationDefinitionId, event)
+                  )
+                )
+              : observeRecordEntriesFromIndex(owned, startIndex).pipe(
+                  Stream.mapEffect((entry) => ownedEnvelope(owned, entry))
+                );
 
-      const observation =
-        owned === undefined
-          ? observeBackendRun(runId, observationDefinitionId).pipe(
-              Stream.mapEffect((event) =>
-                observationDefinitionId === undefined
-                  ? envelope(event)
-                  : backendEnvelope(observationDefinitionId, event)
+          return Stream.fromIterable(initialFrames).pipe(
+            Stream.concat(
+              events.pipe(
+                Stream.mapEffect((next) =>
+                  Effect.gen(function* () {
+                    if (isContinuingEnvelope(next)) {
+                      if (next.event.kind === "progress") {
+                        const eventToken = resumeEventToken(next.resumeToken);
+                        // Compare with the last delivered progress, so A -> B -> A
+                        // remains observable even when warnings occur between updates.
+                        if (eventToken === lastEventToken) {
+                          return;
+                        }
+                        lastEventToken = eventToken;
+                      }
+                      // Lifecycle and warnings must not wait for another checkpoint:
+                      // a quiet session might expire before one arrives.
+                      return continuingFrame([next]);
+                    }
+                    if (!isCompletionEnvelope(next)) {
+                      return;
+                    }
+                    return yield* reconcileTerminalObservationFrame(
+                      runId,
+                      observationDefinitionId,
+                      owned,
+                      ownedPosition,
+                      lastEventToken,
+                      terminalFrame(next)
+                    );
+                  })
+                ),
+                Stream.filter((frame) => frame !== undefined),
+                Stream.takeUntil((frame) => frame.kind === "terminal")
               )
             )
-          : observeRecordEntriesFromIndex(
-              owned,
-              ownedObservationStartIndex(owned, ownedPosition)
-            ).pipe(Stream.mapEffect((entry) => ownedEnvelope(owned, entry)));
-      const events = yield* observation.pipe(
-        Stream.filter((next) => next.resumeToken !== after),
-        Stream.takeUntil(isObservationCheckpoint),
-        Stream.interruptWhen(Effect.sleep(observationLeaseDuration)),
-        Stream.runCollect
-      );
-      const observedLease = leaseFromObservedEvents(events);
-
-      if (observedLease.kind !== "terminal") {
-        return observedLease;
-      }
-
-      return yield* reconcileTerminalObservationLease(
-        runId,
-        observationDefinitionId,
-        owned,
-        ownedPosition,
-        seenEventToken,
-        observedLease
-      );
-    });
+          );
+        })
+      )
+    );
 
   const dashboardProjectionIntervalMs = Duration.toMillis(
     dashboardProjectionInterval
@@ -1253,7 +1258,9 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
               const watcher = backend
                 .watchDashboardRun(run, invalidateDashboard)
                 .pipe(
-                  Effect.ignore,
+                  // A failed provider may invalidate on exit. Keep its slot
+                  // through the reconciliation interval to avoid a retry loop.
+                  Effect.catch(() => Effect.sleep(dashboardFallbackInterval)),
                   Effect.ensuring(
                     Effect.sync(() => {
                       watcherKeys.delete(key);
@@ -1324,8 +1331,7 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
     })
   );
   const migrationServerService = (
-    observeDashboard: MigrateServerService["observeDashboard"],
-    observeDashboardLease: MigrateServerService["observeDashboardLease"]
+    observeDashboard: MigrateServerService["observeDashboard"]
   ): MigrateServerService => ({
     breakLock: ({ lock }) =>
       backend
@@ -1359,9 +1365,14 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
         .normalizeSourceIdentity(definitionId, sourceIdentity)
         .pipe(Effect.mapError(operationError)),
     observeDashboard,
-    observeDashboardLease,
+    observeDashboardSession: (input) =>
+      observationSession(
+        observeDashboard(input).pipe(
+          Stream.map((snapshot) => ({ kind: "snapshot" as const, snapshot }))
+        )
+      ),
     observeRun,
-    observeRunLease,
+    observeRunSession,
     prepareOperation: prepare,
     scanSource: ({ concurrency, target }) =>
       backend
@@ -1600,21 +1611,7 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
           })
         );
 
-      return migrationServerService(observeDashboard, ({ after }) =>
-        observeDashboard({ after }).pipe(
-          Stream.interruptWhen(Effect.sleep(observationLeaseDuration)),
-          Stream.runHead,
-          Effect.map(
-            Option.match({
-              onNone: () => ({ kind: "heartbeat" as const }),
-              onSome: (snapshot) => ({
-                kind: "snapshot" as const,
-                snapshot,
-              }),
-            })
-          )
-        )
-      );
+      return migrationServerService(observeDashboard);
     })
   );
 };

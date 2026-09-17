@@ -66,11 +66,13 @@ export { MigrationExecutable } from "./services/migration-executable.ts";
 export type {
   MigrationExecutableObservationOptions,
   MigrationExecutableObservationResult,
-  MigrationExecutableProgressCheckpoint,
+  MigrationExecutableObservationEvent,
   MigrationExecutableRollbackError,
   MigrationExecutableRunError,
   MigrationExecutableService,
 } from "./services/migration-executable.ts";
+export type { RollbackProgressEvent } from "./domain/rollback-progress.ts";
+export { RollbackProgress } from "./services/rollback-progress.ts";
 export { MigrationProgress } from "./services/migration-progress.ts";
 export { MigrationExecution } from "./services/migration-execution.ts";
 export type {

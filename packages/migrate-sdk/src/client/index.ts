@@ -1,5 +1,6 @@
 import {
   Context,
+  Duration,
   Effect,
   Layer,
   Option,
@@ -16,11 +17,10 @@ import type { Rpcs } from "effect/unstable/rpc/RpcGroup";
 import type { MigrationRunId } from "../domain/ids.ts";
 import {
   type MigrateDashboardResumeToken,
-  type MigrateDashboardSnapshot,
   MigrateHttpRpcs,
   type MigrateObservationEvent,
+  type MigrateObservationFrame,
   type MigrateObservationResumeToken,
-  type MigrateProtocolError,
   MigrateStreamingRpcs,
 } from "../protocol/index.ts";
 import {
@@ -39,117 +39,134 @@ export type { MigrateClientService } from "./internal/client-service.ts";
 
 const transientHttpStatuses = new Set([408, 429, 500, 502, 503, 504]);
 
-const retryableHttpObservationFailure = (cause: unknown): boolean =>
-  Schema.is(RpcClientError)(cause) &&
-  cause.reason._tag === "HttpError" &&
-  (cause.reason.kind === "TransportError" ||
-    cause.reason.kind === "EmptyBodyError" ||
-    (cause.reason.kind === "StatusCodeError" &&
-      Option.exists(rpcClientHttpStatusCode(cause), (status) =>
-        transientHttpStatuses.has(status)
-      )));
+const retryableHttpObservationFailure = (cause: unknown): boolean => {
+  if (!Schema.is(RpcClientError)(cause)) {
+    return false;
+  }
+  const reason = cause.reason;
+  if (reason._tag === "RpcClientDefect") {
+    // Effect reports an interrupted RPC body as a protocol defect when the
+    // connection ends cleanly before the RPC completion frame arrives.
+    return (
+      reason.message === "HTTP response ended before RPC request completed" ||
+      reason.message === "Received empty HTTP response from RPC server"
+    );
+  }
+  return (
+    reason._tag === "HttpError" &&
+    (reason.kind === "TransportError" ||
+      reason.kind === "EmptyBodyError" ||
+      // HTTP DecodeError means reading the response body failed. Malformed
+      // NDJSON is a separate RpcClientDefect and must not be retried.
+      reason.kind === "DecodeError" ||
+      (reason.kind === "StatusCodeError" &&
+        Option.exists(rpcClientHttpStatusCode(cause), (status) =>
+          transientHttpStatuses.has(status)
+        )))
+  );
+};
 
-const leasedObservation = (
+const observationRetrySchedule = Schedule.exponential("1 second").pipe(
+  Schedule.modifyDelay(({ duration }) =>
+    Effect.succeed(Math.min(Duration.toMillis(duration), 30_000))
+  ),
+  Schedule.jittered
+);
+
+const observationStreamRetrySchedule = observationRetrySchedule.pipe(
+  Schedule.while(({ input }) =>
+    Effect.succeed(retryableHttpObservationFailure(input))
+  )
+);
+
+const frameEvents = (
+  frame: MigrateObservationFrame
+): readonly MigrateObservationEvent[] => {
+  switch (frame.kind) {
+    case "heartbeat":
+      return [];
+    case "continuing":
+      return frame.events.map(({ event }) => event);
+    case "terminal":
+      return [...frame.events.map(({ event }) => event), frame.event.event];
+    default: {
+      const unhandled: never = frame;
+      return unhandled;
+    }
+  }
+};
+
+const sessionRunObservation = (
   client: MigrateHttpRpcClient,
   runId: MigrationRunId
-): Stream.Stream<
-  MigrateObservationEvent,
-  MigrateProtocolError | RpcClientError
-> =>
-  Stream.paginate(
-    { resumeToken: undefined as MigrateObservationResumeToken | undefined },
-    ({ resumeToken }) =>
-      client
-        .ObserveRunLease({
-          ...(resumeToken === undefined ? {} : { after: resumeToken }),
-          runId,
+) =>
+  Stream.suspend(() => {
+    let after: MigrateObservationResumeToken | undefined;
+    return Stream.suspend(() =>
+      client.ObserveRunSession({
+        runId,
+        ...(after === undefined ? {} : { after }),
+      })
+    ).pipe(
+      // Heartbeats count as activity even when no migration state changes.
+      Stream.timeout("45 seconds"),
+      Stream.filter((frame) => frame.kind !== "heartbeat"),
+      Stream.tap((frame) =>
+        Effect.sync(() => {
+          if (frame.kind === "continuing") {
+            after = frame.nextResumeToken;
+          }
         })
-        .pipe(
-          Effect.retry({
-            schedule: Schedule.spaced("1 second"),
-            while: retryableHttpObservationFailure,
-          }),
-          Effect.map((lease) => {
-            switch (lease.kind) {
-              case "terminal":
-                return [
-                  [
-                    ...lease.events.map((envelope) => envelope.event),
-                    lease.event.event,
-                  ] as readonly MigrateObservationEvent[],
-                  Option.none(),
-                ] as const;
-              case "continuing":
-                return [
-                  lease.events.map((envelope) => envelope.event),
-                  Option.some({ resumeToken: lease.nextResumeToken }),
-                ] as const;
-              case "heartbeat":
-                return [
-                  [] as readonly MigrateObservationEvent[],
-                  Option.some({ resumeToken }),
-                ] as const;
-              default: {
-                const unhandled: never = lease;
-                return unhandled;
-              }
-            }
-          })
-        )
-  );
+      ),
+      Stream.retry(observationStreamRetrySchedule),
+      Stream.repeat(Schedule.spaced("250 millis")),
+      Stream.takeUntil((frame) => frame.kind === "terminal"),
+      Stream.flatMap((frame) => Stream.fromIterable(frameEvents(frame)))
+    );
+  });
 
-const leasedDashboardObservation = (
+const sessionDashboardObservation = (
   client: MigrateHttpRpcClient,
-  after?: MigrateDashboardResumeToken
-): Stream.Stream<
-  MigrateDashboardSnapshot,
-  MigrateProtocolError | RpcClientError
-> =>
-  Stream.paginate({ resumeToken: after }, ({ resumeToken }) =>
-    client
-      .ObserveDashboardLease(
-        resumeToken === undefined ? {} : { after: resumeToken }
-      )
-      .pipe(
-        Effect.retry({
-          schedule: Schedule.spaced("1 second"),
-          while: retryableHttpObservationFailure,
-        }),
-        Effect.map((lease) =>
-          lease.kind === "heartbeat"
-            ? ([
-                [] as readonly MigrateDashboardSnapshot[],
-                Option.some({ resumeToken }),
-              ] as const)
-            : ([
-                [lease.snapshot] as readonly MigrateDashboardSnapshot[],
-                Option.some({
-                  resumeToken: lease.snapshot.resumeToken,
-                }),
-              ] as const)
-        )
-      )
-  );
+  initialAfter?: MigrateDashboardResumeToken
+) =>
+  Stream.suspend(() => {
+    let after = initialAfter;
+    return Stream.suspend(() =>
+      client.ObserveDashboardSession(after === undefined ? {} : { after })
+    ).pipe(
+      Stream.timeout("45 seconds"),
+      Stream.filter((frame) => frame.kind === "snapshot"),
+      Stream.map((frame) => frame.snapshot),
+      Stream.tap((snapshot) =>
+        Effect.sync(() => {
+          after = snapshot.resumeToken;
+        })
+      ),
+      Stream.retry(observationStreamRetrySchedule),
+      Stream.repeat(Schedule.spaced("250 millis"))
+    );
+  });
 
 const makeStreamingClient = makeRpcClient(MigrateStreamingRpcs).pipe(
   Effect.map(makeStreamingMigrateClientService)
-);
-
-const makeHttpClient = makeRpcClient(MigrateHttpRpcs).pipe(
-  Effect.map((client) =>
-    makeMigrateClientService(
-      client,
-      ({ after }) => leasedDashboardObservation(client, after),
-      ({ runId }) => leasedObservation(client, runId)
-    )
-  )
 );
 
 export class MigrateClient extends Context.Service<
   MigrateClient,
   MigrateClientService
 >()("@migrate-sdk/client/MigrateClient") {
-  static readonly httpLayer = Layer.effect(MigrateClient, makeHttpClient);
+  static readonly httpLayer = Layer.effect(
+    MigrateClient,
+    makeRpcClient(MigrateHttpRpcs).pipe(
+      Effect.map((client) =>
+        makeMigrateClientService(
+          client,
+          ({ after }) => sessionDashboardObservation(client, after),
+          ({ runId }) => sessionRunObservation(client, runId)
+        )
+      )
+    )
+  );
 
   static readonly streamingLayer = Layer.effect(
     MigrateClient,

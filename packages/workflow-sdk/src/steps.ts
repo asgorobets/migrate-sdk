@@ -179,7 +179,7 @@ export const beginMigrationRunExecutionEnvelope = (
     });
 
     return { rollbackOrphans: job.plan.rollbackOrphans === true };
-  });
+  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
 
 export const executeMigrationRunCursorWindow = (input: {
   readonly definitionId: MigrationDefinitionId;
@@ -225,8 +225,8 @@ export const executeMigrationRunCursorWindow = (input: {
         state: input.state,
       },
       job.plan.execution?.process
-    ).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
-  });
+    );
+  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
 
 export const executeMigrationRunRollbackOrphansPage = (input: {
   readonly definitionId: MigrationDefinitionId;
@@ -282,7 +282,7 @@ export const executeMigrationRunRollbackOrphansPage = (input: {
       },
       job.plan.execution?.rollback
     );
-  });
+  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
 
 export const completeMigrationRunExecutionEnvelope = (input: {
   readonly definitions: MigrationRunSummary["definitions"];
@@ -300,7 +300,7 @@ export const completeMigrationRunExecutionEnvelope = (input: {
       lease,
       storeLayer,
     });
-  });
+  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
 
 export const cancelMigrationRunExecutionEnvelope = (input: {
   readonly definitions: MigrationRunSummary["definitions"];
@@ -318,7 +318,7 @@ export const cancelMigrationRunExecutionEnvelope = (input: {
       lease,
       storeLayer,
     });
-  });
+  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
 
 export const failMigrationRunExecutionEnvelope = (input: {
   readonly definitions: MigrationRunSummary["definitions"];
@@ -353,7 +353,7 @@ export const failMigrationRunExecutionEnvelope = (input: {
       lease,
       storeLayer,
     });
-  });
+  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
 
 export const executeMigrationRollbackExecutionEnvelope = (
   envelope: MigrationRollbackExecutionEnvelopeType
@@ -370,4 +370,4 @@ export const executeMigrationRollbackExecutionEnvelope = (
       ...job.options,
       lease,
     });
-  });
+  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));

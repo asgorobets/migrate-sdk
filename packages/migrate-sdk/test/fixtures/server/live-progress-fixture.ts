@@ -4,7 +4,7 @@ import {
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecutable,
-  type MigrationExecutableProgressCheckpoint,
+  type MigrationExecutableObservationEvent,
   MigrationProgress,
   type MigrationRunSummary,
   type MigrationRunTerminalResult,
@@ -51,9 +51,9 @@ const makeDefinition = (itemDelayMs: number) =>
 export const liveProgressProviderObservations: string[] = [];
 
 interface DetachedRun {
-  readonly checkpoints: MigrationExecutableProgressCheckpoint[];
+  readonly checkpoints: MigrationExecutableObservationEvent[];
   readonly listeners: Set<
-    (checkpoint: MigrationExecutableProgressCheckpoint) => void
+    (checkpoint: MigrationExecutableObservationEvent) => void
   >;
   readonly wait: Effect.Effect<MigrationRunTerminalResult<MigrationRunSummary>>;
 }
@@ -78,9 +78,9 @@ const makeDetachedExecutableLayer = (observationFails: boolean) =>
         )
       ),
     startRun: (plan) => {
-      const checkpoints: MigrationExecutableProgressCheckpoint[] = [];
+      const checkpoints: MigrationExecutableObservationEvent[] = [];
       const listeners = new Set<
-        (checkpoint: MigrationExecutableProgressCheckpoint) => void
+        (checkpoint: MigrationExecutableObservationEvent) => void
       >();
       const providerProgress = Layer.succeed(MigrationProgress, {
         emit: (event) =>
@@ -177,11 +177,9 @@ const makeDetachedExecutableLayer = (observationFails: boolean) =>
           return { kind: "failed" as const };
         }
 
-        const publish = (checkpoint: MigrationExecutableProgressCheckpoint) => {
-          if (options?.onProgressCheckpoint !== undefined) {
-            Effect.runForkWith(context)(
-              options.onProgressCheckpoint(checkpoint)
-            );
+        const publish = (checkpoint: MigrationExecutableObservationEvent) => {
+          if (options?.onEvent !== undefined) {
+            Effect.runForkWith(context)(options.onEvent(checkpoint));
           }
         };
         for (const checkpoint of run.checkpoints) {

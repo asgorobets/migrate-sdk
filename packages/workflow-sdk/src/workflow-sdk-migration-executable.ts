@@ -1,4 +1,4 @@
-import { Effect, Exit, Filter, Layer, Schema, Stream } from "effect";
+import { Effect, Exit, Filter, Layer, Queue, Schema, Stream } from "effect";
 import {
   type ExecutionStartResult,
   type MigrationDefinitionExecutableRollbackPlan,
@@ -8,7 +8,6 @@ import {
   MigrationExecutable,
   type MigrationExecutableObservationOptions,
   type MigrationExecutableObservationResult,
-  type MigrationProgressCounts,
   type MigrationRunId,
   MigrationRunId as MigrationRunIdSchema,
   MigrationRunSummary,
@@ -33,7 +32,7 @@ import type {
   WorkflowSdkMigrationRunEnvelope,
 } from "./migration-envelope.ts";
 import {
-  WorkflowSdkMigrationProgressCheckpoint,
+  WorkflowSdkMigrationObservationEvent,
   workflowSdkMigrationProgressStreamNamespace,
 } from "./migration-progress.ts";
 import {
@@ -89,27 +88,13 @@ export class WorkflowSdkMigrationExecutableObservationError extends Schema.Tagge
   }
 ) {}
 
-const toMigrationProgressCounts = (
-  counts: WorkflowSdkMigrationProgressCheckpoint["counts"]
-): MigrationProgressCounts => ({
-  failed: counts.failed,
-  migrated: counts.migrated,
-  needsUpdate: counts.needsUpdate,
-  ...(counts.orphaned === undefined ? {} : { orphaned: counts.orphaned }),
-  ...(counts.rollbackFailed === undefined
-    ? {}
-    : { rollbackFailed: counts.rollbackFailed }),
-  ...(counts.rolledBack === undefined ? {} : { rolledBack: counts.rolledBack }),
-  skipped: counts.skipped,
-  unchanged: counts.unchanged,
-});
-
 const observeWorkflowProgress = (
   run: WorkflowSdkRun,
   options: MigrationExecutableObservationOptions,
   observationError: (
     cause: unknown
-  ) => WorkflowSdkMigrationExecutableObservationError
+  ) => WorkflowSdkMigrationExecutableObservationError,
+  activity: (kind: "progress" | "state-changed") => Effect.Effect<void>
 ) =>
   Effect.tryPromise({
     try: async () => {
@@ -136,18 +121,28 @@ const observeWorkflowProgress = (
       }).pipe(
         Stream.filterMap(
           Filter.fromPredicateOption(
-            Schema.decodeUnknownOption(WorkflowSdkMigrationProgressCheckpoint)
+            Schema.decodeUnknownOption(WorkflowSdkMigrationObservationEvent)
           )
         ),
-        Stream.runForEach(
-          (checkpoint) =>
-            options.onProgressCheckpoint?.({
-              counts: toMigrationProgressCounts(checkpoint.counts),
-              definitionId: toMigrationDefinitionId(checkpoint.definitionId),
-              kind: checkpoint.kind,
-              runId: toMigrationRunId(checkpoint.runId),
-            }) ?? Effect.void
-        )
+        Stream.runForEach((event) => {
+          const notification =
+            event.kind === "progress"
+              ? {
+                  ...event,
+                  definitionId: toMigrationDefinitionId(event.definitionId),
+                  runId: toMigrationRunId(event.runId),
+                }
+              : {
+                  ...event,
+                  definitionIds: event.definitionIds.map(
+                    toMigrationDefinitionId
+                  ),
+                  runId: toMigrationRunId(event.runId),
+                };
+          return (options.onEvent?.(notification) ?? Effect.void).pipe(
+            Effect.andThen(activity(event.kind))
+          );
+        })
       )
     )
   );
@@ -156,7 +151,9 @@ const observeWorkflowTerminal = (
   run: WorkflowSdkRun,
   observationError: (
     cause: unknown
-  ) => WorkflowSdkMigrationExecutableObservationError
+  ) => WorkflowSdkMigrationExecutableObservationError,
+  progressEnded?: Effect.Effect<void>,
+  activity?: Effect.Effect<"progress" | "state-changed">
 ): Effect.Effect<
   MigrationExecutableObservationResult,
   WorkflowSdkMigrationExecutableObservationError
@@ -185,10 +182,31 @@ const observeWorkflowTerminal = (
 
   return Effect.gen(function* () {
     let status = yield* readStatus;
+    let followingProgress = progressEnded !== undefined;
+    let delayMs = followingProgress ? 30_000 : 1000;
 
     while (status === "pending" || status === "running") {
-      yield* Effect.sleep("1 second");
-      status = yield* readStatus;
+      const signal = yield* Effect.raceFirst(
+        Effect.raceFirst(
+          Effect.sleep(delayMs).pipe(Effect.as("timeout" as const)),
+          activity ?? Effect.never
+        ),
+        progressEnded?.pipe(Effect.as("ended" as const)) ?? Effect.never
+      );
+      if (signal === "progress") {
+        continue;
+      }
+      const ended = signal === "ended";
+      followingProgress = followingProgress && !ended;
+      const nextStatus = yield* readStatus;
+      if (followingProgress) {
+        delayMs = 30_000;
+      } else if (ended || nextStatus !== status) {
+        delayMs = 1000;
+      } else {
+        delayMs = Math.min(delayMs * 2, 30_000);
+      }
+      status = nextStatus;
     }
 
     if (status === "cancelled") {
@@ -592,21 +610,38 @@ export const WorkflowSdkMigrationExecutable = {
               .pipe(Effect.mapError((error) => observationError(error.cause)));
 
             return getRun.pipe(
-              Effect.flatMap((run) => {
-                const terminal = observeWorkflowTerminal(run, observationError);
+              Effect.flatMap((run) =>
+                Effect.gen(function* () {
+                  if (options.onEvent === undefined) {
+                    return yield* observeWorkflowTerminal(
+                      run,
+                      observationError
+                    );
+                  }
 
-                if (options.onProgressCheckpoint === undefined) {
-                  return terminal;
-                }
+                  const progressEnded = yield* Queue.sliding<void>(1);
+                  const activity = yield* Queue.sliding<
+                    "progress" | "state-changed"
+                  >(1);
+                  const terminal = observeWorkflowTerminal(
+                    run,
+                    observationError,
+                    Queue.take(progressEnded),
+                    Queue.take(activity)
+                  );
+                  const progress = observeWorkflowProgress(
+                    run,
+                    options,
+                    observationError,
+                    (kind) => Queue.offer(activity, kind).pipe(Effect.asVoid)
+                  ).pipe(
+                    Effect.andThen(Queue.offer(progressEnded, undefined)),
+                    Effect.andThen(Effect.never)
+                  );
 
-                const progress = observeWorkflowProgress(
-                  run,
-                  options,
-                  observationError
-                ).pipe(Effect.andThen(Effect.never));
-
-                return Effect.raceFirst(terminal, progress);
-              })
+                  return yield* Effect.raceFirst(terminal, progress);
+                })
+              )
             );
           },
         };

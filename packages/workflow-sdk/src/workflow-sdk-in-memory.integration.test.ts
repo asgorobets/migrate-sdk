@@ -2,7 +2,7 @@ import { Effect, Layer } from "effect";
 import {
   type MigrationDefinitionRegistryRunInput,
   MigrationExecutable,
-  type MigrationExecutableProgressCheckpoint,
+  type MigrationExecutableObservationEvent,
   MigrationStore,
   toMigrationDefinitionId,
 } from "migrate-sdk";
@@ -24,6 +24,7 @@ import {
   inMemoryMigrationTestRegistry,
   inMemoryMigrationTestStoreState,
   interruptInMemoryMigrationTestWorkflowAt,
+  pauseInMemoryMigrationTestProcessingAfter,
   removeInMemoryMigrationTestSourceItem,
   resetInMemoryMigrationTestState,
   setInMemoryMigrationTestSourceItemCount,
@@ -419,89 +420,89 @@ test("Workflow SDK observes a durable cancellation request between cursor-window
   expect(inMemoryMigrationTestStoreState.itemStates.size).toBeLessThan(1000);
 });
 
-test("Workflow SDK streams committed cursor-window checkpoints during a detached run", async () => {
+test("Workflow SDK streams progress before a cursor window commits and reports the final result", async () => {
   resetInMemoryMigrationTestState();
-  const execution = await startInMemoryMigrationRun();
-  const checkpoints: MigrationExecutableProgressCheckpoint[] = [];
+  const resume = pauseInMemoryMigrationTestProcessingAfter(10);
+  const execution = await startInMemoryMigrationRun(false, 1);
+  const events: MigrationExecutableObservationEvent[] = [];
+  let receivedProgress: () => void = () => undefined;
+  const liveProgress = new Promise<void>((resolve) => {
+    receivedProgress = resolve;
+  });
   const waitForExecution = execution.executable.waitForExecution;
-
   if (waitForExecution === undefined) {
-    throw new Error("Expected Workflow SDK execution observation");
+    throw new Error("Expected Workflow observation");
   }
-
-  const observed = await Effect.runPromise(
+  const observation = Effect.runPromise(
     waitForExecution(
       {
         adapter: execution.started.execution.adapter,
         executionId: execution.run.runId,
       },
       {
-        onProgressCheckpoint: (checkpoint) =>
-          Effect.sync(() => checkpoints.push(checkpoint)),
+        onEvent: (event) =>
+          Effect.sync(() => {
+            events.push(event);
+            if (event.kind === "progress") {
+              receivedProgress();
+            }
+          }),
       }
     )
   );
-
-  expect(observed).toEqual({
+  try {
+    await Promise.race([
+      liveProgress,
+      observation.then(() => {
+        throw new Error("Execution finished before live progress");
+      }),
+    ]);
+    expect(events).toContainEqual({
+      counts: {
+        failed: 0,
+        migrated: 10,
+        needsUpdate: 0,
+        skipped: 0,
+        unchanged: 0,
+      },
+      definitionId: "articles",
+      kind: "progress",
+      runId: execution.started.runId,
+    });
+    expect(inMemoryMigrationTestStoreState.sourceCursorCommits).toHaveLength(0);
+    expect(inMemoryMigrationTestStoreState.itemStates.size).toBe(10);
+    expect(await execution.run.status).toBe("running");
+  } finally {
+    resume();
+  }
+  expect(await observation).toEqual({
     kind: "succeeded",
     summary: expect.objectContaining({
       runId: execution.started.runId,
       status: "succeeded",
     }),
   });
+  expect(events).toContainEqual({
+    counts: {
+      failed: 0,
+      migrated: 100,
+      needsUpdate: 0,
+      skipped: 0,
+      unchanged: 0,
+    },
+    definitionId: "articles",
+    kind: "progress",
+    runId: execution.started.runId,
+  });
+  expect(events).toContainEqual({
+    definitionIds: ["articles"],
+    kind: "state-changed",
+    runId: execution.started.runId,
+  });
   const progressStream = execution.run.getReadable({
     namespace: workflowSdkMigrationProgressStreamNamespace,
   });
-  expect(await progressStream.getTailIndex()).toBe(1);
-  const progressReader = execution.run
-    .getReadable({
-      namespace: workflowSdkMigrationProgressStreamNamespace,
-      startIndex: 0,
-    })
-    .getReader();
-  const firstRawCheckpoint = await progressReader.read();
-  await progressReader.cancel();
-  expect(firstRawCheckpoint).toEqual({
-    done: false,
-    value: {
-      counts: {
-        failed: 0,
-        migrated: 50,
-        needsUpdate: 0,
-        skipped: 0,
-        unchanged: 0,
-      },
-      definitionId: "articles",
-      kind: "source-cursor-window-completed",
-      runId: execution.started.runId,
-    },
-  });
-  expect(checkpoints).toEqual([
-    {
-      counts: {
-        failed: 0,
-        migrated: 50,
-        needsUpdate: 0,
-        skipped: 0,
-        unchanged: 0,
-      },
-      definitionId: "articles",
-      kind: "source-cursor-window-completed",
-      runId: execution.started.runId,
-    },
-    {
-      counts: {
-        failed: 0,
-        migrated: 100,
-        needsUpdate: 0,
-        skipped: 0,
-        unchanged: 0,
-      },
-      definitionId: "articles",
-      kind: "source-cursor-window-completed",
-      runId: execution.started.runId,
-    },
-  ]);
+  expect(await progressStream.getTailIndex()).toBeGreaterThan(1);
 });
 
 test("Workflow SDK restarts Rollback Orphans from the beginning after interruption between source windows", async () => {
