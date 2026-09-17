@@ -1013,9 +1013,9 @@ const MigrationTuiDashboardApp = ({
     runtime,
   });
   const refreshDashboard = useCallback(
-    async (nextNotice?: string) => {
+    async (...args: Parameters<typeof refresh>) => {
       clearSourceItemTotalCache();
-      await refresh(nextNotice);
+      await refresh(...args);
     },
     [clearSourceItemTotalCache, refresh]
   );
@@ -2170,7 +2170,7 @@ const MigrationTuiDashboardApp = ({
       }
 
       if (key.name === "r" && key.shift) {
-        startTask(refreshDashboard());
+        startTask(refreshDashboard(undefined, { coalesce: true }));
         return;
       }
 

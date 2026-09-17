@@ -27,10 +27,17 @@ interface UseDashboardObservationOptions {
   readonly setNotice: (message: string | null) => void;
 }
 
+interface DashboardRefreshOptions {
+  readonly coalesce?: boolean;
+}
+
 interface DashboardObservation {
   readonly activeRuns: readonly MigrateActiveRun[];
   readonly durableRows: readonly MigrateDashboardRow[];
-  readonly refresh: (nextNotice?: string) => Promise<void>;
+  readonly refresh: (
+    nextNotice?: string,
+    options?: DashboardRefreshOptions
+  ) => Promise<void>;
   readonly startObservation: () => void;
   readonly statusError: string | null;
   readonly statusLoading: boolean;
@@ -60,7 +67,7 @@ export const useDashboardObservation = ({
   const generationRef = useRef(0);
   const observationPromiseRef = useRef<Promise<void> | undefined>(undefined);
   const refreshRequestRef = useRef(0);
-  const refreshingRef = useRef(false);
+  const pendingRefreshRef = useRef<number | undefined>(undefined);
   const mountedRef = useRef(true);
   const observedRunSnapshotRef = useRef<SessionRunActivitySnapshot | undefined>(
     undefined
@@ -83,13 +90,19 @@ export const useDashboardObservation = ({
   );
 
   const refresh = useCallback(
-    async (nextNotice = "Status reloaded") => {
-      if (refreshingRef.current) {
+    async (
+      nextNotice = "Status reloaded",
+      options?: DashboardRefreshOptions
+    ) => {
+      if (
+        options?.coalesce &&
+        pendingRefreshRef.current === refreshRequestRef.current
+      ) {
         return;
       }
-      refreshingRef.current = true;
       const requestId = refreshRequestRef.current + 1;
       const nextGeneration = generationRef.current + 1;
+      pendingRefreshRef.current = requestId;
       refreshRequestRef.current = requestId;
       generationRef.current = nextGeneration;
       setStatusLoading(true);
@@ -129,7 +142,9 @@ export const useDashboardObservation = ({
           recordActivity({ kind: "error", message });
         }
       } finally {
-        refreshingRef.current = false;
+        if (pendingRefreshRef.current === requestId) {
+          pendingRefreshRef.current = undefined;
+        }
         if (mountedRef.current && requestId === refreshRequestRef.current) {
           setStatusLoading(false);
         }

@@ -296,7 +296,10 @@ const formatDate = (date: Date | undefined): string => {
 };
 
 const lastRunLabel = (row: MigrateDashboardRow): string => {
-  const lastRun = row.status?.lastRun;
+  if (row.status === undefined) {
+    return "Run history not loaded";
+  }
+  const lastRun = row.status.lastRun;
 
   if (lastRun === null || lastRun === undefined) {
     return "never run";
@@ -771,12 +774,16 @@ const Capabilities = ({ row }: { readonly row: MigrateDashboardRow }) => (
       tone="success"
     />
     <Checkbox checked disabled label="Source Inventory Scan" tone="success" />
-    <Checkbox
-      checked={row.status?.discovery === "incremental"}
-      disabled
-      label="Incremental"
-      tone="success"
-    />
+    {row.status === undefined ? (
+      <text fg={migrationColors.dim}>Incremental: not loaded</text>
+    ) : (
+      <Checkbox
+        checked={row.status.discovery === "incremental"}
+        disabled
+        label="Incremental"
+        tone="success"
+      />
+    )}
   </box>
 );
 

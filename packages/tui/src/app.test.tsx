@@ -499,6 +499,9 @@ describe("MigrationTuiApp", () => {
         expect(setup.captureCharFrame()).toContain("authors");
         expect(setup.captureCharFrame()).toContain("Loading status…");
         expect(setup.captureCharFrame()).toContain("NOT LOADED");
+        expect(setup.captureCharFrame()).toContain("Run history not loaded");
+        expect(setup.captureCharFrame()).toContain("Incremental: not loaded");
+        expect(setup.captureCharFrame()).not.toContain("never run");
         expect(setup.captureCharFrame()).not.toContain("0 / 4");
         act(() => setup.mockInput.pressKey("r"));
         expect(
@@ -577,6 +580,90 @@ describe("MigrationTuiApp", () => {
         expect(refresh).toHaveBeenCalledTimes(2);
         expect(observeDashboard).not.toHaveBeenCalled();
         expect(setup.captureCharFrame()).not.toContain("Store unavailable");
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "shows unloaded history and discovery until status is requested",
+    async () => {
+      const base = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const snapshot = await base.refresh();
+      const pending = Promise.withResolvers<MigrationTuiSnapshot>();
+      const refresh = vi
+        .fn<MigrationTuiRuntime["refresh"]>()
+        .mockImplementationOnce(() => pending.promise)
+        .mockResolvedValue({
+          ...snapshot,
+          rows: snapshot.rows.map((row) =>
+            row.status === undefined
+              ? row
+              : { ...row, status: { ...row.status, lastRun: null } }
+          ),
+        });
+      const runtime = { ...base, refresh };
+      const setup = await createTestRenderer({ height: 30, width: 140 });
+      const root = createRoot(setup.renderer);
+      act(() =>
+        root.render(
+          <MigrationTuiApp loadStatusOnStartup={false} runtime={runtime} />
+        )
+      );
+      try {
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).not.toContain("never run");
+        expect(setup.captureCharFrame()).toContain("Run history not loaded");
+        expect(setup.captureCharFrame()).toContain("Incremental: not loaded");
+        expect(refresh).not.toHaveBeenCalled();
+
+        act(() => setup.mockInput.pressKey("r", { shift: true }));
+        expect(
+          await settle(setup.renderOnce, () => refresh.mock.calls.length === 1)
+        ).toBe(true);
+        expect(setup.captureCharFrame()).not.toContain("never run");
+        expect(setup.captureCharFrame()).toContain("Incremental: not loaded");
+
+        await act(async () => {
+          pending.resolve({
+            ...snapshot,
+            rows: snapshot.rows.map((row) =>
+              row.status === undefined
+                ? row
+                : {
+                    ...row,
+                    status: { ...row.status, discovery: "incremental" },
+                  }
+            ),
+          });
+          await pending.promise;
+        });
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain("run succeeded");
+        expect(setup.captureCharFrame()).toContain("✓ Incremental");
+        expect(setup.captureCharFrame()).not.toContain(
+          "Run history not loaded"
+        );
+        expect(setup.captureCharFrame()).not.toContain(
+          "Incremental: not loaded"
+        );
+
+        act(() => setup.mockInput.pressKey("r", { shift: true }));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("never run")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).not.toContain("✓ Incremental");
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
@@ -3174,6 +3261,125 @@ describe("MigrationTuiApp", () => {
             );
           })
         ).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui.each(["before", "after"] as const)(
+    "refreshes a cleared lock when an older status reload finishes %s the fresh read",
+    async (oldResponseOrder) => {
+      const base = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("locked.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const snapshot = await base.refresh();
+      const locked: MigrationTuiSnapshot = {
+        ...snapshot,
+        rows: snapshot.rows.map((row) =>
+          row.status === undefined
+            ? row
+            : {
+                ...row,
+                status: {
+                  ...row.status,
+                  lock: {
+                    definitionId: row.entry.id,
+                    ownerRunId: toMigrationRunId("run-stuck"),
+                    token: toMigrationDefinitionLockToken("lock-stuck"),
+                    createdAt: new Date("2026-08-23T05:30:00.000Z"),
+                  },
+                },
+              }
+        ),
+      };
+      const fresh: MigrationTuiSnapshot = {
+        ...snapshot,
+        rows: snapshot.rows.map((row) =>
+          row.status === undefined
+            ? row
+            : { ...row, status: { ...row.status, lock: null } }
+        ),
+      };
+      const breakLock = vi.fn<MigrationTuiRuntime["breakLock"]>(
+        async (lock) => ({
+          definitionId: lock.definitionId,
+          kind: "cleared",
+        })
+      );
+      const pending = Promise.withResolvers<MigrationTuiSnapshot>();
+      const pendingFresh = Promise.withResolvers<MigrationTuiSnapshot>();
+      const refresh = vi
+        .fn<MigrationTuiRuntime["refresh"]>()
+        .mockImplementationOnce(() => pending.promise)
+        .mockImplementationOnce(() => pendingFresh.promise);
+      const runtime: MigrationTuiRuntime = {
+        ...base,
+        breakLock,
+        rows: locked.rows,
+        refresh,
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+      act(() =>
+        root.render(
+          <MigrationTuiApp loadStatusOnStartup={false} runtime={runtime} />
+        )
+      );
+      try {
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).toContain("u Break lock");
+        act(() => setup.mockInput.pressKey("r", { shift: true }));
+        expect(
+          await settle(setup.renderOnce, () => refresh.mock.calls.length === 1)
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("u"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Break migration lock")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("y"));
+        expect(
+          await settle(setup.renderOnce, () => refresh.mock.calls.length === 2)
+        ).toBe(true);
+        expect(breakLock).toHaveBeenCalledOnce();
+        if (oldResponseOrder === "before") {
+          await act(async () => {
+            pending.resolve(locked);
+            await pending.promise;
+          });
+          await act(async () => setup.renderOnce());
+          expect(setup.captureCharFrame()).toContain("Breaking lock for");
+        }
+        await act(async () => {
+          pendingFresh.resolve(fresh);
+          await pendingFresh.promise;
+        });
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup
+              .captureCharFrame()
+              .includes("Lock cleared for locked-migration")
+          )
+        ).toBe(true);
+        expect(refresh).toHaveBeenCalledTimes(2);
+        expect(setup.captureCharFrame()).not.toContain("u Break lock");
+
+        if (oldResponseOrder === "after") {
+          await act(async () => {
+            pending.resolve(locked);
+            await pending.promise;
+          });
+        }
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).not.toContain("u Break lock");
+        expect(setup.captureCharFrame()).not.toContain("Owner run  run-stuck");
+        expect(setup.captureCharFrame()).toContain(
+          "Lock cleared for locked-migration"
+        );
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
