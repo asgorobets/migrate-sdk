@@ -118,12 +118,14 @@ export const initializeMigrationTuiRenderSession = ({
 
 export const createMigrationTuiRenderSession = async ({
   initialRows,
+  loadStatusOnStartup = true,
   lifecycle,
   onControlC,
   onRenderError,
   recoveryNotice,
   runtime,
 }: MigrationTuiRenderSessionInput & {
+  readonly loadStatusOnStartup?: boolean;
   readonly runtime: MigrationTuiRuntime;
 }): Promise<MigrationTuiRenderSession> => {
   const renderer = await createCliRenderer({
@@ -139,6 +141,7 @@ export const createMigrationTuiRenderSession = async ({
           <MigrationTuiApp
             {...(initialRows === undefined ? {} : { initialRows })}
             lifecycle={lifecycle}
+            loadStatusOnStartup={loadStatusOnStartup}
             {...(recoveryNotice === undefined ? {} : { recoveryNotice })}
             runtime={runtime}
           />

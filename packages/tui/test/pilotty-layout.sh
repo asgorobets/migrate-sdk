@@ -272,7 +272,7 @@ ACTIVE_SESSION="${LIVE_PROGRESS_SESSION}"
   --name "${LIVE_PROGRESS_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env TMPDIR="${LIVE_PROGRESS_TMP}" \
-  node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/live-progress.config.ts" >/dev/null
+  node bin/migrate-tui.js --config "${SDK_PACKAGE_DIR}/test/fixtures/server/terminal-live-progress.config.ts" >/dev/null
 "${PILOTTY_BIN}" resize -s "${LIVE_PROGRESS_SESSION}" 120 30 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LIVE_PROGRESS_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null

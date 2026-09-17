@@ -15,10 +15,12 @@ import {
 import {
   type MigrateActiveRun,
   MigrateDashboardResumeToken,
+  type MigrateDashboardRow,
   type MigrateDefinitionSourceItemTotal,
   type MigrateRunStartResult,
   type MigrateSourceIdentityHistoryEntry,
   type MigrateStoreSchemaPlan,
+  type MigrateTarget,
 } from "migrate-sdk/protocol";
 import {
   loadLocalMigrateServerRuntime,
@@ -26,7 +28,7 @@ import {
   type MigrateServerExecutionResult,
   makeRegistryMigrateServerRuntime,
 } from "migrate-sdk/server";
-import { act } from "react";
+import { act, useState } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeLimitedRunConfig } from "../examples/limited-run.config.ts";
 import { MigrationTuiApp as MigrationTuiAppView } from "./app.tsx";
@@ -72,8 +74,10 @@ const toTuiExecutionResult = (
 };
 
 const MigrationTuiApp = ({
+  loadStatusOnStartup = true,
   runtime,
 }: {
+  readonly loadStatusOnStartup?: boolean;
   readonly runtime: MigrationTuiRuntime;
 }) => (
   <MigrationTuiAppView
@@ -82,6 +86,7 @@ const MigrationTuiApp = ({
       isExitRequested: () => false,
       requestExit: runtime.detachForExit,
     }}
+    loadStatusOnStartup={loadStatusOnStartup}
     runtime={runtime}
   />
 );
@@ -460,6 +465,126 @@ describe("MigrationTuiApp", () => {
   const itWithOpenTui = process.versions.bun === undefined ? it.skip : it;
 
   itWithOpenTui(
+    "keeps migrations usable while status loads and stops observing when idle",
+    async () => {
+      const base = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const snapshot = await base.refresh();
+      const pendingStatus = Promise.withResolvers<void>();
+      const pendingPreparation =
+        Promise.withResolvers<
+          Awaited<ReturnType<MigrationTuiRuntime["prepare"]>>
+        >();
+      let observationSignal: AbortSignal | undefined;
+      const observeDashboard = vi.fn<MigrationTuiRuntime["observeDashboard"]>(
+        async ({ onSnapshot, signal }) => {
+          observationSignal = signal;
+          await pendingStatus.promise;
+          onSnapshot(snapshot);
+        }
+      );
+      const prepare = vi.fn(() => pendingPreparation.promise);
+      const runtime: MigrationTuiRuntime = {
+        ...base,
+        observeDashboard,
+        prepare,
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).toContain("authors");
+        expect(setup.captureCharFrame()).toContain("Loading status…");
+        expect(setup.captureCharFrame()).toContain("NOT LOADED");
+        expect(setup.captureCharFrame()).not.toContain("0 / 4");
+        act(() => setup.mockInput.pressKey("r"));
+        expect(
+          await settle(setup.renderOnce, () => prepare.mock.calls.length === 1)
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain("Preparing");
+        await act(async () => {
+          pendingStatus.resolve();
+          await pendingStatus.promise;
+        });
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).toContain("Preparing");
+        expect(observationSignal?.aborted).toBe(true);
+        expect(observeDashboard).toHaveBeenCalledOnce();
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "defers manual status until R, coalesces reloads, and allows retry after failure",
+    async () => {
+      const base = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const snapshot = await base.refresh();
+      const pending = Promise.withResolvers<MigrationTuiSnapshot>();
+      const refresh = vi
+        .fn<MigrationTuiRuntime["refresh"]>()
+        .mockImplementationOnce(() => pending.promise)
+        .mockResolvedValue(snapshot);
+      const observeDashboard = vi.fn(base.observeDashboard.bind(base));
+      const runtime: MigrationTuiRuntime = {
+        ...base,
+        refresh,
+        observeDashboard,
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+      act(() =>
+        root.render(
+          <MigrationTuiApp loadStatusOnStartup={false} runtime={runtime} />
+        )
+      );
+      try {
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).toContain("Status not loaded");
+        expect(setup.captureCharFrame()).not.toContain("Loading status…");
+        expect(refresh).not.toHaveBeenCalled();
+        expect(observeDashboard).not.toHaveBeenCalled();
+        act(() => setup.mockInput.pressKey("r", { shift: true }));
+        expect(
+          await settle(setup.renderOnce, () => refresh.mock.calls.length === 1)
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("r", { shift: true }));
+        await act(async () => setup.renderOnce());
+        expect(refresh).toHaveBeenCalledOnce();
+        act(() => {
+          pending.reject(new Error("Store unavailable"));
+        });
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Press R to retry")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).not.toContain("Loading status…");
+        act(() => setup.mockInput.pressKey("r", { shift: true }));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+        expect(refresh).toHaveBeenCalledTimes(2);
+        expect(observeDashboard).not.toHaveBeenCalled();
+        expect(setup.captureCharFrame()).not.toContain("Store unavailable");
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
     "shows the schema popup before observing and upgrades only after confirmation",
     async () => {
       const base = await makeInProcessMigrationTuiRuntime({
@@ -529,7 +654,7 @@ describe("MigrationTuiApp", () => {
             () => observeDashboard.mock.calls.length === 1
           )
         ).toBe(true);
-        expect(refresh).toHaveBeenCalledOnce();
+        expect(refresh).not.toHaveBeenCalled();
         expect(setup.captureCharFrame()).not.toContain("Upgrade store");
       } finally {
         act(() => root.unmount());
@@ -708,7 +833,7 @@ describe("MigrationTuiApp", () => {
   );
 
   itWithOpenTui(
-    "applies a manual durable refresh before restarting dashboard observation",
+    "applies a manual durable refresh without restarting idle observation",
     async () => {
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
         configPath: serverFixturePath("migrate.config.ts"),
@@ -781,13 +906,11 @@ describe("MigrationTuiApp", () => {
             setup.renderOnce,
             () =>
               setup.captureCharFrame().includes("37 migrated") &&
-              observeDashboard.mock.calls.length === 2
+              observeDashboard.mock.calls.length === 1
           )
         ).toBe(true);
         expect(refresh).toHaveBeenCalledOnce();
-        expect(observeDashboard.mock.calls[1]?.[0].after).toBe(
-          fresh.resumeToken
-        );
+        expect(observeDashboard.mock.calls[0]?.[0].signal?.aborted).toBe(true);
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
@@ -827,7 +950,7 @@ describe("MigrationTuiApp", () => {
             const frame = setup.captureCharFrame();
             return (
               frame.includes("Session activity") &&
-              frame.includes("3 RETAINED") &&
+              frame.includes("4 RETAINED") &&
               (frame.match(/Status reloaded/g)?.length ?? 0) >= 2 &&
               frame.includes("Reloading status…")
             );
@@ -844,7 +967,7 @@ describe("MigrationTuiApp", () => {
         act(() => setup.mockInput.pressKey("END"));
         expect(
           await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("Event 3")
+            setup.captureCharFrame().includes("Event 4")
           )
         ).toBe(true);
 
@@ -855,7 +978,7 @@ describe("MigrationTuiApp", () => {
             return (
               frame.includes("Session activity") &&
               frame.includes("e export JSONL") &&
-              frame.includes("Event 3")
+              frame.includes("Event 4")
             );
           })
         ).toBe(true);
@@ -879,7 +1002,7 @@ describe("MigrationTuiApp", () => {
   );
 
   itWithOpenTui(
-    "records lifecycle changes for runs started outside this TUI",
+    "records lifecycle changes for external runs discovered while active",
     async () => {
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
         configPath: serverFixturePath("migrate.config.ts"),
@@ -908,6 +1031,7 @@ describe("MigrationTuiApp", () => {
             resumeToken: MigrateDashboardResumeToken.make(
               "session-activity:initial"
             ),
+            activeRuns: [{ ...activeRun, status: "queued" }],
           });
 
           await new Promise<void>((resolve) => {
@@ -1004,7 +1128,6 @@ describe("MigrationTuiApp", () => {
         configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
-      const durable = await baseRuntime.refresh();
       const diagnostic = [
         "ACTIVITY-START",
         ...Array.from({ length: 30 }, (_, index) => `Diagnostic line ${index}`),
@@ -1012,15 +1135,7 @@ describe("MigrationTuiApp", () => {
       ].join("\n");
       const runtime: MigrationTuiRuntime = {
         ...baseRuntime,
-        observeDashboard: ({ onSnapshot }) => {
-          onSnapshot({
-            ...durable,
-            resumeToken: MigrateDashboardResumeToken.make(
-              "session-activity:long-error"
-            ),
-          });
-          return Promise.reject(new Error(diagnostic));
-        },
+        observeDashboard: () => Promise.reject(new Error(diagnostic)),
       };
       const setup = await createTestRenderer({ height: 24, width: 120 });
       const root = createRoot(setup.renderer);
@@ -1734,97 +1849,92 @@ describe("MigrationTuiApp", () => {
   );
 
   itWithOpenTui(
-    "reuses loaded messages when returning to a migration",
+    "loads messages on demand and reuses migration and group caches",
     async () => {
-      const authorsId = toMigrationDefinitionId("authors");
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
         configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
       });
-      const redundantRequest =
-        Promise.withResolvers<readonly MigrationMessage[]>();
-      const listMessages = vi.fn(
-        (target: Parameters<MigrationTuiRuntime["listMessages"]>[0]) => {
-          const requestsForTarget = listMessages.mock.calls.filter(
-            ([candidate]) => {
-              if (
-                candidate.kind === "migration" &&
-                target.kind === "migration"
-              ) {
-                return candidate.definitionId === target.definitionId;
-              }
-              if (candidate.kind === "group" && target.kind === "group") {
-                return candidate.groupId === target.groupId;
-              }
-
-              return false;
-            }
-          );
-
-          return requestsForTarget.length > 1
-            ? redundantRequest.promise
-            : Promise.resolve([]);
-        }
-      );
-      const runtime: MigrationTuiRuntime = {
-        ...baseRuntime,
-        listMessages,
-      };
-      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const firstRequest = Promise.withResolvers<readonly MigrationMessage[]>();
+      const listMessages = vi
+        .fn<MigrationTuiRuntime["listMessages"]>()
+        .mockImplementationOnce(() => firstRequest.promise)
+        .mockResolvedValue([]);
+      const runtime = { ...baseRuntime, listMessages };
+      const setup = await createTestRenderer({
+        height: 36,
+        kittyKeyboard: true,
+        width: 120,
+      });
       const root = createRoot(setup.renderer);
-
-      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
-
-      try {
-        expect(
-          await settle(
-            setup.renderOnce,
-            () =>
-              listMessages.mock.calls.length === 1 &&
-              setup.captureCharFrame().includes("Status reloaded")
-          )
-        ).toBe(true);
-
-        act(() => setup.mockInput.pressKey("j"));
-        expect(
-          await settle(
-            setup.renderOnce,
-            () => listMessages.mock.calls.length === 2
-          )
-        ).toBe(true);
-
-        act(() => setup.mockInput.pressKey("k"));
+      const press = async (key: string) => {
         await act(async () => {
-          await setup.renderOnce();
+          setup.mockInput.pressKey(key);
           await new Promise<void>((resolve) => setTimeout(resolve, 10));
           await setup.renderOnce();
         });
+      };
 
-        expect(listMessages).toHaveBeenCalledTimes(3);
-
-        act(() => setup.mockInput.pressKey("m"));
-        await act(async () => setup.renderOnce());
-        expect(setup.captureCharFrame()).toContain("No messages.");
-        expect(setup.captureCharFrame()).not.toContain("Loading messages…");
-
-        redundantRequest.resolve([
-          {
-            definitionId: authorsId,
-            kind: "skip-reason",
-            message: "New source message",
-            runId: messageRunId,
-            severity: "info",
-            sourceIdentity: toEncodedSourceIdentity("source-new"),
-            updatedAt: new Date("2026-08-29T12:00:00.000Z"),
-          },
-        ]);
+      act(() =>
+        root.render(
+          <MigrationTuiApp loadStatusOnStartup={false} runtime={runtime} />
+        )
+      );
+      try {
         expect(
           await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("New source message")
+            setup.captureCharFrame().includes("Messages not loaded · m to load")
           )
         ).toBe(true);
+        await press("j");
+        await press("g");
+        expect(listMessages).not.toHaveBeenCalled();
+        expect(setup.captureCharFrame()).not.toContain("Messages 0");
+
+        await press("m");
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Loading messages…")
+          )
+        ).toBe(true);
+        expect(listMessages).toHaveBeenCalledWith({
+          kind: "group",
+          groupId: "content",
+        });
+        await press("m");
+        expect(listMessages).toHaveBeenCalledTimes(1);
+        firstRequest.resolve([]);
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("No messages.")
+          )
+        ).toBe(true);
+
+        await press("ESCAPE");
+        await press("g");
+        await press("m");
+        expect(listMessages).toHaveBeenLastCalledWith({
+          kind: "migration",
+          definitionId: "authors",
+        });
+        await press("ESCAPE");
+        await press("j");
+        await press("m");
+        expect(listMessages).toHaveBeenLastCalledWith({
+          kind: "migration",
+          definitionId: "articles",
+        });
+        await press("ESCAPE");
+        await press("k");
+        await press("m");
+        expect(setup.captureCharFrame()).toContain("No messages.");
+        await press("ESCAPE");
+        await press("g");
+        await press("m");
+        expect(setup.captureCharFrame()).toContain("No messages.");
+        expect(listMessages).toHaveBeenCalledTimes(3);
       } finally {
-        redundantRequest.resolve([]);
+        firstRequest.resolve([]);
         act(() => root.unmount());
         setup.renderer.destroy();
       }
@@ -1860,25 +1970,36 @@ describe("MigrationTuiApp", () => {
       const runtime = { listMessages };
       const setError = vi.fn();
       const snapshots: Array<{
-        readonly loading: boolean;
+        readonly status: string;
         readonly messages: readonly MigrationMessage[];
         readonly target: string;
       }> = [];
-      const MessageSnapshot = ({
-        target,
-      }: {
-        readonly target: typeof authorsTarget | typeof articlesTarget;
-      }) => {
-        const snapshot = useMigrationMessages({ runtime, setError, target });
+      let load = () => Promise.resolve();
+      let select:
+        | ((target: typeof authorsTarget | typeof articlesTarget) => void)
+        | undefined;
+      const MessageSnapshot = () => {
+        const [target, setTarget] = useState<
+          typeof authorsTarget | typeof articlesTarget
+        >(authorsTarget);
+        select = setTarget;
+        const snapshot = useMigrationMessages({
+          rows: [],
+          runtime,
+          setError,
+          target,
+        });
+        load = snapshot.load;
         snapshots.push({ ...snapshot, target: target.definitionId });
         return <box />;
       };
       const setup = await createTestRenderer({ height: 5, width: 40 });
       const root = createRoot(setup.renderer);
 
-      act(() => root.render(<MessageSnapshot target={authorsTarget} />));
+      act(() => root.render(<MessageSnapshot />));
 
       try {
+        await act(() => load());
         expect(
           await settle(setup.renderOnce, () =>
             snapshots.some(
@@ -1890,10 +2011,10 @@ describe("MigrationTuiApp", () => {
         ).toBe(true);
 
         snapshots.length = 0;
-        act(() => root.render(<MessageSnapshot target={articlesTarget} />));
+        act(() => select?.(articlesTarget));
 
         expect(snapshots[0]).toMatchObject({
-          loading: true,
+          status: "not-loaded",
           messages: [],
           target: articlesTarget.definitionId,
         });
@@ -1908,6 +2029,436 @@ describe("MigrationTuiApp", () => {
       }
     }
   );
+
+  itWithOpenTui(
+    "invalidates only affected message caches when durable progress changes",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const rows = (await baseRuntime.refresh()).rows;
+      const authors = {
+        kind: "migration",
+        definitionId: toMigrationDefinitionId("authors"),
+      } as const;
+      const articles = {
+        kind: "migration",
+        definitionId: toMigrationDefinitionId("articles"),
+      } as const;
+      const group = baseRuntime.groups[0];
+      if (group === undefined) {
+        throw new Error("Missing fixture group");
+      }
+      const content = { kind: "group", groupId: group.id } as const;
+      const listMessages = vi
+        .fn<MigrationTuiRuntime["listMessages"]>()
+        .mockResolvedValue([]);
+      const runtime = { listMessages };
+      const setError = vi.fn();
+      let snapshot: ReturnType<typeof useMigrationMessages> | undefined;
+      interface ProbeInput {
+        readonly currentRows: readonly MigrateDashboardRow[];
+        readonly target: MigrateTarget;
+      }
+      let update: ((input: ProbeInput) => void) | undefined;
+      const Probe = () => {
+        const [input, setInput] = useState<ProbeInput>({
+          currentRows: rows,
+          target: authors,
+        });
+        const { currentRows, target } = input;
+        update = setInput;
+        snapshot = useMigrationMessages({
+          rows: currentRows,
+          runtime,
+          setError,
+          target,
+        });
+        return <box />;
+      };
+      const setup = await createTestRenderer({ height: 5, width: 40 });
+      const root = createRoot(setup.renderer);
+      const render = async (
+        currentRows: readonly MigrateDashboardRow[],
+        target: MigrateTarget
+      ) =>
+        act(async () => {
+          update?.({ currentRows, target });
+          await setup.renderOnce();
+        });
+      act(() => root.render(<Probe />));
+      try {
+        for (const target of [authors, articles, content]) {
+          await render(rows, target);
+          expect(snapshot?.status).toBe("not-loaded");
+          await act(async () => {
+            await snapshot?.load();
+          });
+          expect(snapshot?.status).toBe("loaded");
+        }
+        expect(listMessages).toHaveBeenCalledTimes(3);
+
+        const sourceRows = rows.map((row) =>
+          row.status === undefined
+            ? row
+            : {
+                ...row,
+                status: {
+                  ...row.status,
+                  source: {
+                    total: 99,
+                    unprocessed: 99,
+                    invalid: 0,
+                    duplicate: 0,
+                    orphaned: 0,
+                  },
+                },
+              }
+        );
+        await render(sourceRows, content);
+        await act(async () => {
+          await snapshot?.load();
+        });
+        expect(snapshot?.status).toBe("loaded");
+        expect(listMessages).toHaveBeenCalledTimes(3);
+
+        const changedRows = rows.map((row) =>
+          row.entry.id !== authors.definitionId || row.status === undefined
+            ? row
+            : {
+                ...row,
+                status: {
+                  ...row.status,
+                  durable: {
+                    ...row.status.durable,
+                    failed: row.status.durable.failed + 1,
+                  },
+                },
+              }
+        );
+        await render(changedRows, articles);
+        await act(async () => {
+          await snapshot?.load();
+        });
+        expect(snapshot?.status).toBe("loaded");
+        await render(changedRows, content);
+        expect(snapshot?.status).toBe("stale");
+        await render(changedRows, authors);
+        expect(snapshot?.status).toBe("stale");
+        expect(listMessages).toHaveBeenCalledTimes(3);
+        // Counts returning to A while another migration is selected must not
+        // revive either the migration cache or its group cache.
+        await render(rows, articles);
+        expect(snapshot?.status).toBe("loaded");
+        await render(rows, authors);
+        expect(snapshot?.status).toBe("stale");
+        await render(rows, content);
+        expect(snapshot?.status).toBe("stale");
+        await render(changedRows, authors);
+        await act(async () => {
+          await snapshot?.load();
+        });
+        expect(snapshot?.status).toBe("loaded");
+        await render(changedRows, content);
+        await act(async () => {
+          await snapshot?.load();
+        });
+        expect(listMessages).toHaveBeenCalledTimes(5);
+
+        // A new attempt may replace diagnostic text without changing counts.
+        const newRunRows = changedRows.map((row) =>
+          row.entry.id !== authors.definitionId || row.status === undefined
+            ? row
+            : {
+                ...row,
+                status: {
+                  ...row.status,
+                  lastRun: {
+                    definitionId: authors.definitionId,
+                    definitionIds: [authors.definitionId],
+                    runId: toMigrationRunId("new-message-attempt"),
+                    startedAt: new Date("2026-09-17T12:00:00Z"),
+                    finishedAt: new Date("2026-09-17T12:00:01Z"),
+                    status: "succeeded" as const,
+                    runStatus: "succeeded" as const,
+                  },
+                },
+              }
+        );
+        await render(newRunRows, authors);
+        expect(snapshot?.status).toBe("stale");
+        await render(newRunRows, content);
+        expect(snapshot?.status).toBe("stale");
+        expect(listMessages).toHaveBeenCalledTimes(5);
+        expect(setError).not.toHaveBeenCalled();
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "keeps late message responses stale and lets failed loads retry",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const rows = (await baseRuntime.refresh()).rows;
+      const target = {
+        kind: "migration",
+        definitionId: toMigrationDefinitionId("authors"),
+      } as const;
+      const pending = Promise.withResolvers<readonly MigrationMessage[]>();
+      const listMessages = vi
+        .fn<MigrationTuiRuntime["listMessages"]>()
+        .mockImplementationOnce(() => pending.promise)
+        .mockRejectedValueOnce(new Error("Message store unavailable"))
+        .mockResolvedValue([]);
+      const runtime = { listMessages };
+      const setError = vi.fn();
+      let snapshot: ReturnType<typeof useMigrationMessages> | undefined;
+      interface ProbeInput {
+        readonly currentRows: readonly MigrateDashboardRow[];
+        readonly currentRuntime: Pick<MigrationTuiRuntime, "listMessages">;
+      }
+      let update: ((input: ProbeInput) => void) | undefined;
+      const Probe = () => {
+        const [input, setInput] = useState<ProbeInput>({
+          currentRows: rows,
+          currentRuntime: runtime,
+        });
+        const { currentRows, currentRuntime } = input;
+        update = setInput;
+        snapshot = useMigrationMessages({
+          rows: currentRows,
+          runtime: currentRuntime,
+          setError,
+          target,
+        });
+        return <box />;
+      };
+      const setup = await createTestRenderer({ height: 5, width: 40 });
+      const root = createRoot(setup.renderer);
+      try {
+        await act(async () => {
+          root.render(<Probe />);
+          await setup.renderOnce();
+        });
+        let loading: Promise<void> | undefined;
+        act(() => {
+          loading = snapshot?.load();
+        });
+        const changedRows = rows.map((row) =>
+          row.entry.id !== target.definitionId || row.status === undefined
+            ? row
+            : {
+                ...row,
+                status: {
+                  ...row.status,
+                  durable: {
+                    ...row.status.durable,
+                    failed: row.status.durable.failed + 1,
+                  },
+                },
+              }
+        );
+        await act(async () => {
+          update?.({ currentRows: changedRows, currentRuntime: runtime });
+          await setup.renderOnce();
+        });
+        // Even an A -> B -> A transition while the read is pending must
+        // invalidate its eventual response.
+        await act(async () => {
+          update?.({ currentRows: rows, currentRuntime: runtime });
+          await setup.renderOnce();
+        });
+        await act(async () => {
+          pending.resolve([]);
+          await loading;
+        });
+        expect(snapshot?.status).toBe("stale");
+        expect(listMessages).toHaveBeenCalledTimes(1);
+
+        await act(async () => {
+          await snapshot?.load();
+        });
+        expect(snapshot?.status).toBe("error");
+        expect(setError).toHaveBeenCalledWith("Message store unavailable");
+        await act(async () => {
+          await snapshot?.load();
+        });
+        expect(snapshot?.status).toBe("loaded");
+        expect(listMessages).toHaveBeenCalledTimes(3);
+
+        const replacement = {
+          listMessages: vi
+            .fn<MigrationTuiRuntime["listMessages"]>()
+            .mockResolvedValue([]),
+        };
+        await act(async () => {
+          update?.({ currentRows: changedRows, currentRuntime: replacement });
+          await setup.renderOnce();
+        });
+        expect(snapshot?.status).toBe("not-loaded");
+        expect(replacement.listMessages).not.toHaveBeenCalled();
+        await act(async () => {
+          await snapshot?.load();
+        });
+        expect(snapshot?.status).toBe("loaded");
+        expect(replacement.listMessages).toHaveBeenCalledTimes(1);
+      } finally {
+        pending.resolve([]);
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  for (const selection of ["migration", "group"] as const) {
+    itWithOpenTui(
+      `keeps expanded ${selection} messages readable when their cache is invalidated`,
+      async () => {
+        const base = await makeInProcessMigrationTuiRuntime({
+          configPath: serverFixturePath("migrate.config.ts"),
+          cwd: new URL("..", import.meta.url).pathname,
+        });
+        const durable = await base.refresh();
+        const definitionId = toMigrationDefinitionId("authors");
+        const activeRun = {
+          definitionIds: [definitionId],
+          observationDefinitionId: definitionId,
+          runId: messageRunId,
+          startedAt: new Date("2026-09-17T12:00:00Z"),
+          status: "running",
+          stopSupported: true,
+        } satisfies MigrateActiveRun;
+        const messages: readonly MigrationMessage[] = [1, 2].map((number) => ({
+          definitionId,
+          kind: "skip-reason",
+          message: `Original message ${number}`,
+          runId: messageRunId,
+          severity: "info",
+          sourceIdentity: toEncodedSourceIdentity(`item-${number}`),
+          updatedAt: new Date("2026-09-17T12:00:00Z"),
+        }));
+        const listMessages = vi
+          .fn<MigrationTuiRuntime["listMessages"]>()
+          .mockResolvedValueOnce(messages)
+          .mockResolvedValue(
+            messages.map((message) => ({
+              ...message,
+              message: "Fresh message",
+            }))
+          );
+        let publish:
+          | MigrationTuiDashboardObservationOptions["onSnapshot"]
+          | undefined;
+        const runtime: MigrationTuiRuntime = {
+          ...base,
+          listMessages,
+          observeDashboard: async ({ onSnapshot, signal }) => {
+            publish = onSnapshot;
+            onSnapshot({ ...durable, activeRuns: [activeRun] });
+            await new Promise<void>((resolve) => {
+              if (signal?.aborted === true) {
+                resolve();
+                return;
+              }
+              signal?.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            });
+          },
+        };
+        const setup = await createTestRenderer({
+          height: 36,
+          kittyKeyboard: true,
+          width: 120,
+        });
+        const root = createRoot(setup.renderer);
+        act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+        try {
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Status reloaded")
+            )
+          ).toBe(true);
+          if (selection === "group") {
+            act(() => setup.mockInput.pressKey("g"));
+          }
+          act(() => setup.mockInput.pressKey("m"));
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Message 1 of 2")
+            )
+          ).toBe(true);
+          act(() => setup.mockInput.pressKey("j"));
+          act(() => setup.mockInput.pressEnter());
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("↵ Close")
+            )
+          ).toBe(true);
+          expect(setup.captureCharFrame()).toContain("Message 2 of 2");
+          act(() =>
+            publish?.({
+              ...durable,
+              activeRuns: [],
+              resumeToken:
+                MigrateDashboardResumeToken.make("messages:finished"),
+              rows: durable.rows.map((row) =>
+                row.entry.id !== definitionId || row.status === undefined
+                  ? row
+                  : {
+                      ...row,
+                      status: {
+                        ...row.status,
+                        durable: {
+                          ...row.status.durable,
+                          failed: row.status.durable.failed + 1,
+                        },
+                      },
+                    }
+              ),
+            })
+          );
+          await act(async () => {
+            await setup.renderOnce();
+          });
+          expect(setup.captureCharFrame()).toContain("↵ Close");
+          expect(setup.captureCharFrame()).toContain("Message 2 of 2");
+          expect(setup.captureCharFrame()).toContain("Original message 2");
+          act(() => setup.mockInput.pressEscape());
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup
+                .captureCharFrame()
+                .includes("Messages may have changed · m to reload")
+            )
+          ).toBe(true);
+          act(() => setup.mockInput.pressKey("m"));
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("Fresh message")
+            )
+          ).toBe(true);
+          expect(listMessages).toHaveBeenCalledTimes(2);
+          act(() => setup.mockInput.pressEscape());
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("[ Overview ]")
+            )
+          ).toBe(true);
+        } finally {
+          act(() => root.unmount());
+          setup.renderer.destroy();
+        }
+      }
+    );
+  }
 
   itWithOpenTui(
     "expands and scrolls long messages while keeping controls visible",
@@ -2560,13 +3111,13 @@ describe("MigrationTuiApp", () => {
           await settle(
             setup.renderOnce,
             () =>
-              refresh.mock.calls.length >= 3 &&
+              refresh.mock.calls.length >= 2 &&
               setup.captureCharFrame().includes(`Run ${runId} failed`)
           )
         ).toBe(true);
         expect(observeRun).toHaveBeenCalledWith(runId, expect.any(Object));
-        expect(refresh).toHaveBeenCalledTimes(3);
-        expect(dashboardObservationCalls).toBe(2);
+        expect(refresh).toHaveBeenCalledTimes(2);
+        expect(dashboardObservationCalls).toBe(1);
         expect(setup.captureCharFrame()).not.toContain("v View run");
       } finally {
         act(() => root.unmount());
@@ -2617,6 +3168,7 @@ describe("MigrationTuiApp", () => {
             const frame = setup.captureCharFrame();
             return (
               frame.includes("Lock cleared for locked-migration") &&
+              !frame.includes("Breaking lock for") &&
               !frame.includes("u Break lock") &&
               !frame.includes("Break migration lock")
             );

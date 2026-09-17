@@ -4,6 +4,7 @@ import { RadioGroup } from "@tuiparts/react/radio-group";
 import type {
   MigrationDefinitionId,
   MigrationExecutionOptions,
+  MigrationMessage,
   MigrationRunId,
   PipelineExecutionConcurrency,
 } from "migrate-sdk";
@@ -86,6 +87,13 @@ type View =
   | "message-detail"
   | "selective-rollback"
   | "selective-run";
+
+interface ExpandedMessage {
+  readonly index: number;
+  readonly message: MigrationMessage;
+  readonly showDefinitionId: boolean;
+  readonly total: number;
+}
 
 interface MigrationTuiExecutionSettings {
   readonly process?: PipelineExecutionConcurrency;
@@ -691,9 +699,22 @@ const SafetyDialog = ({
 interface MigrationTuiAppProps {
   readonly initialRows?: readonly MigrateDashboardRow[];
   readonly lifecycle: MigrationTuiShutdownController;
+  readonly loadStatusOnStartup?: boolean;
   readonly recoveryNotice?: string;
   readonly runtime: MigrationTuiRuntime;
 }
+
+const statusActivityMessage = (
+  rows: readonly MigrateDashboardRow[],
+  loading: boolean
+): string => {
+  if (loading) {
+    return "Loading status…";
+  }
+  return rows.some((row) => row.status === undefined)
+    ? "Status not loaded · R to load"
+    : "";
+};
 
 export const MigrationTuiApp = (props: MigrationTuiAppProps) => {
   const [readyRows, setReadyRows] = useState<
@@ -718,6 +739,7 @@ export const MigrationTuiApp = (props: MigrationTuiAppProps) => {
 
 const MigrationTuiDashboardApp = ({
   initialRows,
+  loadStatusOnStartup = true,
   lifecycle,
   recoveryNotice,
   runtime,
@@ -746,9 +768,9 @@ const MigrationTuiDashboardApp = ({
   );
   const [detailTab, setDetailTab] = useState<MigrationDetailTab>("overview");
   const [messageIndex, setMessageIndex] = useState(0);
-  const [busy, setBusyState] = useState(
-    initialRows === undefined ? "Loading status…" : ""
-  );
+  const [expandedMessage, setExpandedMessage] =
+    useState<ExpandedMessage | null>(null);
+  const [busy, setBusyState] = useState("");
   const [notice, setNoticeState] = useState<string | null>(
     recoveryNotice ?? null
   );
@@ -875,14 +897,20 @@ const MigrationTuiDashboardApp = ({
     () => setSourceScanStatuses(new Map()),
     []
   );
-  const { activeRuns, durableRows, refresh } = useDashboardObservation({
+  const {
+    activeRuns,
+    durableRows,
+    refresh,
+    startObservation,
+    statusError,
+    statusLoading,
+  } = useDashboardObservation({
     clearSourceScanStatuses,
     initialRows,
+    loadStatusOnStartup,
     recordActivity: appendActivity,
     recoveryNotice,
     runtime,
-    setBusy,
-    setError,
     setNotice,
   });
   const rows = useMemo(
@@ -943,7 +971,12 @@ const MigrationTuiDashboardApp = ({
       ? undefined
       : { definitionId: selectedDefinitionId, kind: "migration" };
   }, [listTab, selectedDefinitionId, selectedGroupId]);
-  const { loading: messagesLoading, messages } = useMigrationMessages({
+  const {
+    load: loadMessages,
+    messages,
+    status: messagesStatus,
+  } = useMigrationMessages({
+    rows: durableRows,
     runtime,
     setError,
     target: selectedTarget,
@@ -990,7 +1023,7 @@ const MigrationTuiDashboardApp = ({
     sourceItemTotalsFailure === null
       ? null
       : `Unable to count source items: ${errorMessage(sourceItemTotalsFailure.cause)}`;
-  const displayedError = error ?? sourceItemTotalsError;
+  const displayedError = error ?? statusError ?? sourceItemTotalsError;
   const selectedActiveRun = useMemo(() => {
     const matching = activeRuns.filter((run) =>
       selectedRows.some((row) => row.status?.lock?.ownerRunId === run.runId)
@@ -1006,6 +1039,8 @@ const MigrationTuiDashboardApp = ({
     [selectiveEntriesByDefinition, selectiveTarget]
   );
   const effectiveBusy = busy;
+  const displayedActivity =
+    effectiveBusy || statusActivityMessage(durableRows, statusLoading);
   const dashboardStateRef = useRef({
     busy: effectiveBusy,
     selectedRows,
@@ -1014,6 +1049,8 @@ const MigrationTuiDashboardApp = ({
   const messageStateRef = useRef({
     count: messages.length,
     selectedIndex: messageIndex,
+    message: messages[messageIndex],
+    showDefinitionId: selectedTarget?.kind === "group",
   });
   const executingRef = useRef(false);
   const runObservationRef = useRef<
@@ -1032,6 +1069,8 @@ const MigrationTuiDashboardApp = ({
   messageStateRef.current = {
     count: messages.length,
     selectedIndex: messageIndex,
+    message: messages[messageIndex],
+    showDefinitionId: selectedTarget?.kind === "group",
   };
   const scanSelectedSource = useCallback(
     async (targetOverride?: MigrateTarget) => {
@@ -1074,10 +1113,12 @@ const MigrationTuiDashboardApp = ({
   );
 
   const openMessages = useCallback(() => {
+    setError(null);
+    loadMessages();
     setMessageIndex(0);
     setView("dashboard");
     setDetailTab("messages");
-  }, []);
+  }, [loadMessages, setError]);
 
   const openBreakLock = useCallback(
     (rowOverride?: MigrateDashboardRow) => {
@@ -1131,6 +1172,7 @@ const MigrationTuiDashboardApp = ({
 
       try {
         const reference = await runtime.start(operation);
+        startObservation();
         setNotice(
           reference.status === "completed"
             ? `Run ${reference.runId} completed`
@@ -1145,6 +1187,7 @@ const MigrationTuiDashboardApp = ({
         await refreshAfterExecutionFailure(cause);
       } finally {
         executingRef.current = false;
+        setBusy("");
         lifecycle.executionSettled();
       }
     },
@@ -1155,6 +1198,7 @@ const MigrationTuiDashboardApp = ({
       setBusy,
       setError,
       setNotice,
+      startObservation,
     ]
   );
 
@@ -2013,6 +2057,7 @@ const MigrationTuiDashboardApp = ({
       );
     } catch (cause) {
       setError(errorMessage(cause));
+    } finally {
       setBusy("");
     }
   }, [pendingLockRow, refreshDashboard, runtime, setBusy, setError]);
@@ -2185,6 +2230,8 @@ const MigrationTuiDashboardApp = ({
           visibleCount === 0 ? 0 : (index + 1) % visibleCount
         );
       } else if (key.name === "m") {
+        key.preventDefault();
+        key.stopPropagation();
         openMessages();
       } else if (dashboardStateRef.current.busy !== "") {
         return;
@@ -2207,37 +2254,55 @@ const MigrationTuiDashboardApp = ({
     ]
   );
 
-  const handleMessageKey = useCallback((key: KeyEvent): boolean => {
-    if (key.name === "escape") {
+  const handleMessageKey = useCallback(
+    (key: KeyEvent): boolean => {
+      if (key.name === "m") {
+        key.preventDefault();
+        key.stopPropagation();
+        openMessages();
+        return true;
+      }
+      if (key.name === "escape") {
+        key.preventDefault();
+        key.stopPropagation();
+        setDetailTab("overview");
+        return true;
+      }
+
+      const state = messageStateRef.current;
+      if (
+        (key.name === "return" || key.name === "linefeed") &&
+        state.message !== undefined
+      ) {
+        key.preventDefault();
+        key.stopPropagation();
+        setExpandedMessage({
+          message: state.message,
+          index: state.selectedIndex,
+          total: state.count,
+          showDefinitionId: state.showDefinitionId,
+        });
+        setView("message-detail");
+        return true;
+      }
+
+      const nextIndex = nextListSelection(
+        key.name,
+        state.selectedIndex,
+        state.count
+      );
+
+      if (nextIndex === undefined) {
+        return false;
+      }
+
       key.preventDefault();
       key.stopPropagation();
-      setDetailTab("overview");
+      setMessageIndex(nextIndex);
       return true;
-    }
-
-    const state = messageStateRef.current;
-    if ((key.name === "return" || key.name === "linefeed") && state.count > 0) {
-      key.preventDefault();
-      key.stopPropagation();
-      setView("message-detail");
-      return true;
-    }
-
-    const nextIndex = nextListSelection(
-      key.name,
-      state.selectedIndex,
-      state.count
-    );
-
-    if (nextIndex === undefined) {
-      return false;
-    }
-
-    key.preventDefault();
-    key.stopPropagation();
-    setMessageIndex(nextIndex);
-    return true;
-  }, []);
+    },
+    [openMessages]
+  );
 
   useKeyboard((key) => {
     if (
@@ -2405,7 +2470,7 @@ const MigrationTuiDashboardApp = ({
         listTab={listTab}
         messageIndex={messageIndex}
         messages={messages}
-        messagesLoading={messagesLoading}
+        messagesStatus={messagesStatus}
         onListTabChange={changeListTab}
         onMessageIndexChange={setMessageIndex}
         onOpenActions={() => {
@@ -2420,7 +2485,13 @@ const MigrationTuiDashboardApp = ({
           }
         }}
         onSelectedIndexChange={setSelectedIndex}
-        onTabChange={setDetailTab}
+        onTabChange={(tab) => {
+          if (tab === "messages") {
+            openMessages();
+          } else {
+            setDetailTab(tab);
+          }
+        }}
         rows={rows}
         selectedIndex={selectedIndex}
         sourceItemTotals={sourceItemTotals}
@@ -2431,13 +2502,14 @@ const MigrationTuiDashboardApp = ({
           flexDirection: "column",
           flexShrink: 0,
           height:
-            effectiveBusy !== "" && (displayedError !== null || notice !== null)
+            displayedActivity !== "" &&
+            (displayedError !== null || notice !== null)
               ? 2
               : 1,
         }}
       >
-        {effectiveBusy === "" ? null : (
-          <text fg={colors.info}>{effectiveBusy}</text>
+        {displayedActivity === "" ? null : (
+          <text fg={colors.info}>{displayedActivity}</text>
         )}
         {displayedError === null ? null : (
           <text fg={colors.danger}>{displayedError}</text>
@@ -2488,14 +2560,17 @@ const MigrationTuiDashboardApp = ({
           width={dimensions.width}
         />
       ) : null}
-      {view === "message-detail" && messages[messageIndex] !== undefined ? (
+      {view === "message-detail" && expandedMessage !== null ? (
         <MessageDetailDialog
           height={dimensions.height}
-          index={messageIndex}
-          message={messages[messageIndex]}
-          onClose={() => setView("dashboard")}
-          showDefinitionId={selectedTarget?.kind === "group"}
-          total={messages.length}
+          index={expandedMessage.index}
+          message={expandedMessage.message}
+          onClose={() => {
+            setExpandedMessage(null);
+            setView("dashboard");
+          }}
+          showDefinitionId={expandedMessage.showDefinitionId}
+          total={expandedMessage.total}
           width={dimensions.width}
         />
       ) : null}

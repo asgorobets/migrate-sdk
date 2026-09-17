@@ -50,7 +50,11 @@ const main = async () => {
   try {
     const supervisor = makeMigrationTuiLifecycleSupervisor({
       createSession: (input) =>
-        createMigrationTuiRenderSession({ ...input, runtime }),
+        createMigrationTuiRenderSession({
+          ...input,
+          loadStatusOnStartup: parsed.status !== "manual",
+          runtime,
+        }),
       runtime,
     });
 
