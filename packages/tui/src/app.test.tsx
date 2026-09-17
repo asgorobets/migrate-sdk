@@ -2243,6 +2243,302 @@ describe("MigrationTuiApp", () => {
   );
 
   itWithOpenTui(
+    "keeps navigation and other runs usable while stop requests await acknowledgement",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("locked.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const snapshot = await baseRuntime.refresh();
+      const lockedRow = snapshot.rows[0];
+      if (lockedRow?.status === undefined) {
+        throw new Error("Expected a locked migration fixture");
+      }
+      const lockedStatus = lockedRow.status;
+      const runIds = [
+        toMigrationRunId("run-stuck"),
+        toMigrationRunId("run-other"),
+      ] as const;
+      const rows = runIds.map((runId, index) => {
+        const definitionId = toMigrationDefinitionId(`migration-${index}`);
+        return {
+          ...lockedRow,
+          entry: { ...lockedRow.entry, id: definitionId },
+          status: {
+            ...lockedStatus,
+            definitionId,
+            lock: {
+              createdAt: new Date(),
+              definitionId,
+              ownerRunId: runId,
+              token: toMigrationDefinitionLockToken(`lock-${index}`),
+            },
+          },
+        };
+      });
+      const activeRuns: MigrateActiveRun[] = rows.map((row, index) => ({
+        definitionIds: [row.entry.id],
+        execution: {
+          adapter: "workflow-sdk",
+          executionId: `workflow-${index}`,
+        },
+        observationDefinitionId: row.entry.id,
+        runId: row.status.lock.ownerRunId,
+        startedAt: new Date(),
+        status: "running",
+        stopSupported: true,
+      }));
+      const firstStop =
+        Promise.withResolvers<
+          Awaited<ReturnType<MigrationTuiRuntime["stopRun"]>>
+        >();
+      const secondStop =
+        Promise.withResolvers<
+          Awaited<ReturnType<MigrationTuiRuntime["stopRun"]>>
+        >();
+      const stopRun = vi.fn((runId: MigrationRunId) =>
+        runId === runIds[0] ? firstStop.promise : secondStop.promise
+      );
+      const detachForExit = vi.fn(async () => ({ kind: "idle" as const }));
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        rows,
+        refresh: async () => ({ ...snapshot, rows, activeRuns }),
+        stopRun,
+        detachForExit,
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("x Stop run")
+          )
+        ).toBe(true);
+        act(() => {
+          setup.mockInput.pressKey("x");
+          setup.mockInput.pressKey("x");
+        });
+        expect(
+          await settle(setup.renderOnce, () => stopRun.mock.calls.length > 0)
+        ).toBe(true);
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("All actions ·")
+          )
+        ).toBe(true);
+        expect(stopRun).toHaveBeenCalledTimes(1);
+        expect(setup.captureCharFrame()).toContain("Sending stop request");
+
+        act(() => setup.mockInput.pressEscape());
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => !setup.captureCharFrame().includes("All actions ·")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("j"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("x Stop run")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("x"));
+        expect(
+          await settle(setup.renderOnce, () => stopRun.mock.calls.length === 2)
+        ).toBe(true);
+        expect(stopRun).toHaveBeenLastCalledWith(runIds[1]);
+
+        firstStop.resolve({
+          kind: "requested",
+          runId: runIds[0],
+          message: "Cancelling first run",
+        });
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup
+              .captureCharFrame()
+              .includes("Stop requested for run run-stuck")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain(
+          "Sending stop request for run run-other"
+        );
+
+        act(() => setup.mockInput.pressKey("l"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Session activity")
+          )
+        ).toBe(true);
+        secondStop.resolve({
+          kind: "requested",
+          runId: runIds[1],
+          message: "Cancelling second run",
+        });
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup
+              .captureCharFrame()
+              .includes("Stop requested for run run-other")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain("Session activity");
+        act(() => setup.mockInput.pressKey("q"));
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => detachForExit.mock.calls.length === 1
+          )
+        ).toBe(true);
+      } finally {
+        firstStop.resolve({
+          kind: "not-running",
+          runId: runIds[0],
+          message: "Test finished",
+        });
+        secondStop.resolve({
+          kind: "not-running",
+          runId: runIds[1],
+          message: "Test finished",
+        });
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "retries failed stop requests without clearing another action's busy state",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("locked.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const snapshot = await baseRuntime.refresh();
+      const runId = toMigrationRunId("run-stuck");
+      const firstStop =
+        Promise.withResolvers<
+          Awaited<ReturnType<MigrationTuiRuntime["stopRun"]>>
+        >();
+      const retryStop =
+        Promise.withResolvers<
+          Awaited<ReturnType<MigrationTuiRuntime["stopRun"]>>
+        >();
+      const scan =
+        Promise.withResolvers<
+          Awaited<ReturnType<MigrationTuiRuntime["scanSource"]>>
+        >();
+      const stopRun = vi
+        .fn(() => retryStop.promise)
+        .mockImplementationOnce(() => firstStop.promise);
+      const scanSource = vi.fn(() => scan.promise);
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        refresh: async () => ({
+          ...snapshot,
+          activeRuns: [
+            {
+              definitionIds: [toMigrationDefinitionId("locked-migration")],
+              execution: {
+                adapter: "workflow-sdk",
+                executionId: "workflow-stuck",
+              },
+              observationDefinitionId:
+                toMigrationDefinitionId("locked-migration"),
+              runId,
+              startedAt: new Date(),
+              status: "running",
+              stopSupported: true,
+            },
+          ],
+        }),
+        stopRun,
+        scanSource,
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("x Stop run")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("x"));
+        expect(
+          await settle(setup.renderOnce, () => stopRun.mock.calls.length === 1)
+        ).toBe(true);
+        firstStop.reject(new Error("Server unavailable"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Server unavailable")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain("x Stop run");
+
+        act(() => setup.mockInput.pressKey("x"));
+        expect(
+          await settle(setup.renderOnce, () => stopRun.mock.calls.length === 2)
+        ).toBe(true);
+        act(() => setup.mockInput.pressKey("s"));
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => scanSource.mock.calls.length === 1
+          )
+        ).toBe(true);
+        retryStop.resolve({
+          kind: "requested",
+          runId,
+          message: "Cancelling run",
+        });
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup
+              .captureCharFrame()
+              .includes("Stop requested for run run-stuck")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain(
+          "Running Source Inventory Scan"
+        );
+
+        scan.resolve(snapshot);
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Source Inventory Scan complete")
+          )
+        ).toBe(true);
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("All actions ·")
+          )
+        ).toBe(true);
+      } finally {
+        firstStop.resolve({
+          kind: "not-running",
+          runId,
+          message: "Test finished",
+        });
+        retryStop.resolve({
+          kind: "not-running",
+          runId,
+          message: "Test finished",
+        });
+        scan.resolve(snapshot);
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
     "offers run focus and an explicit stop for a server-owned locked run",
     async () => {
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
