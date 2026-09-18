@@ -282,16 +282,15 @@ export const migrationTuiAvailableActions = (
       view: "messages",
     },
     {
-      description: `Run a Source Inventory Scan for this ${noun} and its required dependencies`,
+      description: `Scan sources for this ${noun} and its required dependencies`,
       id: "scan",
       key: "s",
-      label: "Source Inventory Scan",
-      shortcutLabel: "s inventory scan",
+      label: "Scan sources",
+      shortcutLabel: "s scan sources",
       view: "scan",
     },
     {
-      description:
-        "Set Process Pipeline, Rollback Pipeline, and Source Inventory Scan concurrency",
+      description: "Set processing, rollback, and source scan concurrency",
       id: "execution-settings",
       key: "c",
       label: "Concurrency settings",

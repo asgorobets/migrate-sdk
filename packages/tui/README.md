@@ -25,7 +25,7 @@ remain active. Runs started elsewhere while the dashboard is idle appear after
 
 If the renderer restarts after an error, it reuses the last dashboard state.
 An idle manual session stays idle; an active run resumes live updates. Source
-inventory scans that find active runs also restore live updates and run controls.
+scans that find active runs also restore live updates and run controls.
 
 Install it in the migration project alongside the SDK:
 
@@ -200,14 +200,15 @@ The footer keeps primary and contextual shortcuts visible for the current
 selection. Press `Enter` to open All actions, which includes the complete action
 set such as rescan, update, and Concurrency settings. Concurrency settings provides
 session-scoped concurrency overrides for the Process Pipeline, Rollback Pipeline,
-and Source Inventory Scan; blank values preserve the configured defaults and
+and source scans; blank values preserve the configured defaults and
 Process or Rollback concurrency can be set to unbounded. Press `c` to open
 Concurrency settings and `g` to switch
 between migration and group tabs, `m` for errors and messages, `r` to run the selected migration or group,
 `e` to open Run selected entries, `f` to retry failed items, `b` to
-rollback, `s` to run a Source Inventory Scan for the current selection and its
+rollback, `s` to scan sources for the current selection and its
 required dependencies, `l` to open Session activity, `R` to reload status, and
-`q` to quit. When applicable, `t`
+`q` to quit. Source scan results stay visible when switching migrations or
+scanning other sources; `R` clears them when reloading status. When applicable, `t`
 retries skipped items, `v` focuses a running migration, `x` requests a safe stop
 for a run owned by the connected Migrate Server, and `u` opens
 the guarded break-lock confirmation. Use

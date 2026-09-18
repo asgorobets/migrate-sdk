@@ -773,7 +773,7 @@ const Capabilities = ({ row }: { readonly row: MigrateDashboardRow }) => (
       label="Rollback"
       tone="success"
     />
-    <Checkbox checked disabled label="Source Inventory Scan" tone="success" />
+    <Checkbox checked disabled label="Scan sources" tone="success" />
     {row.status === undefined ? (
       <text fg={migrationColors.dim}>Incremental: not loaded</text>
     ) : (
@@ -1000,7 +1000,7 @@ const Overview = ({
         </>
       )}
       <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
-        <text fg={migrationColors.foreground}>Source inventory</text>
+        <text fg={migrationColors.foreground}>Sources</text>
       </box>
       <SourceInventorySummary compact={compact} rows={[row]} />
       <LockDetails row={row} />
@@ -1055,7 +1055,7 @@ const GroupOverview = ({
         </>
       )}
       <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
-        <text fg={migrationColors.foreground}>Source inventory</text>
+        <text fg={migrationColors.foreground}>Sources</text>
       </box>
       <SourceInventorySummary compact={compact} rows={rows} />
       <GroupLocks rows={rows} />

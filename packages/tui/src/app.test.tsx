@@ -2979,7 +2979,7 @@ describe("MigrationTuiApp", () => {
           await settle(setup.renderOnce, () => {
             const frame = setup.captureCharFrame();
             return (
-              frame.includes("Source Inventory Scan complete") &&
+              frame.includes("Source scan complete") &&
               frame.includes(
                 "3 total · 2 unprocessed · 0 invalid · 1 duplicate · 0 orphaned"
               ) &&
@@ -2991,6 +2991,90 @@ describe("MigrationTuiApp", () => {
           definitionId: toMigrationDefinitionId("products"),
           kind: "migration",
         });
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui.each([false, true])(
+    "keeps earlier source scans when scanning an unrelated migration (background: %s)",
+    async (loadStatusOnStartup) => {
+      const base = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const scanSource = vi.fn(base.scanSource);
+      const runtime = { ...base, scanSource };
+      const setup = await createTestRenderer({ height: 36, width: 120 });
+      const root = createRoot(setup.renderer);
+      const press = async (key: string) => {
+        await act(async () => {
+          setup.mockInput.pressKey(key);
+          await setup.renderOnce();
+        });
+      };
+      const scan = async (definitionId: string, count: number) => {
+        await press("s");
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes(`Source scan complete for ${definitionId}`) &&
+              frame.includes(`${count} total`)
+            );
+          })
+        ).toBe(true);
+      };
+      const selectMigration = async (key: string, definitionId: string) => {
+        await press(key);
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes(`│ ${definitionId}  `)
+          )
+        ).toBe(true);
+      };
+      act(() =>
+        root.render(
+          <MigrationTuiApp
+            loadStatusOnStartup={loadStatusOnStartup}
+            runtime={runtime}
+          />
+        )
+      );
+      try {
+        await act(async () => setup.renderOnce());
+        await scan("authors", 2);
+        await selectMigration("j", "articles");
+        await scan("articles", 2);
+        await selectMigration("k", "authors");
+        expect(setup.captureCharFrame()).toContain("2 total");
+        await selectMigration("j", "articles");
+        await selectMigration("j", "assets");
+        await scan("assets", 1);
+        await selectMigration("k", "articles");
+        expect(setup.captureCharFrame()).toContain("2 total");
+        expect(setup.captureCharFrame()).not.toContain("Not scanned");
+        await selectMigration("k", "authors");
+        expect(setup.captureCharFrame()).toContain("2 total");
+        await press("g");
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("5 total")
+          )
+        ).toBe(true);
+        expect(scanSource).toHaveBeenCalledTimes(3);
+        await press("s");
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup
+              .captureCharFrame()
+              .includes("Source scan complete for content")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain("5 total");
+        expect(scanSource).toHaveBeenCalledTimes(4);
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
@@ -3386,7 +3470,7 @@ describe("MigrationTuiApp", () => {
 
         expect(
           await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("Source Inventory Scan complete")
+            setup.captureCharFrame().includes("Source scan complete")
           )
         ).toBe(true);
         expect(setup.captureCharFrame()).toContain("v View run");
@@ -3794,9 +3878,7 @@ describe("MigrationTuiApp", () => {
         const concurrencySettings = setup.captureCharFrame();
         expect(concurrencySettings).toContain("Process Pipeline concurrency");
         expect(concurrencySettings).toContain("Rollback Pipeline concurrency");
-        expect(concurrencySettings).toContain(
-          "Source Inventory Scan concurrency"
-        );
+        expect(concurrencySettings).toContain("Source scan concurrency");
         expect(concurrencySettings.match(/Unbounded/g)?.length ?? 0).toBe(2);
 
         await act(async () => {

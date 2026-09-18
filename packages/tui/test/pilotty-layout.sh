@@ -711,7 +711,7 @@ ACTIVE_SESSION="${SOURCE_STATUS_SESSION}"
   "Status reloaded" >/dev/null
 "${PILOTTY_BIN}" key -s "${SOURCE_STATUS_SESSION}" s >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${SOURCE_STATUS_SESSION}" -t 5000 \
-  "Source Inventory Scan complete" >/dev/null
+  "Source scan complete" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${SOURCE_STATUS_SESSION}" \
   --settle 150 \
   --strict \
@@ -862,7 +862,7 @@ assert_line_excludes \
   "short wide action footer does not overlap diagnostic text"
 assert_contains \
   "${ARTIFACT_DIR}/compact.txt" \
-  "m messages · s inventory scan · R reload · q quit" \
+  "m messages · s scan sources · R reload · q quit" \
   "compact shortcut footer remains readable"
 assert_contains \
   "${ARTIFACT_DIR}/compact.txt" \
@@ -978,8 +978,8 @@ assert_contains \
   "All actions includes session concurrency settings"
 assert_contains \
   "${ARTIFACT_DIR}/group-all-actions.txt" \
-  "Source Inventory Scan  [s]" \
-  "All actions uses canonical Source Inventory Scan terminology"
+  "Scan sources  [s]" \
+  "All actions offers Scan sources"
 assert_contains \
   "${ARTIFACT_DIR}/execution-settings.txt" \
   "Process Pipeline concurrency" \
@@ -998,8 +998,8 @@ assert_contains \
   "concurrency settings expose Rollback Pipeline concurrency"
 assert_contains \
   "${ARTIFACT_DIR}/execution-settings.txt" \
-  "Source Inventory Scan concurrency" \
-  "concurrency settings expose Source Inventory Scan concurrency"
+  "Source scan concurrency" \
+  "concurrency settings expose Source scan concurrency"
 assert_contains \
   "${ARTIFACT_DIR}/execution-settings-compact.txt" \
   "tab move · ↑↓ value · space toggle · ^s save · esc cancel" \
@@ -1171,11 +1171,11 @@ assert_contains \
 assert_contains \
   "${ARTIFACT_DIR}/source-status.txt" \
   "3 total · 2 unprocessed · 0 invalid · 1 duplicate · 0 orphaned" \
-  "Source Inventory Scan displays inventory counts"
+  "Source scan displays source counts"
 assert_contains \
   "${ARTIFACT_DIR}/source-status.txt" \
   "Duplicate product-duplicate · 2 occurrences" \
-  "Source Inventory Scan displays identity-specific warnings"
+  "Source scan displays identity-specific warnings"
 assert_contains \
   "${ARTIFACT_DIR}/source-status-compact-scrolled.txt" \
   "Rollback" \

@@ -1089,7 +1089,7 @@ const MigrationTuiDashboardApp = ({
         return;
       }
 
-      setBusy(`Running Source Inventory Scan for ${targetLabel(target)}…`);
+      setBusy(`Scanning sources for ${targetLabel(target)}…`);
       setError(null);
 
       try {
@@ -1098,17 +1098,19 @@ const MigrationTuiDashboardApp = ({
             ? {}
             : { concurrency: executionSettings.sourceInventoryScan }),
         });
-        setSourceScanStatuses(
-          new Map(
-            snapshot.rows.flatMap((row) =>
-              row.status === undefined ? [] : [[row.entry.id, row.status]]
-            )
-          )
-        );
+        setSourceScanStatuses((previous) => {
+          const next = new Map(previous);
+          for (const row of snapshot.rows) {
+            if (row.status?.source !== undefined) {
+              next.set(row.entry.id, row.status);
+            }
+          }
+          return next;
+        });
         if (snapshot.activeRuns.length > 0) {
           startObservation(snapshot);
         }
-        setNotice(`Source Inventory Scan complete for ${targetLabel(target)}`);
+        setNotice(`Source scan complete for ${targetLabel(target)}`);
       } catch (cause) {
         setError(errorMessage(cause));
       } finally {
