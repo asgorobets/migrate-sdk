@@ -5,6 +5,28 @@ TUI's Node Migrate Server loads the same `migrate.config.ts` as the CLI. The TUI
 provides status, item counts, messages, dependency-aware execution plans, and
 contextual actions for every registered migration.
 
+The migration list opens after connecting, without waiting for durable status.
+Status loads once in the background with a **Loading status…** indicator and a
+session activity entry. Navigation and operations remain available while it
+loads. Unloaded counts are shown as **Not loaded**, not zero.
+
+For expensive stores, defer the first status read until you press **R** (Shift+R):
+
+```sh
+pnpm exec migrate-tui --status manual
+pnpm exec migrate-tui --server https://migrate.example.com/api/rpc --status manual
+```
+
+The default is `--status background`. Both modes retain the last loaded idle
+status until **R** requests another read. When a status read finds an active run,
+or you start a run from the TUI, live dashboard updates continue until no runs
+remain active. Runs started elsewhere while the dashboard is idle appear after
+**R**. Status failures leave the list usable and can be retried with **R**.
+
+If the renderer restarts after an error, it reuses the last dashboard state.
+An idle manual session stays idle; an active run resumes live updates. Source
+scans that find active runs also restore live updates and run controls.
+
 Install it in the migration project alongside the SDK:
 
 ```sh
@@ -178,21 +200,31 @@ The footer keeps primary and contextual shortcuts visible for the current
 selection. Press `Enter` to open All actions, which includes the complete action
 set such as rescan, update, and Concurrency settings. Concurrency settings provides
 session-scoped concurrency overrides for the Process Pipeline, Rollback Pipeline,
-and Source Inventory Scan; blank values preserve the configured defaults and
+and source scans; blank values preserve the configured defaults and
 Process or Rollback concurrency can be set to unbounded. Press `c` to open
 Concurrency settings and `g` to switch
 between migration and group tabs, `m` for errors and messages, `r` to run the selected migration or group,
 `e` to open Run selected entries, `f` to retry failed items, `b` to
-rollback, `s` to run a Source Inventory Scan for the current selection and its
+rollback, `s` to scan sources for the current selection and its
 required dependencies, `l` to open Session activity, `R` to reload status, and
-`q` to quit. When applicable, `t`
+`q` to quit. Source scan results stay visible when switching migrations or
+scanning other sources; `R` clears them when reloading status. When applicable, `t`
 retries skipped items, `v` focuses a running migration, `x` requests a safe stop
 for a run owned by the connected Migrate Server, and `u` opens
 the guarded break-lock confirmation. Use
 Page Up and Page Down to scroll the overview while the arrow keys continue to
-select migrations. The Messages tab displays a bounded list with the current
-message highlighted; use the arrow keys to move through it and `Enter` to open
-the complete message and structured details. For non-interactive inspection or
+select migrations. Messages are loaded only when you press `m` or open the Messages tab. Latest
+message shows `m to load` until then. Loaded results, including empty results,
+are cached per migration or group for the session; navigation does not reload
+them. Observed changes to run history or durable item counts mark affected
+caches stale, including their groups. Press `m` again to reload a stale result
+or retry a failed read. An unchanged status refresh keeps the cache. Source
+scans and lock heartbeats do not invalidate it. Changes made by other clients
+while this TUI is idle are discovered on `R`, just like status changes.
+
+The Messages tab displays a bounded list with the current message highlighted;
+use the arrow keys to move through it and `Enter` to open the complete message
+and structured details. For non-interactive inspection or
 export, use `migrate messages <migration>` or
 `migrate messages --all --json` from the same project.
 
