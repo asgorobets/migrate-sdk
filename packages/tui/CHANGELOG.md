@@ -1,5 +1,12 @@
 # @migrate-sdk/tui
 
+## 0.13.3
+
+### Patch Changes
+
+- 5a2d317: Support Node.js 22.19.0 and newer across the SDK, CLI, TUI, and adapters, allowing
+  applications on Node 22 to embed Migrate SDK without upgrading to Node 24.
+
 ## 0.13.2
 
 ### Patch Changes
