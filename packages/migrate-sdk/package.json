@@ -9,7 +9,7 @@
     "directory": "packages/migrate-sdk"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=22.19.0"
   },
   "bin": {
     "migrate": "./dist/cli/bin.js"
@@ -200,7 +200,7 @@
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@repo/typescript-config": "workspace:*",
-    "@types/node": "^24.13.1",
+    "@types/node": "^22.19.0",
     "@types/papaparse": "^5.5.2",
     "@types/proper-lockfile": "^4.1.4",
     "@typescript/native": "npm:typescript@7.0.2",

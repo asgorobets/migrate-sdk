@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/tui-package.yml"
+      - ".nvmrc"
       - ".changeset/config.json"
       - "packages/migrate-sdk/**"
       - "packages/tui/**"
@@ -15,6 +16,7 @@ on:
       - main
     paths:
       - ".github/workflows/tui-package.yml"
+      - ".nvmrc"
       - ".changeset/config.json"
       - "packages/migrate-sdk/**"
       - "packages/tui/**"
@@ -61,7 +63,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 24.x
+          node-version-file: .nvmrc
           package-manager-cache: false
 
       - name: Install dependencies
