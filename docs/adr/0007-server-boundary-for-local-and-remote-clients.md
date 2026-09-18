@@ -319,39 +319,9 @@ deduplication, and global message ordering authoritatively. Clients render
 those canonical reports rather than reconstructing them from dashboard rows or
 per-definition requests.
 
-The TUI bootstraps its migration list through `GetRegistry`, never
-`GetDashboard`. Once mounted, it loads status in the background by default;
-`--status manual` defers that first read until **R**. Status loading has its own
-activity indicator and does not disable navigation or operations. Missing
-status is unknown, not an empty migration. Schema setup also hands off to this
-same lazy dashboard path after the store becomes usable.
-
-The TUI retains an idle snapshot until an explicit refresh. It closes dashboard
-observation when the snapshot has no active runs, avoiding recurring expensive
-store reads. Starting a run or discovering active runs on a status read enables
-live observation until all runs settle. An idle TUI discovers runs started by
-other clients on **R**. This is a TUI subscription policy; the server's shared
-dashboard observation contract and other clients remain unchanged.
-
-The renderer supervisor retains the last dashboard rows, active runs, and
-observation intent. Recovery remounts that state without a blocking status read:
-idle snapshots remain cached, while active observations and pending status reads
-resume in the background. Source Inventory Scans that discover active runs hand
-their snapshot to the dashboard and resume observation as well.
-
-The TUI requests messages only when the user presses **m** or opens Messages,
-for either a migration or a group. It caches successful results, including empty
-lists, per target and runtime. Navigation and unchanged status reads reuse the
-cache. The protocol has no message revision: observed changes to durable item
-counts or run history conservatively invalidate the affected target caches,
-including groups containing a changed migration. Source scans and lock
-heartbeats do not invalidate messages. Invalidated results offer **m** to reload;
-they do not initiate another item-state scan automatically. A response that
-finishes after its status revision changed remains stale. Local revisions only
-advance, so returning to earlier counts cannot revive an invalidated cache. An
-expanded message retains its content and position until the user closes it,
-even when its underlying cache becomes stale. Idle clients discover
-external run changes through the existing explicit status refresh.
+The TUI opens its migration list from `GetRegistry` so expensive status reads
+do not block startup. The client controls when to load status and messages and
+subscribe to dashboard updates.
 
 Remote CLI commands accept a Migrate Server URL and read its bearer token from
 `MIGRATE_SERVER_TOKEN`; secrets are not accepted as command-line flags. Store
@@ -429,7 +399,6 @@ use the same conditional force behavior while preserving the selected identities
   interface without keeping a serverless invocation alive for the run duration.
 - Active dashboard subscriptions receive complete durable snapshots for every
   migration; changing TUI selection affects only optional focused observation.
-  The TUI retains idle snapshots until the user requests a refresh.
 - Inline and provider progress can wake one shared dashboard projection without
   exposing provider event formats or making clients poll every second.
 - The boundary extracts serializable server requests and handlers from the
