@@ -31,7 +31,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 24.x
+          node-version: 22.19.0
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
@@ -70,6 +70,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
+          # Node 24 bundles npm 11, which supports OIDC trusted publishing.
           node-version: 24.x
           registry-url: https://registry.npmjs.org
           package-manager-cache: false

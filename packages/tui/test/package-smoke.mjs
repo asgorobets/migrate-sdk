@@ -255,7 +255,9 @@ try {
     resolve(fixtureDirectory, "migrate.config.ts")
   );
 
-  run(pnpm, ["install", "--ignore-scripts"], { cwd: fixtureDirectory });
+  run(pnpm, ["install", "--ignore-scripts", "--engine-strict"], {
+    cwd: fixtureDirectory,
+  });
 
   const command = resolve(
     fixtureDirectory,

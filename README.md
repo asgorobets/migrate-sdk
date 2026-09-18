@@ -51,6 +51,9 @@ types need to run together or in a certain order.
 
 ## Install
 
+Requires Node.js **22.19.0 or newer**, including Node 24. The same minimum
+applies when embedding the SDK in another Node.js application.
+
 ```sh
 pnpm add migrate-sdk effect
 ```
@@ -219,7 +222,9 @@ the separate Local Source Generation model.
 
 ## Repository development
 
-This repository uses pnpm and Turborepo. Node.js 24 is required.
+This repository uses pnpm and Turborepo, with Node.js 22 as the development
+default (`.nvmrc`). Node.js 22.19.0 is the minimum supported version. Release
+validation checks that minimum; platform checks use the latest Node 22 release.
 
 ```sh
 pnpm install

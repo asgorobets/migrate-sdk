@@ -27,7 +27,8 @@ If the renderer restarts after an error, it reuses the last dashboard state.
 An idle manual session stays idle; an active run resumes live updates. Source
 scans that find active runs also restore live updates and run controls.
 
-Install it in the migration project alongside the SDK:
+Requires Node.js 22.19.0 or newer. Install it in the migration project alongside
+the SDK:
 
 ```sh
 pnpm add migrate-sdk effect
