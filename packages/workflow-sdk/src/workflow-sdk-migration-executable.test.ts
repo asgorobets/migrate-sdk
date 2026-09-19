@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Fiber, Layer, Schema } from "effect";
+import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import {
   MigrationDefinition,
@@ -112,15 +112,15 @@ const makeProgressWorkflowRun = (
         new ReadableStream({
           start(controller) {
             controller.enqueue({
-              counts: {
-                failed: 0,
-                migrated: 1,
-                needsUpdate: 0,
-                skipped: 0,
-                unchanged: 0,
-              },
-              definitionId: "articles",
-              kind: "source-cursor-window-completed",
+              kind: "contribution",
+              partitionId: "window-a:1",
+              revision: 1,
+              changes: [
+                {
+                  definitionId: "articles",
+                  delta: { failed: 0, migrated: 1, needsUpdate: 0, skipped: 0 },
+                },
+              ],
               runId: "run-progress",
             });
             controller.close();
@@ -328,7 +328,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
   );
 
   it.effect(
-    "interrupts observation without leaving Workflow SDK polling active",
+    "backs off quiet Workflow status reads and stops polling on detach",
     () =>
       Effect.gen(function* () {
         let returnValueReads = 0;
@@ -376,15 +376,108 @@ describe("WorkflowSdkMigrationExecutable", () => {
         expect(statusReads).toBe(1);
         expect(returnValueReads).toBe(0);
 
+        yield* TestClock.adjust("20 seconds");
+        // Without a progress stream, reads back off at 0, 1, 3, 7, and 15 seconds.
+        expect(statusReads).toBe(5);
+
         yield* Fiber.interrupt(observationFiber);
         yield* TestClock.adjust("5 seconds");
 
-        expect(statusReads).toBe(1);
+        expect(statusReads).toBe(5);
         expect(returnValueReads).toBe(0);
       })
   );
 
-  it.effect("streams committed cursor checkpoints during observation", () =>
+  it.effect(
+    "reconciles a quiet stream, defers checks on progress, and checks lifecycle changes immediately",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        let controller: ReadableStreamDefaultController<unknown> | undefined;
+        let reads = 0;
+        let completed = false;
+        const run = {
+          runId: "wrun-stream-terminal",
+          getReadable: () =>
+            Object.assign(
+              new ReadableStream<unknown>({
+                start(next) {
+                  controller = next;
+                },
+              }),
+              { getTailIndex: () => Promise.resolve(-1) }
+            ),
+          get status() {
+            reads += 1;
+            Deferred.doneUnsafe(started, Effect.void);
+            if (completed) {
+              return Promise.resolve("completed");
+            }
+            return Promise.resolve(reads === 1 ? "pending" : "running");
+          },
+          get returnValue() {
+            return Promise.resolve(
+              makeObservedRunSummary("run-stream-terminal")
+            );
+          },
+        } as unknown as WorkflowSdkRun;
+        const executable = yield* MigrationExecutable.pipe(
+          Effect.provide(
+            makeWorkflowSdkMigrationExecutableTestLayer({
+              getRun: () => run,
+              start: () => Promise.resolve(makeWorkflowRun("unused")),
+              workflow: migrationExecutionWorkflow,
+            })
+          )
+        );
+        if (executable.waitForExecution === undefined) {
+          return yield* Effect.die("Expected execution observation");
+        }
+        const observer = yield* executable
+          .waitForExecution(
+            { adapter: "workflow-sdk", executionId: run.runId },
+            {
+              onEvent: () => Effect.void,
+            }
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        yield* TestClock.adjust("29 seconds");
+        expect(reads).toBe(1);
+        yield* TestClock.adjust("1 second");
+        expect(reads).toBe(2);
+        yield* TestClock.adjust("29 seconds");
+        expect(reads).toBe(2);
+        controller?.enqueue({
+          kind: "contribution",
+          partitionId: "window-a:1",
+          revision: 1,
+          changes: [
+            {
+              definitionId: "articles",
+              delta: { failed: 0, migrated: 1, needsUpdate: 0, skipped: 0 },
+            },
+          ],
+          runId: "run-stream-terminal",
+        });
+        yield* TestClock.adjust("29 seconds");
+        expect(reads).toBe(2);
+        yield* TestClock.adjust("1 second");
+        expect(reads).toBe(3);
+        completed = true;
+        controller?.enqueue({
+          definitionIds: ["articles"],
+          kind: "state-changed",
+          runId: "run-stream-terminal",
+        });
+        expect((yield* Fiber.join(observer)).kind).toBe("succeeded");
+        expect(reads).toBe(4);
+        yield* TestClock.adjust("1 minute");
+        expect(reads).toBe(4);
+      })
+  );
+
+  it.effect("streams execution progress during observation", () =>
     Effect.gen(function* () {
       const checkpoints: unknown[] = [];
       const readableOptions: unknown[] = [];
@@ -412,7 +505,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
           executionId: "wrun-progress",
         },
         {
-          onProgressCheckpoint: (checkpoint) =>
+          onEvent: (checkpoint) =>
             Effect.sync(() => checkpoints.push(checkpoint)),
         }
       );
@@ -427,23 +520,31 @@ describe("WorkflowSdkMigrationExecutable", () => {
         },
         {
           namespace: "migrate-sdk-progress",
-          startIndex: 5,
+          startIndex: 0,
         },
       ]);
-      expect(checkpoints).toEqual([
+      expect(checkpoints).toMatchObject([
         {
-          counts: {
-            failed: 0,
-            migrated: 1,
-            needsUpdate: 0,
-            skipped: 0,
-            unchanged: 0,
+          kind: "progress",
+          runId: "run-progress",
+          cursor: "0",
+          replaying: true,
+          progress: {
+            kind: "contribution",
+            partitionId: "window-a:1",
+            changes: [{ definitionId: "articles", delta: { migrated: 1 } }],
           },
-          definitionId: toMigrationDefinitionId("articles"),
-          kind: "source-cursor-window-completed",
-          runId: toMigrationRunId("run-progress"),
         },
       ]);
+      readableOptions.length = 0;
+      yield* waitForExecution(
+        { adapter: "workflow-sdk", executionId: "wrun-progress" },
+        { after: "4", onEvent: () => Effect.void }
+      );
+      expect(readableOptions[1]).toEqual({
+        namespace: "migrate-sdk-progress",
+        startIndex: 5,
+      });
     })
   );
 
@@ -487,7 +588,7 @@ describe("WorkflowSdkMigrationExecutable", () => {
             adapter: "workflow-sdk",
             executionId: run.runId,
           },
-          { onProgressCheckpoint: () => Effect.void }
+          { onEvent: () => Effect.void }
         ).pipe(Effect.flip);
 
         expect(error).toBeInstanceOf(

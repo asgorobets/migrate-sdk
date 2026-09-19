@@ -44,14 +44,44 @@ This package currently implements the durable run boundary: allocate a migration
 run id, acquire definition locks, queue migration run state, start the Workflow
 SDK run, attach the Workflow SDK run id, then let the Workflow SDK workflow
 consume the locked run envelope through cursor-window steps. The executable can
-reattach to that Workflow SDK run id for native terminal observation. Each
-committed cursor window also publishes a checkpoint on the adapter's named
-progress stream. A checkpoint carries cumulative committed run counts, and
-reattachment begins with the most recent buffered checkpoint before following
-live updates. Clients can render those counts directly or refresh the affected
-migration in batches.
-The migration store remains authoritative for migration status and item
-progress. Processing concurrency from the executable plan is applied to item
+reattach to that Workflow SDK run id for native terminal observation.
+
+Before item work, the locked run publishes a baseline of stored counts. Existing
+steps accumulate committed before/after state changes and publish one compact
+cumulative contribution every five seconds while changing, plus a final flush
+at window completion or step exit. Unchanged periods write nothing. These are
+stream writes inside existing steps, not extra Workflow steps or persisted
+per-item events. Each step/attempt has its own contribution and revision;
+replaying an update replaces that contribution rather than adding it again.
+Future parallel windows can use independent contributions under the same run.
+
+The Migrate Server relays this stream. Shared client code reconstructs display
+counts and retains them with the last consumed chunk index across HTTP session
+renewals. A new client replays the stream; a replacement server resumes after
+the client's cursor. Neither needs a new persistence service. Routine progress
+and reconnection do not rescan Migration Item State. Lifecycle changes refresh
+small run/definition metadata separately.
+
+Provider status is checked after thirty seconds without progress, on lifecycle
+notifications, and when the stream closes. Dashboard discovery also checks
+active run metadata every thirty seconds; neither check scans item states.
+Failed dashboard and focused-run stream readers reconnect from their last
+cursor with capped, jittered backoff.
+Detaching closes the reader. Idle TUIs stop their observation session.
+
+Streaming is a display optimization: Migration Item State remains authoritative.
+Initial loading, explicit refresh, and terminal reconciliation read stored
+summaries. A worker can commit a state and die before publishing; the display
+may lag until final reconciliation. A missing baseline is reported to the
+client instead of silently initiating expensive polling. Baseline writes have
+bounded retries. No atomic outbox or per-item event history is introduced.
+
+Workflow stream storage, retention, reader compute, and transfer still have a
+cost. Five-second batching bounds routine write volume by active steps and time,
+not item throughput; lifecycle and step-final writes add to that volume.
+Serverless streaming requests also remain subject to host duration and billing.
+
+Processing concurrency from the executable plan is applied to item
 admission and per-item work inside every cursor-window step. A `processBatch`
 callback may separately choose the concurrency of its own destination requests.
 

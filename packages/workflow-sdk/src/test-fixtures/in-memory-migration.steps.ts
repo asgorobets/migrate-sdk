@@ -81,13 +81,16 @@ const processConcurrencyKey = "__migrateSdkWorkflowInMemoryProcessConcurrency";
 interface ProcessConcurrencyState {
   active: number;
   max: number;
+  pauseAfter?: number | undefined;
+  resume?: Promise<void> | undefined;
+  started: number;
 }
 const getProcessConcurrencyState = (): ProcessConcurrencyState => {
   const scope = globalThis as typeof globalThis & {
     [processConcurrencyKey]?: ProcessConcurrencyState;
   };
 
-  scope[processConcurrencyKey] ??= { active: 0, max: 0 };
+  scope[processConcurrencyKey] ??= { active: 0, max: 0, started: 0 };
 
   return scope[processConcurrencyKey];
 };
@@ -146,6 +149,9 @@ const resetStoreState = (state: InMemoryMigrationStoreState) => {
   state.nextRunNumber = 1;
   processConcurrencyState.active = 0;
   processConcurrencyState.max = 0;
+  processConcurrencyState.started = 0;
+  processConcurrencyState.pauseAfter = undefined;
+  processConcurrencyState.resume = undefined;
 };
 
 const storeState = getStoreState();
@@ -156,12 +162,20 @@ const articles = MigrationDefinition.make({
     Effect.acquireUseRelease(
       Effect.sync(() => {
         processConcurrencyState.active += 1;
+        processConcurrencyState.started += 1;
         processConcurrencyState.max = Math.max(
           processConcurrencyState.max,
           processConcurrencyState.active
         );
       }),
-      () => Effect.sleep("5 millis"),
+      () => {
+        const { pauseAfter, resume, started } = processConcurrencyState;
+        return resume !== undefined &&
+          pauseAfter !== undefined &&
+          started > pauseAfter
+          ? Effect.promise(() => resume)
+          : Effect.sleep("5 millis");
+      },
       () =>
         Effect.sync(() => {
           processConcurrencyState.active -= 1;
@@ -348,6 +362,14 @@ export const removeInMemoryMigrationTestSourceItem = (identity: string) => {
   if (index >= 0) {
     sourceItems.splice(index, 1);
   }
+};
+export const pauseInMemoryMigrationTestProcessingAfter = (count: number) => {
+  let resume: () => void = () => undefined;
+  processConcurrencyState.pauseAfter = count;
+  processConcurrencyState.resume = new Promise<void>((resolve) => {
+    resume = resolve;
+  });
+  return resume;
 };
 export const setInMemoryMigrationTestSourceItemCount = (count: number) => {
   sourceItems.splice(0, sourceItems.length, ...makeSourceItems(count));

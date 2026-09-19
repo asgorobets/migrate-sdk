@@ -1,5 +1,19 @@
-import { Deferred, Effect, Fiber, Layer, Option, Ref, Schema } from "effect";
-import { migrationDependencyIsSatisfied } from "../domain/status.ts";
+import {
+  Clock,
+  Deferred,
+  Effect,
+  Layer,
+  Option,
+  Queue,
+  Random,
+  Ref,
+  Schema,
+  Semaphore,
+} from "effect";
+import {
+  type MigrationDefinitionMetadata,
+  migrationDependencyIsSatisfied,
+} from "../domain/status.ts";
 import {
   type ActiveMigrationRun,
   type AnySelfContainedMigrationDefinition,
@@ -16,8 +30,9 @@ import {
   type MigrationDefinitionRegistryMessagesReport,
   type MigrationDefinitionRegistryStatusReport,
   type MigrationDefinitionStatus,
+  type MigrationExecutableObservationEvent,
+  type MigrationExecutableObservationOptions,
   type MigrationExecutableObservationResult,
-  type MigrationExecutableProgressCheckpoint,
   type MigrationExecutableService,
   type MigrationExecutionOptions,
   type MigrationItemState,
@@ -261,6 +276,9 @@ export interface RegistryMigrateServerRuntime {
     lock: MigrationDefinitionLock
   ) => Effect.Effect<MigrateBreakLockResult, unknown>;
   readonly entries: readonly MigrationDefinitionRegistryEntry[];
+  readonly getDefinitionMetadata: (
+    definitionIds: readonly MigrationDefinitionId[]
+  ) => Effect.Effect<readonly MigrationDefinitionMetadata[], unknown>;
   readonly getRegistryMessages: (
     input: MigrateRegistryMessagesRequest
   ) => Effect.Effect<MigrationDefinitionRegistryMessagesReport, unknown>;
@@ -320,7 +338,7 @@ export interface RegistryMigrateServerRuntime {
   ) => Effect.Effect<MigrateServerExecutionStopResult, unknown>;
   readonly watchDashboardRun: (
     run: MigrateActiveRun,
-    invalidate: Effect.Effect<void>
+    options: MigrationExecutableObservationOptions
   ) => Effect.Effect<void, unknown>;
 }
 
@@ -328,6 +346,7 @@ export interface RegistryMigrateServerRuntimeOptions {
   readonly progressFallbackIntervalMs?: number;
   readonly providerSettlementGraceMs?: number;
   readonly terminalPollIntervalMs?: number;
+  readonly terminalPollMaxIntervalMs?: number;
 }
 
 export interface MakeRegistryMigrateServerRuntimeInput
@@ -383,9 +402,10 @@ export const makeRegistryMigrateServerRuntime = (
   const registryId = Option.getOrUndefined(registry.id());
   const executable = input.executable;
   const rows = entries.map((entry) => ({ entry }));
-  const progressFallbackIntervalMs = input.progressFallbackIntervalMs ?? 5000;
+  const progressFallbackIntervalMs = input.progressFallbackIntervalMs ?? 30_000;
   const providerSettlementGraceMs = input.providerSettlementGraceMs ?? 2000;
   const terminalPollIntervalMs = input.terminalPollIntervalMs ?? 500;
+  const terminalPollMaxIntervalMs = input.terminalPollMaxIntervalMs ?? 30_000;
 
   const getRegistryMessages = (input: MigrateRegistryMessagesRequest) =>
     registry.messages(toMigrationDefinitionRegistrySelectionInput(input));
@@ -523,7 +543,8 @@ export const makeRegistryMigrateServerRuntime = (
   const observeDetachedRunEffect = ({
     definitionId,
     execution,
-    onProgressCheckpoint,
+    onEvent,
+    after,
     onProviderObservationError,
     runId,
   }: {
@@ -532,8 +553,9 @@ export const makeRegistryMigrateServerRuntime = (
       readonly adapter: string;
       readonly executionId: string;
     };
-    readonly onProgressCheckpoint?: (
-      checkpoint: MigrationExecutableProgressCheckpoint
+    readonly after?: string;
+    readonly onEvent?: (
+      checkpoint: MigrationExecutableObservationEvent
     ) => Effect.Effect<void>;
     readonly onProviderObservationError?: (cause: unknown) => void;
     readonly runId: MigrationRunId;
@@ -555,25 +577,35 @@ export const makeRegistryMigrateServerRuntime = (
         runId,
         definitionId
       );
-      const durableObservation = waitForDurableRunState({
-        pollIntervalMs: terminalPollIntervalMs,
-        readRunState,
-        runId,
-      }).pipe(Effect.map((state) => ({ state })));
-      const providerObservation = executable.waitForExecution?.(execution, {
-        ...(onProgressCheckpoint === undefined
-          ? {}
-          : {
-              onProgressCheckpoint: (checkpoint) =>
-                checkpoint.runId === runId
-                  ? onProgressCheckpoint(checkpoint)
-                  : Effect.void,
-            }),
-      });
-
-      if (providerObservation === undefined) {
-        return yield* durableObservation;
+      const durableObservation = (pollIntervalMs = terminalPollIntervalMs) =>
+        waitForDurableRunState({
+          maxPollIntervalMs: terminalPollMaxIntervalMs,
+          pollIntervalMs,
+          readRunState,
+          runId,
+        }).pipe(Effect.map((state) => ({ state })));
+      const waitForExecution = executable.waitForExecution;
+      if (waitForExecution === undefined) {
+        return yield* durableObservation();
       }
+      let cursor = after;
+      let retryDelayMs = 1000;
+      let warned = false;
+      const providerObservation = Effect.suspend(() =>
+        waitForExecution(execution, {
+          ...(cursor === undefined ? {} : { after: cursor }),
+          onEvent: (checkpoint) =>
+            Effect.gen(function* () {
+              if (checkpoint.runId !== runId) {
+                return;
+              }
+              yield* onEvent?.(checkpoint) ?? Effect.void;
+              cursor = checkpoint.cursor ?? cursor;
+              retryDelayMs = 1000;
+              warned = false;
+            }),
+        })
+      );
 
       const enrichDurableTerminal = (
         state: MigrationRunState,
@@ -609,57 +641,37 @@ export const makeRegistryMigrateServerRuntime = (
             : {}),
         });
       };
-      const observedProvider = providerObservation.pipe(
-        Effect.match({
-          onFailure: (cause) => ({ cause, kind: "unavailable" as const }),
-          onSuccess: (result) => ({ kind: "observed" as const, result }),
-        })
-      );
-      const providerFiber = yield* observedProvider.pipe(Effect.forkChild);
-      const first = yield* Effect.raceFirst(
-        durableObservation.pipe(
-          Effect.map((terminal) => ({ kind: "durable" as const, terminal }))
-        ),
-        Fiber.join(providerFiber).pipe(
-          Effect.map((provider) => ({ kind: "provider" as const, provider }))
-        )
-      );
-
-      if (first.kind === "durable") {
-        const provider = yield* Fiber.join(providerFiber).pipe(
-          Effect.timeoutOption(providerSettlementGraceMs)
-        );
-
-        if (Option.isNone(provider)) {
-          return first.terminal;
-        }
-
-        const providerResult = provider.value;
-
-        if (providerResult.kind === "unavailable") {
-          yield* Effect.sync(() =>
-            onProviderObservationError?.(providerResult.cause)
+      // During an outage, resume the reader from the last delivered chunk.
+      // Only cheap run metadata is checked between attempts; healthy streams
+      // continue to own completion observation without a parallel polling loop.
+      const providerResult = yield* Effect.gen(function* () {
+        while (true) {
+          const observed = yield* providerObservation.pipe(Effect.result);
+          if (observed._tag === "Success") {
+            return { kind: "observed" as const, result: observed.success };
+          }
+          if (!warned) {
+            yield* Effect.sync(() =>
+              onProviderObservationError?.(observed.failure)
+            );
+            warned = true;
+          }
+          const state = yield* readRunState;
+          if (state?.runId === runId && isTerminalRunState(state)) {
+            return { kind: "durable" as const, state };
+          }
+          yield* Effect.sleep(
+            retryDelayMs * (yield* Random.nextBetween(0.8, 1))
           );
-          return first.terminal;
+          retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
         }
-
-        return yield* enrichDurableTerminal(
-          first.terminal.state,
-          providerResult.result
-        );
-      }
-
-      const providerResult = first.provider;
-
-      if (providerResult.kind === "unavailable") {
-        yield* Effect.sync(() =>
-          onProviderObservationError?.(providerResult.cause)
-        );
-        return yield* durableObservation;
+      });
+      if (providerResult.kind === "durable") {
+        return { state: providerResult.state };
       }
 
       if (providerResult.result.kind === "succeeded") {
-        const terminal = yield* durableObservation;
+        const terminal = yield* durableObservation();
         return yield* enrichDurableTerminal(
           terminal.state,
           providerResult.result
@@ -848,6 +860,24 @@ export const makeRegistryMigrateServerRuntime = (
         scannedSource: scanTarget !== undefined,
       };
     });
+
+  const getDefinitionMetadata = (
+    definitionIds: readonly MigrationDefinitionId[]
+  ) =>
+    Effect.forEach([...new Set(definitionIds)], (definitionId) =>
+      Effect.gen(function* () {
+        const definition = yield* getDefinition(definitionId);
+        return yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+          return {
+            definitionId,
+            completion: yield* store.getDefinitionCompletion(definitionId),
+            lastRun: yield* store.getLatestRunState(definitionId),
+            lock: yield* store.getDefinitionLock(definitionId),
+          };
+        }).pipe(Effect.provide(definition.store));
+      })
+    );
 
   const readRows = readSnapshot().pipe(Effect.map((snapshot) => snapshot.rows));
 
@@ -1150,64 +1180,132 @@ export const makeRegistryMigrateServerRuntime = (
   const makeExecutionProgress = (
     definitionIds: readonly MigrationDefinitionId[],
     options?: RegistryMigrateServerExecutionObserver
-  ) => {
-    const definitionIdSet = new Set(definitionIds);
-    const invalidateDashboard = Effect.sync(() =>
-      options?.onDashboardInvalidation?.()
-    );
-    const publish = (
-      requestedDefinitionIds: readonly MigrationDefinitionId[]
-    ): Effect.Effect<void> =>
-      options?.onProgress === undefined
-        ? Effect.void
-        : readExecutionProgressEffect(requestedDefinitionIds).pipe(
-            Effect.tap((definitions) =>
-              Effect.sync(() => options.onProgress?.({ definitions }))
+  ) =>
+    Effect.gen(function* () {
+      const dirtyDefinitions = new Set<MigrationDefinitionId>();
+      const refreshRequested = yield* Queue.sliding<void>(1);
+      const refresh = yield* Semaphore.make(1);
+      const definitionIdSet = new Set(definitionIds);
+      const lastRefreshAt = new Map<MigrationDefinitionId, number>();
+      const invalidateDashboard = Effect.sync(() =>
+        options?.onDashboardInvalidation?.()
+      );
+      const publish = (
+        requestedDefinitionIds: readonly MigrationDefinitionId[]
+      ): Effect.Effect<void> =>
+        options?.onProgress === undefined
+          ? Effect.void
+          : readExecutionProgressEffect(requestedDefinitionIds).pipe(
+              Effect.tap((definitions) =>
+                Effect.sync(() => options.onProgress?.({ definitions }))
+              ),
+              Effect.catch((error) =>
+                Effect.sync(() => options.onProgressError?.(error))
+              ),
+              Effect.ensuring(
+                Clock.currentTimeMillis.pipe(
+                  Effect.tap((now) =>
+                    Effect.sync(() => {
+                      for (const definitionId of requestedDefinitionIds) {
+                        lastRefreshAt.set(definitionId, now);
+                      }
+                    })
+                  )
+                )
+              ),
+              Effect.asVoid,
+              refresh.withPermit
+            );
+      const requestRefresh = (ids: readonly MigrationDefinitionId[]) =>
+        Effect.gen(function* () {
+          if (options?.onProgress === undefined) {
+            return;
+          }
+          for (const id of ids) {
+            if (definitionIdSet.has(id)) {
+              dirtyDefinitions.add(id);
+            }
+          }
+          if (dirtyDefinitions.size > 0) {
+            yield* Queue.offer(refreshRequested, undefined);
+          }
+        });
+      yield* Queue.take(refreshRequested).pipe(
+        Effect.andThen(Effect.sleep("1 second")),
+        Effect.andThen(
+          Effect.suspend(() => {
+            const ids = [...dirtyDefinitions];
+            dirtyDefinitions.clear();
+            return ids.length === 0 ? Effect.void : publish(ids);
+          })
+        ),
+        Effect.forever,
+        Effect.forkScoped
+      );
+      const publishDefinition = (
+        definitionId: MigrationDefinitionId
+      ): Effect.Effect<void> => requestRefresh([definitionId]);
+      const layer = Layer.merge(
+        Layer.succeed(MigrationProgress, {
+          emit: (event) =>
+            invalidateDashboard.pipe(
+              Effect.andThen(
+                event.kind === "source-item-completed" ||
+                  event.kind === "source-cursor-window-completed" ||
+                  event.kind === "definition-completed"
+                  ? publishDefinition(event.definitionId)
+                  : Effect.void
+              )
             ),
-            Effect.catch((error) =>
-              Effect.sync(() => options.onProgressError?.(error))
+        }),
+        Layer.succeed(RollbackProgress, {
+          emit: (event) =>
+            invalidateDashboard.pipe(
+              Effect.andThen(
+                event.kind === "source-item-completed" ||
+                  event.kind === "definition-completed"
+                  ? publishDefinition(event.definitionId)
+                  : Effect.void
+              )
             ),
-            Effect.asVoid
-          );
-    const publishDefinition = (
-      definitionId: MigrationDefinitionId
-    ): Effect.Effect<void> =>
-      definitionIdSet.has(definitionId) ? publish([definitionId]) : Effect.void;
-    const layer = Layer.merge(
-      Layer.succeed(MigrationProgress, {
-        emit: (event) =>
-          invalidateDashboard.pipe(
-            Effect.andThen(
-              event.kind === "source-cursor-window-completed" ||
-                event.kind === "definition-completed"
-                ? publishDefinition(event.definitionId)
-                : Effect.void
-            )
-          ),
-      }),
-      Layer.succeed(RollbackProgress, {
-        emit: (event) =>
-          invalidateDashboard.pipe(
-            Effect.andThen(
-              event.kind === "definition-completed"
-                ? publishDefinition(event.definitionId)
-                : Effect.void
-            )
-          ),
-      })
-    );
-    const startFallback =
-      options?.onProgress === undefined
-        ? Effect.void
-        : Effect.sleep(progressFallbackIntervalMs).pipe(
-            Effect.andThen(publish(definitionIds)),
-            Effect.forever,
-            Effect.forkScoped,
-            Effect.asVoid
-          );
+        })
+      );
+      const startFallback =
+        options?.onProgress === undefined || definitionIds.length === 0
+          ? Effect.void
+          : Effect.gen(function* () {
+              const startedAt = yield* Clock.currentTimeMillis;
+              while (true) {
+                const before = yield* Clock.currentTimeMillis;
+                const nextRefreshAt = Math.min(
+                  ...definitionIds.map(
+                    (id) =>
+                      (lastRefreshAt.get(id) ?? startedAt) +
+                      progressFallbackIntervalMs
+                  )
+                );
+                const delay = Math.max(0, nextRefreshAt - before);
+                yield* Effect.sleep(delay);
+                const now = yield* Clock.currentTimeMillis;
+                const staleDefinitionIds = definitionIds.filter(
+                  (id) =>
+                    now - (lastRefreshAt.get(id) ?? startedAt) >=
+                    progressFallbackIntervalMs
+                );
+                if (staleDefinitionIds.length > 0) {
+                  yield* publish(staleDefinitionIds);
+                }
+              }
+            }).pipe(Effect.forkScoped, Effect.asVoid);
 
-    return { layer, publish, publishDefinition, startFallback } as const;
-  };
+      return {
+        layer,
+        publish,
+        publishDefinition,
+        requestRefresh,
+        startFallback,
+      } as const;
+    });
 
   const readCompletedRunResult = (
     runId: MigrationRunId
@@ -1302,7 +1400,7 @@ export const makeRegistryMigrateServerRuntime = (
           });
         }
 
-        const progress = makeExecutionProgress(
+        const progress = yield* makeExecutionProgress(
           activeRun.definitionIds,
           options
         );
@@ -1324,16 +1422,15 @@ export const makeRegistryMigrateServerRuntime = (
                 }
           )
         );
-        yield* progress.startFallback;
-
         const terminal = yield* observeDetachedRunEffect({
+          ...(options?.after === undefined ? {} : { after: options.after }),
           definitionId: activeRun.observationDefinitionId,
           execution,
-          onProgressCheckpoint: (checkpoint) =>
-            progress.publishDefinition(checkpoint.definitionId),
+          onEvent: (update) =>
+            Effect.sync(() => options?.onExecutionProgress?.(update)),
           onProviderObservationError: () =>
             options?.onObservationWarning?.(
-              "Execution provider updates are unavailable; following durable migration state"
+              "Execution provider updates are unavailable; retrying the stream"
             ),
           runId,
         });
@@ -1346,19 +1443,23 @@ export const makeRegistryMigrateServerRuntime = (
 
   const watchDashboardRun = (
     run: MigrateActiveRun,
-    invalidate: Effect.Effect<void>
+    options: MigrationExecutableObservationOptions
   ): Effect.Effect<void, unknown> => {
-    const execution = run.execution;
-    const waitForExecution = executable.waitForExecution;
-
-    if (execution === undefined || waitForExecution === undefined) {
+    if (
+      run.execution === undefined ||
+      executable.waitForExecution === undefined
+    ) {
       return Effect.never;
     }
-
-    return waitForExecution(execution, {
-      onProgressCheckpoint: (checkpoint) =>
-        checkpoint.runId === run.runId ? invalidate : Effect.void,
-    }).pipe(Effect.asVoid, Effect.ensuring(invalidate));
+    return executable
+      .waitForExecution(run.execution, {
+        ...options,
+        onEvent: (event) =>
+          event.runId === run.runId
+            ? (options.onEvent?.(event) ?? Effect.void)
+            : Effect.void,
+      })
+      .pipe(Effect.asVoid);
   };
 
   const startExecution = (
@@ -1372,13 +1473,13 @@ export const makeRegistryMigrateServerRuntime = (
       });
       const token = Symbol("RegistryMigrateServerExecution");
       const definitionIds = operation.plan.executionDefinitionIds;
-      const progress = makeExecutionProgress(definitionIds, options);
 
       const notifyState = (state: MigrateExecutionState) =>
         Effect.sync(() => options?.onStateChange?.(state));
 
       const executeEffect = Effect.scoped(
         Effect.gen(function* () {
+          const progress = yield* makeExecutionProgress(definitionIds, options);
           yield* notifyState({
             definitionId: operation.observationDefinitionId,
             kind: "starting",
@@ -1492,16 +1593,14 @@ export const makeRegistryMigrateServerRuntime = (
           if (yield* Deferred.isDone(stopRequested)) {
             yield* stopRun(started.runId);
           }
-          yield* progress.startFallback;
-
           const terminal = yield* observeDetachedRunEffect({
             definitionId: operation.observationDefinitionId,
             execution: started.execution,
-            onProgressCheckpoint: (checkpoint) =>
-              progress.publishDefinition(checkpoint.definitionId),
+            onEvent: (update) =>
+              Effect.sync(() => options?.onExecutionProgress?.(update)),
             onProviderObservationError: () =>
               options?.onObservationWarning?.(
-                "Execution provider updates are unavailable; following durable migration state"
+                "Execution provider updates are unavailable; retrying the stream"
               ),
             runId: started.runId,
           });
@@ -1583,6 +1682,7 @@ export const makeRegistryMigrateServerRuntime = (
     groups,
     hasActiveExecutions: () => activeExecutions.size > 0,
     getRunProgress,
+    getDefinitionMetadata,
     getSourceItemTotals,
     listActiveRuns: listActiveRunsEffect,
     listMessages,

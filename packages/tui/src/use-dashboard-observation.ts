@@ -267,6 +267,9 @@ export const useDashboardObservation = ({
               setNotice(recoveryNotice ?? "Status reloaded");
             }
           }
+          if (snapshot.observationWarning !== undefined) {
+            setNotice(snapshot.observationWarning);
+          }
           receivedSnapshot = true;
           if (snapshot.activeRuns.length === 0) {
             controller.abort();

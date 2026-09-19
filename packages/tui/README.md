@@ -90,8 +90,8 @@ rollback or stopping is supported.
 Remote clients and servers may use different Migrate SDK releases when they
 advertise the same Migrate Protocol version. The server's SDK version remains
 available in connection metadata for diagnostics; protocol compatibility is the
-remote connection gate. Schema administration requires Migrate Protocol v2, so
-update the TUI and server together.
+remote connection gate. HTTP streaming requires Migrate Protocol v3, so update
+the TUI and server together. Older protocol versions are rejected.
 
 If the configured SQL store needs an upgrade, the TUI connects and opens a
 **Store schema upgrade required** popup before loading the dashboard. Review
@@ -162,10 +162,12 @@ Authorization is application-owned Effect HTTP middleware so deployments can
 use their existing identity provider without leaving the request fiber.
 Deployments where authenticated infrastructure already enforces access can omit
 the middleware when converting the fully composed Layer. The HTTP transport uses
-bounded observation leases: each response returns an opaque resume token and
-absolute progress snapshot, and the TUI reconnects from the last token. No
-function invocation or HTTP response owns the lifetime of a durable Migration
-Run.
+bounded streaming sessions: successive snapshots and run updates share one
+response, and the TUI reconnects from the last opaque resume token after expiry
+or interruption. There is no polling transport fallback. Configure
+`observationSessionDuration` below the host request limit (default: four minutes).
+Heartbeats keep quiet streams active without querying durable state. No function
+invocation or HTTP response owns the lifetime of a durable Migration Run.
 
 `migrate-sdk` and `effect` remain peer dependencies: the TUI and config use the
 migration project's compatible versions. `@migrate-sdk/tui` and `migrate-sdk`

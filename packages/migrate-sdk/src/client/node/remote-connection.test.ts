@@ -40,7 +40,7 @@ describe("remote Migrate Server connection", () => {
     ).rejects.toThrow("must use HTTPS");
   });
 
-  it("authenticates, reads the dashboard, and resumes observation leases", async () => {
+  it("authenticates, reads the dashboard, and retries observation streams", async () => {
     const authorizationHeaders: string[] = [];
     let observationRequests = 0;
     let transientStatusFailures = 0;
@@ -60,9 +60,9 @@ describe("remote Migrate Server connection", () => {
       const request = new Request(input, init);
       const body = await request.clone().text();
 
-      if (body.includes("ObserveRunLease")) {
+      if (body.includes("ObserveRunSession")) {
         observationRequests += 1;
-        if (observationRequests === 2) {
+        if (observationRequests === 1) {
           transientStatusFailures += 1;
           return new Response("Temporarily unavailable", { status: 503 });
         }
@@ -149,13 +149,14 @@ describe("remote Migrate Server connection", () => {
     const original = makeRemoteMigrateServerHttp(
       MigrateServer.layer({
         backend: { ...backend, getDashboard: Effect.succeed(initialDashboard) },
+        observationSessionDuration: "20 millis",
         ...serverIdentity,
       })
     );
     const replacement = makeRemoteMigrateServerHttp(
       MigrateServer.layer({ backend, ...serverIdentity })
     );
-    let dashboardLeaseRequests = 0;
+    let dashboardSessionRequests = 0;
     const fetch = async (
       input: Parameters<typeof globalThis.fetch>[0],
       init?: Parameters<typeof globalThis.fetch>[1]
@@ -163,10 +164,10 @@ describe("remote Migrate Server connection", () => {
       const request = new Request(input, init);
       const body = await request.clone().text();
 
-      if (body.includes("ObserveDashboardLease")) {
-        dashboardLeaseRequests += 1;
+      if (body.includes("ObserveDashboardSession")) {
+        dashboardSessionRequests += 1;
 
-        return dashboardLeaseRequests === 1
+        return dashboardSessionRequests === 1
           ? original.handler(request)
           : replacement.handler(request);
       }
@@ -189,7 +190,7 @@ describe("remote Migrate Server connection", () => {
         initialDashboard,
         dashboard,
       ]);
-      expect(dashboardLeaseRequests).toBe(2);
+      expect(dashboardSessionRequests).toBe(2);
     } finally {
       await connection.dispose();
       await original.dispose();
@@ -265,7 +266,10 @@ describe("remote Migrate Server connection", () => {
     }
   });
 
-  it("rejects a remote server with a different protocol version", async () => {
+  it.each([
+    MIGRATE_PROTOCOL_VERSION - 1,
+    MIGRATE_PROTOCOL_VERSION + 1,
+  ])("rejects a remote server with protocol version %s", async (protocolVersion) => {
     const mismatchedServerLayer = Layer.effect(
       MigrateServer,
       MigrateServer.make({ backend, ...serverIdentity }).pipe(
@@ -274,7 +278,7 @@ describe("remote Migrate Server connection", () => {
             ...server,
             getServerInfo: Effect.succeed({
               ...serverInfo,
-              protocolVersion: MIGRATE_PROTOCOL_VERSION + 1,
+              protocolVersion,
             }),
           })
         )
@@ -289,7 +293,7 @@ describe("remote Migrate Server connection", () => {
           url: "https://migrate.example/rpc",
         })
       ).rejects.toThrow(
-        `Migrate Protocol version ${MIGRATE_PROTOCOL_VERSION + 1} is not supported`
+        `Migrate Protocol version ${protocolVersion} is not supported`
       );
     } finally {
       await http.dispose();

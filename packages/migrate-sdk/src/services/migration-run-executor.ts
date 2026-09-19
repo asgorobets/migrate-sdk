@@ -115,6 +115,10 @@ import {
 } from "../runtime/process-source-item.ts";
 import { decodeStoredItemStateForTrackingContract } from "../runtime/stored-item-state-decode.ts";
 import { MigrationDefinitionSource } from "./migration-definition-source.ts";
+import {
+  MigrationItemProgress,
+  persistObservedItemState,
+} from "./migration-item-progress.ts";
 import { MigrationProgress } from "./migration-progress.ts";
 import type { MigrationReference } from "./migration-reference-lookup.ts";
 import { MigrationStore } from "./migration-store.ts";
@@ -1465,7 +1469,9 @@ const prepareUpdateRunDefinition = ({
       }
 
       const updatedAt = yield* DateTime.nowAsDate;
-      yield* store.upsertItemState(
+      yield* persistObservedItemState(
+        store,
+        itemState,
         makeUpdateRunNeedsUpdateState(itemState, runId, updatedAt)
       );
     }
@@ -2075,6 +2081,12 @@ const rollbackItemState = <Definition extends AnyRollbackMigrationDefinition>({
       definitionId: definition.id,
       sourceIdentity: typedItemState.sourceIdentity.encoded,
     });
+    yield* MigrationItemProgress.emit({
+      definitionId: definition.id,
+      runId,
+      before: itemState.status,
+      after: null,
+    });
     return "rolled-back" as const;
   });
 
@@ -2316,7 +2328,9 @@ const processTargetedSourceIdentities = <
             }
 
             const updatedAt = yield* DateTime.nowAsDate;
-            yield* store.upsertItemState(
+            yield* persistObservedItemState(
+              store,
+              previousState,
               makeSourceLookupFailedItemState(
                 definition.id,
                 runId,
@@ -2789,7 +2803,9 @@ const processStubSourceIdentity = ({
     const updatedAt = yield* DateTime.nowAsDate;
 
     if (stubOutcome.kind === "failed") {
-      yield* store.upsertItemState(
+      yield* persistObservedItemState(
+        store,
+        previousState,
         makeFailedStubReferenceState({
           definitionId: definition.id,
           error: stubOutcome.error,
@@ -2818,7 +2834,7 @@ const processStubSourceIdentity = ({
       trackingRecord: stubOutcome.trackingRecord,
       updatedAt,
     });
-    yield* store.upsertItemState(state);
+    yield* persistObservedItemState(store, previousState, state);
 
     return {
       definitionId: state.definitionId,
