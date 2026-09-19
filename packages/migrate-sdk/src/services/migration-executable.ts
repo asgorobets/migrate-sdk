@@ -1,13 +1,11 @@
 import { Effect, Layer } from "effect";
 import { Service } from "effect/Context";
-import type { MigrationDefinitionId, MigrationRunId } from "../domain/ids.ts";
-import type { MigrationProgressCounts } from "../domain/progress.ts";
+import type { MigrationExecutionUpdate } from "../domain/item-progress.ts";
 import type {
   MigrationDefinitionExecutableRollbackPlan,
   MigrationDefinitionExecutableRunPlan,
 } from "../domain/registry.ts";
 import type { RollbackRunSummary } from "../domain/rollback.ts";
-import type { RollbackProgressCounts } from "../domain/rollback-progress.ts";
 import type {
   AnyMigrationDefinition,
   ExecutionStartResult,
@@ -55,21 +53,10 @@ export type MigrationExecutableInlineRunStartError<
 export type MigrationExecutableInlineRollbackStartError =
   MigrationExecutableRollbackError;
 
-/** Execution updates are notifications, not a replacement for durable status. */
-export type MigrationExecutableObservationEvent =
-  | {
-      readonly counts: MigrationProgressCounts | RollbackProgressCounts;
-      readonly definitionId: MigrationDefinitionId;
-      readonly kind: "progress";
-      readonly runId: MigrationRunId;
-    }
-  | {
-      readonly definitionIds: readonly MigrationDefinitionId[];
-      readonly kind: "state-changed";
-      readonly runId: MigrationRunId;
-    };
+export type MigrationExecutableObservationEvent = MigrationExecutionUpdate;
 
 export interface MigrationExecutableObservationOptions {
+  readonly after?: string;
   readonly onEvent?: (
     event: MigrationExecutableObservationEvent
   ) => Effect.Effect<void>;

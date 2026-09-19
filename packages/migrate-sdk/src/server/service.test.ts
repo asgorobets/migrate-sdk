@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Option, Queue, Stream } from "effect";
+import { Deferred, Effect, Fiber, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import { makeDashboardProjection } from "../client/internal/progress-projection.ts";
 import { MigrationStoreError, SourceError } from "../domain/errors.ts";
 import {
   MigrationDefinitionGroupId,
@@ -13,10 +14,10 @@ import {
   MigrationDefinitionRegistryUnknownDefinitionError,
   MigrationDefinitionRegistryUnknownGroupError,
 } from "../domain/registry.ts";
+import type { MigrationDefinitionStatus } from "../domain/status.ts";
 import { MigrationStatusRequestError } from "../domain/status.ts";
 import {
   type MigrateActiveRun,
-  type MigrateDashboard,
   type MigrateDashboardSnapshot,
   MigratePlanChangedError,
   type MigratePreparedOperation,
@@ -43,20 +44,6 @@ const activeRun: MigrateActiveRun = {
   startedAt: new Date("2026-08-25T12:00:00.000Z"),
   status: "running",
   stopSupported: false,
-};
-const secondActiveRun: MigrateActiveRun = {
-  ...activeRun,
-  execution: {
-    adapter: "workflow-sdk",
-    executionId: "workflow-run-2",
-  },
-  runId: secondRunId,
-};
-const definitionLock: MigrationDefinitionLock = {
-  createdAt: new Date("2026-08-25T12:00:00.000Z"),
-  definitionId: articlesId,
-  ownerRunId: runId,
-  token: MigrationDefinitionLockToken.make("lock-1"),
 };
 const runProgress = (
   definitions: Parameters<
@@ -1120,468 +1107,531 @@ describe("Migrate Server", () => {
   );
 
   it.effect(
-    "coalesces dashboard invalidations into serialized absolute snapshots",
+    "keeps final reconciliation resumable while another run publishes",
+    () =>
+      Effect.gen(function* () {
+        for (const replaceServer of [false, true]) {
+          const second = {
+            ...activeRun,
+            runId: secondRunId,
+            observationDefinitionId: MigrationDefinitionId.make("authors"),
+            definitionIds: [MigrationDefinitionId.make("authors")] as const,
+          };
+          let active: readonly MigrateActiveRun[] = [activeRun, second];
+          const status: MigrationDefinitionStatus = {
+            definitionId: articlesId,
+            discovery: "incremental",
+            durable: { migrated: 12, failed: 0, skipped: 0, needsUpdate: 0 },
+            completion: null,
+            lastRun: null,
+            lock: null,
+            warnings: [],
+          };
+          const dashboard = {
+            activeRuns: active,
+            groups: [],
+            rows: [
+              {
+                entry: {
+                  id: articlesId,
+                  hasRollback: false,
+                  dependencies: { required: [], optional: [] },
+                },
+                status,
+              },
+            ],
+            scannedSource: false,
+          };
+          const final = runProgress([
+            { ...status, durable: { ...status.durable, migrated: 100 } },
+          ]);
+          const projection = makeDashboardProjection();
+          const received = yield* Queue.unbounded<MigrateDashboardSnapshot>();
+          const reading = yield* Deferred.make<void>();
+          const release = yield* Deferred.make<void>();
+          const attached =
+            yield* Deferred.make<
+              NonNullable<
+                import("../services/migration-executable.ts").MigrationExecutableObservationOptions["onEvent"]
+              >
+            >();
+          const backend = makeBackend({
+            getDashboard: Effect.succeed(dashboard),
+            getRegistry: Effect.succeed({
+              groups: [],
+              entries: dashboard.rows.map(({ entry }) => entry),
+            }),
+            getActiveRuns: Effect.sync(() => active),
+            getRunProgress: () =>
+              Deferred.succeed(reading, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as(final)
+              ),
+            watchDashboardRun: (run, options) =>
+              Effect.gen(function* () {
+                if (
+                  run.runId === secondRunId &&
+                  options.onEvent !== undefined
+                ) {
+                  yield* Deferred.succeed(attached, options.onEvent);
+                }
+                return yield* Effect.never;
+              }),
+          });
+          const server = yield* MigrateServer.make({
+            backend,
+            ...serverIdentity,
+            dashboardProjectionInterval: 0,
+          });
+          const observer = yield* server.observeDashboard({}).pipe(
+            Stream.map(projection.apply),
+            Stream.runForEach((snapshot) => Queue.offer(received, snapshot)),
+            Effect.forkChild
+          );
+          yield* Queue.take(received);
+          const send = yield* Deferred.await(attached);
+          active = [second];
+          yield* server.getDashboard;
+          yield* TestClock.adjust(0);
+          yield* Deferred.await(reading);
+          yield* send({
+            kind: "state-changed",
+            runId: secondRunId,
+            definitionIds: second.definitionIds,
+            cursor: "7",
+          });
+          const beforeFinal = yield* Queue.take(received);
+          expect(
+            beforeFinal.dashboard.activeRuns.map((run) => run.runId)
+          ).toContain(runId);
+          expect(projection.resume()?.map((run) => run.runId)).toContain(runId);
+          if (replaceServer) {
+            yield* Fiber.interrupt(observer);
+            let finalReads = 0;
+            const replacement = yield* MigrateServer.make({
+              ...serverIdentity,
+              backend: {
+                ...backend,
+                getDashboard: Effect.die(
+                  "must resume without a full dashboard read"
+                ),
+                getRunProgress: (id) =>
+                  Effect.sync(() => {
+                    expect(id).toBe(runId);
+                    finalReads += 1;
+                    return final;
+                  }),
+              },
+            });
+            const frames = yield* replacement
+              .observeDashboard({ resume: projection.resume() ?? [] })
+              .pipe(
+                Stream.take(1),
+                Stream.map(projection.apply),
+                Stream.runCollect
+              );
+            expect(frames[0]?.dashboard.rows[0]?.status?.durable.migrated).toBe(
+              100
+            );
+            expect(finalReads).toBe(1);
+          } else {
+            yield* Deferred.succeed(release, undefined);
+            const completed = yield* Queue.take(received);
+            expect(
+              completed.dashboard.activeRuns.map((run) => run.runId)
+            ).toEqual([secondRunId]);
+            expect(completed.dashboard.rows[0]?.status?.durable.migrated).toBe(
+              100
+            );
+            expect(projection.resume()?.map((run) => run.runId)).toEqual([
+              secondRunId,
+            ]);
+            yield* Fiber.interrupt(observer);
+          }
+        }
+      })
+  );
+
+  it.effect(
+    "refreshes metadata once at renewal and coalesces lifecycle changes during replay",
+    () =>
+      Effect.gen(function* () {
+        let metadataReads = 0;
+        const completion = {
+          definitionId: articlesId,
+          runId,
+          completedAt: new Date("2026-09-18T12:00:00Z"),
+          sourceCursor: null,
+        };
+        let currentCompletion: typeof completion | null = null;
+        const status: MigrationDefinitionStatus = {
+          definitionId: articlesId,
+          discovery: "incremental",
+          durable: { migrated: 12, failed: 0, skipped: 0, needsUpdate: 0 },
+          completion: null,
+          lastRun: null,
+          lock: null,
+          warnings: [],
+        };
+        const entry = {
+          id: articlesId,
+          hasRollback: false,
+          dependencies: { required: [], optional: [] },
+        };
+        const server = yield* MigrateServer.make({
+          ...serverIdentity,
+          backend: {
+            ...makeBackend({
+              getDashboard: Effect.die(
+                "must not scan item summaries on renewal"
+              ),
+              getRegistry: Effect.succeed({ groups: [], entries: [entry] }),
+              getActiveRuns: Effect.succeed([activeRun]),
+              watchDashboardRun: (_run, options) =>
+                Effect.gen(function* () {
+                  currentCompletion = completion;
+                  for (const cursor of ["1", "2", "3"]) {
+                    yield* options.onEvent?.({
+                      kind: "state-changed",
+                      runId,
+                      definitionIds: [articlesId],
+                      cursor,
+                      replaying: true,
+                    }) ?? Effect.void;
+                  }
+                  yield* options.onEvent?.({
+                    kind: "progress",
+                    runId,
+                    cursor: "4",
+                    replaying: false,
+                    progress: {
+                      kind: "contribution",
+                      runId,
+                      partitionId: "a:1",
+                      revision: 1,
+                      changes: [],
+                    },
+                  }) ?? Effect.void;
+                  return yield* Effect.never;
+                }),
+            }),
+            getDefinitionMetadata: (ids) =>
+              Effect.sync(() => {
+                metadataReads += ids.length;
+                return ids.map((definitionId) => ({
+                  definitionId,
+                  completion: currentCompletion,
+                  lastRun: null,
+                  lock: null,
+                }));
+              }),
+          },
+        });
+        const projection = makeDashboardProjection();
+        const snapshot = yield* makeServer(
+          makeBackend({
+            getDashboard: Effect.succeed({
+              activeRuns: [activeRun],
+              rows: [{ entry, status }],
+              groups: [],
+              scannedSource: false,
+            }),
+          })
+        ).pipe(Effect.flatMap((initial) => initial.getDashboard));
+        projection.apply(snapshot);
+        const frames = yield* server
+          .observeDashboard({ resume: projection.resume() ?? [] })
+          .pipe(
+            Stream.take(5),
+            Stream.map(projection.apply),
+            Stream.runCollect
+          );
+        expect(frames[0]?.dashboard.rows[0]?.status?.completion).toBeNull();
+        expect(frames.at(-1)?.dashboard.rows[0]?.status?.completion).toEqual(
+          completion
+        );
+        expect(metadataReads).toBe(2);
+      })
+  );
+
+  it.effect(
+    "relays progress and discovers lifecycle changes without rescanning item states",
     () =>
       Effect.gen(function* () {
         let reads = 0;
-        const initialRead = yield* Deferred.make<void>();
-        const initialSnapshot = yield* Deferred.make<void>();
-        let dashboard: MigrateDashboard = {
-          activeRuns: [],
-          groups: [],
-          rows: [],
-          scannedSource: false,
-        };
+        let finalReads = 0;
+        let active = true;
+        const attached =
+          yield* Deferred.make<
+            NonNullable<
+              import("../services/migration-executable.ts").MigrationExecutableObservationOptions["onEvent"]
+            >
+          >();
+        const finished = yield* Deferred.make<void>();
+        const received = yield* Queue.unbounded<MigrateDashboardSnapshot>();
         const server = yield* MigrateServer.make({
           backend: makeBackend({
             getDashboard: Effect.sync(() => {
               reads += 1;
-              Deferred.doneUnsafe(initialRead, Effect.void);
-              return dashboard;
+              return {
+                activeRuns: [activeRun],
+                groups: [],
+                rows: [],
+                scannedSource: false,
+              };
             }),
+            getActiveRuns: Effect.sync(() => (active ? [activeRun] : [])),
+            getRunProgress: () =>
+              Effect.sync(() => {
+                finalReads += 1;
+                return runProgress([]);
+              }),
+            watchDashboardRun: (_run, options) =>
+              Effect.gen(function* () {
+                if (options.onEvent !== undefined) {
+                  yield* Deferred.succeed(attached, options.onEvent);
+                }
+                yield* Deferred.await(finished);
+              }),
           }),
-          dashboardFallbackInterval: "1 hour",
-          dashboardProjectionInterval: "1 second",
           ...serverIdentity,
         });
-        const snapshotsFiber = yield* server.observeDashboard({}).pipe(
-          Stream.tap(() => Deferred.succeed(initialSnapshot, undefined)),
-          Stream.take(2),
-          Stream.runCollect,
+        const observer = yield* server.observeDashboard({}).pipe(
+          Stream.runForEach((snapshot) => Queue.offer(received, snapshot)),
           Effect.forkChild
         );
-        yield* Deferred.await(initialRead);
-        yield* Deferred.await(initialSnapshot);
-
-        expect(reads).toBe(1);
-        dashboard = { ...dashboard, activeRuns: [activeRun] };
-        yield* server.breakLock({ lock: definitionLock });
-        dashboard = {
-          ...dashboard,
-          activeRuns: [activeRun, secondActiveRun],
-        };
-        yield* server.breakLock({ lock: definitionLock });
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust("1 second");
-        const snapshots = yield* Fiber.join(snapshotsFiber);
-
-        expect(reads).toBe(2);
-        expect(snapshots.map((snapshot) => snapshot.dashboard)).toEqual([
-          { activeRuns: [], groups: [], rows: [], scannedSource: false },
-          {
-            activeRuns: [activeRun, secondActiveRun],
-            groups: [],
-            rows: [],
-            scannedSource: false,
+        yield* Queue.take(received);
+        const send = yield* Deferred.await(attached);
+        yield* send({
+          kind: "progress",
+          runId,
+          cursor: "7",
+          progress: {
+            kind: "contribution",
+            runId,
+            partitionId: "window-a",
+            revision: 1,
+            changes: [],
           },
-        ]);
+        });
+        expect((yield* Queue.take(received)).progress?.cursor).toBe("7");
+        yield* TestClock.adjust("2 minutes");
+        expect(reads).toBe(1);
+        expect(finalReads).toBe(0);
+        active = false;
+        yield* Deferred.succeed(finished, undefined);
+        yield* TestClock.adjust("2 seconds");
+        expect(finalReads).toBe(1);
+        expect(reads).toBe(1);
+        yield* Fiber.interrupt(observer);
       })
   );
 
-  it.effect("shares one dashboard projection across concurrent clients", () =>
-    Effect.gen(function* () {
-      let reads = 0;
-      const server = yield* MigrateServer.make({
-        backend: makeBackend({
-          getDashboard: Effect.sync(() => {
-            reads += 1;
-            return {
-              activeRuns: [],
+  it.effect(
+    "waits for durable completion after a provider settles without repeated summary scans",
+    () =>
+      Effect.gen(function* () {
+        let active = true;
+        let reads = 0;
+        let attachments = 0;
+        const received = yield* Queue.unbounded<MigrateDashboardSnapshot>();
+        const server = yield* MigrateServer.make({
+          backend: makeBackend({
+            getDashboard: Effect.succeed({
+              activeRuns: [activeRun],
               groups: [],
               rows: [],
               scannedSource: false,
-            };
+            }),
+            getActiveRuns: Effect.sync(() => (active ? [activeRun] : [])),
+            getRunProgress: () =>
+              Effect.sync(() => {
+                reads += 1;
+                return runProgress([]);
+              }),
+            watchDashboardRun: () =>
+              Effect.sync(() => {
+                attachments += 1;
+              }),
           }),
-        }),
-        ...serverIdentity,
-      });
-
-      const snapshots = yield* Effect.all(
-        [
-          server.observeDashboard({}).pipe(Stream.take(1), Stream.runCollect),
-          server.observeDashboard({}).pipe(Stream.take(1), Stream.runCollect),
-        ],
-        { concurrency: "unbounded" }
-      );
-
-      expect(snapshots[0]).toEqual(snapshots[1]);
-      expect(reads).toBe(1);
-    })
-  );
-
-  it.effect(
-    "uses a detached provider checkpoint only to trigger a durable read",
-    () =>
-      Effect.gen(function* () {
-        const attached = yield* Deferred.make<Effect.Effect<void>>();
-        const initialSnapshot = yield* Deferred.make<void>();
-        let dashboard: MigrateDashboard = {
-          activeRuns: [activeRun],
-          groups: [],
-          rows: [],
-          scannedSource: false,
-        };
-        const server = yield* MigrateServer.make({
-          backend: makeBackend({
-            getDashboard: Effect.sync(() => dashboard),
-            watchDashboardRun: (_run, invalidate) =>
-              Deferred.succeed(attached, invalidate).pipe(
-                Effect.andThen(Effect.never)
-              ),
-          }),
-          dashboardFallbackInterval: "1 hour",
-          dashboardProjectionInterval: "1 second",
           ...serverIdentity,
         });
-        const snapshotsFiber = yield* server.observeDashboard({}).pipe(
-          Stream.tap(() => Deferred.succeed(initialSnapshot, undefined)),
-          Stream.take(2),
-          Stream.runCollect,
+        const observer = yield* server.observeDashboard({}).pipe(
+          Stream.runForEach((snapshot) => Queue.offer(received, snapshot)),
           Effect.forkChild
         );
-        const invalidate = yield* Deferred.await(attached);
-        yield* Deferred.await(initialSnapshot);
-
-        dashboard = { ...dashboard, activeRuns: [] };
-        yield* invalidate;
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust("1 second");
-        const snapshots = yield* Fiber.join(snapshotsFiber);
-
-        expect(
-          snapshots.map((snapshot) => snapshot.dashboard.activeRuns)
-        ).toEqual([[activeRun], []]);
+        yield* Queue.take(received);
+        yield* TestClock.adjust("2 minutes");
+        expect(attachments).toBe(1);
+        expect(reads).toBe(0);
+        active = false;
+        yield* TestClock.adjust("35 seconds");
+        expect(reads).toBe(1);
+        yield* TestClock.adjust("1 minute");
+        expect(reads).toBe(1);
+        expect(attachments).toBe(1);
+        yield* Fiber.interrupt(observer);
       })
   );
 
   it.effect(
-    "serializes a dirty invalidation that arrives during a slow projection",
+    "reattaches a failed provider reader from its cursor without rereading item summaries",
     () =>
       Effect.gen(function* () {
-        const initialSnapshot = yield* Deferred.make<void>();
-        const slowReadStarted = yield* Deferred.make<void>();
-        const releaseSlowRead = yield* Deferred.make<void>();
-        let dashboard: MigrateDashboard = {
-          activeRuns: [],
-          groups: [],
-          rows: [],
-          scannedSource: false,
-        };
-        let inFlightReads = 0;
-        let maximumInFlightReads = 0;
         let reads = 0;
-        const server = yield* MigrateServer.make({
-          backend: makeBackend({
-            getDashboard: Effect.gen(function* () {
-              reads += 1;
-              const readNumber = reads;
-              const capturedDashboard = dashboard;
-              inFlightReads += 1;
-              maximumInFlightReads = Math.max(
-                maximumInFlightReads,
-                inFlightReads
-              );
-              const read =
-                readNumber === 2
-                  ? Deferred.succeed(slowReadStarted, undefined).pipe(
-                      Effect.andThen(Deferred.await(releaseSlowRead)),
-                      Effect.as(capturedDashboard)
-                    )
-                  : Effect.succeed(capturedDashboard);
-
-              return yield* read;
-            }).pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  inFlightReads -= 1;
-                })
-              )
-            ),
-          }),
-          dashboardFallbackInterval: "1 hour",
-          dashboardProjectionInterval: 0,
-          ...serverIdentity,
-        });
-        const snapshotsFiber = yield* server.observeDashboard({}).pipe(
-          Stream.tap(() => Deferred.succeed(initialSnapshot, undefined)),
-          Stream.take(3),
-          Stream.runCollect,
-          Effect.forkChild
-        );
-        yield* Deferred.await(initialSnapshot);
-
-        dashboard = { ...dashboard, activeRuns: [activeRun] };
-        yield* server.breakLock({ lock: definitionLock });
-        yield* Deferred.await(slowReadStarted);
-
-        dashboard = {
-          ...dashboard,
-          activeRuns: [activeRun, secondActiveRun],
-        };
-        yield* server.breakLock({ lock: definitionLock });
-        yield* Deferred.succeed(releaseSlowRead, undefined);
-        const snapshots = yield* Fiber.join(snapshotsFiber);
-
-        expect(maximumInFlightReads).toBe(1);
-        expect(reads).toBe(3);
-        expect(
-          snapshots.map((snapshot) => snapshot.dashboard.activeRuns)
-        ).toEqual([[], [activeRun], [activeRun, secondActiveRun]]);
-      })
-  );
-
-  it.effect(
-    "reconciles external runs after thirty quiet seconds without five-second reads",
-    () =>
-      Effect.gen(function* () {
-        const initialSnapshot = yield* Deferred.make<void>();
-        let reads = 0;
-        let dashboard: MigrateDashboard = {
-          activeRuns: [],
-          groups: [],
-          rows: [],
-          scannedSource: false,
-        };
+        let attempts = 0;
+        const retried = yield* Deferred.make<string | undefined>();
+        const received = yield* Queue.unbounded<MigrateDashboardSnapshot>();
         const server = yield* MigrateServer.make({
           backend: makeBackend({
             getDashboard: Effect.sync(() => {
               reads += 1;
-              return dashboard;
+              return {
+                activeRuns: [activeRun],
+                groups: [],
+                rows: [],
+                scannedSource: false,
+              };
             }),
+            getActiveRuns: Effect.succeed([activeRun]),
+            getRunProgress: () =>
+              Effect.die(
+                "must not reconcile a reader failure as run completion"
+              ),
+            watchDashboardRun: (_run, options) =>
+              Effect.gen(function* () {
+                attempts += 1;
+                if (attempts === 1) {
+                  yield* options.onEvent?.({
+                    kind: "progress",
+                    runId,
+                    cursor: "8",
+                    progress: {
+                      kind: "contribution",
+                      runId,
+                      partitionId: "a:1",
+                      revision: 1,
+                      changes: [],
+                    },
+                  }) ?? Effect.void;
+                  return yield* Effect.fail("temporary provider failure");
+                }
+                yield* Deferred.succeed(retried, options.after);
+                return yield* Effect.never;
+              }),
           }),
           ...serverIdentity,
         });
-        const snapshotsFiber = yield* server.observeDashboard({}).pipe(
-          Stream.tap(() => Deferred.succeed(initialSnapshot, undefined)),
-          Stream.take(2),
-          Stream.runCollect,
+        const observer = yield* server.observeDashboard({}).pipe(
+          Stream.runForEach((snapshot) => Queue.offer(received, snapshot)),
           Effect.forkChild
         );
-        yield* Deferred.await(initialSnapshot);
-
-        dashboard = { ...dashboard, activeRuns: [activeRun] };
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust("29 seconds");
+        yield* Queue.take(received);
+        yield* Queue.take(received);
+        yield* TestClock.adjust("3 seconds");
+        expect(yield* Deferred.await(retried)).toBe("8");
         expect(reads).toBe(1);
-        yield* TestClock.adjust("1 second");
-        const snapshots = yield* Fiber.join(snapshotsFiber);
-        expect(reads).toBe(2);
-
-        expect(
-          snapshots.map((snapshot) => snapshot.dashboard.activeRuns)
-        ).toEqual([[], [activeRun]]);
+        expect(attempts).toBe(2);
+        yield* Fiber.interrupt(observer);
       })
-  );
-
-  it.effect("backs off before reattaching a failed provider watcher", () =>
-    Effect.gen(function* () {
-      const initialSnapshot = yield* Deferred.make<void>();
-      const secondWatcherAttached = yield* Deferred.make<void>();
-      let watcherAttempts = 0;
-      let dashboard: MigrateDashboard = {
-        activeRuns: [activeRun],
-        groups: [],
-        rows: [],
-        scannedSource: false,
-      };
-      const server = yield* MigrateServer.make({
-        backend: makeBackend({
-          getDashboard: Effect.sync(() => dashboard),
-          watchDashboardRun: (_run, invalidate) => {
-            watcherAttempts += 1;
-
-            if (watcherAttempts === 1) {
-              return invalidate.pipe(
-                Effect.andThen(Effect.fail("provider stream unavailable"))
-              );
-            }
-
-            return Deferred.succeed(secondWatcherAttached, undefined).pipe(
-              Effect.andThen(Effect.never)
-            );
-          },
-        }),
-        ...serverIdentity,
-      });
-      const snapshotsFiber = yield* server.observeDashboard({}).pipe(
-        Stream.tap(() => Deferred.succeed(initialSnapshot, undefined)),
-        Stream.take(2),
-        Stream.runCollect,
-        Effect.forkChild
-      );
-      yield* Deferred.await(initialSnapshot);
-      yield* Effect.yieldNow;
-      yield* TestClock.adjust("29 seconds");
-      expect(watcherAttempts).toBe(1);
-      yield* TestClock.adjust("2 seconds");
-      // Explicit invalidation avoids racing the fallback timer with watcher cleanup.
-      yield* server.breakLock({ lock: definitionLock });
-      yield* TestClock.adjust("1 second");
-      yield* Deferred.await(secondWatcherAttached);
-
-      expect(watcherAttempts).toBe(2);
-
-      dashboard = { ...dashboard, activeRuns: [] };
-      yield* Effect.yieldNow;
-      yield* server.breakLock({ lock: definitionLock });
-      yield* TestClock.adjust("1 second");
-      const snapshots = yield* Fiber.join(snapshotsFiber);
-
-      expect(
-        snapshots.map((snapshot) => snapshot.dashboard.activeRuns)
-      ).toEqual([[activeRun], []]);
-    })
-  );
-
-  it.effect("slides a slow dashboard client to the latest snapshot", () =>
-    Effect.gen(function* () {
-      const slowClientReceivedInitial = yield* Deferred.make<void>();
-      const releaseSlowClient = yield* Deferred.make<void>();
-      const fastClientReceivedInitial = yield* Deferred.make<void>();
-      const firstSnapshotPublished = yield* Deferred.make<void>();
-      const latestSnapshotPublished = yield* Deferred.make<void>();
-      let dashboard: MigrateDashboard = {
-        activeRuns: [],
-        groups: [],
-        rows: [],
-        scannedSource: false,
-      };
-      const server = yield* MigrateServer.make({
-        backend: makeBackend({
-          getDashboard: Effect.sync(() => dashboard),
-        }),
-        dashboardFallbackInterval: "1 hour",
-        dashboardProjectionInterval: 0,
-        ...serverIdentity,
-      });
-      let receivedSnapshots = 0;
-      const snapshotsFiber = yield* server.observeDashboard({}).pipe(
-        Stream.tap(() => {
-          receivedSnapshots += 1;
-
-          return receivedSnapshots === 1
-            ? Deferred.succeed(slowClientReceivedInitial, undefined).pipe(
-                Effect.andThen(Deferred.await(releaseSlowClient))
-              )
-            : Effect.void;
-        }),
-        Stream.take(2),
-        Stream.runCollect,
-        Effect.forkChild
-      );
-      yield* Deferred.await(slowClientReceivedInitial);
-      const fastClientFiber = yield* server.observeDashboard({}).pipe(
-        Stream.runForEach((snapshot) => {
-          const activeRunCount = snapshot.dashboard.activeRuns.length;
-
-          if (activeRunCount === 0) {
-            return Deferred.succeed(fastClientReceivedInitial, undefined);
-          }
-
-          if (activeRunCount === 1) {
-            return Deferred.succeed(firstSnapshotPublished, undefined);
-          }
-
-          return Deferred.succeed(latestSnapshotPublished, undefined);
-        }),
-        Effect.forkChild
-      );
-      yield* Deferred.await(fastClientReceivedInitial);
-
-      dashboard = { ...dashboard, activeRuns: [activeRun] };
-      yield* server.breakLock({ lock: definitionLock });
-      yield* Deferred.await(firstSnapshotPublished);
-
-      dashboard = {
-        ...dashboard,
-        activeRuns: [activeRun, secondActiveRun],
-      };
-      yield* server.breakLock({ lock: definitionLock });
-      yield* Deferred.await(latestSnapshotPublished);
-      yield* Deferred.succeed(releaseSlowClient, undefined);
-      const snapshots = yield* Fiber.join(snapshotsFiber);
-      yield* Fiber.interrupt(fastClientFiber);
-
-      expect(
-        snapshots.map((snapshot) => snapshot.dashboard.activeRuns)
-      ).toEqual([[], [activeRun, secondActiveRun]]);
-    })
   );
 
   it.effect(
-    "does not replay an older shared projection after a versioned refresh",
+    "broadcasts explicit lock changes to every subscriber using metadata reads",
     () =>
       Effect.gen(function* () {
-        let dashboard: MigrateDashboard = {
-          activeRuns: [],
-          groups: [],
-          rows: [],
-          scannedSource: false,
-        };
-        const projected = yield* Queue.unbounded<MigrateDashboardSnapshot>();
+        let reads = 0;
+        let metadataReads = 0;
+        const received = yield* Queue.unbounded<MigrateDashboardSnapshot>();
         const server = yield* MigrateServer.make({
-          backend: makeBackend({
-            getDashboard: Effect.sync(() => dashboard),
-          }),
-          dashboardFallbackInterval: "1 hour",
-          dashboardProjectionInterval: "1 second",
+          backend: {
+            ...makeBackend({
+              getDashboard: Effect.sync(() => {
+                reads += 1;
+                return {
+                  activeRuns: [],
+                  groups: [],
+                  rows: [],
+                  scannedSource: false,
+                };
+              }),
+            }),
+            getDefinitionMetadata: (ids) =>
+              Effect.sync(() => {
+                metadataReads += ids.length;
+                return ids.map((definitionId) => ({
+                  definitionId,
+                  completion: null,
+                  lastRun: null,
+                  lock: null,
+                }));
+              }),
+          },
           ...serverIdentity,
         });
-        const keeper = yield* server.observeDashboard({}).pipe(
-          Stream.runForEach((snapshot) => Queue.offer(projected, snapshot)),
-          Effect.forkChild
-        );
-        yield* Queue.take(projected);
-
-        dashboard = { ...dashboard, activeRuns: [activeRun] };
-        yield* server.breakLock({ lock: definitionLock });
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust("1 second");
-        yield* Queue.take(projected);
-
-        dashboard = {
-          ...dashboard,
-          activeRuns: [activeRun, secondActiveRun],
-        };
-        const refreshed = yield* server.getDashboard;
-        let resumed = false;
-        const resumedFiber = yield* server
-          .observeDashboard({ after: refreshed.resumeToken })
+        const observe = server
+          .observeDashboard({})
           .pipe(
-            Stream.tap(() =>
-              Effect.sync(() => {
-                resumed = true;
-              })
-            ),
-            Stream.take(1),
-            Stream.runHead,
-            Effect.forkChild
+            Stream.runForEach((snapshot) => Queue.offer(received, snapshot))
           );
-        yield* Effect.yieldNow;
+        const first = yield* observe.pipe(Effect.forkChild);
+        const second = yield* observe.pipe(Effect.forkChild);
+        yield* Queue.take(received);
+        yield* Queue.take(received);
+        yield* server.breakLock({
+          lock: {
+            definitionId: articlesId,
+            ownerRunId: runId,
+            createdAt: new Date(),
+            token: MigrationDefinitionLockToken.make("orphan-lock"),
+          },
+        });
         yield* TestClock.adjust("1 second");
-        const projectedAfterRefresh = yield* Queue.take(projected);
-
-        expect(projectedAfterRefresh.dashboard.activeRuns).toEqual([
-          activeRun,
-          secondActiveRun,
-        ]);
-        expect(resumed).toBe(false);
-
-        dashboard = { ...dashboard, activeRuns: [] };
-        yield* server.breakLock({ lock: definitionLock });
-        yield* Effect.yieldNow;
-        yield* TestClock.adjust("1 second");
-        const resumedSnapshot = yield* Fiber.join(resumedFiber);
-
-        expect(Option.getOrThrow(resumedSnapshot).dashboard.activeRuns).toEqual(
-          []
-        );
-        yield* Fiber.interrupt(keeper);
+        for (let i = 0; i < 2; i += 1) {
+          expect((yield* Queue.take(received)).metadata).toEqual([
+            {
+              definitionId: articlesId,
+              completion: null,
+              lastRun: null,
+              lock: null,
+            },
+          ]);
+        }
+        expect(reads).toBe(2);
+        expect(metadataReads).toBe(2);
+        yield* Fiber.interrupt(first);
+        yield* Fiber.interrupt(second);
       })
   );
-});
 
-describe("bounded HTTP observation sessions", () => {
+  it.effect(
+    "a replacement dashboard server resumes provider cursors without loading the dashboard",
+    () =>
+      Effect.gen(function* () {
+        const attached = yield* Deferred.make<string | undefined>();
+        const server = yield* MigrateServer.make({
+          backend: makeBackend({
+            getDashboard: Effect.die("must not rescan on renewal"),
+            getActiveRuns: Effect.succeed([activeRun]),
+            watchDashboardRun: (_run, options) =>
+              Deferred.succeed(attached, options.after).pipe(
+                Effect.andThen(Effect.never)
+              ),
+          }),
+          ...serverIdentity,
+        });
+        const observer = yield* server
+          .observeDashboard({
+            resume: [
+              { runId, observationDefinitionId: articlesId, cursor: "19" },
+            ],
+          })
+          .pipe(Stream.runDrain, Effect.forkChild);
+        expect(yield* Deferred.await(attached)).toBe("19");
+        yield* Fiber.interrupt(observer);
+      })
+  );
+
   it.effect(
     "retains owned events produced during the snapshot read and detaches without stopping execution",
     () =>

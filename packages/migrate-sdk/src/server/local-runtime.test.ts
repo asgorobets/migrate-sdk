@@ -16,6 +16,7 @@ import {
   type RegistryMigrateServerRuntime,
 } from "migrate-sdk/server";
 import { describe, expect, it } from "vitest";
+import { makeMigrationItemProgress } from "../domain/item-progress.ts";
 import { makeRegistryMigrateServerBackend } from "./registry-backend.ts";
 
 const serverFixtureUrl = new URL(
@@ -100,7 +101,7 @@ describe("Local Migrate Server runtime", () => {
     },
     {
       configPath: "provider-observation-failure.config.ts",
-      label: "provider observation fallback",
+      label: "provider observation outage",
       observationWarning: true,
       ownership: "provider",
     },
@@ -262,7 +263,22 @@ describe("Local Migrate Server runtime", () => {
       const migratedCounts: number[] = [];
       const observationWarnings: string[] = [];
       let sawIntermediateProgressWhileRunning = false;
+      const projection = makeMigrationItemProgress();
       const execution = executeRegistryMigration(runtime, operation, {
+        onExecutionProgress: (event) => {
+          if (event.kind !== "progress") {
+            return;
+          }
+          const statuses = projection.apply(event.progress);
+          if (
+            statuses.some(
+              (status) =>
+                status.durable.migrated > 0 && status.durable.migrated < 4
+            )
+          ) {
+            sawIntermediateProgressWhileRunning = true;
+          }
+        },
         onProgress: ({ definitions }) => {
           const status = definitions.find(
             (definition) => definition.definitionId === "live-progress"
@@ -298,11 +314,17 @@ describe("Local Migrate Server runtime", () => {
       }
 
       expect(executionOwnerships).toContain(testCase.ownership);
-      expect(sawIntermediateProgressWhileRunning).toBe(true);
-      expect(migratedCounts.at(-1)).toBe(4);
-      expect(liveProgressProviderObservations).toHaveLength(
-        testCase.ownership === "provider" ? 1 : 0
+      expect(sawIntermediateProgressWhileRunning).toBe(
+        !testCase.observationWarning
       );
+      expect(migratedCounts.at(-1)).toBe(4);
+      if (testCase.observationWarning) {
+        expect(liveProgressProviderObservations.length).toBeGreaterThan(1);
+      } else {
+        expect(liveProgressProviderObservations).toHaveLength(
+          testCase.ownership === "provider" ? 1 : 0
+        );
+      }
       expect(observationWarnings.length > 0).toBe(testCase.observationWarning);
     });
   }

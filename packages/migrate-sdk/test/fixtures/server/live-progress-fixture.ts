@@ -85,16 +85,54 @@ const makeDetachedExecutableLayer = (observationFails: boolean) =>
       const providerProgress = Layer.succeed(MigrationProgress, {
         emit: (event) =>
           Effect.sync(() => {
-            if (event.kind !== "source-cursor-window-completed") {
+            let checkpoint: MigrationExecutableObservationEvent;
+            if (event.kind === "run-started") {
+              checkpoint = {
+                kind: "progress",
+                runId: event.runId,
+                progress: {
+                  kind: "baseline",
+                  runId: event.runId,
+                  definitions: plan.definitions.map((definition) => ({
+                    definitionId: definition.id,
+                    discovery: definition.source.discovery,
+                    durable: {
+                      migrated: 0,
+                      failed: 0,
+                      skipped: 0,
+                      needsUpdate: 0,
+                    },
+                    lastRun: null,
+                    lock: null,
+                    warnings: [],
+                  })),
+                },
+              };
+            } else if (event.kind === "source-cursor-window-completed") {
+              checkpoint = {
+                kind: "progress",
+                runId: event.runId,
+                progress: {
+                  kind: "contribution",
+                  runId: event.runId,
+                  partitionId: "fixture",
+                  revision: event.counts.migrated,
+                  changes: [
+                    {
+                      definitionId: event.definitionId,
+                      delta: {
+                        migrated: event.counts.migrated,
+                        failed: 0,
+                        skipped: 0,
+                        needsUpdate: 0,
+                      },
+                    },
+                  ],
+                },
+              };
+            } else {
               return;
             }
-
-            const checkpoint = {
-              counts: event.counts,
-              definitionId: event.definitionId,
-              kind: event.kind,
-              runId: event.runId,
-            } as const;
             checkpoints.push(checkpoint);
             for (const listener of listeners) {
               listener(checkpoint);

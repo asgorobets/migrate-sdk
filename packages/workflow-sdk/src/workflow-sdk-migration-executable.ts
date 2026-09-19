@@ -1,4 +1,4 @@
-import { Effect, Exit, Filter, Layer, Queue, Schema, Stream } from "effect";
+import { Effect, Exit, Layer, Queue, Schema, Stream } from "effect";
 import {
   type ExecutionStartResult,
   type MigrationDefinitionExecutableRollbackPlan,
@@ -103,48 +103,54 @@ const observeWorkflowProgress = (
       });
       const tailIndex = await probe.getTailIndex();
 
-      return tailIndex < 0
-        ? run.getReadable<unknown>({
-            namespace: workflowSdkMigrationProgressStreamNamespace,
-          })
-        : run.getReadable<unknown>({
-            namespace: workflowSdkMigrationProgressStreamNamespace,
-            startIndex: tailIndex,
-          });
+      const after = options.after === undefined ? -1 : Number(options.after);
+      if (!Number.isSafeInteger(after) || after < -1) {
+        throw new Error("Invalid Workflow stream position");
+      }
+      return {
+        tailIndex,
+        startIndex: after + 1,
+        readable: run.getReadable<unknown>({
+          namespace: workflowSdkMigrationProgressStreamNamespace,
+          startIndex: after + 1,
+        }),
+      };
     },
     catch: observationError,
   }).pipe(
-    Effect.flatMap((readable) =>
-      Stream.fromReadableStream({
+    Effect.flatMap(({ readable, tailIndex, startIndex }) => {
+      let index = startIndex;
+      return Stream.fromReadableStream({
         evaluate: () => readable,
         onError: observationError,
       }).pipe(
-        Stream.filterMap(
-          Filter.fromPredicateOption(
-            Schema.decodeUnknownOption(WorkflowSdkMigrationObservationEvent)
-          )
-        ),
-        Stream.runForEach((event) => {
-          const notification =
-            event.kind === "progress"
-              ? {
-                  ...event,
-                  definitionId: toMigrationDefinitionId(event.definitionId),
-                  runId: toMigrationRunId(event.runId),
-                }
-              : {
-                  ...event,
-                  definitionIds: event.definitionIds.map(
-                    toMigrationDefinitionId
-                  ),
-                  runId: toMigrationRunId(event.runId),
-                };
-          return (options.onEvent?.(notification) ?? Effect.void).pipe(
-            Effect.andThen(activity(event.kind))
-          );
-        })
-      )
-    )
+        Stream.runForEach((chunk) =>
+          Effect.gen(function* () {
+            const cursor = String(index++);
+            const event = yield* Schema.decodeUnknownEffect(
+              WorkflowSdkMigrationObservationEvent
+            )(chunk).pipe(Effect.mapError(observationError));
+            const common = {
+              runId: toMigrationRunId(event.runId),
+              cursor,
+              replaying: Number(cursor) < tailIndex,
+            };
+            const notification =
+              event.kind === "state-changed"
+                ? {
+                    ...common,
+                    kind: "state-changed" as const,
+                    definitionIds: event.definitionIds.map(
+                      toMigrationDefinitionId
+                    ),
+                  }
+                : { ...common, kind: "progress" as const, progress: event };
+            yield* options.onEvent?.(notification) ?? Effect.void;
+            yield* activity(notification.kind);
+          })
+        )
+      );
+    })
   );
 
 const observeWorkflowTerminal = (

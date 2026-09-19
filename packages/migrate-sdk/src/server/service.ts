@@ -1,6 +1,5 @@
 import {
   Cause,
-  Clock,
   Context,
   Deferred,
   Duration,
@@ -8,8 +7,8 @@ import {
   FiberMap,
   FiberSet,
   Layer,
-  Option,
   Queue,
+  Schedule,
   Schema,
   Semaphore,
   Stream,
@@ -20,15 +19,20 @@ import {
   type MigrationDefinitionRegistryId,
   type MigrationRunId,
 } from "../domain/ids.ts";
+import type { MigrationExecutionUpdate } from "../domain/item-progress.ts";
 import type { MigrationDefinitionLock } from "../domain/lock.ts";
 import type { MigrationMessage } from "../domain/message.ts";
-import type { MigrationDefinitionStatus } from "../domain/status.ts";
+import type {
+  MigrationDefinitionMetadata,
+  MigrationDefinitionStatus,
+} from "../domain/status.ts";
 import {
   MIGRATE_PROTOCOL_VERSION,
   type MigrateActiveRun,
   type MigrateBreakLockResult,
   MigrateDashboard,
   type MigrateDashboardFrame,
+  type MigrateDashboardResume,
   MigrateDashboardResumeToken,
   type MigrateDashboardSnapshot,
   type MigrateDefinitionIds,
@@ -60,6 +64,7 @@ import {
   type MigrateTarget,
   type MigrateTerminalSummary,
 } from "../protocol/index.ts";
+import type { MigrationExecutableObservationOptions } from "../services/migration-executable.ts";
 import type { SqlMigrationStoreSchemaConfig } from "../stores/sql/sql-migration-store-schema-plan.ts";
 import { MIGRATE_SDK_VERSION } from "../version.ts";
 import { makeStoreSchemaOperations } from "./store-schema.ts";
@@ -111,15 +116,18 @@ export interface MigrateServerService {
   }) => Effect.Effect<string, MigrateProtocolError>;
   readonly observeDashboard: (input: {
     readonly after?: MigrateDashboardResumeToken | undefined;
+    readonly resume?: MigrateDashboardResume;
   }) => Stream.Stream<MigrateDashboardSnapshot, MigrateProtocolError>;
   readonly observeDashboardSession: (input: {
     readonly after?: MigrateDashboardResumeToken | undefined;
+    readonly resume?: MigrateDashboardResume;
   }) => Stream.Stream<MigrateDashboardFrame, MigrateProtocolError>;
   readonly observeRun: (input: {
     readonly runId: MigrationRunId;
   }) => Stream.Stream<MigrateObservationEvent, MigrateProtocolError>;
   readonly observeRunSession: (input: {
     readonly after?: MigrateObservationResumeToken | undefined;
+    readonly progressAfter?: string;
     readonly runId: MigrationRunId;
   }) => Stream.Stream<MigrateObservationFrame, MigrateProtocolError>;
   readonly prepareOperation: (
@@ -142,7 +150,9 @@ export interface MigrateServerService {
 }
 
 export interface MigrateServerExecutionObserver {
+  readonly after?: string;
   readonly onDashboardInvalidation: () => void;
+  readonly onExecutionProgress?: (update: MigrationExecutionUpdate) => void;
   readonly onObservationWarning: (message: string) => void;
   readonly onProgress: (progress: {
     readonly definitions: readonly MigrationDefinitionStatus[];
@@ -188,6 +198,9 @@ export interface MigrateServerBackend<ExecutableOperation> {
   ) => Effect.Effect<MigrateServerExecutionHandle, unknown>;
   readonly getActiveRuns: Effect.Effect<readonly MigrateActiveRun[], unknown>;
   readonly getDashboard: Effect.Effect<MigrateDashboard, unknown>;
+  readonly getDefinitionMetadata?: (
+    definitionIds: readonly MigrationDefinitionId[]
+  ) => Effect.Effect<readonly MigrationDefinitionMetadata[], unknown>;
   readonly getMessages: (
     target: MigrateTarget
   ) => Effect.Effect<readonly MigrationMessage[], unknown>;
@@ -235,7 +248,7 @@ export interface MigrateServerBackend<ExecutableOperation> {
   readonly watchDashboardRun?:
     | ((
         run: MigrateActiveRun,
-        invalidate: Effect.Effect<void>
+        options: MigrationExecutableObservationOptions
       ) => Effect.Effect<void, unknown>)
     | undefined;
 }
@@ -264,15 +277,6 @@ interface IndexedExecutionEvent {
 interface ObservationEnvelope {
   readonly event: MigrateObservationEvent;
   readonly resumeToken: MigrateObservationResumeToken;
-}
-
-interface DashboardProjectionEnvelope extends MigrateDashboardSnapshot {
-  readonly projectionSequence: number;
-}
-
-interface DashboardProjectionState {
-  readonly isInitialProjection: boolean;
-  readonly lastProjectionAt: number;
 }
 
 interface ContinuingObservationEnvelope extends ObservationEnvelope {
@@ -582,7 +586,7 @@ const resumeEventToken = (
   executionObservationResumePosition(resumeToken)?.eventToken ??
   resumeToken;
 
-const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
+const makeMigrationServerObservationService = <ExecutableOperation>(
   {
     backend,
     sqlStore,
@@ -594,7 +598,6 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
     registryId,
   }: MigrateServerInput<ExecutableOperation>,
   runExecution: (effect: Effect.Effect<void>) => unknown,
-  dashboardInvalidations: Queue.Queue<void>,
   dashboardReadSemaphore: Semaphore.Semaphore
 ): Effect.Effect<MigrateServerService, never, Scope> => {
   const storeSchema = makeStoreSchemaOperations(sqlStore);
@@ -606,10 +609,17 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
     sdkVersion: MIGRATE_SDK_VERSION,
   };
   const executionsByRunId = new Map<string, ExecutionRecord>();
-  const invalidateDashboardUnsafe = () => {
-    Queue.offerUnsafe(dashboardInvalidations, undefined);
+  const dashboardListeners = new Set<
+    (definitionIds: readonly MigrationDefinitionId[]) => void
+  >();
+  const invalidateDashboardUnsafe = (
+    definitionIds: readonly MigrationDefinitionId[] = []
+  ) => {
+    for (const listener of dashboardListeners) {
+      listener(definitionIds);
+    }
   };
-  const invalidateDashboard = Effect.sync(invalidateDashboardUnsafe);
+  const invalidateDashboard = Effect.sync(() => invalidateDashboardUnsafe());
 
   const removeExecution = (record: ExecutionRecord) => {
     if (
@@ -644,7 +654,7 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
     record.events.push(event);
     const index = record.events.length - 1;
 
-    if (event.kind !== "warning") {
+    if (event.kind !== "warning" && event.kind !== "execution-progress") {
       invalidateDashboardUnsafe();
     }
 
@@ -773,13 +783,17 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
   );
   const observeBackendRun = (
     runId: MigrationRunId,
-    observationDefinitionId?: MigrationDefinitionId
+    observationDefinitionId?: MigrationDefinitionId,
+    progressAfter?: string
   ): Stream.Stream<MigrateObservationEvent, MigrateProtocolError> =>
     Stream.callback<MigrateObservationEvent, MigrateProtocolError>((queue) =>
       backend
         .observeRun(
           runId,
           {
+            ...(progressAfter === undefined ? {} : { after: progressAfter }),
+            onExecutionProgress: (update) =>
+              Queue.offerUnsafe(queue, { kind: "execution-progress", update }),
             onDashboardInvalidation: invalidateDashboardUnsafe,
             onObservationWarning: (message) =>
               Queue.offerUnsafe(queue, { kind: "warning", message }),
@@ -917,7 +931,9 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
       }
     }
 
-    return record.events.length;
+    return record.ownership === "provider" && position === undefined
+      ? 0
+      : record.events.length;
   };
 
   const ownedEnvelope = (
@@ -999,6 +1015,7 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
   const isContinuingEnvelope = (
     next: ObservationEnvelope
   ): next is ContinuingObservationEnvelope =>
+    next.event.kind === "execution-progress" ||
     next.event.kind === "progress" ||
     next.event.kind === "state" ||
     next.event.kind === "warning";
@@ -1100,6 +1117,7 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
 
   const observeRunSession: MigrateServerService["observeRunSession"] = ({
     after,
+    progressAfter,
     runId,
   }) =>
     observationSession(
@@ -1117,10 +1135,13 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
             owned === undefined
               ? 0
               : ownedObservationStartIndex(owned, ownedPosition);
-          const initial = yield* initialRunProgress(
-            runId,
-            requestedObservationDefinitionId
-          );
+          const initial =
+            progressAfter === undefined
+              ? yield* initialRunProgress(
+                  runId,
+                  requestedObservationDefinitionId
+                )
+              : undefined;
           const observationDefinitionId =
             initial?.observationDefinitionId ??
             requestedObservationDefinitionId;
@@ -1141,7 +1162,11 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
 
           const events =
             owned === undefined
-              ? observeBackendRun(runId, observationDefinitionId).pipe(
+              ? observeBackendRun(
+                  runId,
+                  observationDefinitionId,
+                  progressAfter
+                ).pipe(
                   Stream.mapEffect((event) =>
                     observationDefinitionId === undefined
                       ? envelope(event)
@@ -1193,150 +1218,272 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
       )
     );
 
-  const dashboardProjectionIntervalMs = Duration.toMillis(
-    dashboardProjectionInterval
-  );
-  let dashboardProjectionSequence = 0;
-  const dashboardProjectionSource = Stream.unwrap(
-    Effect.gen(function* () {
-      const watcherFibers = yield* FiberMap.make<string, void, never>();
-      const watcherKeys = new Set<string>();
-
-      const dashboardWatcherKey = (
-        run: MigrateActiveRun
-      ): string | undefined => {
-        const execution = run.execution;
-
-        if (execution === undefined || executionsByRunId.has(run.runId)) {
-          return;
+  const observeDashboard: MigrateServerService["observeDashboard"] = ({
+    resume,
+  }) =>
+    Stream.callback<MigrateDashboardSnapshot, MigrateProtocolError>((queue) =>
+      Effect.gen(function* () {
+        const watchers = yield* FiberMap.make<MigrationRunId, void, never>();
+        const wake = yield* Queue.sliding<void>(1);
+        const dirtyDefinitions = new Set<MigrationDefinitionId>();
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            const listener = (ids: readonly MigrationDefinitionId[]) => {
+              for (const id of ids) {
+                dirtyDefinitions.add(id);
+              }
+              Queue.offerUnsafe(wake, undefined);
+            };
+            dashboardListeners.add(listener);
+            return listener;
+          }),
+          (listener) =>
+            Effect.sync(() => {
+              dashboardListeners.delete(listener);
+            })
+        );
+        const known = new Map((resume ?? []).map((run) => [run.runId, run]));
+        const finished = new Set<MigrationRunId>();
+        const readMetadata = (ids: readonly MigrationDefinitionId[]) =>
+          (ids.length === 0
+            ? Effect.succeed([])
+            : (backend.getDefinitionMetadata?.(ids) ?? Effect.succeed([]))
+          ).pipe(
+            Effect.catch(() => {
+              for (const id of ids) {
+                dirtyDefinitions.add(id);
+              }
+              return Effect.succeed([]);
+            })
+          );
+        const readDirtyMetadata = Effect.suspend(() => {
+          const ids = [...dirtyDefinitions];
+          dirtyDefinitions.clear();
+          return readMetadata(ids);
+        });
+        let dashboard: MigrateDashboard;
+        let initial = true;
+        const emission = yield* Semaphore.make(1);
+        const emit = (
+          progress?: MigrationExecutionUpdate,
+          definitions: readonly MigrationDefinitionStatus[] = [],
+          metadata: readonly MigrationDefinitionMetadata[] = [],
+          activeRuns?: readonly MigrateActiveRun[]
+        ) =>
+          Effect.gen(function* () {
+            if (activeRuns !== undefined) {
+              dashboard = { ...dashboard, activeRuns };
+            }
+            if (
+              progress !== undefined &&
+              !dashboard.activeRuns.some((run) => run.runId === progress.runId)
+            ) {
+              return;
+            }
+            const statuses = new Map(
+              definitions.map((status) => [status.definitionId, status])
+            );
+            const partial = {
+              ...dashboard,
+              rows: dashboard.rows.map(({ entry }) => ({
+                entry,
+                ...(statuses.has(entry.id)
+                  ? { status: statuses.get(entry.id) }
+                  : {}),
+              })),
+            };
+            const resumeToken =
+              progress === undefined
+                ? yield* dashboardResumeToken(partial)
+                : yield* observationResumeToken({
+                    kind: "execution-progress",
+                    update: progress,
+                  });
+            Queue.offerUnsafe(queue, {
+              dashboard: partial,
+              partial: true,
+              metadata,
+              resumeToken: MigrateDashboardResumeToken.make(resumeToken),
+              ...(progress === undefined ? {} : { progress }),
+            });
+          }).pipe(emission.withPermit);
+        if (resume === undefined) {
+          const snapshot = yield* readDashboardSnapshot;
+          dashboard = snapshot.dashboard;
+          Queue.offerUnsafe(queue, snapshot);
+        } else {
+          const registry = yield* backend.getRegistry.pipe(
+            Effect.mapError(operationError)
+          );
+          dashboard = {
+            groups: registry.groups,
+            scannedSource: false,
+            activeRuns: yield* getActiveRuns,
+            rows: registry.entries.map((entry) => ({ entry })),
+          };
+          for (const run of dashboard.activeRuns) {
+            for (const id of run.definitionIds) {
+              dirtyDefinitions.add(id);
+            }
+          }
         }
-
-        return [run.runId, execution.adapter, execution.executionId]
-          .map(encodeURIComponent)
-          .join(":");
-      };
-
-      const removeInactiveDashboardWatchers = (
-        activeWatcherKeys: ReadonlySet<string>
-      ): Effect.Effect<void> =>
-        [...watcherKeys]
-          .filter((key) => !activeWatcherKeys.has(key))
-          .reduce(
-            (effect, key) =>
-              effect.pipe(
+        const relayExecutionUpdate = (
+          runId: MigrationRunId,
+          event: MigrationExecutionUpdate
+        ) =>
+          Effect.gen(function* () {
+            if (
+              event.runId !== runId ||
+              !dashboard.activeRuns.some((run) => run.runId === runId)
+            ) {
+              return;
+            }
+            if (event.kind === "state-changed") {
+              for (const id of event.definitionIds) {
+                dirtyDefinitions.add(id);
+              }
+            }
+            const metadata =
+              event.replaying === true ? [] : yield* readDirtyMetadata;
+            yield* emit(event, [], metadata);
+            const position = known.get(runId);
+            if (position !== undefined && event.cursor !== undefined) {
+              known.set(runId, { ...position, cursor: event.cursor });
+            }
+          });
+        const watchRun = (run: MigrateActiveRun) =>
+          Effect.gen(function* () {
+            // Provider termination can precede the durable lifecycle transition.
+            // Keep its slot until the store agrees, without reattaching or rescanning.
+            if (finished.has(run.runId)) {
+              return;
+            }
+            const position = known.get(run.runId);
+            known.set(run.runId, {
+              runId: run.runId,
+              observationDefinitionId: run.observationDefinitionId,
+              ...(position?.cursor === undefined
+                ? {}
+                : { cursor: position.cursor }),
+            });
+            const owned = executionsByRunId.get(run.runId);
+            const observe =
+              owned?.ownership === "server"
+                ? observeRecord(owned).pipe(
+                    Stream.runForEach((event) =>
+                      event.kind === "progress"
+                        ? emit(undefined, event.definitions)
+                        : Effect.void
+                    )
+                  )
+                : Effect.suspend(() => {
+                    const after = known.get(run.runId)?.cursor;
+                    return (
+                      backend.watchDashboardRun?.(run, {
+                        ...(after === undefined ? {} : { after }),
+                        onEvent: (event) =>
+                          relayExecutionUpdate(run.runId, event),
+                      }) ?? Effect.never
+                    );
+                  }).pipe(
+                    Effect.retry(
+                      Schedule.exponential("1 second").pipe(
+                        Schedule.modifyDelay(({ duration }) =>
+                          Effect.succeed(
+                            Math.min(Duration.toMillis(duration), 30_000)
+                          )
+                        ),
+                        Schedule.jittered
+                      )
+                    )
+                  );
+            yield* FiberMap.run(
+              watchers,
+              run.runId,
+              observe.pipe(
+                Effect.catch((cause) =>
+                  Effect.sync(() =>
+                    Queue.failCauseUnsafe(
+                      queue,
+                      Cause.fail(operationError(cause))
+                    )
+                  )
+                ),
                 Effect.andThen(
                   Effect.sync(() => {
-                    watcherKeys.delete(key);
+                    finished.add(run.runId);
+                    Queue.offerUnsafe(wake, undefined);
                   })
-                ),
-                Effect.andThen(FiberMap.remove(watcherFibers, key))
+                )
               ),
-            Effect.void
-          );
-
-      const reconcileDashboardRuns = (
-        runs: readonly MigrateActiveRun[]
-      ): Effect.Effect<void> =>
-        Effect.gen(function* () {
-          const activeWatcherKeys = new Set<string>();
-
-          if (backend.watchDashboardRun !== undefined) {
-            for (const run of runs) {
-              const key = dashboardWatcherKey(run);
-
-              if (key === undefined) {
-                continue;
-              }
-
-              activeWatcherKeys.add(key);
-
-              if (watcherKeys.has(key)) {
-                continue;
-              }
-
-              watcherKeys.add(key);
-              const watcher = backend
-                .watchDashboardRun(run, invalidateDashboard)
-                .pipe(
-                  // A failed provider may invalidate on exit. Keep its slot
-                  // through the reconciliation interval to avoid a retry loop.
-                  Effect.catch(() => Effect.sleep(dashboardFallbackInterval)),
-                  Effect.ensuring(
-                    Effect.sync(() => {
-                      watcherKeys.delete(key);
-                    })
-                  )
-                );
-              yield* FiberMap.run(watcherFibers, key, watcher, {
-                onlyIfMissing: true,
-                startImmediately: true,
-              });
-            }
-          }
-
-          yield* removeInactiveDashboardWatchers(activeWatcherKeys);
-        });
-
-      const waitForDashboardTrigger = Effect.raceFirst(
-        Queue.take(dashboardInvalidations).pipe(Effect.asVoid),
-        Effect.sleep(dashboardFallbackInterval)
-      );
-
-      return Stream.paginate<
-        DashboardProjectionState,
-        DashboardProjectionEnvelope,
-        MigrateProtocolError
-      >({ isInitialProjection: true, lastProjectionAt: 0 }, (state) =>
-        Effect.gen(function* () {
-          if (state.isInitialProjection) {
-            yield* Queue.poll(dashboardInvalidations);
-          } else {
-            yield* waitForDashboardTrigger;
-            const beforeDelay = yield* Clock.currentTimeMillis;
-            const remainingDelay = Math.max(
-              0,
-              state.lastProjectionAt +
-                dashboardProjectionIntervalMs -
-                beforeDelay
+              { onlyIfMissing: true, startImmediately: true }
             );
-
-            if (remainingDelay > 0) {
-              yield* Effect.sleep(remainingDelay);
+          });
+        const reconcile = (activeRuns: readonly MigrateActiveRun[]) =>
+          Effect.gen(function* () {
+            const activeIds = new Set(activeRuns.map((run) => run.runId));
+            const definitions: MigrationDefinitionStatus[] = [];
+            const metadata = yield* readDirtyMetadata;
+            for (const [runId, position] of known) {
+              if (activeIds.has(runId)) {
+                continue;
+              }
+              const progress = yield* backend
+                .getRunProgress(runId, position.observationDefinitionId)
+                .pipe(Effect.mapError(operationError));
+              definitions.push(...(progress?.definitions ?? []));
+              known.delete(runId);
+              finished.delete(runId);
+              yield* FiberMap.remove(watchers, runId);
             }
-
-            yield* Queue.poll(dashboardInvalidations);
+            if (!initial || resume !== undefined || definitions.length > 0) {
+              // Publish run removal together with final totals. Until then, other
+              // frames must retain its locator so a replacement server can finish.
+              yield* emit(undefined, definitions, metadata, activeRuns);
+            }
+            initial = false;
+            yield* Effect.forEach(dashboard.activeRuns, watchRun, {
+              discard: true,
+            });
+          });
+        yield* reconcile(dashboard.activeRuns);
+        while (true) {
+          // This only discovers run lifecycle changes. It never scans item states.
+          yield* Effect.raceFirst(
+            Queue.take(wake),
+            Effect.sleep(dashboardFallbackInterval)
+          );
+          yield* Effect.sleep(dashboardProjectionInterval);
+          const activeRuns = yield* getActiveRuns;
+          for (const run of activeRuns) {
+            const previous = dashboard.activeRuns.find(
+              (candidate) => candidate.runId === run.runId
+            );
+            if (previous?.status !== run.status) {
+              for (const id of run.definitionIds) {
+                dirtyDefinitions.add(id);
+              }
+            }
           }
-
-          const snapshot = yield* readDashboardSnapshot;
-          const { dashboard } = snapshot;
-          yield* reconcileDashboardRuns(dashboard.activeRuns);
-          const lastProjectionAt = yield* Clock.currentTimeMillis;
-          dashboardProjectionSequence += 1;
-          const projections: readonly DashboardProjectionEnvelope[] = [
-            {
-              ...snapshot,
-              projectionSequence: dashboardProjectionSequence,
-            },
-          ];
-
-          return [
-            projections,
-            Option.some<DashboardProjectionState>({
-              isInitialProjection: false,
-              lastProjectionAt,
-            }),
-          ] as const;
-        })
-      );
-    })
-  );
+          yield* reconcile(activeRuns);
+        }
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => Queue.failCauseUnsafe(queue, Cause.fail(error)))
+        ),
+        Effect.forkScoped
+      )
+    );
   const migrationServerService = (
     observeDashboard: MigrateServerService["observeDashboard"]
   ): MigrateServerService => ({
     breakLock: ({ lock }) =>
-      backend
-        .breakLock(lock)
-        .pipe(Effect.tap(invalidateDashboard), Effect.mapError(operationError)),
+      backend.breakLock(lock).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => invalidateDashboardUnsafe([lock.definitionId]))
+        ),
+        Effect.mapError(operationError)
+      ),
     getDashboard,
     getActiveRuns,
     getMessages: ({ target }) =>
@@ -1421,6 +1568,8 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
 
         const backendExecution = yield* backend
           .executeOperation(currentPreparedOperation.executable, {
+            onExecutionProgress: (update) =>
+              publish(record, { kind: "execution-progress", update }),
             onDashboardInvalidation: invalidateDashboardUnsafe,
             onObservationWarning: (message) =>
               publish(record, { kind: "warning", message }),
@@ -1577,43 +1726,7 @@ const makeMigrationServerServiceWithInvalidationQueue = <ExecutableOperation>(
       }).pipe(Effect.tap(invalidateDashboard), Effect.mapError(operationError)),
   });
 
-  return dashboardProjectionSource.pipe(
-    Stream.share({ capacity: 1, replay: 1, strategy: "sliding" }),
-    Effect.map((dashboardProjections) => {
-      const observeDashboard: MigrateServerService["observeDashboard"] = ({
-        after,
-      }) =>
-        Stream.unwrap(
-          Effect.sync(() => {
-            const afterProjectionSequence = dashboardProjectionSequence;
-            invalidateDashboardUnsafe();
-
-            return dashboardProjections.pipe(
-              Stream.filter(
-                (projection) =>
-                  projection.projectionSequence > afterProjectionSequence
-              ),
-              Stream.map(({ dashboard, resumeToken }) => ({
-                dashboard,
-                resumeToken,
-              })),
-              Stream.mapAccum(
-                () => after,
-                (previousResumeToken, snapshot) =>
-                  [
-                    snapshot.resumeToken,
-                    previousResumeToken === snapshot.resumeToken
-                      ? []
-                      : [snapshot],
-                  ] as const
-              )
-            );
-          })
-        );
-
-      return migrationServerService(observeDashboard);
-    })
-  );
+  return Effect.succeed(migrationServerService(observeDashboard));
 };
 
 const makeMigrationServerService = <ExecutableOperation>(
@@ -1621,13 +1734,11 @@ const makeMigrationServerService = <ExecutableOperation>(
   runExecution: (effect: Effect.Effect<void>) => unknown
 ): Effect.Effect<MigrateServerService, never, Scope> =>
   Effect.gen(function* () {
-    const dashboardInvalidations = yield* Queue.sliding<void>(1);
     const dashboardReadSemaphore = yield* Semaphore.make(1);
 
-    return yield* makeMigrationServerServiceWithInvalidationQueue(
+    return yield* makeMigrationServerObservationService(
       input,
       runExecution,
-      dashboardInvalidations,
       dashboardReadSemaphore
     );
   });

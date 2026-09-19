@@ -112,15 +112,15 @@ const makeProgressWorkflowRun = (
         new ReadableStream({
           start(controller) {
             controller.enqueue({
-              counts: {
-                failed: 0,
-                migrated: 1,
-                needsUpdate: 0,
-                skipped: 0,
-                unchanged: 0,
-              },
-              definitionId: "articles",
-              kind: "progress",
+              kind: "contribution",
+              partitionId: "window-a:1",
+              revision: 1,
+              changes: [
+                {
+                  definitionId: "articles",
+                  delta: { failed: 0, migrated: 1, needsUpdate: 0, skipped: 0 },
+                },
+              ],
               runId: "run-progress",
             });
             controller.close();
@@ -449,15 +449,15 @@ describe("WorkflowSdkMigrationExecutable", () => {
         yield* TestClock.adjust("29 seconds");
         expect(reads).toBe(2);
         controller?.enqueue({
-          counts: {
-            failed: 0,
-            migrated: 1,
-            needsUpdate: 0,
-            skipped: 0,
-            unchanged: 0,
-          },
-          definitionId: "articles",
-          kind: "progress",
+          kind: "contribution",
+          partitionId: "window-a:1",
+          revision: 1,
+          changes: [
+            {
+              definitionId: "articles",
+              delta: { failed: 0, migrated: 1, needsUpdate: 0, skipped: 0 },
+            },
+          ],
           runId: "run-stream-terminal",
         });
         yield* TestClock.adjust("29 seconds");
@@ -520,23 +520,31 @@ describe("WorkflowSdkMigrationExecutable", () => {
         },
         {
           namespace: "migrate-sdk-progress",
-          startIndex: 5,
+          startIndex: 0,
         },
       ]);
-      expect(checkpoints).toEqual([
+      expect(checkpoints).toMatchObject([
         {
-          counts: {
-            failed: 0,
-            migrated: 1,
-            needsUpdate: 0,
-            skipped: 0,
-            unchanged: 0,
-          },
-          definitionId: toMigrationDefinitionId("articles"),
           kind: "progress",
-          runId: toMigrationRunId("run-progress"),
+          runId: "run-progress",
+          cursor: "0",
+          replaying: true,
+          progress: {
+            kind: "contribution",
+            partitionId: "window-a:1",
+            changes: [{ definitionId: "articles", delta: { migrated: 1 } }],
+          },
         },
       ]);
+      readableOptions.length = 0;
+      yield* waitForExecution(
+        { adapter: "workflow-sdk", executionId: "wrun-progress" },
+        { after: "4", onEvent: () => Effect.void }
+      );
+      expect(readableOptions[1]).toEqual({
+        namespace: "migrate-sdk-progress",
+        startIndex: 5,
+      });
     })
   );
 

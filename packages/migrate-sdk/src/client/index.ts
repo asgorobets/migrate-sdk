@@ -28,6 +28,10 @@ import {
   makeMigrateClientService,
   makeStreamingMigrateClientService,
 } from "./internal/client-service.ts";
+import {
+  makeDashboardProjection,
+  projectRunProgress,
+} from "./internal/progress-projection.ts";
 import { rpcClientHttpStatusCode } from "./internal/rpc-client-error.ts";
 
 type MigrateHttpRpcClient = RpcClient<
@@ -102,9 +106,11 @@ const sessionRunObservation = (
 ) =>
   Stream.suspend(() => {
     let after: MigrateObservationResumeToken | undefined;
+    let progressAfter: string | undefined;
     return Stream.suspend(() =>
       client.ObserveRunSession({
         runId,
+        ...(progressAfter === undefined ? {} : { progressAfter }),
         ...(after === undefined ? {} : { after }),
       })
     ).pipe(
@@ -121,7 +127,18 @@ const sessionRunObservation = (
       Stream.retry(observationStreamRetrySchedule),
       Stream.repeat(Schedule.spaced("250 millis")),
       Stream.takeUntil((frame) => frame.kind === "terminal"),
-      Stream.flatMap((frame) => Stream.fromIterable(frameEvents(frame)))
+      Stream.flatMap((frame) => Stream.fromIterable(frameEvents(frame))),
+      Stream.tap((event) =>
+        Effect.sync(() => {
+          if (
+            event.kind === "execution-progress" &&
+            event.update.cursor !== undefined
+          ) {
+            progressAfter = event.update.cursor;
+          }
+        })
+      ),
+      projectRunProgress
     );
   });
 
@@ -131,12 +148,17 @@ const sessionDashboardObservation = (
 ) =>
   Stream.suspend(() => {
     let after = initialAfter;
-    return Stream.suspend(() =>
-      client.ObserveDashboardSession(after === undefined ? {} : { after })
-    ).pipe(
+    const projection = makeDashboardProjection();
+    return Stream.suspend(() => {
+      const resume = projection.resume();
+      return client.ObserveDashboardSession({
+        ...(after === undefined ? {} : { after }),
+        ...(resume === undefined ? {} : { resume }),
+      });
+    }).pipe(
       Stream.timeout("45 seconds"),
       Stream.filter((frame) => frame.kind === "snapshot"),
-      Stream.map((frame) => frame.snapshot),
+      Stream.map((frame) => projection.apply(frame.snapshot)),
       Stream.tap((snapshot) =>
         Effect.sync(() => {
           after = snapshot.resumeToken;

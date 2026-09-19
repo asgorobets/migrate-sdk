@@ -124,3 +124,11 @@ export type {
 
 /** Shared persisted item-state codec for first-party Migration Store adapters. */
 export { PersistedMigrationItemState } from "./stores/internal/persisted-state.ts";
+
+export {
+  MigrationExecutionUpdate,
+  MigrationItemProgress as MigrationItemProgressUpdate,
+  makeMigrationItemProgress,
+} from "./domain/item-progress.ts";
+export type { MigrationItemStateDelta } from "./domain/item-progress.ts";
+export { MigrationItemProgress } from "./services/migration-item-progress.ts";

@@ -162,34 +162,33 @@ responses active without durable reads; forty-five seconds without a frame
 causes the client to reconnect. These are transport heartbeats, not new HTTP
 requests or status queries.
 
-Whole-dashboard observation follows the same transport split. Connection-based
-clients consume `ObserveDashboard` as a stream of complete
-`MigrateDashboardSnapshot` envelopes containing both the dashboard and its
-opaque content fingerprint. `GetDashboard` returns the same envelope. HTTPS
-clients receive those snapshots through `ObserveDashboardSession`, passing the
-fingerprint when reconnecting. A fresh serverless invocation reconstructs the dashboard from the registry and
-Migration Stores before waiting, so neither client identity nor server process
-memory is required for resumption.
+Whole-dashboard observation uses the same resumable transport. Its wire
+snapshots can carry partial rows, lightweight lifecycle metadata, and execution
+progress. Shared client code assembles complete dashboard snapshots for the TUI.
+Clients retain the projection and per-run stream cursor across HTTP renewals;
+a replacement server validates run identity through the Migration Store and
+resumes the provider stream without rebuilding item summaries.
 
-Execution events are private invalidation signals, not competing dashboard
-payloads. Inline item progress, lifecycle changes, provider progress,
-successful controls, and a subscriber-scoped fallback mark the server's
-dashboard projection dirty. The server coalesces those signals, performs only
-one durable projection read at a time, and multicasts the resulting absolute
-snapshots. Each subscriber suppresses identical fingerprints after discarding
-any shared projection that predates its subscription. The fallback remains
-active while a dashboard subscriber exists even when the previous snapshot has
-no active runs; otherwise a run started by cron or another host could not be
-discovered without a process-local signal.
-This reconciliation defaults to thirty seconds after the last projection;
-events still trigger prompt, coalesced updates. Workflow steps publish changing
-item progress at a bounded rate and flush at window completion and step exit.
-These updates invalidate durable projections; their current-run counts must not
-be interpreted as aggregate stored counts. Provider observation owns terminal
-checks while attached, with durable terminal verification when it settles and
-durable fallback if observation fails. Cross-instance changes without
-events can therefore take thirty seconds to appear. Eliminating that fallback
-requires a shared durable change feed, not a different client transport.
+Workflow execution publishes a baseline under its definition locks before item
+work. Committed item-state transitions become cumulative contributions per
+step/attempt, carrying increasing revisions. Replacing each contribution makes
+replay idempotent and allows independent future cursor windows to be summed.
+Run outcome counts are not stored-state deltas: a failed-to-migrated transition
+subtracts a failure and adds a migrated state. No per-item stream persistence or
+additional storage service is required. Writes are batched while steps run and
+flushed at step completion; unchanged periods produce no writes.
+
+Fresh observers read initial status and replay retained provider contributions.
+Progress and ordinary reconnection do not scan item states. Run discovery and
+provider recovery use bounded metadata checks; lifecycle signals refresh
+inexpensive definition metadata independently from counts. Explicit controls
+invalidate affected metadata for all attached observers on the server.
+
+Migration Stores remain authoritative. A crash between a committed item write
+and its progress publication can leave the display behind. Terminal or explicit
+status reconciliation repairs that gap. A missing baseline produces an
+observation warning; it does not enable repeated full-store scans. Client
+projections never authorize operations or replace authoritative planning.
 
 Focused `ObserveRun` remains separate. It supplies run-specific warnings,
 messages, lifecycle, and terminal detail, but it does not update aggregate
@@ -413,10 +412,10 @@ use the same conditional force behavior while preserving the selected identities
   status.
 - Remote clients receive updates within one HTTP response per observation
   session and resume across serverless invocation boundaries.
-- Active dashboard subscriptions receive complete durable snapshots for every
-  migration; changing TUI selection affects only optional focused observation.
-- Inline and provider progress can wake one shared dashboard projection without
-  exposing provider event formats or making clients poll every second.
+- Clients materialize dashboard rows from baseline, revisioned contributions,
+  and lifecycle metadata; changing selection affects only optional focused observation.
+- Provider progress updates display counts without item-summary scans or
+  client polling. Initial, explicit, and terminal reads remain authoritative.
 - The boundary extracts serializable server requests and handlers from the
   in-process server runtime without rewriting the migration engine or changing
   the existing Execution Adapter interface.

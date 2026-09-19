@@ -1,16 +1,21 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import {
   type MigrationDefinitionRegistryRunInput,
+  type MigrationDefinitionStatus,
   MigrationExecutable,
   type MigrationExecutableObservationEvent,
   MigrationStore,
+  makeMigrationItemProgress,
   toMigrationDefinitionId,
 } from "migrate-sdk";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { expect, test } from "vitest";
 import { getRun } from "workflow/api";
 import { getWorld } from "workflow/runtime";
-import { workflowSdkMigrationProgressStreamNamespace } from "./migration-progress.ts";
+import {
+  WorkflowSdkMigrationObservationEvent,
+  workflowSdkMigrationProgressStreamNamespace,
+} from "./migration-progress.ts";
 import type { WorkflowStepRetryMetadata } from "./steps.ts";
 import {
   beginMigrationRunStep,
@@ -88,6 +93,35 @@ const startInMemoryMigrationRun = async (
   };
 };
 
+const readStreamedTotals = async (executionId: string) => {
+  const projection = makeMigrationItemProgress();
+  let definitions: readonly MigrationDefinitionStatus[] = [];
+  const readable = getRun(executionId).getReadable({
+    namespace: workflowSdkMigrationProgressStreamNamespace,
+    startIndex: 0,
+  });
+  const tail = await readable.getTailIndex();
+  const reader = readable.getReader();
+  try {
+    for (let index = 0; index <= tail; index += 1) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+      const event = Schema.decodeUnknownSync(
+        WorkflowSdkMigrationObservationEvent
+      )(chunk.value);
+      if (event.kind !== "state-changed") {
+        definitions = projection.apply(event);
+      }
+    }
+    return definitions.map((definition) => definition.durable);
+  } finally {
+    await reader.cancel();
+    reader.releaseLock();
+  }
+};
+
 test("Workflow SDK targets identities and updates unchanged entries in real steps", async () => {
   resetInMemoryMigrationTestState();
   await (await startInMemoryMigrationRun()).run.returnValue;
@@ -121,6 +155,9 @@ test("Workflow SDK targets identities and updates unchanged entries in real step
     )
   ).toHaveLength(2);
   expect(updatedResult.snapshot.definitionLockCount).toBe(0);
+  expect(await readStreamedTotals(update.run.runId)).toEqual([
+    { migrated: 100, failed: 0, needsUpdate: 0, skipped: 0 },
+  ]);
 
   const normal = await (await startInMemoryMigrationRun()).run.returnValue;
   expect(normal.summary.definitions[0]?.counts).toMatchObject({
@@ -263,6 +300,9 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
     Awaited<ReturnType<typeof inMemoryMigrationTestWorkflow>>
   >(rollbackOrphansStarted.execution.executionId as string);
   const rollbackOrphansResult = await rollbackOrphansRun.returnValue;
+  expect(await readStreamedTotals(rollbackOrphansRun.runId)).toEqual([
+    { migrated: 99, failed: 0, needsUpdate: 0, skipped: 0 },
+  ]);
   const rollbackOrphansSteps = await getWorld().steps.list({
     resolveData: "none",
     runId: rollbackOrphansRun.runId,
@@ -332,6 +372,9 @@ test("Workflow SDK executes a real in-memory migration run and rollback", async 
       rollbackExecutionId
     );
   const rollbackResult = await rollbackRun.returnValue;
+  expect(await readStreamedTotals(rollbackRun.runId)).toEqual([
+    { migrated: 0, failed: 0, needsUpdate: 0, skipped: 0 },
+  ]);
   const rollbackSteps = await getWorld().steps.list({
     resolveData: "none",
     runId: rollbackRun.runId,
@@ -443,7 +486,10 @@ test("Workflow SDK streams progress before a cursor window commits and reports t
         onEvent: (event) =>
           Effect.sync(() => {
             events.push(event);
-            if (event.kind === "progress") {
+            if (
+              event.kind === "progress" &&
+              event.progress.kind === "contribution"
+            ) {
               receivedProgress();
             }
           }),
@@ -457,18 +503,14 @@ test("Workflow SDK streams progress before a cursor window commits and reports t
         throw new Error("Execution finished before live progress");
       }),
     ]);
-    expect(events).toContainEqual({
-      counts: {
-        failed: 0,
-        migrated: 10,
-        needsUpdate: 0,
-        skipped: 0,
-        unchanged: 0,
-      },
-      definitionId: "articles",
-      kind: "progress",
-      runId: execution.started.runId,
-    });
+    const projection = makeMigrationItemProgress();
+    let statuses: MigrationDefinitionStatus[] = [];
+    for (const event of events) {
+      if (event.kind === "progress") {
+        statuses = [...projection.apply(event.progress)];
+      }
+    }
+    expect(statuses).toMatchObject([{ durable: { migrated: 10, failed: 0 } }]);
     expect(inMemoryMigrationTestStoreState.sourceCursorCommits).toHaveLength(0);
     expect(inMemoryMigrationTestStoreState.itemStates.size).toBe(10);
     expect(await execution.run.status).toBe("running");
@@ -482,23 +524,21 @@ test("Workflow SDK streams progress before a cursor window commits and reports t
       status: "succeeded",
     }),
   });
-  expect(events).toContainEqual({
-    counts: {
-      failed: 0,
-      migrated: 100,
-      needsUpdate: 0,
-      skipped: 0,
-      unchanged: 0,
-    },
-    definitionId: "articles",
-    kind: "progress",
-    runId: execution.started.runId,
-  });
-  expect(events).toContainEqual({
-    definitionIds: ["articles"],
-    kind: "state-changed",
-    runId: execution.started.runId,
-  });
+  const projection = makeMigrationItemProgress();
+  let statuses: MigrationDefinitionStatus[] = [];
+  for (const event of events) {
+    if (event.kind === "progress") {
+      statuses = [...projection.apply(event.progress)];
+    }
+  }
+  expect(statuses).toMatchObject([{ durable: { migrated: 100, failed: 0 } }]);
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      definitionIds: ["articles"],
+      kind: "state-changed",
+      runId: execution.started.runId,
+    })
+  );
   const progressStream = execution.run.getReadable({
     namespace: workflowSdkMigrationProgressStreamNamespace,
   });

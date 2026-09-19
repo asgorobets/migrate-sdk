@@ -118,7 +118,7 @@ describe("HTTP observation sessions", () => {
         expect(requests.some((request) => request.includes("Lease"))).toBe(
           false
         );
-        expect(reads).toBe(4);
+        expect(reads).toBe(1);
         stalled = true;
         yield* TestClock.adjust("45 seconds");
         yield* Deferred.await(stalledResponseAborted);
@@ -137,6 +137,105 @@ describe("HTTP observation sessions", () => {
         expect(reads).toBe(readsAfterDetach);
       })
   );
+
+  it("keeps client totals and resumes the next Workflow chunk on a replacement server without a summary scan", async () => {
+    const definitions = dashboard.rows.flatMap((row) =>
+      row.status === undefined ? [] : [row.status]
+    );
+    let fullReads = 0;
+    let attachments = 0;
+    const makeServer = (replacement: boolean) =>
+      makeRemoteMigrateServerHttp(
+        MigrateServer.layer({
+          backend: {
+            ...backend,
+            getDashboard: replacement
+              ? Effect.die("renewal must not read summaries")
+              : Effect.sync(() => {
+                  fullReads += 1;
+                  return dashboard;
+                }),
+            watchDashboardRun: (_run, options) =>
+              Effect.gen(function* () {
+                attachments += 1;
+                if (replacement) {
+                  expect(options.after).toBe("1");
+                } else {
+                  yield* options.onEvent?.({
+                    kind: "progress",
+                    runId,
+                    cursor: "0",
+                    replaying: true,
+                    progress: { kind: "baseline", runId, definitions },
+                  }) ?? Effect.void;
+                }
+                yield* options.onEvent?.({
+                  kind: "progress",
+                  runId,
+                  cursor: replacement ? "2" : "1",
+                  progress: {
+                    kind: "contribution",
+                    runId,
+                    partitionId: "a:1",
+                    revision: replacement ? 2 : 1,
+                    changes: [
+                      {
+                        definitionId,
+                        delta: {
+                          migrated: replacement ? 5 : 2,
+                          failed: 0,
+                          skipped: 0,
+                          needsUpdate: 0,
+                        },
+                      },
+                    ],
+                  },
+                }) ?? Effect.void;
+                return yield* Effect.never;
+              }),
+          },
+          observationSessionDuration: replacement ? "4 minutes" : "100 millis",
+          ...serverIdentity,
+        })
+      );
+    const original = makeServer(false);
+    const replacement = makeServer(true);
+    let requests = 0;
+    const connection = await connectHttpMigrateServer({
+      url: "https://migrate.example/rpc",
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        if (
+          !(await request.clone().text()).includes("ObserveDashboardSession")
+        ) {
+          return original.handler(request);
+        }
+        requests += 1;
+        return (requests === 1 ? original : replacement).handler(request);
+      },
+    });
+    try {
+      const counts = await connection.runPromise(
+        connection.client.observeDashboard({}).pipe(
+          Stream.map(
+            (snapshot) => snapshot.dashboard.rows[0]?.status?.durable.migrated
+          ),
+          Stream.changes,
+          Stream.filter((count) => count === 14 || count === 17),
+          Stream.take(2),
+          Stream.runCollect
+        )
+      );
+      expect(counts).toEqual([14, 17]);
+      expect(fullReads).toBe(1);
+      expect(requests).toBe(2);
+      expect(attachments).toBe(2);
+    } finally {
+      await connection.dispose();
+      await original.dispose();
+      await replacement.dispose();
+    }
+  });
 
   it.each([
     "broken",
@@ -517,6 +616,9 @@ describe("HTTP observation sessions", () => {
         backend: {
           ...backend,
           getDashboard: Effect.sync(() => snapshots[reads++] ?? dashboard),
+          getActiveRuns: Effect.sync(
+            () => (snapshots[reads++] ?? dashboard).activeRuns
+          ),
         },
         dashboardFallbackInterval: "10 millis",
         dashboardProjectionInterval: 0,

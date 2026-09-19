@@ -5,11 +5,15 @@ import {
   Layer,
   Option,
   Queue,
+  Random,
   Ref,
   Schema,
   Semaphore,
 } from "effect";
-import { migrationDependencyIsSatisfied } from "../domain/status.ts";
+import {
+  type MigrationDefinitionMetadata,
+  migrationDependencyIsSatisfied,
+} from "../domain/status.ts";
 import {
   type ActiveMigrationRun,
   type AnySelfContainedMigrationDefinition,
@@ -27,6 +31,7 @@ import {
   type MigrationDefinitionRegistryStatusReport,
   type MigrationDefinitionStatus,
   type MigrationExecutableObservationEvent,
+  type MigrationExecutableObservationOptions,
   type MigrationExecutableObservationResult,
   type MigrationExecutableService,
   type MigrationExecutionOptions,
@@ -271,6 +276,9 @@ export interface RegistryMigrateServerRuntime {
     lock: MigrationDefinitionLock
   ) => Effect.Effect<MigrateBreakLockResult, unknown>;
   readonly entries: readonly MigrationDefinitionRegistryEntry[];
+  readonly getDefinitionMetadata: (
+    definitionIds: readonly MigrationDefinitionId[]
+  ) => Effect.Effect<readonly MigrationDefinitionMetadata[], unknown>;
   readonly getRegistryMessages: (
     input: MigrateRegistryMessagesRequest
   ) => Effect.Effect<MigrationDefinitionRegistryMessagesReport, unknown>;
@@ -330,7 +338,7 @@ export interface RegistryMigrateServerRuntime {
   ) => Effect.Effect<MigrateServerExecutionStopResult, unknown>;
   readonly watchDashboardRun: (
     run: MigrateActiveRun,
-    invalidate: Effect.Effect<void>
+    options: MigrationExecutableObservationOptions
   ) => Effect.Effect<void, unknown>;
 }
 
@@ -536,6 +544,7 @@ export const makeRegistryMigrateServerRuntime = (
     definitionId,
     execution,
     onEvent,
+    after,
     onProviderObservationError,
     runId,
   }: {
@@ -544,6 +553,7 @@ export const makeRegistryMigrateServerRuntime = (
       readonly adapter: string;
       readonly executionId: string;
     };
+    readonly after?: string;
     readonly onEvent?: (
       checkpoint: MigrationExecutableObservationEvent
     ) => Effect.Effect<void>;
@@ -574,18 +584,28 @@ export const makeRegistryMigrateServerRuntime = (
           readRunState,
           runId,
         }).pipe(Effect.map((state) => ({ state })));
-      const providerObservation = executable.waitForExecution?.(execution, {
-        ...(onEvent === undefined
-          ? {}
-          : {
-              onEvent: (checkpoint) =>
-                checkpoint.runId === runId ? onEvent(checkpoint) : Effect.void,
-            }),
-      });
-
-      if (providerObservation === undefined) {
+      const waitForExecution = executable.waitForExecution;
+      if (waitForExecution === undefined) {
         return yield* durableObservation();
       }
+      let cursor = after;
+      let retryDelayMs = 1000;
+      let warned = false;
+      const providerObservation = Effect.suspend(() =>
+        waitForExecution(execution, {
+          ...(cursor === undefined ? {} : { after: cursor }),
+          onEvent: (checkpoint) =>
+            Effect.gen(function* () {
+              if (checkpoint.runId !== runId) {
+                return;
+              }
+              yield* onEvent?.(checkpoint) ?? Effect.void;
+              cursor = checkpoint.cursor ?? cursor;
+              retryDelayMs = 1000;
+              warned = false;
+            }),
+        })
+      );
 
       const enrichDurableTerminal = (
         state: MigrationRunState,
@@ -621,21 +641,33 @@ export const makeRegistryMigrateServerRuntime = (
             : {}),
         });
       };
-      const observedProvider = providerObservation.pipe(
-        Effect.match({
-          onFailure: (cause) => ({ cause, kind: "unavailable" as const }),
-          onSuccess: (result) => ({ kind: "observed" as const, result }),
-        })
-      );
-      // The provider owns completion observation. Read durable state after it
-      // settles, or fall back if provider observation fails.
-      const providerResult = yield* observedProvider;
-
-      if (providerResult.kind === "unavailable") {
-        yield* Effect.sync(() =>
-          onProviderObservationError?.(providerResult.cause)
-        );
-        return yield* durableObservation();
+      // During an outage, resume the reader from the last delivered chunk.
+      // Only cheap run metadata is checked between attempts; healthy streams
+      // continue to own completion observation without a parallel polling loop.
+      const providerResult = yield* Effect.gen(function* () {
+        while (true) {
+          const observed = yield* providerObservation.pipe(Effect.result);
+          if (observed._tag === "Success") {
+            return { kind: "observed" as const, result: observed.success };
+          }
+          if (!warned) {
+            yield* Effect.sync(() =>
+              onProviderObservationError?.(observed.failure)
+            );
+            warned = true;
+          }
+          const state = yield* readRunState;
+          if (state?.runId === runId && isTerminalRunState(state)) {
+            return { kind: "durable" as const, state };
+          }
+          yield* Effect.sleep(
+            retryDelayMs * (yield* Random.nextBetween(0.8, 1))
+          );
+          retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+        }
+      });
+      if (providerResult.kind === "durable") {
+        return { state: providerResult.state };
       }
 
       if (providerResult.result.kind === "succeeded") {
@@ -828,6 +860,24 @@ export const makeRegistryMigrateServerRuntime = (
         scannedSource: scanTarget !== undefined,
       };
     });
+
+  const getDefinitionMetadata = (
+    definitionIds: readonly MigrationDefinitionId[]
+  ) =>
+    Effect.forEach([...new Set(definitionIds)], (definitionId) =>
+      Effect.gen(function* () {
+        const definition = yield* getDefinition(definitionId);
+        return yield* Effect.gen(function* () {
+          const store = yield* MigrationStore;
+          return {
+            definitionId,
+            completion: yield* store.getDefinitionCompletion(definitionId),
+            lastRun: yield* store.getLatestRunState(definitionId),
+            lock: yield* store.getDefinitionLock(definitionId),
+          };
+        }).pipe(Effect.provide(definition.store));
+      })
+    );
 
   const readRows = readSnapshot().pipe(Effect.map((snapshot) => snapshot.rows));
 
@@ -1372,18 +1422,15 @@ export const makeRegistryMigrateServerRuntime = (
                 }
           )
         );
-        yield* progress.startFallback;
-
         const terminal = yield* observeDetachedRunEffect({
+          ...(options?.after === undefined ? {} : { after: options.after }),
           definitionId: activeRun.observationDefinitionId,
           execution,
-          onEvent: (checkpoint) =>
-            checkpoint.kind === "progress"
-              ? progress.publishDefinition(checkpoint.definitionId)
-              : progress.requestRefresh(checkpoint.definitionIds),
+          onEvent: (update) =>
+            Effect.sync(() => options?.onExecutionProgress?.(update)),
           onProviderObservationError: () =>
             options?.onObservationWarning?.(
-              "Execution provider updates are unavailable; following durable migration state"
+              "Execution provider updates are unavailable; retrying the stream"
             ),
           runId,
         });
@@ -1396,19 +1443,23 @@ export const makeRegistryMigrateServerRuntime = (
 
   const watchDashboardRun = (
     run: MigrateActiveRun,
-    invalidate: Effect.Effect<void>
+    options: MigrationExecutableObservationOptions
   ): Effect.Effect<void, unknown> => {
-    const execution = run.execution;
-    const waitForExecution = executable.waitForExecution;
-
-    if (execution === undefined || waitForExecution === undefined) {
+    if (
+      run.execution === undefined ||
+      executable.waitForExecution === undefined
+    ) {
       return Effect.never;
     }
-
-    return waitForExecution(execution, {
-      onEvent: (checkpoint) =>
-        checkpoint.runId === run.runId ? invalidate : Effect.void,
-    }).pipe(Effect.asVoid, Effect.ensuring(invalidate));
+    return executable
+      .waitForExecution(run.execution, {
+        ...options,
+        onEvent: (event) =>
+          event.runId === run.runId
+            ? (options.onEvent?.(event) ?? Effect.void)
+            : Effect.void,
+      })
+      .pipe(Effect.asVoid);
   };
 
   const startExecution = (
@@ -1542,18 +1593,14 @@ export const makeRegistryMigrateServerRuntime = (
           if (yield* Deferred.isDone(stopRequested)) {
             yield* stopRun(started.runId);
           }
-          yield* progress.startFallback;
-
           const terminal = yield* observeDetachedRunEffect({
             definitionId: operation.observationDefinitionId,
             execution: started.execution,
-            onEvent: (checkpoint) =>
-              checkpoint.kind === "progress"
-                ? progress.publishDefinition(checkpoint.definitionId)
-                : progress.requestRefresh(checkpoint.definitionIds),
+            onEvent: (update) =>
+              Effect.sync(() => options?.onExecutionProgress?.(update)),
             onProviderObservationError: () =>
               options?.onObservationWarning?.(
-                "Execution provider updates are unavailable; following durable migration state"
+                "Execution provider updates are unavailable; retrying the stream"
               ),
             runId: started.runId,
           });
@@ -1635,6 +1682,7 @@ export const makeRegistryMigrateServerRuntime = (
     groups,
     hasActiveExecutions: () => activeExecutions.size > 0,
     getRunProgress,
+    getDefinitionMetadata,
     getSourceItemTotals,
     listActiveRuns: listActiveRunsEffect,
     listMessages,
