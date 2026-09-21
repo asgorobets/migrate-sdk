@@ -2217,19 +2217,24 @@ describe("MigrationDefinitionRegistry", () => {
           message: "Update run planning cannot combine with skipped mode",
         })
       );
+    })
+  );
 
-      const targetError = yield* Effect.flip(
-        registry.planRun({
-          definitionIds: ["articles"],
-          sourceIdentities: ["article-1"],
-          update: true,
-        })
-      );
-      expect(targetError).toEqual(
-        new MigrationDefinitionRegistryInvalidSelectionError({
-          message: "Update run planning cannot target source identities",
-        })
-      );
+  it.effect("plans source identities as the scope of an update run", () =>
+    Effect.gen(function* () {
+      const registry = MigrationDefinitionRegistry.make({
+        definitions: [makeDefinition({ id: "articles" })] as const,
+      });
+      const plan = yield* registry.executable().planRun({
+        definitionIds: ["articles"],
+        sourceIdentities: ["article-1", "article-2"],
+        update: true,
+      });
+      expect(plan.update).toBe(true);
+      expect(plan.target).toMatchObject({
+        definitionId: "articles",
+        sourceIdentities: ["article-1", "article-2"],
+      });
     })
   );
 

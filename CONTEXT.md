@@ -62,7 +62,7 @@ A Migration Run intent that performs an authoritative source scan and then passe
 A migration run intent that restarts source discovery at the beginning while preserving item eligibility from existing migration item state and source versions.
 
 **Update Run**:
-A migration run intent that restarts source discovery and makes previously migrated source items eligible for processing even when their source versions have not changed.
+A migration run intent that makes previously migrated source items within the selected scope eligible for processing even when their source versions have not changed. Without explicit source identities, it also restarts source discovery.
 
 **Source Lookup Strategy**:
 The source's declared cost model for reading a source item by identity.
@@ -400,8 +400,10 @@ An operator-facing durable read model for a Migration Item Error, state reason, 
 - A **Source Inventory Scan** may return **Migration Diagnostics** for invalid source payloads or duplicate **Source Identities**.
 - A **Source Rescan** resets the persisted **Source Cursor** before normal source discovery.
 - A **Source Rescan** leaves matching **Source Versions** unchanged and does not force unchanged items back through processing.
-- An **Update Run** resets the persisted **Source Cursor** and forces discovered migrated source items back through the selected processing pipeline.
-- A **Source Rescan** and an **Update Run** are mutually exclusive because an **Update Run** already restarts source discovery.
+- Explicit **Source Identities** control run scope; they preserve normal item eligibility unless **Update Run** intent is also supplied.
+- An **Update Run** with explicit **Source Identities** schedules only the selected migrated item states as needs-update and processes only those identities. It preserves tracking and journal evidence, unselected item states, the persisted **Source Cursor**, and existing **Migration Definition Completion**. Included dependencies run normally.
+- An **Update Run** without explicit **Source Identities** resets the persisted **Source Cursor** and forces discovered migrated source items back through the selected processing pipeline.
+- A **Source Rescan** and an **Update Run** are mutually exclusive; an untargeted **Update Run** already restarts source discovery, while a targeted run preserves its cursor.
 - A **Migration Item State** records source identity, migration status, and may record observed source version, destination tracking changes, or failure metadata.
 - A **Migration Item State** is modeled as discriminated variants by status.
 - A **Migration Item State** does not store source item payloads by default.

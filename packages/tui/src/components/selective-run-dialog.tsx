@@ -11,6 +11,7 @@ import { type ElementRef, useEffect, useRef } from "react";
 import { migrationColors as colors } from "./migration-dashboard.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
+import { Checkbox } from "./ui/checkbox.tsx";
 import {
   Dialog,
   DialogContent,
@@ -73,25 +74,49 @@ export interface SelectiveRunDialogProps {
   readonly onLimitChange: (value: number | null) => void;
   readonly onModeChange: (mode: SelectiveRunMode) => void;
   readonly onSubmit: (value: string) => void;
+  readonly onUpdateChange: (checked: boolean) => void;
   readonly target: MigrateTarget;
+  readonly update: boolean;
   readonly width: number;
 }
 
-const selectiveDialogLayout = ({
+const selectiveDialogPresentation = ({
   width,
   height,
-  nextItems,
-  showModes,
+  action,
+  target,
+  mode,
+  limit,
+  update,
   entries,
   history,
   historyIndex,
 }: Pick<
   SelectiveRunDialogProps,
-  "width" | "height" | "entries" | "history" | "historyIndex"
-> & { readonly nextItems: boolean; readonly showModes: boolean }) => {
+  | "width"
+  | "height"
+  | "entries"
+  | "history"
+  | "historyIndex"
+  | "action"
+  | "target"
+  | "mode"
+  | "limit"
+  | "update"
+>) => {
+  const nextItems = action === "run" && mode === "next-items";
+  const showModes = action === "run" && target.kind === "migration";
+  const showUpdate = action === "run" && mode === "source-ids";
+  const validLimit = limit !== null && Number.isSafeInteger(limit) && limit > 0;
+  const actionLabel = action === "rollback" ? "Rollback" : "Run";
+  const confirmLabel = showUpdate && update ? "Update" : actionLabel;
   const compact = width < 80 || height < 28;
   const dialogWidth = Math.max(1, Math.min(76, width - (compact ? 8 : 4)));
-  const baseRows = 17 + (showModes ? 3 : 0) - (compact ? 3 : 0);
+  const baseRows =
+    17 +
+    (showModes ? 3 : 0) -
+    (compact ? 3 : 0) +
+    (showUpdate && !compact ? 1 : 0);
   const availableRows = Math.max(2, height - 4 - baseRows);
   const visibleEntryLimit = Math.min(
     compact ? 2 : 4,
@@ -127,6 +152,12 @@ const selectiveDialogLayout = ({
     )
   );
   return {
+    actionLabel,
+    confirmLabel,
+    nextItems,
+    showModes,
+    showUpdate,
+    validLimit,
     compact,
     dialogWidth,
     dialogHeight,
@@ -157,15 +188,20 @@ export const SelectiveRunDialog = ({
   onKeyDown,
   onConfirm,
   onSubmit,
+  onUpdateChange,
+  update,
   width,
 }: SelectiveRunDialogProps) => {
   const inputRef = useRef<ElementRef<typeof Input>>(null);
   const limitRef = useRef<NumberFieldInputRef>(null);
   const focusedInitialInput = useRef(false);
-  const nextItems = action === "run" && mode === "next-items";
-  const showModes = action === "run" && target.kind === "migration";
-  const validLimit = limit !== null && Number.isSafeInteger(limit) && limit > 0;
   const {
+    actionLabel,
+    confirmLabel,
+    nextItems,
+    showModes,
+    showUpdate,
+    validLimit,
     compact,
     dialogWidth,
     dialogHeight,
@@ -173,16 +209,18 @@ export const SelectiveRunDialog = ({
     visibleHistory,
     selectedOverflow,
     historyStart,
-  } = selectiveDialogLayout({
+  } = selectiveDialogPresentation({
     width,
     height,
-    nextItems,
-    showModes,
+    action,
+    target,
+    mode,
+    limit,
+    update,
     entries,
     history,
     historyIndex,
   });
-  const actionLabel = action === "rollback" ? "Rollback" : "Run";
 
   useEffect(() => {
     if (inputReady && !focusedInitialInput.current) {
@@ -395,13 +433,22 @@ export const SelectiveRunDialog = ({
             })}
           </>
         )}
+        {showUpdate && (
+          <Checkbox
+            checked={update}
+            flexShrink={0}
+            height={1}
+            label="Update: reprocess unchanged items"
+            onCheckedChange={onUpdateChange}
+          />
+        )}
         <box
           style={{
             flexDirection: "row-reverse",
             flexShrink: 0,
             gap: 1,
             height: 1,
-            marginTop: 1,
+            marginTop: showUpdate && compact ? 0 : 1,
           }}
         >
           <Button
@@ -410,7 +457,7 @@ export const SelectiveRunDialog = ({
             label={
               nextItems
                 ? `↵ Run ${countLabel(limit ?? 0, "item")}`
-                : `↵ ${actionLabel} ${countLabel(entries.length, "entry", "entries")}`
+                : `↵ ${confirmLabel} ${countLabel(entries.length, "entry", "entries")}`
             }
             onPress={onConfirm}
           />

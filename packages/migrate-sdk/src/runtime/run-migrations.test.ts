@@ -14,6 +14,7 @@ import {
   InMemoryDestination,
   type InMemoryEntryUpsertedChange,
 } from "migrate-sdk/destinations/in-memory";
+import { InMemoryDestinationTesting } from "migrate-sdk/destinations/in-memory/testing";
 import {
   InMemorySource,
   InMemorySourceCursor,
@@ -4353,113 +4354,124 @@ describe("runInlineDefinition", () => {
       })
   );
 
-  it.effect(
-    "reprocesses migrated items when source version contract changes",
-    () =>
-      Effect.gen(function* () {
-        const storeState = InMemoryMigrationStore.makeState();
-        const changedSourceState = InMemorySource.makeState();
-        const store = InMemoryMigrationStore.layer(storeState);
-        const process = () => Effect.void;
-        const originalVersionContract = makeSourceVersionContractFingerprint({
-          kind: "field",
-          field: "updatedAt",
-        });
-        const original = MigrationDefinition.make({
-          id: "articles",
-          source: makeTestInMemorySource({
-            sourceVersionContractFingerprint: originalVersionContract,
-            items: [
-              {
-                identityKey: "article-1",
-                version: "source-version-1",
-                item: {
-                  title: "Original version contract",
+  for (const targeted of [false, true]) {
+    it.effect(
+      `reprocesses migrated items when source version contract changes (${targeted ? "targeted" : "normal"})`,
+      () =>
+        Effect.gen(function* () {
+          const storeState = InMemoryMigrationStore.makeState();
+          const changedSourceState = InMemorySource.makeState();
+          const store = InMemoryMigrationStore.layer(storeState);
+          const process = () => Effect.void;
+          const originalVersionContract = makeSourceVersionContractFingerprint({
+            kind: "field",
+            field: "updatedAt",
+          });
+          const original = MigrationDefinition.make({
+            id: "articles",
+            source: makeTestInMemorySource({
+              sourceVersionContractFingerprint: originalVersionContract,
+              items: [
+                {
+                  identityKey: "article-1",
+                  version: "source-version-1",
+                  item: {
+                    title: "Original version contract",
+                  },
                 },
-              },
-            ],
-          }),
-          store,
-          process,
-        });
+              ],
+            }),
+            store,
+            process,
+          });
 
-        yield* runInlineDefinition(original);
-        expect(
-          storeState.migrationContracts.get(toMigrationDefinitionId("articles"))
-        ).toEqual(
-          expect.objectContaining({
-            definitionId: toMigrationDefinitionId("articles"),
-            sourceIdentityContractFingerprint:
-              ArticleSourceIdentity.fingerprint,
-          })
-        );
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey("articles", "article-1")
-          )
-        ).toEqual(
-          expect.objectContaining({
-            sourceVersionContractFingerprint: originalVersionContract,
-          })
-        );
+          yield* runInlineDefinition(original);
+          expect(
+            storeState.migrationContracts.get(
+              toMigrationDefinitionId("articles")
+            )
+          ).toEqual(
+            expect.objectContaining({
+              definitionId: toMigrationDefinitionId("articles"),
+              sourceIdentityContractFingerprint:
+                ArticleSourceIdentity.fingerprint,
+            })
+          );
+          expect(
+            storeState.itemStates.get(
+              InMemoryMigrationStore.itemStateKey("articles", "article-1")
+            )
+          ).toEqual(
+            expect.objectContaining({
+              sourceVersionContractFingerprint: originalVersionContract,
+            })
+          );
 
-        const changedVersionContract = makeSourceVersionContractFingerprint({
-          kind: "field",
-          field: "changedAt",
-        });
-        const changed = MigrationDefinition.make({
-          id: "articles",
-          source: makeTestInMemorySource({
-            sourceVersionContractFingerprint: changedVersionContract,
-            state: changedSourceState,
-            items: [
-              {
-                identityKey: "article-1",
-                version: "source-version-1",
-                item: {
-                  title: "Changed version contract",
+          const changedVersionContract = makeSourceVersionContractFingerprint({
+            kind: "field",
+            field: "changedAt",
+          });
+          const changed = MigrationDefinition.make({
+            id: "articles",
+            source: makeTestInMemorySource({
+              sourceVersionContractFingerprint: changedVersionContract,
+              state: changedSourceState,
+              items: [
+                {
+                  identityKey: "article-1",
+                  version: "source-version-1",
+                  item: {
+                    title: "Changed version contract",
+                  },
                 },
-              },
-            ],
-          }),
-          store,
-          process,
-        });
+              ],
+            }),
+            store,
+            process,
+          });
 
-        const summary = yield* runInlineDefinition(changed);
+          const summary = yield* runInlineRegistry({
+            definitions: [changed],
+            ...(targeted ? { sourceIdentities: ["article-1"] } : {}),
+          });
 
-        expect(summary.status).toBe("succeeded");
-        expect(summary.definitions[0]?.counts).toEqual({
-          migrated: 1,
-          skipped: 0,
-          failed: 0,
-          unchanged: 0,
-          needsUpdate: 0,
-        });
-        expect(changedSourceState.readAttempts).toBe(1);
-        expect(changedSourceState.readByIdentityAttempts).toBe(0);
-        expect(
-          storeState.migrationContracts.get(toMigrationDefinitionId("articles"))
-        ).toEqual(
-          expect.objectContaining({
-            definitionId: toMigrationDefinitionId("articles"),
-            sourceIdentityContractFingerprint:
-              ArticleSourceIdentity.fingerprint,
-          })
-        );
-        expect(
-          storeState.itemStates.get(
-            InMemoryMigrationStore.itemStateKey("articles", "article-1")
-          )
-        ).toEqual(
-          expect.objectContaining({
-            sourceVersion: toSourceVersion("source-version-1"),
-            sourceVersionContractFingerprint: changedVersionContract,
-            status: "migrated",
-          })
-        );
-      })
-  );
+          expect(summary.status).toBe("succeeded");
+          expect(summary.definitions[0]?.counts).toEqual({
+            migrated: 1,
+            skipped: 0,
+            failed: 0,
+            unchanged: 0,
+            needsUpdate: 0,
+          });
+          expect(changedSourceState.readAttempts).toBe(targeted ? 0 : 1);
+          expect(changedSourceState.readByIdentityAttempts).toBe(
+            targeted ? 1 : 0
+          );
+          expect(
+            storeState.migrationContracts.get(
+              toMigrationDefinitionId("articles")
+            )
+          ).toEqual(
+            expect.objectContaining({
+              definitionId: toMigrationDefinitionId("articles"),
+              sourceIdentityContractFingerprint:
+                ArticleSourceIdentity.fingerprint,
+            })
+          );
+          expect(
+            storeState.itemStates.get(
+              InMemoryMigrationStore.itemStateKey("articles", "article-1")
+            )
+          ).toEqual(
+            expect.objectContaining({
+              sourceVersion: toSourceVersion("source-version-1"),
+              sourceVersionContractFingerprint: changedVersionContract,
+              status: "migrated",
+            })
+          );
+        })
+    );
+  }
 
   it.effect(
     "persists skipped Source Items without executing a destination effect",
@@ -5987,64 +5999,93 @@ describe("runInlineDefinition", () => {
     })
   );
 
-  it.effect("processes exactly one Source Identity in item mode", () =>
-    Effect.gen(function* () {
-      const storeState = InMemoryMigrationStore.makeState();
-      const processCalls: string[] = [];
+  for (const batch of [false, true]) {
+    it.effect(
+      `leaves repeatedly targeted migrated items unchanged (${batch ? "batch" : "item"})`,
+      () =>
+        Effect.gen(function* () {
+          const storeState = InMemoryMigrationStore.makeState();
+          const sourceState = InMemorySource.makeState();
+          const processCalls: string[] = [];
+          const destination = InMemoryDestinationTesting.fixtureEntries({
+            contentType: "article",
+            fields: ArticleEntryFields,
+          });
+          const source = makeTestInMemorySource({
+            state: sourceState,
+            items: ["article-target", "article-unselected"].map(
+              (identityKey) => ({
+                identityKey,
+                version: "source-version-1",
+                item: { title: identityKey },
+              })
+            ),
+          });
+          const process = (id: string) =>
+            Effect.gen(function* () {
+              processCalls.push(id);
+              yield* destination.destination.entries.upsert({ title: id });
+            });
+          const base = {
+            id: "articles",
+            source,
+            store: InMemoryMigrationStore.layer(storeState),
+          };
+          const batchCalls: string[][] = [];
+          const processBatch: ProcessBatchPipelineFor<
+            typeof source,
+            Effect.Error<ReturnType<typeof process>>
+          > = (items) => {
+            batchCalls.push(items.map((item) => item.source.identity.encoded));
+            return items.map((item) =>
+              item.settle(process(item.source.identity.encoded))
+            );
+          };
+          const definition = batch
+            ? MigrationDefinition.make({ ...base, processBatch })
+            : MigrationDefinition.make({
+                ...base,
+                process: (item) => process(item.identity.encoded),
+              });
+          const request = {
+            definitions: [definition],
+            sourceIdentities: ["article-target"],
+          };
+          const cursor = encodedInMemoryCursor(1);
+          storeState.sourceCursors.set(definition.id, cursor);
 
-      const definition = MigrationDefinition.make({
-        id: "articles",
-        source: makeTestInMemorySource({
-          items: [
-            {
-              identityKey: "article-target",
-              version: "source-version-1",
-              item: { title: "Target article" },
-            },
-            {
-              identityKey: "article-new",
-              version: "source-version-1",
-              item: { title: "New article" },
-            },
-          ],
-        }),
-        store: InMemoryMigrationStore.layer(storeState),
-        process: (source) =>
-          Effect.sync(() => {
-            processCalls.push(source.identity.encoded);
-          }),
-      });
+          const first = yield* runInlineRegistry(request);
+          expect(first.definitions[0]?.counts.migrated).toBe(1);
+          const saved = [...storeState.itemStates.values()];
+          const savedEntries = [...destination.entries()];
+          expect(saved[0]?.sourceVersionContractFingerprint).toBe(
+            definition.source.sourceVersionContractFingerprint
+          );
 
-      seedArticleMigrationContract(storeState);
-      storeState.itemStates.set(
-        InMemoryMigrationStore.itemStateKey("articles", "article-target"),
-        {
-          definitionId: toMigrationDefinitionId("articles"),
-          sourceIdentity: articleSourceIdentity("article-target"),
-          sourceVersion: toSourceVersion("source-version-1"),
-          lastRunId: toMigrationRunId("run-previous"),
-          updatedAt: new Date("2026-01-01T00:00:00.000Z"),
-          status: "migrated",
-        }
-      );
-
-      const summary = yield* runInlineRegistry({
-        definitions: [definition],
-        mode: { kind: "item", sourceIdentityKey: "article-target" },
-      });
-
-      expect(summary.status).toBe("succeeded");
-      expect(summary.definitions[0]?.counts).toEqual({
-        migrated: 1,
-        skipped: 0,
-        failed: 0,
-        unchanged: 0,
-        needsUpdate: 0,
-      });
-      expect(processCalls).toEqual(["article-target"]);
-      expect(storeState.sourceCursorCommits).toEqual([]);
-    })
-  );
+          for (let repeat = 0; repeat < 2; repeat += 1) {
+            const summary = yield* runInlineRegistry(request);
+            expect(summary.status).toBe("succeeded");
+            expect(summary.definitions[0]?.counts).toEqual({
+              migrated: 0,
+              skipped: 0,
+              failed: 0,
+              unchanged: 1,
+              needsUpdate: 0,
+            });
+          }
+          expect(processCalls).toEqual(["article-target"]);
+          expect(destination.executeAttempts()).toBe(1);
+          expect([...destination.entries()]).toEqual(savedEntries);
+          expect(batchCalls).toEqual(batch ? [["article-target"]] : []);
+          expect([...storeState.itemStates.values()]).toEqual(saved);
+          expect(sourceState.readAttempts).toBe(0);
+          expect(sourceState.readByIdentityAttempts).toBe(3);
+          expect(storeState.sourceCursors.get(definition.id)).toBe(cursor);
+          expect(storeState.sourceCursorCommits).toEqual([]);
+          expect(storeState.definitionCompletions.size).toBe(0);
+        })
+    );
+  }
 
   it.effect(
     "rescans from the beginning while leaving matching versions unchanged",
@@ -7580,19 +7621,6 @@ describe("runInlineDefinition", () => {
         })
       );
 
-      const targetError = yield* Effect.flip(
-        runInlineRegistry({
-          definitions: [definition],
-          mode: { kind: "item", sourceIdentityKey: "article-target" },
-          update: true,
-        })
-      );
-      expect(targetError).toEqual(
-        expect.objectContaining({
-          _tag: "MigrationDefinitionRegistryInvalidSelectionError",
-          message: "Update run planning cannot target source identities",
-        })
-      );
       expect(processCalls).toEqual([]);
     })
   );

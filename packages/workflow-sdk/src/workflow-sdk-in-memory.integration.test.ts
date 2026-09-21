@@ -87,20 +87,43 @@ const startInMemoryMigrationRun = async (
   };
 };
 
-test("Workflow SDK targets identities and updates unchanged entries in real steps", async () => {
+test("Workflow SDK leaves targeted entries unchanged but reprocesses them on update in real steps", async () => {
   resetInMemoryMigrationTestState();
   await (await startInMemoryMigrationRun()).run.returnValue;
+  const savedItems = [...inMemoryMigrationTestStoreState.itemStates.values()];
 
   const targeted = await startInMemoryMigrationRun(false, undefined, {
     sourceIdentities: ["article-001", "article-003"],
   });
   const targetedResult = await targeted.run.returnValue;
   expect(targetedResult.summary.definitions[0]?.counts).toMatchObject({
+    migrated: 0,
+    unchanged: 2,
+  });
+  expect([...inMemoryMigrationTestStoreState.itemStates.values()]).toEqual(
+    savedItems
+  );
+  expect(targetedResult.snapshot.itemStateCount).toBe(100);
+  expect(targetedResult.snapshot.definitionLockCount).toBe(0);
+
+  const targetedUpdate = await startInMemoryMigrationRun(false, undefined, {
+    sourceIdentities: ["article-001", "article-003"],
+    update: true,
+  });
+  const targetedUpdateResult = await targetedUpdate.run.returnValue;
+  expect(targetedUpdateResult.summary.definitions[0]?.counts).toMatchObject({
     migrated: 2,
     unchanged: 0,
   });
-  expect(targetedResult.snapshot.itemStateCount).toBe(100);
-  expect(targetedResult.snapshot.definitionLockCount).toBe(0);
+  expect([...inMemoryMigrationTestStoreState.itemStates.values()]).toEqual(
+    expect.arrayContaining(
+      savedItems.filter(
+        (item) =>
+          !["article-001", "article-003"].includes(item.sourceIdentity.encoded)
+      )
+    )
+  );
+  expect(targetedUpdateResult.snapshot.definitionLockCount).toBe(0);
 
   const update = await startInMemoryMigrationRun(false, undefined, {
     update: true,
