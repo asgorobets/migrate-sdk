@@ -1,5 +1,11 @@
 # @migrate-sdk/workflow-sdk
 
+## 0.14.0
+
+### Minor Changes
+
+- 230552c: Separate source ID scope from update behavior. Selecting IDs now leaves already migrated items unchanged when their source version and version contract still match. Combine `--id` with `--update` to reprocess only the selected items, preserving other item states and saved scan progress in inline and Workflow runs. The TUI Source IDs dialog now offers the same Update option.
+
 ## 0.13.3
 
 ### Patch Changes
