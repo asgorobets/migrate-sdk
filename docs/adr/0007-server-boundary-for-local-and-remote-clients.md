@@ -79,17 +79,6 @@ the Effect RPC encoding incompatibly requires a new protocol version. An
 additive wire change may remain in the current protocol only when cross-version
 contract tests demonstrate compatibility in both client/server directions.
 
-Protocol v1 is finalized before external adoption by including the complete CLI
-inspection surface described below. Earlier `0.8.0` development deployments
-that advertised the incomplete v1 draft must be redeployed with the corrected
-server before using the new remote CLI inspection commands. This is a one-time
-baseline correction, not precedent for adding required operations to an adopted
-protocol version. Existing TUI operations and payloads remain unchanged.
-
-Protocol v2 adds required `GetStoreSchema` and `UpgradeStoreSchema` operations.
-Clients and servers must be updated together for this contract. This protocol
-version is independent of the SQL store schema version, which is v3.
-
 The currently implemented local connection uses a Node Migrate Server process
 started by the TUI. The Bun renderer communicates with that process over a
 reconnectable local Effect RPC socket, while the Node process loads the same
@@ -136,50 +125,30 @@ execution boundary, but the receiving environment plans authoritatively.
 
 Durable Migration Run State and Migration Item State remain authoritative for
 status and item progress. Provider or attached-host events supplement that
-state with timely checkpoint updates. Observation is reconnectable. Ending an
+state with timely execution updates. Observation is reconnectable. Ending an
 observation stops only that observer; stopping a run requires an explicit
 `StopRun` operation.
 
-HTTPS observation uses bounded, resumable leases rather than making one HTTP
-response own the lifetime of a Migration Run. `ObserveRunLease` accepts an
-opaque resume token and returns token-bearing observation events. A lease starts
-with the current absolute durable progress snapshot, suppresses an already-seen
-snapshot, and then waits for a later checkpoint or terminal state until its
-configured duration ends. The client concatenates leases into one logical
-observation stream. Replayed snapshots are safe because progress events carry
-absolute counts rather than deltas. The opaque resume token retains the run's
-durable observation definition so later leases can address its Migration Store
-directly.
-Transient lifecycle states and warnings are delivered with the next progress or
-completion checkpoint and do not independently advance the resume position.
+Observation uses resumable streams so clients receive updates without repeated
+status requests. HTTP observation sessions have bounded lifetimes to fit
+serverless hosts. Clients retain enough display state and a stream position to
+resume through a replacement server. Losing a connection does not stop a
+Migration Run.
 
-Whole-dashboard observation follows the same transport split. Connection-based
-clients consume `ObserveDashboard` as a stream of complete
-`MigrateDashboardSnapshot` envelopes containing both the dashboard and its
-opaque content fingerprint. `GetDashboard` returns the same envelope. HTTPS
-clients concatenate unary `ObserveDashboardLease` requests, passing the
-fingerprint into the next lease. A lease returns the first changed complete
-snapshot or a heartbeat when its bounded execution window expires. A fresh
-serverless invocation reconstructs the dashboard from the registry and
-Migration Stores before waiting, so neither client identity nor server process
-memory is required for resumption.
+Progress snapshots improve display responsiveness without reading all stored
+item states for each update. Each worker publishes its cumulative changes;
+clients replace earlier snapshots from that worker rather than counting replayed
+updates twice. This also allows independent workers to report progress if cursor
+windows run in parallel later.
 
-Execution events are private invalidation signals, not competing dashboard
-payloads. Inline item progress, lifecycle changes, provider checkpoints,
-successful controls, and a subscriber-scoped fallback mark the server's
-dashboard projection dirty. The server coalesces those signals, performs only
-one durable projection read at a time, and multicasts the resulting absolute
-snapshots. Each subscriber suppresses identical fingerprints after discarding
-any shared projection that predates its subscription. The fallback remains
-active while a dashboard subscriber exists even when the previous snapshot has
-no active runs; otherwise a run started by cron or another host could not be
-discovered without a process-local signal.
+Migration Stores remain authoritative. Stream publication can lag a committed
+item write, so initial loading, explicit refresh, and completion reconcile with
+stored status. Display state never authorizes migration operations. This accepts
+a temporary display delay in exchange for avoiding a separate durable event log
+or additional per-item persistence.
 
-Focused `ObserveRun` remains separate. It supplies run-specific warnings,
-messages, lifecycle, and terminal detail, but it does not update aggregate
-dashboard rows. Client navigation and source-inventory results are also not
-server observation state: the TUI retains selection locally and overlays
-`ScanSource` results over subsequently streamed durable rows.
+Transport settings and the Workflow publishing contract are documented in the
+[Workflow SDK guide](../../packages/workflow-sdk/README.md).
 
 `GetSourceItemTotals` is a lightweight absolute source read for an explicit
 non-empty set of Migration Definition ids. It calls each selected Source's optional `countTotal`
@@ -195,9 +164,9 @@ definition, and invalidates that cache on an explicit status reload. An exact
 Source Inventory Scan result takes precedence and suppresses the redundant count
 request while it remains available.
 
-Attaching to provider events within a lease is an optional latency optimization.
-A serverless function, deployment, or network connection may end between any
-two leases; the next invocation reconstructs observation from the durable
+Provider events remain attached for the observation session. A serverless
+function, deployment, or network connection may end at any time; the next
+invocation reconstructs observation from the durable
 Migration Store and the Execution Adapter identity stored on the Migration Run.
 Process memory is never required for provider-owned run discovery or
 observation.
@@ -242,7 +211,7 @@ internal implementation detail rather than the public compatibility promise.
 The application-level Migrate Protocol and version negotiation are owned by
 Migrate SDK and must remain independently versioned. Connection implementations
 hide their observation transport: local IPC uses an RPC stream, while HTTPS
-concatenates bounded observation leases into the same client-facing stream.
+renews bounded streaming sessions behind the same client-facing interface.
 Their internal Effect RPC groups expose only the observation operation valid for
 that transport, so an HTTPS caller cannot open the local unbounded stream.
 
@@ -395,12 +364,12 @@ use the same conditional force behavior while preserving the selected identities
 - Streaming observation is an optimization over durable state, not a second
   source of truth, and reconnecting clients must be able to refresh from stored
   status.
-- Remote clients can compose bounded HTTP observation leases into a continuous
-  interface without keeping a serverless invocation alive for the run duration.
-- Active dashboard subscriptions receive complete durable snapshots for every
-  migration; changing TUI selection affects only optional focused observation.
-- Inline and provider progress can wake one shared dashboard projection without
-  exposing provider event formats or making clients poll every second.
+- Remote clients receive updates within one HTTP response per observation
+  session and resume across serverless invocation boundaries.
+- Clients retain display progress across reconnections without requiring the
+  same server process to remain alive.
+- Provider progress updates display counts without item-summary scans or
+  client polling. Initial, explicit, and terminal reads remain authoritative.
 - The boundary extracts serializable server requests and handlers from the
   in-process server runtime without rewriting the migration engine or changing
   the existing Execution Adapter interface.

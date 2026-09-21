@@ -66,11 +66,13 @@ export { MigrationExecutable } from "./services/migration-executable.ts";
 export type {
   MigrationExecutableObservationOptions,
   MigrationExecutableObservationResult,
-  MigrationExecutableProgressCheckpoint,
+  MigrationExecutableObservationEvent,
   MigrationExecutableRollbackError,
   MigrationExecutableRunError,
   MigrationExecutableService,
 } from "./services/migration-executable.ts";
+export type { RollbackProgressEvent } from "./domain/rollback-progress.ts";
+export { RollbackProgress } from "./services/rollback-progress.ts";
 export { MigrationProgress } from "./services/migration-progress.ts";
 export { MigrationExecution } from "./services/migration-execution.ts";
 export type {
@@ -122,3 +124,11 @@ export type {
 
 /** Shared persisted item-state codec for first-party Migration Store adapters. */
 export { PersistedMigrationItemState } from "./stores/internal/persisted-state.ts";
+
+export {
+  MigrationExecutionUpdate,
+  MigrationItemProgress as MigrationItemProgressUpdate,
+  makeMigrationItemProgress,
+} from "./domain/item-progress.ts";
+export type { MigrationItemStateDelta } from "./domain/item-progress.ts";
+export { MigrationItemProgress } from "./services/migration-item-progress.ts";

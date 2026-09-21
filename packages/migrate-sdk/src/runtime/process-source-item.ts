@@ -42,6 +42,7 @@ import type {
   TrackingRecordValue,
 } from "../domain/tracking.ts";
 import { TrackingRecord as TrackingRecordSchema } from "../domain/tracking.ts";
+import { persistObservedItemState } from "../services/migration-item-progress.ts";
 import type { MigrationReferenceLookup } from "../services/migration-reference-lookup.ts";
 import { MigrationStore } from "../services/migration-store.ts";
 import {
@@ -374,7 +375,9 @@ const resolveProcessTrackingRecord = <Payload>({
       Effect.catch((error) =>
         Effect.gen(function* () {
           const updatedAt = yield* DateTime.nowAsDate;
-          yield* store.upsertItemState(
+          yield* persistObservedItemState(
+            store,
+            previousState,
             makeFailedItemState(
               sourceVersionContractContext,
               runId,
@@ -415,7 +418,9 @@ const persistProcessOutcome = <Payload>({
     const updatedAt = yield* DateTime.nowAsDate;
 
     if (outcome.kind === "skipped") {
-      yield* store.upsertItemState(
+      yield* persistObservedItemState(
+        store,
+        previousState,
         makeSkippedItemState(
           sourceVersionContractContext,
           runId,
@@ -430,7 +435,9 @@ const persistProcessOutcome = <Payload>({
       return "skipped" as const;
     }
 
-    yield* store.upsertItemState(
+    yield* persistObservedItemState(
+      store,
+      previousState,
       makeFailedItemState(
         sourceVersionContractContext,
         runId,
@@ -503,7 +510,9 @@ const decodeSourceItemOrPersistFailure = <
     Effect.catch((error) =>
       Effect.gen(function* () {
         const updatedAt = yield* DateTime.nowAsDate;
-        yield* store.upsertItemState(
+        yield* persistObservedItemState(
+          store,
+          previousState,
           makeFailedItemState(
             sourceVersionContractContext,
             runId,
@@ -653,7 +662,9 @@ const settleAdmittedSourceItem = <
       processJournalExtensions,
       runId
     );
-    yield* store.upsertItemState(
+    yield* persistObservedItemState(
+      store,
+      previousState,
       makeMigratedItemState(
         sourceVersionContractContext,
         runId,
@@ -750,7 +761,9 @@ const admitSourceItem = <
             Effect.catch((error) =>
               Effect.gen(function* () {
                 const updatedAt = yield* DateTime.nowAsDate;
-                yield* store.upsertItemState(
+                yield* persistObservedItemState(
+                  store,
+                  previousState,
                   makeFailedItemState(
                     sourceVersionContractContext,
                     runId,

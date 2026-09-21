@@ -55,8 +55,8 @@ export const MigrateHttpServerHandlers = MigrateHttpRpcs.toLayer(
 
     return MigrateHttpRpcs.of({
       ...controlHandlers(server),
-      ObserveDashboardLease: server.observeDashboardLease,
-      ObserveRunLease: server.observeRunLease,
+      ObserveDashboardSession: server.observeDashboardSession,
+      ObserveRunSession: server.observeRunSession,
     });
   })
 );

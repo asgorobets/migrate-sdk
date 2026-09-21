@@ -145,6 +145,7 @@ export const makeRegistryMigrateServerBackend = (
   observeRun: (runId, observer, observationDefinitionId) =>
     runtime.observeRun(runId, observer, observationDefinitionId),
   watchDashboardRun: runtime.watchDashboardRun,
+  getDefinitionMetadata: runtime.getDefinitionMetadata,
   prepareOperation: (input) =>
     runtime
       .prepare(

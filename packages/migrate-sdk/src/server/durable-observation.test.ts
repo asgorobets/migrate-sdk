@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Deferred, Effect, Fiber } from "effect";
+import { TestClock } from "effect/testing";
 import {
   type MigrationRunState,
   toMigrationDefinitionId,
@@ -29,6 +30,31 @@ const runState = (
 });
 
 describe("waitForDurableRunState", () => {
+  it.effect(
+    "backs off quiet durable reads and stops reading after detach",
+    () =>
+      Effect.gen(function* () {
+        const firstRead = yield* Deferred.make<void>();
+        let reads = 0;
+        const observer = yield* waitForDurableRunState({
+          pollIntervalMs: 500,
+          maxPollIntervalMs: 5000,
+          readRunState: Effect.sync(() => {
+            reads += 1;
+            Deferred.doneUnsafe(firstRead, Effect.void);
+            return runState(runId, "running");
+          }),
+          runId,
+        }).pipe(Effect.forkChild);
+        yield* Deferred.await(firstRead);
+        yield* TestClock.adjust("20 seconds");
+        // Reads at 0, .5, 1.5, 3.5, 7.5, 12.5, and 17.5 seconds.
+        expect(reads).toBe(7);
+        yield* Fiber.interrupt(observer);
+        yield* TestClock.adjust("20 seconds");
+        expect(reads).toBe(7);
+      })
+  );
   it.effect(
     "polls until the requested run reaches durable terminal state",
     () =>

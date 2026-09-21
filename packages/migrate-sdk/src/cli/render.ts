@@ -191,6 +191,8 @@ export const renderMigrationObservationEvent = (
   options: RenderOptions = {}
 ): string => {
   switch (event.kind) {
+    case "execution-progress":
+      return "";
     case "state":
       return event.state.kind === "starting"
         ? `Starting ${event.state.definitionId}`

@@ -31,6 +31,7 @@ export interface MigrationTuiScanSourceOptions {
 
 export interface MigrationTuiSnapshot {
   readonly activeRuns: readonly MigrateActiveRun[];
+  readonly observationWarning?: string;
   readonly resumeToken: MigrateDashboardResumeToken;
   readonly rows: readonly MigrateDashboardRow[];
   readonly scannedSource: boolean;

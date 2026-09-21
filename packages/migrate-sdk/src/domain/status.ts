@@ -97,6 +97,16 @@ export const MigrationDefinitionStatus = Schema.Struct({
 });
 export type MigrationDefinitionStatus = typeof MigrationDefinitionStatus.Type;
 
+/** Lifecycle metadata can be refreshed without scanning any item states. */
+export const MigrationDefinitionMetadata = Schema.Struct({
+  definitionId: MigrationDefinitionIdSchema,
+  completion: MigrationDefinitionStatus.fields.completion,
+  lastRun: MigrationDefinitionStatus.fields.lastRun,
+  lock: MigrationDefinitionStatus.fields.lock,
+});
+export type MigrationDefinitionMetadata =
+  typeof MigrationDefinitionMetadata.Type;
+
 /** Completion is independent of operation outcomes and individual item failures. */
 export const migrationDependencyIsSatisfied = (
   status: Pick<MigrationDefinitionStatus, "completion">
