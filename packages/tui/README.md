@@ -240,6 +240,13 @@ use Left/Right to switch, then Tab to return to the input. You can also click
 the tabs. Adding an ID keeps Source IDs active, and reopening the dialog
 remembers your selection method. The ordinary Run action stays unlimited.
 
+In **Source IDs**, the IDs set the scope. By default, unchanged migrated items
+stay unchanged. Enable **Update: reprocess unchanged items** to process the
+selected IDs again. From the ID input, press Tab then Space to toggle Update,
+or click its label; choose Update to start. This preserves other items and saved
+scan progress. Update resets to off when you reopen the dialog or switch selection
+methods. The separate Update action still updates the whole migration.
+
 Session activity keeps the statuses, notices, warnings, and errors observed by
 the current TUI session in chronological order, including active-run lifecycle
 changes discovered through dashboard observation. Use the arrow keys, `j`/`k`,

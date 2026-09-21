@@ -106,7 +106,9 @@ export type MigrationDefinitionRegistryRunInput =
     readonly mode?: Exclude<RunModeInput, { readonly kind: "item" }>;
     readonly rollbackOrphans?: boolean;
     readonly rescan?: boolean;
+    /** Restrict scope to these identities, preserving normal eligibility unless update is enabled. */
     readonly sourceIdentities?: readonly string[];
+    /** Reprocess unchanged items in scope. Without sourceIdentities, restart source discovery. */
     readonly update?: boolean;
   };
 
@@ -1124,14 +1126,6 @@ const validateUpdateRunInput = (
     return Effect.fail(
       new MigrationDefinitionRegistryInvalidSelectionError({
         message: "Update run planning cannot combine with skipped mode",
-      })
-    );
-  }
-
-  if (input.sourceIdentities !== undefined) {
-    return Effect.fail(
-      new MigrationDefinitionRegistryInvalidSelectionError({
-        message: "Update run planning cannot target source identities",
       })
     );
   }

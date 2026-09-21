@@ -1412,6 +1412,48 @@ describe("migrate runs", () => {
     })
   );
 
+  it.effect("combines source identity scope with update behavior", () =>
+    Effect.gen(function* () {
+      const requests: MigrateOperationRequest[] = [];
+      const connection = makeConnection({
+        prepareOperation: (request) => {
+          requests.push(request);
+          return Effect.succeed(preparedOperation(request));
+        },
+      });
+      const result = yield* runCli(
+        [
+          "run",
+          "articles",
+          "--id",
+          "article%3A1",
+          "--id",
+          "article%3A2",
+          "--update",
+          "--plan",
+        ],
+        {
+          connectMigrateServer: () => Effect.succeed(connection),
+          cwd: "/workspace",
+        }
+      );
+      expect(result.exitCode).toBe(0);
+      expect(requests).toEqual([
+        {
+          action: "update",
+          options: {
+            sourceIdentities: ["article%3A1", "article%3A2"],
+            withDependencies: false,
+          },
+          selection: { definitionIds: [definitionId], kind: "definitions" },
+        },
+      ]);
+      expect(result.stdout).toContain("article%3A1");
+      expect(result.stdout).toContain("article%3A2");
+      expect(result.stdout).not.toContain("from the beginning");
+    })
+  );
+
   it.effect("suppresses only progress snapshots in none mode", () =>
     Effect.gen(function* () {
       const connection = makeConnection({

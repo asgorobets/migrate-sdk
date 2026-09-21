@@ -89,10 +89,20 @@ pnpm exec migrate run articles --rescan
 # Scan from the beginning and force migrated entries through processing again
 pnpm exec migrate run articles --update
 
+# Reprocess only these entries, including unchanged migrated entries
+pnpm exec migrate run articles --id article-1042 --id article-1043 --update
+
 # Preview a rollback before executing it
 pnpm exec migrate rollback articles --plan
 pnpm exec migrate rollback articles
 ```
+
+IDs control **scope**; `--update` controls **behavior**. IDs alone use normal
+eligibility: migrated entries with matching source versions and version contracts
+are reported as unchanged. Add `--update` to process those selected entries again.
+A targeted update preserves other item states and saved scan progress, and does
+not establish full migration completion. Included dependencies run normally.
+Without IDs, `--update` restarts discovery and updates the whole migration.
 
 The same server-backed commands can target a remote Migrate Server without a
 local migration configuration:

@@ -865,6 +865,7 @@ const MigrationTuiDashboardApp = ({
   );
   const [selectiveRunMode, setSelectiveRunMode] =
     useState<SelectiveRunMode>("next-items");
+  const [selectiveUpdate, setSelectiveUpdate] = useState(false);
   let selectiveMode = selectiveRunMode;
   if (selectiveAction === "rollback") {
     selectiveMode = "source-ids";
@@ -1386,6 +1387,7 @@ const MigrationTuiDashboardApp = ({
       }
 
       setSelectiveLimit(1);
+      setSelectiveUpdate(false);
       setSelectiveAction(action);
       setSelectiveTarget(target);
       setSelectiveDraft("");
@@ -1440,6 +1442,7 @@ const MigrationTuiDashboardApp = ({
         return;
       }
       setSelectiveRunMode(mode);
+      setSelectiveUpdate(false);
       setSelectiveFeedback(undefined);
     },
     [selectiveAction, selectiveTarget]
@@ -1493,7 +1496,9 @@ const MigrationTuiDashboardApp = ({
 
     startTask(
       prepareOperation(
-        selectiveAction,
+        selectiveAction === "run" && selectiveUpdate
+          ? "update"
+          : selectiveAction,
         {
           sourceIdentities: selectiveEntries,
           ...(selectiveAction === "rollback"
@@ -1510,6 +1515,7 @@ const MigrationTuiDashboardApp = ({
     selectiveMode,
     selectiveLimit,
     selectiveTarget,
+    selectiveUpdate,
     startTask,
   ]);
 
@@ -2625,7 +2631,9 @@ const MigrationTuiDashboardApp = ({
             setSelectiveFeedback(undefined);
           }}
           onModeChange={changeSelectiveMode}
+          onUpdateChange={setSelectiveUpdate}
           target={selectiveTarget}
+          update={selectiveUpdate}
           {...(selectiveFeedback === undefined
             ? {}
             : { feedback: selectiveFeedback })}
