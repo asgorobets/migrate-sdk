@@ -48,12 +48,12 @@ reattach to that Workflow SDK run id for native terminal observation.
 
 Before item work, the locked run publishes a baseline of stored counts. Existing
 steps accumulate committed before/after state changes and publish one compact
-cumulative contribution every five seconds while changing, plus a final flush
-at window completion or step exit. Unchanged periods write nothing. These are
+cumulative progress snapshot every five seconds while changing, plus a final
+flush at window completion or step exit. Unchanged periods write nothing. These are
 stream writes inside existing steps, not extra Workflow steps or persisted
-per-item events. Each step/attempt has its own contribution and revision;
-replaying an update replaces that contribution rather than adding it again.
-Future parallel windows can use independent contributions under the same run.
+per-item events. Each step/attempt has its own progress snapshot and revision;
+replaying an update replaces that snapshot rather than adding it again.
+Future parallel windows can use independent snapshots under the same run.
 
 The Migrate Server relays this stream. Shared client code reconstructs display
 counts and retains them with the last consumed chunk index across HTTP session
@@ -67,6 +67,13 @@ notifications, and when the stream closes. Dashboard discovery also checks
 active run metadata every thirty seconds; neither check scans item states.
 Failed dashboard and focused-run stream readers reconnect from their last
 cursor with capped, jittered backoff.
+
+HTTP observation sessions default to four minutes; configure
+`observationSessionDuration` below the host's request limit. Heartbeats arrive
+inside the open response every fifteen seconds. After forty-five seconds without
+a frame, clients reconnect from their saved position. Heartbeats do not read
+stored status or open new HTTP requests.
+
 Detaching closes the reader. Idle TUIs stop their observation session.
 
 Streaming is a display optimization: Migration Item State remains authoritative.

@@ -79,22 +79,6 @@ the Effect RPC encoding incompatibly requires a new protocol version. An
 additive wire change may remain in the current protocol only when cross-version
 contract tests demonstrate compatibility in both client/server directions.
 
-Protocol v1 is finalized before external adoption by including the complete CLI
-inspection surface described below. Earlier `0.8.0` development deployments
-that advertised the incomplete v1 draft must be redeployed with the corrected
-server before using the new remote CLI inspection commands. This is a one-time
-baseline correction, not precedent for adding required operations to an adopted
-protocol version. Existing TUI operations and payloads remain unchanged.
-
-Protocol v2 adds required `GetStoreSchema` and `UpgradeStoreSchema` operations.
-Clients and servers must be updated together for this contract. This protocol
-version is independent of the SQL store schema version, which is v3.
-
-Protocol v3 requires resumable HTTP observation streams and removes unary
-observation leases. Clients and servers must upgrade together. There is no
-legacy HTTP observation transport or capability negotiation. The SQL store
-schema is unchanged.
-
 The currently implemented local connection uses a Node Migrate Server process
 started by the TUI. The Bun renderer communicates with that process over a
 reconnectable local Effect RPC socket, while the Node process loads the same
@@ -145,56 +129,26 @@ state with timely execution updates. Observation is reconnectable. Ending an
 observation stops only that observer; stopping a run requires an explicit
 `StopRun` operation.
 
-HTTPS observation requires bounded, resumable streaming responses through
-`ObserveRunSession` and `ObserveDashboardSession`, delivering successive updates
-over the same response. Session expiration or a transient connection failure
-resumes from the last delivered token, including on a replacement instance.
-Run progress carries absolute counts, so replay is safe. Lifecycle states and
-warnings are delivered immediately. Observation never owns the Migration Run's
-lifetime.
+Observation uses resumable streams so clients receive updates without repeated
+status requests. HTTP observation sessions have bounded lifetimes to fit
+serverless hosts. Clients retain enough display state and a stream position to
+resume through a replacement server. Losing a connection does not stop a
+Migration Run.
 
-Authentication and protocol errors surface; transient failures retry with capped,
-jittered backoff.
+Progress snapshots improve display responsiveness without reading all stored
+item states for each update. Each worker publishes its cumulative changes;
+clients replace earlier snapshots from that worker rather than counting replayed
+updates twice. This also allows independent workers to report progress if cursor
+windows run in parallel later.
 
-`observationSessionDuration` defaults to four minutes and must be below the
-host's configured request limit. Heartbeats every fifteen seconds keep quiet
-responses active without durable reads; forty-five seconds without a frame
-causes the client to reconnect. These are transport heartbeats, not new HTTP
-requests or status queries.
+Migration Stores remain authoritative. Stream publication can lag a committed
+item write, so initial loading, explicit refresh, and completion reconcile with
+stored status. Display state never authorizes migration operations. This accepts
+a temporary display delay in exchange for avoiding a separate durable event log
+or additional per-item persistence.
 
-Whole-dashboard observation uses the same resumable transport. Its wire
-snapshots can carry partial rows, lightweight lifecycle metadata, and execution
-progress. Shared client code assembles complete dashboard snapshots for the TUI.
-Clients retain the projection and per-run stream cursor across HTTP renewals;
-a replacement server validates run identity through the Migration Store and
-resumes the provider stream without rebuilding item summaries.
-
-Workflow execution publishes a baseline under its definition locks before item
-work. Committed item-state transitions become cumulative contributions per
-step/attempt, carrying increasing revisions. Replacing each contribution makes
-replay idempotent and allows independent future cursor windows to be summed.
-Run outcome counts are not stored-state deltas: a failed-to-migrated transition
-subtracts a failure and adds a migrated state. No per-item stream persistence or
-additional storage service is required. Writes are batched while steps run and
-flushed at step completion; unchanged periods produce no writes.
-
-Fresh observers read initial status and replay retained provider contributions.
-Progress and ordinary reconnection do not scan item states. Run discovery and
-provider recovery use bounded metadata checks; lifecycle signals refresh
-inexpensive definition metadata independently from counts. Explicit controls
-invalidate affected metadata for all attached observers on the server.
-
-Migration Stores remain authoritative. A crash between a committed item write
-and its progress publication can leave the display behind. Terminal or explicit
-status reconciliation repairs that gap. A missing baseline produces an
-observation warning; it does not enable repeated full-store scans. Client
-projections never authorize operations or replace authoritative planning.
-
-Focused `ObserveRun` remains separate. It supplies run-specific warnings,
-messages, lifecycle, and terminal detail, but it does not update aggregate
-dashboard rows. Client navigation and source-inventory results are also not
-server observation state: the TUI retains selection locally and overlays
-`ScanSource` results over subsequently streamed durable rows.
+Transport settings and the Workflow publishing contract are documented in the
+[Workflow SDK guide](../../packages/workflow-sdk/README.md).
 
 `GetSourceItemTotals` is a lightweight absolute source read for an explicit
 non-empty set of Migration Definition ids. It calls each selected Source's optional `countTotal`
@@ -412,8 +366,8 @@ use the same conditional force behavior while preserving the selected identities
   status.
 - Remote clients receive updates within one HTTP response per observation
   session and resume across serverless invocation boundaries.
-- Clients materialize dashboard rows from baseline, revisioned contributions,
-  and lifecycle metadata; changing selection affects only optional focused observation.
+- Clients retain display progress across reconnections without requiring the
+  same server process to remain alive.
 - Provider progress updates display counts without item-summary scans or
   client polling. Initial, explicit, and terminal reads remain authoritative.
 - The boundary extracts serializable server requests and handlers from the

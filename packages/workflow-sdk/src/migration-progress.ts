@@ -1,4 +1,5 @@
-import { Effect, Layer, Queue, Schema, Semaphore } from "effect";
+import { type Cause, Effect, Layer, Queue, Schema, Semaphore } from "effect";
+import { Service } from "effect/Context";
 import type { MigrationRunId } from "migrate-sdk";
 import {
   type MigrationDefinitionId,
@@ -25,36 +26,55 @@ export const WorkflowSdkMigrationObservationEvent = Schema.Union([
 export type WorkflowSdkMigrationObservationEvent =
   typeof WorkflowSdkMigrationObservationEvent.Type;
 
+export class WorkflowProgressStream extends Service<
+  WorkflowProgressStream,
+  {
+    readonly partitionId: string;
+    readonly write: (
+      event: WorkflowSdkMigrationObservationEvent
+    ) => Effect.Effect<void, Cause.UnknownError>;
+  }
+>()("@migrate-sdk/workflow-sdk/WorkflowProgressStream") {
+  static readonly layer = Layer.effect(
+    WorkflowProgressStream,
+    Effect.gen(function* () {
+      const metadata = yield* Effect.try(getStepMetadata).pipe(Effect.option);
+      return {
+        partitionId:
+          metadata._tag === "Some"
+            ? `${metadata.value.stepId}:${metadata.value.attempt}`
+            : crypto.randomUUID(),
+        write: (event) =>
+          Effect.acquireUseRelease(
+            Effect.try(() =>
+              getWritable<WorkflowSdkMigrationObservationEvent>({
+                namespace: workflowSdkMigrationProgressStreamNamespace,
+              }).getWriter()
+            ),
+            (writer) => Effect.tryPromise(() => writer.write(event)),
+            (writer) => Effect.sync(() => writer.releaseLock())
+          ),
+      };
+    })
+  );
+}
+
+const writeProgress = (
+  stream: typeof WorkflowProgressStream.Service,
+  event: WorkflowSdkMigrationObservationEvent
+) => stream.write(event).pipe(Effect.timeout("5 seconds"));
+
 export const writeWorkflowProgress = (
   event: WorkflowSdkMigrationObservationEvent
-) =>
-  Effect.acquireUseRelease(
-    Effect.try(() =>
-      getWritable<WorkflowSdkMigrationObservationEvent>({
-        namespace: workflowSdkMigrationProgressStreamNamespace,
-      }).getWriter()
-    ),
-    (writer) =>
-      Effect.tryPromise(() => writer.write(event)).pipe(
-        Effect.timeout("5 seconds")
-      ),
-    (writer) => Effect.sync(() => writer.releaseLock())
-  );
+) => WorkflowProgressStream.use((stream) => writeProgress(stream, event));
 
-export const publishWorkflowProgress = (
-  event: WorkflowSdkMigrationObservationEvent
-) => writeWorkflowProgress(event).pipe(Effect.ignore);
-
-// One small cumulative contribution per active step every five seconds, plus
-// step exit. No per-item persistence and no writes while nothing changes.
+// Publish this step's accumulated changes every five seconds and when it exits.
+// Nothing is written while progress stays unchanged.
 export const workflowSdkMigrationProgressLayer = Layer.unwrap(
   Effect.gen(function* () {
-    const metadata = yield* Effect.try(getStepMetadata).pipe(Effect.option);
-    // Direct, non-Workflow invocation is useful in tests and follows the same scope.
-    const partitionId =
-      metadata._tag === "Some"
-        ? `${metadata.value.stepId}:${metadata.value.attempt}`
-        : crypto.randomUUID();
+    const stream = yield* WorkflowProgressStream;
+    const publish = (event: WorkflowSdkMigrationObservationEvent) =>
+      writeProgress(stream, event).pipe(Effect.ignore);
     const runs = new Map<
       MigrationRunId,
       {
@@ -72,10 +92,10 @@ export const workflowSdkMigrationProgressLayer = Layer.unwrap(
         }
         run.dirty = false;
         run.revision += 1;
-        yield* publishWorkflowProgress({
-          kind: "contribution",
+        yield* publish({
+          kind: "snapshot",
           runId,
-          partitionId,
+          partitionId: stream.partitionId,
           revision: run.revision,
           changes: [...run.changes].map(([definitionId, delta]) => ({
             definitionId,
@@ -134,7 +154,7 @@ export const workflowSdkMigrationProgressLayer = Layer.unwrap(
         if (event.kind === "source-cursor-window-completed") {
           return;
         }
-        yield* publishWorkflowProgress({
+        yield* publish({
           definitionIds:
             "definitionIds" in event
               ? event.definitionIds

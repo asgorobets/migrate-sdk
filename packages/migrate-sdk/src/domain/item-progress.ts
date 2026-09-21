@@ -21,7 +21,7 @@ export const MigrationItemProgress = Schema.Union([
     definitions: Schema.Array(MigrationDefinitionStatus),
   }),
   Schema.Struct({
-    kind: Schema.Literal("contribution"),
+    kind: Schema.Literal("snapshot"),
     runId: MigrationRunId,
     partitionId: Schema.NonEmptyString,
     revision: Position,
@@ -59,9 +59,9 @@ export const makeMigrationItemProgress = () => {
     MigrationRunId,
     readonly MigrationDefinitionStatus[]
   >();
-  const contributions = new Map<
+  const snapshots = new Map<
     MigrationRunId,
-    Map<string, Extract<MigrationItemProgress, { kind: "contribution" }>>
+    Map<string, Extract<MigrationItemProgress, { kind: "snapshot" }>>
   >();
   const totals = new Map<
     MigrationRunId,
@@ -69,10 +69,7 @@ export const makeMigrationItemProgress = () => {
   >();
   const changeTotal = (
     runId: MigrationRunId,
-    changes: Extract<
-      MigrationItemProgress,
-      { kind: "contribution" }
-    >["changes"],
+    changes: Extract<MigrationItemProgress, { kind: "snapshot" }>["changes"],
     direction: number
   ) => {
     let summary = totals.get(runId);
@@ -99,7 +96,7 @@ export const makeMigrationItemProgress = () => {
     hasBaseline: (runId: MigrationRunId) => baselines.has(runId),
     forget: (runId: MigrationRunId) => {
       baselines.delete(runId);
-      contributions.delete(runId);
+      snapshots.delete(runId);
       totals.delete(runId);
     },
     apply: (
@@ -111,10 +108,10 @@ export const makeMigrationItemProgress = () => {
           baselines.set(event.runId, event.definitions);
         }
       } else {
-        let partitions = contributions.get(event.runId);
+        let partitions = snapshots.get(event.runId);
         if (partitions === undefined) {
           partitions = new Map();
-          contributions.set(event.runId, partitions);
+          snapshots.set(event.runId, partitions);
         }
         const previous = partitions.get(event.partitionId);
         if (previous === undefined || previous.revision < event.revision) {

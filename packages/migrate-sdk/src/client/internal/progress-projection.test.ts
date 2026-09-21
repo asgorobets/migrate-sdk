@@ -30,13 +30,13 @@ const baseline: MigrationItemProgress = {
   runId,
   definitions,
 };
-const contribution = (
+const snapshot = (
   partitionId: string,
   revision: number,
   migrated: number,
   failed = 0
 ): MigrationItemProgress => ({
-  kind: "contribution",
+  kind: "snapshot",
   runId,
   partitionId,
   revision,
@@ -49,20 +49,22 @@ describe("client progress projection", () => {
   it("combines independent windows, replaces revisions, ignores replay and isolates attempts", () => {
     const projection = makeMigrationItemProgress();
     projection.apply(baseline);
-    projection.apply(contribution("a:1", 1, 12, -2));
-    expect(
-      projection.apply(contribution("b:1", 1, 8))[0]?.durable
-    ).toMatchObject({ migrated: 1020, failed: 8 });
-    projection.apply(contribution("a:1", 2, 15, -3));
-    projection.apply(contribution("a:1", 1, 12, -2));
-    expect(
-      projection.apply(contribution("b:1", 1, 8))[0]?.durable
-    ).toMatchObject({ migrated: 1023, failed: 7 });
+    projection.apply(snapshot("a:1", 1, 12, -2));
+    expect(projection.apply(snapshot("b:1", 1, 8))[0]?.durable).toMatchObject({
+      migrated: 1020,
+      failed: 8,
+    });
+    projection.apply(snapshot("a:1", 2, 15, -3));
+    projection.apply(snapshot("a:1", 1, 12, -2));
+    expect(projection.apply(snapshot("b:1", 1, 8))[0]?.durable).toMatchObject({
+      migrated: 1023,
+      failed: 7,
+    });
     // A retry contributes only writes made by that attempt. A rollback removes
     // stored states; neither transition is an increment-only outcome count.
-    expect(
-      projection.apply(contribution("a:2", 1, -4))[0]?.durable.migrated
-    ).toBe(1019);
+    expect(projection.apply(snapshot("a:2", 1, -4))[0]?.durable.migrated).toBe(
+      1019
+    );
     expect(projection.apply(baseline)[0]?.durable.migrated).toBe(1019);
   });
 
@@ -89,7 +91,7 @@ describe("client progress projection", () => {
       update(baseline, "0", true).dashboard.rows[0]?.status?.durable.migrated
     ).toBe(12);
     expect(
-      update(contribution("a:1", 1, 12), "1", false).dashboard.rows[0]?.status
+      update(snapshot("a:1", 1, 12), "1", false).dashboard.rows[0]?.status
         ?.durable.migrated
     ).toBe(1012);
     expect(projection.resume()).toEqual([
@@ -97,7 +99,7 @@ describe("client progress projection", () => {
     ]);
     projection.apply({ dashboard: partial, resumeToken, partial: true });
     expect(
-      update(contribution("a:1", 2, 15), "2", false).dashboard.rows[0]?.status
+      update(snapshot("a:1", 2, 15), "2", false).dashboard.rows[0]?.status
         ?.durable.migrated
     ).toBe(1015);
     const reconciled = projection.apply({
@@ -118,7 +120,7 @@ describe("client progress projection", () => {
     expect(reconciled.dashboard.rows[0]?.status?.durable.migrated).toBe(1020);
     expect(projection.resume()).toEqual([]);
   });
-  it("keeps lifecycle metadata when later item contributions arrive and warns once if the baseline is missing", () => {
+  it("keeps lifecycle metadata when later item snapshots arrive and warns once if the baseline is missing", () => {
     const projection = makeDashboardProjection();
     const resumeToken = MigrateDashboardResumeToken.make("snapshot");
     projection.apply({ dashboard, resumeToken });
@@ -133,7 +135,7 @@ describe("client progress projection", () => {
       progress: {
         kind: "progress",
         runId,
-        progress: contribution("a:1", 1, 2),
+        progress: snapshot("a:1", 1, 2),
       },
     });
     expect(incomplete.observationWarning).toContain("totals will reconcile");
@@ -158,7 +160,7 @@ describe("client progress projection", () => {
       progress: {
         kind: "progress",
         runId,
-        progress: contribution("a:1", 2, 4),
+        progress: snapshot("a:1", 2, 4),
       },
     });
     expect(next.dashboard.rows[0]?.status?.completion).toEqual(completion);

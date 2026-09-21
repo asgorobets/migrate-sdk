@@ -113,7 +113,7 @@ const makeDetachedExecutableLayer = (observationFails: boolean) =>
                 kind: "progress",
                 runId: event.runId,
                 progress: {
-                  kind: "contribution",
+                  kind: "snapshot",
                   runId: event.runId,
                   partitionId: "fixture",
                   revision: event.counts.migrated,

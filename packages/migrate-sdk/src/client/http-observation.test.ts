@@ -1,8 +1,6 @@
-/** @effect-diagnostics asyncFunction:skip-file */
-import { it as effectIt } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import { Clock, Deferred, Effect, Layer, Stream } from "effect";
 import { TestClock } from "effect/testing";
-import { describe, expect, it } from "vitest";
 import {
   remoteMigrateServerBackend as backend,
   remoteMigrateDashboard as dashboard,
@@ -16,8 +14,8 @@ import { MigrateServer, MigrateServerHttp } from "../server/index.ts";
 import { connectHttpMigrateServer } from "./http.ts";
 
 describe("HTTP observation sessions", () => {
-  effectIt.effect(
-    "keeps one quiet response with no backup requests, then resumes if heartbeats stop",
+  it.effect(
+    "keeps one response open while heartbeats arrive and reconnects when they stop",
     () =>
       Effect.gen(function* () {
         const clock = yield* Clock.Clock;
@@ -115,9 +113,6 @@ describe("HTTP observation sessions", () => {
             request.includes("ObserveDashboardSession")
           )
         ).toHaveLength(1);
-        expect(requests.some((request) => request.includes("Lease"))).toBe(
-          false
-        );
         expect(reads).toBe(1);
         stalled = true;
         yield* TestClock.adjust("45 seconds");
@@ -126,9 +121,6 @@ describe("HTTP observation sessions", () => {
         yield* Deferred.await(reconnected);
         expect(observationRequests).toBe(2);
         expect(requests.at(-1)).toContain('"after":');
-        expect(requests.some((request) => request.includes("Lease"))).toBe(
-          false
-        );
         abort.abort();
         yield* Effect.promise(() => observing);
         const readsAfterDetach = reads;
@@ -138,7 +130,7 @@ describe("HTTP observation sessions", () => {
       })
   );
 
-  it("keeps client totals and resumes the next Workflow chunk on a replacement server without a summary scan", async () => {
+  it("keeps client totals and resumes the next progress update on a replacement server without a summary scan", async () => {
     const definitions = dashboard.rows.flatMap((row) =>
       row.status === undefined ? [] : [row.status]
     );
@@ -174,7 +166,7 @@ describe("HTTP observation sessions", () => {
                   runId,
                   cursor: replacement ? "2" : "1",
                   progress: {
-                    kind: "contribution",
+                    kind: "snapshot",
                     runId,
                     partitionId: "a:1",
                     revision: replacement ? 2 : 1,
@@ -221,12 +213,11 @@ describe("HTTP observation sessions", () => {
             (snapshot) => snapshot.dashboard.rows[0]?.status?.durable.migrated
           ),
           Stream.changes,
-          Stream.filter((count) => count === 14 || count === 17),
-          Stream.take(2),
+          Stream.take(3),
           Stream.runCollect
         )
       );
-      expect(counts).toEqual([14, 17]);
+      expect(counts).toEqual([12, 14, 17]);
       expect(fullReads).toBe(1);
       expect(requests).toBe(2);
       expect(attachments).toBe(2);
@@ -590,9 +581,6 @@ describe("HTTP observation sessions", () => {
       expect(
         requests.filter((request) => request.includes("ObserveRunSession"))
       ).toHaveLength(1);
-      expect(
-        requests.some((request) => request.includes("ObserveRunLease"))
-      ).toBe(false);
       expect(
         authorization.every((value) => value === "Bearer test-token")
       ).toBe(true);

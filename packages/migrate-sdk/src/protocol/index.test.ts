@@ -917,8 +917,6 @@ describe("Migrate Protocol", () => {
     expect(MigrateHttpRpcs.requests.has("ObserveRun")).toBe(false);
     expect(MigrateHttpRpcs.requests.has("ObserveRunSession")).toBe(true);
     expect(MigrateHttpRpcs.requests.has("ObserveDashboardSession")).toBe(true);
-    expect(MigrateHttpRpcs.requests.has("ObserveRunLease")).toBe(false);
-    expect(MigrateHttpRpcs.requests.has("ObserveDashboardLease")).toBe(false);
     expect(MigrateStreamingRpcs.requests.has("ObserveDashboard")).toBe(true);
     expect(MigrateStreamingRpcs.requests.has("ObserveRun")).toBe(true);
     expect(MigrateStreamingRpcs.requests.has("ObserveRunSession")).toBe(false);

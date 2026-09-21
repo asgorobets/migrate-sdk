@@ -1,4 +1,4 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Fiber, Layer, Schema } from "effect";
 import {
   type MigrationDefinitionRegistryRunInput,
   type MigrationDefinitionStatus,
@@ -463,7 +463,7 @@ test("Workflow SDK observes a durable cancellation request between cursor-window
   expect(inMemoryMigrationTestStoreState.itemStates.size).toBeLessThan(1000);
 });
 
-test("Workflow SDK streams progress before a cursor window commits and reports the final result", async () => {
+test("Workflow SDK streams unfinished work and resumes from the last delivered event", async () => {
   resetInMemoryMigrationTestState();
   const resume = pauseInMemoryMigrationTestProcessingAfter(10);
   const execution = await startInMemoryMigrationRun(false, 1);
@@ -476,30 +476,33 @@ test("Workflow SDK streams progress before a cursor window commits and reports t
   if (waitForExecution === undefined) {
     throw new Error("Expected Workflow observation");
   }
-  const observation = Effect.runPromise(
+  const observe = (after?: string) =>
     waitForExecution(
       {
         adapter: execution.started.execution.adapter,
         executionId: execution.run.runId,
       },
       {
+        ...(after === undefined ? {} : { after }),
         onEvent: (event) =>
           Effect.sync(() => {
             events.push(event);
             if (
               event.kind === "progress" &&
-              event.progress.kind === "contribution"
+              event.progress.kind === "snapshot"
             ) {
               receivedProgress();
             }
           }),
       }
-    )
-  );
+    );
+  let observer = Effect.runFork(observe());
+  let receivedBeforeDetach = 0;
+  let lastCursor = "";
   try {
     await Promise.race([
       liveProgress,
-      observation.then(() => {
+      Effect.runPromise(Fiber.await(observer)).then(() => {
         throw new Error("Execution finished before live progress");
       }),
     ]);
@@ -514,16 +517,32 @@ test("Workflow SDK streams progress before a cursor window commits and reports t
     expect(inMemoryMigrationTestStoreState.sourceCursorCommits).toHaveLength(0);
     expect(inMemoryMigrationTestStoreState.itemStates.size).toBe(10);
     expect(await execution.run.status).toBe("running");
+    await Effect.runPromise(Fiber.interrupt(observer));
+    expect(await execution.run.status).toBe("running");
+    receivedBeforeDetach = events.length;
+    const cursor = events.at(-1)?.cursor;
+    if (cursor === undefined) {
+      throw new Error("Expected a resumable progress event");
+    }
+    lastCursor = cursor;
+    observer = Effect.runFork(observe(lastCursor));
+    resume();
+    expect(await Effect.runPromise(Fiber.join(observer))).toEqual({
+      kind: "succeeded",
+      summary: expect.objectContaining({
+        runId: execution.started.runId,
+        status: "succeeded",
+      }),
+    });
   } finally {
     resume();
+    await Effect.runPromise(Fiber.interrupt(observer));
   }
-  expect(await observation).toEqual({
-    kind: "succeeded",
-    summary: expect.objectContaining({
-      runId: execution.started.runId,
-      status: "succeeded",
-    }),
-  });
+  const resumed = events.slice(receivedBeforeDetach);
+  expect(resumed.length).toBeGreaterThan(0);
+  expect(resumed.map((event) => event.cursor)).toEqual(
+    resumed.map((_, index) => String(Number(lastCursor) + index + 1))
+  );
   const projection = makeMigrationItemProgress();
   let statuses: MigrationDefinitionStatus[] = [];
   for (const event of events) {

@@ -28,9 +28,14 @@ import {
 } from "migrate-sdk/core";
 import { getStepMetadata } from "workflow";
 import {
+  WorkflowProgressStream,
   workflowSdkMigrationProgressLayer,
   writeWorkflowProgress,
 } from "./migration-progress.ts";
+
+const workflowProgressLayer = workflowSdkMigrationProgressLayer.pipe(
+  Layer.provideMerge(WorkflowProgressStream.layer)
+);
 
 export interface WorkflowStepRetryMetadata {
   readonly maxRetries: number;
@@ -165,7 +170,7 @@ const resolveRunFinalization = (envelope: MigrationRunExecutionEnvelopeType) =>
   });
 
 // Capture once under the execution locks, before any item work. Every later
-// contribution is relative to this baseline, including resumed clients.
+// snapshot is relative to this baseline, including resumed clients.
 const publishBaseline = (envelope: MigrationExecutionEnvelopeType) =>
   Effect.gen(function* () {
     const registry = yield* MigrationDefinitionRegistryCatalog.get(
@@ -218,7 +223,7 @@ export const beginMigrationRunExecutionEnvelope = (
 
     yield* publishBaseline(envelope);
     return { rollbackOrphans: job.plan.rollbackOrphans === true };
-  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
+  }).pipe(Effect.provide(workflowProgressLayer));
 
 export const executeMigrationRunCursorWindow = (input: {
   readonly definitionId: MigrationDefinitionId;
@@ -265,7 +270,7 @@ export const executeMigrationRunCursorWindow = (input: {
       },
       job.plan.execution?.process
     );
-  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
+  }).pipe(Effect.provide(workflowProgressLayer));
 
 export const executeMigrationRunRollbackOrphansPage = (input: {
   readonly definitionId: MigrationDefinitionId;
@@ -321,7 +326,7 @@ export const executeMigrationRunRollbackOrphansPage = (input: {
       },
       job.plan.execution?.rollback
     );
-  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
+  }).pipe(Effect.provide(workflowProgressLayer));
 
 export const completeMigrationRunExecutionEnvelope = (input: {
   readonly definitions: MigrationRunSummary["definitions"];
@@ -339,7 +344,7 @@ export const completeMigrationRunExecutionEnvelope = (input: {
       lease,
       storeLayer,
     });
-  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
+  }).pipe(Effect.provide(workflowProgressLayer));
 
 export const cancelMigrationRunExecutionEnvelope = (input: {
   readonly definitions: MigrationRunSummary["definitions"];
@@ -357,7 +362,7 @@ export const cancelMigrationRunExecutionEnvelope = (input: {
       lease,
       storeLayer,
     });
-  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
+  }).pipe(Effect.provide(workflowProgressLayer));
 
 export const failMigrationRunExecutionEnvelope = (input: {
   readonly definitions: MigrationRunSummary["definitions"];
@@ -392,7 +397,7 @@ export const failMigrationRunExecutionEnvelope = (input: {
       lease,
       storeLayer,
     });
-  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
+  }).pipe(Effect.provide(workflowProgressLayer));
 
 export const executeMigrationRollbackExecutionEnvelope = (
   envelope: MigrationRollbackExecutionEnvelopeType
@@ -405,7 +410,7 @@ export const executeMigrationRollbackExecutionEnvelope = (
     const job = yield* MigrationExecutionJob.fromEnvelope(envelope);
     const lease = yield* requireExecutionLease(envelope, job);
 
-    // A retry may already have removed items. Never anchor old contributions
+    // A retry may already have removed items. Never anchor old snapshots
     // to a newer baseline; if the first publication failed, clients reconcile at exit.
     const metadata = yield* Effect.try(getStepMetadata).pipe(Effect.option);
     if (Option.isNone(metadata) || metadata.value.attempt === 1) {
@@ -415,4 +420,4 @@ export const executeMigrationRollbackExecutionEnvelope = (
       ...job.options,
       lease,
     });
-  }).pipe(Effect.provide(workflowSdkMigrationProgressLayer));
+  }).pipe(Effect.provide(workflowProgressLayer));

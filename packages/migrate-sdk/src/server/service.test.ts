@@ -1305,7 +1305,7 @@ describe("Migrate Server", () => {
                     cursor: "4",
                     replaying: false,
                     progress: {
-                      kind: "contribution",
+                      kind: "snapshot",
                       runId,
                       partitionId: "a:1",
                       revision: 1,
@@ -1407,7 +1407,7 @@ describe("Migrate Server", () => {
           runId,
           cursor: "7",
           progress: {
-            kind: "contribution",
+            kind: "snapshot",
             runId,
             partitionId: "window-a",
             revision: 1,
@@ -1507,7 +1507,7 @@ describe("Migrate Server", () => {
                     runId,
                     cursor: "8",
                     progress: {
-                      kind: "contribution",
+                      kind: "snapshot",
                       runId,
                       partitionId: "a:1",
                       revision: 1,
@@ -1536,22 +1536,51 @@ describe("Migrate Server", () => {
       })
   );
 
-  it.effect(
+  it.live(
     "broadcasts explicit lock changes to every subscriber using metadata reads",
     () =>
       Effect.gen(function* () {
         let reads = 0;
         let metadataReads = 0;
-        const received = yield* Queue.unbounded<MigrateDashboardSnapshot>();
+        const lock: MigrationDefinitionLock = {
+          definitionId: articlesId,
+          ownerRunId: runId,
+          createdAt: new Date("2026-09-18T12:00:00Z"),
+          token: MigrationDefinitionLockToken.make("orphan-lock"),
+        };
+        let currentLock: MigrationDefinitionLock | null = lock;
+        const status: MigrationDefinitionStatus = {
+          definitionId: articlesId,
+          discovery: "incremental",
+          durable: { migrated: 12, failed: 0, skipped: 0, needsUpdate: 0 },
+          completion: null,
+          lastRun: null,
+          lock,
+          warnings: [],
+        };
         const server = yield* MigrateServer.make({
           backend: {
             ...makeBackend({
+              breakLock: () =>
+                Effect.sync(() => {
+                  currentLock = null;
+                  return { kind: "cleared" as const, definitionId: articlesId };
+                }),
               getDashboard: Effect.sync(() => {
                 reads += 1;
                 return {
                   activeRuns: [],
                   groups: [],
-                  rows: [],
+                  rows: [
+                    {
+                      entry: {
+                        id: articlesId,
+                        hasRollback: false,
+                        dependencies: { required: [], optional: [] },
+                      },
+                      status,
+                    },
+                  ],
                   scannedSource: false,
                 };
               }),
@@ -1563,44 +1592,38 @@ describe("Migrate Server", () => {
                   definitionId,
                   completion: null,
                   lastRun: null,
-                  lock: null,
+                  lock: currentLock,
                 }));
               }),
           },
           ...serverIdentity,
+          dashboardProjectionInterval: 0,
         });
-        const observe = server
-          .observeDashboard({})
-          .pipe(
-            Stream.runForEach((snapshot) => Queue.offer(received, snapshot))
+        const first = yield* Queue.unbounded<MigrateDashboardSnapshot>();
+        const second = yield* Queue.unbounded<MigrateDashboardSnapshot>();
+        for (const received of [first, second]) {
+          const projection = makeDashboardProjection();
+          yield* server.observeDashboard({}).pipe(
+            Stream.map(projection.apply),
+            Stream.runForEach((snapshot) => Queue.offer(received, snapshot)),
+            Effect.forkChild
           );
-        const first = yield* observe.pipe(Effect.forkChild);
-        const second = yield* observe.pipe(Effect.forkChild);
-        yield* Queue.take(received);
-        yield* Queue.take(received);
-        yield* server.breakLock({
-          lock: {
-            definitionId: articlesId,
-            ownerRunId: runId,
-            createdAt: new Date(),
-            token: MigrationDefinitionLockToken.make("orphan-lock"),
-          },
-        });
-        yield* TestClock.adjust("1 second");
-        for (let i = 0; i < 2; i += 1) {
-          expect((yield* Queue.take(received)).metadata).toEqual([
-            {
-              definitionId: articlesId,
-              completion: null,
-              lastRun: null,
-              lock: null,
-            },
-          ]);
+          expect(
+            (yield* Queue.take(received)).dashboard.rows[0]?.status?.lock
+          ).toEqual(lock);
+        }
+        yield* server.breakLock({ lock });
+        for (const received of [first, second]) {
+          const updated = yield* Queue.take(received).pipe(
+            Effect.timeout("2 seconds")
+          );
+          expect(updated.dashboard.rows[0]?.status?.lock).toBeNull();
+          expect(updated.dashboard.rows[0]?.status?.durable).toEqual(
+            status.durable
+          );
         }
         expect(reads).toBe(2);
         expect(metadataReads).toBe(2);
-        yield* Fiber.interrupt(first);
-        yield* Fiber.interrupt(second);
       })
   );
 

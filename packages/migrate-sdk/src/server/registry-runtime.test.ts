@@ -130,7 +130,7 @@ describe("registry migration server runtime", () => {
                     runId,
                     cursor: "7",
                     progress: {
-                      kind: "contribution",
+                      kind: "snapshot",
                       runId,
                       partitionId: "a",
                       revision: 1,
@@ -647,7 +647,7 @@ describe("registry migration server runtime", () => {
                 kind: "progress",
                 runId,
                 progress: {
-                  kind: "contribution",
+                  kind: "snapshot",
                   runId,
                   partitionId: "a",
                   revision: 1,
