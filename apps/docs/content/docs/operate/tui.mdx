@@ -1,0 +1,103 @@
+---
+title: TUI
+description: Explore migration status, inspect individual failures, and operate runs interactively.
+---
+
+The TUI is a **Migrate Client** for inspecting and operating a **Migration Definition Registry**. It displays definitions, durable state, messages, and active **Migration Runs**, then offers actions appropriate to the current selection.
+
+Its **Migrate Connection** reaches a **Migrate Server**, which owns the authoritative registry, resource credentials, and Execution Adapter for that environment. The terminal requests operations and observes their results. The [operating model](/docs/operate) explains these responsibilities.
+
+## Open a local or remote project
+
+Install the SDK and its matching Effect version using [Getting started](/docs/getting-started#install), then add the TUI:
+
+```sh
+pnpm add --save-dev @migrate-sdk/tui
+pnpm exec migrate-tui
+```
+
+Use a compatible SDK and TUI release. Node.js 24 or later runs your configuration and migration dependencies. The package supplies its pinned Bun renderer; you do not need to install Bun globally.
+
+By default, the local Node Migrate Server loads `migrate.config.ts` from your project. Choose another configuration or connect remotely:
+
+```sh
+pnpm exec migrate-tui --config ./migrations/migrate.config.ts
+pnpm exec migrate-tui --server https://migrate.example.com/api/migrate
+```
+
+Replace the example URL with your server endpoint. Set `MIGRATE_SERVER_TOKEN` through your shell or secret manager when the server requires bearer authentication. Check the connected environment's identity before starting an operation. A remote connection uses the server's registry and credentials without needing a local migration config.
+
+`--config` and `--server` are alternatives. `--otel` enables tracing for local execution only; remote telemetry belongs in the server environment. `--help` lists startup options.
+
+## Understand what has loaded
+
+The Migration Definition Registry catalog opens before expensive status reads finish. Registry metadata describes available definitions; durable status describes their recorded work. By default, status loads once in the background, with a loading indicator. Counts that have not loaded say **Not loaded**, not zero.
+
+For a large or expensive store, defer that initial read:
+
+```sh
+pnpm exec migrate-tui --status manual
+```
+
+Press **R** (Shift+R) when you want status. Both `manual` and the default `background` mode retain the last idle snapshot until you refresh. A run started by a colleague while your screen is idle appears after **R**. When a refresh discovers an active run, or you start one, live updates continue until no runs remain active.
+
+This distinction matters when interpreting counts: idle status is a saved observation, not a promise that nobody else has changed the store.
+
+The dashboard shows **Migration Definition Completion** separately from the latest operation and item counts. Completion records a source pass reaching its end; it can coexist with failed items. A limited or targeted run can succeed without completing a source pass. [States](/docs/learn/states) explains what each signal means.
+
+## Navigate and choose an action
+
+The footer shows shortcuts available for the current selection. Context determines availability: rollback needs a rollback function, and run controls need an active run.
+
+| Key | Action |
+| --- | --- |
+| Up / Down or `k` / `j` | Select a migration or group. |
+| `g` | Switch between migration and group views. |
+| Page Up / Page Down | Scroll the overview. |
+| Enter | Open All actions, including rescan and update. |
+| `r` | Run the selected migration or group. |
+| `e` | Open Run selected entries. |
+| `f` / `t` | Retry failed / skipped items when available. |
+| `b` | Prepare rollback. |
+| `c` | Open concurrency settings. |
+| `s` | Scan the selected source and its required dependencies. |
+| `m` | Load or open durable messages. |
+| `l` | Open Session activity. |
+| `R` | Refresh durable status. |
+| `v` / `x` | View an active run / request a safe stop. |
+| `u` | Open the guarded break-lock dialog when a lock exists. |
+| `q` | Close the TUI and detach observation. |
+
+## Start with selected work
+
+Press `e` to open **Run selected entries**. **Next items** lets you supply a per-migration attempt limit. Every selected migration, including included dependencies, gets that limit; unchanged items do not consume it, while failed and skipped attempts do.
+
+For a single definition, switch to **Source IDs** to target Source Items by their stable Source Identity. From the input, Shift+Tab focuses the selector; Left/Right switches methods, and Tab returns to the input. You can also click the tabs. The dialog remembers the chosen method when reopened.
+
+The ordinary `r` action stays unlimited. If required dependencies lack completion, the TUI asks whether to include them or force the selected run. Review that scope rather than treating the prompt as an error to dismiss.
+
+Concurrency settings apply to this session's operations. Process, rollback, and source-scan settings are separate. Blank values retain configured defaults; process and rollback also accept `unbounded`. A group override changes item concurrency inside each migration, while definitions still execute in plan order.
+
+## Read failures in context
+
+Messages load when you press `m` or open the Messages tab. Before loading, the preview says **m to load**. Use the arrow keys to choose a message and Enter to open its full text and structured details.
+
+Loaded messages, including empty results, are cached by migration or group. Observed changes to run history or durable item counts mark affected caches stale. Press `m` again to reload a stale result or retry a failed read. Navigation alone does not repeatedly query the store. Refresh with **R** to discover changes made by other clients while idle.
+
+**Session activity** is different: it records what this terminal session observed—status loads, warnings, errors, and run lifecycle changes. In that view, Enter opens an event and `e` exports the retained entries as JSON Lines without replacing an existing file. Activity ends with the session; durable migration messages remain in the store and are also available through [the CLI](/docs/operate/cli).
+
+## Review rollback scope
+
+Rollback opens a confirmation with a prepared plan. **Include dependencies** (`i`) includes dependent migrations and orders their rollback first. **Selected only** (`s`) leaves them outside the plan. If those dependents still have tracked items, the dialog explains that references may break; confirming authorizes forced rollback.
+
+Choose **Rollback selected** (`y`) only after reviewing the updated plan. Selected-entry rollback keeps dependency expansion disabled and preserves the chosen identities. A failed planning request stays visible for retry and cannot be confirmed as though it succeeded.
+
+## Stop work or leave the screen
+
+Press `x` to request cooperative cancellation. The Migration Run State enters `cancelling`, execution stops scheduling more work, and the run keeps its Migration Definition Locks while already-started work settles. Keep observing until it finishes; cancellation does not roll back completed destination writes.
+
+Pressing `q` or Ctrl+C detaches this client's Migration Run Observation and leaves the run active. A local Node Migrate Server remains alive while it owns active work, so another TUI session can reconnect. A run owned by a durable Execution Adapter likewise outlives your terminal. If the execution host itself dies, inline work is not durable—use [Workflow SDK execution](/docs/cookbook/workflow-sdk) when that lifetime must survive requests or workers.
+
+If a SQL store needs installation or upgrade, the TUI opens a schema plan before the dashboard. Review it and choose **Upgrade store** (`u`); cancelling keeps the connection available, and `r` reopens the plan. Remote hosts must configure their SQL store administration target.
+
+For shared environments and stale ownership recovery, continue with [Collaboration and locks](/docs/operate/collaboration-and-locks).

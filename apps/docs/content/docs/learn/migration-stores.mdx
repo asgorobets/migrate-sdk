@@ -1,0 +1,109 @@
+---
+title: Migration stores
+description: The durable backend that owns migration state, contracts, checkpoints, history, completion, and locks.
+---
+
+A **Migration Store** is the pluggable durable backend for a migration definition. It preserves the operational records that let executions compare previous work, resume discovery, retry selected items, resolve references, and roll back recorded effects.
+
+The source emits data; processing performs destination effects; the runtime writes migration state through the store. Sources and destination clients do not own migration progress. Storage can be independent of both systems being migrated between.
+
+## Records owned by the store
+
+The public `MigrationStore` service combines related records under one persistence boundary:
+
+| Record | Purpose |
+| --- | --- |
+| Migration Item State | Current durable state and available tracking evidence for a definition and source identity. |
+| Encoded Source Cursor | The committed discovery position for a definition. |
+| Migration Contract | Compatibility of identities, versions, and tracking records across executions. |
+| Migration Run State | Authoritative lifecycle and operation history addressed by run ID. |
+| Migration Definition Run State | Each definition's latest participation in a run. |
+| Migration Definition Completion | Evidence that a forward source pass reached its end. |
+| Migration Definition Lock | Durable ownership preventing overlapping execution of a definition. |
+
+Item state does not archive source payloads by default. Forward retries normally read current source data, while rollback uses stored state. The store also does not make a live assertion about destination resources: external changes can leave recorded references out of date.
+
+## Migration contract and compatibility
+
+A **Migration Contract** is the stored compatibility agreement for a definition's source identity, source version, and optional tracking record contract. It prevents persisted state from being interpreted under incompatible authoring assumptions.
+
+When no item state exists, the runtime can establish the current contract. With existing state, an incompatible identity or tracking contract blocks processing. Renaming a definition instead uses a different state namespace; it does not convert old records.
+
+A source-version contract change is handled differently. The runtime accepts the new version contract, and previously migrated items no longer satisfy the unchanged comparison when encountered. This permits a revised fingerprinting strategy without pretending that old and new versions are comparable.
+
+Changing pipeline code alone does not change these contracts or source versions. Use an explicit update operation when saved successful items should be processed with revised logic. See [Items](/docs/learn/items) and [Tracking](/docs/learn/tracking).
+
+## Store lifetime and shared execution
+
+A definition receives a configured Effect layer through its `store` property. The layer supplies the public service when execution needs it. The underlying records must outlive a process when recovery across restarts is required.
+
+All definitions participating in one run, including expanded dependencies, must reuse the **same store layer value**. Constructing two layers with identical options is insufficient: runtime validation compares layer identity. Define the layer once and pass that value to each definition.
+
+Across processes, shared ownership requires the same physical backend and namespace. Separate local directories are separate stores. For SQL, use the same database and table prefix for runners that should share progress and locks. Isolate environments with separate stores or namespaces; registry IDs do not create a storage partition.
+
+A run acquires the complete set of definition locks before execution. Durable locks do not expire automatically. Releasing ownership, breaking an abandoned lock, stopping execution, and ending observation are distinct actions; see [Collaboration and locks](/docs/operate/collaboration-and-locks).
+
+## Built-in backends
+
+| Backend | Persistence and intended use |
+| --- | --- |
+| File | Records in a directory, surviving process restarts on persistent storage. Suitable for local execution. |
+| SQL | Records in PostgreSQL, SQLite, MySQL, or Microsoft SQL Server through Effect SQL. Suitable for durable storage and shared execution when the database is accessible to all runners. |
+| In-memory | Records in an explicit state object. Useful for tests; no persistence across process termination or independent hosts. |
+
+The file adapter defaults to Node filesystem services and uses atomic record writes and file locking. Relative directory paths depend on the execution working directory. Keep the chosen directory outside disposable build output.
+
+SQL `layerFromClient` supplies an Effect SQL client and maps initialization failures to `MigrationStoreError`. `layer(options)` leaves the client requirement to application layer composition. `tablePrefix` defaults to `migrate_sdk`.
+
+A new SQL store initializes its schema by default. `initialize: false` separates provisioning from execution. Existing schemas requiring upgrades are not silently changed when a runner opens them. `planSchema` inspects the schema; `applySchemaPlan` verifies and applies the exact inspected plan, then checks the result. Stale, partial, or incompatible plans fail rather than proceeding against unexpected tables.
+
+## Consistency and failure obligations
+
+A custom backend must implement the full service, including state summaries, inventory observation, orphan pagination, lifecycle transitions, and lock ownership. Providing item `get` and `set` operations alone is insufficient.
+
+Several invariants connect its records:
+
+- Removing an existing item through `removeRolledBackItem` also invalidates completion and the discovery cursor. An absent item is a no-op that preserves both.
+- A nontransactional backend invalidates completion and cursor before removing the item, so interruption cannot leave removed work marked complete.
+- Run-ID history remains authoritative after a newer run replaces a definition's latest-run projection. Replayed writes must not overwrite that newer projection or revive a terminal run.
+- Lock release must respect the acquired ownership token; a stale runner must not release a replacement owner's lock.
+- Orphan enumeration uses stable encoded-identity ordering and an exclusive cursor. Inventory observation marks existing state without creating missing items.
+
+`migrate-sdk/testing` exports `runMigrationCompletionScenario` and `runSupersededMigrationRunScenario` for two persistence invariants. They complement backend-specific concurrency, locking, and failure tests.
+
+A store failure stops execution where reliable progress cannot be saved. It is not an ordinary item failure to swallow and continue. Store transactions also do not include arbitrary HTTP requests or another database: a destination effect can succeed before its outcome is persisted. Destination idempotency and [tracking](/docs/learn/tracking) remain necessary for recovery.
+
+## Optional configuration examples
+
+<details>
+<summary>Configure a file store</summary>
+
+Reuse this exported layer for every definition included in the same run.
+
+<include lang="ts" meta='title="migration-store.ts"'>../../examples/source-store-file.ts</include>
+
+</details>
+
+<details>
+<summary>Configure a PostgreSQL store and inspect its schema</summary>
+
+Install `@effect/sql-pg` at the version aligned with your Effect packages and set `MIGRATION_DATABASE_URL`. Save these two files beside one another.
+
+<include lang="ts" meta='title="source-store-sql.ts"'>../../examples/source-store-sql.ts</include>
+
+<include lang="ts" meta='title="store-schema.ts"'>../../examples/source-store-schema.ts</include>
+
+Execute `inspectSchema` with `Effect.runPromise` in a setup tool, review the resulting plan, and execute `applySchema(plan)` when ready. The [CLI](/docs/operate/cli) and [TUI](/docs/operate/tui) expose schema setup too. These operations change SDK progress tables, not source or destination application schemas.
+
+</details>
+
+<details>
+<summary>Reuse in-memory state across test runs</summary>
+
+Reuse this state for related test runs and create fresh state for independent tests.
+
+<include lang="ts" meta='title="test-store.ts"'>../../examples/source-store-memory.ts</include>
+
+</details>
+
+Continue with [States and completion](/docs/learn/states) for record semantics, or [Collaboration and locks](/docs/operate/collaboration-and-locks) for shared operation.

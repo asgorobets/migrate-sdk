@@ -1,0 +1,43 @@
+---
+title: Migrate SDK
+description: Compose typed migration definitions with durable item state and explicit recovery.
+---
+
+Migrate SDK is a framework for moving data or content between systems while preserving typed transformation logic and durable migration progress. Its primitives separate access to data, destination work, execution, and the state needed to recover.
+
+## The migration model
+
+A **Migration Definition** connects a **Source**, a processing pipeline, and a **Migration Store**. The source emits **Source Items**. The pipeline performs work through **Destinations**. The runtime records **Migration Item State** for each item it settles.
+
+| Primitive | Responsibility |
+| --- | --- |
+| [Source](/docs/learn/sources) | Emit source items and read them again by identity. |
+| [Source Item](/docs/learn/items) | Carry a payload, stable identity, and observed version. |
+| [Process Pipeline](/docs/learn/defining-migrations#process-pipeline) | Transform one admitted item and perform destination-side work. |
+| [Destination](/docs/learn/destinations) | Supply destination-owned operations and typed evidence of their results. |
+| [Migration Store](/docs/learn/migration-stores) | Persist item state, discovery checkpoints, contracts, run history, and ownership. |
+
+The Source, Destination, and Migration Store are **pluggable capabilities**. Their implementations can change independently while retaining these responsibilities.
+
+## Configuration, execution, and progress
+
+A definition is reusable configuration. A **Migration Run** is one execution attempt of one or more definitions. Its **Execution Adapter** determines whether work runs inline or through a durable workflow provider.
+
+Progress has several scopes. Migration Item State describes one source identity. Migration Run State describes one execution attempt. Migration Definition Completion records that a source pass reached its end. Those records answer different questions; a successful limited run can leave the source pass incomplete, and a completed pass can still contain failed items.
+
+Read [States and completion](/docs/learn/states) and [Execution and observation](/docs/learn/execution) for those distinctions.
+
+## Tracking and recovery
+
+A definition can declare a **Tracking Record Contract** to require a schema-validated result for each successful item. A **Destination Journal** keeps recorded changes and diagnostics. A **Rollback Pipeline** uses saved state to compensate destination work.
+
+Retrying and rollback are explicit operations. The destination and migration store remain independent systems, so destination work must account for a request succeeding before its outcome is saved. [Tracking](/docs/learn/tracking), [Retries](/docs/learn/retries), and [Rollback](/docs/learn/rollback) explain the recovery boundaries.
+
+## Explore the documentation
+
+<Cards>
+  <Card title="Getting started" href="/docs/getting-started" description="Understand the primitives, install the SDK, and assemble a definition." />
+  <Card title="Learn" href="/docs/learn" description="Study each contract, its responsibilities, and its relationship to the runtime." />
+  <Card title="Cookbook" href="/docs/cookbook" description="Apply the concepts to files, APIs, multiple destinations, and durable workflows." />
+  <Card title="Operate" href="/docs/operate" description="Plan and control runs through the CLI and TUI, including shared ownership and lock recovery." />
+</Cards>

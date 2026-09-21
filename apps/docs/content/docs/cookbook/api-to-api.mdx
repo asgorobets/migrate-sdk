@@ -1,0 +1,89 @@
+---
+title: API to API
+description: Read authors from an API, map them with schemas, and write repeatable destination requests.
+---
+
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+
+This recipe implements a Source over HTTP, calls a destination API from a Process Pipeline, and preserves a Tracking Record for recovery. It applies the same primitives as [CSV to JSON files](/docs/cookbook/csv-to-json).
+
+The sample payload contains author records. Their fields illustrate the mapping; identity, versioning, tracking, and rollback follow the SDK contracts described in [Learn](/docs/learn).
+
+## The API contract
+
+The endpoints are illustrative. Point the environment variables at APIs you own that implement this contract, or adapt the small transport helper to your provider.
+
+| Request | Required behavior |
+| --- | --- |
+| `GET SOURCE_URL` | Return the complete `{ authors: [...] }` document shown below. |
+| `PUT DESTINATION_URL/:id` | Create or replace that exact ID; repeating it must converge on the same record. |
+| `DELETE DESTINATION_URL/:id` | Remove that record; `404` means it is already absent. |
+
+```json title="Source response"
+{
+  "authors": [
+    { "id": "author-1040", "first_name": "Ada", "last_name": "Morgan" },
+    { "id": "author-1041", "first_name": "Alex", "last_name": "Chen" }
+  ]
+}
+```
+
+The destination receives `{ "id": "imported-author-1040", "name": "Ada Morgan" }`. Reserve the `imported-` namespace for this migration: rollback deletes records in it. This example does not restore preexisting records that a `PUT` replaced.
+
+## Define the source and migration
+
+Install the dependencies from [Getting started](/docs/getting-started). Save both files below in the same directory. The first file contains the complete migration config; the second implements HTTP requests, authentication, timeout, and error wrapping.
+
+<Tabs items={["api-to-api.ts", "api-http.ts"]}>
+<Tab value="api-to-api.ts">
+<include lang="ts" meta='title="api-to-api.ts"'>../../examples/api-to-api.ts</include>
+</Tab>
+<Tab value="api-http.ts">
+<include lang="ts" meta='title="api-http.ts"'>../../examples/api-http.ts</include>
+</Tab>
+</Tabs>
+
+`DocumentSource` selects `document.authors`, validates their shape, and hashes each selected author for change detection. The fetcher supplies one complete document, so there is no pagination cursor to implement. `Schema.Null` declares that fetcher contract.
+
+Document selection wraps the selected value in `{ item }`. The process therefore reads `sourceItem.item.item`: the outer `.item` is the source payload, and the inner `.item` is the selected author. The [Sources](/docs/learn/sources) page explains adapter payloads.
+
+Lookup uses a scan. A targeted retry can fetch and inspect the whole document to find one ID. Use a direct lookup or a paginated custom source when the provider and dataset justify it.
+
+## Configure and run
+
+Set `SOURCE_URL` and `DESTINATION_URL` to the collection URLs. Set `SOURCE_TOKEN` and `DESTINATION_TOKEN` if the APIs use bearer authentication. Keep those credentials in your shell or deployment environment.
+
+```sh
+pnpm exec migrate run api-authors --config ./api-to-api.ts --plan
+pnpm exec migrate run api-authors --config ./api-to-api.ts
+pnpm exec migrate status api-authors --config ./api-to-api.ts
+```
+
+The plan checks the operation; it does not prove that the API credentials, payload contract, or destination permissions work. Start against a test environment whose imported records you can delete.
+
+The file store saves progress under `.migrate-api`. Keep that directory between invocations, and keep this config pointed at the same destination. Reusing progress from one environment against another can make the SDK treat records as already migrated when the new destination is empty.
+
+## Repeat and recover
+
+Rerun normally after changing an author's source fields. Its content hash changes and the same destination ID receives the new payload. An unchanged migrated author does not need another write.
+
+For an item that failed, fix the endpoint, credentials, or mapping and run:
+
+```sh
+pnpm exec migrate run api-authors --config ./api-to-api.ts --failed
+```
+
+A timeout does not prove the destination rejected a write. The predictable `PUT` path allows a repeat to converge on the same record. Rollback first uses the saved tracking ID; for a failed item without a success record it derives the migration-owned ID from the saved source identity. It never needs the source API to look up that author again.
+
+```sh
+pnpm exec migrate rollback api-authors --config ./api-to-api.ts --plan
+pnpm exec migrate rollback api-authors --config ./api-to-api.ts
+```
+
+If a process crashes before any item state is saved, that item may not yet be available to rollback. Resume or reconcile the destination first. Neither an HTTP response nor a tracking call makes the API and store one transaction.
+
+## Add resilience deliberately
+
+The transport helper has a ten-second timeout per request and makes no automatic retries. To add bounded backoff, preserve status and transient-failure information at the HTTP boundary and use the policy in [Retries and backoff](/docs/learn/retries). Do not retry every generic `DestinationError`: authentication failures and rejected data need different treatment from a `503`.
+
+For large datasets, replace the complete-document fetch with a paginated source. Its cursor must be stable enough to resume, and its discovery mode must allow updates to existing authors to be found. The next recipe first adds another source: [Combine two APIs](/docs/cookbook/combine-api-sources).

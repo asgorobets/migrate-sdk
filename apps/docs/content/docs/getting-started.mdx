@@ -1,0 +1,85 @@
+---
+title: Getting started
+description: Understand the migration primitives and assemble an executable definition.
+---
+
+The starting point is a **Migration Definition**: reusable TypeScript configuration that connects data access, processing, and durable progress. Running that definition creates a **Migration Run**. Keeping these two concepts separate makes the same configuration usable for normal execution, targeted retries, updates, and rollback.
+
+## Install
+
+Use Node.js 24 or newer. Install the SDK and matching Effect packages:
+
+```sh
+pnpm add migrate-sdk effect@4.0.0-rc.113 @effect/platform-node@4.0.0-rc.113
+```
+
+These are the aligned versions used by this monorepo. Effect provides the typed effects, schemas, and dependency layers used by the SDK. The Node platform package supplies Node-specific services when an adapter needs them.
+
+## Compose the capabilities
+
+A definition connects three responsibilities:
+
+1. A **Source** emits Source Items with a payload, a stable Source Identity, and an observed Source Version.
+2. A **Process Pipeline** transforms each eligible item and invokes destination operations. A **Process Batch Pipeline** can instead coordinate several items while preserving an outcome for each one.
+3. A **Migration Store** preserves state between runs, including item outcomes, source checkpoints, compatibility contracts, and execution ownership.
+
+Source, Destination, and Migration Store are replaceable capabilities. Your source system, destination system, and progress backend do not need to use the same technology.
+
+## Establish the contracts
+
+Choose these contracts before implementing transport details:
+
+| Contract | Question to resolve |
+| --- | --- |
+| Source Payload Schema | What values does processing receive after source-native data is decoded? |
+| Source Identity Contract | Which stable key identifies the same item across runs? |
+| Source Version | How does the source report that an item's data changed? |
+| Tracking Record Contract | Which result must a successful item preserve for later lookup or recovery? |
+| Source Discovery | Does a completed traversal restart next time or retain an incremental checkpoint? |
+
+Tracking is optional. Durable Migration Item State still exists for a definition that does not require a Tracking Record. Identity, version, and payload are distinct: changing a value should usually change the version while retaining the identity.
+
+## Assemble a definition
+
+The authoring shape below assumes the configured values have been created in your project. It shows how the primitives connect; the [cookbook](/docs/cookbook) supplies complete runnable implementations.
+
+```ts title="Definition composition"
+import { MigrationDefinition } from "migrate-sdk";
+
+const definition = MigrationDefinition.make({
+  id: "records",
+  source,
+  process,
+  store,
+  tracking,
+  rollback,
+});
+```
+
+`source`, `store`, and exactly one of `process` or `processBatch` are required. `tracking` declares the optional Tracking Record Contract. `rollback` supplies an optional Rollback Pipeline that compensates destination work using saved state.
+
+Destination helpers are called inside the processing pipeline. They can validate inputs, issue requests, return destination-native results, and record changes. The runtime owns the resulting Migration Item State.
+
+Constructing the definition does not start a run. Keep its `id` stable because persisted state belongs to that definition and its source identities.
+
+## Register, plan, and run
+
+Put definitions in a **Migration Definition Registry** and expose it from `migrate.config.ts` with `defineMigrationCliConfig`. A registry is the catalog available to the execution host; it also supplies groups and dependency relationships for planning.
+
+Once a config contains a definition named `records`, these commands inspect and execute it:
+
+```sh
+pnpm exec migrate run records --plan
+pnpm exec migrate run records
+pnpm exec migrate status records
+```
+
+Replace `records` with your definition ID. The plan describes selection and ordering before destination work starts. A run records progress in the configured store. Status inspects that durable state without requiring a new source scan.
+
+## Design for another attempt
+
+A **Migration Item Outcome** is the result of one item's work during a run. Its saved **Migration Item State** determines what future runs can inspect, retry, or roll back. The source supplies current data when an item is retried; the store is not an automatic archive of every source payload.
+
+Destination writes and migration-state persistence are separate operations. Make repeated destination work safe, and retain the evidence required for compensation. A Tracking Record describes a successful result; a Destination Journal can also preserve evidence from partially completed work.
+
+Continue with [Migration definitions](/docs/learn/defining-migrations) for the execution contract, or apply these primitives in the [CSV-to-JSON cookbook](/docs/cookbook/csv-to-json).

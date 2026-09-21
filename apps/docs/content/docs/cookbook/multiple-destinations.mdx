@@ -1,0 +1,93 @@
+---
+title: Write to two destinations
+description: Publish a joined author to a directory and search API, with explicit partial-write recovery.
+---
+
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+
+A Process Pipeline can invoke several destination operations for one Source Item. The runtime retains one Migration Item State, while a composite Tracking Record can preserve multiple destination results.
+
+This recipe applies that model to the [combined API source](/docs/cookbook/combine-api-sources): each joined item produces a directory author and a search document.
+
+```text
+Authors API ──┐                     ┌─ Directory API
+              ├─ enriched author ──┤
+Profiles API ─┘                     └─ Search API
+```
+
+One item owns both writes. The important design decision is what happens when the directory accepts a request but the search API fails.
+
+## Define the destination contracts
+
+The directory API accepts the author payload from [API to API](/docs/cookbook/api-to-api). The search API accepts `{ id, title, body }` at `PUT SEARCH_URL/:id`. Both support deletion by ID and use the same exclusively migration-owned `imported-` namespace.
+
+Both `PUT` operations must safely replace the same record when repeated. Confirm that behavior with your provider; an HTTP method name alone does not establish its idempotency semantics, particularly for triggers, notifications, or other side effects.
+
+## Build the process and rollback
+
+Save the four files below together. The first is the runnable config; the others are the source and helpers from the preceding recipes. Configure `SOURCE_URL`, `PROFILES_URL`, `DESTINATION_URL`, and `SEARCH_URL`, plus their corresponding bearer tokens when needed.
+
+<Tabs items={["api-multiple-destinations.ts", "api-combined-source.ts", "api-to-api.ts", "api-http.ts"]}>
+<Tab value="api-multiple-destinations.ts">
+<include lang="ts" meta='title="api-multiple-destinations.ts"'>../../examples/api-multiple-destinations.ts</include>
+</Tab>
+<Tab value="api-combined-source.ts">
+<include lang="ts" meta='title="api-combined-source.ts"'>../../examples/api-combined-source.ts</include>
+</Tab>
+<Tab value="api-to-api.ts">
+<include lang="ts" meta='title="api-to-api.ts"'>../../examples/api-to-api.ts</include>
+</Tab>
+<Tab value="api-http.ts">
+<include lang="ts" meta='title="api-http.ts"'>../../examples/api-http.ts</include>
+</Tab>
+</Tabs>
+
+The mapping validates both payloads before the first destination request. The writes then happen in a clear order: directory first, search second. Each confirmed write records a journal change. Only after both succeed does the process stage its single composite tracking record.
+
+## Run and inspect
+
+```sh
+pnpm exec migrate run published-authors --config ./api-multiple-destinations.ts --plan
+pnpm exec migrate run published-authors --config ./api-multiple-destinations.ts
+pnpm exec migrate status published-authors --config ./api-multiple-destinations.ts
+```
+
+The store is `.migrate-published`, separate from the earlier recipe so their progress does not collide. Do not independently operate both recipes against the same destination namespace: locks apply to their own migration definitions and stores, not to every external resource they happen to write.
+
+## Recover a partial result
+
+| Point of failure | Possible destination state | Recovery |
+| --- | --- | --- |
+| Mapping validation | Neither write started. | Fix the data or mapping. |
+| Directory request | The write may have failed, or succeeded before a timeout. | Repeat the same directory ID. |
+| Search request | Directory exists; search may or may not exist. | Repeat both idempotent writes. |
+| Persisting the outcome | Either or both writes may exist without the expected saved state. | Resume and reconcile by deterministic IDs. |
+
+After repairing an item failure, run:
+
+```sh
+pnpm exec migrate run published-authors --config ./api-multiple-destinations.ts --failed
+```
+
+A failed-item retry executes the process again from its beginning. It does not resume at the last `Tracking.recordChange`. This recipe rewrites the directory record before retrying search, which is safe only under the stated destination contract.
+
+Journal entries are staged in the process and saved with the item's outcome. They are useful evidence of confirmed writes, but they are not independent durable checkpoints. Existing process journals may be retained on later failed attempts rather than accumulating every attempted write. Read [Tracking](/docs/learn/tracking) before using journals as compensation instructions.
+
+## Undo both sides
+
+Rollback deletes search first, then the directory. It reads destination IDs from the successful tracking record when present. Without one, it derives the known IDs from the saved source identity. This covers partial attempts that did not produce a final success record, including ambiguous HTTP responses.
+
+The ownership rule matters: deriving an ID is permission to delete only because the namespace belongs exclusively to this migration. To update preexisting records instead, save the previous values or use a provider-specific compensation strategy. Deletion would not restore those originals.
+
+```sh
+pnpm exec migrate rollback published-authors --config ./api-multiple-destinations.ts --plan
+pnpm exec migrate rollback published-authors --config ./api-multiple-destinations.ts
+```
+
+If search deletion succeeds and directory deletion fails, the item remains tracked with rollback failure diagnostics. A later rollback can repeat search deletion (`404` is accepted) and retry the directory. No distributed transaction is implied.
+
+## Choose a different boundary when needed
+
+One definition is useful when a source item and its two destination results belong to one unit of recovery. Use separate definitions when the destinations have independent lifecycles, permissions, schedules, or operators; use [dependencies and reference lookup](/docs/learn/registries-and-dependencies) if one result depends on the other.
+
+For long-running hosted execution, retain these same idempotency and tracking contracts and move orchestration into the [Workflow SDK cookbook](/docs/cookbook/workflow-sdk).

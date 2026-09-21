@@ -1,0 +1,93 @@
+---
+title: Errors and intentional skips
+description: Distinguish live failures, durable item errors, diagnostics, and successful skip results.
+---
+
+A **Migration Item Error** is a normalized failure record stored in [Migration Item State](/docs/learn/states). It explains why one item failed after the execution has ended. It is distinct from the live Effect error that interrupted processing and from diagnostic context recorded alongside that failure.
+
+The failure boundary determines what the runtime can preserve and whether execution can continue. An item-level failure can become a durable outcome; a failure to persist that outcome cannot safely be treated the same way.
+
+## Live typed failures
+
+Effect represents expected failures in the error parameter of `Effect<Success, Error, Requirements>`. A tagged error allows process code to distinguish failure categories and inspect their properties before choosing recovery.
+
+The SDK exposes several boundary-specific error types:
+
+| Error type | Boundary it describes |
+| --- | --- |
+| `SourceError` | Reading, locating, or normalizing source data. |
+| `DestinationError` | Destination-side work performed by a process or rollback. |
+| `MigrationStoreError` | Reading or writing durable migration state. |
+| `MigrationReferenceLookupError` | Resolving another definition's saved result or creating its reference stub. |
+| `ProcessBatchContractError` | A batch callback does not supply exactly one settlement per item. |
+
+Planning, runtime, and rollback preflight have additional typed errors. Their purpose is to identify an invalid operation or unavailable capability before it can safely proceed.
+
+User-authored helpers can expose more specific tagged errors. Preserve the fields needed for decisions such as retry eligibility, HTTP status handling, or a recoverable conflict. Map those errors to an SDK boundary error when required, retaining their cause for live inspection.
+
+Programming defects and interruptions are separate from expected typed failures. Ordinary `Effect.retry` does not retry them. Do not convert every unexpected defect into a transient provider failure.
+
+## Durable Migration Item Errors
+
+The runtime normalizes an item failure into these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | The runtime boundary: `source`, `tracking`, `process`, or `destination`. |
+| `errorTag` | The live error's tag or a boundary-specific validation tag. |
+| `message` | A durable human-readable explanation. |
+| `details` | Optional Migration Item Error Details, each with a message and optional field path. |
+
+Raw causes, thrown objects, and complete provider responses are not copied into this record. Put essential failure information in the message; save extra context explicitly as a journal diagnostic. Arbitrary properties on a custom error are not automatically preserved as error details.
+
+The runtime boundary and error class are separate. For example, a `DestinationError` returned through a process is currently saved with `kind: "process"` and `errorTag: "DestinationError"`.
+
+## Failure lifecycle
+
+| Failure point | Runtime behavior |
+| --- | --- |
+| Source cursor read | A `SourceError` can stop traversal before a usable item is available. |
+| Source identity lookup | An existing targeted item can retain failed state when its current source data cannot be read. |
+| Source payload decoding | Saves a failed item with `SourcePayloadSchemaError` and field details. |
+| Process execution | Normalizes ordinary typed failures into failed item state; other admitted items can continue. |
+| Tracking validation | Saves `TrackingRecordContractError` for a missing, duplicate, or invalid staged record. |
+| Migration Store access | `MigrationStoreError` escapes item recovery because outcome persistence is unavailable. |
+
+A failed item can retain destination evidence from partial work. Failure does not undo writes. Read [Tracking](/docs/learn/tracking) for preservation rules and [Rollback](/docs/learn/rollback) for compensation.
+
+A completed source pass may contain failed items. [Completion](/docs/learn/states#migration-definition-completion) describes coverage, while item state describes processing outcomes.
+
+## Destination Journal Diagnostics
+
+A **Destination Journal Diagnostic** records explicitly marked context inside the Pipeline Execution Scope. It contains `severity` (`info`, `warning`, or `error`), a message, and optional JSON-object details. These details differ from validation-oriented Migration Item Error Details.
+
+`Tracking.logDiagnostic` appends that entry and emits an Effect log. The journal append is not suppressed by the configured minimum log level. Ordinary `Effect.log` calls remain observability output and do not become durable item evidence.
+
+Diagnostics can accompany success, failure, or skip. They explain conditions but do not establish that a destination change occurred. Operator-facing **Migration Messages** project saved item errors, state reasons, and journal diagnostics for later inspection.
+
+## Skip an item on purpose
+
+**Skip Item** is a successful Process Pipeline result with a reason. `skipItem(reason)` constructs it; returning it records skipped item state without requiring a newly staged tracking record.
+
+```ts title="skip-result.ts"
+import { skipItem } from "migrate-sdk";
+
+export const excludedByPolicy = skipItem("Excluded by migration policy");
+```
+
+The enclosing process must explicitly return the skip. A nested helper's result does not automatically exit its caller. Returning a skip before destination work prevents that work; returning it afterward does not compensate completed writes. Actual failures use the error channel.
+
+Use a skip for an intentional policy outcome, an error for work that failed, and a diagnostic for context. These distinctions drive [retry selection](/docs/learn/retries) and operational reporting.
+
+## Give API failures a useful type
+
+The [API cookbook](/docs/cookbook/api-to-api) applies these boundaries to transport code. The following optional helper shows a more detailed classification: transient request failure, invalid JSON, and schema-invalid payload remain different error types.
+
+<details>
+<summary>Implementation example: classified API failures</summary>
+
+The endpoint contract is illustrative: a user-supplied `GET /authors/:id` returns `{ id, name }`. The module performs no requests when imported. Adapt transient classification to the provider's documented behavior, then apply a [bounded retry strategy](/docs/learn/retries).
+
+<include lang="ts" meta='title="recovery-api-errors.ts"'>../../examples/recovery-api-errors.ts</include>
+
+</details>

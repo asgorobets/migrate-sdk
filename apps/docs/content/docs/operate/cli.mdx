@@ -1,0 +1,174 @@
+---
+title: CLI
+description: Select, plan, run, inspect, and recover migrations from your terminal.
+---
+
+The `migrate` command comes with `migrate-sdk`. It selects executable **Migration Definitions** from a **Migration Definition Registry**, prepares operations, and starts, observes, or stops **Migration Runs**. Item outcomes and tracking follow the same contracts as programmatic SDK execution and the [TUI](/docs/operate/tui).
+
+Use Node.js 24 or later and a migration project with a `migrate.config.ts` registry, or connect to a hosted Migrate Server. The [operating model](/docs/operate) introduces the server, environment, Execution Adapter, and observation boundaries.
+
+The commands use `authors`, `books`, and `catalog` as illustrative definition and group IDs. Substitute IDs from your registry. For a complete runnable definition using `authors`, see [CSV to JSON](/docs/cookbook/csv-to-json).
+
+## Connect to your migrations
+
+```sh
+pnpm exec migrate list
+pnpm exec migrate graph
+pnpm exec migrate graph authors
+```
+
+`list` reads the Migration Definition Registry catalog. `graph` shows dependency relationships; supplying an ID focuses that graph. These commands do not start a Migration Run.
+
+The CLI searches the current directory, then its parents, for `migrate.config.ts`, `.mts`, `.js`, or `.mjs`. Discovery stops at the workspace root or filesystem root. In a monorepo, run from the migration package or select its file explicitly:
+
+```sh
+pnpm exec migrate --config ./migrations/migrate.config.ts list
+```
+
+For a deployed environment, use its Migrate Server endpoint:
+
+```sh
+# Set MIGRATE_SERVER_TOKEN in your shell or secret manager first.
+pnpm exec migrate --server https://migrate.example.com/api/migrate list
+```
+
+The URL is illustrative; replace it with your host's endpoint. Remote commands use `MIGRATE_SERVER_TOKEN` as a bearer token. The Migrate Server owns the authoritative registry, resource credentials, and Execution Adapter for its environment. `--server` chooses a connection to that environment; it does not change how migrations execute. `--config` and `--server` cannot be combined.
+
+## Select and preview the work
+
+An operation selection chooses its definition scope. Use exactly one form: explicit definition IDs, a named Migration Definition Group, or `--all`.
+
+```sh
+pnpm exec migrate run authors --plan
+pnpm exec migrate run authors books --plan
+pnpm exec migrate run --group catalog --plan
+pnpm exec migrate run --all --plan
+```
+
+`--plan` prepares the same selection and dependency order used by execution without starting destination work. It is not a sample run of your process function or a guarantee that an external API will accept the data.
+
+If `books` requires `authors`, include both explicitly or request expansion:
+
+```sh
+pnpm exec migrate run books --with-dependencies --plan
+pnpm exec migrate run books --with-dependencies
+```
+
+`--with-dependencies` includes required prerequisites for a forward run. Omitted prerequisites need a saved completion record. `--force` bypasses dependency safety checks; it does not add definitions, bypass locks, or repair missing destination references. See [Registries and dependencies](/docs/learn/registries-and-dependencies).
+
+## Run a small batch first
+
+```sh
+pnpm exec migrate run authors --limit 5
+pnpm exec migrate status authors
+pnpm exec migrate run authors
+```
+
+Normal runs discover work in source order. The SDK skips unchanged migrated items and attempts eligible items as it encounters them.
+
+`--limit` is a positive number of eligible attempts **per definition**, including dependencies. It is not a shared budget for the entire group. Unchanged items do not consume it; failed and skipped attempts do. A partially processed source page keeps its previous cursor so the next run can reread that page and apply eligibility checks again.
+
+A limited run may report success without establishing [source-pass completion](/docs/learn/states). Removing the limit continues through the remaining source. Limits apply to normal source scans, including rescans; they cannot combine with `--failed`, `--skipped`, `--update`, explicit source IDs, or orphan cleanup.
+
+Use `--concurrency 4` (or `-c 4`) to override process concurrency for that operation. `unbounded` is also accepted, but choose concurrency to suit the destination's rate limits. Definitions still follow the planned dependency order; this option controls item processing within them.
+
+## Choose the right rerun
+
+| Command | Purpose |
+| --- | --- |
+| `migrate run authors` | Continue normal discovery and process eligible items in source order. |
+| `migrate run authors --failed` | Select saved failed items and look up their current source data. |
+| `migrate run authors --skipped` | Retry saved skipped items regardless of source version. |
+| `migrate run authors --rescan` | Restart discovery from the beginning, preserving unchanged-item checks. |
+| `migrate run authors --update` | Restart discovery and reprocess migrated items even when their version is unchanged. |
+| `migrate run authors --id author-1042` | Target a particular source identity, leaving it unchanged if its migrated version still matches. |
+| `migrate run authors --id author-1042 --update` | Reprocess only the selected identity, even when unchanged. |
+
+The table omits the `pnpm exec` prefix for readability. Run modes `--failed`, `--skipped`, `--rescan`, and `--update` are mutually exclusive.
+
+Repeat `--id` to select several identities:
+
+```sh
+pnpm exec migrate run authors --id author-1042 --id author-1043
+```
+
+Identity targeting requires exactly one explicit definition, not a group or `--all`. Selected migrated items remain unchanged when their source version and version contract still match. Add `--update` to reprocess them explicitly; targeting cannot combine with `--failed`, `--skipped`, `--rescan`, or a limit. Use the source identity's encoded form; for composite identities, follow the part order and encoding described in [Items](/docs/learn/items). Targeting preserves scan progress and does not establish source-pass completion.
+
+Request-level exponential backoff belongs in your process or API helper. `--failed` is a later retry of durable failed items. See [Retries](/docs/learn/retries) for that distinction.
+
+## Inspect state and errors
+
+```sh
+pnpm exec migrate status authors
+pnpm exec migrate status --all
+pnpm exec migrate status authors --scan-source --concurrency 2
+pnpm exec migrate messages authors
+pnpm exec migrate messages --all --json
+```
+
+Ordinary status reads stored progress, completion, locks, and operation information. `--scan-source` also reads the current source inventory; it can make database or API requests and take longer. Its concurrency controls simultaneous source scans, not destination writes.
+
+`messages` reads durable item messages and structured error details. `--json` returns a JSON array suitable for inspection or export. Both commands accept definition IDs, `--group`, `--all`, and `--with-dependencies`. An inventory scan is read-only and does not make a migration complete.
+
+## Roll back deliberately
+
+```sh
+pnpm exec migrate rollback authors --plan
+pnpm exec migrate rollback authors
+pnpm exec migrate rollback authors --id author-1042
+```
+
+Rollback calls the definition's compensation function using saved tracking and journal evidence. Successful rollback removes that item's saved state; failed rollback preserves it for another attempt. It does not infer an inverse transformation from the process function.
+
+For rollback, `--with-dependencies` expands to **dependent** migrations and rolls them back before the prerequisite. Preview the resulting scope. `--force` allows leaving tracked dependents outside that plan, which can leave broken destination references.
+
+Rollback also accepts `--concurrency` and `--progress`. It has no `--limit` flag. Targeted rollback requires one explicit definition and cannot expand dependencies.
+
+For synchronization after source records disappear:
+
+```sh
+pnpm exec migrate run authors --rollback-orphans --plan
+pnpm exec migrate run authors --rollback-orphans
+```
+
+This first performs a complete authoritative source scan, then rolls back saved items absent from that scan. The definition needs a rollback function. It cannot combine with `--failed`, `--skipped`, `--update`, `--id`, or `--limit`. Read [Rollback](/docs/learn/rollback) before using it with filtered or incomplete source data.
+
+## Observe or stop a run
+
+```sh
+pnpm exec migrate runs list
+pnpm exec migrate runs observe RUN_ID
+pnpm exec migrate runs stop RUN_ID
+```
+
+Replace `RUN_ID` with the Migration Run ID printed when execution starts. `runs list` lists Active Migration Runs, whose nonterminal durable state still has definition-lock ownership. It is not a listing of every historical run. Use the same `--server` or `--config` when reconnecting.
+
+`runs observe` opens a Migration Run Observation. The observation belongs to this client; the run belongs to its execution host or durable provider. Reconnecting observes the existing attempt rather than starting a new one.
+
+Run and rollback commands normally observe progress after starting work. `--progress auto` is the default; `log` suits captured logs, and `none` suppresses live progress rendering without changing execution.
+
+In an interactive terminal, Ctrl+C during observation offers detach, safe stop, or continued observation. Noninteractive interruption detaches. Detaching leaves the run active; stopping requests cooperative cancellation and lets already-started work settle. `runs stop` reports the request—it does not wait for completion. Observe the run until it reaches a terminal state. See [Collaboration and locks](/docs/operate/collaboration-and-locks).
+
+## Administer a SQL store
+
+These commands use the local config's `sqlStore` target and do not accept `--server`:
+
+```sh
+pnpm exec migrate store schema status
+pnpm exec migrate store schema status --json
+pnpm exec migrate store schema upgrade
+pnpm exec migrate store schema upgrade --accept-plan PLAN_ID
+```
+
+Interactive upgrade displays the plan for confirmation. Automation must pass its exact `PLAN_ID`; if the current plan differs, the command refuses to apply it. A connected TUI can review and apply a remote server's configured SQL schema plan. See [Migration stores](/docs/learn/migration-stores).
+
+## Help and diagnostics
+
+```sh
+pnpm exec migrate --help
+pnpm exec migrate run --help
+pnpm exec migrate rollback --help
+pnpm exec migrate --otel run authors --limit 1
+```
+
+`--otel` enables local traces with a default OTLP endpoint at `localhost:4318`; `OTEL_*` variables customize export. For remote execution, configure telemetry on the server instead. Use [the TUI](/docs/operate/tui) when you want these operations and their context visible together.

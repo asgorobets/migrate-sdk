@@ -1,0 +1,185 @@
+---
+title: Run durably with Workflow SDK
+description: Move migration execution into durable steps while keeping item state, tracking, and recovery in the Migration Store.
+---
+
+An **Execution Adapter** is the runtime strategy that executes Migration Definitions inline or starts them through a durable workflow provider. The **Workflow SDK Execution Adapter** uses durable steps when a Migration Run must outlive an HTTP request or worker. Definitions retain their Source, processing style, Migration Store, and any Tracking Record Contract or Rollback Pipeline they declare.
+
+The boundary between the starting host and the worker is a **Migration Execution Envelope**: a serializable execution request containing the Migration Run ID, Migration Definition Registry ID, request, and diagnostic planned order. The **Workflow SDK Migration Execution Envelope** also carries the complete acquired Migration Definition Lock set transferred to the provider-owned execution.
+
+## Separate the responsibilities
+
+| Concept | Responsibility |
+| --- | --- |
+| Migration Definition | Defines source decoding, typed mapping, destination work, tracking, and rollback. |
+| Migration Definition Registry | Catalogs executable definitions and plans their dependency order. |
+| Migration Definition Registry Catalog | Resolves a registry ID to its executable registry inside the worker. |
+| Migration Store | Persists item outcomes, cursors, completion, Migration Run State, and definition locks. |
+| Workflow SDK Execution Adapter | Starts provider execution from the envelope and exposes its execution identity. |
+| Workflow SDK | Schedules and durably coordinates workflow steps. |
+| Migrate Server | Provides the environment's planning, execution, observation, and control boundary. |
+| Migrate Client | Requests operations and observes a run without owning the worker's lifetime. |
+
+Starting through the Migrate Server resolves the requested selection against its authoritative registry. The adapter acquires locks and records the Migration Run before handing the envelope to Workflow SDK. The worker resolves the registry ID and re-plans before doing work. Planned order in the envelope is diagnostic metadata, not a frozen executable plan; functions, Layers, and database connections remain in their own runtime.
+
+The Migration Store stays authoritative for migration progress. Workflow history explains which steps ran; it does not replace Migration Item State or tracking. Normal execution still discovers eligible Source Items in source order. Failed-item retries and explicit identity targeting remain separate modes. Migration Run Observation is also separate: a client can stop observing while the durable provider continues execution.
+
+## Use the repository integration
+
+This recipe follows the complete [Workflow SDK example application](https://github.com/asgorobets/migrate-sdk/tree/main/examples/workflow-sdk). Its concrete workload is a PostgreSQL catalog of authors and books, with a SQL Migration Store and a Next.js Migrate Server. The same host and step boundaries apply to other sources and destinations. Read [Defining migrations](/docs/learn/defining-migrations) and [Migration stores](/docs/learn/migration-stores) before adapting the integration.
+
+Run the example as a complete monorepo checkout. The code blocks below show files from that application; their adjacent imports, workspace packages, database setup, and Next.js configuration are supplied by the checkout. Use this map when adapting it:
+
+| File | Responsibility |
+| --- | --- |
+| `src/migrations/catalog.ts` | Complete authors/books definitions and the exported `catalogRegistry`. |
+| `src/migrations/database.ts` | Shared PostgreSQL client and Migration Store. |
+| `src/migrations/catalog-migration.workflow.ts` | Workflow-safe orchestration. |
+| `src/migrations/workflow-steps.ts` | Effect runtime and step implementations. |
+| `src/server/migrate-server.ts` | Registry-backed server and durable execution adapter. |
+| `src/server/auth.ts` and access services | Application-owned bearer authorization. |
+| `src/app/api/migrate/route.ts` | HTTP endpoint used by the CLI and TUI. |
+| `next.config.ts` and `tsconfig.json` | Workflow transform and the `@/*` import alias used by routes. |
+
+To bring this into your own app, replace `catalogRegistry` with your self-contained definitions, retain a stable registry ID and shared durable store, and wire your own authorization. Keep the workflow, step, and host modules separate as shown.
+
+## Start the complete example locally
+
+From a checkout of this monorepo, use Node.js 24 or later, pnpm, and Docker:
+
+```sh
+pnpm install
+cd examples/workflow-sdk
+cp .env.example .env.local
+pnpm db:up
+pnpm db:setup
+pnpm dev
+```
+
+The example's environment file points `DATABASE_URL` to its local PostgreSQL container on port `55433` and supplies development tokens. Database setup installs the migration-store schema and seeds the catalog. Use this dedicated demo database; the optional `db:setup -- --reset` command drops and recreates demo data.
+
+Open `http://127.0.0.1:3100`. In a second terminal at the repository root, connect the TUI:
+
+```sh
+MIGRATE_SERVER_TOKEN=local-migrate-secret \
+  pnpm --filter @migrate-sdk/tui dev -- \
+  --server http://127.0.0.1:3100/api/migrate
+```
+
+Start `authors` or the `catalog` group. Inspect the workflow from `examples/workflow-sdk` with:
+
+```sh
+pnpm exec workflow inspect runs
+pnpm exec workflow web
+```
+
+The example uses `workflow` 4.x with `withWorkflow` in `next.config.ts`. That integration transforms `"use workflow"` and `"use step"` functions. If adapting it to another Next.js application, follow the [official Next.js setup](https://workflow-sdk.dev/docs/getting-started/next), including excluding Workflow's internal routes from application proxy middleware. For Turborepo caching, include generated `app/.well-known/workflow/**` or `src/app/.well-known/workflow/**` routes among build outputs.
+
+## Keep the workflow entry point small
+
+Import orchestration helpers from **`@migrate-sdk/workflow-sdk/workflow`** inside the workflow module. That entry point is safe for Workflow's deterministic runtime. Keep Effect execution, database clients, migration definitions, and server imports in the step module.
+
+This is the complete workflow entry point used by the example:
+
+<include lang="ts" meta='title="src/migrations/catalog-migration.workflow.ts"'>../../../../../examples/workflow-sdk/src/migrations/catalog-migration.workflow.ts</include>
+
+Forward execution has a begin step, repeated cursor-window steps, optional orphan-cleanup pages, and terminal completion, cancellation, or failure steps. The helper carries cumulative progress between steps. The rollback branch delegates to the separate rollback helper and its execution step.
+
+Do not replace this with one `"use step"` around the entire forward migration. The Source Cursor Window boundary lets the adapter coordinate durable progress across smaller units of work. One window can contain several Source Items; it is not one provider step per item.
+
+## Rebuild the runtime inside steps
+
+Every step needs access to the same registry ID, compatible definitions, and durable store. A process-local in-memory store loses that relationship when a different worker executes the next step.
+
+The example supplies a PostgreSQL store:
+
+<include lang="ts" meta='title="src/migrations/database.ts"'>../../../../../examples/workflow-sdk/src/migrations/database.ts</include>
+
+Its step runtime combines four layers:
+
+- `migrationStore`, explicitly available for finalization and lock release.
+- `MigrationDefinitionRegistryCatalog.layer`, which resolves the envelope's registry ID to `catalogRegistry`.
+- `MigrationRunStepExecutor.defaultLayer`, which executes forward cursor windows.
+- `MigrationRollbackExecutor.layer`, which executes rollback.
+
+The definitions supply their source and destination dependencies. The server and step workers must use the same database, table prefix, and compatible registry. Supplying the original store explicitly also lets finalization find durable ownership if a definition is removed or the registry changes during deployment; an ambiguous or missing store cannot safely be guessed.
+
+The full step module below includes imports, runtime composition, telemetry, and every lifecycle function. `runEffect` turns an Effect into a Promise at this runtime boundary. Workflow and migration run IDs are attached to spans so separate step traces can be correlated.
+
+<details>
+<summary>Complete step module</summary>
+
+<include lang="ts" meta='title="src/migrations/workflow-steps.ts"'>../../../../../examples/workflow-sdk/src/migrations/workflow-steps.ts</include>
+
+</details>
+
+## Choose retries at the correct boundary
+
+Workflow SDK normally retries thrown step errors; `maxRetries = 0` disables that automatic retry for a function. See its [retry contract](https://workflow-sdk.dev/docs/foundations/errors-and-retries).
+
+The example deliberately applies `disableWorkflowStepRetries` to **both** the cursor-window step and the orphan-cleanup page step. Keep those calls when adapting the module.
+
+Those steps save item outcomes and cursor or cleanup progress in the Migration Store. That commit is separate from Workflow SDK saving the step's return value. If the return value is lost after migration progress is committed, automatically invoking the same step with old workflow state can consume work against an already-advanced checkpoint.
+
+Lifecycle and finalization steps remain retryable so a transient failure does not prevent durable completion, cancellation, failure recording, or lock release. Do not apply a blanket no-retry policy to every step.
+
+There are still three different recovery mechanisms:
+
+| Mechanism | Appropriate use |
+| --- | --- |
+| Bounded request retry inside the process | Retry a transient API request, with classification and exponential backoff. |
+| Workflow lifecycle-step retry | Recover a transient error in orchestration or finalization. |
+| A later migration run | Resume from saved state or retry recorded failed items. |
+
+Disabling automatic cursor-step retries does **not** provide exactly-once destination writes. A worker can die after a destination accepts a write but before the Migration Item State is saved. Use an upsert keyed by the stable Source Identity or a destination-supported idempotency key. For multi-request work, save useful operation receipts in the Destination Journal so recovery can reason about partial effects. See [Tracking](/docs/learn/tracking) and [Retries](/docs/learn/retries).
+
+## Give the server the durable adapter
+
+The server uses `WorkflowSdkMigrationExecutable.layer` instead of inline execution. It starts the configured workflow through `WorkflowSdkClient.layer`:
+
+<include lang="ts" meta='title="src/server/migrate-server.ts"'>../../../../../examples/workflow-sdk/src/server/migrate-server.ts</include>
+
+The example mounts this layer at `POST /api/migrate` using `MigrateServerHttp.toWebHandler` and application-owned authorization middleware. Clients use that protocol endpoint; they do not invoke your workflow function directly or construct lock envelopes themselves.
+
+<details>
+<summary>HTTP route and authorization modules</summary>
+
+These modules are included in the example application. `auth.ts` also supports its demo setup and cron routes, which is why it imports `DemoSetupAccess`.
+
+<include lang="ts" meta='title="src/app/api/migrate/route.ts"'>../../../../../examples/workflow-sdk/src/app/api/migrate/route.ts</include>
+
+<include lang="ts" meta='title="src/server/auth.ts"'>../../../../../examples/workflow-sdk/src/server/auth.ts</include>
+
+<include lang="ts" meta='title="src/server/migrate-server-access.ts"'>../../../../../examples/workflow-sdk/src/server/migrate-server-access.ts</include>
+
+<include lang="ts" meta='title="src/server/demo-setup-access.ts"'>../../../../../examples/workflow-sdk/src/server/demo-setup-access.ts</include>
+
+</details>
+
+The HTTP request can finish after the workflow has accepted the run. Observation reconnects separately using the Migration Run ID. A scheduled job can use the same server service to prepare and start an operation; the example's `/api/cron/import` route does this for the `catalog` group, preserving the same planning and lock rules as a TUI request.
+
+## Stop and recover
+
+Use the connected TUI's safe-stop action or address the same server from the CLI. From `examples/workflow-sdk`, with `MIGRATE_SERVER_TOKEN` set to your server's token:
+
+```sh
+pnpm exec migrate --server http://127.0.0.1:3100/api/migrate runs list
+pnpm exec migrate --server http://127.0.0.1:3100/api/migrate runs stop RUN_ID
+pnpm exec migrate --server http://127.0.0.1:3100/api/migrate runs observe RUN_ID
+```
+
+Replace `RUN_ID` with the active Migration Run ID. The server records a cancellation request in the Migration Store; execution stops scheduling new work, drains already-started work, and finalizes cancellation. Keep observing until the run is terminal. Closing the terminal only detaches observation.
+
+Avoid directly terminating the provider workflow as your normal stop mechanism: it can bypass migration cleanup and leave locks behind. If that happens, establish that the provider can no longer run before following [lock recovery](/docs/operate/collaboration-and-locks#recover-an-abandoned-lock).
+
+If a cursor step fails, inspect durable item state and the workflow error before starting another migration run. The new run uses the saved cursor and eligibility rules. Failed-item retry selects saved failures; it cannot recover a write whose result was never durably recorded without the destination's own replay protection.
+
+## Deploy the integration
+
+For the repository example, create a Vercel project rooted at `examples/workflow-sdk`. Set `DATABASE_URL` to a reachable PostgreSQL database and configure `MIGRATE_SERVER_TOKEN`, `DEMO_SETUP_TOKEN`, and `CRON_SECRET` for that environment. Enable Vercel system environment variables so Workflow can identify its deployment. The [official deployment guide](https://workflow-sdk.dev/docs/deploying) explains runtime selection and alternative Workflow Worlds.
+
+Initialize the dedicated demo database through the example's authenticated `/api/demo/setup` endpoint or the setup script against that database. The demo's setup and reset endpoints exist for its fixture data; they are not a general production database migration strategy.
+
+The example intentionally displays its Migrate Server token in the browser to let visitors connect. When adapting it for a private environment, remove that public token display and keep authorization in your application or access gateway. Use a real secret manager for client credentials.
+
+Keep source, destination, and store credentials on the deployed server and workers. Confirm that every worker resolves the same registry and store, and exercise a limited run, reconnect, failed-item retry, and cooperative stop in a staging environment before relying on unattended operation. A local type check or docs build does not verify your database or provider deployment.

@@ -16,5 +16,28 @@
         }
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["apps/docs/**/*.css"],
+      "css": {
+        "parser": {
+          "cssModules": true,
+          "tailwindDirectives": true
+        }
+      },
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnknownPseudoClass": {
+              "level": "error",
+              "options": {
+                "ignore": ["global", "local"]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

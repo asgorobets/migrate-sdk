@@ -1,0 +1,80 @@
+---
+title: Schemas and mapping
+description: Define source decoding, typed transformation, and destination validation as separate contracts.
+---
+
+A **Source Payload Schema** validates and decodes source-native values into the values a processing pipeline receives. It also supplies their TypeScript type. Mapping transforms those decoded values into the inputs expected by destination operations.
+
+The schema establishes what a value means at a boundary. The mapping establishes how values relate across boundaries. A TypeScript annotation alone cannot validate data received from another system.
+
+## Distinguish encoded and decoded values
+
+An Effect schema can describe two representations:
+
+| Representation | Role |
+| --- | --- |
+| Encoded | The source-native or serialized form accepted at the boundary. |
+| Decoded | The process-facing value produced after validation and decoding. |
+
+For a schema `S`, `typeof S.Encoded` names the encoded type and `typeof S.Type` names the decoded type. A schema may transform between them. For example, `Schema.NumberFromString` can decode numeric text into a number; `Schema.Number` only validates a number.
+
+The configured Source declares its Source Payload Schema through `sourceSchema`. Adapters may derive this schema from another source-native schema. The runtime decodes the payload before processing and before unchanged-item checks, so a stored successful result does not exempt current source data from validation.
+
+Identity and version remain separate metadata. A Source Payload Schema describes `SourceItem.item`; it does not define the item's Source Identity or the meaning of its Source Version.
+
+## Map from the inferred payload type
+
+A Process Pipeline receives the decoded payload. Its mapping can reshape fields, normalize values, combine inputs, or prepare several destination requests. The payload type is inferred from the configured Source rather than maintained as a duplicate interface.
+
+Validate destination inputs before performing destination-side effects. `Schema.decodeEffect` accepts a schema's encoded TypeScript shape and validates the value when its Effect executes. `Schema.decodeUnknownEffect` accepts `unknown` and is appropriate before an external value's shape has been established.
+
+Type inference checks the program's use of fields. Runtime validation checks the actual values, including constraints that a TypeScript `string` or `number` cannot express by itself.
+
+## Keep destination contracts process-facing
+
+A **Destination Entry Field Schema** describes already-decoded values accepted by a destination helper. Such schemas validate the process-facing representation; source decoding has already happened. The helper can then encode values into the destination's native request format internally.
+
+Do not assume a schema's decoded output is suitable for `JSON.stringify` whenever the encoded and decoded representations differ. Determine whether your transport expects the decoded application value or an encoded wire value, and perform that conversion at the appropriate boundary.
+
+Destination validation and the **Tracking Record Contract** also have different purposes. The former checks what the operation accepts. The latter defines the durable result a successful migration item must preserve. A request payload is not automatically the tracking record.
+
+## Place validation before effects
+
+A useful pipeline separates four steps:
+
+1. Work with the source payload already decoded by the Source Payload Schema.
+2. Transform it and validate all required destination inputs.
+3. Execute destination operations.
+4. Stage tracking results and journal evidence within the item's execution scope.
+
+For multiple destinations, validating every payload before the first write avoids a predictable schema failure after a partial update. Network or provider failures can still interrupt that sequence; validation does not provide a cross-system transaction.
+
+## Distinguish validation from policy
+
+Validation determines whether data conforms to a contract. A **Skip Item** result expresses a deliberate processing decision about valid data. A retry policy determines whether repeating a failed operation could succeed.
+
+| Condition | Appropriate boundary |
+| --- | --- |
+| Source-native value cannot be decoded | Source Payload Schema and source error handling. |
+| Mapped value violates a destination contract | Mapping or destination-input validation. |
+| Valid data is outside the intended migration scope | An explicit `skipItem(reason)` result. |
+| A destination request fails transiently | A bounded Destination Retry Strategy. |
+
+A document-level decoding failure can stop discovery before an individual identity is available. An identifiable source item with an invalid payload can instead receive a failed Migration Item State. See [Sources](/docs/learn/sources) and [Errors](/docs/learn/errors).
+
+## Evolve contracts deliberately
+
+A Source Version describes observed source data. Editing a mapping function does not change it automatically. An **Update Run** restarts discovery and makes previously migrated items eligible even when their source versions match.
+
+Source identity and tracking contracts govern reuse of existing durable state. Changing those contracts may require a state migration, compensation, or another explicit transition. Renaming a Migration Definition does not reconcile the destination or convert its old records.
+
+<details>
+<summary>Mapping example: inferred input and validated output</summary>
+
+This small function illustrates the schema boundaries above. The complete file and API migrations live in the [cookbook](/docs/cookbook).
+
+<include lang="ts" meta='title="mapping.ts"'>../../examples/learn-mapping.ts</include>
+
+</details>
+
+Continue with [Source items](/docs/learn/items) for identity and version contracts, or [Destinations](/docs/learn/destinations) for the operations that consume mapped values.

@@ -1,0 +1,80 @@
+---
+title: Items, identities, and versions
+description: The unit emitted by a source, its durable identity, and the data version used for processing eligibility.
+---
+
+A **Source Item** is one unit emitted by a source for migration. It has a source identity, a source version, and a payload. This is the unit for processing eligibility, saved outcome, targeted retry, and rollback state.
+
+The item boundary does not have to match one destination record. One item can affect several resources, with those effects sharing an item outcome and tracking record. Use separate items when work needs independent identities, versions, or recovery.
+
+## The source item envelope
+
+| Field received by processing | Meaning |
+| --- | --- |
+| `identity` | The structured identity, its contract metadata, and durable encoded form. |
+| `version` | The observed version or fingerprint at read time. |
+| `item` | The payload decoded by the Source Payload Schema. |
+
+An adapter emits `identityKey`, `version`, and a source-native `item`. The SDK normalizes the identity and version, then decodes the payload before processing. Identity derivation belongs to the source, before this envelope reaches the pipeline.
+
+Payloads may be database rows, parsed records, or selected document values with parent context. Their schema determines the inferred TypeScript type. Payload fields are not automatically part of identity or version: the source must make those choices explicitly.
+
+## Source identity and its durable key
+
+A **Source Identity** is the stable, possibly composite identity of an item within a migration definition. The **Source Identity Key** is its structured value. The **Encoded Source Identity** is the durable string produced through schema encoding.
+
+Saved item state is addressed by the definition ID and encoded identity. Keep both stable to continue previous work. Changing a definition ID creates a different state namespace. Changing a key makes the source emit a different item; it does not rename existing destination data or progress.
+
+A key can be a scalar or a fixed positional tuple. Each tuple element is a named **Source Identity Part**. Part names supply schema metadata for diagnostics and targeting; tuple order remains part of the durable identity. Parts must encode and decode as strings, finite numbers, or booleans. Object keys, optional tuple parts, and rest elements are not supported identity shapes.
+
+Use stable source identifiers rather than positions or mutable display values. For overlapping inventories, a composite key can include the originating system. For enrichment from several systems, a single base identity may remain appropriate. Combining data does not inherently require a composite key.
+
+## The identity contract
+
+The **Source Identity Contract** defines the identity's ID, schema, derivation, and encoding. The contract ID is a compatibility name, not a particular item's version. SDK fingerprints also capture the identity schema and source-specific derivation metadata where the adapter exposes it.
+
+Use `SourceIdentity.key`, `SourceIdentity.part`, and `SourceIdentity.tuple` to construct supported schemas. `SourceIdentity.make` creates a reusable identity definition, and `SourceIdentity.fromKey` constructs a normalized identity. Let these helpers encode keys instead of inventing delimiter rules.
+
+Identity compatibility is checked against the stored [Migration Contract](/docs/learn/migration-stores#migration-contract-and-compatibility). An incompatible identity contract with existing item state is rejected before processing so old state cannot silently acquire a new meaning.
+
+## Source versions and change detection
+
+A **Source Version** is the observed version or fingerprint of an item at read time. The public value is a non-empty string compared for equality. The SDK does not order revisions or require them to increase.
+
+A version can come from a source revision, modification metadata, or content hash. It should reflect all source inputs that affect the result. If processing depends on joined data, a version that reflects only one input cannot detect changes to the others. A timestamp generated at read time has the opposite problem: every read appears changed.
+
+Version and cursor serve different purposes. Version describes an individual item's data; a cursor describes position in source discovery. They may use overlapping fields, but neither substitutes for the other.
+
+For ordinary eligibility, a migrated item is unchanged only when both its saved version and its source-version contract fingerprint match. A changed version contract makes encountered items eligible even if their version strings happen to match. Failed, skipped, and needs-update states remain eligible when encountered.
+
+Changing process code does not change a source version automatically. Use an explicit update operation when the same source data should be processed with revised logic. [States and completion](/docs/learn/states) explains the complete eligibility table.
+
+## From item to admitted work and saved state
+
+The runtime validates the payload, loads previous state, validates stored tracking against its contract, and checks eligibility. An **Admitted Source Item** is an item that passed those checks and needs processing. Batch processing groups admitted items while preserving each item's own settlement.
+
+There is at most one current [Migration Item State](/docs/learn/states) for a definition and identity. It may be absent before the first outcome or after successful rollback. A **Migration Item Outcome** describes an attempt during a run; it is distinct from the current persisted state.
+
+The migration store does not archive full source payloads by default. Targeted forward retries normally read current source data. Destination identifiers and other recovery evidence belong in [Tracking](/docs/learn/tracking), where they remain available independently of source availability.
+
+## Optional illustrations
+
+<details>
+<summary>Inspect the identity, version, and payload of an in-memory item</summary>
+
+The item below separates its stable identity from its observed revision and data. The adapter supplies the same envelope used by other sources.
+
+<include lang="ts" meta='title="source-items.ts"'>../../examples/source-items.ts</include>
+
+</details>
+
+<details>
+<summary>Construct a composite identity with named parts</summary>
+
+This identity includes an originating system and its native ID. The SDK supplies durable encoding.
+
+<include lang="ts" meta='title="source-composite-identity.ts"'>../../examples/source-composite-identity.ts</include>
+
+</details>
+
+Continue with [States and completion](/docs/learn/states), or apply these primitives in the [combined API source recipe](/docs/cookbook/combine-api-sources).

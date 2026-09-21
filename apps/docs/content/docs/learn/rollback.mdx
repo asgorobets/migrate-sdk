@@ -1,0 +1,84 @@
+---
+title: Rollback
+description: Define state-driven compensation, its execution scope, and its durable success and failure behavior.
+---
+
+A **Rollback Pipeline** is user-authored compensation code that receives saved [Migration Item State](/docs/learn/states) and performs destination-side cleanup. A Migration Definition exposes it through the `rollback` property.
+
+The pipeline defines what compensation means. It may delete a migration-created resource, remove a relationship, or restore a previously saved value. The runtime controls selection, execution scope, and state persistence; it does not infer the inverse of a Process Pipeline.
+
+## Inputs and relationships
+
+Rollback uses durable state rather than rereading the original Source Item. Its callback receives two arguments:
+
+| Input | Contents |
+| --- | --- |
+| `state` | Source identity, item status, available tracking record, and journal evidence. |
+| `context` | The migration definition ID and current rollback run ID. |
+
+`RollbackPipelineFor<TrackingContract, Error>` supplies the tracking record's inferred type. The runtime validates a saved record against that contract before invoking the callback. The record remains optional because some states have no successful tracking result.
+
+The current runtime calls rollback for every selected saved item state, including failed and skipped states and states without destination evidence. The callback must therefore handle absent records and empty journals. A requested identity with no saved state is skipped.
+
+An item with a recorded destination change can need compensation even if processing failed. Conversely, a failure before destination work may require no external operation. The item's forward status alone does not identify what cleanup is necessary.
+
+## Interpret tracking evidence
+
+[Tracking](/docs/learn/tracking) provides several kinds of saved information:
+
+| Primitive | Role in compensation |
+| --- | --- |
+| Tracking Record | The definition's stable materialized result, which can identify resources or saved prior values. |
+| Destination Change | A confirmed destination-native outcome that may require cleanup. |
+| Destination Change Descriptor | Identifies and decodes the change's typed payload. |
+| Destination Journal Diagnostic | Context for investigation; it does not prove that a write occurred. |
+| Destination Journal Extension | Helper-owned recovery information whose meaning the helper defines. |
+
+Read original process entries from `state.journal?.process.entries`. Use the descriptor's `is` and `decode` methods instead of matching invented change-kind strings. Previous failed compensation attempts are separate entries in `state.journal?.rollbackAttempts`.
+
+The journal preserves entry order but does not prescribe compensation order. The pipeline chooses which operations to perform and in what order. A rollback can also use stable migration-owned identifiers derived from saved identity when the destination contract makes that safe.
+
+## Pipeline Execution Scope
+
+Each rollback invocation receives its own **Pipeline Execution Scope** and `Tracking` service. Evidence recorded during that invocation is separate from the original process segment while compensation is running.
+
+The callback completes with `void` or an Effect that succeeds with `void`; expected compensation failures use its error channel. A successful no-op has the same completion meaning as other successful callbacks: the runtime can remove the selected item state.
+
+This makes the callback's success contract significant. Return success only after the required compensation is complete, or after deliberately deciding no external cleanup is needed. Reporting an unresolved operation only as a diagnostic still permits success unless the callback also fails.
+
+## Durable outcomes
+
+| Rollback outcome | State behavior |
+| --- | --- |
+| Callback succeeds | Removes the item's state, including its tracking record and all journal evidence. |
+| Callback fails | Preserves the original item state and appends a failed rollback-attempt segment with error and recorded evidence. |
+| Saved tracking record is invalid | Records a failed attempt before calling the pipeline. |
+
+A failed rollback preserves the original item status. A previously migrated item does not become a failed forward-processing item merely because compensation failed. Inspect the rollback run and its attempt evidence when diagnosing that operation.
+
+Removing item state makes its identity eligible for a later forward run. Removal also invalidates prior definition completion and resets its discovery cursor. A rollback that removes nothing preserves existing completion. See [States and completion](/docs/learn/states) for the distinction between execution history and source coverage.
+
+## Repeatability and ownership
+
+Compensation can partly succeed before a later operation fails. Repeating rollback must tolerate completed cleanup, such as a resource already being absent. There can also be a crash between destination cleanup and item-state removal.
+
+Record enough information to distinguish resources created by the migration from resources it updated. Deleting an updated resource does not restore its previous value. Restoration requires saved prior data or a destination-specific recovery mechanism.
+
+Tracking is persisted with outcomes and cannot make destination operations atomic with the Migration Store. Use repeatable compensation and reconciliation when evidence may be incomplete. The [multiple-destination cookbook](/docs/cookbook/multiple-destinations) demonstrates these decisions across two APIs.
+
+## Selection and orphan cleanup
+
+A **Rollback Request** selects definitions and optionally source identities. Planning checks selection and dependency constraints before executing compensation; execution uses [locks](/docs/operate/collaboration-and-locks) and the definitions' migration stores. The [CLI guide](/docs/operate/cli) covers planning and invocation.
+
+**Rollback Orphans** is a separate run intent. It first performs an authoritative source scan, then compensates saved items whose identities were not observed. A partial or filtered listing is not proof that absent items should be removed. Source coverage and scan completion are prerequisites for this decision.
+
+Clearing state is different: it removes the SDK's saved information without invoking compensation or changing destination resources.
+
+<details>
+<summary>Implementation example: compensate recorded file writes</summary>
+
+This callback handles a successful path record or a confirmed journal change and treats an already-absent file as successful cleanup. It pairs with the helper on [Tracking](/docs/learn/tracking#apply-the-primitives). The complete scenario is in [CSV to JSON](/docs/cookbook/csv-to-json). It deletes the current file; it does not restore overwritten contents.
+
+<include lang="ts" meta='title="recovery-rollback.ts"'>../../examples/recovery-rollback.ts</include>
+
+</details>

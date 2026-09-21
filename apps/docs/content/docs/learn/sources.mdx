@@ -1,0 +1,90 @@
+---
+title: Sources
+description: The capability that discovers source items, supplies their contracts, and reads them again by identity.
+---
+
+A **Source** is a pluggable capability that emits source items from a source system. It defines how data is discovered and addressed, and supplies the schemas and metadata the runtime needs before processing can begin.
+
+A migration definition connects one configured source to its processing pipeline and migration store. The source owns reading and identifying data. The pipeline owns transformation and destination effects. The store owns durable progress.
+
+## What a source supplies
+
+Every configured source supplies three contracts alongside its read operations:
+
+| Contract | Responsibility |
+| --- | --- |
+| Source Identity Contract | Define the stable identity schema and how source-native values become identity keys. |
+| **Source Payload Schema** | Validate and decode source-native values into the payload type received by processing. |
+| **Source Cursor Schema** | Validate, encode, and decode positions used to continue discovery. |
+
+Identity and version are established before processing. They let the runtime locate previous state and record an item failure even if its payload cannot be decoded. The payload schema may change representations: CSV text can decode into numbers or trimmed strings. A TypeScript annotation alone does not validate those incoming values.
+
+The schema is also the source of the process-facing payload type. See [Schemas and mapping](/docs/learn/schemas-and-mapping) for the boundary between decoding source data and constructing destination data, and [Items](/docs/learn/items) for identity and version semantics.
+
+## Discovery and identity lookup
+
+A source exposes two access paths to the same item contract:
+
+| Operation | Meaning |
+| --- | --- |
+| `read(cursor)` | Return one window of items from the supplied position; `null` means the beginning. |
+| `readByIdentity(identity)` | Return the current item for a decoded identity target, or `null` when it is absent. |
+| `lookupStrategy` | Declare the cost model of identity lookup: `direct` or `scan`. |
+| `countTotal()` | Optionally report a known count, lower bound, or unknown total. |
+
+Normal runs use discovery for all item states. Failed-item retries, skipped-item retries, and explicit identity targets use lookup. A scan-based lookup can read the entire source to recover one item, so targeted work is not necessarily a cheap source operation.
+
+Lookup receives the structured `identity.key`; source implementations should not parse the durable string themselves. Both access paths must agree about identity, version, and payload shape. Returning a different identity from the one requested is a source error.
+
+## Cursor windows and checkpoints
+
+A **Source Cursor** is a position marker. A **Source Cursor Window** is the batch of items returned by one cursor read. The source determines their shape, ordering, and size; a run's attempt limit does not define the source's page size.
+
+A read can return a `nextCursor`. Omitting it ends discovery after the returned items settle. The runtime encodes a returned cursor using the cursor schema and saves it in the migration store only after the whole window settles, including individual failed outcomes. A partially processed window keeps its input checkpoint and can be read again.
+
+A cursor therefore describes discovery position, not proof that every earlier item succeeded. Source versions determine whether encountered items need processing; cursors determine which items are encountered. An item behind a saved checkpoint requires identity lookup or a rescan to be revisited before a later full traversal.
+
+**Source Discovery** defines the meaning of a checkpoint after traversal completes:
+
+| Policy | After interruption | After source exhaustion |
+| --- | --- | --- |
+| `full` (default) | Retain the last committed cursor. | Discard it so the next run starts at the beginning. |
+| `incremental` | Retain the last committed cursor. | Retain it as a high-water mark for the next run. |
+
+Incremental discovery requires every new or changed item to sort after the saved checkpoint. The source owns that guarantee, including stable ordering and tie-breakers. A cursor based only on immutable IDs cannot discover updates to earlier IDs incrementally.
+
+A **Source Rescan** restarts discovery while preserving ordinary item eligibility. An **Update Run** restarts discovery and makes previously migrated items eligible even when their versions match. Neither makes destination effects transactional. See [States](/docs/learn/states) and [Retries](/docs/learn/retries).
+
+## Configured sources and adapter responsibilities
+
+Migration authors normally use an adapter factory. The configured value carries its contracts and an Effect layer that the runtime acquires for that definition.
+
+| Adapter | Source-native responsibilities |
+| --- | --- |
+| `CsvSource` | Dialect, headers, blank-row policy, column identities, and column or row-hash versions. |
+| `DocumentSource` | Fetching, parsing, selecting items, identity derivation, and version derivation. |
+| `SqlSource` | Read and lookup statements, row schema, cursor metadata, and an Effect SQL client. |
+| `InMemorySource` | A supplied collection of item payloads, identities, and versions. |
+
+A **Document Source** composes a fetcher that retrieves resources, a parser that decodes documents, and a selector that chooses items with optional parent context. Its payload is `{ item }` or `{ parent, item }`, so processing accesses the selected value through `sourceItem.item.item`. Destination mapping remains a pipeline responsibility.
+
+SQL callbacks return statements; the adapter executes them and normalizes SQL failures. SQL text does not infer a validated row type. The query must apply the requested limit and ordering compatible with its cursor. CSV manages its cursor internally, but bounded output windows do not make its file parser streaming.
+
+For a new adapter, use `Source.make` for runtime methods with their dependencies already provided. Its factory form creates fresh implementation state. Use `Source.fromLayer` for setup, services, or scoped resources; `source.provide(layer)` binds dependencies into the configured source.
+
+## Failure boundaries
+
+Runtime reads and lookups use the `SourceError` failure channel. A cursor read failure stops that definition's discovery because no reliable item set was returned. Payload validation after a valid identity and version can produce an individual failed state. Identity lookup failures can also become item failures when existing state identifies the target. These boundaries are separate from [request retry policy](/docs/learn/retries).
+
+## Implementation examples
+
+Use [CSV to JSON](/docs/cookbook/csv-to-json) for a built-in adapter, [API to API](/docs/cookbook/api-to-api) for document selection, or [Combine two APIs](/docs/cookbook/combine-api-sources) for a custom fetcher.
+
+<details>
+<summary>Optional: a complete SQL source configuration</summary>
+
+This PostgreSQL illustration assumes a `source_authors` table with text columns `id`, `first_name`, `last_name`, and `revision`, with unique IDs. Set `SOURCE_DATABASE_URL` and install `@effect/sql-pg` at the version aligned with your Effect packages. It uses default full discovery.
+
+<include lang="ts" meta='title="author-sql-source.ts"'>../../examples/source-sql.ts</include>
+
+</details>
