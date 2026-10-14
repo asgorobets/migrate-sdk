@@ -1,7 +1,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { Effect, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { SqlClient } from "effect/sql";
 import {
   MigrationDefinition,
   MigrationDefinitionRegistry,

@@ -1,6 +1,6 @@
 import { Schema } from "effect";
-import { make as makeRpc } from "effect/unstable/rpc/Rpc";
-import { make as makeRpcGroup } from "effect/unstable/rpc/RpcGroup";
+import { make as makeRpc } from "effect/rpc/Rpc";
+import { make as makeRpcGroup } from "effect/rpc/RpcGroup";
 import { MigrationStoreError, SourceError } from "../domain/errors.ts";
 import {
   MigrationDefinitionGroupId,

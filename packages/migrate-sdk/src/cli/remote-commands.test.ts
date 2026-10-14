@@ -2,9 +2,9 @@ import { layer as nodeServicesLayer } from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Ref, Stdio, Stream } from "effect";
 import { pretty as prettyCause } from "effect/Cause";
+import { CliOutput, Command } from "effect/cli";
 import { isFailure, isSuccess } from "effect/Exit";
 import { TestConsole } from "effect/testing";
-import { CliOutput, Command } from "effect/unstable/cli";
 import {
   toEncodedSourceIdentity,
   toMigrationDefinitionId,

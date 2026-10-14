@@ -11,13 +11,10 @@ import {
   Stream,
 } from "effect";
 import { pretty as prettyCause } from "effect/Cause";
+import { CliOutput, Command } from "effect/cli";
 import { isFailure, isSuccess } from "effect/Exit";
+import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
 import { TestClock, TestConsole } from "effect/testing";
-import { CliOutput, Command } from "effect/unstable/cli";
-import {
-  RpcClientDefect,
-  RpcClientError,
-} from "effect/unstable/rpc/RpcClientError";
 import type { MigrateServerConnectionInput } from "../client/node/index.ts";
 import {
   toMigrationDefinitionGroupId,

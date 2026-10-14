@@ -233,6 +233,36 @@ try {
     tempDirectory,
     `migrate-sdk-tui-${packageJson.version}`
   );
+  const dlxDirectory = resolve(tempDirectory, "dlx");
+  await mkdir(dlxDirectory);
+  const dlxHelp = run(
+    pnpm,
+    [
+      "--allow-build=bun",
+      "--allow-build=esbuild",
+      // Supply both unpublished packages; dlx still resolves their Effect peers.
+      `--package=${tuiTarball}`,
+      `--package=${sdkTarball}`,
+      "dlx",
+      "migrate-tui",
+      "--help",
+    ],
+    {
+      capture: true,
+      cwd: dlxDirectory,
+      env: {
+        ...process.env,
+        npm_config_cache_dir: resolve(tempDirectory, "dlx-cache"),
+        npm_config_side_effects_cache: "false",
+      },
+    }
+  );
+  if (!(dlxHelp.includes("Usage:") && dlxHelp.includes("--server"))) {
+    throw new Error(
+      "Packed TUI did not launch through a fresh pnpm dlx install"
+    );
+  }
+
   await writeFile(
     resolve(fixtureDirectory, "package.json"),
     `${JSON.stringify(
@@ -287,7 +317,7 @@ try {
   await runPackedMigration({ command, fixtureDirectory });
 
   process.stdout.write(
-    `Packed launcher and consumer migration smoke check passed (${basename(tuiTarball)})\n`
+    `Packed dlx, launcher, and consumer migration smoke check passed (${basename(tuiTarball)})\n`
   );
 } finally {
   await removeTemporaryDirectory(tempDirectory);

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Effect, Result } from "effect";
-import { Migrator, SqlClient } from "effect/unstable/sql";
+import { Migrator, SqlClient } from "effect/sql";
 import { MigrationStoreError } from "../../domain/errors.ts";
 import {
   indexDefinitions,

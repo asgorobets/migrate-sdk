@@ -3,7 +3,7 @@ import {
   HttpMiddleware,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import {
   MigrationDefinitionId,
   type MigrationDefinitionLock,

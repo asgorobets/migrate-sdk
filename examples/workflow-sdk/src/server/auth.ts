@@ -3,7 +3,7 @@ import {
   HttpMiddleware,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import { DemoSetupAccess } from "./demo-setup-access";
 import { MigrateServerAccess } from "./migrate-server-access";
 

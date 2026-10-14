@@ -1,5 +1,5 @@
 import { Cause, ConfigProvider, Effect, Schema, Tracer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import { describe, expect, it } from "vitest";
 import { completedInlineExecution } from "../examples/inline-execution.ts";
 import { runTelemetryExample } from "../examples/telemetry.ts";
