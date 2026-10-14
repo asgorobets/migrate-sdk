@@ -3,7 +3,7 @@ import { MssqlClient } from "@effect/sql-mssql";
 import { MysqlClient } from "@effect/sql-mysql2";
 import { PgClient } from "@effect/sql-pg";
 import { Effect, FileSystem, Redacted, Schedule, Schema } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { SqlClient } from "effect/sql";
 import {
   DestinationError,
   MigrationDefinition,

@@ -1,4 +1,4 @@
-import type { SqlClient } from "effect/unstable/sql";
+import type { SqlClient } from "effect/sql";
 import type {
   SqlMigrationStoreDialect,
   SqlMigrationStoreTableNames,

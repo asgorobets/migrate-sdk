@@ -55,7 +55,7 @@ Requires Node.js **22.19.0 or newer**, including Node 24. The same minimum
 applies when embedding the SDK in another Node.js application.
 
 ```sh
-pnpm add migrate-sdk effect
+pnpm add migrate-sdk effect@4.0.4 @effect/platform-node@4.0.4
 ```
 
 Optional packages add support for more systems:
@@ -65,6 +65,18 @@ pnpm add @migrate-sdk/commercetools
 pnpm add @migrate-sdk/workflow-sdk
 pnpm add --save-dev @migrate-sdk/tui
 ```
+
+Open a one-off session against a deployed Migrate Server with pnpm 10.2.0 or newer:
+
+```sh
+MIGRATE_SERVER_TOKEN="<your-token>" \
+  pnpm --allow-build=bun --allow-build=esbuild dlx @migrate-sdk/tui@latest \
+  --server https://migrate.example.com/api/migrate
+```
+
+pnpm caches the TUI automatically; no local project or lockfile setup is needed.
+The flags approve the Bun and esbuild install scripts. Use the release with the
+matching Effect 4.0.4 dependencies after it is published.
 
 ## From plan to recovery
 

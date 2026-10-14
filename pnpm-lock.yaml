@@ -10,29 +10,29 @@ catalogs:
       specifier: ^0.86.2
       version: 0.86.2
     '@effect/platform-node':
-      specifier: 4.0.0-rc.113
-      version: 4.0.0-rc.113
+      specifier: 4.0.4
+      version: 4.0.4
     '@effect/sql-mssql':
-      specifier: 4.0.0-rc.113
-      version: 4.0.0-rc.113
+      specifier: 4.0.4
+      version: 4.0.4
     '@effect/sql-mysql2':
-      specifier: 4.0.0-rc.113
-      version: 4.0.0-rc.113
+      specifier: 4.0.4
+      version: 4.0.4
     '@effect/sql-pg':
-      specifier: 4.0.0-rc.113
-      version: 4.0.0-rc.113
+      specifier: 4.0.4
+      version: 4.0.4
     '@effect/sql-sqlite-bun':
-      specifier: 4.0.0-rc.113
-      version: 4.0.0-rc.113
+      specifier: 4.0.4
+      version: 4.0.4
     '@effect/sql-sqlite-node':
-      specifier: 4.0.0-rc.113
-      version: 4.0.0-rc.113
+      specifier: 4.0.4
+      version: 4.0.4
     '@effect/vitest':
-      specifier: 4.0.0-rc.113
-      version: 4.0.0-rc.113
+      specifier: 4.0.4
+      version: 4.0.4
     effect:
-      specifier: 4.0.0-rc.113
-      version: 4.0.0-rc.113
+      specifier: 4.0.4
+      version: 4.0.4
 
 importers:
 
@@ -104,13 +104,13 @@ importers:
     dependencies:
       '@effect/sql-pg':
         specifier: 'catalog:'
-        version: 4.0.0-rc.113(effect@4.0.0-rc.113)
+        version: 4.0.4(effect@4.0.4)
       '@migrate-sdk/workflow-sdk':
         specifier: workspace:*
         version: link:../../packages/workflow-sdk
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.113
+        version: 4.0.4
       migrate-sdk:
         specifier: workspace:*
         version: link:../../packages/migrate-sdk
@@ -125,7 +125,7 @@ importers:
         version: 19.2.5(react@19.2.5)
       workflow:
         specifier: ^4.5.0
-        version: 4.5.0(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(@typescript/typescript6@6.0.2)(next@16.2.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(ws@8.21.3)
+        version: 4.5.0(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(@typescript/typescript6@6.0.2)(next@16.2.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(ws@8.22.0)
     devDependencies:
       '@effect/language-service':
         specifier: 'catalog:'
@@ -175,7 +175,7 @@ importers:
         version: 0.86.2
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.113(effect@4.0.0-rc.113)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))
+        version: 4.0.4(effect@4.0.4)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
@@ -190,7 +190,7 @@ importers:
         version: typescript@7.0.2
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.113
+        version: 4.0.4
       migrate-sdk:
         specifier: workspace:*
         version: link:../migrate-sdk
@@ -211,10 +211,10 @@ importers:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.113(effect@4.0.0-rc.113)(redis@6.2.1)
+        version: 4.0.4(effect@4.0.4)(redis@6.2.1)
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.113
+        version: 4.0.4
       papaparse:
         specifier: ^5.5.3
         version: 5.5.3
@@ -230,22 +230,22 @@ importers:
         version: 0.86.2
       '@effect/sql-mssql':
         specifier: 'catalog:'
-        version: 4.0.0-rc.113(effect@4.0.0-rc.113)
+        version: 4.0.4(effect@4.0.4)
       '@effect/sql-mysql2':
         specifier: 'catalog:'
-        version: 4.0.0-rc.113(@types/node@22.20.3)(effect@4.0.0-rc.113)
+        version: 4.0.4(@types/node@22.20.3)(effect@4.0.4)
       '@effect/sql-pg':
         specifier: 'catalog:'
-        version: 4.0.0-rc.113(effect@4.0.0-rc.113)
+        version: 4.0.4(effect@4.0.4)
       '@effect/sql-sqlite-bun':
         specifier: 'catalog:'
-        version: 4.0.0-rc.113(effect@4.0.0-rc.113)
+        version: 4.0.4(effect@4.0.4)
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.113(effect@4.0.0-rc.113)
+        version: 4.0.4(effect@4.0.4)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.113(effect@4.0.0-rc.113)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))
+        version: 4.0.4(effect@4.0.4)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
@@ -275,10 +275,10 @@ importers:
         version: 0.4.5(@typescript/typescript6@6.0.2)(web-tree-sitter@0.25.10)
       '@opentui/react':
         specifier: 0.4.5
-        version: 0.4.5(@typescript/typescript6@6.0.2)(react-devtools-core@7.0.1)(react@19.2.5)(web-tree-sitter@0.25.10)(ws@8.21.3)
+        version: 0.4.5(@typescript/typescript6@6.0.2)(react-devtools-core@7.0.1)(react@19.2.5)(web-tree-sitter@0.25.10)(ws@8.22.0)
       '@tuiparts/react':
         specifier: 0.0.6
-        version: 0.0.6(@opentui/core@0.4.5(@typescript/typescript6@6.0.2)(web-tree-sitter@0.25.10))(@opentui/react@0.4.5(@typescript/typescript6@6.0.2)(react-devtools-core@7.0.1)(react@19.2.5)(web-tree-sitter@0.25.10)(ws@8.21.3))(react@19.2.5)
+        version: 0.0.6(@opentui/core@0.4.5(@typescript/typescript6@6.0.2)(web-tree-sitter@0.25.10))(@opentui/react@0.4.5(@typescript/typescript6@6.0.2)(react-devtools-core@7.0.1)(react@19.2.5)(web-tree-sitter@0.25.10)(ws@8.22.0))(react@19.2.5)
       bun:
         specifier: 1.3.14
         version: 1.3.14
@@ -291,7 +291,7 @@ importers:
         version: 0.86.2
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.0-rc.113(effect@4.0.0-rc.113)(redis@6.2.1)
+        version: 4.0.4(effect@4.0.4)(redis@6.2.1)
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
@@ -309,7 +309,7 @@ importers:
         version: typescript@7.0.2
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.113
+        version: 4.0.4
       migrate-sdk:
         specifier: workspace:*
         version: link:../migrate-sdk
@@ -357,14 +357,14 @@ importers:
     dependencies:
       workflow:
         specifier: ^4.5.0
-        version: 4.5.0(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(@typescript/typescript6@6.0.2)(next@16.2.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(ws@8.21.3)
+        version: 4.5.0(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(@typescript/typescript6@6.0.2)(next@16.2.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(ws@8.22.0)
     devDependencies:
       '@effect/language-service':
         specifier: 'catalog:'
         version: 0.86.2
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.0-rc.113(effect@4.0.0-rc.113)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))
+        version: 4.0.4(effect@4.0.4)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
@@ -376,10 +376,10 @@ importers:
         version: typescript@7.0.2
       '@workflow/vitest':
         specifier: 4.0.11
-        version: 4.0.11(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(ws@8.21.3)(zod@4.3.6)
+        version: 4.0.11(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(ws@8.22.0)(zod@4.3.6)
       effect:
         specifier: 'catalog:'
-        version: 4.0.0-rc.113
+        version: 4.0.4
       migrate-sdk:
         specifier: workspace:*
         version: link:../migrate-sdk
@@ -696,43 +696,43 @@ packages:
     resolution: {integrity: sha512-SaPln+8srOqDJDUwNTDmP5e+IYpEDr9+1epGznnsLqu8xvo6VnxyWARdeLpqvZJlb0Pgy9ca7ppqvvdWbHPXAg==}
     hasBin: true
 
-  '@effect/platform-node-shared@4.0.0-rc.113':
-    resolution: {integrity: sha512-EPCfjvKlHmNDgqIlT85P1OcgNUNvRxNtBpTFOz1UGHwNJe6Ap7rP93Rue7kzFUeplQMy6EfoZEH4CJR4N0nJ1g==}
+  '@effect/platform-node-shared@4.0.4':
+    resolution: {integrity: sha512-gh2KRmqGWrJ0FVL8GqnI1GpB+fCfCUI7sGiUZkxxBHyHj1t94rm6VDJffCfuVZWe6GpvYXtizifVczUrgOce8A==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-rc.113
+      effect: ^4.0.4
 
-  '@effect/platform-node@4.0.0-rc.113':
-    resolution: {integrity: sha512-8luSE2JcGVsALQ6cZOWh5jdZu+VgcUKIKPfhN/MjX+ZzIuK/krm3jZBHYZdhqkXjM9s8aYGBxNMHGF0WzF+Gpg==}
+  '@effect/platform-node@4.0.4':
+    resolution: {integrity: sha512-SdoyQMrO5zmqBebb2fxDk0sHYyJjBiw4QmLdV2ZcWf3ATpQPge3B5sTLijZg49PadekOwNeO83o5TfdtiiFEig==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.0-rc.113
+      effect: ^4.0.4
       redis: '>=5.0.0 <7.0.0'
 
-  '@effect/sql-mssql@4.0.0-rc.113':
-    resolution: {integrity: sha512-oHmEAKW0KyskWqV+n8GPKlSqXHMs6RXivhgRtpEyHxnmGkupQ97lQrwVz4/4wECGTTeL4wMyR5eLh/X/4sk5Rg==}
+  '@effect/sql-mssql@4.0.4':
+    resolution: {integrity: sha512-/hbO9/nFjcB4kq72VKRhmShIs0T2TGQktQWoKrW5KdByj0DGOskDsNgk6lFbFgiIPspTyw0SSzrvIlTvyUKtmg==}
     peerDependencies:
-      effect: ^4.0.0-rc.113
+      effect: ^4.0.4
 
-  '@effect/sql-mysql2@4.0.0-rc.113':
-    resolution: {integrity: sha512-df5d5fQD/clIHHRi8oYFeJDL4KfFeCUdzrc0Bgx/hScN5eK9fwPjk5B4TAkgGmzqXHdV8U4n8h/Gb5FBWh7uUg==}
+  '@effect/sql-mysql2@4.0.4':
+    resolution: {integrity: sha512-gbcmxJFFtM+mu/YyTiPFOsAK0a4SSuE0oeQt+sGCxz22wclgVDMTtnuOfI+qnMl8ympEq+JfgViQMccOxvdVRA==}
     peerDependencies:
-      effect: ^4.0.0-rc.113
+      effect: ^4.0.4
 
-  '@effect/sql-pg@4.0.0-rc.113':
-    resolution: {integrity: sha512-xsAbmxsR5sC6Pc/38nB4/rBi1co4aCC7e4T95sVy8EhWA9NRheimtiN05EyhTKZwX1C0T2gquainQwCuQYuKuA==}
+  '@effect/sql-pg@4.0.4':
+    resolution: {integrity: sha512-41x5O2C+gRF3A/Sf+IkV+OOzo5BexsIubH1cib3m4NwhZcjQUQUrq5YbOw7fIuWmBODtAyHNXFjaeEtiXoPL9Q==}
     peerDependencies:
-      effect: ^4.0.0-rc.113
+      effect: ^4.0.4
 
-  '@effect/sql-sqlite-bun@4.0.0-rc.113':
-    resolution: {integrity: sha512-gh3k27MMq/MDqPqpQYoNw1BgXgPIxZtQQsF9W321Ml20lbIzEBdOA6LgEEbA1sX7wy8/710bDBgXvDcm27ioAA==}
+  '@effect/sql-sqlite-bun@4.0.4':
+    resolution: {integrity: sha512-Ae1qfvi7t7xmuP8EmuwgJ8IINNcgy7caF9dNndBYGOlKeuBTub8xeHnP16nZRhUyn2/h42oB3uyP/trSdaRlIQ==}
     peerDependencies:
-      effect: ^4.0.0-rc.113
+      effect: ^4.0.4
 
-  '@effect/sql-sqlite-node@4.0.0-rc.113':
-    resolution: {integrity: sha512-3O5Qb6LFBhQGJqFXoNzbc4Psf/TaYvFw4QhjjUGtwaYiIubZ62zbKxDG/ihiqQ2LmzE78+AFiUKkB8zTnyTNBg==}
+  '@effect/sql-sqlite-node@4.0.4':
+    resolution: {integrity: sha512-dKPaiab7UpRvD+CfkcT2qavV83h9k2Vz5cjvNvwa7DyxZWuf10LQiSl8tJDtXMcz69BMLdy7skUUFFnlXVNROw==}
     peerDependencies:
-      effect: ^4.0.0-rc.113
+      effect: ^4.0.4
 
   '@effect/tsgo-darwin-arm64@0.18.1':
     resolution: {integrity: sha512-iv8rC7nNou2m5+mCF6C2CHf18JkrvHvs0JtdXZlJT8s2DSrUxZg5Ln+ygLh8Ojj+dB4TLlUxDJj1IwZdEm6iFQ==}
@@ -773,10 +773,10 @@ packages:
     resolution: {integrity: sha512-oYyxUVzzc9YJwnu/g1G4gFnrpsDgYtH/APR1Ud0txoJ/QQIDs2u+BriWFhfoSF2J0nO5U0SRTTNjMf8DbIcOug==}
     hasBin: true
 
-  '@effect/vitest@4.0.0-rc.113':
-    resolution: {integrity: sha512-ebuPhtZmumq1967n0vgF0sgAx/8tRHMmNGOdH1Oya1jKzV2Yoqhlv8WCGT0N//PuaV/Pc/zky3mmDvxmW81FiQ==}
+  '@effect/vitest@4.0.4':
+    resolution: {integrity: sha512-l5KN46RbDVpqZxWzwXZtX6FVQiyzd+/hTYqL543uSDRo7hC0m19IeICh6O9U/nqCtfersqsNZnBjgHFfkuHsBw==}
     peerDependencies:
-      effect: ^4.0.0-rc.113
+      effect: ^4.0.4
       vitest: '>=5.0.0 <6.0.0'
 
   '@emnapi/core@1.10.0':
@@ -1865,8 +1865,8 @@ packages:
   '@types/retry@0.12.5':
     resolution: {integrity: sha512-3xSjTp3v03X/lSQLkczaN9UIEwJMoMCA1+Nb5HfbJEQWogdeQIyVtTvxPXDQjZ5zws8rFQfVfRdz03ARihPJgw==}
 
-  '@types/ws@8.18.1':
-    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -2621,8 +2621,8 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  effect@4.0.0-rc.113:
-    resolution: {integrity: sha512-uZ4Bh7KSlw2sdVdNDHPLSNjLGH+MWap7cheIHZoB/1T/ZJ3pvI4KiN3kUp50MpFKXhygOMmReJJOwWMQPwpPAg==}
+  effect@4.0.4:
+    resolution: {integrity: sha512-Sr50OeVSC3M5UkoUYUhFf3EULryhGaZZUf6OzDHTvaznOw7HRlxOKdF3/4nvQXHL22StOyMG3Cvo8Bt7xUp+Ng==}
 
   ejs@3.1.10:
     resolution: {integrity: sha512-UeJmFfOrAQS8OJWPZ4qtgHyWExa088/MtK5UEyoJGFH67cDEXkZSviOiKRCZ4Xij0zxI3JECgYs3oKx+AizQBA==}
@@ -3300,8 +3300,8 @@ packages:
   ms@2.1.3:
     resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
 
-  mysql2@3.24.4:
-    resolution: {integrity: sha512-A2olluVlj0mvgyIRRISMEzXc51m+21mRtcMVjJyIpt2GG98+XrC9m9HzsqcMsX2LcnfccJvY5NB22g8fENBnOA==}
+  mysql2@3.24.6:
+    resolution: {integrity: sha512-enu73KhbAua2L3dIxjc6qg6ZJ7H3pt1BImZASWNWY5xSsmJ1ZuUPULTDGXgmJbI61vb+nJAG19IZclIq19UidQ==}
     engines: {node: '>= 8.0'}
     peerDependencies:
       '@types/node': '>= 8'
@@ -3738,9 +3738,6 @@ packages:
     resolution: {integrity: sha512-i5uvt8C3ikiWeNZSVZNWcfZPItFQOsYTUAOkcUPGd8DqDy1uOUikjt5dG+uRlwyvR108Fb9DOd4GvXfT0N2/uQ==}
     engines: {node: '>= 12'}
 
-  sprintf-js@1.1.3:
-    resolution: {integrity: sha512-Oo+0REFV59/rz3gfJNKQiBlwfHaSESl1pcGyABQsnnIfWOFt6JNj5gCog2U6MLZ//IGYD+nA8nI+mTShREReaA==}
-
   sql-escaper@1.5.1:
     resolution: {integrity: sha512-4toX5E1fQbBrpfXidaHnF0669nkAdETeIPTs2SUjxxD7RRIs9ICG4gtpmfc68JCEKehsdwLFqBu9VlQqZ1P1gg==}
     engines: {bun: '>=1.0.0', deno: '>=2.0.0', node: '>=12.0.0'}
@@ -3850,8 +3847,8 @@ packages:
   tar-stream@3.1.7:
     resolution: {integrity: sha512-qJj60CXt7IU1Ffyc3NJMjh6EkuCFej46zUqJ4J7pqYlThyd9bO0XBTmcOIhSzZJVWfsLks0+nle/j538YAW9RQ==}
 
-  tedious@20.0.0:
-    resolution: {integrity: sha512-bTR0aou0Ghucf0ytvZUJjnKHGKDV8tT57jPYtEkSpfTWFe++4uR1wxJLQ4mh5wlSvAYXzmgBxbI0vaE56qigXw==}
+  tedious@20.3.7:
+    resolution: {integrity: sha512-s+43djAcQGFiFHZPWtZPaDSZE/ukJnultjeJHXvKbM//OcZSSusSzXuqAIyOKpraNTWgtobhuWOvxrZK+a1yvA==}
     engines: {node: '>=22'}
 
   terminal-link@5.0.0:
@@ -3973,8 +3970,8 @@ packages:
     resolution: {integrity: sha512-3O9Tf67pGhgOv9jM35AbhkXAKi13f3oy3aE4CSgr+TckGeY+/iu97ZXN+J7DpHPzLbVApFd1IFhcnBjREYXYcg==}
     engines: {node: '>=20.18.1'}
 
-  undici@8.10.2:
-    resolution: {integrity: sha512-/y4/bH9YNU5hi9NIrpOuvGXFcxrj3CMrV+/AYpowAYTpHn8gX/XPFjNy766FPoYY0miQhdW977JFWKGNhBdwyQ==}
+  undici@8.11.2:
+    resolution: {integrity: sha512-u4UB2/IrKdU6lFxumHmmo1a3fCQO5tzQllRorfoRS63txhrB7xTpSn1PftwC4qEHkOaqP95fCWW4lJzwErwzhQ==}
     engines: {node: '>=22.19.0'}
 
   unicorn-magic@0.1.0:
@@ -4204,8 +4201,8 @@ packages:
       utf-8-validate:
         optional: true
 
-  ws@8.21.3:
-    resolution: {integrity: sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==}
+  ws@8.22.0:
+    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -4693,50 +4690,50 @@ snapshots:
 
   '@effect/language-service@0.86.2': {}
 
-  '@effect/platform-node-shared@4.0.0-rc.113(effect@4.0.0-rc.113)':
+  '@effect/platform-node-shared@4.0.4(effect@4.0.4)':
     dependencies:
-      '@types/ws': 8.18.1
-      effect: 4.0.0-rc.113
-      ws: 8.21.3
+      '@types/ws': 8.18.2
+      effect: 4.0.4
+      ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@4.0.0-rc.113(effect@4.0.0-rc.113)(redis@6.2.1)':
+  '@effect/platform-node@4.0.4(effect@4.0.4)(redis@6.2.1)':
     dependencies:
-      '@effect/platform-node-shared': 4.0.0-rc.113(effect@4.0.0-rc.113)
-      effect: 4.0.0-rc.113
+      '@effect/platform-node-shared': 4.0.4(effect@4.0.4)
+      effect: 4.0.4
       redis: 6.2.1
-      undici: 8.10.2
+      undici: 8.11.2
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/sql-mssql@4.0.0-rc.113(effect@4.0.0-rc.113)':
+  '@effect/sql-mssql@4.0.4(effect@4.0.4)':
     dependencies:
-      effect: 4.0.0-rc.113
-      tedious: 20.0.0
+      effect: 4.0.4
+      tedious: 20.3.7
     transitivePeerDependencies:
       - supports-color
 
-  '@effect/sql-mysql2@4.0.0-rc.113(@types/node@22.20.3)(effect@4.0.0-rc.113)':
+  '@effect/sql-mysql2@4.0.4(@types/node@22.20.3)(effect@4.0.4)':
     dependencies:
-      effect: 4.0.0-rc.113
-      mysql2: 3.24.4(@types/node@22.20.3)
+      effect: 4.0.4
+      mysql2: 3.24.6(@types/node@22.20.3)
     transitivePeerDependencies:
       - '@types/node'
 
-  '@effect/sql-pg@4.0.0-rc.113(effect@4.0.0-rc.113)':
+  '@effect/sql-pg@4.0.4(effect@4.0.4)':
     dependencies:
-      effect: 4.0.0-rc.113
+      effect: 4.0.4
 
-  '@effect/sql-sqlite-bun@4.0.0-rc.113(effect@4.0.0-rc.113)':
+  '@effect/sql-sqlite-bun@4.0.4(effect@4.0.4)':
     dependencies:
-      effect: 4.0.0-rc.113
+      effect: 4.0.4
 
-  '@effect/sql-sqlite-node@4.0.0-rc.113(effect@4.0.0-rc.113)':
+  '@effect/sql-sqlite-node@4.0.4(effect@4.0.4)':
     dependencies:
-      effect: 4.0.0-rc.113
+      effect: 4.0.4
 
   '@effect/tsgo-darwin-arm64@0.18.1':
     optional: true
@@ -4769,9 +4766,9 @@ snapshots:
       '@effect/tsgo-win32-arm64': 0.18.1
       '@effect/tsgo-win32-x64': 0.18.1
 
-  '@effect/vitest@4.0.0-rc.113(effect@4.0.0-rc.113)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))':
+  '@effect/vitest@4.0.4(effect@4.0.4)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))':
     dependencies:
-      effect: 4.0.0-rc.113
+      effect: 4.0.4
       vitest: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   '@emnapi/core@1.10.0':
@@ -5229,13 +5226,13 @@ snapshots:
     transitivePeerDependencies:
       - typescript
 
-  '@opentui/react@0.4.5(@typescript/typescript6@6.0.2)(react-devtools-core@7.0.1)(react@19.2.5)(web-tree-sitter@0.25.10)(ws@8.21.3)':
+  '@opentui/react@0.4.5(@typescript/typescript6@6.0.2)(react-devtools-core@7.0.1)(react@19.2.5)(web-tree-sitter@0.25.10)(ws@8.22.0)':
     dependencies:
       '@opentui/core': 0.4.5(@typescript/typescript6@6.0.2)(web-tree-sitter@0.25.10)
       react: 19.2.5
       react-devtools-core: 7.0.1
       react-reconciler: 0.33.0(react@19.2.5)
-      ws: 8.21.3
+      ws: 8.22.0
     transitivePeerDependencies:
       - typescript
       - web-tree-sitter
@@ -5503,10 +5500,10 @@ snapshots:
     dependencies:
       '@opentui/core': 0.4.5(@typescript/typescript6@6.0.2)(web-tree-sitter@0.25.10)
 
-  '@tuiparts/react@0.0.6(@opentui/core@0.4.5(@typescript/typescript6@6.0.2)(web-tree-sitter@0.25.10))(@opentui/react@0.4.5(@typescript/typescript6@6.0.2)(react-devtools-core@7.0.1)(react@19.2.5)(web-tree-sitter@0.25.10)(ws@8.21.3))(react@19.2.5)':
+  '@tuiparts/react@0.0.6(@opentui/core@0.4.5(@typescript/typescript6@6.0.2)(web-tree-sitter@0.25.10))(@opentui/react@0.4.5(@typescript/typescript6@6.0.2)(react-devtools-core@7.0.1)(react@19.2.5)(web-tree-sitter@0.25.10)(ws@8.22.0))(react@19.2.5)':
     dependencies:
       '@opentui/core': 0.4.5(@typescript/typescript6@6.0.2)(web-tree-sitter@0.25.10)
-      '@opentui/react': 0.4.5(@typescript/typescript6@6.0.2)(react-devtools-core@7.0.1)(react@19.2.5)(web-tree-sitter@0.25.10)(ws@8.21.3)
+      '@opentui/react': 0.4.5(@typescript/typescript6@6.0.2)(react-devtools-core@7.0.1)(react@19.2.5)(web-tree-sitter@0.25.10)(ws@8.22.0)
       '@tuiparts/core': 0.0.6(@opentui/core@0.4.5(@typescript/typescript6@6.0.2)(web-tree-sitter@0.25.10))
       react: 19.2.5
 
@@ -5576,7 +5573,7 @@ snapshots:
 
   '@types/retry@0.12.5': {}
 
-  '@types/ws@8.18.1':
+  '@types/ws@8.18.2':
     dependencies:
       '@types/node': 22.20.3
 
@@ -5668,12 +5665,12 @@ snapshots:
     dependencies:
       execa: 5.1.1
 
-  '@vercel/functions@3.7.1(@aws-sdk/credential-provider-web-identity@3.972.49)(ws@8.21.3)':
+  '@vercel/functions@3.7.1(@aws-sdk/credential-provider-web-identity@3.972.49)(ws@8.22.0)':
     dependencies:
       '@vercel/oidc': 3.6.1
     optionalDependencies:
       '@aws-sdk/credential-provider-web-identity': 3.972.49
-      ws: 8.21.3
+      ws: 8.22.0
 
   '@vercel/oidc@3.2.0': {}
 
@@ -5742,13 +5739,13 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
 
-  '@workflow/astro@4.0.10(ws@8.21.3)':
+  '@workflow/astro@4.0.10(ws@8.22.0)':
     dependencies:
       '@swc/core': 1.15.3
-      '@workflow/builders': 4.1.0(ws@8.21.3)
-      '@workflow/rollup': 4.0.10(ws@8.21.3)
+      '@workflow/builders': 4.1.0(ws@8.22.0)
+      '@workflow/rollup': 4.0.10(ws@8.22.0)
       '@workflow/swc-plugin': 4.1.1(@swc/core@1.15.3)
-      '@workflow/vite': 4.0.10(ws@8.21.3)
+      '@workflow/vite': 4.0.10(ws@8.22.0)
       exsolve: 1.0.8
       pathe: 2.0.3
     transitivePeerDependencies:
@@ -5757,10 +5754,10 @@ snapshots:
       - supports-color
       - ws
 
-  '@workflow/builders@4.1.0(ws@8.21.3)':
+  '@workflow/builders@4.1.0(ws@8.22.0)':
     dependencies:
       '@swc/core': 1.15.3
-      '@workflow/core': 4.5.0(ws@8.21.3)
+      '@workflow/core': 4.5.0(ws@8.22.0)
       '@workflow/errors': 4.1.4
       '@workflow/swc-plugin': 4.1.1(@swc/core@1.15.3)
       '@workflow/utils': 4.1.3
@@ -5777,14 +5774,14 @@ snapshots:
       - supports-color
       - ws
 
-  '@workflow/cli@4.2.10(ws@8.21.3)':
+  '@workflow/cli@4.2.10(ws@8.22.0)':
     dependencies:
       '@oclif/core': 4.11.4
       '@oclif/plugin-help': 6.2.37
       '@swc/core': 1.15.3
       '@vercel/cli-auth': 0.0.1
-      '@workflow/builders': 4.1.0(ws@8.21.3)
-      '@workflow/core': 4.5.0(ws@8.21.3)
+      '@workflow/builders': 4.1.0(ws@8.22.0)
+      '@workflow/core': 4.5.0(ws@8.22.0)
       '@workflow/errors': 4.1.4
       '@workflow/swc-plugin': 4.1.1(@swc/core@1.15.3)
       '@workflow/utils': 4.1.3
@@ -5815,13 +5812,13 @@ snapshots:
       - supports-color
       - ws
 
-  '@workflow/core@4.5.0(ws@8.21.3)':
+  '@workflow/core@4.5.0(ws@8.22.0)':
     dependencies:
       '@aws-sdk/credential-provider-web-identity': 3.972.49
       '@jridgewell/trace-mapping': 0.3.31
       '@standard-schema/spec': 1.0.0
       '@types/ms': 2.1.0
-      '@vercel/functions': 3.7.1(@aws-sdk/credential-provider-web-identity@3.972.49)(ws@8.21.3)
+      '@vercel/functions': 3.7.1(@aws-sdk/credential-provider-web-identity@3.972.49)(ws@8.22.0)
       '@workflow/errors': 4.1.4
       '@workflow/serde': 4.1.2
       '@workflow/utils': 4.1.3
@@ -5845,13 +5842,13 @@ snapshots:
       '@workflow/utils': 4.1.3
       ms: 2.1.3
 
-  '@workflow/nest@0.0.10(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(ws@8.21.3)':
+  '@workflow/nest@0.0.10(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(ws@8.22.0)':
     dependencies:
       '@nestjs/common': 11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@nestjs/core': 11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2)
       '@swc/cli': 0.8.1(@swc/core@1.15.3)(chokidar@5.0.0)
       '@swc/core': 1.15.3
-      '@workflow/builders': 4.1.0(ws@8.21.3)
+      '@workflow/builders': 4.1.0(ws@8.22.0)
       '@workflow/swc-plugin': 4.1.1(@swc/core@1.15.3)
       pathe: 2.0.3
     transitivePeerDependencies:
@@ -5860,11 +5857,11 @@ snapshots:
       - supports-color
       - ws
 
-  '@workflow/next@4.0.11(next@16.2.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(ws@8.21.3)':
+  '@workflow/next@4.0.11(next@16.2.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(ws@8.22.0)':
     dependencies:
       '@swc/core': 1.15.3
-      '@workflow/builders': 4.1.0(ws@8.21.3)
-      '@workflow/core': 4.5.0(ws@8.21.3)
+      '@workflow/builders': 4.1.0(ws@8.22.0)
+      '@workflow/core': 4.5.0(ws@8.22.0)
       '@workflow/swc-plugin': 4.1.1(@swc/core@1.15.3)
       semver: 7.7.4
       watchpack: 2.5.1
@@ -5876,14 +5873,14 @@ snapshots:
       - supports-color
       - ws
 
-  '@workflow/nitro@4.1.1(ws@8.21.3)':
+  '@workflow/nitro@4.1.1(ws@8.22.0)':
     dependencies:
       '@swc/core': 1.15.3
-      '@workflow/builders': 4.1.0(ws@8.21.3)
-      '@workflow/core': 4.5.0(ws@8.21.3)
-      '@workflow/rollup': 4.0.10(ws@8.21.3)
+      '@workflow/builders': 4.1.0(ws@8.22.0)
+      '@workflow/core': 4.5.0(ws@8.22.0)
+      '@workflow/rollup': 4.0.10(ws@8.22.0)
       '@workflow/swc-plugin': 4.1.1(@swc/core@1.15.3)
-      '@workflow/vite': 4.0.10(ws@8.21.3)
+      '@workflow/vite': 4.0.10(ws@8.22.0)
       '@workflow/web': 4.1.11
       exsolve: 1.0.8
       pathe: 2.0.3
@@ -5893,10 +5890,10 @@ snapshots:
       - supports-color
       - ws
 
-  '@workflow/nuxt@4.0.11(ws@8.21.3)':
+  '@workflow/nuxt@4.0.11(ws@8.22.0)':
     dependencies:
       '@nuxt/kit': 4.4.7
-      '@workflow/nitro': 4.1.1(ws@8.21.3)
+      '@workflow/nitro': 4.1.1(ws@8.22.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - '@swc/helpers'
@@ -5904,10 +5901,10 @@ snapshots:
       - supports-color
       - ws
 
-  '@workflow/rollup@4.0.10(ws@8.21.3)':
+  '@workflow/rollup@4.0.10(ws@8.22.0)':
     dependencies:
       '@swc/core': 1.15.3
-      '@workflow/builders': 4.1.0(ws@8.21.3)
+      '@workflow/builders': 4.1.0(ws@8.22.0)
       '@workflow/swc-plugin': 4.1.1(@swc/core@1.15.3)
       exsolve: 1.0.7
     transitivePeerDependencies:
@@ -5918,13 +5915,13 @@ snapshots:
 
   '@workflow/serde@4.1.2': {}
 
-  '@workflow/sveltekit@4.0.10(ws@8.21.3)':
+  '@workflow/sveltekit@4.0.10(ws@8.22.0)':
     dependencies:
       '@swc/core': 1.15.3
-      '@workflow/builders': 4.1.0(ws@8.21.3)
-      '@workflow/rollup': 4.0.10(ws@8.21.3)
+      '@workflow/builders': 4.1.0(ws@8.22.0)
+      '@workflow/rollup': 4.0.10(ws@8.22.0)
       '@workflow/swc-plugin': 4.1.1(@swc/core@1.15.3)
-      '@workflow/vite': 4.0.10(ws@8.21.3)
+      '@workflow/vite': 4.0.10(ws@8.22.0)
       exsolve: 1.0.8
       fs-extra: 11.3.5
       pathe: 2.0.3
@@ -5946,20 +5943,20 @@ snapshots:
     dependencies:
       ms: 2.1.3
 
-  '@workflow/vite@4.0.10(ws@8.21.3)':
+  '@workflow/vite@4.0.10(ws@8.22.0)':
     dependencies:
-      '@workflow/builders': 4.1.0(ws@8.21.3)
+      '@workflow/builders': 4.1.0(ws@8.22.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - '@swc/helpers'
       - supports-color
       - ws
 
-  '@workflow/vitest@4.0.11(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(ws@8.21.3)(zod@4.3.6)':
+  '@workflow/vitest@4.0.11(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(ws@8.22.0)(zod@4.3.6)':
     dependencies:
-      '@workflow/builders': 4.1.0(ws@8.21.3)
-      '@workflow/core': 4.5.0(ws@8.21.3)
-      '@workflow/rollup': 4.0.10(ws@8.21.3)
+      '@workflow/builders': 4.1.0(ws@8.22.0)
+      '@workflow/core': 4.5.0(ws@8.22.0)
+      '@workflow/rollup': 4.0.10(ws@8.22.0)
       '@workflow/world': 4.2.0(zod@4.3.6)
       '@workflow/world-local': 4.2.0
       vitest: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
@@ -6464,7 +6461,7 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect@4.0.0-rc.113: {}
+  effect@4.0.4: {}
 
   ejs@3.1.10:
     dependencies:
@@ -7116,7 +7113,7 @@ snapshots:
 
   ms@2.1.3: {}
 
-  mysql2@3.24.4(@types/node@22.20.3):
+  mysql2@3.24.6(@types/node@22.20.3):
     dependencies:
       '@types/node': 22.20.3
       aws-ssl-profiles: 1.1.2
@@ -7598,8 +7595,6 @@ snapshots:
 
   source-map@0.7.6: {}
 
-  sprintf-js@1.1.3: {}
-
   sql-escaper@1.5.1: {}
 
   stackback@0.0.2: {}
@@ -7703,7 +7698,7 @@ snapshots:
       - bare-abort-controller
       - react-native-b4a
 
-  tedious@20.0.0:
+  tedious@20.3.7:
     dependencies:
       '@azure/core-auth': 1.11.0
       '@azure/identity': 4.13.1
@@ -7714,7 +7709,6 @@ snapshots:
       iconv-lite: 0.7.3
       js-md4: 0.3.2
       native-duplexpair: 1.0.0
-      sprintf-js: 1.1.3
     transitivePeerDependencies:
       - supports-color
 
@@ -7848,7 +7842,7 @@ snapshots:
 
   undici@7.26.0: {}
 
-  undici@8.10.2: {}
+  undici@8.11.2: {}
 
   unicorn-magic@0.1.0: {}
 
@@ -7878,7 +7872,7 @@ snapshots:
   vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0):
     dependencies:
       lightningcss: 1.32.0
-      picomatch: 4.0.5
+      picomatch: 4.0.7
       postcss: 8.5.16
       rolldown: 1.0.3
       tinyglobby: 0.2.17
@@ -7973,18 +7967,18 @@ snapshots:
 
   wordwrap@1.0.0: {}
 
-  workflow@4.5.0(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(@typescript/typescript6@6.0.2)(next@16.2.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(ws@8.21.3):
+  workflow@4.5.0(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(@typescript/typescript6@6.0.2)(next@16.2.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(ws@8.22.0):
     dependencies:
-      '@workflow/astro': 4.0.10(ws@8.21.3)
-      '@workflow/cli': 4.2.10(ws@8.21.3)
-      '@workflow/core': 4.5.0(ws@8.21.3)
+      '@workflow/astro': 4.0.10(ws@8.22.0)
+      '@workflow/cli': 4.2.10(ws@8.22.0)
+      '@workflow/core': 4.5.0(ws@8.22.0)
       '@workflow/errors': 4.1.4
-      '@workflow/nest': 0.0.10(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(ws@8.21.3)
-      '@workflow/next': 4.0.11(next@16.2.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(ws@8.21.3)
-      '@workflow/nitro': 4.1.1(ws@8.21.3)
-      '@workflow/nuxt': 4.0.11(ws@8.21.3)
-      '@workflow/rollup': 4.0.10(ws@8.21.3)
-      '@workflow/sveltekit': 4.0.10(ws@8.21.3)
+      '@workflow/nest': 0.0.10(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(ws@8.22.0)
+      '@workflow/next': 4.0.11(next@16.2.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(ws@8.22.0)
+      '@workflow/nitro': 4.1.1(ws@8.22.0)
+      '@workflow/nuxt': 4.0.11(ws@8.22.0)
+      '@workflow/rollup': 4.0.10(ws@8.22.0)
+      '@workflow/sveltekit': 4.0.10(ws@8.22.0)
       '@workflow/typescript-plugin': 4.0.3(@typescript/typescript6@6.0.2)
       '@workflow/utils': 4.1.3
       ms: 2.1.3
@@ -8016,7 +8010,7 @@ snapshots:
 
   ws@7.5.13: {}
 
-  ws@8.21.3: {}
+  ws@8.22.0: {}
 
   wsl-utils@0.1.0:
     dependencies:

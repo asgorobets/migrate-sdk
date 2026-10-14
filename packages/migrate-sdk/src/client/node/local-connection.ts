@@ -5,9 +5,9 @@ import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layerNet } from "@effect/platform-node/NodeSocket";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
-import { layerProtocolSocket } from "effect/unstable/rpc/RpcClient";
-import { RpcClientError } from "effect/unstable/rpc/RpcClientError";
-import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
+import { layerProtocolSocket } from "effect/rpc/RpcClient";
+import { RpcClientError } from "effect/rpc/RpcClientError";
+import { layerNdjson } from "effect/rpc/RpcSerialization";
 import type {
   MigrateServerInfo,
   MigrateServerInstanceId,

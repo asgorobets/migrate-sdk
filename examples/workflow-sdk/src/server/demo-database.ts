@@ -3,7 +3,7 @@ import {
   loadCatalogFixtureFromSnapshot,
 } from "@fixtures/catalog";
 import { Effect } from "effect";
-import { SqlClient } from "effect/unstable/sql";
+import { SqlClient } from "effect/sql";
 import { SqlMigrationStore } from "migrate-sdk/stores/sql";
 import {
   migrationStoreTablePrefix,

@@ -9,8 +9,8 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
-import type { SqlClient } from "effect/unstable/sql";
+import { Argument, CliError, Command, Flag } from "effect/cli";
+import type { SqlClient } from "effect/sql";
 import type { PipelineExecutionConcurrency } from "../domain/execution.ts";
 import {
   toMigrationDefinitionGroupId,

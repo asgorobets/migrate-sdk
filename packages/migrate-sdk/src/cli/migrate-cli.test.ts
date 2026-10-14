@@ -3,10 +3,10 @@ import { layer as nodeServicesLayer } from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Schema, Stdio, Stream } from "effect";
 import { pretty as prettyCause } from "effect/Cause";
+import { CliOutput, Command } from "effect/cli";
 import { isFailure, isSuccess } from "effect/Exit";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { TestConsole } from "effect/testing";
-import { CliOutput, Command } from "effect/unstable/cli";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import {
   DuplicateSourceIdentityStatusWarning,
   MigrationMessage,

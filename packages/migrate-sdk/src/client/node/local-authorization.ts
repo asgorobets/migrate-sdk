@@ -1,18 +1,18 @@
 import { timingSafeEqual } from "node:crypto";
 import { Context, Effect, Layer, Schema } from "effect";
-import { Headers } from "effect/unstable/http";
+import { Headers } from "effect/http";
 import {
   make as makeRpcClient,
   type Protocol,
   type RpcClient,
-} from "effect/unstable/rpc/RpcClient";
-import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
-import type { Rpcs } from "effect/unstable/rpc/RpcGroup";
+} from "effect/rpc/RpcClient";
+import type { RpcClientError } from "effect/rpc/RpcClientError";
+import type { Rpcs } from "effect/rpc/RpcGroup";
 import {
   type ForClient,
   layerClient,
   Service as RpcMiddlewareService,
-} from "effect/unstable/rpc/RpcMiddleware";
+} from "effect/rpc/RpcMiddleware";
 import { MigrateStreamingRpcs } from "../../protocol/index.ts";
 import { MigrateClient } from "../index.ts";
 import {

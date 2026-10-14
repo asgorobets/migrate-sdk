@@ -1,6 +1,6 @@
 import { layer as nodeServicesLayer } from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
-import { Command } from "effect/unstable/cli";
+import { Command } from "effect/cli";
 import { migrationTelemetryLayer } from "../telemetry.ts";
 import { MIGRATE_SDK_VERSION } from "../version.ts";
 import { migrateCommand } from "./command.ts";
