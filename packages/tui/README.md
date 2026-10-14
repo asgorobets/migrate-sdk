@@ -78,6 +78,19 @@ Connect to a deployed Migrate Server without loading a local migration config:
 pnpm exec migrate-tui --server https://migrate.example.com/api/rpc
 ```
 
+For a one-off remote session, use pnpm 10.2.0 or newer:
+
+```sh
+MIGRATE_SERVER_TOKEN="<your-token>" \
+  pnpm --allow-build=bun --allow-build=esbuild dlx @migrate-sdk/tui@latest \
+  --server https://migrate.example.com/api/rpc
+```
+
+No local project, migration config, or lockfile setup is needed. pnpm caches
+the packages automatically. The approval flags allow Bun and esbuild's install
+scripts. This release uses Effect 4.0.4 and matching platform packages; older
+releases may resolve incompatible prerelease and stable dependencies.
+
 When `MIGRATE_SERVER_TOKEN` is set, its value is sent as an HTTP Bearer token.
 Source, destination, Migration Store,
 and Execution Adapter credentials remain in the remote environment. The TUI
@@ -119,7 +132,7 @@ import {
   HttpMiddleware,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import {
   MigrateServerHttp,
   RegistryMigrateServer,
@@ -329,4 +342,8 @@ smoke and local IPC test cover real migration execution:
 ```sh
 pnpm --filter @migrate-sdk/tui test:binary
 pnpm --filter @migrate-sdk/tui test:ipc
+pnpm --filter @migrate-sdk/tui test:package
 ```
+
+The package smoke check includes a fresh `pnpm dlx` launch with explicit build
+approvals and no consumer configuration.

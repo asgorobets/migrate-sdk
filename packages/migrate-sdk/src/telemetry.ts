@@ -1,6 +1,6 @@
 import { Layer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
+import { FetchHttpClient } from "effect/http";
+import { OtlpSerialization, OtlpTracer } from "effect/observability";
 
 /**
  * Opt-in OTLP/HTTP JSON trace export using standard OTEL configuration.

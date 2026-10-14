@@ -1,8 +1,8 @@
 import { Cause, Effect, Layer, ManagedRuntime, Option, Schema } from "effect";
-import { HttpClient, HttpClientRequest } from "effect/unstable/http";
-import { layerProtocolHttp } from "effect/unstable/rpc/RpcClient";
-import { RpcClientError } from "effect/unstable/rpc/RpcClientError";
-import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
+import { HttpClient, HttpClientRequest } from "effect/http";
+import { layerProtocolHttp } from "effect/rpc/RpcClient";
+import { RpcClientError } from "effect/rpc/RpcClientError";
+import { layerNdjson } from "effect/rpc/RpcSerialization";
 import {
   type MigrateConnection,
   validateMigrateServerProtocol,

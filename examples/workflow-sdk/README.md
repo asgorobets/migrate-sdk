@@ -129,6 +129,11 @@ configuration.
    token to visitors so they can exercise Bearer authentication from the browser
    or their own TUI. Set separate private `DEMO_SETUP_TOKEN` and `CRON_SECRET`
    values.
+
+   The example uses Effect and `@effect/sql-pg` 4.0.4 together. This PostgreSQL
+   client sends the database hostname as TLS SNI, which Neon needs to route the
+   connection. Keep `sslmode=require` in the Neon URL. `/api/health` should
+   return `{"database":"reachable","status":"ok"}` after deployment.
 4. Deploy. `withWorkflow` selects Workflow SDK's Vercel runtime automatically,
    and `vercel.json` registers the daily 05:00 UTC catalog import.
 5. Initialize the demo once:
@@ -144,9 +149,15 @@ configuration.
 
    ```bash
    MIGRATE_SERVER_TOKEN="TOKEN_SHOWN_ON_THE_DEMO_PAGE" \
-     pnpm dlx @migrate-sdk/tui \
+     pnpm --allow-build=bun --allow-build=esbuild dlx @migrate-sdk/tui@latest \
      --server https://YOUR_DEPLOYMENT/api/migrate
    ```
+
+   This one-off command requires Node.js 22.19.0 or newer and pnpm 10.2.0 or
+   newer. pnpm caches the TUI automatically; no local project, config file, or
+   lockfile setup is needed. The flags allow the pinned Bun runtime and esbuild
+   to run their install scripts. Use the TUI release with Effect 4.0.4 after it
+   is published; older releases can resolve incompatible Effect dependencies.
 
 `POST /api/demo/setup?reset=true` drops all demo and migration-store data. It is
 provided only for this example and remains protected by the private

@@ -1,5 +1,5 @@
 import { Cause, Effect, type Layer, Schedule, Schema } from "effect";
-import { HttpClientError } from "effect/unstable/http";
+import { HttpClientError } from "effect/http";
 import { type SourceError, SourceIdentity } from "migrate-sdk";
 import {
   DocumentFetchers,

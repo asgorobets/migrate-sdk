@@ -7,12 +7,9 @@ import {
   Schema,
   Stream,
 } from "effect";
-import {
-  make as makeRpcClient,
-  type RpcClient,
-} from "effect/unstable/rpc/RpcClient";
-import { RpcClientError } from "effect/unstable/rpc/RpcClientError";
-import type { Rpcs } from "effect/unstable/rpc/RpcGroup";
+import { make as makeRpcClient, type RpcClient } from "effect/rpc/RpcClient";
+import { RpcClientError } from "effect/rpc/RpcClientError";
+import type { Rpcs } from "effect/rpc/RpcGroup";
 import type { MigrationRunId } from "../domain/ids.ts";
 import {
   type MigrateDashboardResumeToken,

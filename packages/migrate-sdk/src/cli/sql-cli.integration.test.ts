@@ -16,8 +16,8 @@ import {
   Redacted,
   Schedule,
 } from "effect";
+import { SqlClient } from "effect/sql";
 import { TestClock } from "effect/testing";
-import { SqlClient } from "effect/unstable/sql";
 import {
   type MigrationDefinitionRunStatus,
   type MigrationItemStateSummary,
