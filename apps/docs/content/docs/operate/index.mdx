@@ -1,0 +1,46 @@
+---
+title: Operate migrations
+description: Understand the server, execution, observation, and ownership model before operating migrations.
+---
+
+A **Migration Definition** connects a Source, a processing style, and a Migration Store, with optional tracking and rollback contracts. Operating it means selecting definitions from a **Migration Definition Registry**, planning an operation, and starting a **Migration Run**.
+
+The operating model keeps five responsibilities explicit:
+
+| Concept | Responsibility |
+| --- | --- |
+| **Migration Definition Registry** | Catalogs executable definitions and their dependency relationships. |
+| **Migrate Server** | Provides an environment's authoritative registry and capabilities to inspect, plan, execute, observe, and control migrations. |
+| **Execution Adapter** | Executes planned work inline or starts it through a durable workflow provider. |
+| **Migration Store** | Persists item state, run state, source cursors, completion, and definition locks. |
+| **Migrate Client** | Requests operations and displays their results without owning remote source, destination, or store credentials. |
+
+## Choose an environment and connection
+
+A **Migrate Environment** identifies the operational environment served by a Migrate Server, such as development or production. The server exposes its environment ID and optional label, registry identity, protocol version, and SDK version. The host configures the actual sources, destinations, stores, and credentials. An environment label alone does not isolate data; use the appropriate resource configuration for each environment.
+
+A **Migrate Connection** selects the server target and access method. Local clients can reach a Node Migrate Server that loads the project's configuration; remote clients use the hosted protocol endpoint. The connection does not select the Execution Adapter. The server's configuration decides how work executes.
+
+Choose inline execution when the host remains alive for the entire run. Choose a durable Execution Adapter when work must survive individual requests or workers. The [Workflow SDK cookbook](/docs/cookbook/workflow-sdk) shows the durable integration.
+
+## Plan, then execute
+
+An operation selects explicit definition IDs, one Migration Definition Group, or all registered definitions. Planning resolves that selection and dependency order before execution. The server checks an accepted plan against its current registry when starting work, so a stale prepared plan cannot silently authorize a different scope.
+
+A **Migration Run** is one execution attempt of one or more definitions. It has a run ID and durable **Migration Run State**. The run acquires **Migration Definition Locks** for its scope; overlapping ownership prevents competing execution of the same definitions.
+
+Start with a plan and inspect its scope. A small normal run can then exercise a new definition's actual source and destination behavior. The CLI explains which operations accept a per-definition limit and what that limit counts.
+
+## Observe without owning the run
+
+A **Migration Run Observation** is a client-scoped stream of progress, lifecycle, warning, and terminal events for a run ID. Several clients can observe the same run. Ending one observation leaves execution and lock ownership unchanged.
+
+Requesting cancellation is a separate operation. The run stops scheduling work, lets already-started work settle, records terminal state, and releases its locks. Breaking a lock is recovery of abandoned ownership; it does not cancel the former owner's execution.
+
+## Choose an operating interface
+
+<Cards>
+  <Card title="CLI" href="/docs/operate/cli" description="Commands and arguments for plans, selection, limits, status, retries, rollback, and administration." />
+  <Card title="TUI" href="/docs/operate/tui" description="Navigate definitions, inspect item details, preview operations, and observe active runs." />
+  <Card title="Collaboration and locks" href="/docs/operate/collaboration-and-locks" description="Share a server and store, understand ownership, stop safely, and recover abandoned locks." />
+</Cards>

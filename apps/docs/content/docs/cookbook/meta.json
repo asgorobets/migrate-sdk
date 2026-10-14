@@ -1,0 +1,11 @@
+{
+  "title": "Cookbook",
+  "pages": [
+    "index",
+    "csv-to-json",
+    "api-to-api",
+    "combine-api-sources",
+    "multiple-destinations",
+    "workflow-sdk"
+  ]
+}

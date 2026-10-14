@@ -1,0 +1,18 @@
+---
+title: Cookbook
+description: Apply the migration primitives to complete file, API, and workflow integrations.
+---
+
+Recipes assemble the contracts described in [Learn](/docs/learn). Each states its source and destination assumptions, shows the implementation, and explains what happens when execution repeats or fails.
+
+The sample payloads provide concrete data for those contracts. The same Source, Process Pipeline, Tracking, and Migration Store responsibilities apply to other domains.
+
+<Cards>
+  <Card title="CSV to JSON files" href="/docs/cookbook/csv-to-json" description="Run a complete local definition with source decoding, mapping, tracking, and compensation." />
+  <Card title="API to API" href="/docs/cookbook/api-to-api" description="Implement HTTP source access and repeatable destination writes with explicit recovery." />
+  <Card title="Combine two sources" href="/docs/cookbook/combine-api-sources" description="Join upstream payloads while preserving one stable identity and a version covering both inputs." />
+  <Card title="Write to two destinations" href="/docs/cookbook/multiple-destinations" description="Keep a composite Tracking Record and compensate partially completed destination work." />
+  <Card title="Run durably" href="/docs/cookbook/workflow-sdk" description="Use an Execution Adapter and Migration Execution Envelope to coordinate work through Workflow SDK." />
+</Cards>
+
+API recipes include their adjacent TypeScript files in tabs. Their illustrative endpoint contracts must be adapted to your provider. The Workflow recipe uses the complete monorepo integration with its database, server, and deployment wiring.

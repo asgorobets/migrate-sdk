@@ -1,0 +1,83 @@
+---
+title: Retries and exponential backoff
+description: Define retry boundaries, bounded request policies, and recovery from durable failed item state.
+---
+
+A **retry strategy** determines which failed operation to repeat, which errors permit repetition, and how long to wait between attempts. Its scope matters: repeating one destination request, repeating a source read, and reprocessing a saved failed item are different operations.
+
+The SDK preserves these boundaries so a migration can recover locally from transient failures while retaining durable failures for later inspection and correction.
+
+## Destination Retry Strategy
+
+A **Destination Retry Strategy** is an Effect retry wrapper applied by a Process Pipeline at a destination helper or destination Effect call site. The destination can classify its errors; the process chooses where the strategy applies.
+
+The SDK does not impose a destination retry loop around the whole process. `Effect.retry` repeats the Effect it wraps. If that Effect contains multiple writes, an error in the last write can repeat the earlier writes too. Place the wrapper around the smallest operation that should be repeated.
+
+The strategy runs within the current Pipeline Execution Scope. Successful request recovery lets the process continue. Exhausting the policy propagates the final error; the normal item-failure path then determines what state and tracking evidence are persisted.
+
+## Source retry strategies
+
+A definition can select two independent wrappers:
+
+| Primitive | Definition option | Operation repeated |
+| --- | --- | --- |
+| Source Cursor Retry Strategy | `sourceCursorRetry` | Reading a source window from its cursor. |
+| Source Lookup Retry Strategy | `sourceLookupRetry` | Looking up current source data by identity. |
+
+Both use the `SourceRetryStrategy` type: a wrapper from an Effect failing with `SourceError` to another Effect with the same success and error contract. There is no definition option named `sourceRetry`; an example may use that name for a local wrapper function.
+
+These strategies wrap reads and lookups, not item processing or saved failed-state selection. A read failure can include adapter-level validation, so the policy must distinguish temporary provider failures from malformed data. If a source read makes several requests, retrying the read can repeat all of them. Choose between request-level and source-level retry deliberately; nested retry budgets multiply attempts.
+
+## Classify before retrying
+
+A transient error is one expected to become recoverable without changing the request. Temporary unavailability and some network timeouts may qualify. Invalid credentials, malformed payloads, incompatible schemas, and invalid cursors normally require a correction.
+
+Use structured [live errors](/docs/learn/errors#live-typed-failures) for that decision. A generic `SourceError` or `DestinationError` does not itself establish that repetition is useful or safe. When an adapter wraps a provider error, retain the information needed by the policy in its cause or classify it before wrapping.
+
+Retry eligibility and repeatability are separate. A transient timeout can occur after the remote operation succeeded. A safe strategy therefore also needs an idempotent operation, a stable destination key, provider-supported idempotency keys, or reconciliation.
+
+## Exponential backoff and limits
+
+**Exponential backoff** increases the delay between repeated attempts. With a 250 ms base and a factor of two, the first four waits are 250 ms, 500 ms, 1 second, and 2 seconds. **Jitter** varies these waits so concurrent workers do not retry simultaneously.
+
+A complete policy defines more than its delay curve:
+
+| Policy decision | Purpose |
+| --- | --- |
+| Error predicate | Repeat only classified recoverable failures. |
+| Attempt limit | Stop after a bounded number of retries. |
+| Delay cap | Bound the exponential component of each wait. |
+| Request timeout | Bound how long one request can remain outstanding. |
+| Provider delay handling | Respect rate-limit instructions such as `Retry-After`. |
+| Total execution budget | Bound the operation across requests and waits. |
+
+`Effect.retry({ times: 4, ... })` allows at most five attempts: the original plus four retries. Effect's `Schedule.exponential`, `Schedule.jittered`, and `Schedule.modifyDelay` compose the waiting policy. These are application choices rather than SDK defaults.
+
+The optional implementation below caps exponential waits at 4 seconds, respects `Retry-After` up to 60 seconds, and stops when a provider requests a longer wait. It never shortens that provider-requested delay to fit the local cap. The associated request helper has a ten-second timeout.
+
+<details>
+<summary>Implementation example: bounded backoff with rate-limit handling</summary>
+
+This policy consumes `ApiRequestError` from [the errors example](/docs/learn/errors#give-api-failures-a-useful-type), directly or inside `SourceError.cause`. It retries only classified transient failures. `sourceRetryOptions` can be spread into a definition whose source preserves that error cause.
+
+<include lang="ts" meta='title="recovery-retries.ts" twoslash source="../../examples/recovery-retries.ts"'>../../examples/recovery-retries.ts</include>
+
+The code follows the installed Effect v4 API. See the primary [Effect retry documentation](https://github.com/Effect-TS/effect/blob/effect@4.0.0-rc.113/packages/effect/src/Effect.ts) and [Schedule documentation](https://github.com/Effect-TS/effect/blob/effect@4.0.0-rc.113/packages/effect/src/Schedule.ts) when adapting it to another version.
+
+</details>
+
+## Reprocess durable failed items
+
+A **failed-item run** selects saved states with status `failed`, reads current source data for their identities, and executes their processes again. It starts a new Migration Run. It does not replay a frozen payload or resume at the statement that failed.
+
+The CLI's `--failed` mode selects this work; `--skipped` deliberately reevaluates skipped items, and `--id` targets an identity. Required dependencies included in the plan follow their normal run behavior. See the [CLI guide](/docs/operate/cli) for selection and planning.
+
+A normal run also processes failed items it encounters in source order. A saved cursor can already be beyond an earlier failure, so explicit selection avoids depending on a later full traversal. Lookup cost still follows the source's declared strategy: a scan lookup can read the entire source for one identity.
+
+[Tracking](/docs/learn/tracking) exposes prior evidence but does not guarantee exactly-once destination execution. The [multiple-destination cookbook](/docs/cookbook/multiple-destinations) applies repeatability and compensation across several writes.
+
+## Provider step retries
+
+A workflow provider can repeat an orchestration step independently of SDK request policies and failed-item selection. This is another execution boundary, with its own replay consequences.
+
+The Workflow SDK integration disables automatic retries for cursor-window and orphan-cleanup steps because migration state and provider step results cannot be committed atomically. Lifecycle and finalization steps have different retry behavior. Follow the [Workflow SDK recipe](/docs/cookbook/workflow-sdk) rather than enabling processing-step retries as a replacement for item recovery.

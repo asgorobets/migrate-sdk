@@ -1,0 +1,25 @@
+{
+  "name": "migrate-sdk-getting-started",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "start": "node run.ts",
+    "update": "node run.ts update",
+    "rollback": "node run.ts rollback",
+    "test": "node verify.mjs"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.0-rc.113",
+    "effect": "4.0.0-rc.113",
+    "migrate-sdk": "0.14.0"
+  },
+  "overrides": {
+    "@effect/platform-node-shared": "4.0.0-rc.113"
+  },
+  "stackblitz": {
+    "startCommand": "npm start"
+  }
+}

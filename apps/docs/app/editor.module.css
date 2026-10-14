@@ -1,0 +1,322 @@
+.codeSurface {
+  --token-color: var(--token-light);
+  color: var(--foreground);
+  scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin;
+  background: var(--background);
+}
+.compactCode {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.codePre {
+  padding: 18px 0;
+  margin: 0;
+  font:
+    400 11px / 2 var(--font-geist-mono),
+    monospace;
+  tab-size: 2;
+}
+.codePre code {
+  font: inherit;
+}
+.codeLine {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  min-height: 22px;
+  padding-right: 18px;
+  border-left: 2px solid transparent;
+}
+.lineNumber {
+  padding-right: 13px;
+  font-size: 10px;
+  color: var(--muted);
+  text-align: right;
+  user-select: none;
+  opacity: 0.6;
+}
+.lineContent {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.token {
+  color: var(--token-light);
+}
+.typeTrigger {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  line-height: inherit;
+  vertical-align: baseline;
+  text-align: inherit;
+  text-decoration: underline dotted
+    color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 3px;
+  cursor: help;
+  user-select: text;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+.typeTrigger:hover,
+.typeTrigger:focus-visible {
+  text-decoration-color: var(--accent);
+  outline-offset: 2px;
+  background: var(--accent-soft);
+}
+.typeTooltip {
+  position: fixed;
+  z-index: 20;
+  max-height: 240px;
+  padding: 13px 16px;
+  overflow: auto;
+  color: var(--foreground);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  box-shadow: 0 12px 40px #0004;
+}
+.typeLabel {
+  display: block;
+  padding-bottom: 9px;
+  margin-bottom: 9px;
+  font-size: 10px;
+  color: var(--accent);
+  border-bottom: 1px solid var(--border);
+}
+.typeTooltip pre {
+  margin: 0;
+  font:
+    11px / 1.75 var(--font-geist-mono),
+    monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.editorDialog {
+  position: fixed;
+  width: min(1180px, calc(100vw - 48px));
+  max-width: none;
+  height: min(900px, calc(100dvh - 64px));
+  max-height: none;
+  padding: 0;
+  margin: auto;
+  overflow: hidden;
+  color: var(--foreground);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 24px 100px #0006;
+}
+.editorDialog::backdrop {
+  background: #100e0bcc;
+  backdrop-filter: blur(5px);
+}
+.editorWindow {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100%;
+}
+.modalHeader {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 61px;
+  padding-inline: 22px 12px;
+  background: var(--subtle-surface);
+  border-bottom: 1px solid var(--border);
+}
+.modalTitle {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  color: var(--accent);
+}
+.modalTitle h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--foreground);
+  letter-spacing: -0.4px;
+}
+.modalActions {
+  display: flex;
+  gap: 17px;
+  align-items: center;
+}
+.modalActions button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 5px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+}
+.modalActions button:hover {
+  color: var(--accent);
+}
+.editorWorkspace {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  min-height: 0;
+}
+.editorSidebar {
+  padding-block: 17px;
+  border-right: 1px solid var(--border);
+}
+.editorSidebar button {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 19px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+}
+.editorSidebar button > span {
+  width: 16px;
+  font-size: 10px;
+}
+.editorSidebar button[aria-current],
+.editorSidebar button:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.editorSidebar button[aria-current] {
+  border-left-color: var(--accent);
+}
+.editorMain {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+.contextBar {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 49px;
+  padding: 10px 22px;
+  font-size: 11px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+.lineCount {
+  flex-shrink: 0;
+  font-size: 10px;
+}
+.editorViewport {
+  position: relative;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--border) transparent;
+  scrollbar-width: thin;
+  background: var(--background);
+}
+.expandedCode .codePre {
+  padding-block: 24px 60px;
+  font-size: 12px;
+  line-height: 2;
+}
+.expandedCode .codeLine {
+  grid-template-columns: 58px minmax(0, 1fr);
+  min-height: 24px;
+  padding-right: 24px;
+}
+.codeLine[data-highlighted="true"] {
+  background: color-mix(in srgb, var(--accent-soft) 42%, transparent);
+  border-left-color: var(--accent);
+}
+.modalFooter {
+  display: flex;
+  gap: 15px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 22px;
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--subtle-surface);
+  border-top: 1px solid var(--border);
+}
+:global(.dark) .token {
+  color: var(--token-dark);
+}
+@media (max-width: 700px) {
+  .editorDialog {
+    width: calc(100vw - 16px);
+    height: calc(100dvh - 16px);
+  }
+  .modalHeader {
+    gap: 8px;
+    min-height: 56px;
+    padding-inline: 13px 7px;
+  }
+  .modalActions {
+    gap: 6px;
+  }
+  .modalTitle {
+    gap: 8px;
+  }
+  .editorWorkspace {
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-columns: 1fr;
+  }
+  .editorSidebar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .editorSidebar button {
+    gap: 8px;
+    min-height: 40px;
+    padding: 8px 10px;
+    font-size: 10px;
+  }
+  .contextBar {
+    min-height: 44px;
+    padding: 10px 13px;
+    font-size: 10px;
+  }
+  .lineCount {
+    display: none;
+  }
+  .expandedCode .codePre {
+    font-size: 11px;
+  }
+  .expandedCode .codeLine {
+    grid-template-columns: 37px minmax(0, 1fr);
+    padding-right: 13px;
+  }
+  .modalFooter {
+    padding-inline: 13px;
+  }
+  .modalFooter > span:last-child {
+    display: none;
+  }
+}
+@media (max-width: 520px) {
+  .compactCode .codePre {
+    font-size: 10px;
+  }
+  .compactCode .codeLine {
+    grid-template-columns: 30px minmax(0, 1fr);
+    padding-right: 12px;
+  }
+  .lineNumber {
+    padding-right: 9px;
+    font-size: 9px;
+  }
+}
