@@ -9,13 +9,13 @@ The sample data contains authors. The mapping combines `first_name` and `last_na
 
 ## Install
 
-Use Node.js 24 or newer. In your project, install the SDK and the Effect packages used by this example:
+In your project, install the SDK and the Effect packages used by this example:
 
 ```sh
-pnpm add migrate-sdk effect@4.0.0-rc.113 @effect/platform-node@4.0.0-rc.113
+pnpm add migrate-sdk effect@4.0.4 @effect/platform-node@4.0.4
 ```
 
-Keep the Effect and platform package versions aligned. These are the versions used by this monorepo.
+Use matching Effect 4.0.4 packages. Keep your lockfile so subsequent installs use the same resolved versions.
 
 ## Create your source
 
@@ -34,7 +34,7 @@ author-1042,Sam,Rivera
 
 Save the following as `migrate.config.ts` next to the CSV. This is the complete example from the homepage.
 
-<include lang="ts" meta='title="migrate.config.ts"'>../../authors.ts</include>
+<include lang="ts" meta='title="migrate.config.ts" twoslash source="../../authors.ts"'>../../authors.ts</include>
 
 The important parts are:
 

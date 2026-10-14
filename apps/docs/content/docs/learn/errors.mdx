@@ -88,6 +88,6 @@ The [API cookbook](/docs/cookbook/api-to-api) applies these boundaries to transp
 
 The endpoint contract is illustrative: a user-supplied `GET /authors/:id` returns `{ id, name }`. The module performs no requests when imported. Adapt transient classification to the provider's documented behavior, then apply a [bounded retry strategy](/docs/learn/retries).
 
-<include lang="ts" meta='title="recovery-api-errors.ts"'>../../examples/recovery-api-errors.ts</include>
+<include lang="ts" meta='title="recovery-api-errors.ts" twoslash source="../../examples/recovery-api-errors.ts"'>../../examples/recovery-api-errors.ts</include>
 
 </details>

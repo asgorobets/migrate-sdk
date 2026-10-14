@@ -27,6 +27,16 @@ pnpm exec migrate-tui --server https://migrate.example.com/api/migrate
 
 Replace the example URL with your server endpoint. Set `MIGRATE_SERVER_TOKEN` through your shell or secret manager when the server requires bearer authentication. Check the connected environment's identity before starting an operation. A remote connection uses the server's registry and credentials without needing a local migration config.
 
+For a one-off remote session, use pnpm 10.2.0 or newer:
+
+```sh
+MIGRATE_SERVER_TOKEN="<your-token>" \
+  pnpm --allow-build=bun --allow-build=esbuild dlx @migrate-sdk/tui@latest \
+  --server https://migrate.example.com/api/migrate
+```
+
+No local project or lockfile setup is needed. pnpm caches the TUI automatically. The flags approve the Bun and esbuild install scripts. Use the release with Effect 4.0.4 and matching platform packages; older releases can resolve incompatible Effect dependencies.
+
 `--config` and `--server` are alternatives. `--otel` enables tracing for local execution only; remote telemetry belongs in the server environment. `--help` lists startup options.
 
 ## Understand what has loaded

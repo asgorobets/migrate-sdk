@@ -1,43 +1,55 @@
 ---
 title: Migrate SDK
-description: Compose typed migration definitions with durable item state and explicit recovery.
+description: Define and run repeatable data migrations in TypeScript, with your code and infrastructure.
 ---
 
-Migrate SDK is a framework for moving data or content between systems while preserving typed transformation logic and durable migration progress. Its primitives separate access to data, destination work, execution, and the state needed to recover.
+Migrate SDK is a TypeScript library for repeatable data migrations. Define how data moves between systems, and keep the progress and results needed to run it again. Your code and migration state stay in your infrastructure.
 
-## The migration model
+## Why not just write a script?
 
-A **Migration Definition** connects a **Source**, a processing pipeline, and a **Migration Store**. The source emits **Source Items**. The pipeline performs work through **Destinations**. The runtime records **Migration Item State** for each item it settles.
+A migration often starts as a script: read data, transform it, and write it somewhere else. For a small, one-time job, that may be enough.
 
-| Primitive | Responsibility |
-| --- | --- |
-| [Source](/docs/learn/sources) | Emit source items and read them again by identity. |
-| [Source Item](/docs/learn/items) | Carry a payload, stable identity, and observed version. |
-| [Process Pipeline](/docs/learn/defining-migrations#process-pipeline) | Transform one admitted item and perform destination-side work. |
-| [Destination](/docs/learn/destinations) | Supply destination-owned operations and typed evidence of their results. |
-| [Migration Store](/docs/learn/migration-stores) | Persist item state, discovery checkpoints, contracts, run history, and ownership. |
+The harder requirements often appear after the first run. A request fails halfway through. The destination cannot keep up with parallel writes. The source changes, or a mapping needs correcting. You need to know what succeeded, what to repeat, and how to undo work already done.
 
-The Source, Destination, and Migration Store are **pluggable capabilities**. Their implementations can change independently while retaining these responsibilities.
+Whether you write the script yourself or generate it with AI, you still need progress tracking, retries, concurrency limits, and rollback.
 
-## Configuration, execution, and progress
+Migrate SDK brings these pieces together. You define the mapping, destination calls, and recovery behavior in TypeScript and Effect. The SDK coordinates execution and saves the state needed for the next run.
 
-A definition is reusable configuration. A **Migration Run** is one execution attempt of one or more definitions. Its **Execution Adapter** determines whether work runs inline or through a durable workflow provider.
+## Three parts of a migration
 
-Progress has several scopes. Migration Item State describes one source identity. Migration Run State describes one execution attempt. Migration Definition Completion records that a source pass reached its end. Those records answer different questions; a successful limited run can leave the source pass incomplete, and a completed pass can still contain failed items.
+### Sources: read the data
 
-Read [States and completion](/docs/learn/states) and [Execution and observation](/docs/learn/execution) for those distinctions.
+A [Source](/docs/learn/sources) gives the migration a consistent way to read and identify items. Built-in sources cover SQL, CSV, and structured documents such as JSON. You can read a local file or supply a fetcher that uses your HTTP or S3 client.
 
-## Tracking and recovery
+Sources provide validated, typed input and a way to recognize changes between runs. You can plug in your own source for other systems.
 
-A definition can declare a **Tracking Record Contract** to require a schema-validated result for each successful item. A **Destination Journal** keeps recorded changes and diagnostics. A **Rollback Pipeline** uses saved state to compensate destination work.
+### Pipelines: decide what happens to each item
 
-Retrying and rollback are explicit operations. The destination and migration store remain independent systems, so destination work must account for a request succeeding before its outcome is saved. [Tracking](/docs/learn/tracking), [Retries](/docs/learn/retries), and [Rollback](/docs/learn/rollback) explain the recovery boundaries.
+Your [Process Pipeline](/docs/learn/defining-migrations#process-pipeline) maps source data and calls the destination systems. It can write to a database, call an API, or coordinate several destinations for the same item. Use your existing clients and choose how much work runs in parallel. Effect gives you typed errors and [retries with exponential backoff](/docs/learn/retries) where you need them.
 
-## Explore the documentation
+Your [Rollback Pipeline](/docs/learn/rollback) uses recorded results to compensate that work. You decide what to remove or restore, save the information needed, and make those operations safe to repeat.
+
+### Migration stores: remember the work
+
+A [Migration Store](/docs/learn/migration-stores) keeps progress between runs: which items succeeded or failed, the source versions processed, and the destination results you recorded.
+
+That record lets you resume interrupted work, retry failed items, and skip successfully migrated items whose source versions are unchanged. It supports periodic updates and delta migrations as your source discovers new or changed data.
+
+Keep state in a file, in SQL, or in a custom store. A shared store lets another machine or teammate use the same history, with locks to prevent overlapping runs of the same migration.
+
+## Run from code, or use the CLI and TUI
+
+Define and run migrations directly in your application, a cron job, or a webhook handler. The CLI and TUI are optional.
+
+Use the [CLI](/docs/operate/cli) or [TUI](/docs/operate/tui) to select migrations, preview work, follow progress, and retry failures. They work locally or through a migration server on another machine, using the same definitions and saved state.
+
+For work that needs to outlive a request or worker, the [Workflow SDK integration](/docs/cookbook/workflow-sdk) adds durable execution.
+
+## Get started with Migrate SDK
 
 <Cards>
-  <Card title="Getting started" href="/docs/getting-started" description="Understand the primitives, install the SDK, and assemble a definition." />
-  <Card title="Learn" href="/docs/learn" description="Study each contract, its responsibilities, and its relationship to the runtime." />
-  <Card title="Cookbook" href="/docs/cookbook" description="Apply the concepts to files, APIs, multiple destinations, and durable workflows." />
-  <Card title="Operate" href="/docs/operate" description="Plan and control runs through the CLI and TUI, including shared ownership and lock recovery." />
+  <Card title="Getting started" href="/docs/getting-started" description="Install the SDK and define a migration." />
+  <Card title="Learn" href="/docs/learn" description="Understand sources, pipelines, saved state, and recovery." />
+  <Card title="Cookbook" href="/docs/cookbook" description="Work through complete migration recipes." />
+  <Card title="Operate" href="/docs/operate" description="Run and inspect migrations with the CLI and TUI." />
 </Cards>

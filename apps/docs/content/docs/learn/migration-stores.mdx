@@ -80,7 +80,7 @@ A store failure stops execution where reliable progress cannot be saved. It is n
 
 Reuse this exported layer for every definition included in the same run.
 
-<include lang="ts" meta='title="migration-store.ts"'>../../examples/source-store-file.ts</include>
+<include lang="ts" meta='title="migration-store.ts" twoslash source="../../examples/source-store-file.ts"'>../../examples/source-store-file.ts</include>
 
 </details>
 
@@ -89,9 +89,9 @@ Reuse this exported layer for every definition included in the same run.
 
 Install `@effect/sql-pg` at the version aligned with your Effect packages and set `MIGRATION_DATABASE_URL`. Save these two files beside one another.
 
-<include lang="ts" meta='title="source-store-sql.ts"'>../../examples/source-store-sql.ts</include>
+<include lang="ts" meta='title="source-store-sql.ts" twoslash source="../../examples/source-store-sql.ts"'>../../examples/source-store-sql.ts</include>
 
-<include lang="ts" meta='title="store-schema.ts"'>../../examples/source-store-schema.ts</include>
+<include lang="ts" meta='title="store-schema.ts" twoslash source="../../examples/source-store-schema.ts"'>../../examples/source-store-schema.ts</include>
 
 Execute `inspectSchema` with `Effect.runPromise` in a setup tool, review the resulting plan, and execute `applySchema(plan)` when ready. The [CLI](/docs/operate/cli) and [TUI](/docs/operate/tui) expose schema setup too. These operations change SDK progress tables, not source or destination application schemas.
 
@@ -102,7 +102,7 @@ Execute `inspectSchema` with `Effect.runPromise` in a setup tool, review the res
 
 Reuse this state for related test runs and create fresh state for independent tests.
 
-<include lang="ts" meta='title="test-store.ts"'>../../examples/source-store-memory.ts</include>
+<include lang="ts" meta='title="test-store.ts" twoslash source="../../examples/source-store-memory.ts"'>../../examples/source-store-memory.ts</include>
 
 </details>
 

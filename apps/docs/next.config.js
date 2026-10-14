@@ -2,6 +2,7 @@ import { createMDX } from "fumadocs-mdx/next";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  serverExternalPackages: ["typescript"],
   async redirects() {
     return [
       { source: "/docs/concepts", destination: "/docs/learn", permanent: true },

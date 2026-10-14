@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { DataFlow } from "./data-flow";
 import { DefinitionPreview } from "./definition-preview";
+import { Infrastructure } from "./infrastructure";
 import { InstallCommand } from "./install-command";
 import { MigrationDemo } from "./migration-demo";
 import styles from "./page.module.css";
@@ -43,18 +44,19 @@ export default function Home() {
           <div className={styles.heroCopy}>
             <DataFlow />
             <h1 id="hero-title">
-              Data migrations.
+              Data migrations
               <span className={styles.heroAccent}>
                 Defined in{" "}
                 <span className={styles.heroEnding}>
-                  TypeScript.
+                  TypeScript
                   <span aria-hidden="true" className={styles.cursor} />
                 </span>
               </span>
             </h1>
             <p className={styles.heroDescription}>
-              Move data between APIs, databases, files, and CMSes. Write the
-              mapping. The SDK preserves item state for retries and rollback.
+              Migrate data between APIs, databases, files, and CMSes. Define the
+              work in TypeScript and Effect. Keep migration progress between
+              runs and resume where you left off.
             </p>
             <div className={styles.heroActions}>
               <a className={styles.primaryButton} href={gettingStarted}>
@@ -66,23 +68,61 @@ export default function Home() {
             </div>
             <InstallCommand />
           </div>
-          <DefinitionPreview />
+          <div className={styles.definitionSection}>
+            <div className={styles.definitionIntro}>
+              <p className={styles.eyebrow}>01 / define</p>
+              <h2>Your source. Your mapping.</h2>
+              <p>
+                Connect source data, destination calls, and saved results in one
+                migration definition.
+              </p>
+            </div>
+            <DefinitionPreview />
+          </div>
         </section>
         <section
           aria-label="Operate your migrations"
           className={styles.demoSection}
           id="how-it-works"
         >
+          <div className={styles.sectionIntro}>
+            <div>
+              <p className={styles.eyebrow}>02 / run</p>
+              <h2>Run migrations your way.</h2>
+            </div>
+          </div>
           <MigrationDemo />
+        </section>
+        <section
+          aria-labelledby="infrastructure-title"
+          className={styles.infrastructureSection}
+          id="your-infrastructure"
+        >
+          <div className={styles.sectionIntro}>
+            <div>
+              <p className={styles.eyebrow}>03 / deploy</p>
+              <h2 id="infrastructure-title">Your code. Your infrastructure.</h2>
+            </div>
+            <p>
+              Start in your application. Add a server for remote access, or
+              Workflow SDK for durable execution.
+            </p>
+          </div>
+          <Infrastructure />
         </section>
         <section aria-labelledby="start-title" className={styles.closing}>
           <div>
-            <p className={styles.eyebrow}>03 / build</p>
-            <h2 id="start-title">Define your migration.</h2>
+            <h2 id="start-title">Get started with Migrate SDK.</h2>
+            <p>Define a migration, or work through a complete recipe.</p>
           </div>
-          <a className={styles.primaryButton} href={gettingStarted}>
-            <span aria-hidden="true">&gt;</span> Get started
-          </a>
+          <div className={styles.closingActions}>
+            <Link className={styles.secondaryLink} href="/docs/cookbook">
+              [ Cookbook ↗ ]
+            </Link>
+            <a className={styles.primaryButton} href={gettingStarted}>
+              <span aria-hidden="true">&gt;</span> Get started
+            </a>
+          </div>
         </section>
       </main>
       <footer className={styles.footer}>

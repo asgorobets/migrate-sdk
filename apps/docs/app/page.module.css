@@ -35,6 +35,7 @@
 .navigation,
 .hero,
 .demoSection,
+.infrastructureSection,
 .closing,
 .footer {
   padding-inline: var(--page-gutter);
@@ -116,8 +117,23 @@
   align-items: center;
   padding-block: 58px 52px;
 }
-.heroCopy {
+.heroCopy,
+.definitionSection {
   min-width: 0;
+}
+.definitionIntro {
+  margin-bottom: 22px;
+}
+.definitionIntro h2 {
+  margin-top: 10px;
+  font-size: 23px;
+  letter-spacing: -0.9px;
+}
+.definitionIntro > p:last-child {
+  max-width: 50ch;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--muted);
 }
 .eyebrow {
   display: flex;
@@ -492,12 +508,27 @@
   background: transparent;
   border: 0;
 }
-.demoSection {
-  padding-block: 46px 37px;
+.demoSection,
+.infrastructureSection {
+  padding-block: 42px;
   border-top: 1px solid var(--border);
 }
-.closing h2 {
-  margin-top: 14px;
+.sectionIntro {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 24px 48px;
+  align-items: end;
+  margin-bottom: 28px;
+}
+.sectionIntro h2 {
+  margin-top: 10px;
+  font-size: clamp(23px, 2.2vw, 28px);
+}
+.sectionIntro > p {
+  max-width: 48ch;
+  padding-bottom: 3px;
+  font-size: 12px;
+  color: var(--muted);
 }
 .closing {
   display: flex;
@@ -507,6 +538,17 @@
   justify-content: space-between;
   padding-block: 36px 40px;
   border-top: 1px solid var(--border);
+}
+.closing p {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.closingActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  align-items: center;
 }
 .footer {
   display: flex;
@@ -599,6 +641,10 @@
   .heroDescription {
     max-width: 610px;
   }
+  .sectionIntro {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
   .install {
     max-width: 480px;
   }
@@ -678,7 +724,8 @@
   .codeCaption {
     font-size: 10px;
   }
-  .demoSection {
+  .demoSection,
+  .infrastructureSection {
     padding-block: 33px;
   }
   .closing {

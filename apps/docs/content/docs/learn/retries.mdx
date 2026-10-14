@@ -60,7 +60,7 @@ The optional implementation below caps exponential waits at 4 seconds, respects 
 
 This policy consumes `ApiRequestError` from [the errors example](/docs/learn/errors#give-api-failures-a-useful-type), directly or inside `SourceError.cause`. It retries only classified transient failures. `sourceRetryOptions` can be spread into a definition whose source preserves that error cause.
 
-<include lang="ts" meta='title="recovery-retries.ts"'>../../examples/recovery-retries.ts</include>
+<include lang="ts" meta='title="recovery-retries.ts" twoslash source="../../examples/recovery-retries.ts"'>../../examples/recovery-retries.ts</include>
 
 The code follows the installed Effect v4 API. See the primary [Effect retry documentation](https://github.com/Effect-TS/effect/blob/effect@4.0.0-rc.113/packages/effect/src/Effect.ts) and [Schedule documentation](https://github.com/Effect-TS/effect/blob/effect@4.0.0-rc.113/packages/effect/src/Schedule.ts) when adapting it to another version.
 

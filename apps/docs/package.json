@@ -4,10 +4,11 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "pnpm generate:examples && next dev --port 3001",
+    "dev": "pnpm generate:examples && next dev --disable-source-maps --port 3001",
     "build": "pnpm generate:examples && next build",
     "start": "next start",
     "check-types": "pnpm generate:examples && fumadocs-mdx && next typegen && tsc --noEmit",
+    "test": "fumadocs-mdx && node --test test/mdx.test.mjs",
     "generate:examples": "node scripts/build-examples.mjs",
     "postinstall": "fumadocs-mdx"
   },
@@ -15,6 +16,7 @@
     "@repo/ui": "workspace:*",
     "fumadocs-core": "^16.15.11",
     "fumadocs-mdx": "^15.4.1",
+    "fumadocs-twoslash": "^4.0.1",
     "fumadocs-ui": "^16.15.11",
     "lucide-react": "^1.47.0",
     "next": "16.2.0",
@@ -27,6 +29,7 @@
     "@effect/sql-pg": "catalog:",
     "@repo/typescript-config": "workspace:*",
     "@tailwindcss/postcss": "^4.3.3",
+    "@types/mdast": "^4.0.4",
     "@types/mdx": "^2.0.14",
     "@types/node": "^22.19.0",
     "@types/react": "19.2.2",
@@ -37,6 +40,8 @@
     "shiki": "^4.4.3",
     "tailwindcss": "^4.3.3",
     "twoslash": "^0.3.9",
-    "typescript": "npm:@typescript/typescript6@6.0.2"
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.1.0"
   }
 }
