@@ -1,5 +1,14 @@
 # migrate-sdk
 
+## 0.14.1
+
+### Patch Changes
+
+- 92b98d7: Upgrade Effect and its platform, SQL, and testing packages together to 4.0.4.
+  Fresh TUI installations now resolve compatible stable dependencies, and the
+  Workflow SDK example's PostgreSQL client sends TLS SNI for Neon connections.
+  Document one-off pnpm dlx usage with explicit Bun and esbuild build approvals.
+
 ## 0.14.0
 
 ### Minor Changes
