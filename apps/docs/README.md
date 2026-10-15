@@ -17,6 +17,10 @@ Open `http://localhost:3001` for the homepage or `http://localhost:3001/docs` fo
 
 The development command uses Turbopack with Node source-map caching disabled. Rendering the generated MDX otherwise exhausts the Node heap while caching repeated debug-frame maps. Server stack traces in development use generated code locations; browser source maps and production builds keep their normal settings.
 
+## Analytics
+
+The root layout includes Vercel Web Analytics for the homepage and documentation routes. Enable Web Analytics in the docs project's Vercel dashboard, then deploy the app. Verify page views in the Analytics dashboard after visiting the deployed site. See the [Vercel setup guide](https://vercel.com/docs/analytics/quickstart).
+
 ## Content and routing
 
 - `content/docs/**/*.mdx`: documentation pages and frontmatter.
