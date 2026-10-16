@@ -88,8 +88,9 @@ MIGRATE_SERVER_TOKEN="<your-token>" \
 
 No local project, migration config, or lockfile setup is needed. pnpm caches
 the packages automatically. The approval flags allow Bun and esbuild's install
-scripts. This release uses Effect 4.0.4 and matching platform packages; older
-releases may resolve incompatible prerelease and stable dependencies.
+scripts. The SDK and TUI share a compatible Effect v4 peer, which pnpm installs
+when it is missing. Use a TUI release compatible with your Migrate Server;
+replace `@latest` with a specific TUI version for a repeatable setup.
 
 When `MIGRATE_SERVER_TOKEN` is set, its value is sent as an HTTP Bearer token.
 Source, destination, Migration Store,

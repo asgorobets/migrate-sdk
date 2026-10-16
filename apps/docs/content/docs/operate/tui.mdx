@@ -35,7 +35,7 @@ MIGRATE_SERVER_TOKEN="<your-token>" \
   --server https://migrate.example.com/api/migrate
 ```
 
-No local project or lockfile setup is needed. pnpm caches the TUI automatically. The flags approve the Bun and esbuild install scripts. Use the release with Effect 4.0.4 and matching platform packages; older releases can resolve incompatible Effect dependencies.
+No local project or lockfile setup is needed. pnpm caches the TUI automatically. The flags approve the Bun and esbuild install scripts. The SDK and TUI share a compatible Effect v4 peer, which pnpm installs when it is missing. Use a TUI release compatible with your Migrate Server; replace `@latest` with a specific TUI version for a repeatable setup.
 
 `--config` and `--server` are alternatives. `--otel` enables tracing for local execution only; remote telemetry belongs in the server environment. `--help` lists startup options.
 

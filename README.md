@@ -22,8 +22,13 @@ walks through the implementation and deployment.
 For Node.js, use **22.19.0 or newer**.
 
 ```sh
-pnpm add migrate-sdk effect@4.0.4 @effect/platform-node@4.0.4
+pnpm add migrate-sdk@latest effect@4 @effect/platform-node@4
 ```
+
+The SDK shares a compatible Effect v4 installation with your application. These
+commands select the current compatible releases; commit your lockfile to keep
+subsequent installs repeatable. npm 7+ and pnpm with automatic peer installation
+enabled also install a compatible Effect version when you add the SDK alone.
 
 The SDK includes the `migrate` CLI. For the optional terminal UI:
 
@@ -40,8 +45,8 @@ MIGRATE_SERVER_TOKEN="<your-token>" \
 ```
 
 pnpm caches the TUI automatically; no local project or lockfile setup is needed.
-The flags approve the Bun and esbuild install scripts. Use the release with the
-matching Effect 4.0.4 dependencies after it is published.
+The flags approve the Bun and esbuild install scripts. Use a TUI release
+compatible with your Migrate Server.
 
 ## Documentation
 

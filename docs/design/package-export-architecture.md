@@ -182,6 +182,22 @@ the generated declaration without a local declaration.
 
 ## Release Versioning
 
+### Shared Effect dependency
+
+All published SDK packages declare Effect as a required peer dependency using
+the compatible v4 range from the `effect-peers` catalog. Their development
+dependencies use the default catalog's exact version for repeatable builds and
+tests. The core SDK must not also declare Effect as a runtime dependency: a
+consumer's schemas, layers, and Effects cross the public API boundary and should
+resolve to the same compatible installation throughout the SDK packages.
+
+npm 7+ and pnpm's default automatic peer installation supply a compatible Effect
+version when the consumer has none. An incompatible consumer version is a peer
+conflict, not a reason to silently install a separate SDK-owned runtime. Clients
+using package managers with automatic peers disabled must install Effect
+explicitly. `@effect/platform-node` remains a core runtime dependency for Node
+services; its Effect peer resolves against the same consumer installation.
+
 The publishable SDK packages use one shared public version:
 
 ```txt

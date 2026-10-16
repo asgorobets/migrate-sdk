@@ -272,9 +272,6 @@ importers:
       '@effect/platform-node':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)(redis@6.2.1)
-      effect:
-        specifier: 'catalog:'
-        version: 4.0.5
       papaparse:
         specifier: ^5.5.3
         version: 5.5.3
@@ -321,6 +318,9 @@ importers:
       '@typescript/native':
         specifier: npm:typescript@7.0.2
         version: typescript@7.0.2
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.5
       typescript:
         specifier: npm:@typescript/typescript6@6.0.2
         version: '@typescript/typescript6@6.0.2'

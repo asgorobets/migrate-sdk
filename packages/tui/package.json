@@ -62,7 +62,7 @@
     "react": "^19.2.0"
   },
   "peerDependencies": {
-    "effect": "catalog:",
+    "effect": "catalog:effect-peers",
     "migrate-sdk": "workspace:^"
   },
   "devDependencies": {
