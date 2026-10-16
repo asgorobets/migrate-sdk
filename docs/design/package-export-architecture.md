@@ -195,8 +195,24 @@ npm 7+ and pnpm's default automatic peer installation supply a compatible Effect
 version when the consumer has none. An incompatible consumer version is a peer
 conflict, not a reason to silently install a separate SDK-owned runtime. Clients
 using package managers with automatic peers disabled must install Effect
-explicitly. `@effect/platform-node` remains a core runtime dependency for Node
-services; its Effect peer resolves against the same consumer installation.
+explicitly. `@effect/platform-node` follows the same required peer model, with a
+compatible v4 range in `effect-peers` and an exact development catalog version.
+
+Other dependencies whose client objects or types cross a public SDK boundary
+also belong in required peers: the commercetools platform and Import API SDKs,
+Workflow SDK's `workflow`, and the adapters' `migrate-sdk` dependency. Keep each
+in development dependencies too so builds and tests do not rely on automatic
+peer installation. The commercetools HTTP client builder is used only by our
+examples and belongs only in development dependencies. SQL adapters accept an
+application-provided `effect/sql` client; specific SQL drivers remain development
+dependencies rather than becoming requirements for every SDK user.
+
+The TUI also declares React as a required peer because its public API exports
+`MigrationTuiApp`. Native renderer packages and its Bun runtime remain
+application-owned dependencies, as do implementation utilities such as CSV
+parsing and file locking. The
+transitive `@effect/platform-node-shared` package remains owned by the upstream
+platform package; the SDK does not import or expose it directly.
 
 The publishable SDK packages use one shared public version:
 

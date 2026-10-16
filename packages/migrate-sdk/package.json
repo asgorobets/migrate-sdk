@@ -192,10 +192,12 @@
     "test:watch": "vitest"
   },
   "peerDependencies": {
+    "@effect/platform-node": "catalog:effect-peers",
     "effect": "catalog:effect-peers"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",
+    "@effect/platform-node": "catalog:",
     "@effect/sql-mssql": "catalog:",
     "@effect/sql-mysql2": "catalog:",
     "@effect/sql-pg": "catalog:",
@@ -212,7 +214,6 @@
     "vitest": "^5.0.0"
   },
   "dependencies": {
-    "@effect/platform-node": "catalog:",
     "papaparse": "^5.5.3",
     "proper-lockfile": "^4.1.2",
     "tsx": "^4.22.4"

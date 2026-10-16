@@ -24,4 +24,5 @@ catalog:
   effect: 4.0.5
 catalogs:
   effect-peers:
+    "@effect/platform-node": ^4.0.5
     effect: ^4.0.5

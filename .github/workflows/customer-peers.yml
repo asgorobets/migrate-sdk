@@ -1,26 +1,26 @@
-name: Effect Peers
+name: Customer Peers
 
 on:
   pull_request:
     paths:
-      - ".github/workflows/effect-peers.yml"
+      - ".github/workflows/customer-peers.yml"
       - "packages/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
-      - "scripts/test-effect-peers.mjs"
-      - "scripts/fixtures/effect-peer-consumer.mjs"
+      - "scripts/test-customer-peers.mjs"
+      - "scripts/fixtures/customer-peer-consumer.mjs"
   push:
     branches:
       - main
     paths:
-      - ".github/workflows/effect-peers.yml"
+      - ".github/workflows/customer-peers.yml"
       - "packages/**"
       - "package.json"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
-      - "scripts/test-effect-peers.mjs"
-      - "scripts/fixtures/effect-peer-consumer.mjs"
+      - "scripts/test-customer-peers.mjs"
+      - "scripts/fixtures/customer-peer-consumer.mjs"
 
 permissions:
   contents: read
@@ -38,4 +38,4 @@ jobs:
           node-version: 22.19.0
           package-manager-cache: false
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run test:effect-peers
+      - run: pnpm run test:customer-peers

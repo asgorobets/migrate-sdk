@@ -8,16 +8,53 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
 const packages = ["migrate-sdk", "commercetools", "workflow-sdk", "tui"];
-const require = createRequire(
-  resolve(root, "packages/migrate-sdk/package.json")
+const peerPackages = {
+  effect: "migrate-sdk",
+  "@effect/platform-node": "migrate-sdk",
+  "@commercetools/platform-sdk": "commercetools",
+  "@commercetools/importapi-sdk": "commercetools",
+  workflow: "workflow-sdk",
+  react: "tui",
+};
+const peerVersions = Object.fromEntries(
+  await Promise.all(
+    Object.entries(peerPackages).map(async ([name, directory]) => {
+      const manifest = JSON.parse(
+        await readFile(
+          resolve(
+            root,
+            "packages",
+            directory,
+            "node_modules",
+            name,
+            "package.json"
+          ),
+          "utf8"
+        )
+      );
+      return [name, manifest.version];
+    })
+  )
 );
-const effectVersion = require("effect/package.json").version;
+const scenarios = [
+  { name: "existing", peers: peerVersions },
+  { name: "missing", peers: {} },
+  {
+    name: "incompatible-effect",
+    peers: { ...peerVersions, effect: "3.22.3" },
+    rejectedPeer: "effect",
+  },
+  {
+    name: "incompatible-platform",
+    peers: { ...peerVersions, "@effect/platform-node": "4.0.4" },
+    rejectedPeer: "@effect/platform-node",
+  },
+];
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 
@@ -40,7 +77,7 @@ function run(command, args, cwd, allowFailure = false) {
   return result;
 }
 
-const temporary = await mkdtemp(join(tmpdir(), "migrate-effect-peers-"));
+const temporary = await mkdtemp(join(tmpdir(), "migrate-customer-peers-"));
 try {
   const dependencies = {};
   let effectPeerRange;
@@ -81,19 +118,45 @@ try {
       true,
       `${manifest.name} must auto-install missing Effect peers`
     );
+    for (const [name, owner] of Object.entries(peerPackages)) {
+      if (name === "effect" || owner !== directory) {
+        continue;
+      }
+      assert.match(
+        published.peerDependencies?.[name] ?? "",
+        /^\^\d+\.\d+\.\d+$/,
+        `${name} must be a compatible customer peer`
+      );
+      assert.equal(
+        published.dependencies?.[name],
+        undefined,
+        `${name} must use the customer's installation`
+      );
+      assert.notEqual(
+        published.peerDependenciesMeta?.[name]?.optional,
+        true,
+        `${name} must be installed when missing`
+      );
+    }
+    if (directory === "commercetools") {
+      assert.equal(
+        published.dependencies?.["@commercetools/sdk-client-v2"],
+        undefined,
+        "The example-only HTTP client builder must not be a runtime dependency"
+      );
+      assert.equal(
+        published.peerDependencies?.["@commercetools/sdk-client-v2"],
+        undefined
+      );
+    }
     dependencies[manifest.name] = `file:${tarball}`;
   }
 
   for (const manager of [npm, pnpm]) {
-    for (const mode of ["existing", "missing", "incompatible"]) {
+    for (const scenario of scenarios) {
+      const mode = scenario.name;
       const cwd = join(temporary, `${manager}-${mode}`);
       await mkdir(cwd);
-      const consumerDependencies = { ...dependencies };
-      if (mode === "existing") {
-        consumerDependencies.effect = effectVersion;
-      } else if (mode === "incompatible") {
-        consumerDependencies.effect = "3.22.3";
-      }
       await writeFile(
         join(cwd, "package.json"),
         `${JSON.stringify(
@@ -101,7 +164,7 @@ try {
             name: "migrate-effect-consumer",
             private: true,
             type: "module",
-            dependencies: consumerDependencies,
+            dependencies: { ...dependencies, ...scenario.peers },
           },
           null,
           2
@@ -117,22 +180,15 @@ try {
               "--no-audit",
               "--no-fund",
             ];
-      const result = run(manager, args, cwd, mode === "incompatible");
-      if (mode === "incompatible") {
-        assert.notEqual(
-          result.status,
-          0,
-          `${manager} must reject incompatible Effect`
-        );
-        const output = `${result.stdout}\n${result.stderr}`;
-        assert.match(
-          output,
-          manager === pnpm ? /ERR_PNPM_PEER_DEP_ISSUES/ : /ERESOLVE/
-        );
-        assert.match(output, /peer effect@/i);
-      } else {
+      const result = run(
+        manager,
+        args,
+        cwd,
+        scenario.rejectedPeer !== undefined
+      );
+      if (scenario.rejectedPeer === undefined) {
         await copyFile(
-          resolve(root, "scripts/fixtures/effect-peer-consumer.mjs"),
+          resolve(root, "scripts/fixtures/customer-peer-consumer.mjs"),
           join(cwd, "verify.mjs")
         );
         run(
@@ -140,8 +196,20 @@ try {
           ["verify.mjs", mode, ...Object.keys(dependencies)],
           cwd
         );
+      } else {
+        assert.notEqual(
+          result.status,
+          0,
+          `${manager} must reject incompatible ${scenario.rejectedPeer}`
+        );
+        const output = `${result.stdout}\n${result.stderr}`;
+        assert.match(
+          output,
+          manager === pnpm ? /ERR_PNPM_PEER_DEP_ISSUES/ : /ERESOLVE/
+        );
+        assert.ok(output.includes(`peer ${scenario.rejectedPeer}@`), output);
       }
-      process.stdout.write(`${manager}: ${mode} Effect passed\n`);
+      process.stdout.write(`${manager}: ${mode} customer peers passed\n`);
     }
   }
 } finally {

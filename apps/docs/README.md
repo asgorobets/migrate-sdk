@@ -36,14 +36,17 @@ The root layout includes Vercel Web Analytics for the homepage and documentation
 Add an MDX page with `title` and `description` frontmatter, then add its name to `meta.json`. It automatically receives navigation, a table of contents, syntax highlighting, search indexing, and metadata. Keep headings plain; put links in body text.
 
 SDK packages use the default catalog for exact development dependencies and the
-`effect-peers` catalog for the supported public Effect range. Public bootstrap
-commands use `migrate-sdk@latest` and the supported Effect major, rather than a
-development patch number or `effect@latest`, which could select an unsupported
-major. Explain that the lockfile records the resolved versions. Required Effect
-peers are installed automatically by npm 7+ and pnpm with automatic peer
+`effect-peers` catalog for the supported public Effect and Node platform ranges.
+Public bootstrap commands use `migrate-sdk@latest` and the supported Effect major,
+rather than a development patch number or `effect@latest`, which could select an unsupported
+major. Explain that the lockfile records the resolved versions. Required
+customer peers are installed automatically by npm 7+ and pnpm with automatic peer
 installation enabled; package managers that do not install peers require an
-explicit Effect dependency. Keep the standalone getting-started project's exact
-SDK and Effect versions and npm lockfile together as a verified snapshot.
+explicit dependency. The commercetools platform and Import API SDKs and Workflow
+SDK are customer-owned peers too, as is React for the TUI's exported component.
+SQL drivers remain application-provided through
+`effect/sql`. Keep the standalone getting-started project's exact SDK and Effect
+versions and npm lockfile together as a verified snapshot.
 
 `content/authors.ts` is the shared, type-checked migration example. The homepage generates Shiki/Twoslash data from it; the CSV-to-JSON cookbook includes the same file using Fumadocs' `<include>` support. Update the file rather than copying its code into MDX.
 

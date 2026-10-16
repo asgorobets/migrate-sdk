@@ -25,10 +25,10 @@ For Node.js, use **22.19.0 or newer**.
 pnpm add migrate-sdk@latest effect@4 @effect/platform-node@4
 ```
 
-The SDK shares a compatible Effect v4 installation with your application. These
-commands select the current compatible releases; commit your lockfile to keep
-subsequent installs repeatable. npm 7+ and pnpm with automatic peer installation
-enabled also install a compatible Effect version when you add the SDK alone.
+The SDK shares compatible Effect v4 and Node platform installations with your
+application. These commands select the current compatible releases. Commit your
+lockfile to keep subsequent installs repeatable. npm 7+ and pnpm with automatic
+peer installation enabled also install compatible peers when you add the SDK alone.
 
 The SDK includes the `migrate` CLI. For the optional terminal UI:
 

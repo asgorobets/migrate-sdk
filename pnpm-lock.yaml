@@ -219,7 +219,7 @@ importers:
         version: 4.1.8(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/commercetools:
-    dependencies:
+    devDependencies:
       '@commercetools/importapi-sdk':
         specifier: ^7.1.1
         version: 7.1.1
@@ -229,7 +229,6 @@ importers:
       '@commercetools/sdk-client-v2':
         specifier: ^3.5.0
         version: 3.5.0
-    devDependencies:
       '@effect/language-service':
         specifier: 'catalog:'
         version: 0.86.2
@@ -269,9 +268,6 @@ importers:
 
   packages/migrate-sdk:
     dependencies:
-      '@effect/platform-node':
-        specifier: 'catalog:'
-        version: 4.0.5(effect@4.0.5)(redis@6.2.1)
       papaparse:
         specifier: ^5.5.3
         version: 5.5.3
@@ -285,6 +281,9 @@ importers:
       '@effect/language-service':
         specifier: 'catalog:'
         version: 0.86.2
+      '@effect/platform-node':
+        specifier: 'catalog:'
+        version: 4.0.5(effect@4.0.5)(redis@6.2.1)
       '@effect/sql-mssql':
         specifier: 'catalog:'
         version: 4.0.5(effect@4.0.5)
@@ -342,9 +341,6 @@ importers:
       bun:
         specifier: 1.3.14
         version: 1.3.14
-      react:
-        specifier: ^19.2.0
-        version: 19.2.5
     devDependencies:
       '@effect/language-service':
         specifier: 'catalog:'
@@ -376,6 +372,9 @@ importers:
       pilotty:
         specifier: 0.0.11
         version: 0.0.11
+      react:
+        specifier: ^19.2.0
+        version: 19.2.5
       typescript:
         specifier: npm:@typescript/typescript6@6.0.2
         version: '@typescript/typescript6@6.0.2'
@@ -414,10 +413,6 @@ importers:
         version: '@typescript/typescript6@6.0.2'
 
   packages/workflow-sdk:
-    dependencies:
-      workflow:
-        specifier: ^4.5.0
-        version: 4.5.0(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(@typescript/typescript6@6.0.2)(next@16.2.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(ws@8.22.0)
     devDependencies:
       '@effect/language-service':
         specifier: 'catalog:'
@@ -449,6 +444,9 @@ importers:
       vitest:
         specifier: ^5.0.0
         version: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+      workflow:
+        specifier: ^4.5.0
+        version: 4.5.0(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(@nestjs/core@11.1.27(@nestjs/common@11.1.27(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)(rxjs@7.8.2))(@swc/cli@0.8.1(@swc/core@1.15.3)(chokidar@5.0.0))(@swc/core@1.15.3)(@typescript/typescript6@6.0.2)(next@16.2.0(react-dom@19.2.5(react@19.2.5))(react@19.2.5))(ws@8.22.0)
 
 packages:
 
