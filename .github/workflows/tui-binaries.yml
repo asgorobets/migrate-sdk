@@ -1,18 +1,9 @@
 name: TUI Binaries
 
 on:
+  workflow_call:
   workflow_dispatch:
   pull_request:
-    paths:
-      - ".github/workflows/tui-binaries.yml"
-      - "packages/tui/**"
-      - "packages/migrate-sdk/**"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - "turbo.json"
-      - ".nvmrc"
-  push:
-    branches: [main]
     paths:
       - ".github/workflows/tui-binaries.yml"
       - "packages/tui/**"
@@ -68,5 +59,48 @@ jobs:
           path: |
             packages/tui/dist/distribution/archives/*
             packages/tui/dist/distribution/tarballs/*
+            packages/tui/dist/distribution/SHA256SUMS
+            packages/tui/dist/distribution/distribution.json
+      - name: Upload tested release inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-release-input-${{ matrix.target }}
+          if-no-files-found: error
+          compression-level: 0
+          path: packages/tui/dist/binary
+
+  assemble:
+    name: Verify complete npm release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build --filter=@migrate-sdk/tui...
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tui-release-input-*
+          merge-multiple: true
+          path: packages/tui/dist/binary
+      - run: pnpm --filter @migrate-sdk/tui package:release
+      - run: pnpm --filter @migrate-sdk/tui publish:native --dry-run
+      - name: Test aggregated npm install and terminal
+        run: pnpm --filter @migrate-sdk/tui test:binary
+      - name: Upload complete npm release for review and initial publisher setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-npm-release
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            packages/tui/dist/distribution/tarballs/*
+            packages/tui/dist/distribution/archives/*
             packages/tui/dist/distribution/SHA256SUMS
             packages/tui/dist/distribution/distribution.json

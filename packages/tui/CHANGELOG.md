@@ -1,5 +1,15 @@
 # @migrate-sdk/tui
 
+## 0.16.0
+
+### Minor Changes
+
+- 8fd24ef: Publish compiled TUI executables for macOS ARM64/x64, Linux glibc ARM64/x64, and Windows x64 through exact optional npm packages. CLI installations no longer install Bun or require dependency build approvals.
+
+### Patch Changes
+
+- migrate-sdk@0.16.0
+
 ## 0.15.0
 
 ### Minor Changes

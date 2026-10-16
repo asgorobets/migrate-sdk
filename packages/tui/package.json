@@ -1,6 +1,6 @@
 {
   "name": "@migrate-sdk/tui",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Interactive terminal UI for Migrate SDK",
   "type": "module",
   "sideEffects": [],
@@ -45,6 +45,9 @@
     "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
     "build:binary": "bun scripts/build-binary.ts",
     "package:binary": "node scripts/package-binaries.mjs",
+    "package:release": "node scripts/package-binaries.mjs --release",
+    "publish:native": "node scripts/publish-native.mjs",
+    "publish:release": "node scripts/publish-native.mjs --with-changesets",
     "check-types": "tsc --noEmit -p tsconfig.check.json",
     "demo": "bun src/bin.tsx --config ../migrate-sdk/test/fixtures/server/migrate.config.ts",
     "dev": "bun src/bin.tsx",

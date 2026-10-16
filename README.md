@@ -40,10 +40,11 @@ pnpm exec migrate-tui
 ```
 
 The compiled TUI needs no separate Bun installation or install-time build.
-Native packages are currently build candidates; see the
-[binary installation guide](./docs/tui-binaries.md#install-a-compiled-candidate)
-to install them locally or run an extracted executable. Registry releases still
-use the package's supplied Bun runtime until native publication is enabled.
+From 0.16.0, npm selects a compiled executable for macOS ARM64/x64, Linux glibc
+ARM64/x64, or Windows x64. Keep optional dependencies enabled. See the
+[binary installation guide](./docs/tui-binaries.md) for direct executables and
+release details. Releases through 0.15.x use the supplied Bun runtime; with
+strict pnpm build checks, run those versions using `pnpm --config.ignore-scripts=true dlx`.
 
 Open a one-off session against a deployed Migrate Server:
 

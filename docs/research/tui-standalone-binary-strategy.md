@@ -1,8 +1,9 @@
 # Standalone Migrate TUI binary strategy
 
 Research date: 2026-10-16. Status: agreed direction; candidate build infrastructure
-is implemented. See [build instructions and remaining release gates](../tui-binaries.md).
-The public npm distribution has not switched to compiled binaries.
+and native npm release integration are implemented. See the
+[build and release instructions](../tui-binaries.md). Releases from 0.16.0 use
+compiled platform packages; releases through 0.15.x use the previous Bun package.
 
 ## Recommendation
 

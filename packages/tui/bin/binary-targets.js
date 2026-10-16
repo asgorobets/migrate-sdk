@@ -31,6 +31,13 @@ export const binaryTargets = platforms.map(([platform, arch, libc]) => {
   };
 });
 
+// Only targets exercised by native CI runners are included in public releases.
+export const releaseBinaryTargets = binaryTargets.filter(
+  (target) =>
+    target.libc !== "musl" &&
+    !(target.platform === "win32" && target.arch === "arm64")
+);
+
 export const linuxLibc = (report = process.report?.getReport()) => {
   if (typeof report !== "object" || report === null || !report.header) {
     throw new Error("Unable to detect Linux libc for Migrate TUI");
