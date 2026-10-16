@@ -3,8 +3,13 @@ import { Effect, Schema } from "effect";
 import { FilesError, Files as FilesSDKClient } from "files-sdk";
 import { Files } from "files-sdk/effect";
 import { SourceIdentity } from "migrate-sdk";
+import {
+  DocumentParsers,
+  DocumentSource,
+  type DocumentSourceSchemaCursor,
+} from "migrate-sdk/sources/document";
 import { useConfiguredSource } from "migrate-sdk/testing";
-import { makeCatalogSource } from "../../examples/document-source.ts";
+import { CatalogDocument } from "../../examples/document-source.ts";
 import { makeMemoryFilesSDK } from "../testing/index.ts";
 import { FilesSDKDocumentFetchers } from "./document-fetcher.ts";
 import type { FilesSDKObjectDiscoveryOptions } from "./options.ts";
@@ -13,6 +18,21 @@ import { FilesSDKSource } from "./source.ts";
 const jsonFilter = {
   id: "json-files@v1",
   test: (file: { readonly key: string }) => file.key.endsWith(".json"),
+};
+
+const catalog = {
+  parser: DocumentParsers.each(DocumentParsers.json(CatalogDocument)),
+  selector: {
+    item: (document: DocumentSourceSchemaCursor<typeof CatalogDocument.Type>) =>
+      document.products,
+  },
+  identity: {
+    id: "catalog-product@v1",
+    schema: SourceIdentity.key("id", Schema.String),
+    key: ({ item }: { item: { id: string } }) => item.id,
+  },
+  lookup: { kind: "scan" as const },
+  version: { kind: "content-hash" as const },
 };
 
 describe("Files SDK folder Document Fetcher", () => {
@@ -46,10 +66,14 @@ describe("Files SDK folder Document Fetcher", () => {
             expect(keys).toEqual(["input/a.json", "input/b.json"]);
           })
         );
-        const source = makeCatalogSource(
-          { ...selection, filesLayer: backend.layer },
-          1
-        );
+        const source = DocumentSource.make({
+          ...catalog,
+          fetcher: FilesSDKDocumentFetchers.texts({
+            ...selection,
+            filesLayer: backend.layer,
+          }),
+          batchSize: 1,
+        });
         yield* useConfiguredSource(source, (runtime) =>
           Effect.gen(function* () {
             const empty = yield* runtime.read(null);
@@ -85,9 +109,12 @@ describe("Files SDK folder Document Fetcher", () => {
   it.effect("completes an empty folder with no documents", () =>
     Effect.gen(function* () {
       const backend = makeMemoryFilesSDK();
-      const source = makeCatalogSource({
-        storageId: "catalog",
-        filesLayer: backend.layer,
+      const source = DocumentSource.make({
+        ...catalog,
+        fetcher: FilesSDKDocumentFetchers.texts({
+          storageId: "catalog",
+          filesLayer: backend.layer,
+        }),
       });
       yield* useConfiguredSource(source, (runtime) =>
         Effect.gen(function* () {
@@ -107,10 +134,14 @@ describe("Files SDK folder Document Fetcher", () => {
           "b.json": '{"products":[{"id":"c"}]}',
         },
       });
-      const source = makeCatalogSource(
-        { storageId: "catalog", filesLayer: backend.layer },
-        1
-      );
+      const source = DocumentSource.make({
+        ...catalog,
+        fetcher: FilesSDKDocumentFetchers.texts({
+          storageId: "catalog",
+          filesLayer: backend.layer,
+        }),
+        batchSize: 1,
+      });
       yield* useConfiguredSource(source, (runtime) =>
         Effect.gen(function* () {
           const first = yield* runtime.read(null);
