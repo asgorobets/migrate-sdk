@@ -23,11 +23,14 @@ afterEach(async () => {
 });
 
 async function packagingFixture(revision, inheritedEnvironment = process.env) {
-  // Stay under the checkout so the real packaging CLI discovers its Git HEAD.
-  await mkdir(join(packageDirectory, "dist"), { recursive: true });
-  const directory = await mkdtemp(
-    join(packageDirectory, "dist/revision-test-")
+  // Keep Git discovery in this checkout without putting temporary files in
+  // dist, which a concurrent package smoke test can be packing.
+  const fixtureDirectory = join(
+    packageDirectory,
+    "node_modules/.cache/tui-binary-revision"
   );
+  await mkdir(fixtureDirectory, { recursive: true });
+  const directory = await mkdtemp(join(fixtureDirectory, "case-"));
   directories.push(directory);
   for (const child of [
     "scripts",
