@@ -211,7 +211,8 @@ pnpm exec changeset publish
 The first command rejects missing targets, mixed revisions/versions, modified
 bytes, and incorrect executable architectures. The second verifies final npm
 tarball checksums and the launcher's dependency contract, publishes the five
-platform packages, verifies them in the registry, and selects the staged launcher
+platform packages, waits for npm processing to make them available (up to ten
+minutes per package), verifies them in the registry, and selects the staged launcher
 through an ephemeral `publishConfig.directory` override. Changesets then
 publishes the ordinary SDK packages and the native TUI launcher. An existing
 immutable native version is reused only for the same source revision. A failed
@@ -239,6 +240,15 @@ done
 Set `MIGRATE_BINARY_VERSION` to the artifact's recorded version before running
 those commands. Do not publish the umbrella manually: Changesets owns its version
 and publishes it after the platform dependencies are available.
+
+Alternatively, `npm stage publish <tarball> --access public --ignore-scripts`
+registers a new package name with a placeholder while keeping the candidate
+version unpublished. This does not require publish-time 2FA. Use a bootstrap
+version different from the upcoming release: staged and published versions share
+the same immutable version namespace. Configure the publisher below, then let
+CI publish the new release version. The unused candidate can be rejected with
+`npm stage reject <stage-id>` after setup. See
+[npm staging](https://docs.npmjs.com/staged-publishing/).
 
 Configure each platform package to trust GitHub repository
 `asgorobets/migrate-sdk`, workflow `release.yml`, with direct publication

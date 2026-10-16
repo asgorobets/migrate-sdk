@@ -142,7 +142,8 @@ export function publishedPackage(name, version, run = npm) {
   );
 }
 
-export function publishNativePackages(releases, revision, run = npm) {
+export async function publishNativePackages(releases, revision, run = npm) {
+  const uploaded = [];
   for (const release of releases) {
     const published = publishedPackage(release.name, release.version, run);
     if (published) {
@@ -166,13 +167,39 @@ export function publishNativePackages(releases, revision, run = npm) {
         `Native publish failed for ${release.name}:\n${result.stdout}${result.stderr}`
       );
     }
-    const verified = publishedPackage(release.name, release.version, run);
-    if (verified?.migrateTuiSourceRevision !== revision) {
+    uploaded.push(release);
+    console.log(
+      `Uploaded ${release.name}@${release.version}; awaiting npm availability`
+    );
+  }
+  for (const release of uploaded) {
+    // npm can accept a publish while scanning still hides it from consumers.
+    // Upload all platforms first, then wait before advertising the launcher.
+    let available = false;
+    for (let attempt = 0; attempt < 120; attempt++) {
+      const verified = publishedPackage(release.name, release.version, run);
+      if (verified) {
+        if (verified.migrateTuiSourceRevision !== revision) {
+          throw new Error(
+            `Published ${release.name}@${release.version} belongs to another source revision`
+          );
+        }
+        available = true;
+        break;
+      }
+      if (attempt % 6 === 0) {
+        console.log(
+          `Waiting for npm to make ${release.name}@${release.version} available`
+        );
+      }
+      await new Promise((done) => setTimeout(done, 5000));
+    }
+    if (!available) {
       throw new Error(
-        `Cannot verify published ${release.name}@${release.version}; launcher publication stopped`
+        `Timed out waiting for ${release.name}@${release.version}; launcher publication stopped`
       );
     }
-    console.log(`Published ${release.name}@${release.version}`);
+    console.log(`Verified published ${release.name}@${release.version}`);
   }
 }
 
@@ -215,7 +242,7 @@ async function main(args) {
     );
     return;
   }
-  publishNativePackages(releases, sourceRevision);
+  await publishNativePackages(releases, sourceRevision);
   // Changesets publishes this staged native launcher instead of the development
   // package. Keep this override ephemeral so workspace installs still use Bun.
   manifest.publishConfig.directory = "dist/distribution/packages/tui";

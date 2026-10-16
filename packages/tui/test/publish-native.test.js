@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { releaseBinaryTargets } from "../bin/binary-targets.js";
 import { packageManagerCommand } from "../scripts/package-manager.mjs";
 import {
@@ -17,6 +17,7 @@ const revision = "a".repeat(40);
 const directories = [];
 const json = (path, value) => writeFile(path, JSON.stringify(value));
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(
     directories
       .splice(0)
@@ -126,14 +127,14 @@ describe("native publication", () => {
       }))
     ).toThrow("Unable to check");
   });
-  it("verifies every platform before the launcher is selected and supports partial retries", () => {
+  it("verifies every platform before the launcher is selected and supports partial retries", async () => {
     const releases = [
       { name: "first", version: "1.2.3", tarball: "first.tgz" },
       { name: "second", version: "1.2.3", tarball: "second.tgz" },
     ];
     const calls = [];
     const published = new Set(["first"]);
-    publishNativePackages(releases, revision, (args) => {
+    await publishNativePackages(releases, revision, (args) => {
       calls.push(args);
       if (args[0] === "publish") {
         published.add(args[1].replace(".tgz", ""));
@@ -156,17 +157,60 @@ describe("native publication", () => {
       "--prefer-online",
     ]);
   });
-  it("stops on a failed platform publish or another revision's immutable package", () => {
+  it("waits for npm processing before selecting the launcher", async () => {
+    vi.useFakeTimers();
+    let queries = 0;
+    let complete = false;
+    const pending = publishNativePackages(
+      [{ name: "first", version: "1.2.3", tarball: "first.tgz" }],
+      revision,
+      (args) => {
+        if (args[0] === "publish") {
+          return { status: 0 };
+        }
+        queries++;
+        return queries < 3
+          ? { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) }
+          : {
+              status: 0,
+              stdout: JSON.stringify({ migrateTuiSourceRevision: revision }),
+            };
+      }
+    ).then(() => {
+      complete = true;
+    });
+    expect(complete).toBe(false);
+    await vi.advanceTimersByTimeAsync(5000);
+    await pending;
+    expect(complete).toBe(true);
+  });
+  it("stops launcher publication if npm never makes an accepted upload available", async () => {
+    vi.useFakeTimers();
+    const pending = publishNativePackages(
+      [{ name: "first", version: "1.2.3", tarball: "first.tgz" }],
+      revision,
+      (args) =>
+        args[0] === "publish"
+          ? { status: 0 }
+          : { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) }
+    );
+    const assertion = expect(pending).rejects.toThrow(
+      "launcher publication stopped"
+    );
+    await vi.runAllTimersAsync();
+    await assertion;
+  });
+  it("stops on a failed platform publish or another revision's immutable package", async () => {
     const releases = [
       { name: "first", version: "1.2.3", tarball: "first.tgz" },
     ];
-    expect(() =>
+    await expect(
       publishNativePackages(releases, revision, () => ({
         status: 0,
         stdout: JSON.stringify({ migrateTuiSourceRevision: "older" }),
       }))
-    ).toThrow("another source revision");
-    expect(() =>
+    ).rejects.toThrow("another source revision");
+    await expect(
       publishNativePackages(releases, revision, (args) => ({
         status: 1,
         stdout: JSON.stringify({
@@ -174,6 +218,6 @@ describe("native publication", () => {
         }),
         stderr: "",
       }))
-    ).toThrow("Native publish failed");
+    ).rejects.toThrow("Native publish failed");
   });
 });
