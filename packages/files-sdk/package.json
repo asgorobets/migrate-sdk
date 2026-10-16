@@ -1,6 +1,6 @@
 {
   "name": "@migrate-sdk/files-sdk",
-  "version": "0.14.1",
+  "version": "0.16.0",
   "type": "module",
   "sideEffects": [],
   "repository": {
@@ -68,7 +68,7 @@
     "test:package": "node test/package-smoke.mjs"
   },
   "peerDependencies": {
-    "effect": "catalog:",
+    "effect": "catalog:effect-peers",
     "migrate-sdk": "workspace:>=0.1.0 <1.0.0",
     "files-sdk": "^3.1.1"
   },

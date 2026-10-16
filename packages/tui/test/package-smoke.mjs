@@ -10,7 +10,8 @@ import {
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { removeTemporaryDirectory } from "./remove-temporary-directory.mjs";
 
 const packageDirectory = resolve(import.meta.dirname, "..");
@@ -173,7 +174,17 @@ try {
 `
   );
 
-  run(pnpm, ["exec", "bun", basename(scriptPath)], {
+  const fixtureRequire = createRequire(
+    resolve(fixtureDirectory, "package.json")
+  );
+  const launcherUrl = pathToFileURL(
+    resolve(
+      dirname(fixtureRequire.resolve("@migrate-sdk/tui/package.json")),
+      "bin/launcher.js"
+    )
+  );
+  const { resolveBunExecutable } = await import(launcherUrl.href);
+  run(await resolveBunExecutable(), [basename(scriptPath)], {
     cwd: fixtureDirectory,
   });
 };
@@ -215,7 +226,13 @@ try {
     }
   );
   const packedTui = parsePackOutput(tuiPackOutput);
-  if (packedTui.files.some((file) => file.path.startsWith("dist/binary/"))) {
+  if (
+    packedTui.files.some(
+      (file) =>
+        file.path.startsWith("dist/binary/") ||
+        file.path.startsWith("dist/distribution/")
+    )
+  ) {
     throw new Error("Packed TUI included direct-binary build artifacts");
   }
 
@@ -238,8 +255,6 @@ try {
   const dlxHelp = run(
     pnpm,
     [
-      "--allow-build=bun",
-      "--allow-build=esbuild",
       // Supply both unpublished packages; dlx still resolves their Effect peers.
       `--package=${tuiTarball}`,
       `--package=${sdkTarball}`,
@@ -254,6 +269,7 @@ try {
         ...process.env,
         npm_config_cache_dir: resolve(tempDirectory, "dlx-cache"),
         npm_config_side_effects_cache: "false",
+        npm_config_ignore_scripts: "true",
       },
     }
   );

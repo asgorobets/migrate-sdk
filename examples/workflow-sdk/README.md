@@ -134,7 +134,7 @@ configuration.
    or their own TUI. Set separate private `DEMO_SETUP_TOKEN` and `CRON_SECRET`
    values.
 
-   The example uses Effect and `@effect/sql-pg` 4.0.4 together. This PostgreSQL
+   The workspace catalog aligns Effect and `@effect/sql-pg`. This PostgreSQL
    client sends the database hostname as TLS SNI, which Neon needs to route the
    connection. Keep `sslmode=require` in the Neon URL. `/api/health` should
    return `{"database":"reachable","status":"ok"}` after deployment.
@@ -153,15 +153,18 @@ configuration.
 
    ```bash
    MIGRATE_SERVER_TOKEN="TOKEN_SHOWN_ON_THE_DEMO_PAGE" \
-     pnpm --allow-build=bun --allow-build=esbuild dlx @migrate-sdk/tui@latest \
+     pnpm dlx @migrate-sdk/tui@latest \
      --server https://YOUR_DEPLOYMENT/api/migrate
    ```
 
-   This one-off command requires Node.js 22.19.0 or newer and pnpm 10.2.0 or
-   newer. pnpm caches the TUI automatically; no local project, config file, or
-   lockfile setup is needed. The flags allow the pinned Bun runtime and esbuild
-   to run their install scripts. Use the TUI release with Effect 4.0.4 after it
-   is published; older releases can resolve incompatible Effect dependencies.
+   This one-off command requires Node.js 22.19.0 or newer and pnpm. pnpm caches
+   the TUI automatically; no local project, config file, lockfile setup, or
+   install-script approvals are needed. pnpm installs a compatible Effect peer
+   when it is missing. Use a TUI release compatible with your
+   Migrate Server; replace `@latest` with a specific TUI version for a repeatable
+   setup. A [compiled executable](../../docs/tui-binaries.md#install-a-compiled-candidate)
+   can connect to the same server without Node or Bun; native distributions
+   are currently build candidates.
 
 `POST /api/demo/setup?reset=true` drops all demo and migration-store data. It is
 provided only for this example and remains protected by the private

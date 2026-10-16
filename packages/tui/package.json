@@ -1,6 +1,6 @@
 {
   "name": "@migrate-sdk/tui",
-  "version": "0.14.1",
+  "version": "0.16.0",
   "description": "Interactive terminal UI for Migrate SDK",
   "type": "module",
   "sideEffects": [],
@@ -26,6 +26,7 @@
     "dist/**/*.js",
     "dist/**/*.js.map",
     "!dist/binary/**",
+    "!dist/distribution/**",
     "README.md"
   ],
   "exports": {
@@ -43,13 +44,17 @@
   "scripts": {
     "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
     "build:binary": "bun scripts/build-binary.ts",
+    "package:binary": "node scripts/package-binaries.mjs",
+    "package:release": "node scripts/package-binaries.mjs --release",
+    "publish:native": "node scripts/publish-native.mjs",
+    "publish:release": "node scripts/publish-native.mjs --with-changesets",
     "check-types": "tsc --noEmit -p tsconfig.check.json",
     "demo": "bun src/bin.tsx --config ../migrate-sdk/test/fixtures/server/migrate.config.ts",
     "dev": "bun src/bin.tsx",
     "prepack": "node scripts/verify-package.mjs",
     "test": "vitest run --passWithNoTests",
     "test:ipc": "node test/run-local-ipc.mjs",
-    "test:binary": "bash test/binary-smoke.sh",
+    "test:binary": "node test/binary-smoke.mjs",
     "test:package": "node --test test/remove-temporary-directory.node-test.mjs && node test/package-smoke.mjs",
     "test:renderer": "bun test src/app.test.tsx src/render-session.test.ts",
     "test:pilotty": "pnpm run build && pnpm run test:renderer && node --test test/pilotty-wait-for.node-test.mjs && bash test/pilotty-layout.sh"
@@ -58,12 +63,12 @@
     "@opentui/core": "0.4.5",
     "@opentui/react": "0.4.5",
     "@tuiparts/react": "0.0.6",
-    "bun": "1.3.14",
-    "react": "^19.2.0"
+    "bun": "1.3.14"
   },
   "peerDependencies": {
-    "effect": "catalog:",
-    "migrate-sdk": "workspace:^"
+    "effect": "catalog:effect-peers",
+    "migrate-sdk": "workspace:^",
+    "react": "^19.2.0"
   },
   "devDependencies": {
     "@effect/platform-node": "catalog:",
@@ -76,6 +81,7 @@
     "effect": "catalog:",
     "migrate-sdk": "workspace:*",
     "pilotty": "0.0.11",
+    "react": "^19.2.0",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "vitest": "^5.0.0"
   }

@@ -2,6 +2,14 @@
 
 Research date: 2026-08-22
 
+> Historical study. The [2026-10-16 standalone strategy](./tui-standalone-binary-strategy.md)
+> revisits binary distribution after the Node Migrate Server boundary, with
+> [fresh upstream research](./tui-binary-upstream-patterns.md). The direct-config
+> experiments below predate that boundary. In particular, always externalizing
+> client Effect/SDK dependencies is no longer the proposed binary design, and
+> the baseline/modern alias claim below does not apply to pinned Bun 1.3.14.
+> Use the new study for the proposed target matrix and current signing sources.
+
 ## Conclusion
 
 The npm package should ship a Node launcher that starts the compiled JavaScript

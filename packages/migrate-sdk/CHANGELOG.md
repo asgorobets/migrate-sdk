@@ -1,5 +1,22 @@
 # migrate-sdk
 
+## 0.16.0
+
+## 0.15.0
+
+### Minor Changes
+
+- 58a5410: Add standalone TUI compilation and staged platform npm packages, release archives,
+  checksums, and native-platform CI acceptance tests. Expose a Node server bootstrap
+  so bundled clients can run migrations through the matching project SDK.
+
+## 0.14.2
+
+### Patch Changes
+
+- 58eafa5: Update Effect dependencies to 4.0.5.
+- 86c505e: Share compatible customer installations of Effect v4, its Node platform package, the commercetools platform and Import API SDKs, and React for the TUI's exported component. Declare them as required peers with supported version ranges, allowing npm and pnpm to install compatible versions automatically when they are missing. Keep the commercetools HTTP client builder as a development-only example dependency.
+
 ## 0.14.1
 
 ### Patch Changes

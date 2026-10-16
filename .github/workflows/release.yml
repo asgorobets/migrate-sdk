@@ -12,6 +12,10 @@ permissions:
   contents: read
 
 jobs:
+  tui-binaries:
+    name: Build native TUI packages
+    uses: ./.github/workflows/tui-binaries.yml
+
   validate:
     name: Validate Packages
     runs-on: ubuntu-latest
@@ -55,7 +59,7 @@ jobs:
 
   release:
     name: Release
-    needs: validate
+    needs: [validate, tui-binaries]
     runs-on: ubuntu-latest
 
     permissions:
@@ -90,15 +94,31 @@ jobs:
       - name: Build package outputs
         run: pnpm run build-packages
 
+      - name: Download tested native TUI builds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tui-release-input-*
+          merge-multiple: true
+          path: packages/tui/dist/binary
+
+      - name: Assemble complete native TUI release
+        run: pnpm --filter @migrate-sdk/tui package:release
+
       - name: Create release PR or publish packages
         id: changesets
         uses: changesets/action@v2
         with:
           version-script: pnpm exec changeset version
-          publish-script: pnpm exec changeset publish
+          publish-script: pnpm --filter @migrate-sdk/tui publish:release
           commit-message: "chore(migrate-sdk): version packages"
           pr-title: "chore(migrate-sdk): version packages"
           github-token: ${{ secrets.GITHUB_TOKEN }}
         env:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NPM_CONFIG_PROVENANCE: "true"
+
+      - name: Attach executables and checksums to the TUI release
+        if: steps.changesets.outputs.published == 'true' && contains(fromJSON(steps.changesets.outputs.publishedPackages).*.name, '@migrate-sdk/tui')
+        run: node packages/tui/scripts/upload-native-release.mjs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

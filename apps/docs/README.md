@@ -35,6 +35,31 @@ The root layout includes Vercel Web Analytics for the homepage and documentation
 
 Add an MDX page with `title` and `description` frontmatter, then add its name to `meta.json`. It automatically receives navigation, a table of contents, syntax highlighting, search indexing, and metadata. Keep headings plain; put links in body text.
 
+SDK packages use the default catalog for exact development dependencies and the
+`effect-peers` catalog for the supported public Effect and Node platform ranges.
+Public bootstrap commands use `migrate-sdk@latest` and the supported Effect major,
+rather than a development patch number or `effect@latest`, which could select an unsupported
+major. Explain that the lockfile records the resolved versions. Required
+customer peers are installed automatically by npm 7+ and pnpm with automatic peer
+installation enabled; package managers that do not install peers require an
+explicit dependency. The commercetools platform and Import API SDKs and Workflow
+SDK are customer-owned peers too, as is React for the TUI's exported component.
+SQL drivers remain application-provided through
+`effect/sql`. Keep the standalone getting-started project's exact SDK and Effect
+versions and npm lockfile together as a verified snapshot.
+
+One-off TUI commands may use `@migrate-sdk/tui@latest`. Explain that users can
+select a compatible TUI version explicitly for repeatable setups.
+
+Project-local TUI commands pin the exact version of the installed `migrate-sdk`.
+Install and `dlx` examples need no Bun/esbuild build approvals. Compiled native
+packages need no separate Bun runtime or install-time build; they remain build
+candidates until native publication is enabled. Link to `docs/tui-binaries.md`
+for candidate installation, and distinguish that preview from the registry
+package, which still supplies a pinned Bun runtime. Node is required for npm
+launchers and local migrations; direct compiled remote clients need neither
+Node nor Bun. Bun remains the compiler for maintainers building binaries.
+
 `content/authors.ts` is the shared, type-checked migration example. The homepage generates Shiki/Twoslash data from it; the CSV-to-JSON cookbook includes the same file using Fumadocs' `<include>` support. Update the file rather than copying its code into MDX.
 
 ## Check and build

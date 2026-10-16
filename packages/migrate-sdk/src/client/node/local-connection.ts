@@ -52,6 +52,8 @@ export interface LocalMigrateConnectionInput {
   readonly nodeExecutable?: string;
   /** Enable local OTLP/HTTP tracing with defaults overridden by OTEL_* variables. */
   readonly otel?: boolean;
+  /** A real Node bootstrap entry, resolved from the migration project's SDK. */
+  readonly serverEntry?: URL;
 }
 
 export interface LocalMigrateServerBootstrapOptions {
@@ -446,11 +448,12 @@ const connectPersistentMigrateServer = async (
     configPath,
     cwd,
     nodeExecutable = "node",
+    serverEntry: projectServerEntry,
     otel,
   }: LocalMigrateConnectionInput,
   {
     serverIdentity,
-    serverEntry = defaultServerEntry(),
+    serverEntry = projectServerEntry ?? defaultServerEntry(),
     startupTimeoutMs = defaultStartupTimeoutMs,
   }: LocalMigrateServerBootstrapOptions = {}
 ): Promise<MigrateConnection> => {

@@ -1,0 +1,106 @@
+name: TUI Binaries
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/tui-binaries.yml"
+      - "packages/tui/**"
+      - "packages/migrate-sdk/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "turbo.json"
+      - ".nvmrc"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    env:
+      # Bun 1.3.14 extracts relative to cwd, then renames into this cache.
+      # Keep both on the workspace drive (D: on Windows runners).
+      BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/packages/tui/dist/.bun-cache
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64-glibc
+            runner: ubuntu-24.04
+          - target: linux-arm64-glibc
+            runner: ubuntu-24.04-arm
+          - target: darwin-arm64
+            runner: macos-15
+          - target: darwin-x64
+            runner: macos-15-intel
+          - target: windows-x64
+            runner: windows-2025
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - run: pnpm install --frozen-lockfile
+      - name: Build, package, and test relocated binaries and native npm installation
+        run: pnpm turbo run test:binary --filter=@migrate-sdk/tui
+      - name: Upload unsigned distribution candidates
+        uses: actions/upload-artifact@v4
+        with:
+          name: migrate-tui-${{ matrix.target }}
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            packages/tui/dist/distribution/archives/*
+            packages/tui/dist/distribution/tarballs/*
+            packages/tui/dist/distribution/SHA256SUMS
+            packages/tui/dist/distribution/distribution.json
+      - name: Upload tested release inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-release-input-${{ matrix.target }}
+          if-no-files-found: error
+          compression-level: 0
+          path: packages/tui/dist/binary
+
+  assemble:
+    name: Verify complete npm release
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo run build --filter=@migrate-sdk/tui...
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tui-release-input-*
+          merge-multiple: true
+          path: packages/tui/dist/binary
+      - run: pnpm --filter @migrate-sdk/tui package:release
+      - run: pnpm --filter @migrate-sdk/tui publish:native --dry-run
+      - name: Test aggregated npm install and terminal
+        run: pnpm --filter @migrate-sdk/tui test:binary
+      - name: Upload complete npm release for review and initial publisher setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-npm-release
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            packages/tui/dist/distribution/tarballs/*
+            packages/tui/dist/distribution/archives/*
+            packages/tui/dist/distribution/SHA256SUMS
+            packages/tui/dist/distribution/distribution.json
