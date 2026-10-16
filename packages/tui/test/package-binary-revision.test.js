@@ -22,7 +22,7 @@ afterEach(async () => {
   );
 });
 
-async function packagingFixture(revision) {
+async function packagingFixture(revision, inheritedEnvironment = process.env) {
   // Stay under the checkout so the real packaging CLI discovers its Git HEAD.
   await mkdir(join(packageDirectory, "dist"), { recursive: true });
   const directory = await mkdtemp(
@@ -82,13 +82,24 @@ async function packagingFixture(revision) {
     manager,
     'console.error("PACK_REACHED"); process.exit(93);\n'
   );
+  // Windows keeps only the first case-insensitive key when spawning. Remove
+  // pnpm's inherited uppercase variant so this test always uses the helper.
+  const env = Object.fromEntries(
+    Object.entries(inheritedEnvironment).filter(
+      ([key]) => key.toLowerCase() !== "npm_execpath"
+    )
+  );
+  env.npm_execpath = manager;
+  expect(
+    Object.keys(env).filter((key) => key.toLowerCase() === "npm_execpath")
+  ).toEqual(["npm_execpath"]);
   const result = spawnSync(
     process.execPath,
     [resolve(directory, "scripts/package-binaries.mjs")],
     {
       cwd: directory,
       encoding: "utf8",
-      env: { ...process.env, npm_execpath: manager },
+      env,
     }
   );
   if (result.error) {
@@ -113,5 +124,16 @@ describe("binary packaging source revision", () => {
     const result = await packagingFixture(revision);
     expect(result.stderr).toContain("PACK_REACHED");
     expect(result.stderr).not.toContain("source revision");
+  });
+  it("overrides an inherited uppercase package manager variable on Windows", async () => {
+    const revision = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: packageDirectory,
+      encoding: "utf8",
+    }).trim();
+    const result = await packagingFixture(revision, {
+      ...process.env,
+      NPM_EXECPATH: "C:\\tools\\pnpm.cjs",
+    });
+    expect(result.stderr).toContain("PACK_REACHED");
   });
 });

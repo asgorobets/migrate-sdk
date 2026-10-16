@@ -47,7 +47,9 @@ describe("standalone project Node server entry", () => {
     const nested = join(cwd, "app");
     await installSdk(nested, "0.9.0");
     expect(
-      fileURLToPath(resolveProjectServerEntry({ cwd: nested }, "1.2.3"))
+      await realpath(
+        fileURLToPath(resolveProjectServerEntry({ cwd: nested }, "1.2.3"))
+      )
     ).toBe(await realpath(join(sdk, "server.js")));
   });
   it.each([
@@ -65,10 +67,12 @@ describe("standalone project Node server entry", () => {
   it("resolves beside the explicit config even when launched from another directory", async () => {
     const { cwd, sdk } = await project("1.2.3");
     expect(
-      fileURLToPath(
-        resolveProjectServerEntry(
-          { cwd: tmpdir(), configPath: join(cwd, "migrate.config.ts") },
-          "1.2.3"
+      await realpath(
+        fileURLToPath(
+          resolveProjectServerEntry(
+            { cwd: tmpdir(), configPath: join(cwd, "migrate.config.ts") },
+            "1.2.3"
+          )
         )
       )
     ).toBe(await realpath(join(sdk, "server.js")));

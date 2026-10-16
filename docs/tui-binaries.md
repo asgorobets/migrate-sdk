@@ -24,6 +24,17 @@ Bun is the build-time compiler and comes from the workspace's pinned dependency.
 Maintainers do not need a global Bun install. Consumers of the compiled output
 do not install Bun, compile the TUI, or approve Bun/esbuild install scripts.
 
+On Windows, keep Bun's compiler cache on the same drive as the checkout. Pinned
+Bun 1.3.14 can fail to move an extracted target executable across drives and
+report an incomplete download. CI sets `BUN_INSTALL_CACHE_DIR` inside the build
+output; Turbo passes it to compilation and the compiled-client smoke test.
+For a local PowerShell build from the repository root:
+
+```powershell
+$env:BUN_INSTALL_CACHE_DIR = Join-Path (Get-Location) "packages/tui/dist/.bun-cache"
+pnpm turbo run test:binary --filter=@migrate-sdk/tui
+```
+
 The acceptance test verifies checksums, relocates the executable, runs help and
 version with no Node or Bun on PATH, installs the generated npm tarballs with
 lifecycle scripts disabled, and executes a migration through a compiled client

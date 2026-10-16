@@ -29,6 +29,10 @@ jobs:
   build:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
+    env:
+      # Bun 1.3.14 extracts relative to cwd, then renames into this cache.
+      # Keep both on the workspace drive (D: on Windows runners).
+      BUN_INSTALL_CACHE_DIR: ${{ github.workspace }}/packages/tui/dist/.bun-cache
     strategy:
       fail-fast: false
       matrix:

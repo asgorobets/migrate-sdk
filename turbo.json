@@ -31,6 +31,7 @@
     "build:binary": {
       "dependsOn": ["build"],
       "cache": false,
+      "passThroughEnv": ["BUN_INSTALL_CACHE_DIR"],
       "outputs": ["dist/binary/**"]
     },
     "package:binary": {
@@ -41,6 +42,7 @@
     "test:binary": {
       "dependsOn": ["package:binary"],
       "cache": false,
+      "passThroughEnv": ["BUN_INSTALL_CACHE_DIR"],
       "outputs": []
     },
     "dev": {
