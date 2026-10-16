@@ -10,6 +10,13 @@ using recorded results.
 Run in your application or use the CLI and TUI, locally or remotely. Your code
 and migration state stay in your infrastructure.
 
+[Website](https://migrate-sdk.dev) · [Documentation](https://migrate-sdk.dev/docs) · [Live Workflow SDK demo](https://migrate-sdk-workflow.vercel.app)
+
+Try the hosted demo to run PostgreSQL catalog migrations through Vercel Workflow
+and follow their progress in the browser or connect your own TUI using the
+command shown on the demo page. The [Workflow SDK cookbook](https://migrate-sdk.dev/docs/cookbook/workflow-sdk)
+walks through the implementation and deployment.
+
 ## Install
 
 For Node.js, use **22.19.0 or newer**.
@@ -38,8 +45,8 @@ matching Effect 4.0.4 dependencies after it is published.
 
 ## Documentation
 
-- [Getting started](./apps/docs/content/docs/getting-started.mdx) — assemble your first migration definition.
-- [Learn the concepts](./apps/docs/content/docs/learn/index.mdx) — sources, schemas, tracking, and saved state.
-- [CLI](./apps/docs/content/docs/operate/cli.mdx) and [TUI](./apps/docs/content/docs/operate/tui.mdx) — select work, run migrations, and check progress locally or remotely.
-- [Cookbook](./apps/docs/content/docs/cookbook/index.mdx) — complete recipes for common migration tasks.
-- [Workflow SDK](./apps/docs/content/docs/cookbook/workflow-sdk.mdx) — run migrations durably beyond a request's lifetime.
+- [Getting started](https://migrate-sdk.dev/docs/getting-started) — assemble your first migration definition.
+- [Learn the concepts](https://migrate-sdk.dev/docs/learn) — sources, schemas, tracking, and saved state.
+- [CLI](https://migrate-sdk.dev/docs/operate/cli) and [TUI](https://migrate-sdk.dev/docs/operate/tui) — select work, run migrations, and check progress locally or remotely.
+- [Cookbook](https://migrate-sdk.dev/docs/cookbook) — complete recipes for common migration tasks.
+- [Workflow SDK](https://migrate-sdk.dev/docs/cookbook/workflow-sdk) — run migrations durably beyond a request's lifetime.

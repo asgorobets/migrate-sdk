@@ -3,6 +3,8 @@ title: Run durably with Workflow SDK
 description: Move migration execution into durable steps while keeping item state, tracking, and recovery in the Migration Store.
 ---
 
+Try the [live Workflow SDK demo](https://migrate-sdk-workflow.vercel.app) hosted on Vercel. Run the PostgreSQL authors and books migrations, follow progress in the browser, or connect your own TUI using the command shown on the demo page. This recipe explains how that application is built and deployed.
+
 An **Execution Adapter** is the runtime strategy that executes Migration Definitions inline or starts them through a durable workflow provider. The **Workflow SDK Execution Adapter** uses durable steps when a Migration Run must outlive an HTTP request or worker. Definitions retain their Source, processing style, Migration Store, and any Tracking Record Contract or Rollback Pipeline they declare.
 
 The boundary between the starting host and the worker is a **Migration Execution Envelope**: a serializable execution request containing the Migration Run ID, Migration Definition Registry ID, request, and diagnostic planned order. The **Workflow SDK Migration Execution Envelope** also carries the complete acquired Migration Definition Lock set transferred to the provider-owned execution.

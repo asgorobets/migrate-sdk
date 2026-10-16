@@ -5,6 +5,10 @@ Workflow and exposes one authenticated Migrate Server to interactive migration
 controls and the complete local Migrate TUI. The app constructs its registry
 directly in TypeScript; it never discovers or loads a `migrate.config.*` file.
 
+Open the [live demo](https://migrate-sdk-workflow.vercel.app) to try it without
+local setup. The [Workflow SDK cookbook](https://migrate-sdk.dev/docs/cookbook/workflow-sdk)
+walks through the architecture, step boundaries, recovery, and deployment.
+
 ## What runs where
 
 - `POST /api/migrate` is the authenticated Effect RPC Migrate Server route. The
