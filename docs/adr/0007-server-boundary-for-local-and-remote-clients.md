@@ -319,6 +319,10 @@ deduplication, and global message ordering authoritatively. Clients render
 those canonical reports rather than reconstructing them from dashboard rows or
 per-definition requests.
 
+The TUI opens its migration list from `GetRegistry` so expensive status reads
+do not block startup. The client controls when to load status and messages and
+subscribe to dashboard updates.
+
 Remote CLI commands accept a Migrate Server URL and read its bearer token from
 `MIGRATE_SERVER_TOKEN`; secrets are not accepted as command-line flags. Store
 schema CLI commands continue to support direct local administration; the TUI
@@ -393,9 +397,8 @@ use the same conditional force behavior while preserving the selected identities
   status.
 - Remote clients can compose bounded HTTP observation leases into a continuous
   interface without keeping a serverless invocation alive for the run duration.
-- Dashboard clients receive complete durable snapshots for every migration;
-  changing TUI selection affects only optional focused observation and never
-  interrupts aggregate freshness.
+- Active dashboard subscriptions receive complete durable snapshots for every
+  migration; changing TUI selection affects only optional focused observation.
 - Inline and provider progress can wake one shared dashboard projection without
   exposing provider event formats or making clients poll every second.
 - The boundary extracts serializable server requests and handlers from the

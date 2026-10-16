@@ -4,8 +4,8 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import { runMain } from "@effect/platform-node/NodeRuntime";
 import { Effect, Layer, Schema } from "effect";
-import { Protocol as RpcServerProtocol } from "effect/unstable/rpc/RpcServer";
-import { SocketServer } from "effect/unstable/socket";
+import { Protocol as RpcServerProtocol } from "effect/rpc/RpcServer";
+import { SocketServer } from "effect/socket";
 import { toMigrationDefinitionRegistryId } from "../../domain/ids.ts";
 import { MigrateServerInstanceId } from "../../protocol/index.ts";
 import {

@@ -1,0 +1,58 @@
+---
+title: Execution and observation
+description: Distinguish plans, Migration Runs, Execution Adapters, and client observations.
+---
+
+A **Migration Run** is one execution attempt of one or more Migration Definitions. A plan determines the work and order. An **Execution Adapter** determines how that work executes. A **Migration Run Observation** follows its progress from a client.
+
+These lifetimes are separate. Accepting a run does not mean it has completed, and disconnecting an observer does not cancel it.
+
+## From selection to an executable plan
+
+A **Run Request** or **Rollback Request** identifies the requested operation and selection. The registry resolves definitions, dependency scope, and ordering. An **Executable Migration Definition Registry** produces plans whose selected definitions can execute.
+
+The **Migration Execution** service resolves or binds a registry, plans the request, and delegates the executable plan to **Migration Executable**. The latter is the Effect service responsible for executing planned forward and rollback runs.
+
+An executable plan is an in-process object that can refer to functions and configured dependencies. It is not required to be serializable. Previewing a plan establishes intended scope; it does not exercise arbitrary destination operations or prove that every remote request will succeed.
+
+## Execution Adapter
+
+An adapter supplies the runtime strategy behind execution. Inline execution runs work in the execution host. A durable workflow adapter delegates orchestration to a provider that can coordinate work beyond one request or worker lifetime.
+
+The adapter choice does not change the Source Identity, Tracking Record Contract, or meaning of saved item states. Source discovery, eligibility, per-item processing, and rollback still follow the definition's contracts.
+
+An **Execution Start Result** contains the Migration Run ID and either a completed summary or a started run that can be observed separately. Durable execution can return after scheduling or acceptance, before destination work finishes.
+
+## Cross a distributed execution boundary
+
+A **Migration Execution Envelope** is the serializable request derived from an executable plan. It carries the run ID, registry ID, request, and planned order as diagnostic metadata. The worker resolves the registry and re-plans in its own environment.
+
+The envelope does not serialize live clients, Effects, or open database connections. The execution environment must supply compatible definitions and the same durable store. Registry identity provides a resolution key; it is not a snapshot of the implementation.
+
+The Workflow SDK adapter transfers its acquired Migration Definition Lock set with the execution envelope. Its lifecycle and processing steps have different retry requirements because provider step results and migration-store commits are separate. See the [Workflow SDK cookbook](/docs/cookbook/workflow-sdk).
+
+## Migrate Server and Migrate Client
+
+A **Migrate Server** is an environment-bound application with an authoritative registry and the capabilities needed to inspect, plan, execute, observe, and control migrations. A **Migrate Client**, such as the TUI, calls that server without owning its source, destination, store, or execution credentials.
+
+A **Migrate Connection** selects the server target and access method. It does not choose the Execution Adapter. The **Migrate Protocol** defines the versioned requests, results, events, and errors exchanged between client and server.
+
+A **Migrate Server Instance** is one running incarnation of the server. Its identity can change after a restart while registry identity and durable migration state remain. Reconnection must not assume that the original server process still exists.
+
+## Observe a run
+
+A **Migration Run Observation** is a client-scoped stream for one run ID. It carries progress, lifecycle events, warnings, and terminal results. Multiple clients can observe the same run.
+
+**Detach Migration Run Observation** means ending one client's stream while leaving the run active. Another observation can follow the same run ID. Reconnecting observes the same attempt; starting another run creates a new attempt.
+
+An **Active Migration Run** has nonterminal durable run state and still owns at least one definition lock. A **Reconnectable Migration Run** additionally carries the adapter execution identity needed by a new server instance to observe it.
+
+A **Migration Run Handle** is the current host's run-scoped observation and cancellation capability. Its in-memory handle state is different from the durable Migration Run State stored for recovery.
+
+## Cancellation and ownership
+
+Cooperative cancellation records the intent to stop, stops scheduling new work, and allows already-started work to settle. `cancelling` remains nonterminal and retains ownership until finalization. Cancellation does not compensate completed destination effects.
+
+A **Migration Definition Lock** coordinates execution ownership. Breaking a lock removes that ownership record; it does not terminate the former worker or undo in-flight requests. An observation lease or transport timeout is not a lock-expiry mechanism.
+
+Use [Collaboration and locks](/docs/operate/collaboration-and-locks) for operational recovery. Use [States and completion](/docs/learn/states) to interpret a run's result without confusing execution history with source-pass completion.

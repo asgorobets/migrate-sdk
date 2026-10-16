@@ -1,0 +1,30 @@
+---
+title: Learn the concepts
+description: Understand the primitives, contracts, and execution boundaries of a migration.
+---
+
+The learning guides explain the SDK's domain model independently of a particular source format or destination system. Begin with the definition, follow an item through execution, then examine the state and contracts needed for recovery.
+
+## Define the work
+
+- [Migration definitions](/docs/learn/defining-migrations): compose capabilities and choose a Process Pipeline or Process Batch Pipeline.
+- [Schemas and mapping](/docs/learn/schemas-and-mapping): decode source-native values and validate process-facing contracts.
+- [Sources](/docs/learn/sources): emit items, discover changes, and look up current data by identity.
+- [Source items](/docs/learn/items): distinguish payload, stable identity, observed version, and discovery position.
+- [Destinations](/docs/learn/destinations): perform destination-owned operations and record typed evidence.
+
+## Understand durable state
+
+- [States and completion](/docs/learn/states): separate Migration Item State, Migration Run State, and Migration Definition Completion.
+- [Migration stores](/docs/learn/migration-stores): persist progress and enforce compatibility and ownership.
+- [Tracking](/docs/learn/tracking): distinguish the Tracking Record Contract, Tracking Record, and Destination Journal.
+- [Registries and dependencies](/docs/learn/registries-and-dependencies): select definitions, order execution, and resolve tracked references.
+
+## Execute and recover
+
+- [Execution and observation](/docs/learn/execution): plan a Migration Run, select an Execution Adapter, and follow progress through a client observation.
+- [Errors](/docs/learn/errors): understand typed failures, durable error records, and intentional skips.
+- [Retries](/docs/learn/retries): choose the operation to repeat and apply a bounded backoff strategy.
+- [Rollback](/docs/learn/rollback): compensate destination work from durable Migration Item State.
+
+Use the [cookbook](/docs/cookbook) to see these primitives assembled into complete implementations, and the [operating guides](/docs/operate) to control them through the CLI or TUI.

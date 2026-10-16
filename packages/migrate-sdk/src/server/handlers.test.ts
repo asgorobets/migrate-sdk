@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema, Stream } from "effect";
-import { makeClient } from "effect/unstable/rpc/RpcTest";
+import { makeClient } from "effect/rpc/RpcTest";
 import { MigrationDefinitionId, MigrationRunId } from "../domain/ids.ts";
 import {
   MIGRATE_PROTOCOL_VERSION,

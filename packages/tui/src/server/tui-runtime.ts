@@ -44,10 +44,6 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
   const { client, runPromise, serverInfo } = connection;
   const bootstrap = await (async () => {
     const schema = await runPromise(client.GetStoreSchema());
-    if (schema === null || schema.status === "current") {
-      const { dashboard } = await runPromise(client.GetDashboard());
-      return { schema, groups: dashboard.groups, rows: dashboard.rows };
-    }
     const registry = await runPromise(client.GetRegistry());
     return {
       schema,

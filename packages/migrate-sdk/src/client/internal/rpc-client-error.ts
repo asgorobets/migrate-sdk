@@ -1,6 +1,6 @@
 import { Option } from "effect";
-import { HttpClientError } from "effect/unstable/http";
-import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
+import { HttpClientError } from "effect/http";
+import type { RpcClientError } from "effect/rpc/RpcClientError";
 
 export const rpcClientHttpStatusCode = (
   error: RpcClientError

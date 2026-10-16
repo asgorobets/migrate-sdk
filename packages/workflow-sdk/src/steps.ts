@@ -218,7 +218,11 @@ export const executeMigrationRunCursorWindow = (input: {
         definitionIds: job.plan.executionDefinitionIds,
         lease,
         mode: migrationRunModeForDefinition(job.plan, definition.id),
-        ...(job.plan.update === undefined ? {} : { update: job.plan.update }),
+        ...(job.plan.update === true &&
+        (job.plan.target === undefined ||
+          job.plan.target.definitionId === definition.id)
+          ? { update: true }
+          : {}),
         ...(job.plan.limit === undefined ? {} : { limit: job.plan.limit }),
         ...(job.plan.rollbackOrphans === true ? { rollbackOrphans: true } : {}),
         runId: input.runId,

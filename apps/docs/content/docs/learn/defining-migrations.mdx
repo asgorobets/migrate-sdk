@@ -1,0 +1,75 @@
+---
+title: Migration definitions
+description: Compose a Source, a processing pipeline, optional tracking, and a Migration Store.
+---
+
+A **Migration Definition** is the executable configuration of a migration. It connects a Source, exactly one processing style, an optional Tracking Record Contract, and a Migration Store. It can also declare dependencies, execution defaults, a Rollback Pipeline, and destination-stub behavior.
+
+A **Migration Run** is one execution attempt of one or more definitions. The definition persists as configuration across runs; each run has its own identity, selected work, and outcome.
+
+## Compose pluggable capabilities
+
+The primary **pluggable capabilities** are Source, Destination, and Migration Store. Each owns a different boundary:
+
+| Capability | Owns |
+| --- | --- |
+| Source | Reading source-native data, declaring its payload schema, deriving identity and version, and supporting discovery and lookup. |
+| Destination | Destination-owned operations, input validation, request construction, response handling, and typed change descriptors. |
+| Migration Store | Durable item state, cursors, migration contracts, execution history, completion, and locks. |
+
+`MigrationDefinition.make` connects the configured source and store to your processing function. Destinations are called through that function; the definition does not require a `destination` field or a universal create/update command format.
+
+Constructing a definition does not execute its pipeline. The runtime acquires the configured capabilities when executing a planned operation.
+
+## Give the definition a durable identity
+
+The definition's `id` names the migration across configuration loads and runs. Migration Item State is scoped to this ID and a Source Identity. Renaming the definition does not migrate its stored history or compensate its destination effects; the new name identifies different migration state.
+
+The **Migration Contract** records the stored compatibility agreement for source identity, source version, and optional tracking. Identity or tracking changes can make existing state unsafe to reuse. Version-contract changes affect whether stored and current versions can be compared. See [Migration stores](/docs/learn/migration-stores).
+
+## Process Pipeline
+
+A **Process Pipeline** is the user-authored Effect that processes one Source Item and performs destination-side work. It is configured through `process`.
+
+Before invoking it, the runtime decodes the payload, checks existing state, and determines eligibility. The resulting **Admitted Source Item** is ready for processing. An unchanged migrated item can be observed without being admitted to the pipeline.
+
+The process receives:
+
+- A `SourceItem` containing `.item`, `.identity`, and `.version`.
+- A context containing `definitionId`, `runId`, and an optional `previousState` decoded against the tracking contract.
+
+`ProcessPipelineFor` derives the source payload and identity types from a configured Source and the previous-state type from its Tracking Record Contract. The process can transform values, call destination helpers, resolve migrated references, and stage tracking evidence.
+
+The **Pipeline Execution Scope** is the per-item boundary in which the runtime supplies Tracking and related framework capabilities. It keeps one item's journal and staged record associated with that item, even when several items run concurrently.
+
+## Complete, skip, or fail
+
+Normal process completion returns no value. **Skip Item**, constructed by `skipItem(reason)`, is a successful control-flow result that records an intentional skip. A typed failure uses Effect's error channel.
+
+The runtime turns process completion, failure, journal evidence, and the optional tracking contract into a **Migration Item Outcome** and durable **Migration Item State**. User code does not return a complete saved-state object.
+
+When a Tracking Record Contract exists, normal success requires exactly one staged, schema-valid Tracking Record. Intentional skips do not require one. A process without a tracking contract still has durable item state and can record journal evidence.
+
+A skip returned by a nested helper must be returned by its caller as well. Neither a skip nor a failure automatically undoes destination operations already performed. See [Errors](/docs/learn/errors) and [Tracking](/docs/learn/tracking).
+
+## Process Batch Pipeline
+
+A **Process Batch Pipeline**, configured through `processBatch`, coordinates a nonempty group of admitted items. A definition declares either `process` or `processBatch`.
+
+Each **Process Batch Item** has a Source Item, its context, and a `settle(...)` function. The callback must return exactly one **Process Batch Settlement** for every item. A settlement is deferred per-item work; the runtime checks the complete settlement set before executing it.
+
+Batch coordination can group requests or map a bulk response back to individual results. Each settlement retains its own Pipeline Execution Scope, Tracking, and durable outcome. A provider's successful bulk response does not make every contained record successful automatically.
+
+A batch invocation stays within one Source Cursor Window. Requests, chunks, and remote jobs inside it are implementation details; the Source Item remains the durable migration unit. A partial window is not committed as fully processed simply because one request succeeded.
+
+## Define recovery alongside processing
+
+A **Rollback Pipeline** receives durable item state and performs explicit compensation. It can use a Tracking Record and Destination Journal without fetching the source payload again. The definition owns which compensation is appropriate.
+
+Repeated forward execution also needs a destination policy. A destination operation may succeed before its Migration Item State is saved. Choose repeatable writes, idempotency keys, or reconciliation appropriate to that system. Changing processing code alone does not change a Source Version; an explicit Update Run can reprocess unchanged source data under a revised mapping.
+
+## Register and execute
+
+A **Migration Definition Registry** makes definitions available for selection and planning. Dependencies establish ordering between definitions, while an Execution Adapter controls where the resulting run executes.
+
+Continue with [Schemas and mapping](/docs/learn/schemas-and-mapping), [Destinations](/docs/learn/destinations), or [Execution and observation](/docs/learn/execution). The [cookbook](/docs/cookbook) contains complete definition implementations.

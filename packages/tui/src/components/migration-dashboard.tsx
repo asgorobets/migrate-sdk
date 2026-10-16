@@ -13,6 +13,7 @@ import type {
 } from "migrate-sdk/protocol";
 import type { ReactNode } from "react";
 import { useEffect, useRef } from "react";
+import type { MigrationMessagesStatus } from "../use-migration-messages.ts";
 import {
   type MigrationTuiAvailableAction,
   migrationTuiPrimaryActions,
@@ -22,7 +23,10 @@ import {
   migrationMessageKindLabel,
   migrationMessageMarker,
 } from "./migration-message.ts";
-import { MigrationMessages } from "./migration-messages.tsx";
+import {
+  MigrationMessages,
+  migrationMessagesStatusLabel,
+} from "./migration-messages.tsx";
 import {
   aggregateSourceItemTotals,
   type MigrationProgressCounts,
@@ -70,7 +74,7 @@ const statusLabel = (row: {
   const status = row.status;
 
   if (status === undefined) {
-    return "loading";
+    return "not loaded";
   }
   if (status.lastRun?.status === "cancelling") {
     return "cancelling";
@@ -121,7 +125,7 @@ const statusIcon = (label: string): string => {
       return "◌";
     case "complete":
       return "✓";
-    case "loading":
+    case "not loaded":
       return "◌";
     case "partial":
       return "◐";
@@ -245,8 +249,8 @@ const groupStatusLabel = (rows: readonly MigrateDashboardRow[]): string => {
   if (labels.every((label) => label === "complete")) {
     return "complete";
   }
-  if (labels.every((label) => label === "loading")) {
-    return "loading";
+  if (labels.some((label) => label === "not loaded")) {
+    return "not loaded";
   }
 
   return "partial";
@@ -266,7 +270,7 @@ const rowsForGroup = (
 
 const listCountsLabel = (row: MigrateDashboardRow): string => {
   if (row.status === undefined) {
-    return "Reading status…";
+    return "Status not loaded";
   }
 
   const counts = durableCounts(row);
@@ -292,7 +296,10 @@ const formatDate = (date: Date | undefined): string => {
 };
 
 const lastRunLabel = (row: MigrateDashboardRow): string => {
-  const lastRun = row.status?.lastRun;
+  if (row.status === undefined) {
+    return "Run history not loaded";
+  }
+  const lastRun = row.status.lastRun;
 
   if (lastRun === null || lastRun === undefined) {
     return "never run";
@@ -766,13 +773,17 @@ const Capabilities = ({ row }: { readonly row: MigrateDashboardRow }) => (
       label="Rollback"
       tone="success"
     />
-    <Checkbox checked disabled label="Source Inventory Scan" tone="success" />
-    <Checkbox
-      checked={row.status?.discovery === "incremental"}
-      disabled
-      label="Incremental"
-      tone="success"
-    />
+    <Checkbox checked disabled label="Scan sources" tone="success" />
+    {row.status === undefined ? (
+      <text fg={migrationColors.dim}>Incremental: not loaded</text>
+    ) : (
+      <Checkbox
+        checked={row.status.discovery === "incremental"}
+        disabled
+        label="Incremental"
+        tone="success"
+      />
+    )}
   </box>
 );
 
@@ -853,21 +864,23 @@ const Dependencies = ({
 
 const LatestMessage = ({
   compact,
-  loading,
+  status,
   messages,
   showDefinitionId = false,
 }: {
   readonly compact: boolean;
-  readonly loading: boolean;
+  readonly status: MigrationMessagesStatus;
   readonly messages: readonly MigrationMessage[];
   readonly showDefinitionId?: boolean;
 }) => {
   const latest = messages[0];
 
-  if (loading) {
+  if (status !== "loaded") {
     return (
       <box style={{ flexShrink: 0, height: 1 }}>
-        <text fg={migrationColors.dim}>Loading messages…</text>
+        <text fg={migrationColors.dim}>
+          {migrationMessagesStatusLabel(status)}
+        </text>
       </box>
     );
   }
@@ -960,7 +973,7 @@ const Overview = ({
   active,
   compact,
   messages,
-  messagesLoading,
+  messagesStatus,
   row,
   rows,
   sourceItemTotal,
@@ -968,7 +981,7 @@ const Overview = ({
   readonly active: boolean;
   readonly compact: boolean;
   readonly messages: readonly MigrationMessage[];
-  readonly messagesLoading: boolean;
+  readonly messagesStatus: MigrationMessagesStatus;
   readonly row: MigrateDashboardRow;
   readonly rows: readonly MigrateDashboardRow[];
   readonly sourceItemTotal?: MigrateSourceItemTotal | undefined;
@@ -977,11 +990,17 @@ const Overview = ({
 
   return (
     <OverviewViewport active={active}>
-      <ProgressHeading counts={counts} sourceItemTotal={sourceItemTotal} />
-      <ProgressBar counts={counts} sourceItemTotal={sourceItemTotal} />
-      <CountsRow counts={counts} />
+      {row.status === undefined ? (
+        <text fg={migrationColors.dim}>Status not loaded · R to load</text>
+      ) : (
+        <>
+          <ProgressHeading counts={counts} sourceItemTotal={sourceItemTotal} />
+          <ProgressBar counts={counts} sourceItemTotal={sourceItemTotal} />
+          <CountsRow counts={counts} />
+        </>
+      )}
       <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
-        <text fg={migrationColors.foreground}>Source inventory</text>
+        <text fg={migrationColors.foreground}>Sources</text>
       </box>
       <SourceInventorySummary compact={compact} rows={[row]} />
       <LockDetails row={row} />
@@ -1000,8 +1019,8 @@ const Overview = ({
       )}
       <LatestMessage
         compact={compact}
-        loading={messagesLoading}
         messages={messages}
+        status={messagesStatus}
       />
     </OverviewViewport>
   );
@@ -1011,14 +1030,14 @@ const GroupOverview = ({
   active,
   compact,
   messages,
-  messagesLoading,
+  messagesStatus,
   rows,
   sourceItemTotal,
 }: {
   readonly active: boolean;
   readonly compact: boolean;
   readonly messages: readonly MigrationMessage[];
-  readonly messagesLoading: boolean;
+  readonly messagesStatus: MigrationMessagesStatus;
   readonly rows: readonly MigrateDashboardRow[];
   readonly sourceItemTotal?: MigrateSourceItemTotal | undefined;
 }) => {
@@ -1026,11 +1045,17 @@ const GroupOverview = ({
 
   return (
     <OverviewViewport active={active}>
-      <ProgressHeading counts={counts} sourceItemTotal={sourceItemTotal} />
-      <ProgressBar counts={counts} sourceItemTotal={sourceItemTotal} />
-      <CountsRow counts={counts} />
+      {rows.some((row) => row.status === undefined) ? (
+        <text fg={migrationColors.dim}>Status not loaded · R to load</text>
+      ) : (
+        <>
+          <ProgressHeading counts={counts} sourceItemTotal={sourceItemTotal} />
+          <ProgressBar counts={counts} sourceItemTotal={sourceItemTotal} />
+          <CountsRow counts={counts} />
+        </>
+      )}
       <box style={{ flexShrink: 0, height: 1, marginTop: compact ? 0 : 1 }}>
-        <text fg={migrationColors.foreground}>Source inventory</text>
+        <text fg={migrationColors.foreground}>Sources</text>
       </box>
       <SourceInventorySummary compact={compact} rows={rows} />
       <GroupLocks rows={rows} />
@@ -1083,9 +1108,9 @@ const GroupOverview = ({
       )}
       <LatestMessage
         compact={compact}
-        loading={messagesLoading}
         messages={messages}
         showDefinitionId
+        status={messagesStatus}
       />
     </OverviewViewport>
   );
@@ -1128,7 +1153,7 @@ const GroupDetailPane = ({
   group,
   messageIndex,
   messages,
-  messagesLoading,
+  messagesStatus,
   onMessageIndexChange,
   onOpenActions,
   onSelectAction,
@@ -1143,7 +1168,7 @@ const GroupDetailPane = ({
   readonly group: MigrationDefinitionRegistryGroup;
   readonly messages: readonly MigrationMessage[];
   readonly messageIndex: number;
-  readonly messagesLoading: boolean;
+  readonly messagesStatus: MigrationMessagesStatus;
   readonly onMessageIndexChange: (index: number) => void;
   readonly onOpenActions: () => void;
   readonly onSelectAction: (action: MigrationTuiAvailableAction) => void;
@@ -1190,7 +1215,14 @@ const GroupDetailPane = ({
       >
         <TabsList flexShrink={0} height={1} marginTop={1}>
           <TabsTrigger label="Overview" value="overview" />
-          <TabsTrigger label={`Messages ${messages.length}`} value="messages" />
+          <TabsTrigger
+            label={
+              messagesStatus === "loaded"
+                ? `Messages ${messages.length}`
+                : "Messages"
+            }
+            value="messages"
+          />
         </TabsList>
         <TabsContent
           flexDirection="column"
@@ -1205,7 +1237,7 @@ const GroupDetailPane = ({
             compact={compact}
             key={`group-overview-${group.id}`}
             messages={messages}
-            messagesLoading={messagesLoading}
+            messagesStatus={messagesStatus}
             rows={rows}
             sourceItemTotal={sourceItemTotal}
           />
@@ -1222,12 +1254,12 @@ const GroupDetailPane = ({
             colors={migrationColors}
             compact={compact}
             key={`group-messages-${group.id}`}
-            loading={messagesLoading}
             messages={messages}
             onSelectedIndexChange={onMessageIndexChange}
             selectedIndex={messageIndex}
             severityColor={statusColor}
             showDefinitionId
+            status={messagesStatus}
           />
         </TabsContent>
       </Tabs>
@@ -1264,7 +1296,7 @@ const DetailPane = ({
   disabled,
   messages,
   messageIndex,
-  messagesLoading,
+  messagesStatus,
   onMessageIndexChange,
   onOpenActions,
   onSelectAction,
@@ -1279,7 +1311,7 @@ const DetailPane = ({
   readonly disabled: boolean;
   readonly messages: readonly MigrationMessage[];
   readonly messageIndex: number;
-  readonly messagesLoading: boolean;
+  readonly messagesStatus: MigrationMessagesStatus;
   readonly onMessageIndexChange: (index: number) => void;
   readonly onOpenActions: () => void;
   readonly onSelectAction: (action: MigrationTuiAvailableAction) => void;
@@ -1327,7 +1359,14 @@ const DetailPane = ({
       >
         <TabsList flexShrink={0} height={1} marginTop={1}>
           <TabsTrigger label="Overview" value="overview" />
-          <TabsTrigger label={`Messages ${messages.length}`} value="messages" />
+          <TabsTrigger
+            label={
+              messagesStatus === "loaded"
+                ? `Messages ${messages.length}`
+                : "Messages"
+            }
+            value="messages"
+          />
         </TabsList>
         <TabsContent
           flexDirection="column"
@@ -1342,7 +1381,7 @@ const DetailPane = ({
             compact={compact}
             key={`migration-overview-${row.entry.id}`}
             messages={messages}
-            messagesLoading={messagesLoading}
+            messagesStatus={messagesStatus}
             row={row}
             rows={rows}
             sourceItemTotal={sourceItemTotal}
@@ -1360,11 +1399,11 @@ const DetailPane = ({
             colors={migrationColors}
             compact={compact}
             key={`migration-messages-${row.entry.id}`}
-            loading={messagesLoading}
             messages={messages}
             onSelectedIndexChange={onMessageIndexChange}
             selectedIndex={messageIndex}
             severityColor={statusColor}
+            status={messagesStatus}
           />
         </TabsContent>
       </Tabs>
@@ -1402,7 +1441,7 @@ export const MigrationDashboard = ({
   listTab,
   messages,
   messageIndex,
-  messagesLoading,
+  messagesStatus,
   onListTabChange,
   onMessageIndexChange,
   onOpenActions,
@@ -1422,7 +1461,7 @@ export const MigrationDashboard = ({
   readonly listTab: MigrationListTab;
   readonly messages: readonly MigrationMessage[];
   readonly messageIndex: number;
-  readonly messagesLoading: boolean;
+  readonly messagesStatus: MigrationMessagesStatus;
   readonly onListTabChange: (tab: MigrationListTab) => void;
   readonly onMessageIndexChange: (index: number) => void;
   readonly onOpenActions: () => void;
@@ -1482,7 +1521,7 @@ export const MigrationDashboard = ({
         group={group}
         messageIndex={messageIndex}
         messages={messages}
-        messagesLoading={messagesLoading}
+        messagesStatus={messagesStatus}
         onMessageIndexChange={onMessageIndexChange}
         onOpenActions={onOpenActions}
         onSelectAction={onSelectAction}
@@ -1500,7 +1539,7 @@ export const MigrationDashboard = ({
         disabled={busy !== ""}
         messageIndex={messageIndex}
         messages={messages}
-        messagesLoading={messagesLoading}
+        messagesStatus={messagesStatus}
         onMessageIndexChange={onMessageIndexChange}
         onOpenActions={onOpenActions}
         onSelectAction={onSelectAction}

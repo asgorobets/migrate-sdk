@@ -1,0 +1,57 @@
+---
+title: Destinations
+description: Encapsulate destination-owned operations, typed changes, and dependency requirements.
+---
+
+A **Destination** is a pluggable capability that exposes destination-owned helpers, typed change descriptors, dependency layers, and optional rollback helpers. It owns the semantics of operations in the target system.
+
+A **Process Pipeline** calls destination helpers as ordinary Effects. The runtime manages the item's execution scope and durable state; the destination helper manages the external operation.
+
+## Own the destination boundary
+
+A helper can validate process-facing inputs, construct a native request, authenticate, execute the request, decode its response, and return a destination-native result. Its API should express operations meaningful to that destination, including any publish, update, relationship, or bulk-import behavior.
+
+The SDK does not require every destination to fit a universal create/update interface. A plain Effect that performs destination work can participate in a migration; extracting reusable helpers adds destination-specific types and behavior without changing the migration's execution model.
+
+Destination helpers obtain clients, credentials, rate limiters, or other services through their configured dependencies. Framework-owned Tracking is supplied by the item's Pipeline Execution Scope. A helper used outside that scope must not assume Tracking is available.
+
+## Separate operation results from migration tracking
+
+A helper's return value is available to the process immediately. The process can combine results from several helpers before choosing what to preserve in its Tracking Record.
+
+| Concept | Meaning |
+| --- | --- |
+| Destination result | The value returned by a helper after an operation. |
+| Destination Version | A destination-side revision observed or returned by the helper. |
+| Destination Change | Typed evidence of a successful destination-native operation. |
+| Tracking Record | The schema-validated materialized result preserved for one migration item. |
+
+The **Migration Definition** owns the Tracking Record Contract. A destination cannot decide that a migration item is untracked merely because its helper does not return an ID. The runtime still records Migration Item State.
+
+A Source Version describes observed source data for change detection. A Destination Version belongs to destination semantics, such as optimistic concurrency or conditional compensation. They are independent values.
+
+## Record typed changes
+
+A **Destination Change Descriptor** identifies a change kind and supplies its schema. A helper can call `Tracking.recordChange(descriptor, value)` after an operation succeeds. The scoped Tracking service associates the resulting entry with the current source item.
+
+A Destination Change need not be a structural before/after diff. Its payload should contain the destination-native evidence required by inspection or compensation. A **Destination Journal Diagnostic** records context or failure information without asserting that a change occurred.
+
+Changes and diagnostics are staged during execution and persisted with the item's outcome. Recording a change does not create an independent durable checkpoint. A process can fail after some helpers succeed, and a crash can occur before any evidence is saved. See [Tracking](/docs/learn/tracking).
+
+## Allow one item to affect several resources
+
+One Source Item can cause several destination operations, possibly in different systems. It remains one durable migration unit with one Migration Item State and, when declared, one Tracking Record containing multiple named results.
+
+The Process Pipeline defines ordering, maps values between operations, and decides when its required work is complete. A Process Batch Pipeline can coordinate requests across items, but each item's settlement retains its own scope and state.
+
+If operations need independent schedules, ownership, or recovery, model separate Migration Definitions and connect them with [dependencies and reference lookup](/docs/learn/registries-and-dependencies).
+
+## Choose replay and compensation semantics
+
+A **Destination Retry Strategy** is applied at a helper or destination Effect call site. A helper may classify a failure as retryable, while the process chooses which operation to repeat and under what bounded policy.
+
+A timeout can leave the outcome of an external write unknown. Use destination-supported idempotency, predictable resource identities, conditional operations, or reconciliation as appropriate. Recording a journal entry does not provide exactly-once execution across the destination and Migration Store.
+
+A **Rollback Pipeline** decides how to compensate saved effects. Destination packages can supply helper operations and typed descriptors to support it. They do not automatically infer an inverse of every earlier call. Deleting a newly created resource and restoring a preexisting resource are different compensation policies.
+
+Continue with [Tracking](/docs/learn/tracking), or see these boundaries applied in the [multiple-destination cookbook](/docs/cookbook/multiple-destinations).

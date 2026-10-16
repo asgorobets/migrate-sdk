@@ -11,13 +11,10 @@ import {
   Stream,
 } from "effect";
 import { pretty as prettyCause } from "effect/Cause";
+import { CliOutput, Command } from "effect/cli";
 import { isFailure, isSuccess } from "effect/Exit";
+import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
 import { TestClock, TestConsole } from "effect/testing";
-import { CliOutput, Command } from "effect/unstable/cli";
-import {
-  RpcClientDefect,
-  RpcClientError,
-} from "effect/unstable/rpc/RpcClientError";
 import type { MigrateServerConnectionInput } from "../client/node/index.ts";
 import {
   toMigrationDefinitionGroupId,
@@ -1409,6 +1406,48 @@ describe("migrate runs", () => {
           },
         },
       ]);
+    })
+  );
+
+  it.effect("combines source identity scope with update behavior", () =>
+    Effect.gen(function* () {
+      const requests: MigrateOperationRequest[] = [];
+      const connection = makeConnection({
+        prepareOperation: (request) => {
+          requests.push(request);
+          return Effect.succeed(preparedOperation(request));
+        },
+      });
+      const result = yield* runCli(
+        [
+          "run",
+          "articles",
+          "--id",
+          "article%3A1",
+          "--id",
+          "article%3A2",
+          "--update",
+          "--plan",
+        ],
+        {
+          connectMigrateServer: () => Effect.succeed(connection),
+          cwd: "/workspace",
+        }
+      );
+      expect(result.exitCode).toBe(0);
+      expect(requests).toEqual([
+        {
+          action: "update",
+          options: {
+            sourceIdentities: ["article%3A1", "article%3A2"],
+            withDependencies: false,
+          },
+          selection: { definitionIds: [definitionId], kind: "definitions" },
+        },
+      ]);
+      expect(result.stdout).toContain("article%3A1");
+      expect(result.stdout).toContain("article%3A2");
+      expect(result.stdout).not.toContain("from the beginning");
     })
   );
 

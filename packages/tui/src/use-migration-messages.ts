@@ -1,20 +1,21 @@
 import type { MigrationMessage } from "migrate-sdk";
-import type { MigrateTarget } from "migrate-sdk/protocol";
-import { useEffect, useRef, useState } from "react";
+import type { MigrateDashboardRow, MigrateTarget } from "migrate-sdk/protocol";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MigrationTuiRuntime } from "./runtime.ts";
 
 const noMessages: readonly MigrationMessage[] = [];
 
+export type MigrationMessagesStatus =
+  | "not-loaded"
+  | "loading"
+  | "loaded"
+  | "stale"
+  | "error";
+
 interface CachedMessages {
   readonly messages: readonly MigrationMessage[];
-  readonly signature: string;
-}
-
-interface MessageState {
-  readonly generation: number;
-  readonly key?: string | undefined;
-  readonly loading: boolean;
-  readonly messages: readonly MigrationMessage[];
+  readonly revision: number;
+  readonly status: MigrationMessagesStatus;
 }
 
 const messageTargetKey = (target: MigrateTarget): string =>
@@ -22,134 +23,158 @@ const messageTargetKey = (target: MigrateTarget): string =>
     ? `migration:${target.definitionId}`
     : `group:${target.groupId}`;
 
-const messageSignature = (messages: readonly MigrationMessage[]): string =>
-  JSON.stringify(messages);
+interface ObservedDefinition {
+  readonly fingerprint: string;
+  readonly group: string | undefined;
+}
 
 export const useMigrationMessages = ({
+  rows,
   runtime,
   setError,
   target,
 }: {
+  readonly rows: readonly MigrateDashboardRow[];
   readonly runtime: Pick<MigrationTuiRuntime, "listMessages">;
   readonly setError: (error: string) => void;
   readonly target: MigrateTarget | undefined;
 }): {
-  readonly loading: boolean;
+  readonly load: () => Promise<void>;
   readonly messages: readonly MigrationMessage[];
+  readonly status: MigrationMessagesStatus;
 } => {
-  const [state, setState] = useState<MessageState>({
-    generation: 0,
-    loading: false,
-    messages: noMessages,
-  });
-  const cacheRef = useRef(new Map<string, CachedMessages>());
-  const requestsRef = useRef(
-    new Map<string, Promise<readonly MigrationMessage[]>>()
+  const session = useMemo(
+    () => ({
+      runtime,
+      definitions: new Map<string, ObservedDefinition>(),
+      revisions: new Map<string, number>(),
+      entries: new Map<string, CachedMessages>(),
+      requests: new Map<string, Promise<void>>(),
+    }),
+    [runtime]
   );
-  const runtimeRef = useRef(runtime);
-  const runtimeGenerationRef = useRef(0);
-
-  if (runtimeRef.current !== runtime) {
-    runtimeRef.current = runtime;
-    runtimeGenerationRef.current += 1;
-    cacheRef.current.clear();
-    requestsRef.current.clear();
-  }
+  const [displayedCache, setDisplayedCache] = useState({
+    session,
+    entries: session.entries,
+  });
+  const currentRef = useRef({ session, target });
+  currentRef.current = { session, target };
+  const mountedRef = useRef(true);
 
   useEffect(() => {
-    const generation = runtimeGenerationRef.current;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
+  // There is no message-specific server revision. Run history and durable
+  // counts conservatively invalidate messages; source scans and locks do not.
+  useEffect(() => {
+    const definitions = new Map<string, ObservedDefinition>(
+      rows.map((row) => [
+        row.entry.id,
+        {
+          fingerprint: JSON.stringify([
+            row.status?.durable,
+            row.status?.lastRun,
+          ]),
+          group: row.entry.group,
+        },
+      ])
+    );
+    const changedTargets = new Set<string>();
+    const definitionIds = new Set([
+      ...session.definitions.keys(),
+      ...definitions.keys(),
+    ]);
+    for (const definitionId of definitionIds) {
+      const previous = session.definitions.get(definitionId);
+      const next = definitions.get(definitionId);
+      if (
+        previous?.fingerprint === next?.fingerprint &&
+        previous?.group === next?.group
+      ) {
+        continue;
+      }
+      changedTargets.add(`migration:${definitionId}`);
+      for (const group of [previous?.group, next?.group]) {
+        if (group !== undefined) {
+          changedTargets.add(`group:${group}`);
+        }
+      }
+    }
+    session.definitions = definitions;
+    // Versions only advance: A -> B -> A must not revive an old result. Track
+    // every definition, including targets whose requests are still in flight.
+    for (const key of changedTargets) {
+      session.revisions.set(key, (session.revisions.get(key) ?? 0) + 1);
+    }
+    if ([...changedTargets].some((key) => session.entries.has(key))) {
+      setDisplayedCache({ session, entries: new Map(session.entries) });
+    }
+  }, [rows, session]);
+
+  const load = useCallback(async () => {
     if (target === undefined) {
-      setState({ generation, loading: false, messages: noMessages });
       return;
     }
-
     const key = messageTargetKey(target);
-    const cached = cacheRef.current.get(key);
-    let active = true;
-
-    setState({
-      generation,
-      key,
-      loading: cached === undefined,
-      messages: cached?.messages ?? noMessages,
-    });
-
-    let request = requestsRef.current.get(key);
-    if (request === undefined) {
-      request = runtime.listMessages(target);
-      requestsRef.current.set(key, request);
+    const revision = session.revisions.get(key) ?? 0;
+    const cached = session.entries.get(key);
+    if (cached?.status === "loaded" && cached.revision === revision) {
+      return;
+    }
+    const pending = session.requests.get(key);
+    if (pending !== undefined) {
+      return pending;
     }
 
-    request
+    const publish = (entry: CachedMessages) => {
+      session.entries.set(key, entry);
+      if (mountedRef.current && currentRef.current.session === session) {
+        setDisplayedCache({ session, entries: new Map(session.entries) });
+      }
+    };
+    publish({ messages: noMessages, revision, status: "loading" });
+    const request = Promise.resolve()
+      .then(() => runtime.listMessages(target))
       .then(
-        (nextMessages) => {
-          if (generation !== runtimeGenerationRef.current) {
-            return;
-          }
-
-          const current = cacheRef.current.get(key);
-          const signature = messageSignature(nextMessages);
-          const next =
-            current?.signature === signature
-              ? current
-              : { messages: nextMessages, signature };
-          cacheRef.current.set(key, next);
-
-          if (!active) {
-            return;
-          }
-
-          setState((displayed) =>
-            displayed.generation === generation &&
-            displayed.key === key &&
-            displayed.messages === next.messages &&
-            !displayed.loading
-              ? displayed
-              : { generation, key, loading: false, messages: next.messages }
-          );
-        },
+        (messages) => publish({ messages, revision, status: "loaded" }),
         (cause: unknown) => {
-          if (!active || generation !== runtimeGenerationRef.current) {
-            return;
+          publish({ messages: noMessages, revision, status: "error" });
+          const current = currentRef.current;
+          if (
+            mountedRef.current &&
+            current.session === session &&
+            current.target !== undefined &&
+            messageTargetKey(current.target) === key
+          ) {
+            setError(cause instanceof Error ? cause.message : String(cause));
           }
-
-          setState((displayed) =>
-            displayed.generation === generation &&
-            displayed.key === key &&
-            displayed.loading
-              ? { ...displayed, loading: false }
-              : displayed
-          );
-          setError(cause instanceof Error ? cause.message : String(cause));
         }
       )
-      .finally(() => {
-        if (requestsRef.current.get(key) === request) {
-          requestsRef.current.delete(key);
-        }
-      });
+      .finally(() => session.requests.delete(key));
+    session.requests.set(key, request);
+    await request;
+  }, [runtime, session, setError, target]);
 
-    return () => {
-      active = false;
-    };
-  }, [runtime, setError, target]);
-
-  const generation = runtimeGenerationRef.current;
-  if (target === undefined) {
-    return state.generation === generation && state.key === undefined
-      ? state
-      : { loading: false, messages: noMessages };
-  }
-
-  const key = messageTargetKey(target);
-  if (state.generation === generation && state.key === key) {
-    return state;
-  }
-
-  const cached = cacheRef.current.get(key);
+  const cached =
+    target === undefined || displayedCache.session !== session
+      ? undefined
+      : displayedCache.entries.get(messageTargetKey(target));
+  const revision =
+    target === undefined
+      ? 0
+      : (session.revisions.get(messageTargetKey(target)) ?? 0);
+  const status =
+    cached?.status === "loaded" && cached.revision !== revision
+      ? "stale"
+      : (cached?.status ?? "not-loaded");
   return {
-    loading: cached === undefined,
-    messages: cached?.messages ?? noMessages,
+    load,
+    messages:
+      status === "loaded" ? (cached?.messages ?? noMessages) : noMessages,
+    status,
   };
 };

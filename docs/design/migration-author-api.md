@@ -638,13 +638,13 @@ const program = registry
 
 Effect workflows can use the same envelope, but the provider boundary is an
 Effect `Workflow` value and a `WorkflowEngine` layer. The API currently lives
-under `effect/unstable/workflow`, so this adapter should be treated as
+under `effect/workflow`, so this adapter should be treated as
 experimental until that Effect API stabilizes.
 
 ```ts
 import { Schema } from "effect"
 import { MigrationExecutionJob } from "migrate-sdk/core"
-import { Workflow } from "effect/unstable/workflow"
+import { Workflow } from "effect/workflow"
 
 export const MigrationExecutionEnvelopeSchema = Schema.Struct({
   runId: MigrationRunId,
@@ -739,7 +739,7 @@ development only; production durability requires a durable engine such as the
 cluster workflow engine with sharding and message storage.
 
 ```ts
-import { WorkflowEngine } from "effect/unstable/workflow"
+import { WorkflowEngine } from "effect/workflow"
 
 const EffectWorkflowMigrationLayer = Layer.mergeAll(
   MigrationRunWorkflowLayer,

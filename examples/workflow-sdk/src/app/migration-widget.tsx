@@ -448,7 +448,7 @@ export function MigrationWidget({ bearerToken }: MigrationWidgetProps) {
     [appendActivity, concurrency, connection, pending]
   );
 
-  const tuiCommand = `MIGRATE_SERVER_TOKEN="${bearerToken}" pnpm dlx @migrate-sdk/tui --server "${serverUrl}"`;
+  const tuiCommand = `MIGRATE_SERVER_TOKEN="${bearerToken}" pnpm --allow-build=bun --allow-build=esbuild dlx @migrate-sdk/tui@latest --server "${serverUrl}"`;
 
   const copyCommand = useCallback((): void => {
     navigator.clipboard.writeText(tuiCommand).then(

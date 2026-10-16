@@ -93,6 +93,37 @@ const listenOnLocalhost = async (
 };
 
 describe("remote TUI runtime", () => {
+  it("lists migrations at startup without reading durable status", async () => {
+    let dashboardReads = 0;
+    const http = makeRemoteMigrateServerHttp(
+      MigrateServer.layer({
+        backend: {
+          ...backend,
+          getDashboard: Effect.sync(() => {
+            dashboardReads += 1;
+          }).pipe(Effect.andThen(backend.getDashboard)),
+        },
+        ...serverIdentity,
+      })
+    );
+    const { server, url } = await listenOnLocalhost(http.handler);
+    try {
+      const runtime = await makeMigrationTuiRuntime({ server: { url } });
+      try {
+        expect(runtime.rows[0]?.entry.id).toBe(definitionId);
+        expect(dashboardReads).toBe(0);
+        expect(runtime.rows[0]?.status).toBeUndefined();
+        await runtime.refresh();
+        expect(dashboardReads).toBe(1);
+      } finally {
+        await runtime.dispose?.();
+      }
+    } finally {
+      await closeServer(server);
+      await http.dispose();
+    }
+  });
+
   it("connects and reviews an upgrade before requesting the remote dashboard", async () => {
     const plan: MigrateStoreSchemaPlan = {
       applied: [

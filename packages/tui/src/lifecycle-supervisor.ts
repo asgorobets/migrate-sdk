@@ -3,8 +3,8 @@ import type {
   MigrateStoreSchema,
 } from "migrate-sdk/protocol";
 import type {
+  MigrationTuiDashboardState,
   MigrationTuiDetachResult,
-  MigrationTuiSnapshot,
 } from "./runtime.ts";
 import {
   type MigrationTuiShutdownController,
@@ -14,9 +14,11 @@ import {
 } from "./shutdown-controller.ts";
 
 export interface MigrationTuiRenderSessionInput {
+  readonly initialDashboardState?: MigrationTuiDashboardState;
   readonly initialRows?: readonly MigrateDashboardRow[];
   readonly lifecycle: MigrationTuiShutdownController;
   readonly onControlC: () => void;
+  readonly onDashboardStateChange: (state: MigrationTuiDashboardState) => void;
   readonly onRenderError: (cause: unknown) => void;
   readonly recoveryNotice?: string;
 }
@@ -28,7 +30,6 @@ export interface MigrationTuiRenderSession {
 interface MigrationTuiSupervisorRuntime {
   readonly detachForExit: () => Promise<MigrationTuiDetachResult>;
   readonly getStoreSchema: () => Promise<MigrateStoreSchema>;
-  readonly refresh: () => Promise<MigrationTuiSnapshot>;
 }
 
 interface MigrationTuiLifecycleSupervisorOptions {
@@ -56,7 +57,7 @@ const errorDetails = (cause: unknown): string =>
 
 const recoveryNotice = (cause: unknown): string => {
   const message = errorMessage(cause).replaceAll(/\s+/g, " ").trim();
-  return `UI recovered from a renderer error (${message}); migration state was reloaded.`;
+  return `UI recovered from a renderer error (${message}).`;
 };
 
 export const makeMigrationTuiLifecycleSupervisor = (
@@ -73,6 +74,7 @@ export const makeMigrationTuiLifecycleSupervisor = (
   const writeError =
     options.writeError ?? ((message: string) => process.stderr.write(message));
   let activeSession: ActiveRenderSession | undefined;
+  let dashboardState: MigrationTuiDashboardState | undefined;
   let exitCode = 0;
   let exitTimer: ReturnType<typeof setTimeout> | undefined;
   let finished = false;
@@ -208,17 +210,15 @@ export const makeMigrationTuiLifecycleSupervisor = (
 
     try {
       const schema = await options.runtime.getStoreSchema();
-      const snapshot =
-        schema === null || schema.status === "current"
-          ? await options.runtime.refresh()
-          : undefined;
+      if (schema !== null && schema.status !== "current") {
+        dashboardState = undefined;
+      }
 
       if (finished) {
         return;
       }
 
       await openSession({
-        ...(snapshot === undefined ? {} : { initialRows: snapshot.rows }),
         recoveryNotice: recoveryNotice(cause),
       });
     } catch (recoveryCause) {
@@ -227,10 +227,8 @@ export const makeMigrationTuiLifecycleSupervisor = (
   }
 
   async function openSession({
-    initialRows,
     recoveryNotice: nextRecoveryNotice,
   }: {
-    readonly initialRows?: readonly MigrateDashboardRow[];
     readonly recoveryNotice?: string;
   } = {}): Promise<void> {
     const token = Symbol("MigrationTuiRenderSession");
@@ -238,9 +236,19 @@ export const makeMigrationTuiLifecycleSupervisor = (
 
     try {
       const session = await options.createSession({
-        ...(initialRows === undefined ? {} : { initialRows }),
+        ...(dashboardState === undefined
+          ? {}
+          : { initialDashboardState: dashboardState }),
         lifecycle,
         onControlC: () => requestExit(130, true).catch(() => undefined),
+        onDashboardStateChange: (state) => {
+          if (
+            !finished &&
+            (activeSession?.token === token || pendingToken === token)
+          ) {
+            dashboardState = state;
+          }
+        },
         onRenderError: (cause) => handleRendererError(token, cause),
         ...(nextRecoveryNotice === undefined
           ? {}

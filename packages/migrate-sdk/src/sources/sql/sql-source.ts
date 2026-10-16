@@ -1,5 +1,5 @@
 import { Effect, Layer, type Schema } from "effect";
-import { SqlClient, type Statement } from "effect/unstable/sql";
+import { SqlClient, type Statement } from "effect/sql";
 import {
   type ConfiguredSource,
   Source,

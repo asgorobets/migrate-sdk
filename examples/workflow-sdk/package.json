@@ -28,7 +28,7 @@
     "@effect/language-service": "catalog:",
     "@next/env": "16.2.0",
     "@repo/typescript-config": "workspace:*",
-    "@types/node": "^24.13.1",
+    "@types/node": "^22.19.0",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "@typescript/native": "npm:typescript@7.0.2",

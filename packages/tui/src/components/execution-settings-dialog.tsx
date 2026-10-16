@@ -178,7 +178,7 @@ export const ExecutionSettingsDialog = ({
           width={fieldWidth}
         />
         <box style={{ flexDirection: "column", flexShrink: 0, height: 4 }}>
-          <text fg={colors.foreground}>Source Inventory Scan concurrency</text>
+          <text fg={colors.foreground}>Source scan concurrency</text>
           <NumberField
             min={1}
             onSubmit={onSave}

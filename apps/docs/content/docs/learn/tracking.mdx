@@ -1,0 +1,89 @@
+---
+title: Tracking
+description: Understand tracking contracts, destination evidence, and the per-item scope that connects them.
+---
+
+**Tracking** connects destination-side work to [Migration Item State](/docs/learn/states). The runtime provides a `Tracking` service inside each Pipeline Execution Scope. Process code uses it to stage a final record, record confirmed changes, and retain diagnostic context. The runtime then persists the appropriate evidence with the item's outcome.
+
+Tracking has two main representations: a **Tracking Record** exposes a stable result that other operations can use; a **Destination Journal** preserves recorded execution evidence. Both belong to one source identity within one migration definition and live in its [Migration Store](/docs/learn/migration-stores).
+
+## Tracking Record Contract
+
+A **Tracking Record Contract** is the definition's static agreement about the record required for successful processing. It contains a stable contract ID and a schema. The SDK derives a fingerprint from the schema to detect incompatible changes.
+
+Declare it with `Tracking.record`, then assign it to the definition's `tracking` property:
+
+```ts title="tracking-contract.ts"
+import { Schema } from "effect";
+import { Tracking } from "migrate-sdk";
+
+export const referenceTracking = Tracking.record({
+  id: "destination-reference@v1",
+  schema: Schema.Struct({ destinationId: Schema.NonEmptyString }),
+});
+
+export type ReferenceRecord = typeof referenceTracking.schema.Type;
+```
+
+The migration definition owns this contract. A destination helper can return data and record changes without deciding the migration's final record shape.
+
+The contract ID describes the meaning of the stored record, not a particular item or run. Changing that ID or its schema while item state exists can block execution. Plan compatibility changes with the saved state, rather than treating the ID as a display label.
+
+## Tracking Record
+
+A **Tracking Record** is the optional schema-validated object persisted for one migration item. It can contain a destination reference, multiple named references, destination versions, or other information required for later operations. It must encode as a JSON-compatible object.
+
+The process stages the record with `Tracking.setRecord`. It does not return the record as its process result. The runtime validates and commits the staged value only after the process completes successfully.
+
+| Process outcome | Record behavior |
+| --- | --- |
+| Success with a contract | Requires exactly one staged, schema-valid record. |
+| Success without a contract | Requires no staged record; item progress still persists. |
+| Failure or intentional skip | Does not commit a newly staged success record. Prior saved evidence can remain. |
+| Missing, duplicate, or invalid required record | Produces a failed item with a tracking contract error. |
+
+Calling `setRecord` twice does not replace the first value. Stage one complete record after the required work succeeds. Use the schema's inferred type or `satisfies` to check its shape in TypeScript; the runtime enforces the declared contract at the success boundary.
+
+[Migration Reference Lookup](/docs/learn/registries-and-dependencies) reads this record through the referenced definition's schema. A definition intended to supply downstream references should therefore declare a tracking contract.
+
+## Destination Journal and its entries
+
+A **Destination Journal** contains ordered evidence captured during processing and failed rollback attempts. Its entries have two kinds:
+
+| Primitive | Meaning | Authoring API |
+| --- | --- | --- |
+| Destination Change | A confirmed destination-native outcome. It may identify an affected resource or version; it need not be a structural diff. | `Tracking.recordChange(descriptor, value)` |
+| Destination Journal Diagnostic | Explicit context with severity, message, and optional JSON-object details. It makes no claim that a write succeeded. | `Tracking.logDiagnostic(input)` |
+
+A **Destination Change Descriptor** names and validates one kind of change. Create it with `DestinationChangeDescriptor.make(id, schema)`. Its `is` predicate identifies matching entries and its `decode` method returns the typed payload. Destination modules normally expose their descriptors alongside the helpers that record them.
+
+A **Destination Journal Segment** groups ordered entries from one execution scope. The journal's `process` segment contains processing evidence; `rollbackAttempts` contains preserved failed compensation attempts. Repeated changes with the same descriptor remain distinct ordered entries.
+
+Ordinary API calls and Effect logs do not automatically produce journal entries. A helper or process must explicitly record them. Definitions without a tracking contract can still persist nonempty journals.
+
+## Pipeline Execution Scope and persistence
+
+A **Pipeline Execution Scope** is the runtime boundary for one item's processing or rollback. It isolates staged tracking from other items, including items executing concurrently. Each Process Batch Settlement also retains its own scope.
+
+The scope holds live evidence until the runtime saves an item outcome. Neither `recordChange` nor `setRecord` is an immediate durable checkpoint or a transaction with the destination. A crash after a remote write but before state persistence can leave unrecorded destination work. Repeatable operations and reconciliation address that gap.
+
+During reprocessing, `context.previousState` exposes saved evidence. Failed or skipped attempts preserve an existing tracking record and process journal when present. Successful reprocessing replaces them with the new record and process segment. The process journal is not an append-only history of every attempt.
+
+## Destination Journal Extensions
+
+A **Destination Journal Extension** is a named, schema-validated value owned by a helper. Use it for data with semantics the helper defines, such as an import receipt or correlation information.
+
+`DestinationJournalExtension.make` declares the extension; `Tracking.setExtension` replaces its value and `Tracking.removeExtension` removes it. Untouched extensions survive reprocessing, and changes persist with migrated, failed, or skipped outcomes. Extensions are saved at the same item boundary and have no automatic retry, rollback, or history behavior.
+
+## Apply the primitives
+
+Use [Rollback](/docs/learn/rollback) to interpret saved records and journal changes. The [multiple-destination cookbook](/docs/cookbook/multiple-destinations) combines individual change entries with one final composite record.
+
+<details>
+<summary>Implementation example: tracking a file write</summary>
+
+This helper is used inside a process with `tracking: authorTracking`. It records confirmed write evidence before staging the successful result. The complete file-based scenario is in [CSV to JSON](/docs/cookbook/csv-to-json).
+
+<include lang="ts" meta='title="recovery-tracking.ts" twoslash source="../../examples/recovery-tracking.ts"'>../../examples/recovery-tracking.ts</include>
+
+</details>

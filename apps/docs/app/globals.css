@@ -1,50 +1,102 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+@import "fumadocs-twoslash/twoslash.css";
+
+@theme {
+  --font-sans: var(--font-geist-mono), monospace;
+  --font-mono: var(--font-geist-mono), monospace;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #efede7;
+  --foreground: #2c2925;
+  --surface: #f7f5ef;
+  --subtle-surface: #e6e2d9;
+  --muted: #6c655c;
+  --border: #c7c0b5;
+  --accent: #8e4b27;
+  --accent-foreground: #fff8ed;
+  --accent-soft: #e9dac9;
+  --code-keyword: #84577f;
+  --code-property: #396e79;
+  color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+.dark {
+  --background: #161514;
+  --foreground: #e8e2d8;
+  --surface: #1c1b19;
+  --subtle-surface: #24221f;
+  --muted: #a59e92;
+  --border: #474139;
+  --accent: #e9bb83;
+  --accent-foreground: #211a11;
+  --accent-soft: #392e22;
+  --code-keyword: #c5a2c4;
+  --code-property: #9fc2c8;
+  color-scheme: dark;
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
   }
-}
-
-html,
-body {
-  max-width: 100vw;
-  overflow-x: hidden;
-}
-
-body {
-  color: var(--foreground);
-  background: var(--background);
-}
-
-* {
-  box-sizing: border-box;
-  padding: 0;
-  margin: 0;
-}
-
-a {
-  color: inherit;
-  text-decoration: none;
-}
-
-.imgDark {
-  display: none;
-}
-
-@media (prefers-color-scheme: dark) {
   html {
-    color-scheme: dark;
+    scroll-padding-top: 2rem;
   }
+  body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    margin: 0;
+    font-family: var(--font-geist-mono), monospace;
+    -webkit-font-smoothing: antialiased;
+    color: var(--foreground);
+    background: var(--background);
+  }
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  button,
+  a {
+    -webkit-tap-highlight-color: transparent;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 5px;
+  }
+  ::selection {
+    color: var(--accent-foreground);
+    background: var(--accent);
+  }
+}
 
-  .imgLight {
-    display: none;
-  }
-  .imgDark {
-    display: unset;
-  }
+:root,
+.dark,
+.dark #nd-sidebar {
+  --color-fd-background: var(--background);
+  --color-fd-foreground: var(--foreground);
+  --color-fd-muted: var(--subtle-surface);
+  --color-fd-muted-foreground: var(--muted);
+  --color-fd-popover: var(--surface);
+  --color-fd-popover-foreground: var(--foreground);
+  --color-fd-card: var(--surface);
+  --color-fd-card-foreground: var(--foreground);
+  --color-fd-border: var(--border);
+  --color-fd-primary: var(--accent);
+  --color-fd-primary-foreground: var(--accent-foreground);
+  --color-fd-secondary: var(--subtle-surface);
+  --color-fd-secondary-foreground: var(--foreground);
+  --color-fd-accent: var(--accent-soft);
+  --color-fd-accent-foreground: var(--foreground);
+  --color-fd-ring: var(--accent);
+  --fd-layout-width: 1440px;
 }

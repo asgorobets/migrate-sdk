@@ -1,11 +1,33 @@
 import type { ScrollBoxRenderable } from "@opentui/core";
 import type { MigrationMessage } from "migrate-sdk";
 import { useEffect, useRef } from "react";
+import type { MigrationMessagesStatus } from "../use-migration-messages.ts";
 import {
   migrationMessageKindLabel,
   migrationMessageMarker,
   migrationMessageRowKey,
 } from "./migration-message.ts";
+
+export const migrationMessagesStatusLabel = (
+  status: MigrationMessagesStatus
+): string => {
+  switch (status) {
+    case "not-loaded":
+      return "Messages not loaded · m to load";
+    case "loading":
+      return "Loading messages…";
+    case "stale":
+      return "Messages may have changed · m to reload";
+    case "error":
+      return "Unable to load messages · m to retry";
+    case "loaded":
+      return "";
+    default: {
+      const unhandled: never = status;
+      return unhandled;
+    }
+  }
+};
 
 interface MigrationMessageColors {
   readonly dim: string;
@@ -59,7 +81,7 @@ const MessageLine = ({
 export const MigrationMessages = ({
   colors,
   compact,
-  loading,
+  status,
   messages,
   onSelectedIndexChange,
   selectedIndex,
@@ -68,7 +90,7 @@ export const MigrationMessages = ({
 }: {
   readonly colors: MigrationMessageColors;
   readonly compact: boolean;
-  readonly loading: boolean;
+  readonly status: MigrationMessagesStatus;
   readonly messages: readonly MigrationMessage[];
   readonly onSelectedIndexChange: (index: number) => void;
   readonly selectedIndex: number;
@@ -136,13 +158,14 @@ export const MigrationMessages = ({
         verticalScrollbarOptions={{ visible: false }}
         viewportCulling
       >
-        {loading ? <text fg={colors.dim}>Loading messages…</text> : null}
-        {!loading && messages.length === 0 ? (
+        {status === "loaded" ? null : (
+          <text fg={colors.dim}>{migrationMessagesStatusLabel(status)}</text>
+        )}
+        {status === "loaded" && messages.length === 0 ? (
           <text fg={colors.dim}>No messages.</text>
         ) : null}
-        {loading
-          ? null
-          : messages.map((message, index) => (
+        {status === "loaded"
+          ? messages.map((message, index) => (
               <MessageLine
                 colors={colors}
                 index={index}
@@ -153,9 +176,10 @@ export const MigrationMessages = ({
                 showDefinitionId={showDefinitionId}
                 total={messages.length}
               />
-            ))}
+            ))
+          : null}
       </scrollbox>
-      {loading || messages.length === 0 ? null : (
+      {status !== "loaded" || messages.length === 0 ? null : (
         <box
           style={{
             flexDirection: "column",

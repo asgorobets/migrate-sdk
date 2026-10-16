@@ -11,8 +11,8 @@ import {
   Terminal,
 } from "effect";
 import { Service } from "effect/Context";
-import { Prompt } from "effect/unstable/cli";
-import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
+import { Prompt } from "effect/cli";
+import type { RpcClientError } from "effect/rpc/RpcClientError";
 import {
   connectMigrateServer,
   type MigrateServerConnectionInput,

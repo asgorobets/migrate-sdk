@@ -4,9 +4,9 @@ import {
   type HttpMiddleware,
   type HttpServerRequest,
   type HttpServerResponse,
-} from "effect/unstable/http";
-import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
-import { toHttpEffect } from "effect/unstable/rpc/RpcServer";
+} from "effect/http";
+import { layerNdjson } from "effect/rpc/RpcSerialization";
+import { toHttpEffect } from "effect/rpc/RpcServer";
 import { MigrateHttpRpcs } from "../protocol/index.ts";
 import { MigrateHttpServerHandlers } from "./handlers.ts";
 import type { MigrateServer } from "./service.ts";

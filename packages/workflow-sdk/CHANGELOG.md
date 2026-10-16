@@ -1,5 +1,29 @@
 # @migrate-sdk/workflow-sdk
 
+## 0.14.1
+
+### Patch Changes
+
+- 92b98d7: Upgrade Effect and its platform, SQL, and testing packages together to 4.0.4.
+  Fresh TUI installations now resolve compatible stable dependencies, and the
+  Workflow SDK example's PostgreSQL client sends TLS SNI for Neon connections.
+  Document one-off pnpm dlx usage with explicit Bun and esbuild build approvals.
+
+## 0.14.0
+
+### Minor Changes
+
+- 230552c: Separate source ID scope from update behavior. Selecting IDs now leaves already migrated items unchanged when their source version and version contract still match. Combine `--id` with `--update` to reprocess only the selected items, preserving other item states and saved scan progress in inline and Workflow runs. The TUI Source IDs dialog now offers the same Update option.
+
+## 0.13.3
+
+### Patch Changes
+
+- 5a2d317: Support Node.js 22.19.0 and newer across the SDK, CLI, TUI, and adapters, allowing
+  applications on Node 22 to embed Migrate SDK without upgrading to Node 24.
+
+## 0.13.2
+
 ## 0.13.1
 
 ## 0.13.0

@@ -2,16 +2,16 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { NodeSocketServer } from "@effect/platform-node";
 import { Effect, Layer, Schema } from "effect";
-import { NetAddress } from "effect/unstable/net";
-import type * as Rpc from "effect/unstable/rpc/Rpc";
-import type { Rpcs } from "effect/unstable/rpc/RpcGroup";
-import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
+import { NetAddress } from "effect/net";
+import type * as Rpc from "effect/rpc/Rpc";
+import type { Rpcs } from "effect/rpc/RpcGroup";
+import { layerNdjson } from "effect/rpc/RpcSerialization";
 import {
   layerProtocolSocketServer,
   layer as layerRpcServer,
   type Protocol,
-} from "effect/unstable/rpc/RpcServer";
-import { SocketServer } from "effect/unstable/socket";
+} from "effect/rpc/RpcServer";
+import { SocketServer } from "effect/socket";
 import {
   type MigrateServerInstanceId,
   MigrateStreamingRpcs,

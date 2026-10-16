@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
-import type { SqlClient, Statement } from "effect/unstable/sql";
+import type { SqlClient, Statement } from "effect/sql";
 import { makeInitialSqlMigrationStoreSchema } from "./schema/migrations/0001-initial-schema.ts";
 import {
   makeSqlMigrationStoreDialect,

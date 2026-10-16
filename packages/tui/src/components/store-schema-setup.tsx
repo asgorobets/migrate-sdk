@@ -64,10 +64,7 @@ export const StoreSchemaSetup = ({
       }
       setPlan(next);
       if (next === null || next.status === "current") {
-        const snapshot = await runtime.refresh();
-        if (mounted.current) {
-          onReady(snapshot.rows);
-        }
+        onReady(runtime.rows);
       }
     } catch (cause) {
       if (!mounted.current) {

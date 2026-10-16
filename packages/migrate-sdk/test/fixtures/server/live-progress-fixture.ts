@@ -26,10 +26,10 @@ const PrerequisiteIdentity = SourceIdentity.make({
   schema: SourceIdentity.key("id", Schema.NonEmptyString),
 });
 
-const makeDefinition = () =>
+const makeDefinition = (itemDelayMs: number) =>
   MigrationDefinition.make({
     id: "live-progress",
-    process: () => Effect.sleep("250 millis"),
+    process: () => Effect.sleep(itemDelayMs),
     source: InMemorySource.make({
       batchSize: 1,
       identity: ContentIdentity,
@@ -217,9 +217,10 @@ const makeDetachedExecutableLayer = (observationFails: boolean) =>
 
 export const makeLiveProgressConfig = (
   detached: boolean,
-  observationFails = false
+  observationFails = false,
+  itemDelayMs = 250
 ) => {
-  const definition = makeDefinition();
+  const definition = makeDefinition(itemDelayMs);
 
   return defineMigrationCliConfig({
     ...(detached

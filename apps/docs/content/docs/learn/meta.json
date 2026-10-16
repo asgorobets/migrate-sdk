@@ -1,0 +1,19 @@
+{
+  "title": "Learn",
+  "pages": [
+    "index",
+    "defining-migrations",
+    "schemas-and-mapping",
+    "sources",
+    "items",
+    "destinations",
+    "states",
+    "migration-stores",
+    "tracking",
+    "registries-and-dependencies",
+    "execution",
+    "errors",
+    "retries",
+    "rollback"
+  ]
+}

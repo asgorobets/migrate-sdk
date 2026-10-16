@@ -1,5 +1,5 @@
 import { Layer } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import { FetchHttpClient } from "effect/http";
 import type { MigrateConnection } from "./connection.ts";
 import { connectMigrateHttpServer } from "./internal/http-connection.ts";
 

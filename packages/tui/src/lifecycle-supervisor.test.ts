@@ -1,27 +1,30 @@
-import { MigrateDashboardResumeToken } from "migrate-sdk/protocol";
 import { describe, expect, it, vi } from "vitest";
 import {
   type MigrationTuiRenderSessionInput,
   makeMigrationTuiLifecycleSupervisor,
 } from "./lifecycle-supervisor.ts";
-import type { MigrationTuiSnapshot } from "./runtime.ts";
+import type { MigrationTuiDashboardState } from "./runtime.ts";
 
 const waitFor = async (predicate: () => boolean): Promise<void> => {
   await vi.waitFor(() => expect(predicate()).toBe(true));
 };
 
 describe("Migration TUI lifecycle supervisor", () => {
-  it("destroys a failed renderer and recovers once from durable state", async () => {
-    const rows: MigrationTuiSnapshot["rows"] = [];
+  it("recovers once from retained dashboard state without reading status", async () => {
     const inputs: MigrationTuiRenderSessionInput[] = [];
     const destroys: ReturnType<typeof vi.fn>[] = [];
     const exitCodes: number[] = [];
     const errors: string[] = [];
-    const snapshot: MigrationTuiSnapshot = {
+    const dashboardState: MigrationTuiDashboardState = {
       activeRuns: [],
-      resumeToken: MigrateDashboardResumeToken.make("test:snapshot"),
-      rows,
-      scannedSource: false,
+      observing: false,
+      rows: [],
+    };
+    const refresh = vi.fn(() => new Promise<never>(() => undefined));
+    const runtime = {
+      getStoreSchema: () => Promise.resolve(null),
+      detachForExit: () => Promise.resolve({ kind: "idle" as const }),
+      refresh,
     };
     const supervisor = makeMigrationTuiLifecycleSupervisor({
       createSession: (input) => {
@@ -31,11 +34,7 @@ describe("Migration TUI lifecycle supervisor", () => {
         return Promise.resolve({ destroy });
       },
       forceExit: vi.fn(),
-      runtime: {
-        getStoreSchema: () => Promise.resolve(null),
-        detachForExit: () => Promise.resolve({ kind: "idle" }),
-        refresh: vi.fn(() => Promise.resolve(snapshot)),
-      },
+      runtime,
       setExitCode: (code) => exitCodes.push(code),
       signalSource: {
         off: vi.fn(),
@@ -45,11 +44,13 @@ describe("Migration TUI lifecycle supervisor", () => {
     });
 
     await supervisor.start();
+    inputs[0]?.onDashboardStateChange?.(dashboardState);
     inputs[0]?.onRenderError(new Error("host text invariant"));
     await waitFor(() => inputs.length === 2);
 
     expect(destroys[0]).toHaveBeenCalledOnce();
-    expect(inputs[1]?.initialRows).toBe(rows);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(inputs[1]?.initialDashboardState).toBe(dashboardState);
     expect(inputs[1]?.recoveryNotice).toContain(
       "UI recovered from a renderer error"
     );
@@ -82,13 +83,6 @@ describe("Migration TUI lifecycle supervisor", () => {
       runtime: {
         getStoreSchema: () => Promise.resolve(null),
         detachForExit,
-        refresh: () =>
-          Promise.resolve({
-            activeRuns: [],
-            resumeToken: MigrateDashboardResumeToken.make("test:snapshot"),
-            rows: [],
-            scannedSource: false as const,
-          }),
       },
       setExitCode: vi.fn(),
       signalSource: {
@@ -130,13 +124,6 @@ describe("Migration TUI lifecycle supervisor", () => {
       runtime: {
         getStoreSchema: () => Promise.resolve(null),
         detachForExit: () => new Promise(() => undefined),
-        refresh: () =>
-          Promise.resolve({
-            activeRuns: [],
-            resumeToken: MigrateDashboardResumeToken.make("test:snapshot"),
-            rows: [],
-            scannedSource: false as const,
-          }),
       },
       setExitCode: vi.fn(),
       signalSource: {

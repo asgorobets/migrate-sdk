@@ -1,0 +1,99 @@
+---
+title: CSV to JSON files
+description: Apply source schemas, identity, tracking, and rollback in a complete local migration.
+---
+
+This recipe assembles a CSV Source, a schema-based Process Pipeline, a Tracking Record Contract, a Rollback Pipeline, and a file-backed Migration Store. It provides a complete local implementation of the primitives introduced in [Getting started](/docs/getting-started).
+
+The sample data contains authors. The mapping combines `first_name` and `last_name` into `name`, and each successful item preserves the written file path for rollback.
+
+## Install
+
+In your project, install the SDK and the Effect packages used by this example:
+
+```sh
+pnpm add migrate-sdk effect@4.0.4 @effect/platform-node@4.0.4
+```
+
+Use matching Effect 4.0.4 packages. Keep your lockfile so subsequent installs use the same resolved versions.
+
+## Create your source
+
+Save this file as `authors.csv` in your project directory:
+
+```csv title="authors.csv"
+id,first_name,last_name
+author-1040,Ada,Morgan
+author-1041,Alex,Chen
+author-1042,Sam,Rivera
+```
+
+`CsvSource` reads the file. `AuthorRow` validates each row and supplies its TypeScript type. The `id` column identifies an author, and the row hash tells the SDK when its data has changed.
+
+## Define the migration
+
+Save the following as `migrate.config.ts` next to the CSV. This is the complete example from the homepage.
+
+<include lang="ts" meta='title="migrate.config.ts" twoslash source="../../authors.ts"'>../../authors.ts</include>
+
+The important parts are:
+
+- **`processAuthor`:** receives an already-decoded `AuthorRow` and maps its fields into a call to `upsertAuthor`.
+- **`upsertAuthor`:** accepts the type inferred from the destination's `AuthorInput` schema and validates it before calling `writeAuthor`. The write uses a predictable path, such as `authors/author-1040.json`, so repeating it replaces that author's file.
+- **`Tracking.setRecord`:** stages the path for the successful item outcome.
+- **`rollbackAuthor`:** reads the saved path and removes that file.
+- **`FileMigrationStore`:** saves progress under `.migrate`, separately from your destination files.
+
+## Plan and run
+
+Run these commands from the directory containing your config and CSV:
+
+```sh
+pnpm exec migrate run authors --plan
+pnpm exec migrate run authors
+pnpm exec migrate status authors
+```
+
+The plan inspects the operation without writing destination files. After the run, `authors/author-1040.json` contains:
+
+```json title="authors/author-1040.json"
+{
+  "id": "author-1040",
+  "name": "Ada Morgan"
+}
+```
+
+Keep `.migrate` between runs: it contains the saved state that makes retries and rollback possible.
+
+## Retry a failure
+
+If one file write fails, fix its cause and run:
+
+```sh
+pnpm exec migrate run authors --failed
+```
+
+Only failed items are retried. Authors that already succeeded keep their saved results.
+
+To process one author explicitly, use its source ID:
+
+```sh
+pnpm exec migrate run authors --id author-1042
+```
+
+## Roll back
+
+Preview the rollback, then remove the files written by this migration:
+
+```sh
+pnpm exec migrate rollback authors --plan
+pnpm exec migrate rollback authors
+```
+
+Rollback uses the saved paths. It does not need to read `authors.csv` again. For this example, rollback deletes the current JSON files; it does not restore an older file that a write replaced.
+
+## Connect your own data
+
+Replace the CSV source or the file-writing functions with your own adapters and services. Keep the same definition, processing, tracking, and rollback structure.
+
+Continue with [Defining a migration](/docs/learn/defining-migrations) to understand each piece, or [API to API](/docs/cookbook/api-to-api) to replace the files with HTTP services.

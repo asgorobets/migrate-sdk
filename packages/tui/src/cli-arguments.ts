@@ -3,19 +3,21 @@ export interface MigrationTuiArguments {
   readonly help: boolean;
   readonly otel?: boolean;
   readonly serverUrl?: string;
+  readonly status?: "background" | "manual";
   readonly version: boolean;
 }
 
 export const migrationTuiUsage = `Migrate
 
 Usage:
-  migrate-tui [--config <path>] [--otel]
-  migrate-tui --server <url>
+  migrate-tui [--config <path>] [--otel] [--status background|manual]
+  migrate-tui --server <url> [--status background|manual]
 
 Options:
   --config, -c  Path to migrate.config.ts, .mts, .js, or .mjs
   --server      Remote Migrate Server HTTP endpoint
   --otel        Enable local OpenTelemetry traces (localhost:4318)
+  --status      Load status in background (default), or manual with R
   --help, -h    Show this help
   --version, -v Show the version
 
@@ -29,9 +31,20 @@ export const parseMigrationTuiArguments = (
   let configPath: string | undefined;
   let serverUrl: string | undefined;
   let otel = false;
+  let status: MigrationTuiArguments["status"];
 
   for (let index = 0; index < args.length; index++) {
     const argument = args[index];
+
+    if (argument === "--status") {
+      const value = args[index + 1];
+      if (value !== "background" && value !== "manual") {
+        throw new Error("--status requires background or manual");
+      }
+      status = value;
+      index += 1;
+      continue;
+    }
 
     if (argument === "--otel") {
       otel = true;
@@ -87,6 +100,7 @@ export const parseMigrationTuiArguments = (
     help: false,
     ...(otel ? { otel } : {}),
     ...(serverUrl === undefined ? {} : { serverUrl }),
+    ...(status === undefined ? {} : { status }),
     version: false,
   };
 };

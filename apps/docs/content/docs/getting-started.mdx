@@ -1,0 +1,228 @@
+---
+title: Getting started
+description: Build and run your first migration, save progress locally, and roll back the result.
+---
+
+Let's migrate two author records into JSON files. You'll write a small source plugin, combine each author's first and last names, and save one file per author. Then you'll run the migration again to see how saved progress avoids repeating work, and roll it back using the file paths you tracked.
+
+Everything runs locally in a TypeScript script. You'll use Migrate SDK directly, with a file store to keep progress between runs.
+
+## 1. Set up a project
+
+Use **Node.js 22.19 or newer** and pnpm. This example runs TypeScript directly with Node, without a separate transpiler.
+
+Create a directory and initialize a project:
+
+```sh
+mkdir my-first-migration
+cd my-first-migration
+pnpm init --init-type module
+```
+
+`pnpm init` creates `package.json`. The `--init-type module` option writes `"type": "module"` into that file, telling Node to load this project's `.ts` and `.js` files as **ES modules**. That matches the `import` and `export` statements below, and lets `run.ts` use `await` outside a function.
+
+This is a project setup choice for the example, not a special Migrate SDK setting. If your project already has `"type": "module"`, keep its existing `package.json`. You can also use `.mts` filenames and update the relative imports to match; Node always treats those files as ES modules. See [Node's module-system rules](https://nodejs.org/api/typescript.html#determining-module-system) for details.
+
+<span id="install" />
+
+Install the SDK and the Effect packages:
+
+```sh
+pnpm add migrate-sdk effect@4.0.4 @effect/platform-node@4.0.4
+```
+
+Effect supplies the schemas and operations used below; the platform package supplies Node filesystem services for the store. Use matching Effect 4.0.4 packages. Keep your lockfile so subsequent installs use the same resolved versions.
+
+You'll create four TypeScript files in this directory. Each file includes its imports. Hover over a name in a TypeScript example, or select it, to inspect its inferred type.
+
+## 2. Create a source plugin
+
+A **source** supplies the records to migrate. Start with two records in an array so you can follow the whole example without setting up another system.
+
+Save this as `source.ts`:
+
+<include lang="ts" meta='title="source.ts" twoslash source="../examples/getting-started/source.ts"'>../examples/getting-started/source.ts</include>
+
+`Schema.Struct` describes the fields each source record must contain. The SDK validates a record against this schema before processing it.
+
+Each emitted item has three parts:
+
+| Field | In this example |
+| --- | --- |
+| `identityKey` | The author's stable ID. It stays the same when their name changes. |
+| `version` | The serialized record. Changing a field changes this value, telling the SDK that the item needs work. |
+| `item` | The source data your processing function receives. |
+
+`read` returns both records in one batch. There is no next page, so it omits `nextCursor` and uses `Schema.Null` for the cursor schema. `readByIdentity` returns one record by ID, or `null` if it is absent. This supports later retries that look up an individual item.
+
+`Effect.succeed(value)` wraps an already-available value in an Effect operation. Your source returns these operations because the SDK also supports sources that need asynchronous reads or can fail.
+
+### See what the schema gives you
+
+The schema supplies both runtime validation and TypeScript types. This small example uses the same `AuthorRow` schema to decode an `unknown` input. Inspect `input`, `author`, and `firstName` to follow the change in types:
+
+<include lang="ts" meta='title="Inspect the decoded author" twoslash source="../examples/getting-started/schema-preview.ts"'>../examples/getting-started/schema-preview.ts</include>
+
+After decoding succeeds, `author` has three required string fields: `id`, `firstName`, and `lastName`. `firstName` is a `string`, so you can call `toUpperCase()` directly. Missing fields, `null`, and empty strings fail validation. No type assertion or separate interface is needed; TypeScript infers the result from the schema.
+
+You can try this separately in `schema-preview.ts` with `node schema-preview.ts`. Changing the input's `firstName` to `null` makes decoding fail. The migration below performs this decoding for you before calling `process`.
+
+## 3. Write to a destination
+
+The destination will be an `authors` directory containing one JSON file per author. A destination can be ordinary functions that perform writes and return results for your migration to track.
+
+Save this as `destination.ts`:
+
+<include lang="ts" meta='title="destination.ts" twoslash source="../examples/getting-started/destination.ts"'>../examples/getting-started/destination.ts</include>
+
+`writeAuthor` creates the directory, writes the transformed author, and returns the file path. The path is derived from the author's ID, so repeating a write replaces the same file. `deleteAuthor` removes a file and also succeeds if it has already been removed.
+
+`Effect.tryPromise` wraps an asynchronous Node operation and maps a rejected promise to `DestinationError`, which the SDK can record as an item failure.
+
+## 4. Connect processing, tracking, and storage
+
+A **migration definition** connects your source to a processing function and a store. Here, processing joins the name fields and writes the result. Tracking preserves the written path so rollback can find the file later.
+
+Save this as `migration.ts`:
+
+<include lang="ts" meta='title="migration.ts" twoslash source="../examples/getting-started/migration.ts"'>../examples/getting-started/migration.ts</include>
+
+There are two places data is saved:
+
+| Directory | Contents |
+| --- | --- |
+| `authors/` | Your destination data: the JSON files written by `writeAuthor`. |
+| `.migrate/` | SDK progress: item states, tracked paths, and run history. |
+
+<Callout title="Keep your migration state">
+Keep `.migrate/` between runs. The SDK uses it to skip unchanged records and find the tracked file paths during rollback. Run the scripts from the same project directory so they use the same store.
+</Callout>
+
+`FileMigrationStore.layer` configures the local progress store, including its Node filesystem services. A *layer* supplies services when an Effect operation needs them. The SDK uses this one to read and save progress for your definition.
+
+The `process` function receives a validated source item. Inside `Effect.gen`, `yield*` runs an Effect operation and gives you its result, much as `await` does for a promise. After the write succeeds, `Tracking.setRecord({ path })` stages the path for the SDK to save with that item's successful outcome.
+
+Inspect `row` or `row.firstName` in this code: they carry the same concrete types as the decoded author above. Changing `AuthorRow` changes the types available in `process`, so TypeScript can catch a misspelled or removed field where you use it. The saved tracking record is inferred from its schema too; inspect `state.trackingRecord` in `rollback` to see its shape and its possible absence.
+
+`Tracking.record` declares the **tracking contract**: every successfully processed author must supply a record matching `{ path: string }`. The `rollback` function reads that saved record and deletes its file. It does not need to fetch the source record again.
+
+Keep the definition ID (`authors`) and contract IDs (`author-id@v1` and `author-file@v1`) stable when changing source data. These identify the migration and the shape of its saved state; they are not package versions or per-item versions.
+
+## 5. Run the migration
+
+Save this as `run.ts`:
+
+<include lang="ts" meta='title="run.ts" twoslash source="../examples/getting-started/run.ts"'>../examples/getting-started/run.ts</include>
+
+The registry collects the definitions available to run. `MigrationExecution.make` binds it to an executor that runs in this Node process. Creating these values does not start the migration.
+
+`execution.run({ all: true })` selects all definitions in the registry, which contains only `authors`. A start result can contain a summary or a handle to ongoing work. The script waits for completion before printing the summary. `Effect.runPromise` is the boundary that executes the program and lets your script await it.
+
+Your project is now complete:
+
+<Files>
+  <Folder name="my-first-migration" defaultOpen>
+    <File name="package.json" />
+    <File name="pnpm-lock.yaml" />
+    <File name="source.ts" />
+    <File name="destination.ts" />
+    <File name="migration.ts" />
+    <File name="run.ts" />
+  </Folder>
+</Files>
+
+Run it from that directory:
+
+```sh
+node run.ts
+```
+
+The summary reports `migrated: 2` and `failed: 0` in the definition's `counts`. You'll have two destination files. The first contains:
+
+```json title="authors/author-1.json"
+{
+  "id": "author-1",
+  "name": "Ada Morgan"
+}
+```
+
+The script exits with a nonzero status if the run fails. If a file write fails, correct its cause and run the script again; the SDK can retry the failed item while leaving unchanged successful items alone.
+
+## 6. Run it again and change a record
+
+Run `node run.ts` again from the same directory, keeping `.migrate` in place. The summary now reports `migrated: 0` and `unchanged: 2`. The SDK has compared each item's identity and version with saved progress and avoided calling `process` again.
+
+Now change Ada's `lastName` in `source.ts` from `Morgan` to `Lovelace` and run the script again. Her identity stays `author-1`, but the serialized record changes. The summary reports `migrated: 1` and `unchanged: 1`, and `authors/author-1.json` now contains `"name": "Ada Lovelace"`.
+
+Changing only your processing code does not change source versions. To apply a revised transformation to unchanged records, use the script's `update` command, which passes `update: true` to `execution.run`:
+
+```sh
+node run.ts update
+```
+
+## 7. Roll back the files
+
+Use the script's `rollback` command to call `execution.rollback({ all: true })`:
+
+```sh
+node run.ts rollback
+```
+
+Rollback reads the saved paths, removes both author files, and removes their item states after successful cleanup. The summary reports `rolledBack: 2`. The empty `authors` directory and the store's run history remain.
+
+This rollback deletes the current files. It does not restore older contents that a write replaced. Destination writes and progress saves are separate operations, so a process interruption can happen between them; the predictable file paths make a repeated write safe in this example. For migrations with several destination writes per item, [tracking changes in a journal](/docs/learn/tracking) also lets rollback use evidence from partially completed work.
+
+To migrate again, run `node run.ts`. Both authors are eligible again after rollback.
+
+## Bonus: Run the same migration with the CLI
+
+The `migrate` command is included in the `migrate-sdk` package you installed earlier. You can use it to select, run, inspect, and roll back the same migration. `pnpm exec` runs the command from your project's installed dependencies; no additional package is needed.
+
+Save this as `migrate.config.ts` beside `migration.ts`:
+
+<include lang="ts" meta='title="migrate.config.ts" twoslash source="../examples/getting-started/migrate.config.ts"'>../examples/getting-started/migrate.config.ts</include>
+
+The CLI discovers this config and uses its registry. It imports the `authors` definition, including the source, processing function, file store, and rollback you already wrote. The CLI handles starting the operation, waiting for completion, and reporting the result, so these commands take the place of running `run.ts` yourself.
+
+The two entry points share the same migration:
+
+| Command | Entry point | What it does |
+| --- | --- | --- |
+| `node run.ts` | `run.ts` | Your script creates the registry and starts execution. |
+| `pnpm exec migrate run authors` | `migrate.config.ts` | The CLI loads the exported registry and starts execution. |
+
+Use the filename `migrate.config.ts` so the CLI finds it automatically. Both entry points import `migration.ts`; the CLI does not execute `run.ts`.
+
+From the project directory, list the available definitions and preview the selection:
+
+```sh
+pnpm exec migrate list
+pnpm exec migrate run authors --plan
+```
+
+`authors` is the definition's `id`. The plan shows which definitions would run without writing destination files. Run the migration and inspect its saved state:
+
+```sh
+pnpm exec migrate run authors
+pnpm exec migrate status authors
+```
+
+Both ways of running the migration use the same `.migrate/` directory. If you just rolled back in the previous step, the CLI migrates both authors again. If you left them migrated, unchanged records stay unchanged. Switching to the CLI does not reset progress.
+
+The other operations from the walkthrough are available as commands too:
+
+| Operation | Command |
+| --- | --- |
+| Apply processing changes to unchanged records | `pnpm exec migrate run authors --update` |
+| Remove the author files using the saved tracking records | `pnpm exec migrate rollback authors` |
+
+Continue with the [CLI guide](/docs/operate/cli) for selection, retries, and other commands.
+
+## Build on this example
+
+You now have a working source, destination, processing pipeline, local progress store, tracking contract, and rollback. Replace the array or file-writing helpers as you connect your own systems.
+
+- [Sources](/docs/learn/sources) explains source adapters, identities, versions, and pagination.
+- [Migration definitions](/docs/learn/defining-migrations) covers processing and recovery in more detail.
+- [Migration stores](/docs/learn/migration-stores) covers other ways to keep durable progress.
+- The [cookbook](/docs/cookbook) applies these pieces to CSV, APIs, and other systems.

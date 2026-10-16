@@ -21,8 +21,8 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import {
   layerProtocolSocket,
   make as makeRpcClient,
-} from "effect/unstable/rpc/RpcClient";
-import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
+} from "effect/rpc/RpcClient";
+import { layerNdjson } from "effect/rpc/RpcSerialization";
 import { toMigrationDefinitionId } from "migrate-sdk";
 import type { MigrateConnection } from "migrate-sdk/client/node";
 import {

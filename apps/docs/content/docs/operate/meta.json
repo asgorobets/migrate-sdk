@@ -1,0 +1,4 @@
+{
+  "title": "Operate",
+  "pages": ["index", "cli", "tui", "collaboration-and-locks"]
+}

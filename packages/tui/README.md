@@ -5,7 +5,30 @@ TUI's Node Migrate Server loads the same `migrate.config.ts` as the CLI. The TUI
 provides status, item counts, messages, dependency-aware execution plans, and
 contextual actions for every registered migration.
 
-Install it in the migration project alongside the SDK:
+The migration list opens after connecting, without waiting for durable status.
+Status loads once in the background with a **Loading status…** indicator and a
+session activity entry. Navigation and operations remain available while it
+loads. Unloaded counts are shown as **Not loaded**, not zero.
+
+For expensive stores, defer the first status read until you press **R** (Shift+R):
+
+```sh
+pnpm exec migrate-tui --status manual
+pnpm exec migrate-tui --server https://migrate.example.com/api/rpc --status manual
+```
+
+The default is `--status background`. Both modes retain the last loaded idle
+status until **R** requests another read. When a status read finds an active run,
+or you start a run from the TUI, live dashboard updates continue until no runs
+remain active. Runs started elsewhere while the dashboard is idle appear after
+**R**. Status failures leave the list usable and can be retried with **R**.
+
+If the renderer restarts after an error, it reuses the last dashboard state.
+An idle manual session stays idle; an active run resumes live updates. Source
+scans that find active runs also restore live updates and run controls.
+
+Requires Node.js 22.19.0 or newer. Install it in the migration project alongside
+the SDK:
 
 ```sh
 pnpm add migrate-sdk effect
@@ -55,6 +78,19 @@ Connect to a deployed Migrate Server without loading a local migration config:
 pnpm exec migrate-tui --server https://migrate.example.com/api/rpc
 ```
 
+For a one-off remote session, use pnpm 10.2.0 or newer:
+
+```sh
+MIGRATE_SERVER_TOKEN="<your-token>" \
+  pnpm --allow-build=bun --allow-build=esbuild dlx @migrate-sdk/tui@latest \
+  --server https://migrate.example.com/api/rpc
+```
+
+No local project, migration config, or lockfile setup is needed. pnpm caches
+the packages automatically. The approval flags allow Bun and esbuild's install
+scripts. This release uses Effect 4.0.4 and matching platform packages; older
+releases may resolve incompatible prerelease and stable dependencies.
+
 When `MIGRATE_SERVER_TOKEN` is set, its value is sent as an HTTP Bearer token.
 Source, destination, Migration Store,
 and Execution Adapter credentials remain in the remote environment. The TUI
@@ -96,7 +132,7 @@ import {
   HttpMiddleware,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import {
   MigrateServerHttp,
   RegistryMigrateServer,
@@ -178,21 +214,31 @@ The footer keeps primary and contextual shortcuts visible for the current
 selection. Press `Enter` to open All actions, which includes the complete action
 set such as rescan, update, and Concurrency settings. Concurrency settings provides
 session-scoped concurrency overrides for the Process Pipeline, Rollback Pipeline,
-and Source Inventory Scan; blank values preserve the configured defaults and
+and source scans; blank values preserve the configured defaults and
 Process or Rollback concurrency can be set to unbounded. Press `c` to open
 Concurrency settings and `g` to switch
 between migration and group tabs, `m` for errors and messages, `r` to run the selected migration or group,
 `e` to open Run selected entries, `f` to retry failed items, `b` to
-rollback, `s` to run a Source Inventory Scan for the current selection and its
+rollback, `s` to scan sources for the current selection and its
 required dependencies, `l` to open Session activity, `R` to reload status, and
-`q` to quit. When applicable, `t`
+`q` to quit. Source scan results stay visible when switching migrations or
+scanning other sources; `R` clears them when reloading status. When applicable, `t`
 retries skipped items, `v` focuses a running migration, `x` requests a safe stop
 for a run owned by the connected Migrate Server, and `u` opens
 the guarded break-lock confirmation. Use
 Page Up and Page Down to scroll the overview while the arrow keys continue to
-select migrations. The Messages tab displays a bounded list with the current
-message highlighted; use the arrow keys to move through it and `Enter` to open
-the complete message and structured details. For non-interactive inspection or
+select migrations. Messages are loaded only when you press `m` or open the Messages tab. Latest
+message shows `m to load` until then. Loaded results, including empty results,
+are cached per migration or group for the session; navigation does not reload
+them. Observed changes to run history or durable item counts mark affected
+caches stale, including their groups. Press `m` again to reload a stale result
+or retry a failed read. An unchanged status refresh keeps the cache. Source
+scans and lock heartbeats do not invalidate it. Changes made by other clients
+while this TUI is idle are discovered on `R`, just like status changes.
+
+The Messages tab displays a bounded list with the current message highlighted;
+use the arrow keys to move through it and `Enter` to open the complete message
+and structured details. For non-interactive inspection or
 export, use `migrate messages <migration>` or
 `migrate messages --all --json` from the same project.
 
@@ -207,6 +253,13 @@ select items. From the input, press Shift+Tab to focus the selection control,
 use Left/Right to switch, then Tab to return to the input. You can also click
 the tabs. Adding an ID keeps Source IDs active, and reopening the dialog
 remembers your selection method. The ordinary Run action stays unlimited.
+
+In **Source IDs**, the IDs set the scope. By default, unchanged migrated items
+stay unchanged. Enable **Update: reprocess unchanged items** to process the
+selected IDs again. From the ID input, press Tab then Space to toggle Update,
+or click its label; choose Update to start. This preserves other items and saved
+scan progress. Update resets to off when you reopen the dialog or switch selection
+methods. The separate Update action still updates the whole migration.
 
 Session activity keeps the statuses, notices, warnings, and errors observed by
 the current TUI session in chronological order, including active-run lifecycle
@@ -289,4 +342,8 @@ smoke and local IPC test cover real migration execution:
 ```sh
 pnpm --filter @migrate-sdk/tui test:binary
 pnpm --filter @migrate-sdk/tui test:ipc
+pnpm --filter @migrate-sdk/tui test:package
 ```
+
+The package smoke check includes a fresh `pnpm dlx` launch with explicit build
+approvals and no consumer configuration.

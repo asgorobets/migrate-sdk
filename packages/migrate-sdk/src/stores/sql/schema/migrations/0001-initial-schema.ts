@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { SqlClient, SqlError } from "effect/unstable/sql";
+import type { SqlClient, SqlError } from "effect/sql";
 import { createMssqlSchemaVersion1 } from "../../dialects/mssql.ts";
 import { createMysqlSchemaVersion1 } from "../../dialects/mysql.ts";
 import { createPostgresOrSqliteSchemaVersion1 } from "../../dialects/postgres-sqlite.ts";
