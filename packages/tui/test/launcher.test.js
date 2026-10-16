@@ -1,11 +1,15 @@
 import { execFileSync } from "node:child_process";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { hostBinaryTarget } from "../bin/binary-targets.js";
 import {
   bunPlatformPackageCandidates,
   resolveBunExecutable,
+  resolveNativeExecutable,
   tuiChildEnvironment,
 } from "../bin/launcher.js";
 
@@ -64,5 +68,50 @@ describe("Migrate TUI Node launcher", () => {
         MIGRATE_TUI_NODE_EXECUTABLE: "/runtime/node",
       }
     );
+  });
+});
+
+describe("native Migrate TUI launcher", () => {
+  const directories = [];
+  afterEach(async () => {
+    await Promise.all(
+      directories
+        .splice(0)
+        .map((directory) => rm(directory, { recursive: true, force: true }))
+    );
+  });
+  const nativePackage = async (version) => {
+    const directory = await mkdtemp(join(tmpdir(), "migrate-native-launcher-"));
+    directories.push(directory);
+    await mkdir(join(directory, "bin"));
+    const manifestPath = join(directory, "package.json");
+    await writeFile(manifestPath, JSON.stringify({ version }));
+    return { directory, manifestPath };
+  };
+  it("reports omitted optional dependencies without falling back to another runtime", async () => {
+    await expect(
+      resolveNativeExecutable({
+        resolvePackage: () => {
+          throw new Error("missing");
+        },
+      })
+    ).rejects.toThrow("optional dependencies enabled");
+  });
+  it("rejects a platform package with a different launcher version", async () => {
+    const { manifestPath } = await nativePackage("0.0.0");
+    await expect(
+      resolveNativeExecutable({ resolvePackage: () => manifestPath })
+    ).rejects.toThrow(`does not match launcher ${packageJson.version}`);
+  });
+  it("rejects a non-native command in a correctly versioned package", async () => {
+    const { directory, manifestPath } = await nativePackage(
+      packageJson.version
+    );
+    const executable = join(directory, "bin", hostBinaryTarget().executable);
+    await writeFile(executable, "echo not a native executable");
+    await chmod(executable, 0o755);
+    await expect(
+      resolveNativeExecutable({ resolvePackage: () => manifestPath })
+    ).rejects.toThrow("missing or invalid");
   });
 });

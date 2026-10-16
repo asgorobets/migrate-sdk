@@ -28,6 +28,21 @@
       "dependsOn": ["build"],
       "outputs": []
     },
+    "build:binary": {
+      "dependsOn": ["build"],
+      "cache": false,
+      "outputs": ["dist/binary/**"]
+    },
+    "package:binary": {
+      "dependsOn": ["build:binary"],
+      "cache": false,
+      "outputs": ["dist/distribution/**"]
+    },
+    "test:binary": {
+      "dependsOn": ["package:binary"],
+      "cache": false,
+      "outputs": []
+    },
     "dev": {
       "cache": false,
       "persistent": true

@@ -9,14 +9,17 @@ Its **Migrate Connection** reaches a **Migrate Server**, which owns the authorit
 
 ## Open a local or remote project
 
-Install the SDK and its matching Effect version using [Getting started](/docs/getting-started#install), then add the TUI:
+Install the SDK and its matching Effect version using [Getting started](/docs/getting-started#install), then pin the TUI to your project's SDK version:
 
 ```sh
-pnpm add --save-dev @migrate-sdk/tui
+TUI_VERSION="$(node -p "require('migrate-sdk/package.json').version")"
+pnpm add --save-dev --save-exact "@migrate-sdk/tui@$TUI_VERSION"
 pnpm exec migrate-tui
 ```
 
-Use a compatible SDK and TUI release. Node.js 24 or later runs your configuration and migration dependencies. The package supplies its pinned Bun renderer; you do not need to install Bun globally.
+Local SDK and TUI versions must match exactly. Node.js 22.19.0 or newer runs your configuration and migration dependencies. Keep the version and lockfile with each migration project. Add `"tui": "migrate-tui"` to `package.json` scripts to open that project's TUI with `pnpm run tui`.
+
+The compiled TUI needs no separate Bun installation or install-time build. Native npm packages and executable archives are currently build candidates; follow the [compiled candidate installation guide](https://github.com/asgorobets/migrate-sdk/blob/main/docs/tui-binaries.md#install-a-compiled-candidate) to try them. Registry releases still supply their pinned Bun runtime until native publication is enabled. Neither installation needs a global Bun executable.
 
 By default, the local Node Migrate Server loads `migrate.config.ts` from your project. Choose another configuration or connect remotely:
 
@@ -27,15 +30,15 @@ pnpm exec migrate-tui --server https://migrate.example.com/api/migrate
 
 Replace the example URL with your server endpoint. Set `MIGRATE_SERVER_TOKEN` through your shell or secret manager when the server requires bearer authentication. Check the connected environment's identity before starting an operation. A remote connection uses the server's registry and credentials without needing a local migration config.
 
-For a one-off remote session, use pnpm 10.2.0 or newer:
+For a one-off remote session:
 
 ```sh
 MIGRATE_SERVER_TOKEN="<your-token>" \
-  pnpm --allow-build=bun --allow-build=esbuild dlx @migrate-sdk/tui@latest \
+  pnpm dlx @migrate-sdk/tui@latest \
   --server https://migrate.example.com/api/migrate
 ```
 
-No local project or lockfile setup is needed. pnpm caches the TUI automatically. The flags approve the Bun and esbuild install scripts. The SDK and TUI share a compatible Effect v4 peer, which pnpm installs when it is missing. Use a TUI release compatible with your Migrate Server; replace `@latest` with a specific TUI version for a repeatable setup.
+No local project, lockfile setup, or install-script approvals are needed. pnpm caches the TUI automatically and installs a compatible Effect v4 peer when it is missing. Use a TUI release compatible with your Migrate Server; replace `@latest` with a specific TUI version when you need a repeatable setup. The npm launcher needs Node; an extracted compiled executable can connect with `./migrate-tui --server <url>` without Node or Bun.
 
 `--config` and `--server` are alternatives. `--otel` enables tracing for local execution only; remote telemetry belongs in the server environment. `--help` lists startup options.
 

@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { existsSync, constants as fsConstants } from "node:fs";
-import { access, open } from "node:fs/promises";
+import { access, open, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hostBinaryTarget } from "./binary-targets.js";
 
 const require = createRequire(import.meta.url);
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -131,6 +132,36 @@ export const resolveBunExecutable = async () => {
   );
 };
 
+export const resolveNativeExecutable = async ({
+  target = hostBinaryTarget(),
+  resolvePackage = (name) => require.resolve(`${name}/package.json`),
+  expectedVersion = packageJson.version,
+} = {}) => {
+  let manifestPath;
+  try {
+    manifestPath = resolvePackage(target.packageName);
+  } catch (cause) {
+    throw new Error(
+      `The Migrate TUI binary package ${target.packageName}@${expectedVersion} is missing. ` +
+        "Reinstall @migrate-sdk/tui with optional dependencies enabled.",
+      { cause }
+    );
+  }
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  if (manifest.version !== expectedVersion) {
+    throw new Error(
+      `Migrate TUI binary version ${manifest.version} does not match launcher ${expectedVersion}`
+    );
+  }
+  const executable = join(dirname(manifestPath), "bin", target.executable);
+  if (!(await nativeExecutableExists(executable))) {
+    throw new Error(
+      `Migrate TUI native executable is missing or invalid: ${executable}`
+    );
+  }
+  return executable;
+};
+
 const appEntryPath = () => {
   const compiled = join(packageDirectory, "dist", "bin.js");
 
@@ -163,12 +194,19 @@ export const launch = async (
   args,
   { cwd = process.cwd(), env = process.env, spawnProcess = spawn } = {}
 ) => {
-  const executable = await resolveBunExecutable();
-  const child = spawnProcess(executable, [appEntryPath(), ...args], {
-    cwd,
-    env: tuiChildEnvironment(env, process.execPath),
-    stdio: "inherit",
-  });
+  const nativeDistribution = packageJson.migrateTuiBinaryDistribution === true;
+  const executable = nativeDistribution
+    ? await resolveNativeExecutable()
+    : await resolveBunExecutable();
+  const child = spawnProcess(
+    executable,
+    nativeDistribution ? args : [appEntryPath(), ...args],
+    {
+      cwd,
+      env: tuiChildEnvironment(env, process.execPath),
+      stdio: "inherit",
+    }
+  );
   const forwardedSignals = ["SIGINT", "SIGHUP", "SIGTERM"];
   const listeners = new Map();
 

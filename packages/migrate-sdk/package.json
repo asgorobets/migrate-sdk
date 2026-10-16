@@ -96,6 +96,7 @@
       "source": "./src/server/http-host.ts",
       "import": "./dist/server/http-host.js"
     },
+    "./server/node": "./dist/client/node/local-server-entry.js",
     "./destinations/in-memory": {
       "types": "./dist/destinations/in-memory/index.d.ts",
       "bun": "./src/destinations/in-memory/index.ts",

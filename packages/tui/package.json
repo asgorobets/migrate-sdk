@@ -26,6 +26,7 @@
     "dist/**/*.js",
     "dist/**/*.js.map",
     "!dist/binary/**",
+    "!dist/distribution/**",
     "README.md"
   ],
   "exports": {
@@ -43,13 +44,14 @@
   "scripts": {
     "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
     "build:binary": "bun scripts/build-binary.ts",
+    "package:binary": "node scripts/package-binaries.mjs",
     "check-types": "tsc --noEmit -p tsconfig.check.json",
     "demo": "bun src/bin.tsx --config ../migrate-sdk/test/fixtures/server/migrate.config.ts",
     "dev": "bun src/bin.tsx",
     "prepack": "node scripts/verify-package.mjs",
     "test": "vitest run --passWithNoTests",
     "test:ipc": "node test/run-local-ipc.mjs",
-    "test:binary": "bash test/binary-smoke.sh",
+    "test:binary": "node test/binary-smoke.mjs",
     "test:package": "node --test test/remove-temporary-directory.node-test.mjs && node test/package-smoke.mjs",
     "test:renderer": "bun test src/app.test.tsx src/render-session.test.ts",
     "test:pilotty": "pnpm run build && pnpm run test:renderer && node --test test/pilotty-wait-for.node-test.mjs && bash test/pilotty-layout.sh"
