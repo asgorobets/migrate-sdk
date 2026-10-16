@@ -182,6 +182,38 @@ the generated declaration without a local declaration.
 
 ## Release Versioning
 
+### Shared Effect dependency
+
+All published SDK packages declare Effect as a required peer dependency using
+the compatible v4 range from the `effect-peers` catalog. Their development
+dependencies use the default catalog's exact version for repeatable builds and
+tests. The core SDK must not also declare Effect as a runtime dependency: a
+consumer's schemas, layers, and Effects cross the public API boundary and should
+resolve to the same compatible installation throughout the SDK packages.
+
+npm 7+ and pnpm's default automatic peer installation supply a compatible Effect
+version when the consumer has none. An incompatible consumer version is a peer
+conflict, not a reason to silently install a separate SDK-owned runtime. Clients
+using package managers with automatic peers disabled must install Effect
+explicitly. `@effect/platform-node` follows the same required peer model, with a
+compatible v4 range in `effect-peers` and an exact development catalog version.
+
+Other dependencies whose client objects or types cross a public SDK boundary
+also belong in required peers: the commercetools platform and Import API SDKs,
+Workflow SDK's `workflow`, and the adapters' `migrate-sdk` dependency. Keep each
+in development dependencies too so builds and tests do not rely on automatic
+peer installation. The commercetools HTTP client builder is used only by our
+examples and belongs only in development dependencies. SQL adapters accept an
+application-provided `effect/sql` client; specific SQL drivers remain development
+dependencies rather than becoming requirements for every SDK user.
+
+The TUI also declares React as a required peer because its public API exports
+`MigrationTuiApp`. Native renderer packages and its Bun runtime remain
+application-owned dependencies, as do implementation utilities such as CSV
+parsing and file locking. The
+transitive `@effect/platform-node-shared` package remains owned by the upstream
+platform package; the SDK does not import or expose it directly.
+
 The publishable SDK packages use one shared public version:
 
 ```txt

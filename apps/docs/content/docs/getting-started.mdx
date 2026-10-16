@@ -28,10 +28,12 @@ This is a project setup choice for the example, not a special Migrate SDK settin
 Install the SDK and the Effect packages:
 
 ```sh
-pnpm add migrate-sdk effect@4.0.4 @effect/platform-node@4.0.4
+pnpm add migrate-sdk@latest effect@4 @effect/platform-node@4
 ```
 
-Effect supplies the schemas and operations used below; the platform package supplies Node filesystem services for the store. Use matching Effect 4.0.4 packages. Keep your lockfile so subsequent installs use the same resolved versions.
+Effect supplies the schemas and operations used below; the platform package supplies Node filesystem services for the store. The SDK shares your application's compatible Effect v4 and Node platform installations. These commands select the current compatible releases; keep your lockfile so subsequent installs use the same resolved versions.
+
+Effect and the Node platform package are required peer dependencies. npm 7+ and pnpm with automatic peer installation enabled install them when they are missing. We list them explicitly here so your own code can import them directly. If you already use these packages, keep versions that satisfy the SDK's peer ranges; an incompatible major version must be upgraded or used in a separate project.
 
 You'll create four TypeScript files in this directory. Each file includes its imports. Hover over a name in a TypeScript example, or select it, to inspect its inferred type.
 

@@ -191,8 +191,13 @@
     "test:sql:smoke": "vitest run --config vitest.sql.config.ts",
     "test:watch": "vitest"
   },
+  "peerDependencies": {
+    "@effect/platform-node": "catalog:effect-peers",
+    "effect": "catalog:effect-peers"
+  },
   "devDependencies": {
     "@effect/language-service": "catalog:",
+    "@effect/platform-node": "catalog:",
     "@effect/sql-mssql": "catalog:",
     "@effect/sql-mysql2": "catalog:",
     "@effect/sql-pg": "catalog:",
@@ -204,12 +209,11 @@
     "@types/papaparse": "^5.5.2",
     "@types/proper-lockfile": "^4.1.4",
     "@typescript/native": "npm:typescript@7.0.2",
+    "effect": "catalog:",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "vitest": "^5.0.0"
   },
   "dependencies": {
-    "@effect/platform-node": "catalog:",
-    "effect": "catalog:",
     "papaparse": "^5.5.3",
     "proper-lockfile": "^4.1.2",
     "tsx": "^4.22.4"

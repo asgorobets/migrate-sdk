@@ -76,10 +76,15 @@
     "test:watch": "vitest"
   },
   "peerDependencies": {
-    "effect": "catalog:",
+    "@commercetools/importapi-sdk": "^7.1.1",
+    "@commercetools/platform-sdk": "^8.27.0",
+    "effect": "catalog:effect-peers",
     "migrate-sdk": "workspace:>=0.1.0 <1.0.0"
   },
   "devDependencies": {
+    "@commercetools/importapi-sdk": "^7.1.1",
+    "@commercetools/platform-sdk": "^8.27.0",
+    "@commercetools/sdk-client-v2": "^3.5.0",
     "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
     "@repo/typescript-config": "workspace:*",
@@ -92,10 +97,5 @@
     "tsx": "^4.22.4",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "vitest": "^5.0.0"
-  },
-  "dependencies": {
-    "@commercetools/importapi-sdk": "^7.1.1",
-    "@commercetools/platform-sdk": "^8.27.0",
-    "@commercetools/sdk-client-v2": "^3.5.0"
   }
 }

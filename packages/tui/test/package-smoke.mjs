@@ -10,7 +10,8 @@ import {
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { removeTemporaryDirectory } from "./remove-temporary-directory.mjs";
 
 const packageDirectory = resolve(import.meta.dirname, "..");
@@ -173,7 +174,17 @@ try {
 `
   );
 
-  run(pnpm, ["exec", "bun", basename(scriptPath)], {
+  const fixtureRequire = createRequire(
+    resolve(fixtureDirectory, "package.json")
+  );
+  const launcherUrl = pathToFileURL(
+    resolve(
+      dirname(fixtureRequire.resolve("@migrate-sdk/tui/package.json")),
+      "bin/launcher.js"
+    )
+  );
+  const { resolveBunExecutable } = await import(launcherUrl.href);
+  run(await resolveBunExecutable(), [basename(scriptPath)], {
     cwd: fixtureDirectory,
   });
 };
