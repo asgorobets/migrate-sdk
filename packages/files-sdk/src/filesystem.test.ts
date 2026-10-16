@@ -3,14 +3,48 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect } from "effect";
+import { Effect, type Layer } from "effect";
 import { Files as FilesSDKClient } from "files-sdk";
-import { make } from "files-sdk/effect";
+import { Files, make } from "files-sdk/effect";
 import { fs } from "files-sdk/fs";
+import {
+  MigrationDefinition,
+  type MigrationStore,
+  type MigrationStoreError,
+} from "migrate-sdk";
+import { SqlMigrationStore } from "migrate-sdk/stores/sql";
 import { runInlineDefinition } from "migrate-sdk/testing";
-import { makeObjectMigration } from "../examples/object-migration.ts";
-import { makeSqlBackedObjectMigration } from "../examples/sql-migration.ts";
+import { FilesSDKDestination } from "./destination/index.ts";
+import { FilesSDKMigrationStore } from "./migration-store/index.ts";
+import { FilesSDKSource } from "./source/index.ts";
 import { makeMemoryFilesSDK } from "./testing/index.ts";
+
+function makeMigration(
+  clients: { source: FilesSDKClient; destination: FilesSDKClient },
+  store: Layer.Layer<MigrationStore, MigrationStoreError>
+) {
+  const destination = FilesSDKDestination.make({
+    storageId: "destination",
+  }).provide(Files.layer(clients.destination));
+  return MigrationDefinition.make({
+    id: "filesystem-copy",
+    source: FilesSDKSource.objects({
+      storageId: "source",
+      prefix: "input/",
+    }).provide(Files.layer(clients.source)),
+    store,
+    process: (sourceItem) =>
+      destination
+        .transferFrom({
+          source: make(clients.source),
+          object: sourceItem.item,
+          key: `output/${sourceItem.item.key.slice("input/".length)}`,
+          write: { kind: "overwrite" },
+          verify: "sha256",
+        })
+        .pipe(Effect.asVoid),
+  });
+}
 
 describe("filesystem provider", () => {
   it.effect(
@@ -28,9 +62,9 @@ describe("filesystem provider", () => {
               filename: join(root, "state.sqlite"),
             });
             const migration = () =>
-              makeSqlBackedObjectMigration(
+              makeMigration(
                 { source: source.client, destination: destination.client },
-                sql
+                SqlMigrationStore.layerFromClient(sql)
               );
             expect((yield* runInlineDefinition(migration())).status).toBe(
               "succeeded"
@@ -60,15 +94,25 @@ describe("filesystem provider", () => {
               adapter: fs({ root: join(root, "state") }),
             }),
           });
+          const migration = (selected: ReturnType<typeof clients>) =>
+            makeMigration(
+              selected,
+              FilesSDKMigrationStore.layerFromClient({
+                client: selected.state,
+                storageId: "state",
+                namespace: "filesystem-test",
+                locking: "advisory",
+              })
+            );
           const initial = clients();
           yield* make(initial.source).upload("input/a.txt", "filesystem bytes");
-          expect(
-            (yield* runInlineDefinition(makeObjectMigration(initial))).status
-          ).toBe("succeeded");
+          expect((yield* runInlineDefinition(migration(initial))).status).toBe(
+            "succeeded"
+          );
           const reopened = clients();
           expect(
-            (yield* runInlineDefinition(makeObjectMigration(reopened)))
-              .definitions[0]?.counts.unchanged
+            (yield* runInlineDefinition(migration(reopened))).definitions[0]
+              ?.counts.unchanged
           ).toBe(1);
           expect(
             yield* (yield* make(reopened.destination).download("output/a.txt"))

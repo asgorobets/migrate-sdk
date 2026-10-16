@@ -67,16 +67,17 @@ test("Files SDK cookbook renders the integration and advisory lock disclosure", 
   const { code, dependencies } = await compile("cookbook/files-sdk.mdx");
   assert.ok(code.includes("Files SDK"));
   assert.ok(code.includes("non-atomic"));
-  assert.ok(code.includes("authoritative"));
-  for (const example of [
-    "document-source.ts",
-    "object-migration.ts",
-    "sql-migration.ts",
-    "copy-rollback.ts",
-  ]) {
+  assert.ok(code.includes("one writer"));
+  assert.ok(
+    dependencies.has(
+      resolve("../../packages/files-sdk/examples/document-source.ts")
+    ),
+    "DocumentSource must be included from its typechecked source"
+  );
+  for (const example of ["folder-copy.ts", "migrate.config.ts", "storage.ts"]) {
     assert.ok(
-      dependencies.has(resolve("../../packages/files-sdk/examples", example)),
-      `${example} must be included from its typechecked source`
+      dependencies.has(resolve("../../examples/files-sdk", example)),
+      `${example} must be included from the runnable project`
     );
   }
 });

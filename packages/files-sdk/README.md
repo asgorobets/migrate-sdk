@@ -181,12 +181,12 @@ const store = FilesSDKMigrationStore.layerFromClient({
 });
 ```
 
-The [complete file migration](https://github.com/asgorobets/migrate-sdk/blob/main/packages/files-sdk/examples/object-migration.ts)
-connects a Source, a Process Pipeline, a Tracking Record, and a Rollback Pipeline.
-It reserves `output/` exclusively for the migration and deletes journaled uploads
-from that prefix during rollback. The
-[SQL composition](https://github.com/asgorobets/migrate-sdk/blob/main/packages/files-sdk/examples/sql-migration.ts)
-uses the same Source and Destination with SQL-backed state.
+The [runnable folder migration](https://github.com/asgorobets/migrate-sdk/tree/main/examples/files-sdk)
+connects a Source, a Process Pipeline, a Tracking Record, and a Rollback Pipeline
+to the CLI. It reserves `copied/` exclusively for the migration and deletes
+journaled uploads from that prefix during rollback. The
+[cookbook](https://migrate-sdk.dev/docs/cookbook/files-sdk) includes these project
+files directly and shows how to choose a different Migration Store.
 
 ### Destination policies
 
@@ -228,6 +228,9 @@ decodes `destination.changes.copied` and passes that ETag to
 `delete({ key, policy: { kind: "exact", etag } })`. The provider checks the ETag
 during deletion. A changed ETag or unsupported conditional deletion fails
 rollback and retains Migration Item State.
+
+Provide `copyRollback(state)` with `Effect.provide(Files.layer(destinationClient))`,
+using the same Files client and `storageId` as the copy operation.
 
 A copy's ETag may be absent because the provider omits it or the follow-up
 metadata read failed. The acknowledged copy remains journaled. Reconcile it or

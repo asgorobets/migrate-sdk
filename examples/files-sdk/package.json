@@ -1,0 +1,28 @@
+{
+  "name": "@migrate-sdk/files-sdk-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "migrate": "migrate --config ./migrate.config.ts",
+    "verify": "node scripts/verify.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check-types": "tsc6 --noEmit"
+  },
+  "dependencies": {
+    "@effect/platform-node": "4.0.5",
+    "@migrate-sdk/files-sdk": "0.17.0",
+    "effect": "4.0.5",
+    "files-sdk": "3.1.1",
+    "migrate-sdk": "0.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "typescript": "npm:@typescript/typescript6@6.0.2"
+  }
+}
