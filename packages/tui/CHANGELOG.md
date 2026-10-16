@@ -1,5 +1,18 @@
 # @migrate-sdk/tui
 
+## 0.15.0
+
+### Minor Changes
+
+- 58a5410: Add standalone TUI compilation and staged platform npm packages, release archives,
+  checksums, and native-platform CI acceptance tests. Expose a Node server bootstrap
+  so bundled clients can run migrations through the matching project SDK.
+
+### Patch Changes
+
+- Updated dependencies [58a5410]
+  - migrate-sdk@0.15.0
+
 ## 0.14.2
 
 ### Patch Changes
