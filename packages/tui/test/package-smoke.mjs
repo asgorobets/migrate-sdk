@@ -285,9 +285,17 @@ try {
     resolve(fixtureDirectory, "migrate.config.ts")
   );
 
-  run(pnpm, ["install", "--ignore-scripts", "--engine-strict"], {
-    cwd: fixtureDirectory,
-  });
+  // Consumer installs do not inherit workspace overrides; reject peer drift.
+  run(
+    pnpm,
+    [
+      "install",
+      "--ignore-scripts",
+      "--engine-strict",
+      "--strict-peer-dependencies",
+    ],
+    { cwd: fixtureDirectory }
+  );
 
   const command = resolve(
     fixtureDirectory,
