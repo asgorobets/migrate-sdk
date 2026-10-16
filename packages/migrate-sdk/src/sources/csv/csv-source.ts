@@ -890,7 +890,7 @@ const makeImplementation = <
   };
   interface CursorDocumentCache {
     readonly document: LoadedDocument;
-    readonly inode: number | undefined;
+    readonly inode: bigint | undefined;
     readonly modifiedAt: number | undefined;
     readonly size: bigint;
   }

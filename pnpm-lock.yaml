@@ -10,29 +10,29 @@ catalogs:
       specifier: ^0.86.2
       version: 0.86.2
     '@effect/platform-node':
-      specifier: 4.0.4
-      version: 4.0.4
+      specifier: 4.0.5
+      version: 4.0.5
     '@effect/sql-mssql':
-      specifier: 4.0.4
-      version: 4.0.4
+      specifier: 4.0.5
+      version: 4.0.5
     '@effect/sql-mysql2':
-      specifier: 4.0.4
-      version: 4.0.4
+      specifier: 4.0.5
+      version: 4.0.5
     '@effect/sql-pg':
-      specifier: 4.0.4
-      version: 4.0.4
+      specifier: 4.0.5
+      version: 4.0.5
     '@effect/sql-sqlite-bun':
-      specifier: 4.0.4
-      version: 4.0.4
+      specifier: 4.0.5
+      version: 4.0.5
     '@effect/sql-sqlite-node':
-      specifier: 4.0.4
-      version: 4.0.4
+      specifier: 4.0.5
+      version: 4.0.5
     '@effect/vitest':
-      specifier: 4.0.4
-      version: 4.0.4
+      specifier: 4.0.5
+      version: 4.0.5
     effect:
-      specifier: 4.0.4
-      version: 4.0.4
+      specifier: 4.0.5
+      version: 4.0.5
 
 importers:
 
@@ -104,10 +104,10 @@ importers:
     devDependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)(redis@6.2.1)
+        version: 4.0.5(effect@4.0.5)(redis@6.2.1)
       '@effect/sql-pg':
         specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)
+        version: 4.0.5(effect@4.0.5)
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../../packages/typescript-config
@@ -134,7 +134,7 @@ importers:
         version: typescript@7.0.2
       effect:
         specifier: 'catalog:'
-        version: 4.0.4
+        version: 4.0.5
       migrate-sdk:
         specifier: workspace:*
         version: link:../../packages/migrate-sdk
@@ -161,13 +161,13 @@ importers:
     dependencies:
       '@effect/sql-pg':
         specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)
+        version: 4.0.5(effect@4.0.5)
       '@migrate-sdk/workflow-sdk':
         specifier: workspace:*
         version: link:../../packages/workflow-sdk
       effect:
         specifier: 'catalog:'
-        version: 4.0.4
+        version: 4.0.5
       migrate-sdk:
         specifier: workspace:*
         version: link:../../packages/migrate-sdk
@@ -213,7 +213,7 @@ importers:
         version: '@typescript/typescript6@6.0.2'
       vitest:
         specifier: ^4.1.8
-        version: 4.1.8(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 4.1.8(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/commercetools:
     dependencies:
@@ -232,7 +232,7 @@ importers:
         version: 0.86.2
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))
+        version: 4.0.5(effect@4.0.5)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
@@ -247,7 +247,7 @@ importers:
         version: typescript@7.0.2
       effect:
         specifier: 'catalog:'
-        version: 4.0.4
+        version: 4.0.5
       migrate-sdk:
         specifier: workspace:*
         version: link:../migrate-sdk
@@ -262,16 +262,16 @@ importers:
         version: '@typescript/typescript6@6.0.2'
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/migrate-sdk:
     dependencies:
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)(redis@6.2.1)
+        version: 4.0.5(effect@4.0.5)(redis@6.2.1)
       effect:
         specifier: 'catalog:'
-        version: 4.0.4
+        version: 4.0.5
       papaparse:
         specifier: ^5.5.3
         version: 5.5.3
@@ -287,22 +287,22 @@ importers:
         version: 0.86.2
       '@effect/sql-mssql':
         specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)
+        version: 4.0.5(effect@4.0.5)
       '@effect/sql-mysql2':
         specifier: 'catalog:'
-        version: 4.0.4(@types/node@22.20.3)(effect@4.0.4)
+        version: 4.0.5(@types/node@22.20.3)(effect@4.0.5)
       '@effect/sql-pg':
         specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)
+        version: 4.0.5(effect@4.0.5)
       '@effect/sql-sqlite-bun':
         specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)
+        version: 4.0.5(effect@4.0.5)
       '@effect/sql-sqlite-node':
         specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)
+        version: 4.0.5(effect@4.0.5)
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))
+        version: 4.0.5(effect@4.0.5)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
@@ -323,7 +323,7 @@ importers:
         version: '@typescript/typescript6@6.0.2'
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/tui:
     dependencies:
@@ -348,7 +348,7 @@ importers:
         version: 0.86.2
       '@effect/platform-node':
         specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)(redis@6.2.1)
+        version: 4.0.5(effect@4.0.5)(redis@6.2.1)
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
@@ -366,7 +366,7 @@ importers:
         version: typescript@7.0.2
       effect:
         specifier: 'catalog:'
-        version: 4.0.4
+        version: 4.0.5
       migrate-sdk:
         specifier: workspace:*
         version: link:../migrate-sdk
@@ -378,7 +378,7 @@ importers:
         version: '@typescript/typescript6@6.0.2'
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   packages/typescript-config: {}
 
@@ -421,7 +421,7 @@ importers:
         version: 0.86.2
       '@effect/vitest':
         specifier: 'catalog:'
-        version: 4.0.4(effect@4.0.4)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))
+        version: 4.0.5(effect@4.0.5)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../typescript-config
@@ -433,10 +433,10 @@ importers:
         version: typescript@7.0.2
       '@workflow/vitest':
         specifier: 4.0.11
-        version: 4.0.11(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(ws@8.22.0)(zod@4.3.6)
+        version: 4.0.11(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(ws@8.22.0)(zod@4.3.6)
       effect:
         specifier: 'catalog:'
-        version: 4.0.4
+        version: 4.0.5
       migrate-sdk:
         specifier: workspace:*
         version: link:../migrate-sdk
@@ -445,7 +445,7 @@ importers:
         version: '@typescript/typescript6@6.0.2'
       vitest:
         specifier: ^5.0.0
-        version: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+        version: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
 packages:
 
@@ -788,43 +788,43 @@ packages:
     resolution: {integrity: sha512-SaPln+8srOqDJDUwNTDmP5e+IYpEDr9+1epGznnsLqu8xvo6VnxyWARdeLpqvZJlb0Pgy9ca7ppqvvdWbHPXAg==}
     hasBin: true
 
-  '@effect/platform-node-shared@4.0.4':
-    resolution: {integrity: sha512-gh2KRmqGWrJ0FVL8GqnI1GpB+fCfCUI7sGiUZkxxBHyHj1t94rm6VDJffCfuVZWe6GpvYXtizifVczUrgOce8A==}
+  '@effect/platform-node-shared@4.0.5':
+    resolution: {integrity: sha512-a8rCdEkfZBGe9C6bsIjxVZuRp73svIyK5IHwHdDAVsvZXjrbkxusfI+rZ8WlX31RP1mKizwI/E72GQTNfdMWHw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.4
+      effect: ^4.0.5
 
-  '@effect/platform-node@4.0.4':
-    resolution: {integrity: sha512-SdoyQMrO5zmqBebb2fxDk0sHYyJjBiw4QmLdV2ZcWf3ATpQPge3B5sTLijZg49PadekOwNeO83o5TfdtiiFEig==}
+  '@effect/platform-node@4.0.5':
+    resolution: {integrity: sha512-v4KD5fWvEUa4QmWFpZFbBsRhmfnTP6ETCME2r9ifyXVDPjhfpxpTZl41prjgQFMqZBHdWWCl7YC5ImbXv5ui5g==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.4
+      effect: ^4.0.5
       redis: '>=5.0.0 <7.0.0'
 
-  '@effect/sql-mssql@4.0.4':
-    resolution: {integrity: sha512-/hbO9/nFjcB4kq72VKRhmShIs0T2TGQktQWoKrW5KdByj0DGOskDsNgk6lFbFgiIPspTyw0SSzrvIlTvyUKtmg==}
+  '@effect/sql-mssql@4.0.5':
+    resolution: {integrity: sha512-0jlGtar6KlLcCT0LN/9w68d1WlowD4rpLlYwMW//a1bWf8nRzcTF4ZQQuybwl+WA929wyBU07xi461YjtELWKw==}
     peerDependencies:
-      effect: ^4.0.4
+      effect: ^4.0.5
 
-  '@effect/sql-mysql2@4.0.4':
-    resolution: {integrity: sha512-gbcmxJFFtM+mu/YyTiPFOsAK0a4SSuE0oeQt+sGCxz22wclgVDMTtnuOfI+qnMl8ympEq+JfgViQMccOxvdVRA==}
+  '@effect/sql-mysql2@4.0.5':
+    resolution: {integrity: sha512-GuZ00f74D796GzlPZ/vQ0vH5I9564gNIp7qLSuQwWwpaxbXWESkZxUsD9xsmuiBYz5793Alz3MugHDGK3fSqzw==}
     peerDependencies:
-      effect: ^4.0.4
+      effect: ^4.0.5
 
-  '@effect/sql-pg@4.0.4':
-    resolution: {integrity: sha512-41x5O2C+gRF3A/Sf+IkV+OOzo5BexsIubH1cib3m4NwhZcjQUQUrq5YbOw7fIuWmBODtAyHNXFjaeEtiXoPL9Q==}
+  '@effect/sql-pg@4.0.5':
+    resolution: {integrity: sha512-F9tG76H+aryhYcp5pvgd+MwWrNltv3XAuLcZSBsOOX6q+PEl+IM4zkQKzx0TF9OsEMH/SQ+3gZRdYWOsDF+vJQ==}
     peerDependencies:
-      effect: ^4.0.4
+      effect: ^4.0.5
 
-  '@effect/sql-sqlite-bun@4.0.4':
-    resolution: {integrity: sha512-Ae1qfvi7t7xmuP8EmuwgJ8IINNcgy7caF9dNndBYGOlKeuBTub8xeHnP16nZRhUyn2/h42oB3uyP/trSdaRlIQ==}
+  '@effect/sql-sqlite-bun@4.0.5':
+    resolution: {integrity: sha512-gL6mOT/BPM/AOWzcHhFphv6092zpgbJC79j29vfORakJ2ZLE/p+Eah9DeahokI6WBOk7AqFcaXsKVnjJBTUNXw==}
     peerDependencies:
-      effect: ^4.0.4
+      effect: ^4.0.5
 
-  '@effect/sql-sqlite-node@4.0.4':
-    resolution: {integrity: sha512-dKPaiab7UpRvD+CfkcT2qavV83h9k2Vz5cjvNvwa7DyxZWuf10LQiSl8tJDtXMcz69BMLdy7skUUFFnlXVNROw==}
+  '@effect/sql-sqlite-node@4.0.5':
+    resolution: {integrity: sha512-SHza5qNwiI4dRtUk45wvUfvZq7vB950DW2wD6npzt2aH/tesFfPlZJSDBIvwhazoK+gvDknBOONfKyFZsIF+tg==}
     peerDependencies:
-      effect: ^4.0.4
+      effect: ^4.0.5
 
   '@effect/tsgo-darwin-arm64@0.18.1':
     resolution: {integrity: sha512-iv8rC7nNou2m5+mCF6C2CHf18JkrvHvs0JtdXZlJT8s2DSrUxZg5Ln+ygLh8Ojj+dB4TLlUxDJj1IwZdEm6iFQ==}
@@ -865,10 +865,10 @@ packages:
     resolution: {integrity: sha512-oYyxUVzzc9YJwnu/g1G4gFnrpsDgYtH/APR1Ud0txoJ/QQIDs2u+BriWFhfoSF2J0nO5U0SRTTNjMf8DbIcOug==}
     hasBin: true
 
-  '@effect/vitest@4.0.4':
-    resolution: {integrity: sha512-l5KN46RbDVpqZxWzwXZtX6FVQiyzd+/hTYqL543uSDRo7hC0m19IeICh6O9U/nqCtfersqsNZnBjgHFfkuHsBw==}
+  '@effect/vitest@4.0.5':
+    resolution: {integrity: sha512-q64paZ/i4V2NiRhTyqCmT2KiDbFjlxc2EZrZca8GGt+Nf8844946HyJM5bPk/q+YeRkFSxIrlCs+J+LSfky/wA==}
     peerDependencies:
-      effect: ^4.0.4
+      effect: ^4.0.5
       vitest: '>=5.0.0 <6.0.0'
 
   '@emnapi/core@1.10.0':
@@ -3046,67 +3046,79 @@ packages:
     resolution: {integrity: sha512-Rvr0/EkPfPgc0C1wx8dz4bv6o4I4yeYI06tcHUL0f4ZdwSyIreABoLHNW51Ap0VNA7aDRVQ4izRNQh/LuykofA==}
     cpu: [arm64]
     os: [android]
+    deprecated: yuku-analyzer runs on yuku-core since 0.14
 
   '@yuku-analyzer/binding-darwin-arm64@0.9.5':
     resolution: {integrity: sha512-sh9DaXzkVmedM9aWvjCAAluRtvz/trk5VSosF7dPhqDf3IhrJW2DOh9iuA+YQzWSktP/ILsKfKili2UZ/ZjRzw==}
     cpu: [arm64]
     os: [darwin]
+    deprecated: yuku-analyzer runs on yuku-core since 0.14
 
   '@yuku-analyzer/binding-darwin-x64@0.9.5':
     resolution: {integrity: sha512-qPKyWlGK92vjwwFdAKwGkfqF3rye4UR8X2WPvzhOSt/plATd2pPJFyMBhF1aclRMBNbk20YnctWYRYLS8FBgAg==}
     cpu: [x64]
     os: [darwin]
+    deprecated: yuku-analyzer runs on yuku-core since 0.14
 
   '@yuku-analyzer/binding-freebsd-x64@0.9.5':
     resolution: {integrity: sha512-LeSbxDQ7k0WFyddM3BiFW3i55eSkWwi4hgG8PmqNBGL9dZ4sysYOwcy3We8vyxc/fyhuhc0CYxa6p6v14+UBow==}
     cpu: [x64]
     os: [freebsd]
+    deprecated: yuku-analyzer runs on yuku-core since 0.14
 
   '@yuku-analyzer/binding-linux-arm-gnu@0.9.5':
     resolution: {integrity: sha512-GVtm5UmUhKMnicVz/Q4QgRr7OFyvxDrr7j9u0Mrgnisj/GmABhcFhzqVwW+rbS+EFnUHY7yIamwY2Fc3CoCTCw==}
     cpu: [arm]
     os: [linux]
     libc: [glibc]
+    deprecated: yuku-analyzer runs on yuku-core since 0.14
 
   '@yuku-analyzer/binding-linux-arm-musl@0.9.5':
     resolution: {integrity: sha512-c/9lCWXRwp0eaAvbTZslrplIjaLhiFCdc5bF/hCV13HrYYyICSwEcCgx3/OEEpwfHpdQsqejhsntUKc/0Ylbfg==}
     cpu: [arm]
     os: [linux]
     libc: [musl]
+    deprecated: yuku-analyzer runs on yuku-core since 0.14
 
   '@yuku-analyzer/binding-linux-arm64-gnu@0.9.5':
     resolution: {integrity: sha512-BwZYDPfnuP9gh8KphdjClzN3XRV0smbc2nNGkxvSOEYB/uRW0e+S2Jh82QKMSCK5TptQfovmFWe55Z5lToLAfA==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
+    deprecated: yuku-analyzer runs on yuku-core since 0.14
 
   '@yuku-analyzer/binding-linux-arm64-musl@0.9.5':
     resolution: {integrity: sha512-xglOsssSkPQGwendJdWud5maVWoM6h5SwlouStfg0eUACjxV8uLvnub2NT+euQJQMVzH3aRc5RuPPqzvMFeDTA==}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
+    deprecated: yuku-analyzer runs on yuku-core since 0.14
 
   '@yuku-analyzer/binding-linux-x64-gnu@0.9.5':
     resolution: {integrity: sha512-X7J/LWSnNsyx1E4hv6CFofXQft4GMePfc4pDn00B4lG6BO3HNR/zGlYZ5ayQsxhRNLxtAlvSFSaguaSuyz6p6g==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
+    deprecated: yuku-analyzer runs on yuku-core since 0.14
 
   '@yuku-analyzer/binding-linux-x64-musl@0.9.5':
     resolution: {integrity: sha512-gmi9vazzSs4PLpHjgkFLPGCDMzG7ths3mcip0qZEHhLwLJthH5PTA+LYKi+7FRKHNQT4A50RTVox5CjdUC+prw==}
     cpu: [x64]
     os: [linux]
     libc: [musl]
+    deprecated: yuku-analyzer runs on yuku-core since 0.14
 
   '@yuku-analyzer/binding-win32-arm64@0.9.5':
     resolution: {integrity: sha512-0iKC5sGOCrFqumzSHLv2qCQa0OTytK605dSJrdHah5CoLT13oStEfk3jwNltYB77J3BiSagg896d5YmTY8HQPA==}
     cpu: [arm64]
     os: [win32]
+    deprecated: yuku-analyzer runs on yuku-core since 0.14
 
   '@yuku-analyzer/binding-win32-x64@0.9.5':
     resolution: {integrity: sha512-dSb5o6D9JugPmKRsjVLDLpgHRdSd1oCvNhY6AP6+OCzMwn0kbiNxhf2DwXYtt4xIBjliYQnw+ZsvIy1d0lHtSg==}
     cpu: [x64]
     os: [win32]
+    deprecated: yuku-analyzer runs on yuku-core since 0.14
 
   '@yuku-toolchain/types@0.9.5':
     resolution: {integrity: sha512-KiuLNNgX9uNealaWAR+G3/cMXnRk9x4TY2EkYe/KIag+UPdwiA0RRf1hr1WAxzTP8KGzCTkqUdLPvqh32sEO3w==}
@@ -3582,8 +3594,8 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  effect@4.0.4:
-    resolution: {integrity: sha512-Sr50OeVSC3M5UkoUYUhFf3EULryhGaZZUf6OzDHTvaznOw7HRlxOKdF3/4nvQXHL22StOyMG3Cvo8Bt7xUp+Ng==}
+  effect@4.0.5:
+    resolution: {integrity: sha512-BY4/28NlpOd99yzmV741xbVGmp+1U7tks4oB7F/Png64bTa5tm5eCA6W0RiXsnuLDDoJpjfVSo4Dnq4BZb/89Q==}
 
   ejs@3.1.10:
     resolution: {integrity: sha512-UeJmFfOrAQS8OJWPZ4qtgHyWExa088/MtK5UEyoJGFH67cDEXkZSviOiKRCZ4Xij0zxI3JECgYs3oKx+AizQBA==}
@@ -6328,50 +6340,50 @@ snapshots:
 
   '@effect/language-service@0.86.2': {}
 
-  '@effect/platform-node-shared@4.0.4(effect@4.0.4)':
+  '@effect/platform-node-shared@4.0.5(effect@4.0.5)':
     dependencies:
       '@types/ws': 8.18.2
-      effect: 4.0.4
+      effect: 4.0.5
       ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@4.0.4(effect@4.0.4)(redis@6.2.1)':
+  '@effect/platform-node@4.0.5(effect@4.0.5)(redis@6.2.1)':
     dependencies:
-      '@effect/platform-node-shared': 4.0.4(effect@4.0.4)
-      effect: 4.0.4
+      '@effect/platform-node-shared': 4.0.5(effect@4.0.5)
+      effect: 4.0.5
       redis: 6.2.1
       undici: 8.11.2
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/sql-mssql@4.0.4(effect@4.0.4)':
+  '@effect/sql-mssql@4.0.5(effect@4.0.5)':
     dependencies:
-      effect: 4.0.4
+      effect: 4.0.5
       tedious: 20.3.7
     transitivePeerDependencies:
       - supports-color
 
-  '@effect/sql-mysql2@4.0.4(@types/node@22.20.3)(effect@4.0.4)':
+  '@effect/sql-mysql2@4.0.5(@types/node@22.20.3)(effect@4.0.5)':
     dependencies:
-      effect: 4.0.4
+      effect: 4.0.5
       mysql2: 3.24.6(@types/node@22.20.3)
     transitivePeerDependencies:
       - '@types/node'
 
-  '@effect/sql-pg@4.0.4(effect@4.0.4)':
+  '@effect/sql-pg@4.0.5(effect@4.0.5)':
     dependencies:
-      effect: 4.0.4
+      effect: 4.0.5
 
-  '@effect/sql-sqlite-bun@4.0.4(effect@4.0.4)':
+  '@effect/sql-sqlite-bun@4.0.5(effect@4.0.5)':
     dependencies:
-      effect: 4.0.4
+      effect: 4.0.5
 
-  '@effect/sql-sqlite-node@4.0.4(effect@4.0.4)':
+  '@effect/sql-sqlite-node@4.0.5(effect@4.0.5)':
     dependencies:
-      effect: 4.0.4
+      effect: 4.0.5
 
   '@effect/tsgo-darwin-arm64@0.18.1':
     optional: true
@@ -6404,10 +6416,10 @@ snapshots:
       '@effect/tsgo-win32-arm64': 0.18.1
       '@effect/tsgo-win32-x64': 0.18.1
 
-  '@effect/vitest@4.0.4(effect@4.0.4)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))':
+  '@effect/vitest@4.0.5(effect@4.0.5)(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))':
     dependencies:
-      effect: 4.0.4
-      vitest: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+      effect: 4.0.5
+      vitest: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
 
   '@emnapi/core@1.10.0':
     dependencies:
@@ -7827,7 +7839,7 @@ snapshots:
 
   '@types/readable-stream@4.0.24':
     dependencies:
-      '@types/node': 22.20.3
+      '@types/node': 22.20.4
 
   '@types/retry@0.12.5': {}
 
@@ -7837,7 +7849,7 @@ snapshots:
 
   '@types/ws@8.18.2':
     dependencies:
-      '@types/node': 22.20.3
+      '@types/node': 22.20.4
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -7972,22 +7984,22 @@ snapshots:
       chai: 6.2.2
       tinyrainbow: 3.1.0
 
-  '@vitest/mocker@4.1.8(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))':
+  '@vitest/mocker@4.1.8(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))':
     dependencies:
       '@vitest/spy': 4.1.8
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
-      vite: 8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
+      vite: 8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
 
-  '@vitest/mocker@5.0.0(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))':
+  '@vitest/mocker@5.0.0(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))':
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       '@vitest/spy': 5.0.0
       estree-walker: 3.0.3
       magic-string: 1.2.3
     optionalDependencies:
-      vite: 8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
+      vite: 8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
 
   '@vitest/pretty-format@4.1.8':
     dependencies:
@@ -8228,16 +8240,16 @@ snapshots:
       - supports-color
       - ws
 
-  '@workflow/vitest@4.0.11(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(ws@8.22.0)(zod@4.3.6)':
+  '@workflow/vitest@4.0.11(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))(vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)))(ws@8.22.0)(zod@4.3.6)':
     dependencies:
       '@workflow/builders': 4.1.0(ws@8.22.0)
       '@workflow/core': 4.5.0(ws@8.22.0)
       '@workflow/rollup': 4.0.10(ws@8.22.0)
       '@workflow/world': 4.2.0(zod@4.3.6)
       '@workflow/world-local': 4.2.0
-      vitest: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+      vitest: 5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
     optionalDependencies:
-      vite: 8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
+      vite: 8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
     transitivePeerDependencies:
       - '@opentelemetry/api'
       - '@swc/helpers'
@@ -8823,7 +8835,7 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect@4.0.4: {}
+  effect@4.0.5: {}
 
   ejs@3.1.10:
     dependencies:
@@ -11058,7 +11070,7 @@ snapshots:
       '@azure/identity': 4.13.1
       '@azure/keyvault-keys': 4.10.2
       '@js-joda/core': 6.1.0
-      '@types/node': 22.20.3
+      '@types/node': 22.20.4
       bl: 6.1.6
       iconv-lite: 0.7.3
       js-md4: 0.3.2
@@ -11315,7 +11327,7 @@ snapshots:
       '@types/unist': 3.0.3
       vfile-message: 4.0.3
 
-  vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0):
+  vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0):
     dependencies:
       lightningcss: 1.32.0
       picomatch: 4.0.7
@@ -11324,7 +11336,7 @@ snapshots:
       tinyglobby: 0.2.17
     optionalDependencies:
       '@types/node': 22.20.3
-      esbuild: 0.28.1
+      esbuild: 0.28.2
       fsevents: 2.3.3
       jiti: 2.7.0
       tsx: 4.22.4
@@ -11344,11 +11356,12 @@ snapshots:
       jiti: 2.7.0
       tsx: 4.22.4
       yaml: 2.9.0
+    optional: true
 
-  vitest@4.1.8(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)):
+  vitest@4.1.8(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)):
     dependencies:
       '@vitest/expect': 4.1.8
-      '@vitest/mocker': 4.1.8(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+      '@vitest/mocker': 4.1.8(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       '@vitest/pretty-format': 4.1.8
       '@vitest/runner': 4.1.8
       '@vitest/snapshot': 4.1.8
@@ -11365,17 +11378,17 @@ snapshots:
       tinyexec: 1.3.0
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vite: 8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
+      vite: 8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 22.20.3
     transitivePeerDependencies:
       - msw
 
-  vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)):
+  vitest@5.0.0(@types/node@22.20.3)(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)):
     dependencies:
       '@types/chai': 5.2.3
-      '@vitest/mocker': 5.0.0(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
+      '@vitest/mocker': 5.0.0(vite@8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0))
       chai: 6.2.2
       es-module-lexer: 2.3.2
       expect-type: 1.4.0
@@ -11386,7 +11399,7 @@ snapshots:
       tinybench: 6.1.4
       tinyexec: 1.3.0
       tinyglobby: 0.2.17
-      vite: 8.0.16(@types/node@22.20.3)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
+      vite: 8.0.16(@types/node@22.20.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.22.4)(yaml@2.9.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 22.20.3
