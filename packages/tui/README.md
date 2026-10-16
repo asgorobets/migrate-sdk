@@ -27,19 +27,40 @@ If the renderer restarts after an error, it reuses the last dashboard state.
 An idle manual session stays idle; an active run resumes live updates. Source
 scans that find active runs also restore live updates and run controls.
 
-Requires Node.js 22.19.0 or newer. Install it in the migration project alongside
-the SDK:
+For local migrations, use Node.js 22.19.0 or newer and install the TUI at the
+exact version of the project's SDK. Install the SDK and compatible Effect
+packages using [Getting started](https://migrate-sdk.dev/docs/getting-started#install)
+first:
 
 ```sh
-pnpm add migrate-sdk effect
-pnpm add --save-dev @migrate-sdk/tui
+TUI_VERSION="$(node -p "require('migrate-sdk/package.json').version")"
+pnpm add --save-dev --save-exact "@migrate-sdk/tui@$TUI_VERSION"
 pnpm exec migrate-tui
 ```
 
-The published command is a small Node launcher. It runs the renderer with the
-pinned Bun runtime supplied by the package, so users do not need a global Bun
-installation. The renderer starts a local Node Migrate Server and communicates
-with it over Effect RPC. `migrate.config.ts`, `migrate-sdk`, migration
+Commit the version and lockfile with the migration project. Add a package script
+to use that project's TUI:
+
+```json
+{
+  "scripts": {
+    "tui": "migrate-tui"
+  }
+}
+```
+
+Run it with `pnpm run tui`, or `npm run tui` if the project uses npm.
+
+The compiled TUI includes its runtime and needs no separate Bun installation or
+install-time build. Native npm packages and direct executables are currently
+build candidates; the [candidate installation guide](../../docs/tui-binaries.md#install-a-compiled-candidate)
+shows how to install the tarballs locally with lifecycle scripts disabled.
+Registry releases still use the package-supplied pinned Bun runtime until native
+publication is enabled. Neither route requires a global Bun installation.
+
+The npm command uses a small Node launcher. For local operation, the renderer
+starts a Node Migrate Server and communicates with it over Effect RPC.
+`migrate.config.ts`, `migrate-sdk`, migration
 dependencies, stores, sources, destinations, and execution adapters all remain
 in Node, matching the local CLI runtime contract. See
 [`ADR 0007`](../../docs/adr/0007-server-boundary-for-local-and-remote-clients.md).
@@ -78,19 +99,21 @@ Connect to a deployed Migrate Server without loading a local migration config:
 pnpm exec migrate-tui --server https://migrate.example.com/api/rpc
 ```
 
-For a one-off remote session, use pnpm 10.2.0 or newer:
+For a one-off remote session:
 
 ```sh
 MIGRATE_SERVER_TOKEN="<your-token>" \
-  pnpm --allow-build=bun --allow-build=esbuild dlx @migrate-sdk/tui@latest \
+  pnpm dlx @migrate-sdk/tui@latest \
   --server https://migrate.example.com/api/rpc
 ```
 
-No local project, migration config, or lockfile setup is needed. pnpm caches
-the packages automatically. The approval flags allow Bun and esbuild's install
-scripts. The SDK and TUI share a compatible Effect v4 peer, which pnpm installs
-when it is missing. Use a TUI release compatible with your Migrate Server;
-replace `@latest` with a specific TUI version for a repeatable setup.
+No local project, migration config, lockfile setup, or install-script approvals
+are needed. pnpm caches the packages automatically and installs a compatible
+Effect v4 peer when it is missing. Use a TUI release compatible
+with your Migrate Server; replace `@latest` with a specific TUI version when you
+need a repeatable setup. The npm launcher needs Node. An extracted compiled
+executable can connect remotely with `./migrate-tui --server <url>` without
+Node or Bun.
 
 When `MIGRATE_SERVER_TOKEN` is set, its value is sent as an HTTP Bearer token.
 Source, destination, Migration Store,
@@ -181,9 +204,10 @@ absolute progress snapshot, and the TUI reconnects from the last token. No
 function invocation or HTTP response owns the lifetime of a durable Migration
 Run.
 
-`migrate-sdk` and `effect` remain peer dependencies: the TUI and config use the
-migration project's compatible versions. `@migrate-sdk/tui` and `migrate-sdk`
-are published with matching versions.
+`migrate-sdk` and `effect` remain peer dependencies for programmatic consumers.
+The compiled client bundles its dependencies and resolves the local Node server
+from the migration project's SDK. Local TUI and SDK versions must match exactly;
+remote compatibility follows the Migrate Protocol version.
 
 For workspace development:
 
@@ -197,19 +221,20 @@ Use an explicit project config:
 pnpm --filter @migrate-sdk/tui dev -- --config ./migrate.config.ts
 ```
 
-The npm package is the supported local distribution. A compiled renderer binary
-remains available for packaging experiments and version smoke tests:
+Build, package, and verify a compiled distribution for your host platform:
 
 ```sh
-pnpm --filter @migrate-sdk/tui build:binary
-(cd packages/tui && ./dist/binary/migrate-tui --version)
+pnpm turbo run test:binary --filter=@migrate-sdk/tui
+# Example output for macOS ARM64; use your host target directory.
+./packages/tui/dist/binary/darwin-arm64/migrate-tui --version
 ```
 
-The renderer binary is not currently a standalone Migrate TUI distribution: a
-functional release also needs the Node Migrate Server entry and the migration
-project's compatible `migrate-sdk` and `effect` packages. Cross-compilation,
-the companion server layout, signing gates, and OpenCode references are documented
-in [`docs/research/tui-binary-distribution.md`](../../docs/research/tui-binary-distribution.md).
+The resulting executable runs independently for remote connections. Local use
+needs Node and a matching project SDK with the public server bootstrap. Bun is
+the build-time compiler supplied by the workspace; consumers do not compile the
+TUI. Native packages and archives remain unsigned candidates until the release
+gates are complete. See [building and installing binaries](../../docs/tui-binaries.md)
+for targets, tarball installation, checksums, and publication status.
 
 The footer keeps primary and contextual shortcuts visible for the current
 selection. Press `Enter` to open All actions, which includes the complete action
@@ -336,15 +361,17 @@ cooperative cancellation and draining, the 72×34 compact dashboard, and the
 120×36 confirmation views. It prints the directory that contains its text
 snapshots for further inspection.
 
-The compiled-binary smoke check builds and relocates the host executable, loads
-its embedded version, and verifies it can start independently. The npm package
-smoke and local IPC test cover real migration execution:
+The compiled-binary acceptance test builds and relocates the host executable,
+installs its native npm tarballs with lifecycle scripts disabled, and runs a
+real migration through the project's Node server. Unix also exercises the
+dashboard and migration execution in a PTY. Run it through Turbo so build and
+packaging prerequisites execute in order:
 
 ```sh
-pnpm --filter @migrate-sdk/tui test:binary
+pnpm turbo run test:binary --filter=@migrate-sdk/tui
 pnpm --filter @migrate-sdk/tui test:ipc
 pnpm --filter @migrate-sdk/tui test:package
 ```
 
-The package smoke check includes a fresh `pnpm dlx` launch with explicit build
-approvals and no consumer configuration.
+The source-package smoke check includes a fresh `pnpm dlx` launch with lifecycle
+scripts disabled and no consumer configuration.

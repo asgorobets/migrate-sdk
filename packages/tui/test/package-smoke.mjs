@@ -226,7 +226,13 @@ try {
     }
   );
   const packedTui = parsePackOutput(tuiPackOutput);
-  if (packedTui.files.some((file) => file.path.startsWith("dist/binary/"))) {
+  if (
+    packedTui.files.some(
+      (file) =>
+        file.path.startsWith("dist/binary/") ||
+        file.path.startsWith("dist/distribution/")
+    )
+  ) {
     throw new Error("Packed TUI included direct-binary build artifacts");
   }
 
@@ -249,8 +255,6 @@ try {
   const dlxHelp = run(
     pnpm,
     [
-      "--allow-build=bun",
-      "--allow-build=esbuild",
       // Supply both unpublished packages; dlx still resolves their Effect peers.
       `--package=${tuiTarball}`,
       `--package=${sdkTarball}`,
@@ -265,6 +269,7 @@ try {
         ...process.env,
         npm_config_cache_dir: resolve(tempDirectory, "dlx-cache"),
         npm_config_side_effects_cache: "false",
+        npm_config_ignore_scripts: "true",
       },
     }
   );

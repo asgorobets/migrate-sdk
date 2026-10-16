@@ -53,11 +53,12 @@ node packages/tui/bin/migrate-tui.js \
   --config packages/migrate-sdk/examples/sqlite-catalog/migrate.config.ts
 ```
 
-The published command starts the package's pinned Bun renderer, which acts as a
-client of a local Node Migrate Server over Effect RPC. The Node process loads
+This workspace command starts the package's pinned Bun renderer, which acts as
+a client of a local Node Migrate Server over Effect RPC. The Node process loads
 this config and runs the SDK, SQLite adapters, sources, stores, destinations,
 and migration code. No global Bun installation is required, and the migration
-runtime matches the Node CLI. See
+runtime matches the Node CLI. A [compiled TUI candidate](../../../../docs/tui-binaries.md#install-a-compiled-candidate)
+bundles the renderer runtime; it still uses Node for this local configuration. See
 [`ADR 0007`](../../../../docs/adr/0007-server-boundary-for-local-and-remote-clients.md).
 
 The `catalog` group contains Authors, Publishers, Subjects, and Books. Books

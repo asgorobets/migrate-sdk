@@ -30,23 +30,33 @@ application. These commands select the current compatible releases. Commit your
 lockfile to keep subsequent installs repeatable. npm 7+ and pnpm with automatic
 peer installation enabled also install compatible peers when you add the SDK alone.
 
-The SDK includes the `migrate` CLI. For the optional terminal UI:
+The SDK includes the `migrate` CLI. Install the optional terminal UI at the same
+version as your project's SDK:
 
 ```sh
-pnpm add --save-dev @migrate-sdk/tui
+TUI_VERSION="$(node -p "require('migrate-sdk/package.json').version")"
+pnpm add --save-dev --save-exact "@migrate-sdk/tui@$TUI_VERSION"
+pnpm exec migrate-tui
 ```
 
-Open a one-off session against a deployed Migrate Server with pnpm 10.2.0 or newer:
+The compiled TUI needs no separate Bun installation or install-time build.
+Native packages are currently build candidates; see the
+[binary installation guide](./docs/tui-binaries.md#install-a-compiled-candidate)
+to install them locally or run an extracted executable. Registry releases still
+use the package's supplied Bun runtime until native publication is enabled.
+
+Open a one-off session against a deployed Migrate Server:
 
 ```sh
 MIGRATE_SERVER_TOKEN="<your-token>" \
-  pnpm --allow-build=bun --allow-build=esbuild dlx @migrate-sdk/tui@latest \
+  pnpm dlx @migrate-sdk/tui@latest \
   --server https://migrate.example.com/api/migrate
 ```
 
-pnpm caches the TUI automatically; no local project or lockfile setup is needed.
-The flags approve the Bun and esbuild install scripts. Use a TUI release
-compatible with your Migrate Server.
+pnpm caches the TUI automatically; no local project, lockfile setup, or build
+script approvals are needed. Use a TUI release compatible with your Migrate
+Server; pin that version for repeatable sessions. Direct compiled executables
+can connect remotely without Node or Bun. Local migrations require Node.
 
 ## Documentation
 
