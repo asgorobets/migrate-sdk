@@ -142,7 +142,7 @@ a run or rollback request, and delegates the executable plan to a Migration
 Executable.
 
 **Migration Definition Lock**:
-A durable ownership record that prevents multiple runners from executing the same migration definition concurrently.
+A durable ownership record that prevents multiple runners from executing the same migration definition concurrently when its Migration Store provides atomic exclusion. FilesSDKMigrationStore requires one authoritative writer per namespace because its locks are non-atomic; see the [Migration Store documentation](packages/files-sdk/README.md#migration-store).
 
 **Migration Spec**:
 A serializable description of a migration workflow that can be compiled into a migration definition.

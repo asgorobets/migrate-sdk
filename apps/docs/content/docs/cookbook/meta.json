@@ -6,6 +6,7 @@
     "api-to-api",
     "combine-api-sources",
     "multiple-destinations",
+    "files-sdk",
     "workflow-sdk"
   ]
 }

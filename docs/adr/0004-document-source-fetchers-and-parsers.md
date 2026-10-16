@@ -137,6 +137,10 @@ semantics that should stay explicit in the CSV source API.
   generic parser contract may return zero documents; JSON parser success returns
   exactly one document. A streaming parser contract is out of scope until there
   is a concrete large-resource use case.
+- Array-valued resources can compose with `DocumentParsers.each(parser)`, which
+  applies one parser to every resource, preserves order, and flattens its
+  document collections. Empty arrays produce zero documents. This composition
+  applies to custom Effect fetchers and Files SDK folder fetchers.
 - Parser errors describe parser-local facts; the document source wraps them
   with fetcher and resource context such as file path, URL, cursor, or resource
   fingerprint.

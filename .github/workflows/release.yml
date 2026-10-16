@@ -41,6 +41,9 @@ jobs:
       - name: Validate packages
         run: pnpm run validate-packages
 
+      - name: Smoke test packed Files SDK
+        run: pnpm --filter @migrate-sdk/files-sdk test:package
+
       - name: Smoke test packed TUI
         run: pnpm --filter @migrate-sdk/tui test:package
 
