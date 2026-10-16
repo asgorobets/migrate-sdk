@@ -2,9 +2,10 @@
 
 The binary pipeline compiles the TUI with pinned Bun and OpenTUI, bundles its
 client dependencies, and stages platform npm packages and direct-download
-archives. The existing npm publication workflow continues to ship the current
-package. Generated distributions are **unsigned candidates**, marked private to
-prevent accidental publication while release signing and aggregation are pending.
+archives. From 0.16.0, the release workflow publishes those platform packages
+before publishing the native launcher to npm. Host-only builds remain private
+candidates. Public executables are currently unsigned; npm releases use GitHub
+OIDC provenance, and GitHub release archives include SHA-256 checksums.
 
 ## Build and verify the host platform
 
@@ -37,7 +38,8 @@ pnpm turbo run test:binary --filter=@migrate-sdk/tui
 
 The acceptance test verifies checksums, relocates the executable, runs help and
 version with no Node or Bun on PATH, installs the generated npm tarballs with
-lifecycle scripts disabled, and executes a migration through a compiled client
+lifecycle scripts disabled, launches a fresh registry-backed `pnpm dlx` with
+strict dependency build checks and scripts enabled, and executes a migration through a compiled client
 and the project's Node server. Unix also exercises the full dashboard, migration
 execution, and quit through both the relocated executable and installed launcher
 in a real PTY. Windows runs the compiled RPC client test; interactive Windows
@@ -53,20 +55,25 @@ Outputs under `packages/tui/dist/`:
 | `distribution/tarballs/` | Installable npm tarballs |
 | `distribution/archives/` | Unix tar.gz and Windows zip archives |
 | `distribution/SHA256SUMS` | Checksums of the final archives and npm tarballs |
-| `distribution/distribution.json` | Included targets/version and `releaseReady: false` |
+| `distribution/distribution.json` | Included targets/version/revision, release readiness, and signing status |
 
 Each generated umbrella package references **only the targets supplied to that
-packaging run**. A host-only candidate is useful for testing; it must not become
-the multi-platform public release. All inputs must match the current package,
+packaging run**. Host-only candidates are private and have `releaseReady: false`.
+The `package:release` command requires all five tested targets, removes private
+markers, and records `releaseReady: true`. All inputs must match the current package,
 Bun, and OpenTUI versions and source revision. Packaging rejects modified bytes
 and executables whose file headers disagree with the target architecture.
 
 ## Install a compiled candidate
 
-Native distributions are currently available as local build output and CI
-artifacts. The registry's `@migrate-sdk/tui@latest` still uses the existing
-package-supplied Bun runtime. Use the candidate artifacts below to try the
-compiled distribution before native npm publication is enabled.
+For native npm releases (0.16.0 onward), install the TUI as an exact project dev
+dependency, or use `pnpm dlx @migrate-sdk/tui@<version> --server <url>`. npm/pnpm
+select the platform executable through optional dependencies. No install scripts
+or postinstall downloads are used. Releases through 0.15.x retain the Bun
+package layout and need `pnpm --config.ignore-scripts=true dlx` when strict build
+checks are enabled.
+
+The instructions below also support testing unpublished local build candidates.
 
 ### Install in a migration project
 
@@ -96,9 +103,8 @@ pnpm exec migrate-tui --config ./migrate.config.ts
 
 Keep the project's Effect dependencies aligned with the candidate SDK's
 `package.json`. Both TUI tarballs must have the same version. The explicit native
-package is needed for this preview because it has not been published to npm;
-published native distributions will select it automatically through optional
-dependencies. The install works with lifecycle scripts disabled and needs no
+package is needed for an unpublished candidate; released native distributions
+select it automatically through optional dependencies. The install works with lifecycle scripts disabled and needs no
 postinstall download or separate Bun runtime.
 
 Add a package script so each project opens the TUI recorded in its lockfile:
@@ -112,8 +118,8 @@ Add a package script so each project opens the TUI recorded in its lockfile:
 ```
 
 Use `pnpm run tui` or `npm run tui`. Local migrations still require Node
-`>=22.19.0` and the matching project SDK. Once native packages are published,
-replace the tarball installs with an exact project dependency:
+`>=22.19.0` and the matching project SDK. For a released version, replace the tarball installs with an exact
+project dependency:
 
 ```sh
 pnpm add --save-dev --save-exact "@migrate-sdk/tui@$MIGRATE_BINARY_VERSION"
@@ -159,7 +165,9 @@ of silently using the host's native library. Start with native builders;
 cross-compilation does not establish that the resulting artifact runs.
 
 The `TUI Binaries` GitHub workflow runs native jobs for macOS ARM64/x64, Linux
-glibc ARM64/x64, and Windows x64 and uploads the accepted candidates. Musl and
+glibc ARM64/x64, and Windows x64. Its aggregation job requires all five matching
+builds, stages the public npm distribution, and repeats installation and terminal
+tests against the assembled launcher. Musl and
 Windows ARM64 are defined but are not advertised as tested releases yet.
 
 ## Runtime and installation contract
@@ -180,24 +188,77 @@ disabled. The Node server retains its existing configuration-loading behavior.
 The generated npm umbrella uses the same Node command launcher for local and
 global installations. It selects an exact-version native package, verifies the
 executable, forwards termination signals, and needs no postinstall download or
-copy. The source/workspace package keeps using its current package-pinned Bun
-runtime until publication moves to the staged distribution.
+copy. The source/workspace package uses its development Bun runtime. Only the
+release job redirects Changesets to the staged native launcher. Renderer and SDK
+JavaScript peers are optional so remote CLI installation does not fetch them;
+programmatic users install the peers explicitly.
 
 For public consumption, pin the project dev dependency to the SDK version and
 keep the package script and lockfile with that project. Native platform packages
 are selected through optional dependencies; keep optional dependencies enabled.
 
-## Before public binary publication
+## Publishing
 
-Complete target execution tests, aggregate the supported targets from one version
-and commit, preserve dependency license notices, sign and verify the macOS and
-Windows artifacts, define the macOS notarization step, and rebuild checksums from
-the signed archives. Validate the distributable bytes and only then remove the
-candidate packages' private markers and publish native packages before the
-umbrella. The source npm release remains independent until these gates pass.
+The Release workflow calls the native matrix for the same commit, waits for all
+build, installation, and terminal tests, downloads the tested inputs, and runs:
 
-OpenCode patterns adapted here include explicit target enumeration, deliberate
-native asset selection, executable architecture checks, exact-version platform
-packages, and separate build/package stages. See the
-[pinned upstream study](./research/tui-binary-upstream-patterns.md) and
-[strategy](./research/tui-standalone-binary-strategy.md).
+```sh
+pnpm --filter @migrate-sdk/tui package:release
+pnpm --filter @migrate-sdk/tui publish:native
+pnpm exec changeset publish
+```
+
+The first command rejects missing targets, mixed revisions/versions, modified
+bytes, and incorrect executable architectures. The second verifies final npm
+tarball checksums and the launcher's dependency contract, publishes the five
+platform packages, verifies them in the registry, and selects the staged launcher
+through an ephemeral `publishConfig.directory` override. Changesets then
+publishes the ordinary SDK packages and the native TUI launcher. An existing
+immutable native version is reused only for the same source revision. A failed
+platform publication stops the release before the launcher is advertised.
+
+If the TUI version is already published, platform publication is skipped and
+Changesets creates the usual version PR. npm versions cannot be overwritten;
+merging the next version PR releases the native distribution under a new version.
+The TUI GitHub release receives executable archives, metadata, and checksums.
+
+### Initial npm package setup
+
+Each new platform package must exist before npm can configure its trusted
+publisher. Download the `tui-npm-release` artifact from a successful TUI Binaries
+run and inspect `distribution.json` and `SHA256SUMS`. On a maintainer machine
+with npm authentication, publish only the five platform tarballs initially:
+
+```sh
+npm login
+for target in darwin-arm64 darwin-x64 linux-arm64-glibc linux-x64-glibc windows-x64; do
+  npm publish "tarballs/migrate-sdk-tui-$target-$MIGRATE_BINARY_VERSION.tgz" --access public --ignore-scripts
+done
+```
+
+Set `MIGRATE_BINARY_VERSION` to the artifact's recorded version before running
+those commands. Do not publish the umbrella manually: Changesets owns its version
+and publishes it after the platform dependencies are available.
+
+Configure each platform package to trust GitHub repository
+`asgorobets/migrate-sdk`, workflow `release.yml`, with direct publication
+allowed. The npm website's package settings support this, or npm >=11.15.0 can
+configure it from the same authenticated machine:
+
+```sh
+for target in darwin-arm64 darwin-x64 linux-arm64-glibc linux-x64-glibc windows-x64; do
+  npm trust github "@migrate-sdk/tui-$target" --repo asgorobets/migrate-sdk --file release.yml --allow-publish --yes
+  sleep 2
+done
+```
+
+See npm's [trusted publisher setup](https://docs.npmjs.com/trusted-publishers/)
+and [trust command](https://docs.npmjs.com/cli/v11/commands/npm-trust/).
+Subsequent releases use OIDC without an npm write token. Signing and macOS
+notarization can be added to native jobs later; the current release metadata
+explicitly records `signed: false`.
+
+OpenCode patterns adapted here include explicit target enumeration, native asset
+selection, executable architecture checks, exact-version optional platform
+packages, and publishing platforms before the launcher. See the
+[pinned upstream study](./research/tui-binary-upstream-patterns.md).

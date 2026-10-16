@@ -19,7 +19,7 @@ pnpm exec migrate-tui
 
 Local SDK and TUI versions must match exactly. Node.js 22.19.0 or newer runs your configuration and migration dependencies. Keep the version and lockfile with each migration project. Add `"tui": "migrate-tui"` to `package.json` scripts to open that project's TUI with `pnpm run tui`.
 
-The compiled TUI needs no separate Bun installation or install-time build. Native npm packages and executable archives are currently build candidates; follow the [compiled candidate installation guide](https://github.com/asgorobets/migrate-sdk/blob/main/docs/tui-binaries.md#install-a-compiled-candidate) to try them. Registry releases still supply their pinned Bun runtime until native publication is enabled. Neither installation needs a global Bun executable.
+The compiled TUI needs no separate Bun installation or install-time build. From 0.16.0, npm selects an exact-version executable for macOS ARM64/x64, Linux glibc ARM64/x64, or Windows x64. Keep optional dependencies enabled. See the [binary installation guide](https://github.com/asgorobets/migrate-sdk/blob/main/docs/tui-binaries.md). Releases through 0.15.x use the supplied Bun runtime; under strict pnpm build checks, use `pnpm --config.ignore-scripts=true dlx` for those versions.
 
 By default, the local Node Migrate Server loads `migrate.config.ts` from your project. Choose another configuration or connect remotely:
 
@@ -38,7 +38,7 @@ MIGRATE_SERVER_TOKEN="<your-token>" \
   --server https://migrate.example.com/api/migrate
 ```
 
-No local project, lockfile setup, or install-script approvals are needed. pnpm caches the TUI automatically and installs a compatible Effect v4 peer when it is missing. Use a TUI release compatible with your Migrate Server; replace `@latest` with a specific TUI version when you need a repeatable setup. The npm launcher needs Node; an extracted compiled executable can connect with `./migrate-tui --server <url>` without Node or Bun.
+For native releases, no local project, lockfile setup, or install-script approvals are needed. pnpm caches the platform package automatically. Use a TUI release compatible with your Migrate Server; replace `@latest` with a specific TUI version when you need a repeatable setup. The npm launcher needs Node; an extracted compiled executable can connect with `./migrate-tui --server <url>` without Node or Bun.
 
 `--config` and `--server` are alternatives. `--otel` enables tracing for local execution only; remote telemetry belongs in the server environment. `--help` lists startup options.
 

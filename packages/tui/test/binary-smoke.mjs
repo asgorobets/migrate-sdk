@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { hostBinaryTarget } from "../bin/binary-targets.js";
 import { packageManagerCommand } from "../scripts/package-manager.mjs";
+import { testNativeDlx } from "./native-dlx.mjs";
 import { removeTemporaryDirectory } from "./remove-temporary-directory.mjs";
 
 const packageDirectory = resolve(import.meta.dirname, "..");
@@ -148,6 +149,13 @@ try {
   );
   console.log("Relocated binary starts without Node/Bun on PATH");
 
+  await testNativeDlx({
+    distribution,
+    target,
+    version: manifest.version,
+    temp,
+  });
+
   run(pnpm, ["pack", "--pack-destination", temp], { cwd: sdkDirectory });
   const sdkTarball = (await readdir(temp)).find((name) =>
     name.endsWith(".tgz")
@@ -207,7 +215,7 @@ try {
       "utf8"
     )
   );
-  assert.equal(installed.dependencies.bun, undefined);
+  assert.equal(installed.dependencies?.bun, undefined);
   assert.equal(
     installed.optionalDependencies[target.packageName],
     manifest.version

@@ -52,11 +52,11 @@ to use that project's TUI:
 Run it with `pnpm run tui`, or `npm run tui` if the project uses npm.
 
 The compiled TUI includes its runtime and needs no separate Bun installation or
-install-time build. Native npm packages and direct executables are currently
-build candidates; the [candidate installation guide](../../docs/tui-binaries.md#install-a-compiled-candidate)
-shows how to install the tarballs locally with lifecycle scripts disabled.
-Registry releases still use the package-supplied pinned Bun runtime until native
-publication is enabled. Neither route requires a global Bun installation.
+install-time build. From 0.16.0, npm selects an exact-version compiled package
+for macOS ARM64/x64, Linux glibc ARM64/x64, or Windows x64. Keep optional
+dependencies enabled. See the [binary installation guide](../../docs/tui-binaries.md).
+Releases through 0.15.x use the supplied Bun runtime; under strict pnpm build
+checks, invoke them with `pnpm --config.ignore-scripts=true dlx`.
 
 The npm command uses a small Node launcher. For local operation, the renderer
 starts a Node Migrate Server and communicates with it over Effect RPC.
@@ -65,7 +65,12 @@ dependencies, stores, sources, destinations, and execution adapters all remain
 in Node, matching the local CLI runtime contract. See
 [`ADR 0007`](../../docs/adr/0007-server-boundary-for-local-and-remote-clients.md).
 
-Programmatic consumers use the same client/server boundary:
+Programmatic consumers use the same client/server boundary. The native CLI
+does not install its JavaScript API's optional peers. To embed the exported
+components or runtime, install the matching `migrate-sdk`, `effect`, `react`,
+`@opentui/core`, `@opentui/react`, and `@tuiparts/react` peers listed in the
+package manifest:
+
 
 ```ts
 import { makeMigrationTuiRuntime } from "@migrate-sdk/tui";
@@ -108,8 +113,8 @@ MIGRATE_SERVER_TOKEN="<your-token>" \
 ```
 
 No local project, migration config, lockfile setup, or install-script approvals
-are needed. pnpm caches the packages automatically and installs a compatible
-Effect v4 peer when it is missing. Use a TUI release compatible
+are needed for native releases. pnpm caches the platform package automatically.
+Use a TUI release compatible
 with your Migrate Server; replace `@latest` with a specific TUI version when you
 need a repeatable setup. The npm launcher needs Node. An extracted compiled
 executable can connect remotely with `./migrate-tui --server <url>` without
@@ -232,8 +237,9 @@ pnpm turbo run test:binary --filter=@migrate-sdk/tui
 The resulting executable runs independently for remote connections. Local use
 needs Node and a matching project SDK with the public server bootstrap. Bun is
 the build-time compiler supplied by the workspace; consumers do not compile the
-TUI. Native packages and archives remain unsigned candidates until the release
-gates are complete. See [building and installing binaries](../../docs/tui-binaries.md)
+TUI. The release workflow aggregates all five tested targets, publishes their
+npm packages before the launcher, and attaches unsigned executable archives
+and checksums to the GitHub release. See [building and installing binaries](../../docs/tui-binaries.md)
 for targets, tarball installation, checksums, and publication status.
 
 The footer keeps primary and contextual shortcuts visible for the current

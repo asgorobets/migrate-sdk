@@ -12,7 +12,11 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
-import { binaryTargets, findBinaryTarget } from "../bin/binary-targets.js";
+import {
+  binaryTargets,
+  findBinaryTarget,
+  releaseBinaryTargets,
+} from "../bin/binary-targets.js";
 import { packageManagerCommand } from "./package-manager.mjs";
 import { verifyBinary } from "./verify-binary.mjs";
 
@@ -22,16 +26,29 @@ const manifest = JSON.parse(
 );
 const outputDirectory = resolve(packageDirectory, "dist/distribution");
 const args = process.argv.slice(2);
-if (!(args.length === 0 || (args.length === 2 && args[0] === "--target"))) {
-  throw new Error("Usage: package-binaries.mjs [--target <target-id>]");
+const release = args.length === 1 && args[0] === "--release";
+if (
+  !(
+    release ||
+    args.length === 0 ||
+    (args.length === 2 && args[0] === "--target")
+  )
+) {
+  throw new Error(
+    "Usage: package-binaries.mjs [--target <target-id> | --release]"
+  );
 }
 const buildDirectories = await readdir(
   resolve(packageDirectory, "dist/binary")
 );
-const selected =
-  args.length === 2
-    ? [findBinaryTarget(args[1])]
-    : binaryTargets.filter((item) => buildDirectories.includes(item.id));
+let selected = binaryTargets.filter((item) =>
+  buildDirectories.includes(item.id)
+);
+if (release) {
+  selected = releaseBinaryTargets;
+} else if (args.length === 2) {
+  selected = [findBinaryTarget(args[1])];
+}
 if (selected.length === 0) {
   throw new Error("Build at least one binary before packaging");
 }
@@ -183,7 +200,7 @@ try {
     );
     await json(resolve(nativeDirectory, "package.json"), {
       name: target.packageName,
-      private: true,
+      private: !release,
       version: manifest.version,
       description: `${manifest.description} (${target.id})`,
       repository: manifest.repository,
@@ -193,6 +210,7 @@ try {
       ...(target.libc === undefined ? {} : { libc: [target.libc] }),
       files: ["bin", "build.json", "README.md"],
       publishConfig: { access: "public" },
+      migrateTuiSourceRevision: sourceRevision,
     });
     packages[target.packageName] = manifest.version;
     artifacts.push(pack(nativeDirectory), archive(target, nativeDirectory));
@@ -208,12 +226,27 @@ try {
   ]);
   const stagedManifestPath = resolve(umbrella, "package.json");
   const staged = JSON.parse(await readFile(stagedManifestPath, "utf8"));
-  staged.dependencies.bun = undefined;
+  // The executable contains the renderer dependencies. Optional peers retain
+  // the JavaScript API without installing its dependency tree for CLI users.
+  staged.peerDependencies = Object.fromEntries(
+    Object.entries({
+      ...staged.peerDependencies,
+      ...staged.dependencies,
+    }).filter(([name]) => name !== "bun")
+  );
+  staged.peerDependenciesMeta = Object.fromEntries(
+    Object.keys(staged.peerDependencies).map((name) => [
+      name,
+      { optional: true },
+    ])
+  );
+  staged.dependencies = undefined;
   staged.devDependencies = undefined;
   staged.scripts = undefined;
   staged.optionalDependencies = packages;
   staged.migrateTuiBinaryDistribution = true;
-  staged.private = true;
+  staged.private = !release;
+  staged.migrateTuiSourceRevision = sourceRevision;
   await json(stagedManifestPath, staged);
   artifacts.push(pack(umbrella));
   const checksums = await Promise.all(
@@ -236,8 +269,8 @@ try {
     revision: sourceRevision,
     targets: selected.map((target) => target.id),
     packages,
-    // CI artifacts are unsigned candidates; publication needs native signing and all target gates.
-    releaseReady: false,
+    releaseReady: release,
+    signed: false,
   });
   console.log(
     `Staged ${selected.length} target(s), npm packages, archives, and SHA256SUMS in ${outputDirectory}`
