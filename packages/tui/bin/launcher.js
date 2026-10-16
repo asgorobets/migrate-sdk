@@ -3,7 +3,7 @@ import { existsSync, constants as fsConstants } from "node:fs";
 import { access, open, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, toNamespacedPath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { hostBinaryTarget } from "./binary-targets.js";
 
@@ -101,7 +101,7 @@ export const resolveBunExecutable = async () => {
   const installedExecutable = join(bunPackageDirectory, "bin", "bun.exe");
 
   if (await nativeExecutableExists(installedExecutable)) {
-    return installedExecutable;
+    return toNamespacedPath(installedExecutable);
   }
 
   const requireFromBun = createRequire(bunPackageJsonPath);
@@ -119,7 +119,8 @@ export const resolveBunExecutable = async () => {
       );
 
       if (await nativeExecutableExists(executable)) {
-        return executable;
+        // pnpm's Windows cache paths can exceed CreateProcess's legacy limit.
+        return toNamespacedPath(executable);
       }
     } catch {
       // Try the next compatible platform package.
@@ -159,7 +160,7 @@ export const resolveNativeExecutable = async ({
       `Migrate TUI native executable is missing or invalid: ${executable}`
     );
   }
-  return executable;
+  return toNamespacedPath(executable);
 };
 
 const appEntryPath = () => {

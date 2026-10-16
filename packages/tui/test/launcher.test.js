@@ -1,5 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -12,6 +19,7 @@ import {
   resolveNativeExecutable,
   tuiChildEnvironment,
 } from "../bin/launcher.js";
+import { removeTemporaryDirectory } from "./remove-temporary-directory.mjs";
 
 const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
@@ -69,6 +77,56 @@ describe("Migrate TUI Node launcher", () => {
       }
     );
   });
+
+  it("launches a renderer from an installation path longer than Windows MAX_PATH", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "migrate-launcher-path-"));
+    try {
+      const installed = join(
+        directory,
+        "nested-installation-".repeat(5),
+        "pnpm-cache-".repeat(9)
+      );
+      const runtimeDirectory = join(installed, "node_modules/bun/bin");
+      await mkdir(runtimeDirectory, { recursive: true });
+      await mkdir(join(installed, "bin"));
+      await mkdir(join(installed, "dist"));
+      await writeFile(
+        join(installed, "package.json"),
+        JSON.stringify({ type: "module", version: "0.0.0" })
+      );
+      await writeFile(
+        join(installed, "node_modules/bun/package.json"),
+        JSON.stringify({ name: "bun", version: "1.3.14" })
+      );
+      for (const file of [
+        "migrate-tui.js",
+        "launcher.js",
+        "binary-targets.js",
+      ]) {
+        await copyFile(
+          join(packageDirectory, "bin", file),
+          join(installed, "bin", file)
+        );
+      }
+      const executable = join(runtimeDirectory, "bun.exe");
+      expect(executable.length).toBeGreaterThan(260);
+      await copyFile(await resolveBunExecutable(), executable);
+      await chmod(executable, 0o755);
+      await writeFile(
+        join(installed, "dist/bin.js"),
+        'console.log("Renderer launched from a deep installation");\n'
+      );
+      expect(
+        execFileSync(
+          process.execPath,
+          [join(installed, "bin/migrate-tui.js"), "--help"],
+          { encoding: "utf8" }
+        )
+      ).toContain("Renderer launched from a deep installation");
+    } finally {
+      await removeTemporaryDirectory(directory);
+    }
+  }, 15_000);
 });
 
 describe("native Migrate TUI launcher", () => {
