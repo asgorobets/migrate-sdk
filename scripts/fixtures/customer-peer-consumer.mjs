@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { createRequire, findPackageJSON } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   MigrationDefinition,
   MigrationDefinitionRegistry,
@@ -19,18 +18,22 @@ const peerOwners = {
   "@effect/platform-node": "migrate-sdk",
   "@commercetools/platform-sdk": "@migrate-sdk/commercetools",
   "@commercetools/importapi-sdk": "@migrate-sdk/commercetools",
+  "files-sdk": "@migrate-sdk/files-sdk",
   workflow: "@migrate-sdk/workflow-sdk",
   react: "@migrate-sdk/tui",
 };
 const peerPaths = new Map();
+function resolveModule(name, parent = import.meta.url) {
+  return realpathSync(fileURLToPath(import.meta.resolve(name, parent)));
+}
 for (const [peer, owner] of Object.entries(peerOwners)) {
-  const localRequire = createRequire(require.resolve(`${owner}/package.json`));
-  const path = realpathSync(localRequire.resolve(peer));
+  const ownerUrl = pathToFileURL(require.resolve(`${owner}/package.json`));
+  const path = resolveModule(peer, ownerUrl.href);
   peerPaths.set(peer, path);
   if (process.argv[2] === "existing") {
     assert.equal(
       path,
-      realpathSync(require.resolve(peer)),
+      resolveModule(peer),
       `${owner} must use the customer's ${peer}`
     );
   }
@@ -40,24 +43,9 @@ const { Effect, FileSystem, Schema } = await import(
 );
 const checked = new Set();
 function resolvePackageManifest(parent, name) {
-  try {
-    return parent.resolve(`${name}/package.json`);
-  } catch (cause) {
-    if (cause.code !== "ERR_PACKAGE_PATH_NOT_EXPORTED") {
-      throw cause;
-    }
-  }
-  // Some packages export entry points without exposing their manifest.
-  let directory = dirname(realpathSync(parent.resolve(name)));
-  while (directory !== dirname(directory)) {
-    const path = join(directory, "package.json");
-    if (
-      existsSync(path) &&
-      JSON.parse(readFileSync(path, "utf8")).name === name
-    ) {
-      return path;
-    }
-    directory = dirname(directory);
+  const path = findPackageJSON(name, parent);
+  if (path) {
+    return realpathSync(path);
   }
   throw new Error(`Cannot find the installed manifest for ${name}`);
 }
@@ -69,10 +57,11 @@ function checkPeerResolution(parent, name) {
   checked.add(manifestPath);
   const localRequire = createRequire(manifestPath);
   const manifest = localRequire(manifestPath);
+  const manifestUrl = pathToFileURL(manifestPath).href;
   for (const [peer, path] of peerPaths) {
     if (manifest.dependencies?.[peer] || manifest.peerDependencies?.[peer]) {
       assert.equal(
-        realpathSync(localRequire.resolve(peer)),
+        resolveModule(peer, manifestUrl),
         path,
         `${name} must share the consumer's ${peer} installation`
       );
@@ -84,12 +73,12 @@ function checkPeerResolution(parent, name) {
   ]);
   for (const dependency of dependencies) {
     if (dependency.startsWith("@effect/") || peerPaths.has(dependency)) {
-      checkPeerResolution(localRequire, dependency);
+      checkPeerResolution(manifestUrl, dependency);
     }
   }
 }
 for (const name of process.argv.slice(3)) {
-  checkPeerResolution(require, name);
+  checkPeerResolution(import.meta.url, name);
 }
 
 const nodeFileSystem = await import(
@@ -165,6 +154,8 @@ for (const [Service, peer] of [
   );
 }
 await import("@migrate-sdk/workflow-sdk");
+await import("@migrate-sdk/files-sdk/source");
+await import("@migrate-sdk/files-sdk/destination");
 process.stdout.write(
   "SDK migration and adapters share customer runtime dependencies\n"
 );

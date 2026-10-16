@@ -66,3 +66,5 @@ can connect remotely without Node or Bun. Local migrations require Node.
 - [CLI](https://migrate-sdk.dev/docs/operate/cli) and [TUI](https://migrate-sdk.dev/docs/operate/tui) — select work, run migrations, and check progress locally or remotely.
 - [Cookbook](https://migrate-sdk.dev/docs/cookbook) — complete recipes for common migration tasks.
 - [Workflow SDK](https://migrate-sdk.dev/docs/cookbook/workflow-sdk) — run migrations durably beyond a request's lifetime.
+
+[Files SDK integration](packages/files-sdk/README.md) composes `DocumentSource` with file and folder Document Fetchers. `@migrate-sdk/files-sdk` also provides a Source for migrating files, Destination helpers, and an optional Migration Store with non-atomic Migration Definition Locks.

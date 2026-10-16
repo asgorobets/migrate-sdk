@@ -62,3 +62,21 @@ test("hidden example imports invalidate the compiled MDX page", async () => {
     "the recursively included API helper must be a compiler dependency"
   );
 });
+
+test("Files SDK cookbook renders the integration and advisory lock disclosure", async () => {
+  const { code, dependencies } = await compile("cookbook/files-sdk.mdx");
+  assert.ok(code.includes("Files SDK"));
+  assert.ok(code.includes("non-atomic"));
+  assert.ok(code.includes("authoritative"));
+  for (const example of [
+    "document-source.ts",
+    "object-migration.ts",
+    "sql-migration.ts",
+    "copy-rollback.ts",
+  ]) {
+    assert.ok(
+      dependencies.has(resolve("../../packages/files-sdk/examples", example)),
+      `${example} must be included from its typechecked source`
+    );
+  }
+});

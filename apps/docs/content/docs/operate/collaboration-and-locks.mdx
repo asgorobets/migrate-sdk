@@ -51,9 +51,11 @@ A Migration Definition Lock grants one run ownership of a definition. It records
 | `token` | The identity of this particular acquisition. |
 | `createdAt` | When the acquisition happened. |
 
-The token prevents an older owner from releasing a replacement owner's lock. The runtime and store validate acquired ownership when using the execution lease and finalizing a run. Locks do not have an age-based expiry field: an old timestamp by itself does not mean the run is dead.
+With an atomic store, the token prevents an older owner from releasing a replacement owner's lock. The runtime and store validate acquired ownership when using the execution lease and finalizing a run. Locks do not have an age-based expiry field: an old timestamp by itself does not mean the run is dead.
 
-Plans whose lock scopes overlap cannot execute concurrently. Independent definitions with non-overlapping scopes can. Including dependencies can enlarge that scope, so inspect the plan when an operation is blocked by another run.
+With an atomic store, plans whose lock scopes overlap cannot execute concurrently. Independent definitions with non-overlapping scopes can. Including dependencies can enlarge that scope, so inspect the plan when an operation is blocked by another run.
+
+[FilesSDKMigrationStore](/docs/cookbook/files-sdk#choose-the-migration-store) requires one authoritative writer per namespace, including run-control updates, because its locks are advisory and non-atomic. Concurrent processes can both acquire a lock or delete a replacement lock despite ownership checks. Use a transactional store for multiple writers.
 
 The lock coordinates Migrate SDK runners. It does not lock the destination API against unrelated writers or make external requests transactional. Stable destination identities and idempotent writes still matter.
 

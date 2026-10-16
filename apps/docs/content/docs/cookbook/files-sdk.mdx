@@ -1,0 +1,200 @@
+---
+title: Files SDK
+description: Select records from stored documents, migrate whole files, and compose Files SDK Destinations with a Migration Store.
+---
+
+Use `DocumentSource` when Source Items are records inside structured files.
+Use `FilesSDKSource.objects` when each complete file is a Source Item. Both
+compose with Files SDK Destination helpers and your choice of Migration Store.
+
+Requires Node.js 22.19.0+, Effect 4, and `files-sdk` 3.1.1+:
+
+```sh
+pnpm add migrate-sdk @migrate-sdk/files-sdk files-sdk effect
+```
+
+Install the optional SDK packages for your provider. The filesystem and memory
+adapters need no cloud dependencies.
+
+## Select records from a folder
+
+For JSON files shaped as `{ "products": [{ "id": "p1" }] }`, compose a Document
+Fetcher, Document Parser, and Document Selector:
+
+<include lang="ts" meta='title="document-source.ts"'>../../../../../packages/files-sdk/examples/document-source.ts</include>
+
+`texts` retrieves one listing page as UTF-8 strings. `each(parser)` applies the
+same parser to every string and combines the parsed documents in order.
+DocumentSource selects products and assigns their Source Identities and Source
+Versions. The Process Pipeline receives each product at `sourceItem.item.item`.
+Product ids must be unique across all selected files; use a composite identity
+for document-local ids. Scan lookup reads and parses selected files to resolve
+an identity.
+
+Configure the client and file selection when creating the Source:
+
+```ts
+import type { FilesSDKObjectDiscoveryOptions } from "@migrate-sdk/files-sdk/source";
+import { Files as FilesSDKClient } from "files-sdk";
+import { Files } from "files-sdk/effect";
+import { fs } from "files-sdk/fs";
+import { makeCatalogSource } from "./document-source.ts";
+
+const sourceClient = new FilesSDKClient({ adapter: fs({ root: "./source-storage" }) });
+const filesLayer = Files.layer(sourceClient);
+const selection = {
+  storageId: "legacy-catalog",
+  prefix: "input/",
+  pageSize: 20,
+  filter: { id: "json-files@v1", test: (file) => file.key.endsWith(".json") },
+} satisfies FilesSDKObjectDiscoveryOptions;
+
+const source = makeCatalogSource({
+  ...selection,
+  filesLayer,
+  maxBytes: 10 * 1024 * 1024,
+});
+```
+
+`DocumentParsers.each` also accepts arrays from custom
+`DocumentFetchers.effect(...)` fetchers. An empty or fully filtered listing
+page produces zero documents and preserves continuation.
+
+### Fetch one known document
+
+For one file, pass a single-text fetcher and a parser directly to
+`DocumentSource.make`:
+
+```ts
+import { FilesSDKDocumentFetchers } from "@migrate-sdk/files-sdk/source";
+import { Schema } from "effect";
+import { DocumentParsers } from "migrate-sdk/sources/document";
+
+const fetcher = FilesSDKDocumentFetchers.text({
+  key: "catalog.json",
+  filesLayer,
+  maxBytes: 5_000_000,
+});
+const parser = DocumentParsers.json(Schema.Struct({
+  products: Schema.Array(Schema.Struct({ id: Schema.String })),
+}));
+```
+
+Like `DocumentFetchers.fileText`, `.text` returns a UTF-8 string. JSON decoding
+belongs to the parser.
+
+### Control paging and memory
+
+`pageSize` controls file listing before filtering; DocumentSource's `batchSize`
+controls windows of selected records. The catalog example sets `batchSize` to
+100. File discovery defaults to 100 files per page and 4 concurrent metadata
+reads.
+
+`texts.maxBytes` bounds total downloaded bytes across selected files in one
+listing page, defaulting to 10 MiB. File bodies are read sequentially and
+buffered for parsing. Reduce `pageSize` or raise `maxBytes` for larger inputs.
+
+If file keys or bytes change within a partially consumed page, DocumentSource
+restarts that page. Changing storage, prefix, page size, filter id, or byte
+bound requires `migrate run <definition> --rescan`.
+
+Listings follow the provider's order and folder semantics. Folder-only
+providers need explicit tree traversal. Freeze source writes for authoritative
+orphan cleanup and keep source, destination, and state prefixes disjoint.
+
+## Migrate complete files
+
+The folder fetcher and file Source share `FilesSDKObjectDiscoveryOptions`:
+`storageId`, `prefix`, `filter`, `pageSize`, and `metadataConcurrency`. Reuse the
+selection above to treat each selected JSON file as one Source Item:
+
+```ts
+import { FilesSDKSource } from "@migrate-sdk/files-sdk/source";
+
+const fileSource = FilesSDKSource.objects(selection).provide(filesLayer);
+```
+
+Each `sourceItem.item` is a file descriptor with a key, size, content type,
+and available validators and metadata. Use this Source for asset copies, media
+imports, or file registration. The default Source Version fingerprints ETag,
+modification time, and size; `{ kind: "sha256" }` hashes the bytes instead.
+DocumentSource assigns versions to the selected records within files.
+
+## Compose a file migration
+
+This complete definition copies `input/` to `output/`, records destination
+references in a Tracking Record, and rolls back journaled uploads. It accepts
+separate source, destination, and state clients. **Reserve `output/` exclusively
+for this migration:** its Rollback Pipeline uses the owned-prefix delete policy.
+
+<include lang="ts" meta='title="object-migration.ts"'>../../../../../packages/files-sdk/examples/object-migration.ts</include>
+
+Create the definition with independently configured clients:
+
+```ts
+import { makeObjectMigration } from "./object-migration.ts";
+
+const migration = makeObjectMigration({
+  source: sourceClient,
+  destination: new FilesSDKClient({ adapter: fs({ root: "./target-storage" }) }),
+  state: new FilesSDKClient({ adapter: fs({ root: "./state-storage" }) }),
+});
+```
+
+`transferFrom` streams the file within one Process Pipeline execution. It waits
+for end-of-stream, upload acknowledgement, size and source-validator checks,
+and the requested SHA-256 verification. Failure or interruption fails the
+operation; a retry opens a fresh reader at byte zero. SHA-256 verification also
+downloads destination bytes. Transfers preserve content type and custom metadata
+from the downloaded file; use `metadata: "omit"` to omit custom metadata.
+
+`upload` and `copy` require an explicit overwrite, create, or replace policy.
+Create/replace rely on native provider predicates and fail when unsupported.
+Streaming transfers require overwrite. Destination writes and migration-state
+persistence are separate commits, so inspect journal evidence and reconcile an
+uncertain outcome before retrying or rolling back.
+
+### Use SQL-backed migration state
+
+The Source and Destination can use a SQL Migration Store independently of the
+file store. Supply your configured Effect SQL layer:
+
+<include lang="ts" meta='title="sql-migration.ts"'>../../../../../packages/files-sdk/examples/sql-migration.ts</include>
+
+## Guard copy rollback with the recorded ETag
+
+`copy` operates within one client and journals the destination's observed size
+and available ETag. Set a Migration Definition's `rollback` to
+`makeGuardedCopyRollback(client, storageId)`, using the same destination binding
+as its Process Pipeline:
+
+<include lang="ts" meta='title="copy-rollback.ts"'>../../../../../packages/files-sdk/examples/copy-rollback.ts</include>
+
+The provider checks the saved ETag as part of deletion. If the destination has
+changed, conditional deletion is unsupported, or the journal lacks an ETag,
+rollback fails and retains Migration Item State. An ETag can be absent when
+the provider omits it or the metadata read after an acknowledged copy fails.
+Reconcile that state or choose an exclusively owned-prefix policy explicitly.
+Overwrites and deletions have no automatic restore.
+
+## Choose the Migration Store
+
+**FilesSDKMigrationStore uses advisory, non-atomic Migration Definition Locks.
+Run one authoritative writer per namespace, including run-control updates.**
+Concurrent processes can both acquire a lock, overwrite state, or delete a
+replacement lock. Locks do not expire; stop the original worker before
+[explicitly unlocking](/docs/operate/collaboration-and-locks#recover-an-abandoned-lock).
+
+The required `locking: "advisory"` option documents this limitation in the IDE,
+and the store logs the disclosure when initialized. Share one store layer
+across definitions. Multiple observers can connect to one persistent server;
+use SQL for concurrent servers or distributed execution and control writers.
+
+Use a dedicated state client with fresh reads, complete listing, and whole-object
+publication. Caching, soft delete, versioning, deduplication, failover, tiering,
+and expiry can alter those semantics. Summaries and orphan cleanup scan stored
+records repeatedly, so prefer SQL for large inventories.
+
+The [package reference](https://github.com/asgorobets/migrate-sdk/tree/main/packages/files-sdk)
+covers Source Versions, mutation policies, store options, testing helpers, and
+live provider qualification.

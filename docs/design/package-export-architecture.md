@@ -200,8 +200,9 @@ compatible v4 range in `effect-peers` and an exact development catalog version.
 
 Other dependencies whose client objects or types cross a public SDK boundary
 also belong in required peers: the commercetools platform and Import API SDKs,
-Workflow SDK's `workflow`, and the adapters' `migrate-sdk` dependency. Keep each
-in development dependencies too so builds and tests do not rely on automatic
+Files SDK's `files-sdk`, Workflow SDK's `workflow`, and the adapters'
+`migrate-sdk` dependency. Keep each in development dependencies too so builds
+and tests do not rely on automatic
 peer installation. The commercetools HTTP client builder is used only by our
 examples and belongs only in development dependencies. SQL adapters accept an
 application-provided `effect/sql` client; specific SQL drivers remain development
@@ -219,13 +220,15 @@ The publishable SDK packages use one shared public version:
 ```txt
 migrate-sdk
 @migrate-sdk/commercetools
+@migrate-sdk/files-sdk
 @migrate-sdk/workflow-sdk
+@migrate-sdk/tui
 ```
 
 Changesets keeps these packages in a fixed group so a release bumps and
 publishes them together. Extension packages declare `migrate-sdk` as a
-`workspace:^` peer for local development; pnpm rewrites that to the matching
-semver peer range in packed and published package manifests.
+`workspace:>=0.1.0 <1.0.0` peer; pnpm removes the workspace prefix in packed and
+published package manifests.
 
 Release publishing is driven from the repository root:
 
@@ -234,13 +237,14 @@ pnpm run publish-packages
 ```
 
 CI runs `pnpm run validate-packages` in a read-only validation job, without npm
-publish credentials or OIDC publish permission. That job uploads package `dist`
-artifacts for the release job. The release workflow does not use an `NPM_TOKEN`;
-npm publishing must be configured through npm trusted publishing for
+publish credentials or OIDC publish permission. The release job builds the SDK
+packages and assembles the tested native TUI artifacts. Its TUI publisher calls
+Changesets to publish all changed public packages. The workflow does not use an
+`NPM_TOKEN`; npm publishing must be configured through npm trusted publishing for
 `.github/workflows/release.yml`, using GitHub Actions OIDC. The credentialed
-publish job installs dependencies with lifecycle scripts disabled, calls
-Changesets directly, and sets `NPM_CONFIG_IGNORE_SCRIPTS=true` so package
-lifecycle scripts do not run during publish. The `publish-packages` script is
+publish job installs dependencies with lifecycle scripts disabled and sets
+`NPM_CONFIG_IGNORE_SCRIPTS=true` so package lifecycle scripts do not run during
+publish. The `publish-packages` script is
 kept as the local publish operation only: `changeset publish`. Do not keep a
 repository or organization `NPM_TOKEN` secret for this workflow; a merged
 malicious workflow could read any available repo secret by name.
@@ -257,6 +261,23 @@ restored from the Turbo cache.
 Do not add a `worker` condition until the corresponding subpath is actually
 supported in worker runtimes. A source condition should not imply a runtime
 support guarantee.
+
+### First publish of a package
+
+npm requires a package to exist before a trusted publisher can be configured.
+Publish the first reviewed release with an npm maintainer account, using a
+tarball made by `pnpm pack` so workspace and catalog references become semver
+ranges. Then authorize the shared release workflow (npm 11.15+ and account 2FA):
+
+```sh
+npm trust github @migrate-sdk/files-sdk --repo=asgorobets/migrate-sdk --file=release.yml --allow-publish
+```
+
+The publisher is scoped to `asgorobets/migrate-sdk` and `release.yml`, with no
+GitHub environment name. Subsequent releases use the shared Changesets workflow.
+The read-only `files-sdk-package.yml` workflow builds, typechecks, runs tests,
+and checks packed installation on Node.js 22.19.0 and 24.
+See [npm trusted publisher setup](https://docs.npmjs.com/cli/v11/commands/npm-trust/#prerequisites).
 
 ## Split-Package Rule
 

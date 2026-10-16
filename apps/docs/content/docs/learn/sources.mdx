@@ -68,6 +68,8 @@ Migration authors normally use an adapter factory. The configured value carries 
 
 A **Document Source** composes a fetcher that retrieves resources, a parser that decodes documents, and a selector that chooses items with optional parent context. Its payload is `{ item }` or `{ parent, item }`, so processing accesses the selected value through `sourceItem.item.item`. Destination mapping remains a pipeline responsibility.
 
+When a fetcher returns an array of resources, use `DocumentParsers.each(parser)`. For example, `DocumentParsers.each(DocumentParsers.json(DocumentSchema))` applies the same JSON parser to every fetched string and combines the documents in order. This composes with array-returning `DocumentFetchers.effect(...)` fetchers and the [Files SDK folder fetcher](/docs/cookbook/files-sdk). Empty arrays produce zero documents.
+
 SQL callbacks return statements; the adapter executes them and normalizes SQL failures. SQL text does not infer a validated row type. The query must apply the requested limit and ordering compatible with its cursor. CSV manages its cursor internally, but bounded output windows do not make its file parser streaming.
 
 For a new adapter, use `Source.make` for runtime methods with their dependencies already provided. Its factory form creates fresh implementation state. Use `Source.fromLayer` for setup, services, or scoped resources; `source.provide(layer)` binds dependencies into the configured source.

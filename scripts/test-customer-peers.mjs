@@ -12,12 +12,22 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
-const packages = ["migrate-sdk", "commercetools", "workflow-sdk", "tui"];
+const { packageManager } = JSON.parse(
+  await readFile(join(root, "package.json"), "utf8")
+);
+const packages = [
+  "migrate-sdk",
+  "commercetools",
+  "files-sdk",
+  "workflow-sdk",
+  "tui",
+];
 const peerPackages = {
   effect: "migrate-sdk",
   "@effect/platform-node": "migrate-sdk",
   "@commercetools/platform-sdk": "commercetools",
   "@commercetools/importapi-sdk": "commercetools",
+  "files-sdk": "files-sdk",
   workflow: "workflow-sdk",
   react: "tui",
 };
@@ -164,6 +174,7 @@ try {
             name: "migrate-effect-consumer",
             private: true,
             type: "module",
+            packageManager,
             dependencies: { ...dependencies, ...scenario.peers },
           },
           null,
@@ -193,7 +204,12 @@ try {
         );
         run(
           process.execPath,
-          ["verify.mjs", mode, ...Object.keys(dependencies)],
+          [
+            "--experimental-import-meta-resolve",
+            "verify.mjs",
+            mode,
+            ...Object.keys(dependencies),
+          ],
           cwd
         );
       } else {

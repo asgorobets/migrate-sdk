@@ -195,6 +195,59 @@ const writeCompaniesFile = (filePath: string) =>
   });
 
 describe("DocumentSource", () => {
+  it.effect(
+    "composes an array-valued Effect fetcher with one parser per resource",
+    () =>
+      Effect.gen(function* () {
+        const pages: readonly (readonly string[])[] = [
+          [],
+          ['{"items":[{"id":"a"}]}', '{"items":[{"id":"b"}]}'],
+          ['{"items":[{"id":"c"}]}'],
+        ];
+        const source = DocumentSource.make({
+          fetcher: DocumentFetchers.effect({
+            cursorSchema: Schema.Number,
+            read: (cursor) => {
+              const index = cursor ?? 0;
+              return Effect.succeed({
+                resource: pages[index] ?? [],
+                ...(index + 1 < pages.length ? { nextCursor: index + 1 } : {}),
+              });
+            },
+          }),
+          parser: DocumentParsers.each(
+            DocumentParsers.json(
+              Schema.Struct({
+                items: Schema.Array(Schema.Struct({ id: Schema.String })),
+              })
+            )
+          ),
+          selector: { item: (document) => document.items },
+          identity: {
+            id: "effect-array-record@v1",
+            schema: SourceIdentity.key("id", Schema.String),
+            key: ({ item }) => item.id,
+          },
+          lookup: { kind: "scan" },
+          version: { kind: "content-hash" },
+        });
+        yield* useConfiguredSource(source, (runtime) =>
+          Effect.gen(function* () {
+            const empty = yield* runtime.read(null);
+            expect(empty.items).toEqual([]);
+            const first = yield* runtime.read(empty.nextCursor ?? null);
+            expect(first.items.map((item) => item.item.item.id)).toEqual([
+              "a",
+              "b",
+            ]);
+            const last = yield* runtime.read(first.nextCursor ?? null);
+            expect(last.items.map((item) => item.item.item.id)).toEqual(["c"]);
+            expect(last.nextCursor).toBeUndefined();
+          })
+        );
+      })
+  );
+
   it("includes value version contract ids in the source version contract fingerprint", () => {
     const fetcher: DocumentFetcher<string, null> = {
       cursorSchema: Schema.Null,
