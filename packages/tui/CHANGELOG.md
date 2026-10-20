@@ -1,5 +1,11 @@
 # @migrate-sdk/tui
 
+## 0.17.1
+
+### Patch Changes
+
+- bec774b: License Migrate SDK under MIT and include the license in published packages and native TUI archives.
+
 ## 0.17.0
 
 ### Patch Changes
