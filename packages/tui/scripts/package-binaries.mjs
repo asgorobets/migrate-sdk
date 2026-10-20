@@ -119,9 +119,11 @@ function archive(target, nativeDirectory) {
         }
       );
     } else {
-      run("zip", ["-q", "-r", destination, "bin", "build.json", "README.md"], {
-        cwd: nativeDirectory,
-      });
+      run(
+        "zip",
+        ["-q", "-r", destination, "bin", "build.json", "README.md", "LICENSE"],
+        { cwd: nativeDirectory }
+      );
     }
   } else {
     run("tar", [
@@ -132,6 +134,7 @@ function archive(target, nativeDirectory) {
       "bin",
       "build.json",
       "README.md",
+      "LICENSE",
     ]);
   }
   return destination;
@@ -179,6 +182,11 @@ try {
   if (!baseTarball) {
     throw new Error("Base TUI tarball was not produced");
   }
+  const license = run("tar", [
+    "-xOf",
+    resolve(temp, baseTarball),
+    "package/LICENSE",
+  ]);
   await rm(outputDirectory, { recursive: true, force: true });
   for (const directory of ["packages", "archives", "tarballs"]) {
     await mkdir(resolve(outputDirectory, directory), { recursive: true });
@@ -194,6 +202,7 @@ try {
     );
     await chmod(resolve(nativeDirectory, "bin", target.executable), 0o755);
     await json(resolve(nativeDirectory, "build.json"), metadata);
+    await writeFile(resolve(nativeDirectory, "LICENSE"), license);
     await writeFile(
       resolve(nativeDirectory, "README.md"),
       `# Migrate TUI (${target.id})\n\nNative executable for @migrate-sdk/tui@${manifest.version}.\nRemote use needs no Node or Bun. Local use requires Node >=22.19.0 and a matching project SDK.\n\nSource: https://github.com/asgorobets/migrate-sdk\n`
@@ -208,7 +217,7 @@ try {
       os: [target.platform],
       cpu: [target.arch],
       ...(target.libc === undefined ? {} : { libc: [target.libc] }),
-      files: ["bin", "build.json", "README.md"],
+      files: ["bin", "build.json", "README.md", "LICENSE"],
       publishConfig: { access: "public" },
       migrateTuiSourceRevision: sourceRevision,
     });

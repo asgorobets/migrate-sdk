@@ -68,3 +68,7 @@ can connect remotely without Node or Bun. Local migrations require Node.
 - [Workflow SDK](https://migrate-sdk.dev/docs/cookbook/workflow-sdk) — run migrations durably beyond a request's lifetime.
 
 [Files SDK integration](packages/files-sdk/README.md) composes `DocumentSource` with file and folder Document Fetchers. `@migrate-sdk/files-sdk` also provides a Source for migrating files, Destination helpers, and an optional Migration Store with non-atomic Migration Definition Locks.
+
+## License
+
+[MIT](LICENSE) © 2026 Alexei Gorobet.

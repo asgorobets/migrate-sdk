@@ -1,5 +1,6 @@
 {
   "name": "@migrate-sdk/monorepo",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "repository": {

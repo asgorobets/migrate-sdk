@@ -1,5 +1,6 @@
 {
   "name": "@migrate-sdk/tui",
+  "license": "MIT",
   "version": "0.17.0",
   "description": "Interactive terminal UI for Migrate SDK",
   "type": "module",
