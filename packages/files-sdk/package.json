@@ -1,5 +1,6 @@
 {
   "name": "@migrate-sdk/files-sdk",
+  "license": "MIT",
   "version": "0.17.0",
   "type": "module",
   "sideEffects": [],
