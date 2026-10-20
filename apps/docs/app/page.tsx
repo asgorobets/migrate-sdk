@@ -9,6 +9,7 @@ import { ThemeToggle } from "./theme-toggle";
 
 const repository = "https://github.com/asgorobets/migrate-sdk";
 const gettingStarted = "/docs/getting-started";
+const liveDemo = "https://migrate-sdk-workflow.vercel.app";
 export default function Home() {
   return (
     <div className={styles.page}>
@@ -62,8 +63,8 @@ export default function Home() {
               <a className={styles.primaryButton} href={gettingStarted}>
                 <span aria-hidden="true">&gt;</span> Get started
               </a>
-              <a className={styles.secondaryLink} href={repository}>
-                [ GitHub ↗ ]
+              <a className={styles.secondaryLink} href={liveDemo}>
+                [ Try live demo ↗ ]
               </a>
             </div>
             <InstallCommand />
