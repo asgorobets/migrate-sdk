@@ -5,9 +5,9 @@ import { Input } from "@tuiparts/react/input";
 import { type ElementRef, useEffect, useRef } from "react";
 import { migrationColors as colors } from "./migration-dashboard.tsx";
 import { Badge } from "./ui/badge.tsx";
-import { Button } from "./ui/button.tsx";
 import {
   Dialog,
+  DialogActions,
   DialogContent,
   DialogDescription,
   DialogTitle,
@@ -119,24 +119,12 @@ export const SessionActivityExportDialog = ({
           fg={error === undefined ? colors.dim : colors.danger}
           wrapMode="none"
         />
-        <box
-          style={{
-            flexDirection: "row",
-            flexShrink: 0,
-            gap: 1,
-            height: 1,
-            justifyContent: "flex-end",
-            marginTop: 1,
-          }}
-        >
-          <Button intent="neutral" label="esc Cancel" onPress={onCancel} />
-          <Button
-            disabled={saving || outputPath.trim() === ""}
-            intent="primary"
-            label={saving ? "Exporting…" : "↵ Export"}
-            onPress={onExport}
-          />
-        </box>
+        <DialogActions
+          disabled={saving || outputPath.trim() === ""}
+          label={saving ? "Exporting…" : "Export"}
+          onCancel={onCancel}
+          onConfirm={onExport}
+        />
       </DialogContent>
     </Dialog>
   );

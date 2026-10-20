@@ -2,12 +2,13 @@ import { type KeyEvent, RGBA } from "@opentui/core";
 import type { MigrationDefinitionLock } from "migrate-sdk";
 import { migrationColors as colors } from "./migration-dashboard.tsx";
 import { Badge } from "./ui/badge.tsx";
-import { Button } from "./ui/button.tsx";
 import {
   Dialog,
+  DialogActions,
   DialogContent,
   DialogDescription,
   DialogTitle,
+  useDialogNavigation,
 } from "./ui/dialog.tsx";
 
 export const BreakLockDialog = ({
@@ -33,6 +34,16 @@ export const BreakLockDialog = ({
     timeStyle: "short",
   }).format(lock.createdAt);
 
+  useDialogNavigation({
+    onConfirm,
+    onCancel,
+    onShortcut: (key) => {
+      if (key.name === "y") {
+        onKeyDown(key);
+      }
+    },
+  });
+
   return (
     <Dialog
       onOpenChange={(open) => {
@@ -49,7 +60,6 @@ export const BreakLockDialog = ({
         focusedBorderColor={colors.danger}
         height={dialogHeight}
         maxWidth={dialogWidth}
-        onKeyDown={onKeyDown}
         overflow="hidden"
         paddingLeft={compact ? 1 : 2}
         paddingRight={compact ? 1 : 2}
@@ -96,27 +106,15 @@ export const BreakLockDialog = ({
           </text>
         </box>
         <box style={{ flexGrow: 1, minHeight: 0 }} />
-        <box
-          style={{
-            flexDirection: "row-reverse",
-            flexShrink: 0,
-            gap: 1,
-            height: 1,
-          }}
-        >
-          <Button intent="warning" label="y Break lock" onPress={onConfirm} />
-          <Button intent="neutral" label="n Cancel" onPress={onCancel} />
-        </box>
-        <box
-          style={{
-            flexShrink: 0,
-            height: 1,
-            justifyContent: "flex-end",
-            width: "100%",
-          }}
-        >
-          <text fg={colors.dim}>y break lock · n/esc cancel</text>
-        </box>
+        <DialogActions
+          intent="warning"
+          label="Break lock"
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+        />
+        <text fg={colors.dim} flexShrink={0}>
+          enter/y confirm · esc/n cancel
+        </text>
       </DialogContent>
     </Dialog>
   );

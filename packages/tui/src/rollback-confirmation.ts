@@ -23,7 +23,7 @@ export const rollbackConfirmation = (
   }
 
   return {
-    buttonLabel: "y Rollback selected",
+    buttonLabel: "Rollback selected",
     paragraphs,
   };
 };

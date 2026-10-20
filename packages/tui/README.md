@@ -273,7 +273,9 @@ the Messages tab and CLI after the TUI closes.
 Runs start directly when their dependencies are ready. A group concurrency
 override controls item processing within each migration; migration definitions
 still execute in SDK plan order. If required dependencies lack completion,
-the TUI asks whether to include them or force the selected run.
+the TUI asks whether to include them or force the selected run. Use Up/Down to
+select a mode, Enter to proceed, or Esc to cancel. The recommended mode is selected
+initially. The `i`/`f` shortcuts remain available. Page Up/Down scroll the plan.
 
 Rollback offers two scope choices in one confirmation dialog. **Include
 dependencies** (`i`) is selected by default and recommended; the plan rolls back
@@ -281,7 +283,7 @@ dependent migrations first. **Selected only** (`s`) leaves those migrations
 outside the plan. If they still have tracked items, the dialog explains that
 their records will remain and references may break; confirming this choice
 authorizes forced rollback. If they have no tracked items, force is unnecessary.
-Review the updated plan and choose **Rollback selected** (`y`) to execute it
+Use Up/Down to change scope. Review the updated plan and press Enter (or `y`) to execute it
 once. Selected-entry rollback keeps dependency inclusion disabled and preserves
 the selected identities. A failed plan or status update stays in the dialog
 for retry; confirmation waits for a successfully prepared plan.
@@ -330,7 +332,11 @@ dependency. Exercise the real PTY interaction and responsive-layout path with:
 pnpm --filter @migrate-sdk/tui test:pilotty
 ```
 
-The harness verifies planned retry and rollback scopes, view transitions,
+For just the dialog checks, run `pnpm --filter @migrate-sdk/tui test:pilotty:dialogs`.
+These exercise dependency radios, previews, arrow/Enter sequences with 20ms
+between keys, Escape cancellation, rollback scope, and lock confirmation.
+
+The full harness verifies planned retry and rollback scopes, view transitions,
 cooperative cancellation and draining, the 72×34 compact dashboard, and the
 120×36 confirmation views. It prints the directory that contains its text
 snapshots for further inspection.

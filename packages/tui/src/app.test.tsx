@@ -32,6 +32,12 @@ import { act, useState } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { makeLimitedRunConfig } from "../examples/limited-run.config.ts";
 import { MigrationTuiApp as MigrationTuiAppView } from "./app.tsx";
+import {
+  Dialog,
+  DialogActions,
+  DialogContent,
+  useDialogNavigation,
+} from "./components/ui/dialog.tsx";
 import type { MigrationTuiExecutionResult } from "./execution.ts";
 import {
   type MigrationTuiRenderSessionInput,
@@ -505,6 +511,162 @@ afterAll(() => {
 describe("MigrationTuiApp", () => {
   const itWithOpenTui = process.versions.bun === undefined ? it.skip : it;
 
+  itWithOpenTui.each(["include", "force"] as const)(
+    "selects %s dependencies using arrows and confirms only on Enter",
+    async (mode) => {
+      const runtime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("dependency-preflight.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const start = vi
+        .spyOn(runtime, "start")
+        .mockRejectedValue(
+          new Error("Stopped after reviewing the execution request")
+        );
+      const setup = await createTestRenderer({ height: 24, width: 72 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Status reloaded")
+        );
+        act(() => setup.mockInput.pressArrow("down"));
+        act(() => setup.mockInput.pressKey("r"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Dependencies incomplete")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain("● i Include dependencies");
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 120));
+        });
+
+        act(() => setup.mockInput.pressArrow("down"));
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).toContain("● f Force run");
+        if (mode === "include") {
+          act(() => setup.mockInput.pressArrow("up"));
+          await act(async () => setup.renderOnce());
+          expect(setup.captureCharFrame()).toContain(
+            "● i Include dependencies"
+          );
+        }
+        expect(start).not.toHaveBeenCalled();
+        act(() => setup.mockInput.pressEnter());
+        expect(
+          await settle(setup.renderOnce, () => start.mock.calls.length === 1)
+        ).toBe(true);
+        expect(start).toHaveBeenCalledWith(
+          expect.objectContaining({
+            plan: expect.objectContaining({
+              withDependencies: mode === "include",
+              force: mode === "force",
+            }),
+          })
+        );
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "previews only the migrations included by the selected dependency mode",
+    async () => {
+      const runtime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("dependency-preflight.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const start = vi.spyOn(runtime, "start");
+      const setup = await createTestRenderer({ height: 24, width: 72 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        await settle(setup.renderOnce, () =>
+          setup.captureCharFrame().includes("Status reloaded")
+        );
+        act(() => setup.mockInput.pressArrow("down"));
+        act(() => setup.mockInput.pressKey("r"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Dependencies incomplete")
+          )
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain("1. ○ authors");
+        expect(setup.captureCharFrame()).toContain("2. ○ articles");
+        act(() => setup.mockInput.pressArrow("down"));
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).toContain("● f Force run");
+        expect(setup.captureCharFrame()).toContain("1. ○ articles");
+        expect(setup.captureCharFrame()).not.toContain("1. ○ authors");
+        expect(setup.captureCharFrame()).not.toContain(
+          "Run migrations with dependencies"
+        );
+        act(() => setup.mockInput.pressArrow("up"));
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).toContain("1. ○ authors");
+        expect(setup.captureCharFrame()).toContain("2. ○ articles");
+        expect(start).not.toHaveBeenCalled();
+        act(() => setup.mockInput.pressKey("ESCAPE"));
+        expect(
+          await settle(
+            setup.renderOnce,
+            () => !setup.captureCharFrame().includes("Dependencies incomplete")
+          )
+        ).toBe(true);
+        expect(start).not.toHaveBeenCalled();
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "guards opening Enter and activates a focused Cancel with Enter",
+    async () => {
+      const confirm = vi.fn();
+      const cancel = vi.fn();
+      const Confirmation = () => {
+        useDialogNavigation({ onConfirm: confirm, onCancel: cancel });
+        return (
+          <Dialog open>
+            <DialogContent>
+              <DialogActions
+                label="Proceed"
+                onCancel={cancel}
+                onConfirm={confirm}
+              />
+            </DialogContent>
+          </Dialog>
+        );
+      };
+      const setup = await createTestRenderer({ height: 24, width: 72 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<Confirmation />));
+      try {
+        await act(async () => setup.renderOnce());
+        act(() => setup.mockInput.pressEnter());
+        expect(confirm).not.toHaveBeenCalled();
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 120));
+        });
+        act(() => setup.mockInput.pressEnter());
+        expect(confirm).toHaveBeenCalledOnce();
+        act(() => setup.mockInput.pressKey("TAB"));
+        await act(async () => setup.renderOnce());
+        act(() => setup.mockInput.pressEnter());
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(confirm).toHaveBeenCalledOnce();
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
   itWithOpenTui(
     "keeps migrations usable while status loads and stops observing when idle",
     async () => {
@@ -756,9 +918,12 @@ describe("MigrationTuiApp", () => {
         await settle(setup.renderOnce, () =>
           setup.captureCharFrame().includes("Upgrade store")
         );
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 120));
+        });
         act(() => {
-          setup.mockInput.pressKey("u");
-          setup.mockInput.pressKey("u");
+          setup.mockInput.pressEnter();
+          setup.mockInput.pressEnter();
         });
         await settle(setup.renderOnce, () =>
           setup.captureCharFrame().includes("Upgrading")
@@ -3893,12 +4058,15 @@ describe("MigrationTuiApp", () => {
             return (
               frame.includes("Break migration lock") &&
               frame.includes("Only break this lock after confirming") &&
-              frame.includes("y break lock · n/esc cancel")
+              frame.includes("enter/y confirm · esc/n cancel")
             );
           })
         ).toBe(true);
 
-        act(() => setup.mockInput.pressKey("y"));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 120));
+        });
+        act(() => setup.mockInput.pressEnter());
         expect(
           await settle(setup.renderOnce, () => {
             const frame = setup.captureCharFrame();
@@ -4178,6 +4346,16 @@ describe("MigrationTuiApp", () => {
         expect(concurrencySettings).toContain("Rollback Pipeline concurrency");
         expect(concurrencySettings).toContain("Source scan concurrency");
         expect(concurrencySettings.match(/Unbounded/g)?.length ?? 0).toBe(2);
+
+        act(() => setup.resize(72, 24));
+        await act(async () => setup.renderOnce());
+        expect(setup.captureCharFrame()).toContain(
+          "tab move · ↑↓ value · space toggle · ↵ save · esc cancel"
+        );
+        expect(setup.captureCharFrame()).toContain("↵ Save");
+        expect(setup.captureCharFrame()).toContain("esc Cancel");
+        act(() => setup.resize(120, 30));
+        await act(async () => setup.renderOnce());
 
         await act(async () => {
           await new Promise<void>((resolve) => setTimeout(resolve, 150));
@@ -5345,7 +5523,7 @@ describe("MigrationTuiApp", () => {
             setup.captureCharFrame().includes("Confirm orphan rollback")
           )
         ).toBe(true);
-        expect(setup.captureCharFrame()).toContain("y Rollback orphans");
+        expect(setup.captureCharFrame()).toContain("↵ Rollback orphans");
         expect(prepare).toHaveBeenCalledWith(
           {
             definitionIds: [toMigrationDefinitionId("authors")],
@@ -5413,7 +5591,7 @@ describe("MigrationTuiApp", () => {
           expect(setup.captureCharFrame()).toContain(
             "f Force rollback orphans"
           );
-          expect(setup.captureCharFrame()).not.toContain("y Rollback orphans");
+          expect(setup.captureCharFrame()).not.toContain("↵ Rollback orphans");
           act(() => setup.mockInput.pressKey("y"));
           await act(async () => setup.renderOnce());
           expect(start).not.toHaveBeenCalled();
@@ -5533,7 +5711,7 @@ describe("MigrationTuiApp", () => {
             withDependencies: false,
           })
         );
-        expect(setup.captureCharFrame()).toContain("y Rollback selected");
+        expect(setup.captureCharFrame()).toContain("↵ Rollback selected");
         expect(setup.captureCharFrame()).toContain("Rollback 1 selected entry");
         const prepareCount = prepare.mock.calls.length;
         act(() => setup.mockInput.pressKey("i"));
@@ -5588,8 +5766,8 @@ describe("MigrationTuiApp", () => {
           setup.captureCharFrame().includes("Confirm rollback")
         );
         act(() => {
-          setup.mockInput.pressKey("s");
-          setup.mockInput.pressKey("y");
+          setup.mockInput.pressArrow("down");
+          setup.mockInput.pressEnter();
         });
         expect(
           await settle(setup.renderOnce, () =>
@@ -5597,7 +5775,7 @@ describe("MigrationTuiApp", () => {
           )
         ).toBe(true);
         expect(start).not.toHaveBeenCalled();
-        act(() => setup.mockInput.pressKey("n"));
+        act(() => setup.mockInput.pressKey("ESCAPE"));
         await settle(
           setup.renderOnce,
           () => !setup.captureCharFrame().includes("Confirm rollback")
@@ -5802,14 +5980,17 @@ describe("MigrationTuiApp", () => {
         expect(frame).toContain("1. ○ pages");
         expect(frame).toContain("2. ○ articles");
         expect(frame).toContain("3. ○ authors");
-        expect(frame).toContain("y Rollback selected");
+        expect(frame).toContain("↵ Rollback selected");
         expect(prepare).toHaveBeenLastCalledWith(
           expect.anything(),
           "rollback",
           { force: false, withDependencies: true }
         );
         expect(start).not.toHaveBeenCalled();
-        act(() => setup.mockInput.pressKey("y"));
+        await act(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 120));
+        });
+        act(() => setup.mockInput.pressEnter());
         expect(
           await settle(setup.renderOnce, () => start.mock.calls.length === 1)
         ).toBe(true);
@@ -5857,7 +6038,7 @@ describe("MigrationTuiApp", () => {
         await settle(setup.renderOnce, () =>
           setup.captureCharFrame().includes("Confirm rollback")
         );
-        act(() => setup.mockInput.pressKey("s"));
+        act(() => setup.mockInput.pressArrow("down"));
         expect(
           await settle(setup.renderOnce, () =>
             setup.captureCharFrame().includes("● s Selected only")
@@ -5869,7 +6050,7 @@ describe("MigrationTuiApp", () => {
         expect(frame).toContain(
           "Dependent records remain; references may break."
         );
-        expect(frame).toContain("y Rollback selected");
+        expect(frame).toContain("↵ Rollback selected");
         expect(frame).toMatch(rollbackAuthorsRowPattern);
         expect(frame).not.toContain("2. ○ articles");
         expect(prepare).toHaveBeenLastCalledWith(
@@ -5880,7 +6061,7 @@ describe("MigrationTuiApp", () => {
           "rollback",
           { force: true, withDependencies: false }
         );
-        act(() => setup.mockInput.pressKey("i"));
+        act(() => setup.mockInput.pressArrow("up"));
         expect(
           await settle(setup.renderOnce, () =>
             setup
@@ -5897,7 +6078,7 @@ describe("MigrationTuiApp", () => {
             withDependencies: true,
           }
         );
-        act(() => setup.mockInput.pressKey("s"));
+        act(() => setup.mockInput.pressArrow("down"));
         expect(
           await settle(setup.renderOnce, () =>
             setup.captureCharFrame().includes("● s Selected only")
@@ -5909,7 +6090,7 @@ describe("MigrationTuiApp", () => {
         expect(narrowFrame).toContain(
           "Dependent records remain; references may break."
         );
-        expect(narrowFrame).toContain("y Rollback selected");
+        expect(narrowFrame).toContain("↵ Rollback selected");
         expect(start).not.toHaveBeenCalled();
         act(() => setup.mockInput.pressKey("y"));
         expect(
@@ -5966,7 +6147,7 @@ describe("MigrationTuiApp", () => {
             const frame = setup.captureCharFrame();
             return (
               frame.includes("Confirm rollback") &&
-              frame.includes("i include · s selected only · y confirm")
+              frame.includes("↑↓ choose · enter confirm · esc cancel")
             );
           })
         ).toBe(true);
@@ -5974,13 +6155,13 @@ describe("MigrationTuiApp", () => {
 
         for (let index = 0; index < 20; index += 1) {
           act(() => {
-            setup.mockInput.pressArrow("down");
+            setup.mockInput.pressKey("\x1b[6~");
           });
           await act(async () => setup.renderOnce());
         }
         expect(setup.captureCharFrame()).toContain("17. ○ migration-02");
         expect(setup.captureCharFrame()).toContain(
-          "i include · s selected only · y confirm"
+          "↑↓ choose · enter confirm · esc cancel"
         );
       } finally {
         act(() => root.unmount());
@@ -6013,7 +6194,7 @@ describe("MigrationTuiApp", () => {
         act(() => setup.mockInput.pressKey("b"));
         expect(
           await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("y Rollback selected")
+            setup.captureCharFrame().includes("↵ Rollback selected")
           )
         ).toBe(true);
         act(() => setup.mockInput.pressKey("y"));
