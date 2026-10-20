@@ -86,8 +86,9 @@ built-in adapters. No new service or separate state store is required.
 
 Run and rollback dialogs use the same numbered execution-plan presentation.
 When dependencies are incomplete, the run dialog previews the server-prepared
-plan with dependencies included; accepting inclusion prepares it again before
-starting. Force still prepares only the operator's selected scope. Rollback
+plan for the selected scope. Include dependencies is selected by default; choosing
+Force switches the preview to only the operator's selected scope. Accepting either
+choice prepares it again before starting. Rollback
 buttons use fixed copy; the displayed plan communicates the affected migrations.
 The rollback dialog recommends **Include dependencies**, selected by default.
 Its alternative, **Selected only**, prepares with force only when omitted

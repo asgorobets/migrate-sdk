@@ -1,6 +1,10 @@
 /** @jsxImportSource @opentui/react */
 
+import type { KeyEvent } from "@opentui/core";
+import { useKeyboard, useRenderer } from "@opentui/react";
 import { Dialog as DialogPrimitive } from "@tuiparts/react/dialog";
+import { useEffect, useRef } from "react";
+import { Button } from "./button.tsx";
 import { tint } from "./theme.ts";
 import { useTheme } from "./use-theme.tsx";
 
@@ -99,5 +103,147 @@ export function DialogClose(props: DialogPrimitive.Close.Props) {
       paddingRight={tokens.density.paddingX}
       {...props}
     />
+  );
+}
+
+export interface DialogChoice {
+  readonly disabled?: boolean;
+  readonly value: string;
+}
+
+const nextDialogChoice = (
+  choices: readonly DialogChoice[],
+  value: string | undefined,
+  step: number
+) => {
+  const available = choices.filter((choice) => !choice.disabled);
+  const index = available.findIndex((choice) => choice.value === value);
+  return available[(index + step + available.length) % available.length]?.value;
+};
+
+/** Shared keyboard contract for confirmation and choice dialogs.
+ * Forms keep their own field navigation; text previews use Page Up/Down.
+ */
+export function useDialogNavigation({
+  enabled = true,
+  disabled = false,
+  navigationDisabled = false,
+  cancelDisabled = false,
+  choices = [],
+  value,
+  onValueChange,
+  onConfirm,
+  onCancel,
+  onShortcut,
+  resetKey,
+}: {
+  readonly navigationDisabled?: boolean;
+  readonly enabled?: boolean;
+  readonly disabled?: boolean;
+  readonly cancelDisabled?: boolean;
+  readonly choices?: readonly DialogChoice[];
+  readonly value?: string;
+  readonly onValueChange?: (value: string) => void;
+  readonly onConfirm: () => void;
+  readonly onCancel: () => void;
+  readonly onShortcut?: (key: KeyEvent) => void;
+  readonly resetKey?: string;
+}) {
+  const renderer = useRenderer();
+  const ready = useRef<string | null>(null);
+  const inputPhase = `${enabled}:${resetKey ?? ""}`;
+  useEffect(() => {
+    ready.current = null;
+    const timer = setTimeout(() => {
+      ready.current = inputPhase;
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [inputPhase]);
+
+  const cancelDialog = () => {
+    if (!cancelDisabled) {
+      onCancel();
+    }
+  };
+
+  useKeyboard((key) => {
+    if (!enabled || key.ctrl || key.meta) {
+      return;
+    }
+    const enter = key.name === "return" || key.name === "linefeed";
+    const cancel = key.name === "escape" || key.name === "n";
+    const navigate =
+      choices.length > 0 && (key.name === "up" || key.name === "down");
+    if (!(enter || cancel || navigate)) {
+      onShortcut?.(key);
+      return;
+    }
+    key.preventDefault();
+    key.stopPropagation();
+    if (cancel) {
+      cancelDialog();
+      return;
+    }
+    if (enter) {
+      if (ready.current !== inputPhase) {
+        return;
+      }
+      if (renderer.currentFocusedRenderable?.id === "dialog-cancel") {
+        cancelDialog();
+      } else if (!disabled) {
+        onConfirm();
+      }
+      return;
+    }
+    if (navigationDisabled) {
+      return;
+    }
+    const next = nextDialogChoice(choices, value, key.name === "up" ? -1 : 1);
+    if (next !== undefined) {
+      onValueChange?.(next);
+    }
+  });
+}
+
+/** Consistent primary action and Escape cancellation for dialog footers. */
+export function DialogActions({
+  label,
+  onConfirm,
+  onCancel,
+  disabled,
+  cancelDisabled,
+  intent = "primary",
+  marginTop = 1,
+}: {
+  readonly label: string;
+  readonly onConfirm: () => void;
+  readonly onCancel: () => void;
+  readonly disabled?: boolean;
+  readonly cancelDisabled?: boolean;
+  readonly intent?: "primary" | "warning";
+  readonly marginTop?: number;
+}) {
+  return (
+    <box
+      flexDirection="row-reverse"
+      flexShrink={0}
+      gap={1}
+      height={1}
+      marginTop={marginTop}
+    >
+      <Button
+        {...(disabled === undefined ? {} : { disabled })}
+        intent={intent}
+        label={`↵ ${label}`}
+        onPress={onConfirm}
+      />
+      <Button
+        id="dialog-cancel"
+        {...(cancelDisabled === undefined ? {} : { disabled: cancelDisabled })}
+        intent="neutral"
+        label="esc Cancel"
+        onPress={onCancel}
+      />
+    </box>
   );
 }

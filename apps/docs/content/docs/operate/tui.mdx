@@ -87,7 +87,7 @@ Press `e` to open **Run selected entries**. **Next items** lets you supply a per
 
 For a single definition, switch to **Source IDs** to target Source Items by their stable Source Identity. From the input, Shift+Tab focuses the selector; Left/Right switches methods, and Tab returns to the input. You can also click the tabs. The dialog remembers the chosen method when reopened.
 
-The ordinary `r` action stays unlimited. If required dependencies lack completion, the TUI asks whether to include them or force the selected run. Review that scope rather than treating the prompt as an error to dismiss.
+The ordinary `r` action stays unlimited. If required dependencies lack completion, the TUI asks whether to include them or force the selected run. Use Up/Down to select a mode, Enter to proceed, or Escape to cancel. The recommended mode is selected initially; `i` and `f` remain available as shortcuts. Page Up/Down scroll the plan.
 
 Concurrency settings apply to this session's operations. Process, rollback, and source-scan settings are separate. Blank values retain configured defaults; process and rollback also accept `unbounded`. A group override changes item concurrency inside each migration, while definitions still execute in plan order.
 
@@ -103,7 +103,7 @@ Loaded messages, including empty results, are cached by migration or group. Obse
 
 Rollback opens a confirmation with a prepared plan. **Include dependencies** (`i`) includes dependent migrations and orders their rollback first. **Selected only** (`s`) leaves them outside the plan. If those dependents still have tracked items, the dialog explains that references may break; confirming authorizes forced rollback.
 
-Choose **Rollback selected** (`y`) only after reviewing the updated plan. Selected-entry rollback keeps dependency expansion disabled and preserves the chosen identities. A failed planning request stays visible for retry and cannot be confirmed as though it succeeded.
+Use Up/Down to change scope, then press Enter (or `y`) after reviewing the updated plan. Escape cancels. Selected-entry rollback keeps dependency expansion disabled and preserves the chosen identities. A failed planning request stays visible for retry and cannot be confirmed as though it succeeded.
 
 ## Stop work or leave the screen
 

@@ -83,7 +83,7 @@ A crash or failed cleanup can leave a lock after its owner has stopped. Recovery
 3. If the owner is alive, request a stop and wait for it to finish. If it is abandoned, confirm that the worker or provider execution can no longer continue.
 4. Clear the abandoned lock, refresh status, and inspect saved item outcomes before starting a recovery run.
 
-In the TUI, `u` opens **Break migration lock** with the owner, timestamp, and token. `y` confirms; `n` or Escape cancels. The server checks the expected ownership, so a stale dialog cannot silently remove a replacement owner's lock.
+In the TUI, `u` opens **Break migration lock** with the owner, timestamp, and token. Enter (or `y`) confirms; Escape (or `n`) cancels. The server checks the expected ownership, so a stale dialog cannot silently remove a replacement owner's lock.
 
 The CLI command is immediate and has no confirmation prompt:
 

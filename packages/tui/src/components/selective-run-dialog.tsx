@@ -10,10 +10,10 @@ import type {
 import { type ElementRef, useEffect, useRef } from "react";
 import { migrationColors as colors } from "./migration-dashboard.tsx";
 import { Badge } from "./ui/badge.tsx";
-import { Button } from "./ui/button.tsx";
 import { Checkbox } from "./ui/checkbox.tsx";
 import {
   Dialog,
+  DialogActions,
   DialogContent,
   DialogDescription,
   DialogTitle,
@@ -442,27 +442,18 @@ export const SelectiveRunDialog = ({
             onCheckedChange={onUpdateChange}
           />
         )}
-        <box
-          style={{
-            flexDirection: "row-reverse",
-            flexShrink: 0,
-            gap: 1,
-            height: 1,
-            marginTop: showUpdate && compact ? 0 : 1,
-          }}
-        >
-          <Button
-            disabled={nextItems ? !validLimit : entries.length === 0}
-            intent={action === "rollback" ? "warning" : "primary"}
-            label={
-              nextItems
-                ? `↵ Run ${countLabel(limit ?? 0, "item")}`
-                : `↵ ${confirmLabel} ${countLabel(entries.length, "entry", "entries")}`
-            }
-            onPress={onConfirm}
-          />
-          <Button intent="neutral" label="esc Cancel" onPress={onCancel} />
-        </box>
+        <DialogActions
+          disabled={nextItems ? !validLimit : entries.length === 0}
+          intent={action === "rollback" ? "warning" : "primary"}
+          label={
+            nextItems
+              ? `Run ${countLabel(limit ?? 0, "item")}`
+              : `${confirmLabel} ${countLabel(entries.length, "entry", "entries")}`
+          }
+          marginTop={showUpdate && compact ? 0 : 1}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+        />
         <box
           style={{
             flexDirection: "row",

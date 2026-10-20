@@ -562,13 +562,13 @@ ACTIVE_SESSION="${LARGE_HIERARCHY_SESSION}"
   "Status reloaded" >/dev/null
 "${PILOTTY_BIN}" key -s "${LARGE_HIERARCHY_SESSION}" b >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LARGE_HIERARCHY_SESSION}" -t 5000 \
-  "y Rollback selected" >/dev/null
+  "↵ Rollback selected" >/dev/null
 "${PILOTTY_BIN}" snapshot -s "${LARGE_HIERARCHY_SESSION}" \
   --settle 150 \
   --strict \
   --format text >"${ARTIFACT_DIR}/large-rollback-hierarchy.txt"
 for _ in {1..20}; do
-  "${PILOTTY_BIN}" key -s "${LARGE_HIERARCHY_SESSION}" Down >/dev/null
+  "${PILOTTY_BIN}" key -s "${LARGE_HIERARCHY_SESSION}" PageDown >/dev/null
 done
 "${PILOTTY_BIN}" snapshot -s "${LARGE_HIERARCHY_SESSION}" \
   --settle 150 \
@@ -902,7 +902,7 @@ assert_contains \
   "rollback plan puts the selected migration after its dependent"
 assert_contains \
   "${ARTIFACT_DIR}/rollback-confirmation.txt" \
-  "y Rollback selected" \
+  "↵ Rollback selected" \
   "rollback controls remain readable"
 assert_contains \
   "${ARTIFACT_DIR}/rollback-confirmation.txt" \
@@ -1002,7 +1002,7 @@ assert_contains \
   "concurrency settings expose Source scan concurrency"
 assert_contains \
   "${ARTIFACT_DIR}/execution-settings-compact.txt" \
-  "tab move · ↑↓ value · space toggle · ^s save · esc cancel" \
+  "tab move · ↑↓ value · space toggle · ↵ save · esc cancel" \
   "compact concurrency settings retain navigation controls"
 assert_contains \
   "${ARTIFACT_DIR}/execution-settings-values.txt" \
@@ -1106,8 +1106,12 @@ assert_contains \
   "dependency decision exposes the explicit force resolution"
 assert_contains \
   "${ARTIFACT_DIR}/dependency-decision-compact.txt" \
-  "i include · f force · n/esc cancel" \
+  "↑↓ choose · enter confirm · esc cancel" \
   "compact dependency decision preserves its controls"
+assert_contains \
+  "${ARTIFACT_DIR}/dependency-decision-compact.txt" \
+  "i include · f force" \
+  "compact dependency decision preserves optional shortcuts"
 assert_contains \
   "${ARTIFACT_DIR}/dependency-after-include.txt" \
   "1 migrated" \
@@ -1138,7 +1142,7 @@ assert_contains \
   "rollback plan puts the transitive dependent first"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy.txt" \
-  "y Rollback selected" \
+  "↵ Rollback selected" \
   "large rollback plan keeps its confirmation visible"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy-scrolled.txt" \
@@ -1146,7 +1150,7 @@ assert_contains \
   "large rollback plan scrolls to its final entry"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy-scrolled.txt" \
-  "y Rollback selected" \
+  "↵ Rollback selected" \
   "large rollback plan keeps confirmation fixed while scrolling"
 assert_contains \
   "${ARTIFACT_DIR}/large-rollback-hierarchy-scrolled.txt" \
@@ -1198,7 +1202,7 @@ assert_contains \
   "lock confirmation explains the operator precondition"
 assert_contains \
   "${ARTIFACT_DIR}/break-lock-confirmation.txt" \
-  "y break lock · n/esc cancel" \
+  "enter/y confirm · esc/n cancel" \
   "lock confirmation keeps its controls visible"
 assert_contains \
   "${ARTIFACT_DIR}/lock-cleared.txt" \
