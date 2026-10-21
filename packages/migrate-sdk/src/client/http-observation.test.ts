@@ -9,6 +9,7 @@ import {
   remoteMigrateRunId as runId,
   remoteMigrateServerIdentity as serverIdentity,
 } from "../../test/fixtures/remote-server.ts";
+import type { MigrationDefinitionStatus } from "../domain/status.ts";
 import type { MigrateDashboard } from "../protocol/index.ts";
 import { MigrateServer, MigrateServerHttp } from "../server/index.ts";
 import { connectHttpMigrateServer } from "./http.ts";
@@ -642,6 +643,108 @@ describe("HTTP observation sessions", () => {
     } finally {
       await connection.dispose();
       await http.dispose();
+    }
+  });
+
+  it("reconciles missed terminal runs across replacement sessions and retries unavailable summaries", async () => {
+    const initial = { ...dashboard, activeRuns: [] };
+    const initialStatus = initial.rows[0]?.status;
+    if (initialStatus === undefined) {
+      throw new Error("Missing fixture status");
+    }
+    let status: MigrationDefinitionStatus = initialStatus;
+    const completedStatus: MigrationDefinitionStatus = {
+      ...initialStatus,
+      durable: { ...initialStatus.durable, migrated: 25 },
+      lastRun: {
+        definitionId,
+        definitionIds: [definitionId],
+        runId,
+        startedAt: new Date("2026-08-25T12:00:00Z"),
+        finishedAt: new Date("2026-08-25T12:00:06Z"),
+        runStatus: "succeeded",
+        status: "succeeded",
+      },
+    };
+    let dashboardReads = 0;
+    let summaryReads = 0;
+    const makeHttp = () =>
+      makeRemoteMigrateServerHttp(
+        MigrateServer.layer({
+          backend: {
+            ...backend,
+            getActiveRuns: Effect.succeed([]),
+            getDashboard: Effect.sync(() => {
+              dashboardReads += 1;
+              return initial;
+            }),
+            getDefinitionMetadata: () =>
+              Effect.sync(() => [
+                {
+                  definitionId,
+                  completion: status.completion,
+                  lastRun: status.lastRun,
+                  lock: status.lock,
+                },
+              ]),
+            getRunProgress: () =>
+              Effect.sync(() => {
+                summaryReads += 1;
+                // Replicated run state may be visible before its progress locator.
+                return summaryReads === 1
+                  ? undefined
+                  : {
+                      observationDefinitionId: definitionId,
+                      definitions: [status],
+                    };
+              }),
+          },
+          ...serverIdentity,
+          observationSessionDuration: "20 millis",
+          dashboardFallbackInterval: "1 hour",
+        })
+      );
+    const original = makeHttp();
+    const replacement = makeHttp();
+    const observationBodies: string[] = [];
+    const connection = await connectHttpMigrateServer({
+      fetch: async (input, init) => {
+        const request = new Request(input, init);
+        const body = await request.clone().text();
+        if (body.includes("ObserveDashboardSession")) {
+          observationBodies.push(body);
+          if (observationBodies.length > 1) {
+            status = completedStatus;
+            return replacement.handler(request);
+          }
+        }
+        return original.handler(request);
+      },
+      url: "https://migrate.example/rpc",
+    });
+    try {
+      const observed = await connection.runPromise(
+        connection.client
+          .observeDashboard({})
+          .pipe(Stream.take(4), Stream.runCollect)
+      );
+      expect(
+        observed.map(
+          (snapshot) => snapshot.dashboard.rows[0]?.status?.durable.migrated
+        )
+      ).toEqual([12, 12, 25, 25]);
+      expect(observed[1]?.dashboard.rows[0]?.status?.lastRun).toBeNull();
+      expect(observed[2]?.dashboard.rows[0]?.status?.lastRun).toEqual(
+        completedStatus.lastRun
+      );
+      expect(observationBodies[1]).toContain('"metadataAfter":');
+      expect(observationBodies[3]).toContain('"runStatus":"succeeded"');
+      expect(dashboardReads).toBe(1);
+      expect(summaryReads).toBe(2);
+    } finally {
+      await connection.dispose();
+      await original.dispose();
+      await replacement.dispose();
     }
   });
 

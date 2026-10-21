@@ -68,7 +68,11 @@ small run/definition metadata separately.
 
 Provider status is checked after thirty seconds without progress, on lifecycle
 notifications, and when the stream closes. Dashboard discovery also checks
-active run metadata every thirty seconds; neither check scans item states.
+active runs and lightweight definition metadata every thirty seconds. This also
+discovers runs that started and finished between checks. Changed terminal runs
+trigger a targeted stored-summary reconciliation; unchanged definitions do not
+rescan item states. HTTP renewals retain the last reconciled lifecycle metadata
+so a replacement server can reconcile missed completions too.
 Failed dashboard and focused-run stream readers reconnect from their last
 cursor with capped, jittered backoff.
 
@@ -78,7 +82,8 @@ inside the open response every fifteen seconds. After forty-five seconds without
 a frame, clients reconnect from their saved position. Heartbeats do not read
 stored status or open new HTTP requests.
 
-Detaching closes the reader. Idle TUIs stop their observation session.
+Detaching closes the reader. TUIs using background status observation keep their
+session open while idle so runs started by other clients are discovered.
 
 Streaming is a display optimization: Migration Item State remains authoritative.
 Initial loading, explicit refresh, and terminal reconciliation read stored

@@ -167,4 +167,48 @@ describe("client progress projection", () => {
     expect(next.dashboard.rows[0]?.status?.durable.migrated).toBe(1004);
     expect(next.observationWarning).toBeUndefined();
   });
+
+  it("carries only reconciled lifecycle metadata across renewal when completion arrives before totals", () => {
+    const projection = makeDashboardProjection();
+    const resumeToken = MigrateDashboardResumeToken.make("snapshot");
+    projection.apply({
+      dashboard: { ...dashboard, activeRuns: [] },
+      resumeToken,
+    });
+    const lastRun = {
+      definitionId,
+      definitionIds: [definitionId],
+      runId,
+      startedAt: new Date("2026-09-18T12:00:00Z"),
+      finishedAt: new Date("2026-09-18T12:00:05Z"),
+      status: "succeeded" as const,
+      runStatus: "succeeded" as const,
+    };
+    const partial = {
+      ...dashboard,
+      activeRuns: [],
+      rows: dashboard.rows.map(({ entry }) => ({ entry })),
+    };
+    const displayed = projection.apply({
+      dashboard: partial,
+      resumeToken,
+      partial: true,
+      metadata: [{ definitionId, completion: null, lastRun, lock: null }],
+    });
+    expect(displayed.dashboard.rows[0]?.status?.lastRun).toEqual(lastRun);
+    expect(projection.resume()).toEqual([]);
+    expect(projection.metadataAfter()?.[0]?.lastRun).toBeNull();
+    projection.apply({
+      dashboard: {
+        ...partial,
+        rows: dashboard.rows.map(({ entry }) => ({
+          entry,
+          status: { ...definition, lastRun },
+        })),
+      },
+      resumeToken,
+      partial: true,
+    });
+    expect(projection.metadataAfter()?.[0]?.lastRun).toEqual(lastRun);
+  });
 });

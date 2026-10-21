@@ -1647,6 +1647,109 @@ describe("Migrate Server", () => {
   );
 
   it.effect(
+    "reconciles an external run that finishes between discovery checks without rescanning idle totals",
+    () =>
+      Effect.gen(function* () {
+        let dashboardReads = 0;
+        let summaryReads = 0;
+        let activeReads = 0;
+        let status: MigrationDefinitionStatus = {
+          definitionId: articlesId,
+          discovery: "incremental",
+          durable: { migrated: 0, failed: 0, skipped: 0, needsUpdate: 0 },
+          completion: null,
+          lastRun: null,
+          lock: null,
+          warnings: [],
+        };
+        let active = false;
+        const server = yield* MigrateServer.make({
+          backend: {
+            ...makeBackend({
+              getActiveRuns: Effect.sync(() => {
+                activeReads += 1;
+                return active ? [activeRun] : [];
+              }),
+              getDashboard: Effect.sync(() => {
+                dashboardReads += 1;
+                return {
+                  activeRuns: [],
+                  groups: [],
+                  scannedSource: false,
+                  rows: [
+                    {
+                      entry: {
+                        id: articlesId,
+                        hasRollback: false,
+                        dependencies: { required: [], optional: [] },
+                      },
+                      status,
+                    },
+                  ],
+                };
+              }),
+              getRunProgress: () =>
+                Effect.sync(() => {
+                  summaryReads += 1;
+                  return runProgress([status]);
+                }),
+            }),
+            getDefinitionMetadata: () =>
+              Effect.sync(() => [
+                {
+                  definitionId: articlesId,
+                  completion: status.completion,
+                  lastRun: status.lastRun,
+                  lock: status.lock,
+                },
+              ]),
+          },
+          ...serverIdentity,
+          dashboardProjectionInterval: 0,
+        });
+        const received = yield* Queue.unbounded<MigrateDashboardSnapshot>();
+        const projection = makeDashboardProjection();
+        yield* server.observeDashboard({}).pipe(
+          Stream.map(projection.apply),
+          Stream.runForEach((snapshot) => Queue.offer(received, snapshot)),
+          Effect.forkChild
+        );
+        yield* Queue.take(received);
+        yield* Effect.gen(function* () {
+          yield* Effect.sleep("1 second");
+          active = true;
+          yield* Effect.sleep("5 seconds");
+          active = false;
+          status = {
+            ...status,
+            durable: { ...status.durable, migrated: 1 },
+            lastRun: {
+              definitionId: articlesId,
+              definitionIds: [articlesId],
+              runId,
+              startedAt: activeRun.startedAt,
+              finishedAt: new Date("2026-08-25T12:00:06Z"),
+              runStatus: "succeeded",
+              status: "succeeded",
+            },
+          };
+        }).pipe(Effect.forkChild);
+        yield* TestClock.adjust("30 seconds");
+        const updated = yield* Queue.take(received);
+        expect(updated.dashboard.rows[0]?.status?.durable.migrated).toBe(1);
+        expect(updated.dashboard.rows[0]?.status?.lastRun?.runId).toBe(runId);
+        for (let check = 0; check < 2; check += 1) {
+          yield* TestClock.adjust("30 seconds");
+          const unchanged = yield* Queue.take(received);
+          expect(unchanged.dashboard.rows[0]?.status?.durable.migrated).toBe(1);
+        }
+        expect(activeReads).toBeGreaterThanOrEqual(3);
+        expect(dashboardReads).toBe(1);
+        expect(summaryReads).toBe(1);
+      })
+  );
+
+  it.effect(
     "a replacement dashboard server resumes provider cursors without loading the dashboard",
     () =>
       Effect.gen(function* () {

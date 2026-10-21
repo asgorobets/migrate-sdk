@@ -147,9 +147,11 @@ const sessionDashboardObservation = (
     const projection = makeDashboardProjection();
     return Stream.suspend(() => {
       const resume = projection.resume();
+      const metadataAfter = projection.metadataAfter();
       return client.ObserveDashboardSession({
         ...(after === undefined ? {} : { after }),
         ...(resume === undefined ? {} : { resume }),
+        ...(metadataAfter === undefined ? {} : { metadataAfter }),
       });
     }).pipe(
       Stream.timeout("45 seconds"),

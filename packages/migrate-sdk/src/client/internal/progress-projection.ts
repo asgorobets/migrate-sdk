@@ -1,10 +1,16 @@
 import { Stream } from "effect";
-import type { MigrationRunId } from "../../domain/ids.ts";
+import type {
+  MigrationDefinitionId,
+  MigrationRunId,
+} from "../../domain/ids.ts";
 import {
   type MigrationExecutionUpdate,
   makeMigrationItemProgress,
 } from "../../domain/item-progress.ts";
-import type { MigrationDefinitionStatus } from "../../domain/status.ts";
+import type {
+  MigrationDefinitionMetadata,
+  MigrationDefinitionStatus,
+} from "../../domain/status.ts";
 import type {
   MigrateDashboardResume,
   MigrateDashboardSnapshot,
@@ -73,9 +79,37 @@ export const makeDashboardProjection = () => {
   const projection = makeExecutionProjection();
   let snapshot: MigrateDashboardSnapshot | undefined;
   let resume: MigrateDashboardResume | undefined;
+  const reconciledMetadata = new Map<
+    MigrationDefinitionId,
+    MigrationDefinitionMetadata
+  >();
   return {
     resume: () => resume,
+    metadataAfter: () =>
+      snapshot?.dashboard.rows.flatMap(({ entry }) => {
+        const status = reconciledMetadata.get(entry.id);
+        return status === undefined
+          ? []
+          : [
+              {
+                definitionId: status.definitionId,
+                completion: status.completion,
+                lastRun: status.lastRun,
+                lock: status.lock,
+              },
+            ];
+      }),
     apply: (next: MigrateDashboardSnapshot): MigrateDashboardSnapshot => {
+      if (!next.partial) {
+        reconciledMetadata.clear();
+      }
+      // Only row summaries carry authoritative totals. Metadata-only frames
+      // must not hide a missed completion when the HTTP session renews.
+      for (const { status } of next.dashboard.rows) {
+        if (status !== undefined) {
+          reconciledMetadata.set(status.definitionId, status);
+        }
+      }
       const previousStatuses = new Map(
         snapshot?.dashboard.rows.map((row) => [row.entry.id, row.status])
       );

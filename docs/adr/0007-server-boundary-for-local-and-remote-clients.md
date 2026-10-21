@@ -135,6 +135,12 @@ serverless hosts. Clients retain enough display state and a stream position to
 resume through a replacement server. Losing a connection does not stop a
 Migration Run.
 
+Dashboard discovery checks lightweight definition metadata as well as active
+runs. A run that starts and finishes between checks still triggers targeted
+terminal reconciliation. Clients retain the last reconciled lifecycle metadata
+across HTTP renewals, allowing replacement servers to detect missed completions
+without rereading unchanged item summaries.
+
 Progress snapshots improve display responsiveness without reading all stored
 item states for each update. Each worker publishes its cumulative changes;
 clients replace earlier snapshots from that worker rather than counting replayed

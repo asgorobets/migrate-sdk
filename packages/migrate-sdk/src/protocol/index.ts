@@ -708,6 +708,9 @@ export class ObserveDashboard extends makeRpc("ObserveDashboard", {
   payload: {
     after: Schema.optional(MigrateDashboardResumeToken),
     resume: Schema.optionalKey(MigrateDashboardResume),
+    metadataAfter: Schema.optionalKey(
+      Schema.Array(MigrationDefinitionMetadata)
+    ),
   },
   stream: true,
   success: MigrateDashboardSnapshot,
@@ -720,6 +723,9 @@ export class ObserveDashboardSession extends makeRpc(
     payload: {
       after: Schema.optional(MigrateDashboardResumeToken),
       resume: Schema.optionalKey(MigrateDashboardResume),
+      metadataAfter: Schema.optionalKey(
+        Schema.Array(MigrationDefinitionMetadata)
+      ),
     },
     stream: true,
     success: MigrateDashboardFrame,
