@@ -6,7 +6,7 @@ provides status, item counts, messages, dependency-aware execution plans, and
 contextual actions for every registered migration.
 
 The migration list opens after connecting, without waiting for durable status.
-Status loads once in the background with a **Loading status…** indicator and a
+Status loads in the background with a **Loading status…** indicator and a
 session activity entry. Navigation and operations remain available while it
 loads. Unloaded counts are shown as **Not loaded**, not zero.
 
@@ -17,14 +17,16 @@ pnpm exec migrate-tui --status manual
 pnpm exec migrate-tui --server https://migrate.example.com/api/rpc --status manual
 ```
 
-The default is `--status background`. Both modes retain the last loaded idle
-status until **R** requests another read. When a status read finds an active run,
+The default is `--status background`. It keeps observing the dashboard while idle,
+so runs started by other clients appear automatically. **R** reloads status and
+resumes observation from that snapshot. In manual mode, idle status stays unchanged
+until **R** requests another read. When a manual status read finds an active run,
 or you start a run from the TUI, live dashboard updates continue until no runs
-remain active. Runs started elsewhere while the dashboard is idle appear after
-**R**. Status failures leave the list usable and can be retried with **R**.
+remain active. Status failures leave the list usable and can be retried with **R**.
 
 If the renderer restarts after an error, it reuses the last dashboard state.
-An idle manual session stays idle; an active run resumes live updates. Source
+Background sessions resume observation, including while idle. An idle manual
+session stays idle; an active run resumes live updates. Source
 scans that find active runs also restore live updates and run controls.
 
 Install it in the migration project alongside the SDK:
@@ -221,8 +223,9 @@ are cached per migration or group for the session; navigation does not reload
 them. Observed changes to run history or durable item counts mark affected
 caches stale, including their groups. Press `m` again to reload a stale result
 or retry a failed read. An unchanged status refresh keeps the cache. Source
-scans and lock heartbeats do not invalidate it. Changes made by other clients
-while this TUI is idle are discovered on `R`, just like status changes.
+scans and lock heartbeats do not invalidate it. In background mode, observed
+changes from other clients also mark affected caches stale while the TUI is idle.
+In manual mode, idle changes are discovered on `R`, just like status changes.
 
 The Messages tab displays a bounded list with the current message highlighted;
 use the arrow keys to move through it and `Enter` to open the complete message
