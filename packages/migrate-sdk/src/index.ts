@@ -332,7 +332,7 @@ export type {
   MigrationExecutableInlineRunStartError,
   MigrationExecutableObservationOptions,
   MigrationExecutableObservationResult,
-  MigrationExecutableProgressCheckpoint,
+  MigrationExecutableObservationEvent,
   MigrationExecutableRollbackError,
   MigrationExecutableRollbackStartError,
   MigrationExecutableRunError,
@@ -380,3 +380,11 @@ export type {
 export { MigrationProgress } from "./services/migration-progress.ts";
 export { RollbackProgress } from "./services/rollback-progress.ts";
 export { Tracking } from "./services/tracking.ts";
+
+export {
+  MigrationExecutionUpdate,
+  MigrationItemProgress as MigrationItemProgressUpdate,
+  makeMigrationItemProgress,
+} from "./domain/item-progress.ts";
+export type { MigrationItemStateDelta } from "./domain/item-progress.ts";
+export { MigrationItemProgress } from "./services/migration-item-progress.ts";

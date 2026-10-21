@@ -83,9 +83,11 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
   const snapshot = ({
     dashboard,
     resumeToken,
+    observationWarning,
   }: MigrateDashboardSnapshot): MigrationTuiSnapshot => ({
     ...sourceScanSnapshot(dashboard),
     resumeToken,
+    ...(observationWarning === undefined ? {} : { observationWarning }),
   });
 
   const runCommand = <Value, CommandError>(
@@ -128,7 +130,10 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
 
   const consumeObservation = async <ObservationError>(
     observationConnection: MigrateConnection,
-    stream: Stream.Stream<MigrateObservationEvent, ObservationError>,
+    stream: Stream.Stream<
+      Exclude<MigrateObservationEvent, { readonly kind: "execution-progress" }>,
+      ObservationError
+    >,
     runId: MigrationRunId,
     options?: MigrationTuiExecuteOptions,
     signal?: AbortSignal

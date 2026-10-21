@@ -668,7 +668,7 @@ describe("MigrationTuiApp", () => {
   );
 
   itWithOpenTui(
-    "keeps migrations usable while status loads and stops observing when idle",
+    "keeps migrations usable while status loads and keeps observing when idle",
     async () => {
       const base = await makeInProcessMigrationTuiRuntime({
         configPath: serverFixturePath("migrate.config.ts"),
@@ -717,12 +717,100 @@ describe("MigrationTuiApp", () => {
         });
         await act(async () => setup.renderOnce());
         expect(setup.captureCharFrame()).toContain("Preparing");
-        expect(observationSignal?.aborted).toBe(true);
+        expect(observationSignal?.aborted).toBe(false);
         expect(observeDashboard).toHaveBeenCalledOnce();
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
       }
+    }
+  );
+
+  itWithOpenTui(
+    "discovers external runs after startup and completed runs while idle",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const idle = await baseRuntime.refresh();
+      const running = withActiveAuthorsRun(idle);
+      let observer: MigrationTuiDashboardObservationOptions | undefined;
+      const observeDashboard = vi.fn<MigrationTuiRuntime["observeDashboard"]>(
+        async (options) => {
+          observer = options;
+          options.onSnapshot(idle);
+          await new Promise<void>((resolve) => {
+            if (options.signal?.aborted) {
+              resolve();
+            } else {
+              options.signal?.addEventListener("abort", () => resolve(), {
+                once: true,
+              });
+            }
+          });
+        }
+      );
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        observeDashboard,
+        observeRun: () =>
+          new Promise<MigrationTuiExecutionResult>(() => undefined),
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+      const onDashboardStateChange = vi.fn();
+      const publish = (snapshot: MigrationTuiSnapshot) => {
+        if (!observer?.signal?.aborted) {
+          observer?.onSnapshot(snapshot);
+        }
+      };
+
+      act(() =>
+        root.render(
+          <MigrationTuiAppView
+            lifecycle={{
+              executionSettled: () => false,
+              isExitRequested: () => false,
+              requestExit: runtime.detachForExit,
+            }}
+            onDashboardStateChange={onDashboardStateChange}
+            runtime={runtime}
+          />
+        )
+      );
+      try {
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Status reloaded")
+          )
+        ).toBe(true);
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          act(() => publish(running));
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("v View run")
+            )
+          ).toBe(true);
+          act(() => publish(idle));
+          expect(
+            await settle(
+              setup.renderOnce,
+              () => !setup.captureCharFrame().includes("v View run")
+            )
+          ).toBe(true);
+        }
+        expect(observeDashboard).toHaveBeenCalledOnce();
+        expect(observer?.signal?.aborted).toBe(false);
+        expect(onDashboardStateChange.mock.lastCall?.[0]).toMatchObject({
+          activeRuns: [],
+          observing: true,
+        });
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+      expect(observer?.signal?.aborted).toBe(true);
     }
   );
 
@@ -1342,7 +1430,7 @@ describe("MigrationTuiApp", () => {
             () => !setup.captureCharFrame().includes("v View run")
           )
         ).toBe(true);
-        expect(signal?.aborted).toBe(true);
+        expect(signal?.aborted).toBe(!loadStatusOnStartup);
         expect(observeDashboard).toHaveBeenCalledTimes(initialCalls + 1);
       } finally {
         act(() => root.unmount());
@@ -1351,9 +1439,9 @@ describe("MigrationTuiApp", () => {
     }
   );
 
-  itWithOpenTui(
-    "applies a manual durable refresh without restarting idle observation",
-    async () => {
+  itWithOpenTui.each([true, false])(
+    "applies a durable refresh and observes idle background sessions (background: %s)",
+    async (loadStatusOnStartup) => {
       const baseRuntime = await makeInProcessMigrationTuiRuntime({
         configPath: serverFixturePath("migrate.config.ts"),
         cwd: new URL("..", import.meta.url).pathname,
@@ -1409,14 +1497,26 @@ describe("MigrationTuiApp", () => {
       const setup = await createTestRenderer({ height: 30, width: 120 });
       const root = createRoot(setup.renderer);
 
-      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      act(() =>
+        root.render(
+          <MigrationTuiApp
+            loadStatusOnStartup={loadStatusOnStartup}
+            runtime={runtime}
+          />
+        )
+      );
 
       try {
-        expect(
-          await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("1 migrated")
-          )
-        ).toBe(true);
+        if (loadStatusOnStartup) {
+          expect(
+            await settle(setup.renderOnce, () =>
+              setup.captureCharFrame().includes("1 migrated")
+            )
+          ).toBe(true);
+        } else {
+          await act(async () => setup.renderOnce());
+          expect(observeDashboard).not.toHaveBeenCalled();
+        }
 
         act(() => setup.mockInput.pressKey("r", { shift: true }));
 
@@ -1425,11 +1525,22 @@ describe("MigrationTuiApp", () => {
             setup.renderOnce,
             () =>
               setup.captureCharFrame().includes("37 migrated") &&
-              observeDashboard.mock.calls.length === 1
+              observeDashboard.mock.calls.length ===
+                (loadStatusOnStartup ? 2 : 0)
           )
         ).toBe(true);
         expect(refresh).toHaveBeenCalledOnce();
-        expect(observeDashboard.mock.calls[0]?.[0].signal?.aborted).toBe(true);
+        if (loadStatusOnStartup) {
+          expect(observeDashboard.mock.calls[0]?.[0].signal?.aborted).toBe(
+            true
+          );
+          expect(observeDashboard.mock.calls[1]?.[0]).toMatchObject({
+            after: fresh.resumeToken,
+          });
+          expect(observeDashboard.mock.calls[1]?.[0].signal?.aborted).toBe(
+            false
+          );
+        }
       } finally {
         act(() => root.unmount());
         setup.renderer.destroy();
@@ -4017,8 +4128,8 @@ describe("MigrationTuiApp", () => {
           )
         ).toBe(true);
         expect(observeRun).toHaveBeenCalledWith(runId, expect.any(Object));
-        expect(refresh).toHaveBeenCalledTimes(2);
-        expect(dashboardObservationCalls).toBe(1);
+        expect(refresh).toHaveBeenCalledTimes(3);
+        expect(dashboardObservationCalls).toBe(2);
         expect(setup.captureCharFrame()).not.toContain("v View run");
       } finally {
         act(() => root.unmount());

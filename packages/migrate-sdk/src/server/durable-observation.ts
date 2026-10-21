@@ -10,10 +10,12 @@ export const isTerminalRunState = (state: MigrationRunState): boolean =>
     state.status === "succeeded");
 
 export const waitForDurableRunState = <Error, Requirements>({
+  maxPollIntervalMs,
   pollIntervalMs,
   readRunState,
   runId,
 }: {
+  readonly maxPollIntervalMs?: number;
   readonly pollIntervalMs: number;
   readonly readRunState: Effect.Effect<
     MigrationRunState | null,
@@ -23,6 +25,11 @@ export const waitForDurableRunState = <Error, Requirements>({
   readonly runId: MigrationRunId;
 }): Effect.Effect<MigrationRunState, Error, Requirements> =>
   Effect.gen(function* () {
+    let delay = pollIntervalMs;
+    const maximumDelay = Math.max(
+      pollIntervalMs,
+      maxPollIntervalMs ?? pollIntervalMs
+    );
     while (true) {
       const state = yield* readRunState;
 
@@ -30,6 +37,7 @@ export const waitForDurableRunState = <Error, Requirements>({
         return state;
       }
 
-      yield* Effect.sleep(pollIntervalMs);
+      yield* Effect.sleep(delay);
+      delay = Math.min(delay * 2, maximumDelay);
     }
   });

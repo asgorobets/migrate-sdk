@@ -20,6 +20,8 @@ const environmentLabel =
     : `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}/`;
 
 export const migrateServerLayer = RegistryMigrateServer.layer({
+  // Renew before the HTTP route's 60-second maxDuration.
+  observationSessionDuration: "50 seconds",
   environment: {
     id: process.env.VERCEL_ENV ?? "local",
     label: environmentLabel,

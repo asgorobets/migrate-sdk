@@ -352,7 +352,7 @@ describe("remote TUI runtime", () => {
     const http = makeRemoteMigrateServerHttp(
       MigrateServer.layer({
         backend: observationBackend,
-        observationLeaseDuration: "20 seconds",
+        observationSessionDuration: "20 seconds",
         ...serverIdentity,
       })
     );

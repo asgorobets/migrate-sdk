@@ -18,7 +18,7 @@ export interface RegistryMigrateServerLayerOptions
   readonly dashboardFallbackInterval?: Duration.Input;
   readonly dashboardProjectionInterval?: Duration.Input;
   readonly environment: MigrateEnvironmentInfo;
-  readonly observationLeaseDuration?: Duration.Input;
+  readonly observationSessionDuration?: Duration.Input;
   readonly registry: MigrationDefinitionRegistry<
     readonly AnySelfContainedMigrationDefinition[]
   >;
@@ -48,6 +48,9 @@ const layer = (
         ...(options.terminalPollIntervalMs === undefined
           ? {}
           : { terminalPollIntervalMs: options.terminalPollIntervalMs }),
+        ...(options.terminalPollMaxIntervalMs === undefined
+          ? {}
+          : { terminalPollMaxIntervalMs: options.terminalPollMaxIntervalMs }),
       });
       const registryId = Option.getOrUndefined(options.registry.id());
 
@@ -57,7 +60,7 @@ const layer = (
         dashboardProjectionInterval: options.dashboardProjectionInterval,
         environment: options.environment,
         sqlStore: options.sqlStore,
-        observationLeaseDuration: options.observationLeaseDuration,
+        observationSessionDuration: options.observationSessionDuration,
         ...(registryId === undefined ? {} : { registryId }),
       });
     })

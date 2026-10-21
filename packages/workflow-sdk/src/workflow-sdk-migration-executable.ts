@@ -1,4 +1,4 @@
-import { Effect, Exit, Filter, Layer, Schema, Stream } from "effect";
+import { Effect, Exit, Layer, Queue, Schema, Stream } from "effect";
 import {
   type ExecutionStartResult,
   type MigrationDefinitionExecutableRollbackPlan,
@@ -8,7 +8,6 @@ import {
   MigrationExecutable,
   type MigrationExecutableObservationOptions,
   type MigrationExecutableObservationResult,
-  type MigrationProgressCounts,
   type MigrationRunId,
   MigrationRunId as MigrationRunIdSchema,
   MigrationRunSummary,
@@ -33,7 +32,7 @@ import type {
   WorkflowSdkMigrationRunEnvelope,
 } from "./migration-envelope.ts";
 import {
-  WorkflowSdkMigrationProgressCheckpoint,
+  WorkflowSdkMigrationObservationEvent,
   workflowSdkMigrationProgressStreamNamespace,
 } from "./migration-progress.ts";
 import {
@@ -89,27 +88,13 @@ export class WorkflowSdkMigrationExecutableObservationError extends Schema.Tagge
   }
 ) {}
 
-const toMigrationProgressCounts = (
-  counts: WorkflowSdkMigrationProgressCheckpoint["counts"]
-): MigrationProgressCounts => ({
-  failed: counts.failed,
-  migrated: counts.migrated,
-  needsUpdate: counts.needsUpdate,
-  ...(counts.orphaned === undefined ? {} : { orphaned: counts.orphaned }),
-  ...(counts.rollbackFailed === undefined
-    ? {}
-    : { rollbackFailed: counts.rollbackFailed }),
-  ...(counts.rolledBack === undefined ? {} : { rolledBack: counts.rolledBack }),
-  skipped: counts.skipped,
-  unchanged: counts.unchanged,
-});
-
 const observeWorkflowProgress = (
   run: WorkflowSdkRun,
   options: MigrationExecutableObservationOptions,
   observationError: (
     cause: unknown
-  ) => WorkflowSdkMigrationExecutableObservationError
+  ) => WorkflowSdkMigrationExecutableObservationError,
+  activity: (kind: "progress" | "state-changed") => Effect.Effect<void>
 ) =>
   Effect.tryPromise({
     try: async () => {
@@ -118,45 +103,63 @@ const observeWorkflowProgress = (
       });
       const tailIndex = await probe.getTailIndex();
 
-      return tailIndex < 0
-        ? run.getReadable<unknown>({
-            namespace: workflowSdkMigrationProgressStreamNamespace,
-          })
-        : run.getReadable<unknown>({
-            namespace: workflowSdkMigrationProgressStreamNamespace,
-            startIndex: tailIndex,
-          });
+      const after = options.after === undefined ? -1 : Number(options.after);
+      if (!Number.isSafeInteger(after) || after < -1) {
+        throw new Error("Invalid Workflow stream position");
+      }
+      return {
+        tailIndex,
+        startIndex: after + 1,
+        readable: run.getReadable<unknown>({
+          namespace: workflowSdkMigrationProgressStreamNamespace,
+          startIndex: after + 1,
+        }),
+      };
     },
     catch: observationError,
   }).pipe(
-    Effect.flatMap((readable) =>
-      Stream.fromReadableStream({
+    Effect.flatMap(({ readable, tailIndex, startIndex }) => {
+      let index = startIndex;
+      return Stream.fromReadableStream({
         evaluate: () => readable,
         onError: observationError,
       }).pipe(
-        Stream.filterMap(
-          Filter.fromPredicateOption(
-            Schema.decodeUnknownOption(WorkflowSdkMigrationProgressCheckpoint)
-          )
-        ),
-        Stream.runForEach(
-          (checkpoint) =>
-            options.onProgressCheckpoint?.({
-              counts: toMigrationProgressCounts(checkpoint.counts),
-              definitionId: toMigrationDefinitionId(checkpoint.definitionId),
-              kind: checkpoint.kind,
-              runId: toMigrationRunId(checkpoint.runId),
-            }) ?? Effect.void
+        Stream.runForEach((chunk) =>
+          Effect.gen(function* () {
+            const cursor = String(index++);
+            const event = yield* Schema.decodeUnknownEffect(
+              WorkflowSdkMigrationObservationEvent
+            )(chunk).pipe(Effect.mapError(observationError));
+            const common = {
+              runId: toMigrationRunId(event.runId),
+              cursor,
+              replaying: Number(cursor) < tailIndex,
+            };
+            const notification =
+              event.kind === "state-changed"
+                ? {
+                    ...common,
+                    kind: "state-changed" as const,
+                    definitionIds: event.definitionIds.map(
+                      toMigrationDefinitionId
+                    ),
+                  }
+                : { ...common, kind: "progress" as const, progress: event };
+            yield* options.onEvent?.(notification) ?? Effect.void;
+            yield* activity(notification.kind);
+          })
         )
-      )
-    )
+      );
+    })
   );
 
 const observeWorkflowTerminal = (
   run: WorkflowSdkRun,
   observationError: (
     cause: unknown
-  ) => WorkflowSdkMigrationExecutableObservationError
+  ) => WorkflowSdkMigrationExecutableObservationError,
+  progressEnded?: Effect.Effect<void>,
+  activity?: Effect.Effect<"progress" | "state-changed">
 ): Effect.Effect<
   MigrationExecutableObservationResult,
   WorkflowSdkMigrationExecutableObservationError
@@ -185,10 +188,31 @@ const observeWorkflowTerminal = (
 
   return Effect.gen(function* () {
     let status = yield* readStatus;
+    let followingProgress = progressEnded !== undefined;
+    let delayMs = followingProgress ? 30_000 : 1000;
 
     while (status === "pending" || status === "running") {
-      yield* Effect.sleep("1 second");
-      status = yield* readStatus;
+      const signal = yield* Effect.raceFirst(
+        Effect.raceFirst(
+          Effect.sleep(delayMs).pipe(Effect.as("timeout" as const)),
+          activity ?? Effect.never
+        ),
+        progressEnded?.pipe(Effect.as("ended" as const)) ?? Effect.never
+      );
+      if (signal === "progress") {
+        continue;
+      }
+      const ended = signal === "ended";
+      followingProgress = followingProgress && !ended;
+      const nextStatus = yield* readStatus;
+      if (followingProgress) {
+        delayMs = 30_000;
+      } else if (ended || nextStatus !== status) {
+        delayMs = 1000;
+      } else {
+        delayMs = Math.min(delayMs * 2, 30_000);
+      }
+      status = nextStatus;
     }
 
     if (status === "cancelled") {
@@ -592,21 +616,38 @@ export const WorkflowSdkMigrationExecutable = {
               .pipe(Effect.mapError((error) => observationError(error.cause)));
 
             return getRun.pipe(
-              Effect.flatMap((run) => {
-                const terminal = observeWorkflowTerminal(run, observationError);
+              Effect.flatMap((run) =>
+                Effect.gen(function* () {
+                  if (options.onEvent === undefined) {
+                    return yield* observeWorkflowTerminal(
+                      run,
+                      observationError
+                    );
+                  }
 
-                if (options.onProgressCheckpoint === undefined) {
-                  return terminal;
-                }
+                  const progressEnded = yield* Queue.sliding<void>(1);
+                  const activity = yield* Queue.sliding<
+                    "progress" | "state-changed"
+                  >(1);
+                  const terminal = observeWorkflowTerminal(
+                    run,
+                    observationError,
+                    Queue.take(progressEnded),
+                    Queue.take(activity)
+                  );
+                  const progress = observeWorkflowProgress(
+                    run,
+                    options,
+                    observationError,
+                    (kind) => Queue.offer(activity, kind).pipe(Effect.asVoid)
+                  ).pipe(
+                    Effect.andThen(Queue.offer(progressEnded, undefined)),
+                    Effect.andThen(Effect.never)
+                  );
 
-                const progress = observeWorkflowProgress(
-                  run,
-                  options,
-                  observationError
-                ).pipe(Effect.andThen(Effect.never));
-
-                return Effect.raceFirst(terminal, progress);
-              })
+                  return yield* Effect.raceFirst(terminal, progress);
+                })
+              )
             );
           },
         };

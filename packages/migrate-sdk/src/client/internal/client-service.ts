@@ -10,6 +10,10 @@ import type {
   MigrateProtocolError,
   MigrateStreamingRpcs,
 } from "../../protocol/index.ts";
+import {
+  projectDashboardProgress,
+  projectRunProgress,
+} from "./progress-projection.ts";
 
 export type MigrateStreamingRpcClient = RpcClient<
   Rpcs<typeof MigrateStreamingRpcs>,
@@ -18,6 +22,11 @@ export type MigrateStreamingRpcClient = RpcClient<
 type MigrateControlRpcClient = Omit<
   MigrateStreamingRpcClient,
   "ObserveDashboard" | "ObserveRun"
+>;
+
+export type MigrateClientObservationEvent = Exclude<
+  MigrateObservationEvent,
+  { readonly kind: "execution-progress" }
 >;
 
 export type MigrateClientService = MigrateControlRpcClient & {
@@ -30,7 +39,7 @@ export type MigrateClientService = MigrateControlRpcClient & {
   readonly observeRun: (input: {
     readonly runId: MigrationRunId;
   }) => Stream.Stream<
-    MigrateObservationEvent,
+    MigrateClientObservationEvent,
     MigrateProtocolError | RpcClientError
   >;
 };
@@ -66,6 +75,6 @@ export const makeStreamingMigrateClientService = (
 ): MigrateClientService =>
   makeMigrateClientService(
     client,
-    (input) => client.ObserveDashboard(input),
-    ({ runId }) => client.ObserveRun({ runId })
+    (input) => client.ObserveDashboard(input).pipe(projectDashboardProgress),
+    ({ runId }) => client.ObserveRun({ runId }).pipe(projectRunProgress)
   );

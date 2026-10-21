@@ -98,8 +98,8 @@ const serverLayer = Layer.succeed(
     normalizeSourceIdentity: ({ sourceIdentity }) =>
       Effect.succeed(sourceIdentity),
     observeDashboard: () => Stream.succeed(dashboardSnapshot),
-    observeDashboardLease: () =>
-      Effect.succeed({
+    observeDashboardSession: () =>
+      Stream.succeed({
         kind: "snapshot" as const,
         snapshot: dashboardSnapshot,
       }),
@@ -116,8 +116,8 @@ const serverLayer = Layer.succeed(
           runId: MigrationRunId.make("run-1"),
         },
       ]),
-    observeRunLease: () =>
-      Effect.succeed({
+    observeRunSession: () =>
+      Stream.succeed({
         event: {
           resumeToken: MigrateObservationResumeToken.make("sha256:terminal"),
           event: {
@@ -193,12 +193,16 @@ const program = Effect.gen(function* () {
 const httpProgram = Effect.gen(function* () {
   const client = yield* makeClient(MigrateHttpRpcs);
 
-  const dashboardLease = yield* client.ObserveDashboardLease({});
-  const runLease = yield* client.ObserveRunLease({
-    runId: MigrationRunId.make("run-1"),
-  });
+  const dashboardFrames = yield* client
+    .ObserveDashboardSession({})
+    .pipe(Stream.runCollect);
+  const runFrames = yield* client
+    .ObserveRunSession({
+      runId: MigrationRunId.make("run-1"),
+    })
+    .pipe(Stream.runCollect);
 
-  return { dashboardLease, runLease };
+  return { dashboardFrames, runFrames };
 }).pipe(
   Effect.provide(MigrateHttpServerHandlers.pipe(Layer.provide(serverLayer)))
 );
@@ -207,7 +211,7 @@ describe("Migrate Server RPC handlers", () => {
   it.effect("serves unary and streaming operations through the protocol", () =>
     Effect.gen(function* () {
       const result = yield* program;
-      const { dashboardLease, runLease } = yield* httpProgram;
+      const { dashboardFrames, runFrames } = yield* httpProgram;
 
       expect(result.serverInfo).toEqual(info);
       expect(result.currentDashboard).toEqual(dashboardSnapshot);
@@ -246,23 +250,27 @@ describe("Migrate Server RPC handlers", () => {
           runId: "run-1",
         },
       ]);
-      expect(runLease).toEqual({
-        event: {
-          resumeToken: "sha256:terminal",
+      expect(runFrames).toEqual([
+        {
           event: {
-            kind: "terminal",
-            message: "Run run-1 succeeded",
-            outcome: "completed",
-            runId: "run-1",
+            resumeToken: "sha256:terminal",
+            event: {
+              kind: "terminal",
+              message: "Run run-1 succeeded",
+              outcome: "completed",
+              runId: "run-1",
+            },
           },
+          events: [],
+          kind: "terminal",
         },
-        events: [],
-        kind: "terminal",
-      });
-      expect(dashboardLease).toEqual({
-        kind: "snapshot",
-        snapshot: dashboardSnapshot,
-      });
+      ]);
+      expect(dashboardFrames).toEqual([
+        {
+          kind: "snapshot",
+          snapshot: dashboardSnapshot,
+        },
+      ]);
     })
   );
 });

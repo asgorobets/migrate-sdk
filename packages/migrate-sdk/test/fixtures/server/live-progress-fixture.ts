@@ -4,7 +4,7 @@ import {
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecutable,
-  type MigrationExecutableProgressCheckpoint,
+  type MigrationExecutableObservationEvent,
   MigrationProgress,
   type MigrationRunSummary,
   type MigrationRunTerminalResult,
@@ -51,9 +51,9 @@ const makeDefinition = (itemDelayMs: number) =>
 export const liveProgressProviderObservations: string[] = [];
 
 interface DetachedRun {
-  readonly checkpoints: MigrationExecutableProgressCheckpoint[];
+  readonly checkpoints: MigrationExecutableObservationEvent[];
   readonly listeners: Set<
-    (checkpoint: MigrationExecutableProgressCheckpoint) => void
+    (checkpoint: MigrationExecutableObservationEvent) => void
   >;
   readonly wait: Effect.Effect<MigrationRunTerminalResult<MigrationRunSummary>>;
 }
@@ -78,23 +78,61 @@ const makeDetachedExecutableLayer = (observationFails: boolean) =>
         )
       ),
     startRun: (plan) => {
-      const checkpoints: MigrationExecutableProgressCheckpoint[] = [];
+      const checkpoints: MigrationExecutableObservationEvent[] = [];
       const listeners = new Set<
-        (checkpoint: MigrationExecutableProgressCheckpoint) => void
+        (checkpoint: MigrationExecutableObservationEvent) => void
       >();
       const providerProgress = Layer.succeed(MigrationProgress, {
         emit: (event) =>
           Effect.sync(() => {
-            if (event.kind !== "source-cursor-window-completed") {
+            let checkpoint: MigrationExecutableObservationEvent;
+            if (event.kind === "run-started") {
+              checkpoint = {
+                kind: "progress",
+                runId: event.runId,
+                progress: {
+                  kind: "baseline",
+                  runId: event.runId,
+                  definitions: plan.definitions.map((definition) => ({
+                    definitionId: definition.id,
+                    discovery: definition.source.discovery,
+                    durable: {
+                      migrated: 0,
+                      failed: 0,
+                      skipped: 0,
+                      needsUpdate: 0,
+                    },
+                    lastRun: null,
+                    lock: null,
+                    warnings: [],
+                  })),
+                },
+              };
+            } else if (event.kind === "source-cursor-window-completed") {
+              checkpoint = {
+                kind: "progress",
+                runId: event.runId,
+                progress: {
+                  kind: "snapshot",
+                  runId: event.runId,
+                  partitionId: "fixture",
+                  revision: event.counts.migrated,
+                  changes: [
+                    {
+                      definitionId: event.definitionId,
+                      delta: {
+                        migrated: event.counts.migrated,
+                        failed: 0,
+                        skipped: 0,
+                        needsUpdate: 0,
+                      },
+                    },
+                  ],
+                },
+              };
+            } else {
               return;
             }
-
-            const checkpoint = {
-              counts: event.counts,
-              definitionId: event.definitionId,
-              kind: event.kind,
-              runId: event.runId,
-            } as const;
             checkpoints.push(checkpoint);
             for (const listener of listeners) {
               listener(checkpoint);
@@ -177,11 +215,9 @@ const makeDetachedExecutableLayer = (observationFails: boolean) =>
           return { kind: "failed" as const };
         }
 
-        const publish = (checkpoint: MigrationExecutableProgressCheckpoint) => {
-          if (options?.onProgressCheckpoint !== undefined) {
-            Effect.runForkWith(context)(
-              options.onProgressCheckpoint(checkpoint)
-            );
+        const publish = (checkpoint: MigrationExecutableObservationEvent) => {
+          if (options?.onEvent !== undefined) {
+            Effect.runForkWith(context)(options.onEvent(checkpoint));
           }
         };
         for (const checkpoint of run.checkpoints) {

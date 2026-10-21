@@ -123,10 +123,10 @@ export const useDashboardObservation = ({
       updateDashboard({
         rows: snapshot.rows,
         activeRuns: snapshot.activeRuns,
-        observing: snapshot.activeRuns.length > 0,
+        observing: loadStatusOnStartup || snapshot.activeRuns.length > 0,
       });
     },
-    [recordActivity, updateDashboard]
+    [loadStatusOnStartup, recordActivity, updateDashboard]
   );
 
   const refresh = useCallback(
@@ -169,7 +169,7 @@ export const useDashboardObservation = ({
         applySnapshot(snapshot);
         clearSourceScanStatuses();
         setNotice(nextNotice);
-        if (snapshot.activeRuns.length > 0) {
+        if (loadStatusOnStartup || snapshot.activeRuns.length > 0) {
           setObservationState({
             after: snapshot.resumeToken,
             generation: nextGeneration,
@@ -195,6 +195,7 @@ export const useDashboardObservation = ({
     [
       applySnapshot,
       clearSourceScanStatuses,
+      loadStatusOnStartup,
       runtime,
       recordActivity,
       setNotice,
@@ -267,8 +268,11 @@ export const useDashboardObservation = ({
               setNotice(recoveryNotice ?? "Status reloaded");
             }
           }
+          if (snapshot.observationWarning !== undefined) {
+            setNotice(snapshot.observationWarning);
+          }
           receivedSnapshot = true;
-          if (snapshot.activeRuns.length === 0) {
+          if (!loadStatusOnStartup && snapshot.activeRuns.length === 0) {
             controller.abort();
             setObservationState(null);
           }
@@ -303,6 +307,7 @@ export const useDashboardObservation = ({
     };
   }, [
     applySnapshot,
+    loadStatusOnStartup,
     observationState,
     recoveryNotice,
     recordActivity,

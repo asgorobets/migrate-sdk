@@ -17,7 +17,7 @@ import {
   MigrateActiveRun,
   MigrateBreakLockResult,
   MigrateDashboard,
-  MigrateDashboardLease,
+  MigrateDashboardFrame,
   MigrateDashboardResumeToken,
   MigrateDashboardSnapshot,
   MigrateDefinitionSourceItemTotal,
@@ -27,7 +27,7 @@ import {
   MigrateExecutionState,
   MigrateHttpRpcs,
   MigrateObservationEvent,
-  MigrateObservationLease,
+  MigrateObservationFrame,
   MigrateObservationResumeToken,
   MigrateOperationError,
   MigrateOperationRequest,
@@ -55,9 +55,9 @@ import {
   MigrateTerminalSummary,
   NormalizeSourceIdentity,
   ObserveDashboard,
-  ObserveDashboardLease,
+  ObserveDashboardSession,
   ObserveRun,
-  ObserveRunLease,
+  ObserveRunSession,
   PrepareOperation,
   ScanSource,
   StartOperation,
@@ -379,8 +379,8 @@ const contractCases: readonly {
     },
   },
   {
-    name: "dashboard observation lease",
-    schema: MigrateDashboardLease,
+    name: "dashboard observation frame",
+    schema: MigrateDashboardFrame,
     value: {
       kind: "snapshot",
       snapshot: {
@@ -544,8 +544,8 @@ const contractCases: readonly {
     value: "sha256:checkpoint",
   },
   {
-    name: "observation lease",
-    schema: MigrateObservationLease,
+    name: "observation frame",
+    schema: MigrateObservationFrame,
     value: {
       events: [
         {
@@ -772,13 +772,13 @@ const rpcPayloadCases: readonly {
     value: { after: "sha256:dashboard" },
   },
   {
-    name: "ObserveDashboardLease",
-    schema: ObserveDashboardLease.payloadSchema,
+    name: "ObserveDashboardSession",
+    schema: ObserveDashboardSession.payloadSchema,
     value: { after: "sha256:dashboard" },
   },
   {
-    name: "ObserveRunLease",
-    schema: ObserveRunLease.payloadSchema,
+    name: "ObserveRunSession",
+    schema: ObserveRunSession.payloadSchema,
     value: { after: "sha256:checkpoint", runId: "run-1" },
   },
   {
@@ -844,17 +844,6 @@ const rpcUnarySuccessCases: readonly {
     value: registryStatusReportValue,
   },
   {
-    name: "ObserveDashboardLease",
-    schema: ObserveDashboardLease.successSchema,
-    value: {
-      kind: "snapshot",
-      snapshot: {
-        dashboard: dashboardValue,
-        resumeToken: "sha256:dashboard",
-      },
-    },
-  },
-  {
     name: "GetActiveRuns",
     schema: GetActiveRuns.successSchema,
     value: [],
@@ -912,7 +901,6 @@ const rpcErrorCases = [
   GetRegistry,
   GetRegistryMessages,
   GetRegistryStatus,
-  ObserveDashboardLease,
   GetMessages,
   GetSourceIdentityHistory,
   NormalizeSourceIdentity,
@@ -924,17 +912,17 @@ const rpcErrorCases = [
 ] as const;
 
 describe("Migrate Protocol", () => {
-  it("keeps streaming observation off the bounded HTTP RPC surface", () => {
+  it("requires resumable HTTP sessions and keeps local streams separate", () => {
     expect(MigrateHttpRpcs.requests.has("ObserveDashboard")).toBe(false);
-    expect(MigrateHttpRpcs.requests.has("ObserveDashboardLease")).toBe(true);
     expect(MigrateHttpRpcs.requests.has("ObserveRun")).toBe(false);
-    expect(MigrateHttpRpcs.requests.has("ObserveRunLease")).toBe(true);
+    expect(MigrateHttpRpcs.requests.has("ObserveRunSession")).toBe(true);
+    expect(MigrateHttpRpcs.requests.has("ObserveDashboardSession")).toBe(true);
     expect(MigrateStreamingRpcs.requests.has("ObserveDashboard")).toBe(true);
-    expect(MigrateStreamingRpcs.requests.has("ObserveDashboardLease")).toBe(
+    expect(MigrateStreamingRpcs.requests.has("ObserveRun")).toBe(true);
+    expect(MigrateStreamingRpcs.requests.has("ObserveRunSession")).toBe(false);
+    expect(MigrateStreamingRpcs.requests.has("ObserveDashboardSession")).toBe(
       false
     );
-    expect(MigrateStreamingRpcs.requests.has("ObserveRun")).toBe(true);
-    expect(MigrateStreamingRpcs.requests.has("ObserveRunLease")).toBe(false);
   });
 
   for (const contract of contractCases) {
@@ -969,6 +957,14 @@ describe("Migrate Protocol", () => {
     });
   }
 
+  for (const rpc of [ObserveDashboardSession, ObserveRunSession]) {
+    it(`round-trips the ${rpc._tag} stream error schema`, () => {
+      expect(roundTrip(rpc.successSchema.error, protocolErrorValue)).toEqual(
+        protocolErrorValue
+      );
+    });
+  }
+
   it("round-trips a serializable prepared operation", () => {
     const prepared = Schema.decodeUnknownSync(MigratePreparedOperation)(
       preparedOperationValue
@@ -978,7 +974,7 @@ describe("Migrate Protocol", () => {
 
     expect(encoded).toEqual(preparedOperationValue);
     expect("definitions" in prepared.plan).toBe(false);
-    expect(MIGRATE_PROTOCOL_VERSION).toBe(2);
+    expect(MIGRATE_PROTOCOL_VERSION).toBe(3);
   });
 
   it("rejects an active run without any definitions", () => {
@@ -1019,9 +1015,9 @@ describe("Migrate Protocol", () => {
     ).toThrow();
   });
 
-  it("rejects a terminal observation lease without a terminal event", () => {
+  it("rejects a terminal observation frame without a terminal event", () => {
     expect(() =>
-      Schema.decodeUnknownSync(MigrateObservationLease)({
+      Schema.decodeUnknownSync(MigrateObservationFrame)({
         events: [],
         kind: "terminal",
       })
@@ -1030,7 +1026,7 @@ describe("Migrate Protocol", () => {
 
   it("accepts lifecycle state batched with terminal completion", () => {
     expect(
-      Schema.decodeUnknownSync(MigrateObservationLease)({
+      Schema.decodeUnknownSync(MigrateObservationFrame)({
         event: {
           resumeToken: "sha256:terminal",
           event: {
@@ -1064,9 +1060,9 @@ describe("Migrate Protocol", () => {
     });
   });
 
-  it("rejects a terminal event inside a continuing observation lease", () => {
+  it("rejects a terminal event inside a continuing observation frame", () => {
     expect(() =>
-      Schema.decodeUnknownSync(MigrateObservationLease)({
+      Schema.decodeUnknownSync(MigrateObservationFrame)({
         events: [
           {
             resumeToken: "sha256:terminal",
@@ -1086,7 +1082,7 @@ describe("Migrate Protocol", () => {
 
   it("rejects continuing observation events without a resume token", () => {
     expect(() =>
-      Schema.decodeUnknownSync(MigrateObservationLease)({
+      Schema.decodeUnknownSync(MigrateObservationFrame)({
         events: [
           {
             resumeToken: "sha256:checkpoint",
@@ -1098,9 +1094,9 @@ describe("Migrate Protocol", () => {
     ).toThrow();
   });
 
-  it("rejects an empty continuing observation lease", () => {
+  it("rejects an empty continuing observation frame", () => {
     expect(() =>
-      Schema.decodeUnknownSync(MigrateObservationLease)({
+      Schema.decodeUnknownSync(MigrateObservationFrame)({
         events: [],
         kind: "continuing",
         nextResumeToken: "sha256:checkpoint",
@@ -1110,7 +1106,7 @@ describe("Migrate Protocol", () => {
 
   it("accepts an observation heartbeat without a resume token", () => {
     expect(
-      Schema.decodeUnknownSync(MigrateObservationLease)({ kind: "heartbeat" })
+      Schema.decodeUnknownSync(MigrateObservationFrame)({ kind: "heartbeat" })
     ).toEqual({ kind: "heartbeat" });
   });
 

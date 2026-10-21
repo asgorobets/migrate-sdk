@@ -1,7 +1,6 @@
 import { Effect, Layer } from "effect";
 import { Service } from "effect/Context";
-import type { MigrationDefinitionId, MigrationRunId } from "../domain/ids.ts";
-import type { MigrationProgressCounts } from "../domain/progress.ts";
+import type { MigrationExecutionUpdate } from "../domain/item-progress.ts";
 import type {
   MigrationDefinitionExecutableRollbackPlan,
   MigrationDefinitionExecutableRunPlan,
@@ -54,16 +53,12 @@ export type MigrationExecutableInlineRunStartError<
 export type MigrationExecutableInlineRollbackStartError =
   MigrationExecutableRollbackError;
 
-export interface MigrationExecutableProgressCheckpoint {
-  readonly counts: MigrationProgressCounts;
-  readonly definitionId: MigrationDefinitionId;
-  readonly kind: "source-cursor-window-completed";
-  readonly runId: MigrationRunId;
-}
+export type MigrationExecutableObservationEvent = MigrationExecutionUpdate;
 
 export interface MigrationExecutableObservationOptions {
-  readonly onProgressCheckpoint?: (
-    checkpoint: MigrationExecutableProgressCheckpoint
+  readonly after?: string;
+  readonly onEvent?: (
+    event: MigrationExecutableObservationEvent
   ) => Effect.Effect<void>;
 }
 

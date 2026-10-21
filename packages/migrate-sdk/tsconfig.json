@@ -60,6 +60,7 @@
             "include": ["src/**/*.test.ts", "examples/**/*.test.ts"],
             "options": {
               "diagnosticSeverity": {
+                "asyncFunction": "off",
                 "globalDate": "off",
                 "globalDateInEffect": "off",
                 "lazyEffect": "off",
