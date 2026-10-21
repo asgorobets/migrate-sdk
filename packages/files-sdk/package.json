@@ -1,0 +1,90 @@
+{
+  "name": "@migrate-sdk/files-sdk",
+  "license": "MIT",
+  "version": "0.17.2",
+  "type": "module",
+  "sideEffects": [],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/asgorobets/migrate-sdk",
+    "directory": "packages/files-sdk"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "files": [
+    "src/**/*.ts",
+    "!src/**/*.test.ts",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "README.md",
+    "docs/**/*.md"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "bun": "./src/index.ts",
+      "source": "./src/index.ts",
+      "import": "./dist/index.js"
+    },
+    "./destination": {
+      "types": "./dist/destination/index.d.ts",
+      "bun": "./src/destination/index.ts",
+      "source": "./src/destination/index.ts",
+      "import": "./dist/destination/index.js"
+    },
+    "./migration-store": {
+      "types": "./dist/migration-store/index.d.ts",
+      "bun": "./src/migration-store/index.ts",
+      "source": "./src/migration-store/index.ts",
+      "import": "./dist/migration-store/index.js"
+    },
+    "./source": {
+      "types": "./dist/source/index.d.ts",
+      "bun": "./src/source/index.ts",
+      "source": "./src/source/index.ts",
+      "import": "./dist/source/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "bun": "./src/testing/index.ts",
+      "source": "./src/testing/index.ts",
+      "import": "./dist/testing/index.js"
+    },
+    "./internal/*": null,
+    "./*/internal/*": null
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node ../../scripts/clean-build-output.mjs dist tsconfig.tsbuildinfo && tsc -p tsconfig.json && node ../../scripts/rewrite-declaration-extensions.mjs dist",
+    "check-types": "tsc --noEmit -p tsconfig.check.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "test:package": "node test/package-smoke.mjs"
+  },
+  "peerDependencies": {
+    "effect": "catalog:effect-peers",
+    "migrate-sdk": "workspace:>=0.1.0 <1.0.0",
+    "files-sdk": "^3.1.1"
+  },
+  "devDependencies": {
+    "@effect/language-service": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@repo/typescript-config": "workspace:*",
+    "@types/node": "^22.19.0",
+    "@typescript/native": "npm:typescript@7.0.2",
+    "effect": "catalog:",
+    "migrate-sdk": "workspace:*",
+    "tsx": "^4.22.4",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
+    "vitest": "^5.0.0",
+    "files-sdk": "3.1.1",
+    "@effect/sql-sqlite-node": "catalog:"
+  }
+}

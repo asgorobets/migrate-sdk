@@ -1,0 +1,98 @@
+---
+title: Collaboration and locks
+description: Share an authoritative environment, reconnect to runs, and recover abandoned ownership safely.
+---
+
+A **Migrate Server** exposes an environment's authoritative **Migration Definition Registry** and the capabilities to inspect, execute, observe, and control its migrations. Multiple **Migrate Clients** can use that server while the shared **Migration Store** preserves durable progress and ownership.
+
+A **Migration Run** is one execution attempt of one or more definitions. A **Migration Definition Lock** records which run owns a definition's execution. Each client's **Migration Run Observation** has its own lifetime, so several operators can observe the same run without acquiring execution ownership themselves.
+
+## Establish the shared environment
+
+```sh
+# Both teammates use the same endpoint and their authorized credentials.
+pnpm exec migrate-tui --server https://migrate.example.com/api/migrate
+pnpm exec migrate --server https://migrate.example.com/api/migrate status authors
+```
+
+The hostname and `authors` definition ID are illustrative. Your application hosts and authenticates the endpoint. The clients send `MIGRATE_SERVER_TOKEN` as a bearer token when set; database and destination credentials remain on the server.
+
+A SQL Migration Store is suitable when multiple processes or hosts must coordinate. All runners for the same definition must use the same store and namespace. Independent stores cannot coordinate execution ownership, even when their definition IDs match. A local file store is useful for a single project environment; copying its directory onto another machine does not create shared coordination.
+
+The **Migrate Environment** ID identifies the operational environment, with an optional label for display. The Migration Definition Registry ID identifies its executable catalog across execution boundaries; definition IDs identify entries in that catalog. Keep these identities stable across compatible deploys. A **Migrate Server Instance** is one running incarnation of the server and can change when its process is replaced without changing those stable identities.
+
+Resource configuration establishes environment separation. Giving two servers different environment labels does not isolate them if their stores and destinations still point at the same data. Conversely, observing the same named definition against different stores does not provide shared progress.
+
+Remote compatibility is checked by **Migrate Protocol version**; SDK version metadata helps diagnose differences, but matching package version strings alone is not the protocol contract. Coordinate client and server upgrades when that protocol changes. A Migrate Connection selects which server to reach; the server's Execution Adapter determines whether its work executes inline or through a durable provider.
+
+## A run and its observers have different lifetimes
+
+Starting a run returns a Migration Run ID. Several clients can observe that run, disconnect, and reconnect without restarting the migration:
+
+```sh
+pnpm exec migrate --server https://migrate.example.com/api/migrate runs list
+pnpm exec migrate --server https://migrate.example.com/api/migrate runs observe RUN_ID
+```
+
+Replace `RUN_ID` with the active ID. An **Active Migration Run** has nonterminal durable Migration Run State and still owns at least one Migration Definition Lock. A **Reconnectable Migration Run** also records the Execution Adapter identity needed for a later Migrate Server to observe its existing execution.
+
+An idle TUI retains its last snapshot. Press **R** to discover a run started elsewhere. Once an active run is known, live updates follow it. HTTP observation uses bounded, resumable leases so a long migration can be followed across several requests. **An observation lease is not an execution lock**, and losing an HTTP response does not stop the run.
+
+Closing a local client also leaves its Node Migrate Server alive while runs remain active. That protects work from terminal closure, not from the host process or machine failing. Durable execution requires an adapter such as [Workflow SDK](/docs/cookbook/workflow-sdk).
+
+## What the lock protects
+
+A Migration Definition Lock grants one run ownership of a definition. It records:
+
+| Field | Meaning |
+| --- | --- |
+| `definitionId` | The definition whose execution is protected. |
+| `ownerRunId` | The run that acquired it. |
+| `token` | The identity of this particular acquisition. |
+| `createdAt` | When the acquisition happened. |
+
+With an atomic store, the token prevents an older owner from releasing a replacement owner's lock. The runtime and store validate acquired ownership when using the execution lease and finalizing a run. Locks do not have an age-based expiry field: an old timestamp by itself does not mean the run is dead.
+
+With an atomic store, plans whose lock scopes overlap cannot execute concurrently. Independent definitions with non-overlapping scopes can. Including dependencies can enlarge that scope, so inspect the plan when an operation is blocked by another run.
+
+[FilesSDKMigrationStore](/docs/cookbook/files-sdk#choose-the-migration-store) requires one authoritative writer per namespace, including run-control updates, because its locks are advisory and non-atomic. Concurrent processes can both acquire a lock or delete a replacement lock despite ownership checks. Use a transactional store for multiple writers.
+
+The lock coordinates Migrate SDK runners. It does not lock the destination API against unrelated writers or make external requests transactional. Stable destination identities and idempotent writes still matter.
+
+## Coordinate cancellation
+
+Use the run's stop control before considering lock recovery:
+
+```sh
+pnpm exec migrate --server https://migrate.example.com/api/migrate runs stop RUN_ID
+pnpm exec migrate --server https://migrate.example.com/api/migrate runs observe RUN_ID
+```
+
+The current server persists a cancellation request in the Migration Store. Inline and Workflow SDK execution check that request, stop scheduling new work, and finish already-started work. The run remains `cancelling` and keeps ownership until cleanup reaches a terminal state. Slow external requests can delay that transition.
+
+Stopping does not undo completed destination writes. Those remain tracked and can be handled by a separate [rollback](/docs/learn/rollback). Detaching observation is different again: it changes no run state.
+
+For Workflow SDK, prefer this cooperative stop to cancelling the provider run directly. Provider termination can prevent migration finalization from running and leave durable ownership requiring recovery.
+
+## Recover an abandoned lock
+
+A crash or failed cleanup can leave a lock after its owner has stopped. Recovery is an operator decision because a store cannot prove that an external worker will never write again.
+
+1. Read current status and identify the lock's owner run, token, and creation time.
+2. Inspect that run and its execution host or workflow provider. A quiet progress display alone is insufficient evidence that the owner has stopped.
+3. If the owner is alive, request a stop and wait for it to finish. If it is abandoned, confirm that the worker or provider execution can no longer continue.
+4. Clear the abandoned lock, refresh status, and inspect saved item outcomes before starting a recovery run.
+
+In the TUI, `u` opens **Break migration lock** with the owner, timestamp, and token. Enter (or `y`) confirms; Escape (or `n`) cancels. The server checks the expected ownership, so a stale dialog cannot silently remove a replacement owner's lock.
+
+The CLI command is immediate and has no confirmation prompt:
+
+```sh
+pnpm exec migrate --server https://migrate.example.com/api/migrate unlock authors
+```
+
+Remote unlock reads the lock and submits that expected ownership. Direct local CLI unlock clears the definition's current lock by ID; prefer the guarded TUI flow when coordinating recovery with others.
+
+**Breaking a lock does not stop its former owner.** A destination request already in flight can still complete. It also does not roll back writes, repair missing tracking, or turn an interrupted run into successful completion. Starting another run while the old owner is alive can create competing writers despite the new lock.
+
+After recovery, a normal run resumes using saved cursors and item eligibility; `--failed` targets recorded failures. An interrupted item whose outcome was never saved may be attempted again. Design external writes to tolerate that replay, then use [Tracking](/docs/learn/tracking) and [Retries](/docs/learn/retries) to make the recovery understandable.

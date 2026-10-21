@@ -1,0 +1,84 @@
+---
+title: Registries and dependencies
+description: Catalog definitions, select operations, order execution, and resolve tracked references.
+---
+
+A **Migration Definition Registry** is the catalog of executable definitions available to an execution host. A **Migration Definition Dependency** establishes ordering between definitions. A **Migration Reference Lookup** retrieves a referenced definition's saved Tracking Record.
+
+These primitives cooperate, but each answers a separate question: what can run, what must run first, and which destination result is available.
+
+## Registry and registry identity
+
+`MigrationDefinitionRegistry.make({ definitions })` assembles a catalog with unique definition IDs. An optional registry `id` gives it a stable **Migration Definition Registry Id** for use across execution boundaries.
+
+The registry ID and a definition ID identify different scopes. Neither replaces the Migration Store's database or namespace configuration. Definitions participating in one run must share the same configured store layer instance.
+
+A **Migration Definition Registry Catalog** is the Effect service that resolves registries by ID. Distributed execution uses it to reconstruct executable definitions on a worker. Functions, clients, and dependency layers remain in that execution environment rather than being serialized as registry contents.
+
+## Selection and groups
+
+A **Migrate Operation Selection** identifies all registered definitions, an explicit nonempty definition set, or one group. Planning resolves that selection and its dependency scope before starting work.
+
+A **Migration Definition Group** is a named operational bundle. A definition can belong to one group through its `group` field. Group membership makes selection convenient; dependencies express relationships between definitions. Reuse across groups is represented through dependencies rather than multiple group membership.
+
+A dashboard's selected target is a navigation concern. An operation's selection is the scope that will actually execute. Review the prepared plan when those differ.
+
+## Required and optional dependencies
+
+A **Required Migration Definition Dependency** must precede its dependent. When both participate in a forward plan, the prerequisite runs first. When a required prerequisite is omitted, execution checks its **Migration Definition Completion** record unless the operation explicitly bypasses that preflight.
+
+An **Optional Migration Definition Dependency** establishes ordering when both definitions participate. It does not require an omitted definition to be present or complete.
+
+The `dependencies` field expresses these relationships with `required` and `optional` definition IDs. Registry planning checks the dependency structure; the input array's order is not a replacement for declaring a dependency.
+
+## Completion and readiness
+
+**Migration Dependency Readiness** is based on a durable completed source pass. It is not determined by the latest run's success or by the absence of failed items.
+
+Completion can coexist with failed or needs-update item states. A dependent may therefore run and still find a required reference missing. Reference lookup and its failure policy remain part of the dependent pipeline.
+
+Included prerequisites execute before their dependents without a completion recheck between definitions. A per-definition limit can stop an included prerequisite before source exhaustion and still allow the dependent to run in that plan. Run the prerequisite fully first when the dependent requires broader coverage.
+
+The CLI's `--with-dependencies` expands a forward selection to required prerequisites. `--force` bypasses readiness checks; it does not create references or supply missing destination data. See [CLI selection and planning](/docs/operate/cli#select-and-preview-the-work).
+
+## Migration Reference Lookup
+
+Lookup takes a referenced Migration Definition and a Source Identity Key. It reads that definition's Migration Item State through its Migration Store and returns a Tracking Record typed by the referenced definition's Tracking Record Contract.
+
+A definition intended to provide downstream references should declare that contract. Declaring a dependency establishes ordering and locking guarantees, but does not perform a lookup or wire destination fields automatically. Lookup can also target a definition that is not a declared dependency; then the caller does not gain those same-run ordering guarantees.
+
+The result can be absent or can refer to `migrated` or `needs-update` state. A needs-update reference can be usable when destination state already exists. The consuming pipeline decides whether that level of completeness is sufficient.
+
+Lookup reads saved evidence, not a live destination query. Deleting or modifying a destination resource outside the migration can leave an existing Tracking Record stale. Reconciliation and destination validation must account for that boundary.
+
+## Destination Stubs
+
+A **Destination Stub** reserves a destination reference before the full destination data is available. The referenced definition supplies a `stub` pipeline, and the lookup request must allow stub creation.
+
+The stub pipeline works from Source Identity rather than the full source payload. It records a result and leaves the referenced item in `needs-update` state for later processing. It does not establish source-pass completion.
+
+Use stubs only when the destination supports incomplete resources and a later operation will populate them. Stub creation is destination work, not an in-memory substitute for a missing value.
+
+## Rollback ordering
+
+Rollback planning reverses the relevant relationship: compensate dependents before their prerequisites. Omitted dependents with saved items can block the operation unless the narrower scope is deliberately forced.
+
+The registry can order compensation and expose its scope. Each definition still needs its own Rollback Pipeline; a dependency does not define how to undo destination work.
+
+<details>
+<summary>Reference lookup example with two definitions</summary>
+
+This example extends [API to API](/docs/cookbook/api-to-api). Save its two adjacent API files alongside `learn-registry.ts`. Both definitions reuse the same store layer instance.
+
+<include lang="ts" meta='title="learn-registry.ts" twoslash source="../../examples/learn-registry.ts"'>../../examples/learn-registry.ts</include>
+
+```sh
+pnpm exec migrate run articles --config ./learn-registry.ts --with-dependencies --plan
+pnpm exec migrate run articles --config ./learn-registry.ts --with-dependencies
+```
+
+The consuming definition requires a `migrated` reference. Its tracking and rollback are omitted to keep this illustration focused on reference resolution.
+
+</details>
+
+Continue with [Execution and observation](/docs/learn/execution) for the transition from a plan to a run.

@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/@effect/language-service/schema.json",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "noEmit": true,
+    "types": ["node"],
+    "paths": {
+      "@migrate-sdk/files-sdk": ["./src/index.ts"],
+      "@migrate-sdk/files-sdk/destination": ["./src/destination/index.ts"],
+      "@migrate-sdk/files-sdk/migration-store": [
+        "./src/migration-store/index.ts"
+      ],
+      "@migrate-sdk/files-sdk/source": ["./src/source/index.ts"],
+      "@migrate-sdk/files-sdk/testing": ["./src/testing/index.ts"]
+    },
+    "rootDir": "."
+  },
+  "exclude": ["node_modules", "dist"],
+  "include": ["examples/**/*.ts", "src"]
+}

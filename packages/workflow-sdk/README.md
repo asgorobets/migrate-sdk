@@ -2,6 +2,10 @@
 
 Workflow SDK execution adapter for `migrate-sdk`.
 
+Try the [live demo](https://migrate-sdk-workflow.vercel.app), follow the
+[Workflow SDK cookbook](https://migrate-sdk.dev/docs/cookbook/workflow-sdk), or
+explore the [complete example application](../../examples/workflow-sdk).
+
 The package is named for Workflow SDK rather than Vercel because Workflow SDK
 runs on swappable worlds: Vercel, local, Postgres, Redis, and other providers.
 Vercel is a deployment/world choice, not the migration adapter boundary.

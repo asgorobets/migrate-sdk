@@ -176,7 +176,73 @@ describe("DocumentParsers.json", () => {
   );
 });
 
+describe("DocumentParsers.each", () => {
+  it.effect("preserves schema inference and resource order", () =>
+    Effect.gen(function* () {
+      const document = Schema.Struct({ id: Schema.String });
+      const parser = DocumentParsers.each(DocumentParsers.json(document));
+      expectTypeOf(parser).toMatchTypeOf<
+        DocumentParser<readonly string[], typeof document.Type>
+      >();
+      expect(parser.documentSchema).toBe(document);
+      expect(yield* parser.parse(['{"id":"a"}', '{"id":"b"}'])).toEqual([
+        { id: "a" },
+        { id: "b" },
+      ]);
+      expect(yield* parser.parse([])).toEqual([]);
+    })
+  );
+
+  it.effect("composes with parsers that return multiple documents", () =>
+    Effect.gen(function* () {
+      const parser = DocumentParsers.each(
+        DocumentParsers.each(
+          DocumentParsers.json(Schema.Struct({ id: Schema.String }))
+        )
+      );
+      expect(
+        yield* parser.parse([['{"id":"a"}', '{"id":"b"}'], [], ['{"id":"c"}']])
+      ).toEqual([{ id: "a" }, { id: "b" }, { id: "c" }]);
+    })
+  );
+
+  it.effect(
+    "identifies the failed resource and preserves the parser error",
+    () =>
+      Effect.gen(function* () {
+        const parser = DocumentParsers.each(
+          DocumentParsers.json(CompanyDocument)
+        );
+        const error = yield* Effect.flip(
+          parser.parse(['{"companies":[]}', "{not json"])
+        );
+        expect(error.cause).toMatchObject({
+          resourceIndex: 1,
+          parser: "json",
+          cause: { cause: { kind: "json-syntax" } },
+        });
+      })
+  );
+});
+
 describe("DocumentParsers.schema", () => {
+  it.effect("composes with each for a page of materialized resources", () =>
+    Effect.gen(function* () {
+      const parser = DocumentParsers.each(
+        DocumentParsers.schema("inventory", InventoryDocument)
+      );
+      expect(
+        yield* parser.parse([
+          { items: [{ inventory: 42, key: "sku-1" }] },
+          { items: [{ inventory: 7, key: "sku-2" }] },
+        ])
+      ).toEqual([
+        { items: [{ inventory: 42, key: "sku-1" }] },
+        { items: [{ inventory: 7, key: "sku-2" }] },
+      ]);
+    })
+  );
+
   it.effect("validates an already-materialized resource as one document", () =>
     Effect.gen(function* () {
       const parser = DocumentParsers.schema("company-api", CompanyDocument);

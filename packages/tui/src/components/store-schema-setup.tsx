@@ -7,9 +7,11 @@ import { migrationColors as colors } from "./migration-dashboard.tsx";
 import { Button } from "./ui/button.tsx";
 import {
   Dialog,
+  DialogActions,
   DialogContent,
   DialogDescription,
   DialogTitle,
+  useDialogNavigation,
 } from "./ui/dialog.tsx";
 
 /** Keep dashboard reads and observation unmounted until the store is usable. */
@@ -39,13 +41,19 @@ export const StoreSchemaSetup = ({
   const canUpgrade =
     plan?.status === "upgrade-required" || plan?.status === "not-installed";
 
+  let confirmLabel = current ? "Open dashboard" : "Check again";
+  if (canUpgrade) {
+    confirmLabel = "Upgrade store";
+  }
+  if (busy) {
+    confirmLabel = "Please wait…";
+  }
   let title = "Store schema needs attention";
   if (current) {
     title = "Store schema is up to date";
   } else if (canUpgrade) {
     title = "Store schema upgrade required";
   }
-  const reloadLabel = current ? "r Open dashboard" : "r Check again";
 
   const perform = async (upgrade: boolean) => {
     if (inFlight.current) {
@@ -88,6 +96,16 @@ export const StoreSchemaSetup = ({
     }
   };
 
+  useDialogNavigation({
+    enabled: open,
+    disabled: busy,
+    cancelDisabled: busy,
+    onConfirm: () => {
+      perform(canUpgrade);
+    },
+    onCancel: () => setOpen(false),
+  });
+
   useKeyboard((key) => {
     if (key.ctrl || key.meta) {
       return;
@@ -96,12 +114,6 @@ export const StoreSchemaSetup = ({
       key.preventDefault();
       key.stopPropagation();
       onExit();
-    } else if ((key.name === "escape" || key.name === "n") && open) {
-      key.preventDefault();
-      key.stopPropagation();
-      if (!busy) {
-        setOpen(false);
-      }
     } else if (key.name === "u" && open && canUpgrade) {
       key.preventDefault();
       key.stopPropagation();
@@ -204,35 +216,18 @@ export const StoreSchemaSetup = ({
               </box>
             )}
           </scrollbox>
-          <box flexDirection="row" flexShrink={0} gap={1} marginTop={1}>
-            {canUpgrade && (
-              <Button
-                disabled={busy}
-                intent="warning"
-                label={busy ? "Upgrading…" : "u Upgrade store"}
-                onPress={() => {
-                  perform(true);
-                }}
-              />
-            )}
-            {!canUpgrade && (
-              <Button
-                disabled={busy}
-                label={busy ? "Loading…" : reloadLabel}
-                onPress={() => {
-                  perform(false);
-                }}
-              />
-            )}
-            <Button
-              disabled={busy}
-              intent="neutral"
-              label="Cancel"
-              onPress={() => setOpen(false)}
-            />
-          </box>
-          <text fg={colors.dim}>
-            {busy ? "Please wait…" : "↑↓ scroll · r check again · esc cancel"}
+          <DialogActions
+            cancelDisabled={busy}
+            disabled={busy}
+            intent={canUpgrade ? "warning" : "primary"}
+            label={confirmLabel}
+            onCancel={() => setOpen(false)}
+            onConfirm={() => {
+              perform(canUpgrade);
+            }}
+          />
+          <text fg={colors.dim} flexShrink={0}>
+            {busy ? "Please wait…" : "↑↓ scroll · enter proceed · esc cancel"}
           </text>
         </DialogContent>
       </Dialog>

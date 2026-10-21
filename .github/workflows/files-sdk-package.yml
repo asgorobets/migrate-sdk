@@ -1,0 +1,65 @@
+name: Files SDK Package
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/files-sdk-package.yml"
+      - ".github/workflows/release.yml"
+      - ".changeset/**"
+      - "packages/files-sdk/**"
+      - "packages/migrate-sdk/**"
+      - "packages/typescript-config/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "scripts/clean-build-output.mjs"
+      - "scripts/rewrite-declaration-extensions.mjs"
+      - "turbo.json"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/files-sdk-package.yml"
+      - ".github/workflows/release.yml"
+      - ".changeset/**"
+      - "packages/files-sdk/**"
+      - "packages/migrate-sdk/**"
+      - "packages/typescript-config/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "scripts/clean-build-output.mjs"
+      - "scripts/rewrite-declaration-extensions.mjs"
+      - "turbo.json"
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22.19.0", "24.x"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build, typecheck, test, and check packed installation
+        run: pnpm turbo run check-types test test:package --filter=migrate-sdk --filter=@migrate-sdk/files-sdk

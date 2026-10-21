@@ -5,6 +5,10 @@ Workflow and exposes one authenticated Migrate Server to interactive migration
 controls and the complete local Migrate TUI. The app constructs its registry
 directly in TypeScript; it never discovers or loads a `migrate.config.*` file.
 
+Open the [live demo](https://migrate-sdk-workflow.vercel.app) to try it without
+local setup. The [Workflow SDK cookbook](https://migrate-sdk.dev/docs/cookbook/workflow-sdk)
+walks through the architecture, step boundaries, recovery, and deployment.
+
 ## What runs where
 
 - `POST /api/migrate` is the authenticated Effect RPC Migrate Server route. The
@@ -129,6 +133,11 @@ configuration.
    token to visitors so they can exercise Bearer authentication from the browser
    or their own TUI. Set separate private `DEMO_SETUP_TOKEN` and `CRON_SECRET`
    values.
+
+   The workspace catalog aligns Effect and `@effect/sql-pg`. This PostgreSQL
+   client sends the database hostname as TLS SNI, which Neon needs to route the
+   connection. Keep `sslmode=require` in the Neon URL. `/api/health` should
+   return `{"database":"reachable","status":"ok"}` after deployment.
 4. Deploy. `withWorkflow` selects Workflow SDK's Vercel runtime automatically,
    and `vercel.json` registers the daily 05:00 UTC catalog import.
 5. Initialize the demo once:
@@ -144,9 +153,18 @@ configuration.
 
    ```bash
    MIGRATE_SERVER_TOKEN="TOKEN_SHOWN_ON_THE_DEMO_PAGE" \
-     pnpm dlx @migrate-sdk/tui \
+     pnpm dlx @migrate-sdk/tui@latest \
      --server https://YOUR_DEPLOYMENT/api/migrate
    ```
+
+   This one-off command requires Node.js 22.19.0 or newer and pnpm. pnpm caches
+   the TUI automatically; no local project, config file, lockfile setup, or
+   install-script approvals are needed. pnpm installs a compatible Effect peer
+   when it is missing. Use a TUI release compatible with your
+   Migrate Server; replace `@latest` with a specific TUI version for a repeatable
+   setup. A [compiled executable](../../docs/tui-binaries.md#install-a-compiled-candidate)
+   can connect to the same server without Node or Bun; native distributions
+   are currently build candidates.
 
 `POST /api/demo/setup?reset=true` drops all demo and migration-store data. It is
 provided only for this example and remains protected by the private

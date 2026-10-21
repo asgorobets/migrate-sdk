@@ -1,0 +1,84 @@
+---
+title: Combine two APIs as a source
+description: Join authors and profiles into one source item with one identity and a version that covers both APIs.
+---
+
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+
+A Source can combine several upstream systems into one Source Item payload. The resulting item still needs one Source Identity and a Source Version that covers every input relevant to processing.
+
+This recipe uses one API for author names and another for biographies to demonstrate an enrichment join before processing.
+
+This recipe joins records by `author.id === profile.author_id`. It produces one item per author, not one item per HTTP response.
+
+```text
+Authors API ──┐
+              ├─ join by author ID ── one enriched author ── mapping
+Profiles API ─┘
+```
+
+## Choose which API defines membership
+
+The author API defines which items exist. Every author must have one profile. An extra profile without an author is ignored. Duplicate author IDs, duplicate profile IDs, or a missing required profile fail the source read.
+
+These are deliberate rules, not behavior the SDK can infer. If your domain allows a missing biography, model the profile as optional and define its default in the mapping instead. If either API should introduce new items, build a union of their IDs and define how incomplete pairs work.
+
+The first response is the author document from [API to API](/docs/cookbook/api-to-api). The second is:
+
+```json title="Profiles response"
+{
+  "profiles": [
+    { "author_id": "author-1040", "bio": "Writes about data and systems." },
+    { "author_id": "author-1041", "bio": "Builds publishing tools." }
+  ]
+}
+```
+
+## Join at the source boundary
+
+Save `api-combined-source.ts` beside the two files from the preceding recipe. All three files are available here. Set `PROFILES_URL` and, if needed, `PROFILES_TOKEN`, in addition to the earlier environment variables.
+
+<Tabs items={["api-combined-source.ts", "api-to-api.ts", "api-http.ts"]}>
+<Tab value="api-combined-source.ts">
+<include lang="ts" meta='title="api-combined-source.ts" twoslash source="../../examples/api-combined-source.ts"'>../../examples/api-combined-source.ts</include>
+</Tab>
+<Tab value="api-to-api.ts">
+<include lang="ts" meta='title="api-to-api.ts" twoslash source="../../examples/api-to-api.ts"'>../../examples/api-to-api.ts</include>
+</Tab>
+<Tab value="api-http.ts">
+<include lang="ts" meta='title="api-http.ts" twoslash source="../../examples/api-http.ts"'>../../examples/api-http.ts</include>
+</Tab>
+</Tabs>
+
+The fetcher reads both APIs concurrently, validates each response, indexes profiles by author ID, and constructs `{ authors: [{ author, profile }] }`. `DocumentSource` then selects and versions the joined items.
+
+This file exports `combinedSource`; it does not define a runnable migration on its own. The [next recipe](/docs/cookbook/multiple-destinations) connects it to a complete process, tracking contract, store, and CLI config.
+
+## Keep identity stable and version both inputs
+
+An author's source identity remains `author-1040`. Its profile is additional data for the same author, so a biography edit must not create a new identity.
+
+The content hash covers the selected combined payload, including the profile. A change in either API therefore changes the item version and makes an encountered migrated item eligible for an update. Hashing only the author row would miss biography-only edits.
+
+Use stable field selection. Including a response timestamp that changes on every request can cause every author to look changed on every run. Include values that affect the destination, and define a version contract deliberately if the provider offers meaningful revision identifiers.
+
+## Decide where a join failure belongs
+
+This implementation constructs a complete document before emitting items. A malformed response or missing profile fails discovery as a source error, before any item from that read is processed. It avoids writing a half-joined page but does not create a persisted failed item for each missing profile.
+
+If you want a bad profile to fail only its author, there are other designs:
+
+- Emit each author from the source and fetch its profile inside the process. Handle profile failure as that item's outcome, and ensure versioning or an update policy still discovers profile-only changes.
+- Use a custom source that emits a schema-valid representation of incomplete joins, then let the process decide whether to skip or fail each one.
+
+Neither approach should silently treat an unavailable profile API as an empty inventory. That can turn an outage into missing data or unsafe orphan decisions.
+
+## Scale the join
+
+The example expects small, complete responses that fit in memory. Its scan lookup also refetches both collections when locating an item for a targeted operation.
+
+For larger APIs, use one authoritative paginated stream, fetch profiles for each page's author IDs, and checkpoint only a page whose joined items can be reconstructed. Add a direct lookup that returns the same joined payload and version for a single identity.
+
+Two live HTTP reads are not a consistent database snapshot. When relationships can change during a run, use provider snapshot tokens, exports from the same revision, or an agreed maintenance window. A cursor alone does not make two independent APIs consistent.
+
+Continue with [Writing to two destinations](/docs/cookbook/multiple-destinations) to make this migration sit between both upstream and both downstream systems.

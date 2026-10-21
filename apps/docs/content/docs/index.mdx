@@ -1,0 +1,57 @@
+---
+title: Migrate SDK
+description: Define and run repeatable data migrations in TypeScript, with your code and infrastructure.
+---
+
+Migrate SDK is a TypeScript library for repeatable data migrations. Define how data moves between systems, and keep the progress and results needed to run it again. Your code and migration state stay in your infrastructure.
+
+## Why not just write a script?
+
+A migration often starts as a script: read data, transform it, and write it somewhere else. For a small, one-time job, that may be enough.
+
+The harder requirements often appear after the first run. A request fails halfway through. The destination cannot keep up with parallel writes. The source changes, or a mapping needs correcting. You need to know what succeeded, what to repeat, and how to undo work already done.
+
+Whether you write the script yourself or generate it with AI, you still need progress tracking, retries, concurrency limits, and rollback.
+
+Migrate SDK brings these pieces together. You define the mapping, destination calls, and recovery behavior in TypeScript and Effect. The SDK coordinates execution and saves the state needed for the next run.
+
+## Three parts of a migration
+
+### Sources: read the data
+
+A [Source](/docs/learn/sources) gives the migration a consistent way to read and identify items. Built-in sources cover SQL, CSV, and structured documents such as JSON. You can read a local file or supply a fetcher that uses your HTTP or S3 client.
+
+Sources provide validated, typed input and a way to recognize changes between runs. You can plug in your own source for other systems.
+
+### Pipelines: decide what happens to each item
+
+Your [Process Pipeline](/docs/learn/defining-migrations#process-pipeline) maps source data and calls the destination systems. It can write to a database, call an API, or coordinate several destinations for the same item. Use your existing clients and choose how much work runs in parallel. Effect gives you typed errors and [retries with exponential backoff](/docs/learn/retries) where you need them.
+
+Your [Rollback Pipeline](/docs/learn/rollback) uses recorded results to compensate that work. You decide what to remove or restore, save the information needed, and make those operations safe to repeat.
+
+### Migration stores: remember the work
+
+A [Migration Store](/docs/learn/migration-stores) keeps progress between runs: which items succeeded or failed, the source versions processed, and the destination results you recorded.
+
+That record lets you resume interrupted work, retry failed items, and skip successfully migrated items whose source versions are unchanged. It supports periodic updates and delta migrations as your source discovers new or changed data.
+
+Keep state in a file, in SQL, or in a custom store. A shared store lets another machine or teammate use the same history, with locks to prevent overlapping runs of the same migration.
+
+## Run from code, or use the CLI and TUI
+
+Define and run migrations directly in your application, a cron job, or a webhook handler. The CLI and TUI are optional.
+
+Use the [CLI](/docs/operate/cli) or [TUI](/docs/operate/tui) to select migrations, preview work, follow progress, and retry failures. They work locally or through a migration server on another machine, using the same definitions and saved state.
+
+For work that needs to outlive a request or worker, the [Workflow SDK integration](/docs/cookbook/workflow-sdk) adds durable execution.
+
+Try the [live Workflow SDK demo](https://migrate-sdk-workflow.vercel.app) to run PostgreSQL catalog migrations on Vercel and follow progress in the browser. You can also connect your own TUI using the command on the demo page.
+
+## Get started with Migrate SDK
+
+<Cards>
+  <Card title="Getting started" href="/docs/getting-started" description="Install the SDK and define a migration." />
+  <Card title="Learn" href="/docs/learn" description="Understand sources, pipelines, saved state, and recovery." />
+  <Card title="Cookbook" href="/docs/cookbook" description="Work through complete migration recipes." />
+  <Card title="Operate" href="/docs/operate" description="Run and inspect migrations with the CLI and TUI." />
+</Cards>

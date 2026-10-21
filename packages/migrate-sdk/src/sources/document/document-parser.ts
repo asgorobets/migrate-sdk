@@ -119,7 +119,38 @@ const makeSchemaParser = <Document>(
     ),
 });
 
+/** Parse each resource in a fetched page, preserving document order. */
+const makeEachParser = <Resource, Document>(
+  parser: DocumentParser<Resource, Document>
+): DocumentParser<readonly Resource[], Document> => ({
+  documentSchema: parser.documentSchema,
+  name: `each(${parser.name})`,
+  parse: (resources) =>
+    Effect.forEach(resources, (resource, resourceIndex) =>
+      parser.parse(resource).pipe(
+        Effect.mapError(
+          (cause) =>
+            new SourceError({
+              message: "Unable to parse document resource in page",
+              cause: {
+                cause,
+                resourceIndex,
+                parser: parser.name,
+                diagnostic:
+                  typeof cause.cause === "object" &&
+                  cause.cause !== null &&
+                  "diagnostic" in cause.cause
+                    ? String(cause.cause.diagnostic)
+                    : cause.message,
+              },
+            })
+        )
+      )
+    ).pipe(Effect.map((documents) => documents.flat())),
+});
+
 export const DocumentParsers = {
+  each: makeEachParser,
   json: makeJsonParser,
   schema: makeSchemaParser,
 } as const;

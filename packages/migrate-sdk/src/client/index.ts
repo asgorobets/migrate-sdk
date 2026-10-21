@@ -8,12 +8,9 @@ import {
   Schema,
   Stream,
 } from "effect";
-import {
-  make as makeRpcClient,
-  type RpcClient,
-} from "effect/unstable/rpc/RpcClient";
-import { RpcClientError } from "effect/unstable/rpc/RpcClientError";
-import type { Rpcs } from "effect/unstable/rpc/RpcGroup";
+import { make as makeRpcClient, type RpcClient } from "effect/rpc/RpcClient";
+import { RpcClientError } from "effect/rpc/RpcClientError";
+import type { Rpcs } from "effect/rpc/RpcGroup";
 import type { MigrationRunId } from "../domain/ids.ts";
 import {
   type MigrateDashboardResumeToken,
@@ -60,8 +57,7 @@ const retryableHttpObservationFailure = (cause: unknown): boolean => {
     reason._tag === "HttpError" &&
     (reason.kind === "TransportError" ||
       reason.kind === "EmptyBodyError" ||
-      // HTTP DecodeError means reading the response body failed. Malformed
-      // NDJSON is a separate RpcClientDefect and must not be retried.
+      // HTTP DecodeError means reading the response body failed.
       reason.kind === "DecodeError" ||
       (reason.kind === "StatusCodeError" &&
         Option.exists(rpcClientHttpStatusCode(cause), (status) =>

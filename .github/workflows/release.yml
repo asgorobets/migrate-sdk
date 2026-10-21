@@ -12,6 +12,10 @@ permissions:
   contents: read
 
 jobs:
+  tui-binaries:
+    name: Build native TUI packages
+    uses: ./.github/workflows/tui-binaries.yml
+
   validate:
     name: Validate Packages
     runs-on: ubuntu-latest
@@ -31,7 +35,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 24.x
+          node-version: 22.19.0
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
@@ -41,15 +45,21 @@ jobs:
       - name: Validate packages
         run: pnpm run validate-packages
 
+      - name: Smoke test packed Files SDK
+        run: pnpm --filter @migrate-sdk/files-sdk test:package
+
       - name: Smoke test packed TUI
         run: pnpm --filter @migrate-sdk/tui test:package
+
+      - name: Verify PostgreSQL TLS routing
+        run: pnpm --filter @migrate-sdk/workflow-sdk-example exec vitest run src/migrations/database.test.ts
 
       - name: Smoke test SQL providers
         run: pnpm run test:sql:smoke
 
   release:
     name: Release
-    needs: validate
+    needs: [validate, tui-binaries]
     runs-on: ubuntu-latest
 
     permissions:
@@ -70,6 +80,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
+          # Node 24 bundles npm 11, which supports OIDC trusted publishing.
           node-version: 24.x
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
@@ -83,15 +94,31 @@ jobs:
       - name: Build package outputs
         run: pnpm run build-packages
 
+      - name: Download tested native TUI builds
+        uses: actions/download-artifact@v4
+        with:
+          pattern: tui-release-input-*
+          merge-multiple: true
+          path: packages/tui/dist/binary
+
+      - name: Assemble complete native TUI release
+        run: pnpm --filter @migrate-sdk/tui package:release
+
       - name: Create release PR or publish packages
         id: changesets
         uses: changesets/action@v2
         with:
           version-script: pnpm exec changeset version
-          publish-script: pnpm exec changeset publish
+          publish-script: pnpm --filter @migrate-sdk/tui publish:release
           commit-message: "chore(migrate-sdk): version packages"
           pr-title: "chore(migrate-sdk): version packages"
           github-token: ${{ secrets.GITHUB_TOKEN }}
         env:
           NPM_CONFIG_IGNORE_SCRIPTS: "true"
           NPM_CONFIG_PROVENANCE: "true"
+
+      - name: Attach executables and checksums to the TUI release
+        if: steps.changesets.outputs.published == 'true' && contains(fromJSON(steps.changesets.outputs['published-packages'] || '[]').*.name, '@migrate-sdk/tui')
+        run: node packages/tui/scripts/upload-native-release.mjs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

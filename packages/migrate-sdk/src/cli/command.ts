@@ -9,8 +9,8 @@ import {
   Semaphore,
   Stream,
 } from "effect";
-import { Argument, CliError, Command, Flag } from "effect/unstable/cli";
-import type { SqlClient } from "effect/unstable/sql";
+import { Argument, CliError, Command, Flag } from "effect/cli";
+import type { SqlClient } from "effect/sql";
 import type { PipelineExecutionConcurrency } from "../domain/execution.ts";
 import {
   toMigrationDefinitionGroupId,
@@ -663,7 +663,9 @@ const rollbackOrphans = Flag.Boolean("rollback-orphans").pipe(
 
 const update = Flag.Boolean("update").pipe(
   Flag.withDefault(false),
-  Flag.withDescription("Plan an update run")
+  Flag.withDescription(
+    "Reprocess unchanged items; combine with --id to update only selected items"
+  )
 );
 
 const force = Flag.Boolean("force").pipe(
@@ -676,7 +678,7 @@ const force = Flag.Boolean("force").pipe(
 const id = Flag.String("id").pipe(
   Flag.atMost(Number.MAX_SAFE_INTEGER),
   Flag.optional,
-  Flag.withDescription("Repeatable source identity target")
+  Flag.withDescription("Limit scope to this source identity (repeatable)")
 );
 
 const runDefinitions = Argument.String("definition").pipe(Argument.variadic());

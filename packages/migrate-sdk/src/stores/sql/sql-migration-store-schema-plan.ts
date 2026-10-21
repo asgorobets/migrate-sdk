@@ -1,6 +1,6 @@
 import type { Layer } from "effect";
 import { Schema } from "effect";
-import type { SqlClient } from "effect/unstable/sql";
+import type { SqlClient } from "effect/sql";
 
 export interface SqlMigrationStoreSchemaConfig {
   readonly clientLayer: Layer.Layer<SqlClient.SqlClient, unknown>;

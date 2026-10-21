@@ -34,3 +34,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Highlighted examples, rebuilt from content
+/app/generated/
+
+# Fumadocs collections
+/.source/

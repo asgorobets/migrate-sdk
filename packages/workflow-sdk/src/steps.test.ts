@@ -75,6 +75,7 @@ type RunOptions = Omit<
 
 const makeFixture = (
   options: {
+    readonly afterProcess?: (id: string) => Effect.Effect<void>;
     readonly batch?: boolean;
     readonly batchSize?: number;
     readonly withDependency?: boolean;
@@ -113,7 +114,8 @@ const makeFixture = (
       case "skipped":
         return skipItem("Not ready");
       default:
-        return yield* Tracking.setRecord({ id: `destination-${id}` });
+        yield* Tracking.setRecord({ id: `destination-${id}` });
+        yield* options.afterProcess?.(id) ?? Effect.void;
     }
   });
   const baseDefinition = {
@@ -584,20 +586,144 @@ describe("Workflow migration run modes", () => {
     ).toEqual([JSON.stringify(["a", "fr"])]);
   });
 
-  it("reprocesses only selected identities without reading or changing the cursor", async () => {
-    const fixture = makeFixture();
-    await fixture.run();
-    fixture.calls.splice(0);
-    const cursor = toEncodedSourceCursor(JSON.stringify({ offset: 2 }));
-    fixture.state.sourceCursors.set(fixture.definition.id, cursor);
-    const reads = fixture.sourceState.readAttempts;
-    const summary = await fixture.run({ sourceIdentities: ["a", "c"] });
-    expect(fixture.calls).toEqual(["a", "c"]);
-    expect(fixture.sourceState.readAttempts).toBe(reads);
-    expect(fixture.state.sourceCursors.get(fixture.definition.id)).toBe(cursor);
-    expect(summary.definitions[0]?.counts.migrated).toBe(2);
-    expect(fixture.state.definitionLocks.size).toBe(0);
-  });
+  for (const batch of [false, true]) {
+    for (const execution of ["inline", "workflow"] as const) {
+      it(`applies normal eligibility to selected identities (${execution}, ${batch ? "batch" : "item"})`, async () => {
+        const fixture = makeFixture({ batch });
+        const run = execution === "inline" ? fixture.runInline : fixture.run;
+        fixture.sourceItems.push(
+          ...["needs-update", "changed", "unselected"].map((id) => ({
+            identityKey: id,
+            item: id,
+            version: "v1",
+          }))
+        );
+        fixture.outcomes.set("b", "failed");
+        fixture.outcomes.set("c", "skipped");
+        await run();
+        fixture.outcomes.clear();
+        fixture.calls.splice(0);
+        const completion = fixture.state.definitionCompletions.get(
+          fixture.definition.id
+        );
+        const savedStates = [...fixture.state.itemStates.values()];
+        const needsUpdate = savedStates.find(
+          (item) => item.sourceIdentity.key === "needs-update"
+        );
+        if (needsUpdate === undefined) {
+          throw new Error("Expected a migrated needs-update fixture item");
+        }
+        await Effect.runPromise(
+          Effect.flatMap(MigrationStore, (store) =>
+            store.upsertItemState({
+              ...needsUpdate,
+              status: "needs-update",
+              reason: "Destination needs updating",
+            })
+          ).pipe(Effect.provide(fixture.store))
+        );
+        for (const item of fixture.sourceItems) {
+          if (
+            item.identityKey === "changed" ||
+            item.identityKey === "unselected"
+          ) {
+            item.version = "v2";
+          }
+        }
+        fixture.sourceItems.push(
+          { identityKey: "new", item: "new", version: "v1" },
+          {
+            identityKey: "unselected-new",
+            item: "unselected-new",
+            version: "v1",
+          }
+        );
+        const cursor = toEncodedSourceCursor(JSON.stringify({ offset: 2 }));
+        fixture.state.sourceCursors.set(fixture.definition.id, cursor);
+        const reads = fixture.sourceState.readAttempts;
+        const sourceIdentities = [
+          "a",
+          "b",
+          "c",
+          "needs-update",
+          "changed",
+          "new",
+        ];
+        const summary = await run({ sourceIdentities });
+        expect(summary.status).toBe("succeeded");
+        expect(summary.definitions[0]?.counts).toEqual({
+          migrated: 5,
+          unchanged: 1,
+          failed: 0,
+          skipped: 0,
+          needsUpdate: 0,
+        });
+        expect(fixture.calls).toEqual([
+          "b",
+          "c",
+          "needs-update",
+          "changed",
+          "new",
+        ]);
+        const untouched = savedStates.filter(
+          (item) =>
+            item.sourceIdentity.key === "a" ||
+            item.sourceIdentity.key === "unselected"
+        );
+        expect([...fixture.state.itemStates.values()]).toEqual(
+          expect.arrayContaining(untouched)
+        );
+        expect(
+          [...fixture.state.itemStates.values()].some(
+            (item) => item.sourceIdentity.key === "unselected-new"
+          )
+        ).toBe(false);
+
+        fixture.calls.splice(0);
+        const repeated = await run({ sourceIdentities });
+        expect(repeated.definitions[0]?.counts).toEqual({
+          migrated: 0,
+          unchanged: 6,
+          failed: 0,
+          skipped: 0,
+          needsUpdate: 0,
+        });
+        expect(fixture.calls).toEqual([]);
+
+        fixture.sourceItems.push({
+          identityKey: "update-new",
+          item: "update-new",
+          version: "v1",
+        });
+        const updateIdentities = [...sourceIdentities, "update-new"];
+        const updated = await run({
+          sourceIdentities: updateIdentities,
+          update: true,
+        });
+        expect(updated.definitions[0]?.counts).toEqual({
+          migrated: 7,
+          unchanged: 0,
+          failed: 0,
+          skipped: 0,
+          needsUpdate: 0,
+        });
+        expect(fixture.calls).toEqual(updateIdentities);
+        expect([...fixture.state.itemStates.values()]).toEqual(
+          expect.arrayContaining(
+            untouched.filter((item) => item.sourceIdentity.key === "unselected")
+          )
+        );
+        expect(fixture.sourceState.readAttempts).toBe(reads);
+        expect(fixture.state.sourceCursors.get(fixture.definition.id)).toBe(
+          cursor
+        );
+        expect(
+          fixture.state.definitionCompletions.get(fixture.definition.id)
+        ).toEqual(completion);
+        expect(fixture.state.definitionLocks.size).toBe(0);
+      });
+    }
+  }
 
   it.each([
     "failed",
@@ -759,7 +885,7 @@ describe("Workflow migration run modes", () => {
           request: {
             definitionIds: ["articles"],
             update: true,
-            sourceIdentities: ["a"],
+            mode: { kind: "failed" },
           },
         },
         fixture.steps
@@ -909,6 +1035,95 @@ describe("Workflow migration run modes", () => {
     ).toEqual([3, 1]);
     expect(fixture.state.definitionLocks.size).toBe(0);
   });
+
+  for (const execution of ["inline", "workflow"] as const) {
+    it(`runs included dependencies normally during a targeted update (${execution})`, async () => {
+      const fixture = makeFixture({ withDependency: true });
+      const run = execution === "inline" ? fixture.runInline : fixture.run;
+      await run({ sourceIdentities: ["b"], withDependencies: true });
+      const authors = [...fixture.state.itemStates.values()].filter(
+        (item) => item.definitionId === "authors"
+      );
+      fixture.calls.splice(0);
+      await run({
+        sourceIdentities: ["b"],
+        withDependencies: true,
+        update: true,
+      });
+      expect(fixture.calls).toEqual(["b"]);
+      expect([...fixture.state.itemStates.values()]).toEqual(
+        expect.arrayContaining(authors)
+      );
+    });
+
+    it(`preserves only selected update backlog after cancellation (${execution})`, async () => {
+      let stop: (() => Promise<void>) | undefined;
+      const fixture = makeFixture({
+        afterProcess: (id) =>
+          Effect.promise(async () => {
+            if (id === "a") {
+              await stop?.();
+            }
+          }),
+      });
+      const run = execution === "inline" ? fixture.runInline : fixture.run;
+      await run();
+      fixture.calls.splice(0);
+      const saved = [...fixture.state.itemStates.values()];
+      const completion = fixture.state.definitionCompletions.get(
+        fixture.definition.id
+      );
+      const cursor = toEncodedSourceCursor(JSON.stringify({ offset: 2 }));
+      fixture.state.sourceCursors.set(fixture.definition.id, cursor);
+      stop = async () => {
+        const active = [...fixture.state.runStates.values()].find(
+          (run) => run.status === "running"
+        );
+        if (active === undefined) {
+          throw new Error("Expected an active update run");
+        }
+        await fixture.cancel(active.runId);
+        // The durable cancellation check is cached for one second.
+        await new Promise<void>((resolve) => setTimeout(resolve, 1100));
+      };
+      const result = await run({ sourceIdentities: ["a", "b"], update: true });
+      expect(result.status).toBe("cancelled");
+      expect(fixture.calls).toEqual(["a"]);
+      const states = [...fixture.state.itemStates.values()];
+      expect(
+        states.find((item) => item.sourceIdentity.encoded === "b")
+      ).toMatchObject({
+        status: "needs-update",
+        trackingRecord: { id: "destination-b" },
+      });
+      expect(
+        states.find((item) => item.sourceIdentity.encoded === "b")?.journal
+      ).toEqual(
+        saved.find((item) => item.sourceIdentity.encoded === "b")?.journal
+      );
+      expect(
+        states.find((item) => item.sourceIdentity.encoded === "c")
+      ).toEqual(saved.find((item) => item.sourceIdentity.encoded === "c"));
+      expect(
+        fixture.state.definitionCompletions.get(fixture.definition.id)
+      ).toEqual(completion);
+      expect(fixture.state.sourceCursors.get(fixture.definition.id)).toBe(
+        cursor
+      );
+      expect(fixture.state.definitionLocks.size).toBe(0);
+      stop = undefined;
+      fixture.calls.splice(0);
+      const resumed = await run({ sourceIdentities: ["a", "b"] });
+      expect(fixture.calls).toEqual(["b"]);
+      expect(resumed.definitions[0]?.counts).toMatchObject({
+        migrated: 1,
+        unchanged: 1,
+      });
+      expect(fixture.state.sourceCursors.get(fixture.definition.id)).toBe(
+        cursor
+      );
+    });
+  }
 
   it("preserves update tracking and backlog after cancellation between windows", async () => {
     const fixture = makeFixture();

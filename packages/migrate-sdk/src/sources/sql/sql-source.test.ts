@@ -1,7 +1,7 @@
 import { SqliteClient } from "@effect/sql-sqlite-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
-import { SqlClient, type Statement } from "effect/unstable/sql";
+import { SqlClient, type Statement } from "effect/sql";
 import {
   type ConfiguredSource,
   type EncodedSourceIdentityInput,

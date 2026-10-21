@@ -7,7 +7,8 @@
       "migrate-sdk",
       "@migrate-sdk/commercetools",
       "@migrate-sdk/workflow-sdk",
-      "@migrate-sdk/tui"
+      "@migrate-sdk/tui",
+      "@migrate-sdk/files-sdk"
     ]
   ],
   "linked": [],

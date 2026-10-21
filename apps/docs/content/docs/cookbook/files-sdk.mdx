@@ -1,0 +1,161 @@
+---
+title: Files SDK
+description: Read records from JSON files, copy a folder with the CLI, and save progress using Files SDK.
+---
+
+import { Tab, Tabs } from "fumadocs-ui/components/tabs";
+
+Files SDK can read your source files, write destination files, and save migration
+progress. Each role can use its own storage client.
+
+Choose the Source by what you want to migrate:
+
+- **Records inside files:** use `DocumentSource` with a Files SDK Document Fetcher.
+- **Whole files:** use `FilesSDKSource.objects`, with one Source Item per file.
+
+## Install
+
+Requires Node.js 22.19.0+, Effect 4, and `files-sdk` 3.1.1+:
+
+```sh
+pnpm add migrate-sdk @migrate-sdk/files-sdk files-sdk effect @effect/platform-node
+```
+
+The local filesystem adapter needs no cloud credentials or extra provider packages.
+
+## Read records from JSON files
+
+Suppose `source-storage/input/` contains JSON files like this:
+
+```json
+{ "products": [{ "id": "p1" }, { "id": "p2" }] }
+```
+
+This Source reads those files and emits each product as a Source Item:
+
+<include lang="ts" meta='title="document-source.ts"'>../../../../../packages/files-sdk/examples/document-source.ts</include>
+
+The Document Fetcher reads file text. `DocumentParsers.each` runs the JSON parser
+on each file. The selector picks `products`, and the Process Pipeline receives
+each product at `sourceItem.item.item`.
+
+Product IDs must be unique across the selected files. The content hash detects
+changes to each product, so unchanged products can be skipped on a later run.
+
+For one known file, use `text` and one parser:
+
+```ts
+const fetcher = FilesSDKDocumentFetchers.text({
+  key: "catalog.json",
+  filesLayer,
+});
+const parser = DocumentParsers.json(CatalogDocument);
+```
+
+The fetcher returns text; the parser handles JSON.
+
+`pageSize` sets how many files to list at a time. `maxBytes` limits the combined
+file text downloaded for that page. Lower the page size if files are large.
+Pass the same `selection` to `FilesSDKSource.objects(selection)` when you want
+to migrate those JSON files as complete files instead of selecting products.
+
+## Copy a folder with the CLI
+
+The [runnable example](https://github.com/asgorobets/migrate-sdk/tree/main/examples/files-sdk)
+copies four files, including nested paths and a binary file. From a repository
+checkout:
+
+```sh
+cd examples/files-sdk
+pnpm install
+pnpm run setup
+pnpm migrate run folder-copy --plan
+pnpm migrate run folder-copy --progress log
+pnpm verify
+```
+
+Its folders have separate jobs:
+
+```text
+.data/source/               Files to copy
+.data/destination/copied/   Copied files, with the same relative paths
+.data/state/                Saved migration progress
+```
+
+These are the files used by the CLI. `folder-copy.ts` defines the migration,
+`storage.ts` chooses the folders and Migration Store, and `migrate.config.ts`
+registers the definition.
+
+<Tabs items={["folder-copy.ts", "storage.ts", "migrate.config.ts"]}>
+<Tab value="folder-copy.ts">
+<include lang="ts" meta='title="folder-copy.ts"'>../../../../../examples/files-sdk/folder-copy.ts</include>
+</Tab>
+<Tab value="storage.ts">
+<include lang="ts" meta='title="storage.ts"'>../../../../../examples/files-sdk/storage.ts</include>
+</Tab>
+<Tab value="migrate.config.ts">
+<include lang="ts" meta='title="migrate.config.ts"'>../../../../../examples/files-sdk/migrate.config.ts</include>
+</Tab>
+</Tabs>
+
+`FilesSDKSource.objects` supplies each file's key and metadata at
+`sourceItem.item`. The Process Pipeline calls `transferFrom` to copy the file
+and checks that its SHA-256 hash matches. Each transfer finishes within one
+Process Pipeline execution. If it fails, a retry starts the transfer again from
+the beginning.
+
+## Rerun or roll back
+
+Run the same command again:
+
+```sh
+pnpm migrate run folder-copy --progress log
+pnpm migrate status folder-copy
+```
+
+The second run reports four unchanged files. The Migration Store keeps that
+progress in `.data/state/` between CLI invocations.
+
+After editing source files, rescan to copy the changed files and skip the rest:
+
+```sh
+pnpm migrate run folder-copy --rescan --progress log
+pnpm verify
+```
+
+Use `--update` when you want to reprocess every migrated file, even if unchanged.
+
+To delete the files copied by this migration:
+
+```sh
+pnpm migrate rollback folder-copy --plan
+pnpm migrate rollback folder-copy --progress log
+```
+
+**Reserve `copied/` for this migration.** Rollback uses the saved journal to delete
+files from that prefix. The example allows overwrites, and rollback cannot
+restore the previous contents of an overwritten file.
+
+## Keep one writer per namespace
+
+**Files SDK Migration Definition Locks are non-atomic.** Two processes can both
+acquire a lock and overwrite saved state. Run one writer at a time for the
+`folder-copy` namespace, including commands that update cancellation state.
+
+The required `locking: "advisory"` option acknowledges this limit, and the store
+logs a warning when initialized. Locks do not expire. Stop the original worker
+before [unlocking an abandoned lock](/docs/operate/collaboration-and-locks#recover-an-abandoned-lock).
+
+Use a SQL Migration Store when you need concurrent writers. The Source and
+Destination can stay the same: replace the `store` layer in `storage.ts`. For an
+existing Effect SQL layer named `databaseLayer`:
+
+```ts
+import { SqlMigrationStore } from "migrate-sdk/stores/sql";
+
+export const store = SqlMigrationStore.layerFromClient(databaseLayer);
+```
+
+See [Migration stores](/docs/learn/migration-stores) for SQL setup. The
+[Files SDK package reference](https://github.com/asgorobets/migrate-sdk/tree/main/packages/files-sdk)
+covers provider options, file metadata, and rollback with a saved ETag.

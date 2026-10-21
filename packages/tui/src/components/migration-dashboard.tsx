@@ -1136,7 +1136,7 @@ const PrimaryActionButtons = ({
 
     return (
       <Button
-        disabled={disabled}
+        disabled={disabled || action.disabled === true}
         intent={primary.intent}
         key={action.id}
         label={compact ? primary.compactLabel : primary.label}
@@ -1147,6 +1147,7 @@ const PrimaryActionButtons = ({
 
 const GroupDetailPane = ({
   activeTab,
+  keyboardActive,
   actions,
   compact,
   disabled,
@@ -1162,6 +1163,7 @@ const GroupDetailPane = ({
   sourceItemTotal,
 }: {
   readonly activeTab: MigrationDetailTab;
+  readonly keyboardActive: boolean;
   readonly actions: readonly MigrationTuiAvailableAction[];
   readonly compact: boolean;
   readonly disabled: boolean;
@@ -1233,7 +1235,7 @@ const GroupDetailPane = ({
           value="overview"
         >
           <GroupOverview
-            active={activeTab === "overview"}
+            active={keyboardActive && activeTab === "overview"}
             compact={compact}
             key={`group-overview-${group.id}`}
             messages={messages}
@@ -1291,6 +1293,7 @@ const GroupDetailPane = ({
 
 const DetailPane = ({
   activeTab,
+  keyboardActive,
   actions,
   compact,
   disabled,
@@ -1306,6 +1309,7 @@ const DetailPane = ({
   sourceItemTotal,
 }: {
   readonly activeTab: MigrationDetailTab;
+  readonly keyboardActive: boolean;
   readonly actions: readonly MigrationTuiAvailableAction[];
   readonly compact: boolean;
   readonly disabled: boolean;
@@ -1377,7 +1381,7 @@ const DetailPane = ({
           value="overview"
         >
           <Overview
-            active={activeTab === "overview"}
+            active={keyboardActive && activeTab === "overview"}
             compact={compact}
             key={`migration-overview-${row.entry.id}`}
             messages={messages}
@@ -1435,6 +1439,7 @@ const DetailPane = ({
 
 export const MigrationDashboard = ({
   activeTab,
+  keyboardActive = true,
   actions,
   busy,
   groups,
@@ -1455,6 +1460,7 @@ export const MigrationDashboard = ({
   terminalWidth,
 }: {
   readonly activeTab: MigrationDetailTab;
+  readonly keyboardActive?: boolean;
   readonly actions: readonly MigrationTuiAvailableAction[];
   readonly busy: string;
   readonly groups: readonly MigrationDefinitionRegistryGroup[];
@@ -1519,6 +1525,7 @@ export const MigrationDashboard = ({
         compact={!wide}
         disabled={busy !== ""}
         group={group}
+        keyboardActive={keyboardActive}
         messageIndex={messageIndex}
         messages={messages}
         messagesStatus={messagesStatus}
@@ -1537,6 +1544,7 @@ export const MigrationDashboard = ({
         activeTab={activeTab}
         compact={!wide}
         disabled={busy !== ""}
+        keyboardActive={keyboardActive}
         messageIndex={messageIndex}
         messages={messages}
         messagesStatus={messagesStatus}

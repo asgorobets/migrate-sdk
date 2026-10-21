@@ -13,6 +13,7 @@ import type {
   MigrateRunStartResult,
 } from "migrate-sdk/protocol";
 import type { MigrationTuiExecutionResult } from "../execution.ts";
+import { resolveProjectServerEntry } from "../local-server-entry.ts";
 import type {
   LoadMigrationTuiInput,
   MigrationTuiDashboardObservationOptions,
@@ -24,6 +25,9 @@ import type {
 
 type ConnectLocalMigrateServer = typeof connectLocalMigrateServer;
 
+declare const MIGRATE_TUI_STANDALONE: boolean | undefined;
+declare const MIGRATE_TUI_VERSION: string;
+
 /** @internal Test composition seam. Use makeMigrationTuiRuntime in production. */
 export const makeMigrationTuiRuntimeWithLocalConnection = async (
   input: LoadMigrationTuiInput,
@@ -32,8 +36,13 @@ export const makeMigrationTuiRuntimeWithLocalConnection = async (
   const connect = (): Promise<MigrateConnection> => {
     if (input.server === undefined) {
       const nodeExecutable = process.env.MIGRATE_TUI_NODE_EXECUTABLE;
+      const serverEntry =
+        typeof MIGRATE_TUI_STANDALONE !== "undefined" && MIGRATE_TUI_STANDALONE
+          ? resolveProjectServerEntry(input, MIGRATE_TUI_VERSION)
+          : undefined;
       return connectLocal({
         ...input,
+        ...(serverEntry === undefined ? {} : { serverEntry }),
         ...(nodeExecutable === undefined ? {} : { nodeExecutable }),
       });
     }

@@ -1,7 +1,7 @@
 import type { Stream } from "effect";
-import type { RpcClient } from "effect/unstable/rpc/RpcClient";
-import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
-import type { Rpcs } from "effect/unstable/rpc/RpcGroup";
+import type { RpcClient } from "effect/rpc/RpcClient";
+import type { RpcClientError } from "effect/rpc/RpcClientError";
+import type { Rpcs } from "effect/rpc/RpcGroup";
 import type { MigrationRunId } from "../../domain/ids.ts";
 import type {
   MigrateDashboardResumeToken,

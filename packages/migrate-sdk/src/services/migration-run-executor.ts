@@ -195,10 +195,7 @@ const splitStoreRunError = (
 
 const invalidUpdateRunModeError = (mode: RunMode) =>
   new MigrationRuntimeError({
-    message:
-      mode.kind === "item"
-        ? "Update run cannot target source identities"
-        : `Update run cannot combine with ${mode.kind} mode`,
+    message: `Update run cannot combine with ${mode.kind} mode`,
   });
 
 const invalidRescanRunModeError = (mode: RunMode) =>
@@ -1290,7 +1287,9 @@ const validateUpdateRunRequest = (request: {
 
   const mode = request.mode ?? normalRunMode;
 
-  return mode.kind === "normal" ? null : invalidUpdateRunModeError(mode);
+  return mode.kind === "normal" || mode.kind === "item"
+    ? null
+    : invalidUpdateRunModeError(mode);
 };
 
 const validateRescanRunRequest = (request: {
@@ -1415,8 +1414,10 @@ export const validateMigrationRunDependencyPreflight = (
 
 const isTargetedMode = (mode: RunMode): boolean => mode.kind !== "normal";
 
-const shouldReprocessUnchangedTerminal = (mode: RunMode): boolean =>
-  mode.kind === "skipped" || mode.kind === "item";
+const shouldReprocessUnchangedTerminal = (
+  mode: RunMode,
+  update: boolean
+): boolean => update || mode.kind === "skipped";
 
 const updateRunScheduleReason = "Scheduled by update run";
 
@@ -1454,17 +1455,25 @@ const makeUpdateRunNeedsUpdateState = (
 const prepareUpdateRunDefinition = ({
   definitionId,
   itemStates,
+  mode,
   runId,
   store,
 }: {
   readonly definitionId: MigrationDefinitionId;
   readonly itemStates: readonly MigrationItemState[];
+  readonly mode: RunMode;
   readonly runId: MigrationRunId;
   readonly store: typeof MigrationStore.Service;
 }): Effect.Effect<void, MigrationStoreError> =>
   Effect.gen(function* () {
+    const selected =
+      mode.kind === "item" ? new Set(mode.encodedSourceIdentities) : undefined;
     for (const itemState of itemStates) {
-      if (itemState.status !== "migrated") {
+      if (
+        itemState.status !== "migrated" ||
+        (selected !== undefined &&
+          !selected.has(itemState.sourceIdentity.encoded))
+      ) {
         continue;
       }
 
@@ -1476,7 +1485,9 @@ const prepareUpdateRunDefinition = ({
       );
     }
 
-    yield* store.deleteSourceCursor(definitionId);
+    if (mode.kind === "normal") {
+      yield* store.deleteSourceCursor(definitionId);
+    }
   });
 
 const selectBacklogStates = (
@@ -2237,6 +2248,7 @@ interface ProcessTargetedSourceIdentitiesOptions<
     IdentityKey
   >;
   readonly store: typeof MigrationStore.Service;
+  readonly update: boolean;
 }
 
 const processTargetedSourceIdentities = <
@@ -2259,6 +2271,7 @@ const processTargetedSourceIdentities = <
   runId,
   source,
   store,
+  update,
 }: ProcessTargetedSourceIdentitiesOptions<
   Source,
   PipelineError,
@@ -2358,7 +2371,10 @@ const processTargetedSourceIdentities = <
 
           const outcome = yield* processSourceItem({
             definition,
-            reprocessUnchangedTerminal: shouldReprocessUnchangedTerminal(mode),
+            reprocessUnchangedTerminal: shouldReprocessUnchangedTerminal(
+              mode,
+              update
+            ),
             runId,
             sourceSchema: source.sourceSchema,
             sourceItem: lookup.sourceItem,
@@ -2391,7 +2407,10 @@ const processTargetedSourceIdentities = <
       const outcomes = yield* processSourceItemsBatch({
         concurrency: processConcurrency,
         definition,
-        reprocessUnchangedTerminal: shouldReprocessUnchangedTerminal(mode),
+        reprocessUnchangedTerminal: shouldReprocessUnchangedTerminal(
+          mode,
+          update
+        ),
         runId,
         sourceItems: batchItems,
         sourceSchema: source.sourceSchema,
@@ -3209,10 +3228,13 @@ const runMigrationDefinition = <
       yield* prepareUpdateRunDefinition({
         definitionId: definition.id,
         itemStates,
+        mode,
         runId,
         store,
       });
+    }
 
+    if (runOptions.update && mode.kind === "normal") {
       const discovery = yield* processCursorDiscovery({
         counts,
         definition,
@@ -3258,6 +3280,7 @@ const runMigrationDefinition = <
           runId,
           source,
           store,
+          update: runOptions.update,
         })
       : { completed: true, sourceIdentities: [] };
 
@@ -3379,8 +3402,9 @@ const runMigrationDefinitionCursorWindow = <
   if (limitError !== undefined) {
     return Effect.fail(new MigrationRuntimeError({ message: limitError }));
   }
-  if (input.update === true && mode.kind !== "normal") {
-    return Effect.fail(invalidUpdateRunModeError(mode));
+  const updateError = validateUpdateRunRequest(input);
+  if (updateError !== null) {
+    return Effect.fail(updateError);
   }
 
   const program = Effect.gen(function* () {
@@ -3422,6 +3446,7 @@ const runMigrationDefinitionCursorWindow = <
         yield* prepareUpdateRunDefinition({
           definitionId: definition.id,
           itemStates: yield* store.listItemStates(definition.id),
+          mode,
           runId: input.runId,
           store,
         });
@@ -3437,6 +3462,7 @@ const runMigrationDefinitionCursorWindow = <
             runId: input.runId,
             source,
             store,
+            update: input.update === true,
           })
         : { completed: true, sourceIdentities: [] };
       excludedSourceIdentities = targeted.sourceIdentities;
@@ -4374,7 +4400,10 @@ const executePreparedRunDefinitions = <
                     limit: input.limit,
                     rescan: input.rescan === true,
                     rollbackOrphans: input.rollbackOrphans === true,
-                    update: input.update === true,
+                    update:
+                      input.update === true &&
+                      (input.target === undefined ||
+                        input.target.definitionId === definition.id),
                   },
                   stubRunScope.createStubReference,
                   input.execution?.process

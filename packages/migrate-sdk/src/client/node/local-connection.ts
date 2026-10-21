@@ -5,9 +5,9 @@ import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { layerNet } from "@effect/platform-node/NodeSocket";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
-import { layerProtocolSocket } from "effect/unstable/rpc/RpcClient";
-import { RpcClientError } from "effect/unstable/rpc/RpcClientError";
-import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
+import { layerProtocolSocket } from "effect/rpc/RpcClient";
+import { RpcClientError } from "effect/rpc/RpcClientError";
+import { layerNdjson } from "effect/rpc/RpcSerialization";
 import type {
   MigrateServerInfo,
   MigrateServerInstanceId,
@@ -52,6 +52,8 @@ export interface LocalMigrateConnectionInput {
   readonly nodeExecutable?: string;
   /** Enable local OTLP/HTTP tracing with defaults overridden by OTEL_* variables. */
   readonly otel?: boolean;
+  /** A real Node bootstrap entry, resolved from the migration project's SDK. */
+  readonly serverEntry?: URL;
 }
 
 export interface LocalMigrateServerBootstrapOptions {
@@ -446,11 +448,12 @@ const connectPersistentMigrateServer = async (
     configPath,
     cwd,
     nodeExecutable = "node",
+    serverEntry: projectServerEntry,
     otel,
   }: LocalMigrateConnectionInput,
   {
     serverIdentity,
-    serverEntry = defaultServerEntry(),
+    serverEntry = projectServerEntry ?? defaultServerEntry(),
     startupTimeoutMs = defaultStartupTimeoutMs,
   }: LocalMigrateServerBootstrapOptions = {}
 ): Promise<MigrateConnection> => {

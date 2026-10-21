@@ -21,8 +21,8 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import {
   layerProtocolSocket,
   make as makeRpcClient,
-} from "effect/unstable/rpc/RpcClient";
-import { layerNdjson } from "effect/unstable/rpc/RpcSerialization";
+} from "effect/rpc/RpcClient";
+import { layerNdjson } from "effect/rpc/RpcSerialization";
 import { toMigrationDefinitionId } from "migrate-sdk";
 import type { MigrateConnection } from "migrate-sdk/client/node";
 import {
@@ -877,14 +877,14 @@ test("Node server bootstrap failures exit unsuccessfully", () => {
       "--endpoint",
       join(tmpdir(), `migrate-bootstrap-${randomUUID()}.sock`),
     ],
-    { encoding: "utf8" }
+    { encoding: "utf8", timeout: 15_000 }
   );
 
   expect(result.status).toBe(1);
   expect(`${result.stdout}${result.stderr}`).toContain(
     "Migration config file was not found"
   );
-});
+}, 20_000);
 
 test("reports a local server startup timeout and releases the child", async () => {
   await expect(

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { DateTime, Effect, Layer, Schema } from "effect";
-import { SqlClient, SqlError } from "effect/unstable/sql";
+import { SqlClient, SqlError } from "effect/sql";
 import { MigrationStoreError } from "../../domain/errors.ts";
 import {
   EncodedSourceCursor,

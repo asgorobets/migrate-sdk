@@ -1,0 +1,88 @@
+---
+title: States and completion
+description: Distinguish durable item state, per-attempt outcomes, run lifecycle, and completed source coverage.
+---
+
+**Migration Item State** is the durable state of one source item within a migration definition. It records what the runtime knows about that identity after work has settled. It is the basis for future eligibility, inspection, reference lookup, and rollback.
+
+State exists at several independent levels. An item's current state, one execution's result, and evidence that a source pass completed answer different questions. Treating them as one success flag loses information needed for recovery.
+
+## The four persisted item states
+
+Item state is a discriminated union whose `status` is one of four values:
+
+| Status | Meaning | Additional evidence |
+| --- | --- | --- |
+| `migrated` | Processing completed successfully. | Observed source version and any tracking record or journal. |
+| `skipped` | Processing deliberately returned a skip result. | Skip reason, observed version, and preserved previous tracking evidence. |
+| `failed` | Item lookup/validation, tracking decoding, or processing failed. | Normalized error kind, tag, message, and available details or journal evidence. |
+| `needs-update` | Existing state has been scheduled for processing or represents an incomplete reference stub. | A reason and any prior version or tracking evidence. |
+
+Every state contains the definition ID, structured source identity, last run ID, and update time. Failed and needs-update states can lack an observed version. State may be absent before an initial outcome or after successful rollback; there is no persisted `pending` variant.
+
+The runtime owns these transitions. A pipeline reports successful completion, an intentional skip, or a failure; it does not return an arbitrary saved state. Returning `skipItem(reason)` uses the success channel and does not undo destination effects already performed. See [Defining migrations](/docs/learn/defining-migrations).
+
+`needs-update` is not evidence of continuous source monitoring. An update run marks previously migrated items for another attempt, preserving their evidence. Stub creation can also leave this status until full processing occurs.
+
+## Outcomes and eligibility
+
+A **Migration Item Outcome** is the result for one item during a run. Outcomes contribute to run counts. The outcome `unchanged` means the runtime omitted processing because the saved migrated state was still comparable and current; it does not create a fifth saved state.
+
+Normal runs select work through source discovery, in source order. After current payload and stored tracking validation, eligibility is:
+
+| Previous state | Action when the source emits the item |
+| --- | --- |
+| Absent | Process the item. |
+| `migrated`, matching version and version contract | Report `unchanged`; retain migrated state. |
+| `migrated`, changed version or version contract | Process the current payload. |
+| `failed`, `skipped`, or `needs-update` | Attempt processing again. |
+
+This table does not fetch items behind a saved cursor. Targeted [retries](/docs/learn/retries), explicit identities, or a source rescan can revisit that work. Concurrency can change completion order without changing source-driven selection.
+
+Successful rollback removes the selected state instead of writing a `rolled-back` variant. The rollback operation remains in history, and a later discovery pass can admit that identity again. A failed rollback preserves the item state and records available attempt evidence.
+
+## Run state and operation history
+
+A **Migration Run** is one execution attempt involving one or more definitions. **Migration Run State** records its ID, definitions, timing, operation, execution-adapter metadata where available, and lifecycle status.
+
+| Status | Lifecycle meaning |
+| --- | --- |
+| `queued` | Execution has been scheduled. |
+| `running` | Execution is active. |
+| `cancelling` | Stop was requested; scheduling stops while already-started work drains. |
+| `cancelled`, `succeeded`, `failed`, `start-failed` | Terminal outcomes. |
+
+Terminal state cannot be revived by a late or replayed lifecycle write. While cancelling, the run still owns its definition locks. Ending a client observation is a separate operation and does not cancel durable execution.
+
+**Migration Definition Run State** describes one definition's participation in the run. A definition can succeed while another fails and makes the overall run fail. A definition can also be skipped; that does not assign skipped item states to all its source items.
+
+The **Migration Run Operation** distinguishes forward `run` from `rollback`. Historical records without that field retain unknown intent. Neither operation history nor the latest run status determines whether a source pass completed.
+
+## Migration definition completion
+
+**Migration Definition Completion** is durable evidence that a forward source pass reached its end. It records the definition ID, run ID, completion time, and source checkpoint. An empty source can establish completion.
+
+Completion proves traversal coverage, not that all items succeeded. Failed, skipped, and needs-update items can coexist with completion. Required dependencies omitted from a run plan use this record for readiness; reference lookup may still find missing or incomplete destination data.
+
+Included dependencies run before dependents without a completion recheck between them. A limited prerequisite pass can therefore precede a dependent in the same plan without establishing readiness for a later standalone run. See [Registries and dependencies](/docs/learn/registries-and-dependencies).
+
+These activities do not independently establish completion:
+
+- Identity-targeted or retry-only processing.
+- Creating reference stubs.
+- Inspecting source inventory.
+- Stopping at an attempt limit before source exhaustion.
+
+Earlier completion survives later failed or cancelled work unless tracked state is removed. Removing an existing item through rollback invalidates completion and resets the discovery cursor immediately, even if a later rollback item fails. A no-op removal preserves both records.
+
+A forward source pass can reestablish completion. Successful forward orphan cleanup also reestablishes it after cleanup finishes without rollback failures; partial cleanup after removal remains incomplete. For incremental discovery, completion describes the completed checkpoint rather than asserting that no newer data exists.
+
+## Inspecting saved state and current inventory
+
+A **Source Inventory Scan** is a read-only traversal from the beginning of the current source. It validates payloads and can report unprocessed, invalid, duplicate, or orphaned identities. It does not process items, modify the persisted discovery cursor, or establish completion.
+
+Ordinary status reads durable records. Source inspection is explicit because traversing current data can be expensive. Counts such as `unprocessed` are inventory observations, not additional item-state variants.
+
+An **Orphaned Migration Item State** is saved state whose identity was absent from a completed authoritative source scan. That absence does not automatically delete destination data; [rollback orphans](/docs/learn/rollback) is a separate operation.
+
+Continue with [Migration stores](/docs/learn/migration-stores) for persistence obligations, [Errors](/docs/learn/errors) for failed-state detail, or the [CLI](/docs/operate/cli) and [TUI](/docs/operate/tui) for inspection and control.

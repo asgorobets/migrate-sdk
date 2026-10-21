@@ -29,23 +29,50 @@ Background sessions resume observation, including while idle. An idle manual
 session stays idle; an active run resumes live updates. Source
 scans that find active runs also restore live updates and run controls.
 
-Install it in the migration project alongside the SDK:
+For local migrations, use Node.js 22.19.0 or newer and install the TUI at the
+exact version of the project's SDK. Install the SDK and compatible Effect
+packages using [Getting started](https://migrate-sdk.dev/docs/getting-started#install)
+first:
 
 ```sh
-pnpm add migrate-sdk effect
-pnpm add --save-dev @migrate-sdk/tui
+TUI_VERSION="$(node -p "require('migrate-sdk/package.json').version")"
+pnpm add --save-dev --save-exact "@migrate-sdk/tui@$TUI_VERSION"
 pnpm exec migrate-tui
 ```
 
-The published command is a small Node launcher. It runs the renderer with the
-pinned Bun runtime supplied by the package, so users do not need a global Bun
-installation. The renderer starts a local Node Migrate Server and communicates
-with it over Effect RPC. `migrate.config.ts`, `migrate-sdk`, migration
+Commit the version and lockfile with the migration project. Add a package script
+to use that project's TUI:
+
+```json
+{
+  "scripts": {
+    "tui": "migrate-tui"
+  }
+}
+```
+
+Run it with `pnpm run tui`, or `npm run tui` if the project uses npm.
+
+The compiled TUI includes its runtime and needs no separate Bun installation or
+install-time build. From 0.16.0, npm selects an exact-version compiled package
+for macOS ARM64/x64, Linux glibc ARM64/x64, or Windows x64. Keep optional
+dependencies enabled. See the [binary installation guide](../../docs/tui-binaries.md).
+Releases through 0.15.x use the supplied Bun runtime; under strict pnpm build
+checks, invoke them with `pnpm --config.ignore-scripts=true dlx`.
+
+The npm command uses a small Node launcher. For local operation, the renderer
+starts a Node Migrate Server and communicates with it over Effect RPC.
+`migrate.config.ts`, `migrate-sdk`, migration
 dependencies, stores, sources, destinations, and execution adapters all remain
 in Node, matching the local CLI runtime contract. See
 [`ADR 0007`](../../docs/adr/0007-server-boundary-for-local-and-remote-clients.md).
 
-Programmatic consumers use the same client/server boundary:
+Programmatic consumers use the same client/server boundary. The native CLI
+does not install its JavaScript API's optional peers. To embed the exported
+components or runtime, install the matching `migrate-sdk`, `effect`, `react`,
+`@opentui/core`, `@opentui/react`, and `@tuiparts/react` peers listed in the
+package manifest:
+
 
 ```ts
 import { makeMigrationTuiRuntime } from "@migrate-sdk/tui";
@@ -78,6 +105,22 @@ Connect to a deployed Migrate Server without loading a local migration config:
 ```sh
 pnpm exec migrate-tui --server https://migrate.example.com/api/rpc
 ```
+
+For a one-off remote session:
+
+```sh
+MIGRATE_SERVER_TOKEN="<your-token>" \
+  pnpm dlx @migrate-sdk/tui@latest \
+  --server https://migrate.example.com/api/rpc
+```
+
+No local project, migration config, lockfile setup, or install-script approvals
+are needed for native releases. pnpm caches the platform package automatically.
+Use a TUI release compatible
+with your Migrate Server; replace `@latest` with a specific TUI version when you
+need a repeatable setup. The npm launcher needs Node. An extracted compiled
+executable can connect remotely with `./migrate-tui --server <url>` without
+Node or Bun.
 
 When `MIGRATE_SERVER_TOKEN` is set, its value is sent as an HTTP Bearer token.
 Source, destination, Migration Store,
@@ -120,7 +163,7 @@ import {
   HttpMiddleware,
   HttpServerRequest,
   HttpServerResponse,
-} from "effect/unstable/http";
+} from "effect/http";
 import {
   MigrateServerHttp,
   RegistryMigrateServer,
@@ -170,9 +213,10 @@ or interruption. There is no polling transport fallback. Configure
 Heartbeats keep quiet streams active without querying durable state. No function
 invocation or HTTP response owns the lifetime of a durable Migration Run.
 
-`migrate-sdk` and `effect` remain peer dependencies: the TUI and config use the
-migration project's compatible versions. `@migrate-sdk/tui` and `migrate-sdk`
-are published with matching versions.
+`migrate-sdk` and `effect` remain peer dependencies for programmatic consumers.
+The compiled client bundles its dependencies and resolves the local Node server
+from the migration project's SDK. Local TUI and SDK versions must match exactly;
+remote compatibility follows the Migrate Protocol version.
 
 For workspace development:
 
@@ -186,19 +230,21 @@ Use an explicit project config:
 pnpm --filter @migrate-sdk/tui dev -- --config ./migrate.config.ts
 ```
 
-The npm package is the supported local distribution. A compiled renderer binary
-remains available for packaging experiments and version smoke tests:
+Build, package, and verify a compiled distribution for your host platform:
 
 ```sh
-pnpm --filter @migrate-sdk/tui build:binary
-(cd packages/tui && ./dist/binary/migrate-tui --version)
+pnpm turbo run test:binary --filter=@migrate-sdk/tui
+# Example output for macOS ARM64; use your host target directory.
+./packages/tui/dist/binary/darwin-arm64/migrate-tui --version
 ```
 
-The renderer binary is not currently a standalone Migrate TUI distribution: a
-functional release also needs the Node Migrate Server entry and the migration
-project's compatible `migrate-sdk` and `effect` packages. Cross-compilation,
-the companion server layout, signing gates, and OpenCode references are documented
-in [`docs/research/tui-binary-distribution.md`](../../docs/research/tui-binary-distribution.md).
+The resulting executable runs independently for remote connections. Local use
+needs Node and a matching project SDK with the public server bootstrap. Bun is
+the build-time compiler supplied by the workspace; consumers do not compile the
+TUI. The release workflow aggregates all five tested targets, publishes their
+npm packages before the launcher, and attaches unsigned executable archives
+and checksums to the GitHub release. See [building and installing binaries](../../docs/tui-binaries.md)
+for targets, tarball installation, checksums, and publication status.
 
 The footer keeps primary and contextual shortcuts visible for the current
 selection. Press `Enter` to open All actions, which includes the complete action
@@ -245,6 +291,13 @@ use Left/Right to switch, then Tab to return to the input. You can also click
 the tabs. Adding an ID keeps Source IDs active, and reopening the dialog
 remembers your selection method. The ordinary Run action stays unlimited.
 
+In **Source IDs**, the IDs set the scope. By default, unchanged migrated items
+stay unchanged. Enable **Update: reprocess unchanged items** to process the
+selected IDs again. From the ID input, press Tab then Space to toggle Update,
+or click its label; choose Update to start. This preserves other items and saved
+scan progress. Update resets to off when you reopen the dialog or switch selection
+methods. The separate Update action still updates the whole migration.
+
 Session activity keeps the statuses, notices, warnings, and errors observed by
 the current TUI session in chronological order, including active-run lifecycle
 changes discovered through dashboard observation. Use the arrow keys, `j`/`k`,
@@ -257,7 +310,9 @@ the Messages tab and CLI after the TUI closes.
 Runs start directly when their dependencies are ready. A group concurrency
 override controls item processing within each migration; migration definitions
 still execute in SDK plan order. If required dependencies lack completion,
-the TUI asks whether to include them or force the selected run.
+the TUI asks whether to include them or force the selected run. Use Up/Down to
+select a mode, Enter to proceed, or Esc to cancel. The recommended mode is selected
+initially. The `i`/`f` shortcuts remain available. Page Up/Down scroll the plan.
 
 Rollback offers two scope choices in one confirmation dialog. **Include
 dependencies** (`i`) is selected by default and recommended; the plan rolls back
@@ -265,7 +320,7 @@ dependent migrations first. **Selected only** (`s`) leaves those migrations
 outside the plan. If they still have tracked items, the dialog explains that
 their records will remain and references may break; confirming this choice
 authorizes forced rollback. If they have no tracked items, force is unnecessary.
-Review the updated plan and choose **Rollback selected** (`y`) to execute it
+Use Up/Down to change scope. Review the updated plan and press Enter (or `y`) to execute it
 once. Selected-entry rollback keeps dependency inclusion disabled and preserves
 the selected identities. A failed plan or status update stays in the dialog
 for retry; confirmation waits for a successfully prepared plan.
@@ -314,16 +369,26 @@ dependency. Exercise the real PTY interaction and responsive-layout path with:
 pnpm --filter @migrate-sdk/tui test:pilotty
 ```
 
-The harness verifies planned retry and rollback scopes, view transitions,
+For just the dialog checks, run `pnpm --filter @migrate-sdk/tui test:pilotty:dialogs`.
+These exercise dependency radios, previews, arrow/Enter sequences with 20ms
+between keys, Escape cancellation, rollback scope, and lock confirmation.
+
+The full harness verifies planned retry and rollback scopes, view transitions,
 cooperative cancellation and draining, the 72×34 compact dashboard, and the
 120×36 confirmation views. It prints the directory that contains its text
 snapshots for further inspection.
 
-The compiled-binary smoke check builds and relocates the host executable, loads
-its embedded version, and verifies it can start independently. The npm package
-smoke and local IPC test cover real migration execution:
+The compiled-binary acceptance test builds and relocates the host executable,
+installs its native npm tarballs with lifecycle scripts disabled, and runs a
+real migration through the project's Node server. Unix also exercises the
+dashboard and migration execution in a PTY. Run it through Turbo so build and
+packaging prerequisites execute in order:
 
 ```sh
-pnpm --filter @migrate-sdk/tui test:binary
+pnpm turbo run test:binary --filter=@migrate-sdk/tui
 pnpm --filter @migrate-sdk/tui test:ipc
+pnpm --filter @migrate-sdk/tui test:package
 ```
+
+The source-package smoke check includes a fresh `pnpm dlx` launch with lifecycle
+scripts disabled and no consumer configuration.

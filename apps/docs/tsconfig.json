@@ -1,6 +1,8 @@
 {
   "extends": "@repo/typescript-config/nextjs.json",
   "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "customConditions": ["source"],
     "plugins": [
       {
         "name": "next"

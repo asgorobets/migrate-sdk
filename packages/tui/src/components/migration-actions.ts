@@ -34,6 +34,7 @@ interface MigrationTuiPrimaryAction {
 
 interface MigrationTuiAvailableActionBase {
   readonly description: string;
+  readonly disabled?: boolean;
   readonly key: string;
   readonly label: string;
   readonly primary?: MigrationTuiPrimaryAction;
@@ -91,7 +92,8 @@ export type MigrationTuiAvailableAction =
 export const migrationTuiAvailableActions = (
   target: MigrateTarget,
   rows: readonly MigrateDashboardRow[],
-  activeRuns: readonly MigrateActiveRun[] = []
+  activeRuns: readonly MigrateActiveRun[] = [],
+  pendingStopRunIds: ReadonlySet<MigrationRunId> = new Set()
 ): readonly MigrationTuiAvailableAction[] => {
   const isGroup = target.kind === "group";
   const noun = isGroup ? "group" : "migration";
@@ -137,15 +139,19 @@ export const migrationTuiAvailableActions = (
     });
 
     if (activeRun.stopSupported === true) {
+      const pending = pendingStopRunIds.has(activeRun.runId);
       options.push({
-        description: `Request a safe stop for run ${activeRun.runId}`,
+        description: pending
+          ? `Waiting for the server to acknowledge the stop request for run ${activeRun.runId}`
+          : `Request a safe stop for run ${activeRun.runId}`,
+        disabled: pending,
         id: "stop-run",
         key: "x",
-        label: "Stop run",
+        label: pending ? "Sending stop request…" : "Stop run",
         primary: {
-          compactLabel: "x Stop",
+          compactLabel: pending ? "Sending stop…" : "x Stop",
           intent: "warning",
-          label: "x Stop run",
+          label: pending ? "Sending stop request…" : "x Stop run",
           slot: "stop",
         },
         runId: activeRun.runId,

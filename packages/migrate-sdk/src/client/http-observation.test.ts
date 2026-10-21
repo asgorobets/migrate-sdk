@@ -515,7 +515,7 @@ describe("HTTP observation sessions", () => {
 
   it.each([
     "permission",
-    "malformed NDJSON",
+    "malformed observation frame",
   ])("does not retry an observation %s failure", async (failure) => {
     let attempts = 0;
     const http = makeRemoteMigrateServerHttp(
@@ -524,15 +524,19 @@ describe("HTTP observation sessions", () => {
     const connection = await connectHttpMigrateServer({
       fetch: async (input, init) => {
         const request = new Request(input, init);
-        if (
-          (await request.clone().text()).includes("ObserveDashboardSession")
-        ) {
+        const body = await request.clone().text();
+        if (body.includes("ObserveDashboardSession")) {
           attempts += 1;
           return failure === "permission"
             ? new Response("Forbidden", { status: 403 })
-            : new Response("not-json\n", {
-                headers: { "content-type": "application/ndjson" },
-              });
+            : new Response(
+                `${JSON.stringify({
+                  _tag: "Chunk",
+                  requestId: JSON.parse(body).id,
+                  values: [{ kind: "invalid" }],
+                })}\n`,
+                { headers: { "content-type": "application/ndjson" } }
+              );
         }
         return http.handler(request);
       },

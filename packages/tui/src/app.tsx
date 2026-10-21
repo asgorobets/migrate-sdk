@@ -1,4 +1,4 @@
-import { type KeyEvent, RGBA } from "@opentui/core";
+import { type KeyEvent, RGBA, type ScrollBoxRenderable } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
 import { RadioGroup } from "@tuiparts/react/radio-group";
 import type {
@@ -49,12 +49,13 @@ import {
 } from "./components/session-activity-view.tsx";
 import { StoreSchemaSetup } from "./components/store-schema-setup.tsx";
 import { Badge } from "./components/ui/badge.tsx";
-import { Button } from "./components/ui/button.tsx";
 import {
   Dialog,
+  DialogActions,
   DialogContent,
   DialogDescription,
   DialogTitle,
+  useDialogNavigation,
 } from "./components/ui/dialog.tsx";
 import { Radio } from "./components/ui/radio.tsx";
 import type { MigrationTuiExecutionResult } from "./execution.ts";
@@ -415,7 +416,10 @@ const ExecutionPlan = ({
   );
 };
 
-const operationConfirmationCopy = (operation: MigratePreparedOperation) => {
+const operationConfirmationCopy = (
+  operation: MigratePreparedOperation,
+  withDependencies = true
+) => {
   const rollback = operation.action === "rollback";
   const rollbackOrphans = operationRollsBackOrphans(operation);
   const dependencyDecision = operationNeedsDependencyDecision(operation);
@@ -424,25 +428,24 @@ const operationConfirmationCopy = (operation: MigratePreparedOperation) => {
   let description: string = rollbackOrphans
     ? "Rollback orphaned items with dependencies"
     : actionCopy[operation.action].dependencyDescription;
+  if (dependencyDecision && !withDependencies) {
+    description = "Dependencies are omitted from this execution.";
+  }
   let badgeLabel = "ACTION REQUIRED";
   let planLabel = rollbackOrphans ? "Migration plan" : "Run order";
-  let confirmationButtonLabel = "";
-  let destructiveShortcut = "";
+  let confirmationButtonLabel = preparedOperationCopy(operation).button;
 
   const rollbackCopy = rollback ? rollbackConfirmation(operation) : undefined;
   if (rollback) {
     title = "Confirm rollback";
     planLabel = "Rollback order";
     badgeLabel = forcedRollback ? "UNSAFE" : "DESTRUCTIVE";
-    confirmationButtonLabel =
-      rollbackCopy?.buttonLabel ?? "y Rollback selected";
-    destructiveShortcut = "i include · s selected only · y confirm";
+    confirmationButtonLabel = rollbackCopy?.buttonLabel ?? "Rollback selected";
   } else if (rollbackOrphans && !dependencyDecision) {
     title = "Confirm orphan rollback";
     description = "Rollback destination items missing from source";
     badgeLabel = "DESTRUCTIVE";
-    confirmationButtonLabel = "y Rollback orphans";
-    destructiveShortcut = "y rollback orphans";
+    confirmationButtonLabel = "Rollback orphans";
   }
 
   const paragraphs = rollbackCopy?.paragraphs ?? [description];
@@ -455,10 +458,105 @@ const operationConfirmationCopy = (operation: MigratePreparedOperation) => {
     badgeLabel,
     planLabel,
     confirmationButtonLabel,
-    destructiveShortcut,
     paragraphs,
     forceWarning,
   };
+};
+
+interface SafetyDialogProps {
+  readonly height: number;
+  readonly onCancel: () => void;
+  readonly onConfirm: () => void;
+  readonly onForce: () => void;
+  readonly onIncludeDependencies: () => void;
+  readonly onKeyDown: (key: KeyEvent) => void;
+  readonly onRollbackScopeChange: (scope: RollbackScope) => void;
+  readonly operation: MigratePreparedOperation;
+  readonly preview: MigratePreparedOperation | null;
+  readonly rollbackPlanError: string | null;
+  readonly rollbackPlanUpdating: boolean;
+  readonly width: number;
+}
+
+const useSafetyDialogNavigation = ({
+  operation,
+  onCancel,
+  onForce,
+  onConfirm,
+  onIncludeDependencies,
+  onKeyDown,
+  onRollbackScopeChange,
+  rollbackPlanError,
+  rollbackPlanUpdating,
+}: Omit<SafetyDialogProps, "height" | "width" | "preview">) => {
+  const [dependencyMode, setDependencyMode] = useState("include-dependencies");
+  const rollback = operation.action === "rollback";
+  const dependencyDecision = operationNeedsDependencyDecision(operation);
+  const destructive =
+    rollback || (operationRollsBackOrphans(operation) && !dependencyDecision);
+  const { confirmationButtonLabel } = operationConfirmationCopy(operation);
+  const rollbackScope = operation.plan.withDependencies
+    ? "include-dependencies"
+    : "selected-only";
+  const scope = rollback ? rollbackScope : dependencyMode;
+  const choices =
+    rollback || dependencyDecision
+      ? [
+          {
+            value: "include-dependencies",
+            disabled: operation.sourceIdentities !== undefined,
+          },
+          { value: "selected-only" },
+        ]
+      : [];
+  const confirm = () => {
+    if (dependencyDecision && !rollback) {
+      if (dependencyMode === "include-dependencies") {
+        onIncludeDependencies();
+      } else {
+        onForce();
+      }
+    } else {
+      onConfirm();
+    }
+  };
+  useDialogNavigation({
+    choices,
+    value: scope,
+    disabled: rollbackPlanUpdating || rollbackPlanError !== null,
+    navigationDisabled: rollbackPlanUpdating,
+    onValueChange: (value) => {
+      if (value !== "include-dependencies" && value !== "selected-only") {
+        return;
+      }
+      if (rollback) {
+        onRollbackScopeChange(value);
+      } else {
+        setDependencyMode(value);
+      }
+    },
+    onConfirm: confirm,
+    onCancel,
+    onShortcut: (key) => {
+      if (["i", "s", "f", "y", "pageup", "pagedown"].includes(key.name)) {
+        onKeyDown(key);
+      }
+    },
+    resetKey: `${operation.action}:${dependencyDecision}`,
+  });
+
+  let label = confirmationButtonLabel;
+  if (dependencyDecision && !rollback) {
+    label =
+      dependencyMode === "include-dependencies"
+        ? "Include dependencies"
+        : `Force ${preparedOperationCopy(operation).button}`;
+  }
+  const intent =
+    destructive || (dependencyDecision && dependencyMode === "selected-only")
+      ? "warning"
+      : "primary";
+  return { confirm, dependencyMode, setDependencyMode, label, intent } as const;
 };
 
 const SafetyDialog = ({
@@ -474,51 +572,62 @@ const SafetyDialog = ({
   rollbackPlanUpdating,
   onRollbackScopeChange,
   width,
-}: {
-  readonly rollbackPlanError: string | null;
-  readonly rollbackPlanUpdating: boolean;
-  readonly onRollbackScopeChange: (scope: RollbackScope) => void;
-  readonly height: number;
-  readonly onCancel: () => void;
-  readonly onForce: () => void;
-  readonly onConfirm: () => void;
-  readonly onIncludeDependencies: () => void;
-  readonly onKeyDown: (key: KeyEvent) => void;
-  readonly operation: MigratePreparedOperation;
-  readonly preview: MigratePreparedOperation | null;
-  readonly width: number;
-}) => {
+}: SafetyDialogProps) => {
+  const scrollboxRef = useRef<ScrollBoxRenderable | null>(null);
   const compact = width < 80;
   const dialogWidth = Math.max(1, Math.min(76, width - (compact ? 8 : 4)));
-  const hierarchyItems = executionPlanItems(preview ?? operation);
+  const { confirm, dependencyMode, setDependencyMode, label, intent } =
+    useSafetyDialogNavigation({
+      operation,
+      onCancel,
+      onForce,
+      onConfirm,
+      onIncludeDependencies,
+      onKeyDown: (key) => {
+        if (key.name === "pageup" || key.name === "pagedown") {
+          key.preventDefault();
+          key.stopPropagation();
+          scrollboxRef.current?.scrollBy(
+            key.name === "pageup" ? -1 : 1,
+            "viewport"
+          );
+        } else {
+          onKeyDown(key);
+        }
+      },
+      onRollbackScopeChange,
+      rollbackPlanError,
+      rollbackPlanUpdating,
+    });
+  const dependencyDecision = operationNeedsDependencyDecision(operation);
+  const displayedOperation =
+    dependencyDecision && dependencyMode === "selected-only"
+      ? operation
+      : (preview ?? operation);
+  const hierarchyItems = executionPlanItems(displayedOperation);
   const hierarchyRows =
     hierarchyItems.length + (operation.selection.kind === "group" ? 1 : 0);
   const rollback = operation.action === "rollback";
-  const rollbackExtraRows = operation.plan.force === true ? 13 : 12;
+  const rollbackExtraRows = operation.plan.force === true ? 14 : 13;
   const limited = operation.plan.limit !== undefined;
   const dialogHeight = Math.max(
     1,
     Math.min(
       Math.max(
-        rollback ? 14 : 13,
-        hierarchyRows + (rollback ? rollbackExtraRows : 10) + (limited ? 3 : 0)
+        rollback ? 15 : 13,
+        hierarchyRows + (rollback ? rollbackExtraRows : 14) + (limited ? 3 : 0)
       ),
       height - 4
     )
   );
   const dialogPadding = compact ? 1 : 2;
   const rollbackOrphans = operationRollsBackOrphans(operation);
-  const dependencyDecision = operationNeedsDependencyDecision(operation);
   const destructive = rollback || (rollbackOrphans && !dependencyDecision);
-  const {
-    title,
-    badgeLabel,
-    planLabel,
-    confirmationButtonLabel,
-    destructiveShortcut,
-    paragraphs,
-    forceWarning,
-  } = operationConfirmationCopy(operation);
+  const { title, badgeLabel, planLabel, paragraphs, forceWarning } =
+    operationConfirmationCopy(
+      operation,
+      dependencyMode === "include-dependencies"
+    );
   const rollbackScopeHint =
     rollbackPlanError ?? (rollbackPlanUpdating ? "Updating plan…" : null);
 
@@ -538,7 +647,6 @@ const SafetyDialog = ({
         focusedBorderColor={destructive ? colors.danger : colors.warning}
         height={dialogHeight}
         maxWidth={dialogWidth}
-        onKeyDown={onKeyDown}
         overflow="hidden"
         paddingLeft={dialogPadding}
         paddingRight={dialogPadding}
@@ -563,6 +671,7 @@ const SafetyDialog = ({
         <scrollbox
           focusable
           focused
+          ref={scrollboxRef}
           scrollX={false}
           scrollY
           style={{
@@ -595,13 +704,15 @@ const SafetyDialog = ({
               {planLabel}
             </text>
           </box>
-          <ExecutionPlan operation={preview ?? operation} />
+          <ExecutionPlan operation={displayedOperation} />
         </scrollbox>
         {limited && (
           <text fg={colors.info} flexShrink={0} marginTop={1} wrapMode="word">
             Up to {operation.plan.limit}{" "}
-            {operation.plan.limit === 1 ? "item" : "items"} per migration,
-            including dependencies.
+            {operation.plan.limit === 1 ? "item" : "items"} per migration
+            {displayedOperation.plan.withDependencies
+              ? ", including dependencies."
+              : "."}
           </text>
         )}
         {rollback && (
@@ -646,58 +757,56 @@ const SafetyDialog = ({
             )}
           </box>
         )}
-        <box
-          style={{
-            flexDirection: "row-reverse",
-            flexShrink: 0,
-            gap: 1,
-            height: 1,
-            justifyContent: "flex-start",
-            marginTop: 1,
-          }}
-        >
-          {destructive || (limited && !dependencyDecision) ? (
-            <Button
-              disabled={rollbackPlanUpdating || rollbackPlanError !== null}
-              intent={destructive ? "warning" : "primary"}
-              label={confirmationButtonLabel}
-              onPress={onConfirm}
+        {dependencyDecision && !rollback && (
+          <RadioGroup
+            flexDirection="column"
+            flexShrink={0}
+            marginTop={1}
+            onValueChange={setDependencyMode}
+            value={dependencyMode}
+          >
+            <Radio
+              accentColor={colors.info}
+              label="i Include dependencies (recommended)"
+              value="include-dependencies"
             />
-          ) : (
-            <>
-              <Button
-                label="i Include dependencies"
-                onPress={onIncludeDependencies}
-              />
-              <Button
-                intent="warning"
-                label={`f Force ${preparedOperationCopy(operation).button}`}
-                onPress={onForce}
-              />
-            </>
-          )}
-          <Button intent="neutral" label="n Cancel" onPress={onCancel} />
-        </box>
-        <box
-          style={{
-            flexDirection: "row",
-            flexShrink: 0,
-            height: 1,
-            justifyContent: "flex-end",
-            width: "100%",
-          }}
-        >
-          <text fg={colors.dim}>
-            {"↑↓ scroll · "}
-            {dependencyDecision
-              ? "i include · f force · n/esc cancel"
-              : `${limited ? "y run" : destructiveShortcut} · n/esc cancel`}
-          </text>
-        </box>
+            <Radio
+              accentColor={colors.warning}
+              label={`f Force ${preparedOperationCopy(operation).button}`}
+              value="selected-only"
+            />
+          </RadioGroup>
+        )}
+        <DialogActions
+          disabled={rollbackPlanUpdating || rollbackPlanError !== null}
+          intent={intent}
+          label={label}
+          onCancel={onCancel}
+          onConfirm={confirm}
+        />
+        <text fg={colors.dim} flexShrink={0}>
+          {rollback || dependencyDecision
+            ? "↑↓ choose · enter confirm · esc cancel"
+            : "enter confirm · esc cancel"}
+        </text>
+        <text fg={colors.dim} flexShrink={0}>
+          pgup/pgdn scroll ·{" "}
+          {dependencyDecision && !rollback
+            ? "i include · f force"
+            : "y confirm"}
+        </text>
       </DialogContent>
     </Dialog>
   );
 };
+
+const pendingStopMessage = (
+  runId: MigrationRunId | undefined,
+  pendingRunIds: ReadonlySet<MigrationRunId>
+): string =>
+  runId !== undefined && pendingRunIds.has(runId)
+    ? `Sending stop request for run ${runId}…`
+    : "";
 
 interface MigrationTuiAppProps {
   readonly initialDashboardState?: MigrationTuiDashboardState;
@@ -778,6 +887,10 @@ const MigrationTuiDashboardApp = ({
   const [expandedMessage, setExpandedMessage] =
     useState<ExpandedMessage | null>(null);
   const [busy, setBusyState] = useState("");
+  const pendingStopRunIdsRef = useRef(new Set<MigrationRunId>());
+  const [pendingStopRunIds, setPendingStopRunIds] = useState<
+    ReadonlySet<MigrationRunId>
+  >(() => new Set());
   const [notice, setNoticeState] = useState<string | null>(
     recoveryNotice ?? null
   );
@@ -830,11 +943,15 @@ const MigrationTuiDashboardApp = ({
   const setStopResult = useCallback(
     (result: MigrateRunStopResult) => {
       const presentation = stopResultPresentation[result.kind];
-      setNoticeState(result.message);
+      const message =
+        result.kind === "requested"
+          ? `Stop requested for run ${result.runId}; waiting for active work to finish…`
+          : result.message;
+      setNoticeState(message);
       setNoticeTone(presentation.noticeTone);
       appendActivity({
         kind: presentation.activityKind,
-        message: result.message,
+        message,
       });
     },
     [appendActivity]
@@ -865,6 +982,7 @@ const MigrationTuiDashboardApp = ({
   );
   const [selectiveRunMode, setSelectiveRunMode] =
     useState<SelectiveRunMode>("next-items");
+  const [selectiveUpdate, setSelectiveUpdate] = useState(false);
   let selectiveMode = selectiveRunMode;
   if (selectiveAction === "rollback") {
     selectiveMode = "source-ids";
@@ -1049,7 +1167,9 @@ const MigrationTuiDashboardApp = ({
   );
   const effectiveBusy = busy;
   const displayedActivity =
-    effectiveBusy || statusActivityMessage(durableRows, statusLoading);
+    effectiveBusy ||
+    pendingStopMessage(selectedActiveRun?.runId, pendingStopRunIds) ||
+    statusActivityMessage(durableRows, statusLoading);
   const dashboardStateRef = useRef({
     busy: effectiveBusy,
     selectedRows,
@@ -1277,20 +1397,31 @@ const MigrationTuiDashboardApp = ({
 
   const stopRun = useCallback(
     async (runId: MigrationRunId) => {
+      if (pendingStopRunIdsRef.current.has(runId)) {
+        return;
+      }
+      pendingStopRunIdsRef.current.add(runId);
+      setPendingStopRunIds(new Set(pendingStopRunIdsRef.current));
       setView("dashboard");
-      setBusy(`Stopping run ${runId}…`);
+      appendActivity({
+        kind: "status",
+        message: `Sending stop request for run ${runId}…`,
+      });
       setError(null);
 
       try {
         const result = await runtime.stopRun(runId);
         setStopResult(result);
-        setBusy("");
       } catch (cause) {
-        setError(errorMessage(cause));
-        setBusy("");
+        setError(
+          `Unable to request stop for run ${runId}: ${errorMessage(cause)}`
+        );
+      } finally {
+        pendingStopRunIdsRef.current.delete(runId);
+        setPendingStopRunIds(new Set(pendingStopRunIdsRef.current));
       }
     },
-    [runtime, setBusy, setError, setStopResult]
+    [appendActivity, runtime, setError, setStopResult]
   );
 
   const prepareOperation = useCallback(
@@ -1386,6 +1517,7 @@ const MigrationTuiDashboardApp = ({
       }
 
       setSelectiveLimit(1);
+      setSelectiveUpdate(false);
       setSelectiveAction(action);
       setSelectiveTarget(target);
       setSelectiveDraft("");
@@ -1440,6 +1572,7 @@ const MigrationTuiDashboardApp = ({
         return;
       }
       setSelectiveRunMode(mode);
+      setSelectiveUpdate(false);
       setSelectiveFeedback(undefined);
     },
     [selectiveAction, selectiveTarget]
@@ -1493,7 +1626,9 @@ const MigrationTuiDashboardApp = ({
 
     startTask(
       prepareOperation(
-        selectiveAction,
+        selectiveAction === "run" && selectiveUpdate
+          ? "update"
+          : selectiveAction,
         {
           sourceIdentities: selectiveEntries,
           ...(selectiveAction === "rollback"
@@ -1510,6 +1645,7 @@ const MigrationTuiDashboardApp = ({
     selectiveMode,
     selectiveLimit,
     selectiveTarget,
+    selectiveUpdate,
     startTask,
   ]);
 
@@ -1731,7 +1867,7 @@ const MigrationTuiDashboardApp = ({
 
   const chooseOption = useCallback(
     (option: MigrationTuiAvailableAction | undefined) => {
-      if (option === undefined) {
+      if (option === undefined || option.disabled === true) {
         return;
       }
 
@@ -1800,9 +1936,10 @@ const MigrationTuiDashboardApp = ({
         : migrationTuiAvailableActions(
             selectedTarget,
             selectedRows,
-            activeRuns
+            activeRuns,
+            pendingStopRunIds
           ),
-    [activeRuns, selectedRows, selectedTarget]
+    [activeRuns, pendingStopRunIds, selectedRows, selectedTarget]
   );
 
   const openActivity = useCallback(() => {
@@ -2320,22 +2457,11 @@ const MigrationTuiDashboardApp = ({
   );
 
   useKeyboard((key) => {
-    if (
-      view === "break-lock" &&
-      (key.name === "y" || key.name === "n" || key.name === "escape")
-    ) {
-      handleBreakLockKey(key);
-    } else if (
-      view === "confirm" &&
-      (key.name === "f" ||
-        key.name === "i" ||
-        (key.name === "s" && pendingOperation?.action === "rollback") ||
-        key.name === "y" ||
-        key.name === "n" ||
-        key.name === "escape")
-    ) {
-      handleConfirmationKey(key);
-    } else if (view === "dashboard" && key.name === "l") {
+    if (view === "break-lock" || view === "confirm") {
+      // Confirmation dialogs own navigation and shortcuts.
+      return;
+    }
+    if (view === "dashboard" && key.name === "l") {
       key.preventDefault();
       key.stopPropagation();
       openActivity();
@@ -2482,6 +2608,7 @@ const MigrationTuiDashboardApp = ({
         activeTab={detailTab}
         busy={effectiveBusy}
         groups={runtime.groups}
+        keyboardActive={view === "dashboard"}
         listTab={listTab}
         messageIndex={messageIndex}
         messages={messages}
@@ -2545,9 +2672,8 @@ const MigrationTuiDashboardApp = ({
               return;
             }
             if (
-              pendingOperation.action === "rollback" ||
-              (operationRollsBackOrphans(pendingOperation) &&
-                !operationNeedsDependencyDecision(pendingOperation))
+              !operationNeedsDependencyDecision(pendingOperation) ||
+              pendingOperation.action === "rollback"
             ) {
               startTask(executeOperation(pendingOperation));
             }
@@ -2625,7 +2751,9 @@ const MigrationTuiDashboardApp = ({
             setSelectiveFeedback(undefined);
           }}
           onModeChange={changeSelectiveMode}
+          onUpdateChange={setSelectiveUpdate}
           target={selectiveTarget}
+          update={selectiveUpdate}
           {...(selectiveFeedback === undefined
             ? {}
             : { feedback: selectiveFeedback })}

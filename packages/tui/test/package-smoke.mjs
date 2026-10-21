@@ -10,7 +10,8 @@ import {
 } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { removeTemporaryDirectory } from "./remove-temporary-directory.mjs";
 
 const packageDirectory = resolve(import.meta.dirname, "..");
@@ -173,7 +174,17 @@ try {
 `
   );
 
-  run(pnpm, ["exec", "bun", basename(scriptPath)], {
+  const fixtureRequire = createRequire(
+    resolve(fixtureDirectory, "package.json")
+  );
+  const launcherUrl = pathToFileURL(
+    resolve(
+      dirname(fixtureRequire.resolve("@migrate-sdk/tui/package.json")),
+      "bin/launcher.js"
+    )
+  );
+  const { resolveBunExecutable } = await import(launcherUrl.href);
+  run(await resolveBunExecutable(), [basename(scriptPath)], {
     cwd: fixtureDirectory,
   });
 };
@@ -215,7 +226,13 @@ try {
     }
   );
   const packedTui = parsePackOutput(tuiPackOutput);
-  if (packedTui.files.some((file) => file.path.startsWith("dist/binary/"))) {
+  if (
+    packedTui.files.some(
+      (file) =>
+        file.path.startsWith("dist/binary/") ||
+        file.path.startsWith("dist/distribution/")
+    )
+  ) {
     throw new Error("Packed TUI included direct-binary build artifacts");
   }
 
@@ -233,6 +250,35 @@ try {
     tempDirectory,
     `migrate-sdk-tui-${packageJson.version}`
   );
+  const dlxDirectory = resolve(tempDirectory, "dlx");
+  await mkdir(dlxDirectory);
+  const dlxHelp = run(
+    pnpm,
+    [
+      // Supply both unpublished packages; dlx still resolves their Effect peers.
+      `--package=${tuiTarball}`,
+      `--package=${sdkTarball}`,
+      "dlx",
+      "migrate-tui",
+      "--help",
+    ],
+    {
+      capture: true,
+      cwd: dlxDirectory,
+      env: {
+        ...process.env,
+        npm_config_cache_dir: resolve(tempDirectory, "dlx-cache"),
+        npm_config_side_effects_cache: "false",
+        npm_config_ignore_scripts: "true",
+      },
+    }
+  );
+  if (!(dlxHelp.includes("Usage:") && dlxHelp.includes("--server"))) {
+    throw new Error(
+      "Packed TUI did not launch through a fresh pnpm dlx install"
+    );
+  }
+
   await writeFile(
     resolve(fixtureDirectory, "package.json"),
     `${JSON.stringify(
@@ -255,7 +301,17 @@ try {
     resolve(fixtureDirectory, "migrate.config.ts")
   );
 
-  run(pnpm, ["install", "--ignore-scripts"], { cwd: fixtureDirectory });
+  // Consumer installs do not inherit workspace overrides; reject peer drift.
+  run(
+    pnpm,
+    [
+      "install",
+      "--ignore-scripts",
+      "--engine-strict",
+      "--strict-peer-dependencies",
+    ],
+    { cwd: fixtureDirectory }
+  );
 
   const command = resolve(
     fixtureDirectory,
@@ -285,7 +341,7 @@ try {
   await runPackedMigration({ command, fixtureDirectory });
 
   process.stdout.write(
-    `Packed launcher and consumer migration smoke check passed (${basename(tuiTarball)})\n`
+    `Packed dlx, launcher, and consumer migration smoke check passed (${basename(tuiTarball)})\n`
   );
 } finally {
   await removeTemporaryDirectory(tempDirectory);

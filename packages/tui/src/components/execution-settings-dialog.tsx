@@ -4,10 +4,10 @@ import { type KeyEvent, RGBA } from "@opentui/core";
 import { type RefObject, useEffect, useRef } from "react";
 import { migrationColors as colors } from "./migration-dashboard.tsx";
 import { Badge } from "./ui/badge.tsx";
-import { Button } from "./ui/button.tsx";
 import { Checkbox } from "./ui/checkbox.tsx";
 import {
   Dialog,
+  DialogActions,
   DialogContent,
   DialogDescription,
   DialogTitle,
@@ -193,17 +193,12 @@ export const ExecutionSettingsDialog = ({
         <box style={{ flexShrink: 0, height: 1 }}>
           <text fg={colors.dim}>Changes apply to this TUI session.</text>
         </box>
-        <box
-          style={{
-            flexDirection: "row-reverse",
-            flexShrink: 0,
-            gap: 1,
-            height: 1,
-          }}
-        >
-          <Button intent="primary" label="ctrl+s Save" onPress={onSave} />
-          <Button intent="neutral" label="esc Cancel" onPress={onCancel} />
-        </box>
+        <DialogActions
+          label="Save"
+          marginTop={0}
+          onCancel={onCancel}
+          onConfirm={onSave}
+        />
         <box
           style={{
             flexDirection: "row",
@@ -213,7 +208,7 @@ export const ExecutionSettingsDialog = ({
           }}
         >
           <text fg={colors.dim}>
-            tab move · ↑↓ value · space toggle · ^s save · esc cancel
+            tab move · ↑↓ value · space toggle · ↵ save · esc cancel
           </text>
         </box>
       </DialogContent>

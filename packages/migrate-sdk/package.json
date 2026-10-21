@@ -1,6 +1,7 @@
 {
   "name": "migrate-sdk",
-  "version": "0.13.1",
+  "license": "MIT",
+  "version": "0.17.2",
   "type": "module",
   "sideEffects": [],
   "repository": {
@@ -9,7 +10,7 @@
     "directory": "packages/migrate-sdk"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=22.19.0"
   },
   "bin": {
     "migrate": "./dist/cli/bin.js"
@@ -96,6 +97,7 @@
       "source": "./src/server/http-host.ts",
       "import": "./dist/server/http-host.js"
     },
+    "./server/node": "./dist/client/node/local-server-entry.js",
     "./destinations/in-memory": {
       "types": "./dist/destinations/in-memory/index.d.ts",
       "bun": "./src/destinations/in-memory/index.ts",
@@ -191,8 +193,13 @@
     "test:sql:smoke": "vitest run --config vitest.sql.config.ts",
     "test:watch": "vitest"
   },
+  "peerDependencies": {
+    "@effect/platform-node": "catalog:effect-peers",
+    "effect": "catalog:effect-peers"
+  },
   "devDependencies": {
     "@effect/language-service": "catalog:",
+    "@effect/platform-node": "catalog:",
     "@effect/sql-mssql": "catalog:",
     "@effect/sql-mysql2": "catalog:",
     "@effect/sql-pg": "catalog:",
@@ -200,16 +207,15 @@
     "@effect/sql-sqlite-node": "catalog:",
     "@effect/vitest": "catalog:",
     "@repo/typescript-config": "workspace:*",
-    "@types/node": "^24.13.1",
+    "@types/node": "^22.19.0",
     "@types/papaparse": "^5.5.2",
     "@types/proper-lockfile": "^4.1.4",
     "@typescript/native": "npm:typescript@7.0.2",
+    "effect": "catalog:",
     "typescript": "npm:@typescript/typescript6@6.0.2",
     "vitest": "^5.0.0"
   },
   "dependencies": {
-    "@effect/platform-node": "catalog:",
-    "effect": "catalog:",
     "papaparse": "^5.5.3",
     "proper-lockfile": "^4.1.2",
     "tsx": "^4.22.4"

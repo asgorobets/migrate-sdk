@@ -1,5 +1,90 @@
 # @migrate-sdk/tui
 
+## 0.17.2
+
+### Patch Changes
+
+- 1c8e878: Standardize dialog controls with arrow-key dependency selection, Enter to proceed, and Escape to cancel. Keep execution previews aligned with the selected scope and preserve keyboard hints in compact layouts.
+
+## 0.17.1
+
+### Patch Changes
+
+- bec774b: License Migrate SDK under MIT and include the license in published packages and native TUI archives.
+
+## 0.17.0
+
+### Patch Changes
+
+- Updated dependencies [1800ebc]
+  - migrate-sdk@0.17.0
+
+## 0.16.0
+
+### Minor Changes
+
+- 8fd24ef: Publish compiled TUI executables for macOS ARM64/x64, Linux glibc ARM64/x64, and Windows x64 through exact optional npm packages. CLI installations no longer install Bun or require dependency build approvals.
+
+### Patch Changes
+
+- migrate-sdk@0.16.0
+
+## 0.15.0
+
+### Minor Changes
+
+- 58a5410: Add standalone TUI compilation and staged platform npm packages, release archives,
+  checksums, and native-platform CI acceptance tests. Expose a Node server bootstrap
+  so bundled clients can run migrations through the matching project SDK.
+
+### Patch Changes
+
+- Updated dependencies [58a5410]
+  - migrate-sdk@0.15.0
+
+## 0.14.2
+
+### Patch Changes
+
+- 58eafa5: Update Effect dependencies to 4.0.5.
+- 86c505e: Share compatible customer installations of Effect v4, its Node platform package, the commercetools platform and Import API SDKs, and React for the TUI's exported component. Declare them as required peers with supported version ranges, allowing npm and pnpm to install compatible versions automatically when they are missing. Keep the commercetools HTTP client builder as a development-only example dependency.
+- 5d30e19: Keep the TUI responsive while a stop request waits for the Migrate Server. Navigation and controls for other runs remain available, duplicate pending stop requests are prevented, and the TUI distinguishes sending a request from waiting for active work to finish.
+
+## 0.14.1
+
+### Patch Changes
+
+- 92b98d7: Upgrade Effect and its platform, SQL, and testing packages together to 4.0.4.
+  Fresh TUI installations now resolve compatible stable dependencies, and the
+  Workflow SDK example's PostgreSQL client sends TLS SNI for Neon connections.
+  Document one-off pnpm dlx usage with explicit Bun and esbuild build approvals.
+
+## 0.14.0
+
+### Minor Changes
+
+- 230552c: Separate source ID scope from update behavior. Selecting IDs now leaves already migrated items unchanged when their source version and version contract still match. Combine `--id` with `--update` to reprocess only the selected items, preserving other item states and saved scan progress in inline and Workflow runs. The TUI Source IDs dialog now offers the same Update option.
+
+### Patch Changes
+
+- Updated dependencies [230552c]
+  - migrate-sdk@0.14.0
+
+## 0.13.3
+
+### Patch Changes
+
+- 5a2d317: Support Node.js 22.19.0 and newer across the SDK, CLI, TUI, and adapters, allowing
+  applications on Node 22 to embed Migrate SDK without upgrading to Node 24.
+
+## 0.13.2
+
+### Patch Changes
+
+- f30de8a: Open the migration list without waiting for durable status, with background or manual status loading. Load messages on demand and reuse migration and group caches until observed progress invalidates them.
+
+  Keep earlier source counts when scanning another migration, and label the TUI action "Scan sources".
+
 ## 0.13.1
 
 ### Patch Changes

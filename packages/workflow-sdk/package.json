@@ -1,6 +1,7 @@
 {
   "name": "@migrate-sdk/workflow-sdk",
-  "version": "0.13.1",
+  "license": "MIT",
+  "version": "0.17.2",
   "type": "module",
   "sideEffects": [],
   "repository": {
@@ -9,7 +10,7 @@
     "directory": "packages/workflow-sdk"
   },
   "engines": {
-    "node": ">=24.0.0"
+    "node": ">=22.19.0"
   },
   "files": [
     "src/*.ts",
@@ -54,7 +55,7 @@
     "test:watch": "vitest"
   },
   "peerDependencies": {
-    "effect": "catalog:",
+    "effect": "catalog:effect-peers",
     "migrate-sdk": "workspace:>=0.1.0 <1.0.0",
     "workflow": "^4.5.0"
   },
@@ -62,12 +63,13 @@
     "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
     "@repo/typescript-config": "workspace:*",
-    "@types/node": "^24.13.1",
+    "@types/node": "^22.19.0",
     "@workflow/vitest": "4.0.11",
     "effect": "catalog:",
     "migrate-sdk": "workspace:*",
     "@typescript/native": "npm:typescript@7.0.2",
     "typescript": "npm:@typescript/typescript6@6.0.2",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.0",
+    "workflow": "^4.5.0"
   }
 }
