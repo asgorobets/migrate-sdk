@@ -1380,7 +1380,10 @@ describe("Migrate Server", () => {
                 scannedSource: false,
               };
             }),
-            getActiveRuns: Effect.sync(() => (active ? [activeRun] : [])),
+            // Store I/O can finish after the test clock advances.
+            getActiveRuns: TestClock.withLive(Effect.sleep("10 millis")).pipe(
+              Effect.andThen(Effect.sync(() => (active ? [activeRun] : [])))
+            ),
             getRunProgress: () =>
               Effect.sync(() => {
                 finalReads += 1;
@@ -1421,6 +1424,13 @@ describe("Migrate Server", () => {
         active = false;
         yield* Deferred.succeed(finished, undefined);
         yield* TestClock.adjust("2 seconds");
+        yield* Stream.fromQueue(received).pipe(
+          Stream.filter(
+            (snapshot) => snapshot.dashboard.activeRuns.length === 0
+          ),
+          Stream.take(1),
+          Stream.runDrain
+        );
         expect(finalReads).toBe(1);
         expect(reads).toBe(1);
         yield* Fiber.interrupt(observer);
@@ -1443,7 +1453,9 @@ describe("Migrate Server", () => {
               rows: [],
               scannedSource: false,
             }),
-            getActiveRuns: Effect.sync(() => (active ? [activeRun] : [])),
+            getActiveRuns: TestClock.withLive(Effect.sleep("10 millis")).pipe(
+              Effect.andThen(Effect.sync(() => (active ? [activeRun] : [])))
+            ),
             getRunProgress: () =>
               Effect.sync(() => {
                 reads += 1;
@@ -1466,6 +1478,13 @@ describe("Migrate Server", () => {
         expect(reads).toBe(0);
         active = false;
         yield* TestClock.adjust("35 seconds");
+        yield* Stream.fromQueue(received).pipe(
+          Stream.filter(
+            (snapshot) => snapshot.dashboard.activeRuns.length === 0
+          ),
+          Stream.take(1),
+          Stream.runDrain
+        );
         expect(reads).toBe(1);
         yield* TestClock.adjust("1 minute");
         expect(reads).toBe(1);

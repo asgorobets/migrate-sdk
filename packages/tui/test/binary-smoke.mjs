@@ -90,13 +90,24 @@ async function terminalMigration(command, cwd, env) {
     );
     call(["key", "-s", session, "q"]);
   } catch (cause) {
+    const status = spawnSync(pilotty, ["status", "-s", session], {
+      env: terminalEnv,
+      encoding: "utf8",
+    });
+    const output = spawnSync(pilotty, ["output", "-s", session], {
+      env: terminalEnv,
+      encoding: "utf8",
+    });
     const snapshot = spawnSync(
       pilotty,
       ["snapshot", "-s", session, "--format", "text"],
       { env: terminalEnv, encoding: "utf8" }
     );
     throw new Error(
-      `${cause.message}\n${snapshot.stdout ?? ""}${snapshot.stderr ?? ""}`,
+      `${cause.message}\nCommand: ${command.join(" ")}\n` +
+        `${status.stdout ?? ""}${status.stderr ?? ""}` +
+        `${output.stdout ?? ""}${output.stderr ?? ""}` +
+        `${snapshot.stdout ?? ""}${snapshot.stderr ?? ""}`,
       { cause }
     );
   } finally {
@@ -177,6 +188,13 @@ try {
           [target.packageName]: `file:${resolve(tarballs, `migrate-sdk-tui-${target.id}-${manifest.version}.tgz`)}`,
           "migrate-sdk": `file:${resolve(temp, sdkTarball)}`,
           effect: require("effect/package.json").version,
+        },
+        // Optional dependencies must resolve to this build even when npm has
+        // already published a native package with the same version.
+        pnpm: {
+          overrides: {
+            [target.packageName]: `file:${resolve(tarballs, `migrate-sdk-tui-${target.id}-${manifest.version}.tgz`)}`,
+          },
         },
       },
       null,
