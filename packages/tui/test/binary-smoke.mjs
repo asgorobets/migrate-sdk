@@ -11,7 +11,6 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { hostBinaryTarget } from "../bin/binary-targets.js";
@@ -26,7 +25,6 @@ const manifest = JSON.parse(
   await readFile(resolve(packageDirectory, "package.json"), "utf8")
 );
 const target = hostBinaryTarget();
-const require = createRequire(import.meta.url);
 const temp = await mkdtemp(join(tmpdir(), "migrate-tui-binary-"));
 const pnpm = "pnpm";
 const completedMigrationPattern = /packaging-fixture {2}COMPLETE/;
@@ -161,6 +159,9 @@ try {
     name.endsWith(".tgz")
   );
   assert.ok(sdkTarball, "SDK tarball");
+  const sdkPeers = JSON.parse(
+    run("tar", ["-xOf", resolve(temp, sdkTarball), "package/package.json"])
+  ).peerDependencies;
   const tarballs = resolve(distribution, "tarballs");
   const fixture = resolve(temp, "fixture");
   await mkdir(fixture);
@@ -176,7 +177,7 @@ try {
           "@migrate-sdk/tui": `file:${resolve(tarballs, `migrate-sdk-tui-${manifest.version}.tgz`)}`,
           [target.packageName]: `file:${resolve(tarballs, `migrate-sdk-tui-${target.id}-${manifest.version}.tgz`)}`,
           "migrate-sdk": `file:${resolve(temp, sdkTarball)}`,
-          effect: `^${require("effect/package.json").version}`,
+          effect: sdkPeers.effect,
         },
       },
       null,

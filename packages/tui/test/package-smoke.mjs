@@ -18,7 +18,6 @@ const packageDirectory = resolve(import.meta.dirname, "..");
 const repositoryDirectory = resolve(packageDirectory, "../..");
 const sdkDirectory = resolve(repositoryDirectory, "packages/migrate-sdk");
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-const require = createRequire(import.meta.url);
 const windowsCommandScriptPattern = /\.(?:bat|cmd)$/i;
 
 const run = (command, args, options = {}) => {
@@ -250,6 +249,11 @@ try {
     tempDirectory,
     `migrate-sdk-tui-${packageJson.version}`
   );
+  const sdkPeers = JSON.parse(
+    run("tar", ["-xOf", sdkTarball, "package/package.json"], {
+      capture: true,
+    })
+  ).peerDependencies;
   const dlxDirectory = resolve(tempDirectory, "dlx");
   await mkdir(dlxDirectory);
   const dlxHelp = run(
@@ -288,7 +292,7 @@ try {
         type: "module",
         dependencies: {
           "@migrate-sdk/tui": `file:${tuiTarball}`,
-          effect: `^${require("effect/package.json").version}`,
+          effect: sdkPeers.effect,
           "migrate-sdk": `file:${sdkTarball}`,
         },
       },

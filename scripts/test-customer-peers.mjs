@@ -31,46 +31,28 @@ const peerPackages = {
   workflow: "workflow-sdk",
   react: "tui",
 };
-const peerVersions = Object.fromEntries(
+const customerPeers = Object.fromEntries(
   await Promise.all(
-    Object.entries(peerPackages).map(async ([name, directory]) => {
-      const manifest = JSON.parse(
-        await readFile(
-          resolve(
-            root,
-            "packages",
-            directory,
-            "node_modules",
-            name,
-            "package.json"
-          ),
-          "utf8"
-        )
-      );
-      // Resolve Effect and its platform together, including transitive peers.
-      // Exact root pins without a consumer lockfile can mix patch releases.
-      const version =
-        name === "effect" || name === "@effect/platform-node"
-          ? `^${manifest.version}`
-          : manifest.version;
-      return [name, version];
-    })
+    Object.entries(peerPackages)
+      .filter(([name]) => name !== "effect" && name !== "@effect/platform-node")
+      .map(async ([name, directory]) => {
+        const manifest = JSON.parse(
+          await readFile(
+            resolve(
+              root,
+              "packages",
+              directory,
+              "node_modules",
+              name,
+              "package.json"
+            ),
+            "utf8"
+          )
+        );
+        return [name, manifest.version];
+      })
   )
 );
-const scenarios = [
-  { name: "existing", peers: peerVersions },
-  { name: "missing", peers: {} },
-  {
-    name: "incompatible-effect",
-    peers: { ...peerVersions, effect: "3.22.3" },
-    rejectedPeer: "effect",
-  },
-  {
-    name: "incompatible-platform",
-    peers: { ...peerVersions, "@effect/platform-node": "4.0.4" },
-    rejectedPeer: "@effect/platform-node",
-  },
-];
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 
@@ -165,8 +147,29 @@ try {
         undefined
       );
     }
+    if (directory === "migrate-sdk") {
+      // pnpm pack resolves these ranges from the effect-peers catalog.
+      customerPeers.effect = peerRange;
+      customerPeers["@effect/platform-node"] =
+        published.peerDependencies["@effect/platform-node"];
+    }
     dependencies[manifest.name] = `file:${tarball}`;
   }
+
+  const scenarios = [
+    { name: "existing", peers: customerPeers },
+    { name: "missing", peers: {} },
+    {
+      name: "incompatible-effect",
+      peers: { ...customerPeers, effect: "3.22.3" },
+      rejectedPeer: "effect",
+    },
+    {
+      name: "incompatible-platform",
+      peers: { ...customerPeers, "@effect/platform-node": "4.0.4" },
+      rejectedPeer: "@effect/platform-node",
+    },
+  ];
 
   for (const manager of [npm, pnpm]) {
     for (const scenario of scenarios) {
