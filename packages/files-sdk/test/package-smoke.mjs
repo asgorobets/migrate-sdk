@@ -38,6 +38,10 @@ try {
   const integration = JSON.parse(
     await readFile(join(packageDirectory, "package.json"), "utf8")
   );
+  const sdkTarball = join(temporary, `migrate-sdk-${sdk.version}.tgz`);
+  const sdkPeers = JSON.parse(
+    run("tar", ["-xOf", sdkTarball, "package/package.json"], packageDirectory)
+  ).peerDependencies;
   await writeFile(
     join(consumer, "package.json"),
     JSON.stringify({
@@ -53,9 +57,9 @@ try {
       "add",
       "--ignore-scripts",
       "--save-exact",
-      join(temporary, `migrate-sdk-${sdk.version}.tgz`),
+      sdkTarball,
       join(temporary, `migrate-sdk-files-sdk-${integration.version}.tgz`),
-      "effect@4.0.5",
+      `effect@${sdkPeers.effect}`,
       "files-sdk@3.1.1",
     ],
     consumer

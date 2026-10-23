@@ -101,6 +101,22 @@ const customObjectVersion = (
   return;
 };
 
+// Model the documented null omission recursively as a storage stress case.
+// Array positions remain stable in this fake; the codec must preserve them.
+const omitNullObjectFields = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(omitNullObjectFields);
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, field]) => field !== null)
+        .map(([key, field]) => [key, omitNullObjectFields(field)])
+    );
+  }
+  return value;
+};
+
 const recordedCustomObject = ({
   draft,
   id,
@@ -115,7 +131,7 @@ const recordedCustomObject = ({
   id,
   key: draft.key,
   lastModifiedAt: "2026-01-01T00:00:00.000Z",
-  value: draft.value,
+  value: omitNullObjectFields(draft.value),
   version,
 });
 

@@ -1,3 +1,4 @@
+import { formatMigrateError } from "../client/error-message.ts";
 import type {
   MigrationDefinitionGroupId,
   MigrationDefinitionId,
@@ -1519,7 +1520,9 @@ export const renderRuntimeError = (error: {
   readonly _tag: string;
   readonly message?: string;
 }): string =>
-  error.message === undefined ? error._tag : `${error._tag}: ${error.message}`;
+  error.message === undefined
+    ? error._tag
+    : formatMigrateError(error, { includeName: true });
 
 export const renderConfigLoadError = (error: {
   readonly cause?: unknown;

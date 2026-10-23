@@ -302,6 +302,13 @@ JSON Lines without replacing an existing file. Session activity is limited to
 the current TUI process; durable Migration Messages remain available through
 the Messages tab and CLI after the TUI closes.
 
+Connection, status and operation failures include their underlying error messages.
+Schema decoding errors show the failing field path and reason alongside the
+record identifier. The footer expands to show diagnostic lines within the
+available terminal space. Press `l`, then Enter on the error event, to read and
+scroll the complete message in Session activity; no migration-code changes or
+tracing flags are required.
+
 Runs start directly when their dependencies are ready. A group concurrency
 override controls item processing within each migration; migration definitions
 still execute in SDK plan order. If required dependencies lack completion,

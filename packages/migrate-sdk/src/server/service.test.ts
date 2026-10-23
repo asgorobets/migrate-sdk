@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Option, Queue, Stream } from "effect";
+import { Deferred, Effect, Fiber, Option, Queue, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { MigrationStoreError, SourceError } from "../domain/errors.ts";
 import {
@@ -28,6 +28,11 @@ import {
   type MigrateServerExecutionObserver,
   type MigrateServerExecutionResult,
 } from "./service.ts";
+
+class TestOperationError extends Schema.TaggedError<TestOperationError>()(
+  "TestOperationError",
+  { message: Schema.String, cause: Schema.Defect() }
+) {}
 
 const articlesId = MigrationDefinitionId.make("articles");
 const runId = MigrationRunId.make("run-1");
@@ -237,6 +242,39 @@ describe("Migrate Server", () => {
         expect(error).toEqual(planningError);
       }
     })
+  );
+
+  it.effect(
+    "retains schema diagnostics when converting an operation failure",
+    () =>
+      Effect.gen(function* () {
+        const schemaError = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            state: Schema.Struct({ runId: Schema.String }),
+          })
+        )({ state: {} }).pipe(Effect.flip);
+        const server = yield* makeServer(
+          makeBackend({
+            prepareOperation: () =>
+              Effect.fail(
+                new TestOperationError({
+                  message: "Unable to prepare migration",
+                  cause: schemaError,
+                })
+              ),
+          })
+        );
+        const error = yield* server
+          .prepareOperation({
+            action: "run",
+            options: {},
+            selection: { kind: "all" },
+          })
+          .pipe(Effect.flip);
+        expect(error.message).toContain("Unable to prepare migration");
+        expect(error.message).toContain("Missing key");
+        expect(error.message).toContain('["state"]["runId"]');
+      })
   );
 
   it.effect("preserves typed registry inspection errors", () =>

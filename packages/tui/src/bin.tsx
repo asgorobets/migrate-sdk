@@ -1,5 +1,7 @@
 #!/usr/bin/env bun
 
+import { formatMigrateError } from "migrate-sdk/client/errors";
+
 import {
   migrationTuiUsage,
   parseMigrationTuiArguments,
@@ -66,7 +68,7 @@ const main = async () => {
 };
 
 main().catch((cause: unknown) => {
-  const message = cause instanceof Error ? cause.message : String(cause);
+  const message = formatMigrateError(cause);
   process.stderr.write(`migrate-tui: ${message}\n`);
   process.exitCode = 1;
 });

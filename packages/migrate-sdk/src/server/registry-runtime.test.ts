@@ -1,5 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Deferred, Effect, Fiber, Layer, Queue, Schema } from "effect";
+import { vi } from "vitest";
+import { formatMigrateError } from "../client/error-message.ts";
 import {
   emptyMigrationProgressCounts,
   MigrationDefinition,
@@ -26,6 +28,58 @@ describe("registry migration server runtime", () => {
     expect(runtime.rows).toEqual([]);
     expect(runtime.groups).toEqual([]);
   });
+
+  it.effect(
+    "does not repeat nested causes when source identity parsing fails",
+    () =>
+      Effect.gen(function* () {
+        const schemaError = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            state: Schema.Struct({ runId: Schema.String }),
+          })
+        )({ state: {} }).pipe(Effect.flip);
+        const failure = new Error("Invalid identity", { cause: schemaError });
+        const definitionId = toMigrationDefinitionId("invalid-identity");
+        const identity = SourceIdentity.make({
+          id: "registry-server-invalid-identity@v1",
+          schema: SourceIdentity.key("id", Schema.NonEmptyString),
+        });
+        const definition = MigrationDefinition.make({
+          id: definitionId,
+          process: () => Effect.void,
+          source: Source.make({
+            cursorSchema: Schema.Struct({ offset: Schema.Int }),
+            identity,
+            lookupStrategy: "direct",
+            read: () => Effect.succeed({ items: [] }),
+            readByIdentity: () => Effect.succeed(null),
+            sourceSchema: Schema.Struct({ title: Schema.String }),
+          }),
+          store: InMemoryMigrationStore.layer(),
+        });
+        const runtime = makeRegistryMigrateServerRuntime({
+          executable: MigrationExecutable.inlineService,
+          registry: MigrationDefinitionRegistry.make({
+            definitions: [definition],
+          }),
+        });
+        const parse = vi
+          .spyOn(SourceIdentity, "fromText")
+          .mockImplementation(() => {
+            throw failure;
+          });
+        try {
+          const error = yield* runtime
+            .normalizeSourceIdentity(definitionId, "invalid")
+            .pipe(Effect.flip);
+          expect(formatMigrateError(error)).toBe(
+            'Invalid identity\nCaused by: SchemaError: Missing key\n  at ["state"]["runId"]'
+          );
+        } finally {
+          parse.mockRestore();
+        }
+      })
+  );
 
   it.effect("returns canonical empty registry reports", () =>
     Effect.gen(function* () {
@@ -237,7 +291,9 @@ describe("registry migration server runtime", () => {
     () => {
       const definitionId = toMigrationDefinitionId("executor-failure");
       const runId = toMigrationRunId("run-executor-failure");
-      const failure = new Error("Executor process crashed");
+      const failure = new Error("Executor process crashed", {
+        cause: new Error("Worker process exited unexpectedly"),
+      });
       const storeLayer = InMemoryMigrationStore.layer(
         InMemoryMigrationStore.makeState()
       );
@@ -298,7 +354,8 @@ describe("registry migration server runtime", () => {
         const execution = yield* runtime.startExecution(operation);
 
         expect(yield* execution.result).toEqual({
-          message: failure.message,
+          message:
+            "Executor process crashed\nCaused by: Error: Worker process exited unexpectedly",
           outcome: "failed",
           runId,
         });

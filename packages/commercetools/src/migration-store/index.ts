@@ -45,6 +45,8 @@ import {
   type CommercetoolsSdkLayerOptions,
 } from "../sdk.ts";
 
+import { customObjectCodec } from "./custom-object-value.ts";
+
 type EncodedSourceCursor = typeof EncodedSourceCursorSchema.Type;
 type EncodedSourceIdentity = typeof EncodedSourceIdentitySchema.Type;
 type MigrationDefinitionLock = typeof MigrationDefinitionLockSchema.Type;
@@ -493,7 +495,7 @@ const encodeRecord = <A>(
   value: A,
   key: string
 ): Effect.Effect<unknown, MigrationStoreError> =>
-  Schema.encodeEffect(schema)(value).pipe(
+  Schema.encodeEffect(customObjectCodec(schema))(value).pipe(
     Effect.mapError((cause) =>
       storeError(`Unable to encode migration store record ${key}`, cause)
     )
@@ -519,7 +521,7 @@ const decodeRecord = <A>(
     );
   }
 
-  return Schema.decodeUnknownEffect(schema)(value).pipe(
+  return Schema.decodeUnknownEffect(customObjectCodec(schema))(value).pipe(
     Effect.mapError((cause) =>
       storeError(`Unable to decode migration store record ${key}`, cause)
     )

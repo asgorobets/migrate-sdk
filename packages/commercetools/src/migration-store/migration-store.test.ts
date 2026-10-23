@@ -321,6 +321,187 @@ describe("CommercetoolsMigrationStore", () => {
     );
   }
 
+  it.effect(
+    "reads legacy source-pass evidence with an omitted null cursor",
+    () => {
+      const recording = makeRecordingCustomObjectApiRoot();
+      const runId = toMigrationRunId("run-legacy-null-cursor");
+      const completedAt = new Date("2026-09-17T14:58:17.249Z");
+      return Effect.gen(function* () {
+        yield* seedCustomObject(
+          recording,
+          `${namespace}__definition-completion__${definitionHashSegment(definitionId)}`,
+          {
+            formatVersion: 1,
+            index: { definitionId },
+            namespace,
+            recordKind: "definition-completion",
+            state: {
+              definitionId,
+              runId,
+              completedAt: completedAt.toISOString(),
+            },
+          }
+        );
+        const store = yield* MigrationStore;
+        expect(yield* store.getDefinitionCompletion(definitionId)).toEqual({
+          definitionId,
+          runId,
+          completedAt,
+          sourceCursor: null,
+        });
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  it.effect("round-trips a source pass without a saved cursor", () => {
+    const recording = makeRecordingCustomObjectApiRoot();
+    const completion = {
+      definitionId,
+      runId: toMigrationRunId("run-null-cursor"),
+      completedAt: new Date("2026-09-17T14:58:17.249Z"),
+      sourceCursor: null,
+    };
+    return Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      yield* store.recordSourcePassCompletion(completion);
+      expect(yield* store.getDefinitionCompletion(definitionId)).toEqual(
+        completion
+      );
+    }).pipe(Effect.provide(makeStoreLayer(recording)));
+  });
+
+  it.effect(
+    "preserves nulls in tracking records, journal changes and extensions",
+    () => {
+      const recording = makeRecordingCustomObjectApiRoot();
+      const runId = toMigrationRunId("run-null-payloads");
+      const item = {
+        definitionId,
+        lastRunId: runId,
+        sourceIdentity,
+        sourceVersion: toSourceVersion("v1"),
+        status: "migrated",
+        updatedAt: new Date("2026-09-17T14:58:17.249Z"),
+        trackingRecord: {
+          absentResource: null,
+          nested: { country: null },
+          values: [null, { lot: null }, "kept"],
+        },
+        journal: {
+          process: {
+            runId,
+            entries: [
+              {
+                kind: "change",
+                descriptorId: DestinationChangeDescriptorId.make(
+                  "commercetools.product.upserted"
+                ),
+                sequence: 0,
+                value: {
+                  resourceKey: null,
+                  selector: null,
+                  resourceId: "product-123",
+                },
+              },
+            ],
+          },
+          rollbackAttempts: [],
+          extensions: {
+            "commercetools.product-draft.import-operation@v1": {
+              resourceVersion: null,
+              operationId: "failed-operation",
+            },
+          },
+        },
+      } as const;
+      return Effect.gen(function* () {
+        const store = yield* MigrationStore;
+        yield* store.upsertItemState(item);
+        expect(
+          yield* store.getItemState(definitionId, sourceIdentity.encoded)
+        ).toEqual(item);
+        expect(yield* store.listItemStates(definitionId)).toEqual([item]);
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  it.effect(
+    "round-trips an unchanged user tracking schema through provider storage",
+    () => {
+      const recording = makeRecordingCustomObjectApiRoot();
+      const UserTracking = Schema.Struct({
+        resourceId: Schema.String,
+        removedAt: Schema.NullOr(Schema.DateFromString),
+        optional: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        byKey: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
+      });
+      const value = {
+        resourceId: "product-123",
+        removedAt: null,
+        optional: null,
+        byKey: { arbitraryKey: null, nullFields: null, retained: "value" },
+      };
+      return Effect.gen(function* () {
+        const encoded = yield* Schema.encodeEffect(UserTracking)(value);
+        const store = yield* MigrationStore;
+        yield* store.upsertItemState({
+          definitionId,
+          lastRunId: toMigrationRunId("run-user-tracking-codec"),
+          sourceIdentity,
+          sourceVersion: toSourceVersion("v1"),
+          status: "migrated",
+          updatedAt: new Date("2026-10-23T00:00:00Z"),
+          trackingRecord: encoded,
+        });
+        const stored = yield* store.getItemState(
+          definitionId,
+          sourceIdentity.encoded
+        );
+        expect(stored).not.toBeNull();
+        expect(stored).not.toHaveProperty("nullFields");
+        expect(
+          yield* Schema.decodeUnknownEffect(UserTracking)(
+            stored?.trackingRecord
+          )
+        ).toEqual(value);
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
+  for (const state of [
+    { definitionId, runId: "run-invalid", sourceCursor: 123 },
+    { definitionId },
+  ]) {
+    it.effect(
+      "rejects invalid or missing non-nullable source-pass fields",
+      () => {
+        const recording = makeRecordingCustomObjectApiRoot();
+        return Effect.gen(function* () {
+          yield* seedCustomObject(
+            recording,
+            `${namespace}__definition-completion__${definitionHashSegment(definitionId)}`,
+            {
+              formatVersion: 1,
+              index: { definitionId },
+              namespace,
+              recordKind: "definition-completion",
+              state: { completedAt: "2026-09-17T14:58:17.249Z", ...state },
+            }
+          );
+          const store = yield* MigrationStore;
+          const error = yield* store
+            .getDefinitionCompletion(definitionId)
+            .pipe(Effect.flip);
+          expect(error._tag).toBe("MigrationStoreError");
+          expect(error.message).toContain(
+            "Unable to decode migration store record"
+          );
+        }).pipe(Effect.provide(makeStoreLayer(recording)));
+      }
+    );
+  }
+
   it.effect("conforms to completion and rollback history transitions", () => {
     const recording = makeRecordingCustomObjectApiRoot();
     return Effect.gen(function* () {

@@ -1,4 +1,5 @@
 import { Deferred, Effect, Fiber, Layer, Option, Ref, Schema } from "effect";
+import { formatMigrateError } from "../client/error-message.ts";
 import { migrationDependencyIsSatisfied } from "../domain/status.ts";
 import {
   type ActiveMigrationRun,
@@ -141,7 +142,7 @@ const executionResultFromDetachedTerminal = (
 ): MigrateServerExecutionResult => {
   if (terminal.executionFailure !== undefined) {
     return {
-      message: causeMessage(terminal.executionFailure),
+      message: formatMigrateError(terminal.executionFailure),
       outcome: "failed",
       runId: terminal.state.runId,
     };
@@ -1459,7 +1460,7 @@ export const makeRegistryMigrateServerRuntime = (
                   };
                 case "execution-failed":
                   return {
-                    message: causeMessage(terminal.cause),
+                    message: formatMigrateError(terminal.cause),
                     outcome: "failed" as const,
                     runId: terminal.state.runId,
                   };

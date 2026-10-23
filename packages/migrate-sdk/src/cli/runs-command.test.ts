@@ -7,6 +7,7 @@ import {
   Layer,
   Queue,
   Redacted,
+  Schema,
   Stdio,
   Stream,
 } from "effect";
@@ -16,6 +17,7 @@ import { isFailure, isSuccess } from "effect/Exit";
 import { RpcClientDefect, RpcClientError } from "effect/rpc/RpcClientError";
 import { TestClock, TestConsole } from "effect/testing";
 import type { MigrateServerConnectionInput } from "../client/node/index.ts";
+import { MigrationStoreError } from "../domain/errors.ts";
 import {
   toMigrationDefinitionGroupId,
   toMigrationDefinitionId,
@@ -35,6 +37,7 @@ import type {
 import {
   MigrateDashboardResumeToken,
   MigratePlanFingerprint,
+  MigrateProtocolError,
 } from "../protocol/index.ts";
 import { migrateCommand } from "./command.ts";
 import type { ActiveMigrationCliInterrupts } from "./interrupts.ts";
@@ -221,6 +224,43 @@ const interruptRuntime = (
 });
 
 describe("migrate runs", () => {
+  it.effect(
+    "shows the schema field and reason from a remote store decoding failure",
+    () =>
+      Effect.gen(function* () {
+        const schemaError = yield* Schema.decodeUnknownEffect(
+          Schema.Struct({
+            state: Schema.Struct({
+              sourceCursor: Schema.NullOr(Schema.String),
+            }),
+          })
+        )({ state: {} }).pipe(Effect.flip);
+        const failure = new MigrationStoreError({
+          message:
+            "Unable to decode migration store record catalog__definition-completion__123",
+          cause: schemaError,
+        });
+        const encoded =
+          yield* Schema.encodeEffect(MigrateProtocolError)(failure);
+        const remoteFailure =
+          yield* Schema.decodeUnknownEffect(MigrateProtocolError)(encoded);
+        const result = yield* runCli(["run", "articles", "--plan"], {
+          connectMigrateServer: () =>
+            Effect.succeed(
+              makeConnection({
+                prepareOperation: () => Effect.fail(remoteFailure),
+              })
+            ),
+          cwd: "/workspace",
+        });
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("catalog__definition-completion__123");
+        expect(result.stderr).toContain("Missing key");
+        expect(result.stderr).toContain('["state"]["sourceCursor"]');
+        expect(result.stderr).not.toContain("node_modules");
+      })
+  );
+
   for (const { args, selection, options } of [
     {
       args: ["articles"],
