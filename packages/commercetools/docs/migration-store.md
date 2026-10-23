@@ -278,9 +278,28 @@ depend on every nested runtime state shape. Index fields should stay scalar:
 strings, numbers, booleans, and dates encoded as strings. The canonical data
 still lives in `state`.
 
-Commercetools does not persist fields with `null` values inside Custom Object
-values, so persisted schemas should use optional fields and discriminated
-unions instead of relying on explicit `null`.
+Commercetools does not persist object fields with `null` values inside Custom
+Object values. The adapter handles this at its storage boundary; domain schemas
+keep their required and nullable fields.
+
+For existing records, a failed decode triggers schema-guided reconstruction of
+missing required fields whose codecs accept `null`, including nested objects,
+arrays, records and union members. Optional absence and configured decoding
+defaults are preserved. The reconstructed value must still pass the unchanged
+record codec, including refinements and transformations. Missing non-nullable
+fields and invalid existing values remain errors.
+
+New writes also save an additive `nullFields` envelope property listing the key
+paths of explicit null-valued object fields. Reads restore those exact fields
+before schema decoding. This preserves arbitrary tracking records, destination
+journal changes and journal extensions, whose internal schemas are not available
+to the store. Index and state fields remain queryable in their existing locations,
+and `formatVersion` remains `1`. Null array elements retain their positions.
+
+Older arbitrary JSON payloads without this metadata cannot have unknown missing
+keys reconstructed: the store cannot distinguish an originally absent key from a
+removed null. Malformed paths and paths that would overwrite a non-null value are
+rejected. Decoding never writes back to Commercetools.
 
 ## Locking
 
