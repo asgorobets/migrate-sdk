@@ -592,9 +592,13 @@ describe("MigrationTuiApp", () => {
         act(() => setup.mockInput.pressArrow("down"));
         act(() => setup.mockInput.pressKey("r"));
         expect(
-          await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("Dependencies incomplete")
-          )
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("Dependencies incomplete") &&
+              frame.includes("2. ○ articles")
+            );
+          })
         ).toBe(true);
         expect(setup.captureCharFrame()).toContain("1. ○ authors");
         expect(setup.captureCharFrame()).toContain("2. ○ articles");
@@ -6270,9 +6274,13 @@ describe("MigrationTuiApp", () => {
         act(() => setup.mockInput.pressArrow("down"));
         act(() => setup.mockInput.pressKey("r"));
         expect(
-          await settle(setup.renderOnce, () =>
-            setup.captureCharFrame().includes("Dependencies incomplete")
-          )
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("Dependencies incomplete") &&
+              frame.includes("2. ○ articles")
+            );
+          })
         ).toBe(true);
         expect(setup.captureCharFrame()).toContain("1. ○ authors");
         expect(setup.captureCharFrame()).toContain("2. ○ articles");
