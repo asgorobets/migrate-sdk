@@ -29,6 +29,11 @@ import {
   type MigrateServerExecutionResult,
 } from "./service.ts";
 
+class TestOperationError extends Schema.TaggedError<TestOperationError>()(
+  "TestOperationError",
+  { message: Schema.String, cause: Schema.Defect() }
+) {}
+
 const articlesId = MigrationDefinitionId.make("articles");
 const runId = MigrationRunId.make("run-1");
 const secondRunId = MigrationRunId.make("run-2");
@@ -252,7 +257,10 @@ describe("Migrate Server", () => {
           makeBackend({
             prepareOperation: () =>
               Effect.fail(
-                new Error("Unable to prepare migration", { cause: schemaError })
+                new TestOperationError({
+                  message: "Unable to prepare migration",
+                  cause: schemaError,
+                })
               ),
           })
         );

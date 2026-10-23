@@ -176,7 +176,7 @@ try {
           "@migrate-sdk/tui": `file:${resolve(tarballs, `migrate-sdk-tui-${manifest.version}.tgz`)}`,
           [target.packageName]: `file:${resolve(tarballs, `migrate-sdk-tui-${target.id}-${manifest.version}.tgz`)}`,
           "migrate-sdk": `file:${resolve(temp, sdkTarball)}`,
-          effect: require("effect/package.json").version,
+          effect: `^${require("effect/package.json").version}`,
         },
       },
       null,

@@ -55,7 +55,7 @@ try {
       "--save-exact",
       join(temporary, `migrate-sdk-${sdk.version}.tgz`),
       join(temporary, `migrate-sdk-files-sdk-${integration.version}.tgz`),
-      "effect@4.0.5",
+      "effect@^4.0.5",
       "files-sdk@3.1.1",
     ],
     consumer

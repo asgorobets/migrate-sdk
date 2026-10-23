@@ -47,7 +47,13 @@ const peerVersions = Object.fromEntries(
           "utf8"
         )
       );
-      return [name, manifest.version];
+      // Resolve Effect and its platform together, including transitive peers.
+      // Exact root pins without a consumer lockfile can mix patch releases.
+      const version =
+        name === "effect" || name === "@effect/platform-node"
+          ? `^${manifest.version}`
+          : manifest.version;
+      return [name, version];
     })
   )
 );

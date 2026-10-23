@@ -288,7 +288,7 @@ try {
         type: "module",
         dependencies: {
           "@migrate-sdk/tui": `file:${tuiTarball}`,
-          effect: require("effect/package.json").version,
+          effect: `^${require("effect/package.json").version}`,
           "migrate-sdk": `file:${sdkTarball}`,
         },
       },
