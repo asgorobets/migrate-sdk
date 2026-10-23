@@ -1,5 +1,11 @@
 # @migrate-sdk/commercetools
 
+## 0.17.3
+
+### Patch Changes
+
+- 0c63c1a: Preserve nulls in stored tracking and journal data, and fix reads of older Commercetools records with omitted nullable fields.
+
 ## 0.17.2
 
 ## 0.17.1

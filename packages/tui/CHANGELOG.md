@@ -1,5 +1,11 @@
 # @migrate-sdk/tui
 
+## 0.17.3
+
+### Patch Changes
+
+- 2939610: Show underlying error causes and schema field paths in the CLI and TUI.
+
 ## 0.17.2
 
 ### Patch Changes
