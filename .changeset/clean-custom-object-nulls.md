@@ -2,4 +2,4 @@
 "@migrate-sdk/commercetools": patch
 ---
 
-Fix Commercetools migration-store decoding failures caused by omitted null fields, and preserve nulls in tracking and journal data.
+Preserve nulls in stored tracking and journal data, and fix reads of older Commercetools records with omitted nullable fields.

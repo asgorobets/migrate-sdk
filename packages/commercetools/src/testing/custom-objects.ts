@@ -101,8 +101,8 @@ const customObjectVersion = (
   return;
 };
 
-// Custom Objects discard null-valued object properties, including nested ones.
-// Null array elements retain their positions.
+// Model the documented null omission recursively as a storage stress case.
+// Array positions remain stable in this fake; the codec must preserve them.
 const omitNullObjectFields = (value: unknown): unknown => {
   if (Array.isArray(value)) {
     return value.map(omitNullObjectFields);

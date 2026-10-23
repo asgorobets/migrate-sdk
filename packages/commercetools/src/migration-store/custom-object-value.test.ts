@@ -1,20 +1,17 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Schema, SchemaGetter } from "effect";
-import {
-  decodeCustomObjectValue,
-  encodeCustomObjectValue,
-} from "./custom-object-value.ts";
+import { customObjectCodec } from "./custom-object-value.ts";
 
 const decode = <A>(
   schema: Schema.Codec<A, unknown, never, never>,
   value: unknown
-) => Effect.runSync(decodeCustomObjectValue(schema, value));
+) => Schema.decodeUnknownSync(customObjectCodec(schema))(value);
 
 // Model the provider response without sharing the recorder's implementation.
 const persisted = (value: unknown): unknown =>
   JSON.parse(
     JSON.stringify(
-      encodeCustomObjectValue(value),
+      Schema.encodeUnknownSync(customObjectCodec(Schema.Unknown))(value),
       function (key, field: unknown) {
         return key !== "" && field === null && !Array.isArray(this)
           ? undefined
@@ -163,7 +160,7 @@ describe("Custom Object null compatibility", () => {
     const schema = Schema.Struct({ payload: Schema.Json });
     const original = {
       payload: JSON.parse(
-        '{"a.b":null,"a/b":null,"":null,"__proto__":null,"constructor":null,"array":[null,{"nested":null}]}'
+        '{"a.b":null,"a/b":null,"":null,"__proto__":null,"constructor":null,"nullFields":null,"array":[null,{"nested":null}]}'
       ),
     };
     const stored = persisted(original);
@@ -180,12 +177,125 @@ describe("Custom Object null compatibility", () => {
     ).toEqual({ payload: {} });
   });
 
-  it("does not add metadata to records without null object fields", () => {
-    expect(
-      encodeCustomObjectValue({ state: { cursor: "saved", values: [null] } })
-    ).toEqual({
-      state: { cursor: "saved", values: [null] },
+  it("marks new records even when there are no nulls to restore", () => {
+    const schema = Schema.Struct({ cursor: Schema.String });
+    const encoded = Schema.encodeUnknownSync(customObjectCodec(schema))({
+      cursor: "saved",
     });
+    expect(encoded).toEqual({ cursor: "saved", nullFields: [] });
+    expect(decode(schema, encoded)).toEqual({ cursor: "saved" });
+  });
+
+  it("decodes missing nullable keys without replaying domain transformations", () => {
+    let calls = 0;
+    const name = Schema.String.pipe(
+      Schema.decodeTo(Schema.String, {
+        decode: SchemaGetter.transform((value) => {
+          calls += 1;
+          return value;
+        }),
+        encode: SchemaGetter.passthrough(),
+      })
+    );
+    const schema = Schema.Struct({
+      name,
+      cursor: Schema.NullOr(Schema.String),
+    });
+    const codec = customObjectCodec(schema);
+    expect(Schema.decodeUnknownSync(codec)({ name: "record" })).toEqual({
+      name: "record",
+      cursor: null,
+    });
+    expect(calls).toBe(1);
+  });
+
+  it("preserves optional absence, optional nulls and already-valid union branches", () => {
+    const schema = Schema.Struct({
+      choice: Schema.Union([
+        Schema.Struct({ required: Schema.NullOr(Schema.String) }),
+        Schema.Struct({ name: Schema.String }),
+      ]),
+      optional: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    });
+    for (const value of [
+      { choice: { name: "second" } },
+      { choice: { name: "second" }, optional: null },
+      { choice: { required: null } },
+    ]) {
+      expect(decode(schema, persisted(value))).toEqual(value);
+    }
+  });
+
+  it("writes null-free provider values without changing the supplied value", () => {
+    const schema = Schema.Struct({ payload: Schema.Json });
+    const value = {
+      payload: {
+        nullable: null,
+        nested: [null, { nullable: null }, 0, "null"],
+      },
+    };
+    const encoded = Schema.encodeUnknownSync(customObjectCodec(schema))(value);
+    const containsNull = (input: unknown): boolean => {
+      if (input === null) {
+        return true;
+      }
+      if (Array.isArray(input)) {
+        return input.some(containsNull);
+      }
+      return typeof input === "object" && input !== null
+        ? Object.values(input).some(containsNull)
+        : false;
+    };
+    expect(containsNull(encoded)).toBe(false);
+    expect(decode(schema, encoded)).toEqual(value);
+    expect(value.payload.nullable).toBeNull();
+    expect(value.payload.nested[0]).toBeNull();
+  });
+
+  it("preserves transformations and parent refinements in both storage representations", () => {
+    const schema = Schema.Struct({
+      id: Schema.String,
+      at: Schema.DateFromString,
+      cursor: Schema.NullOr(Schema.String),
+    }).check(Schema.makeFilter(({ id }) => id !== "rejected"));
+    const codec = customObjectCodec(schema);
+    const value = {
+      id: "record",
+      at: new Date("2026-10-23T00:00:00Z"),
+      cursor: null,
+    };
+    const encoded = Schema.encodeUnknownSync(codec)(value);
+    expect(Schema.decodeUnknownSync(codec)(encoded)).toEqual(value);
+    expect(
+      decode(schema, { id: "record", at: value.at.toISOString() })
+    ).toEqual(value);
+    expect(() =>
+      decode(schema, { id: "rejected", at: value.at.toISOString() })
+    ).toThrow();
+    expect(() =>
+      Schema.encodeUnknownSync(codec)({ ...value, id: "rejected" })
+    ).toThrow();
+    expect(() =>
+      Schema.encodeUnknownSync(schema)({ id: "record", at: value.at })
+    ).toThrow();
+    expect(() =>
+      Schema.encodeUnknownSync(codec)({ id: "record", at: value.at })
+    ).toThrow();
+  });
+
+  it("does not repair malformed current records or leak metadata into domain values", () => {
+    const schema = Schema.Struct({ cursor: Schema.NullOr(Schema.String) });
+    const invalid = Schema.decodeUnknownExit(customObjectCodec(schema))({
+      nullFields: [],
+    });
+    expect(invalid._tag).toBe("Failure");
+    expect(() => decode(schema, { nullFields: [] })).toThrow("Missing key");
+    expect(
+      decode(Schema.Record(Schema.String, Schema.Json), {
+        payload: {},
+        nullFields: [["payload", "nullable"]],
+      })
+    ).toEqual({ payload: { nullable: null } });
   });
 
   it("rejects malformed null metadata and refuses to overwrite existing values", () => {
@@ -196,10 +306,19 @@ describe("Custom Object null compatibility", () => {
       [["payload", "missing-parent", "key"]],
       [["payload", "present"]],
       [["nullFields"]],
+      [["payload", "array", "length"]],
+      [["payload", "array", "-1"]],
+      [["payload", "array", "1"]],
     ]) {
-      expect(() =>
-        decode(schema, { payload: { present: "preserved" }, nullFields })
-      ).toThrow();
+      const result = Effect.runSync(
+        Effect.result(
+          Schema.decodeUnknownEffect(customObjectCodec(schema))({
+            payload: { present: "preserved", array: ["kept"] },
+            nullFields,
+          })
+        )
+      );
+      expect(result._tag).toBe("Failure");
     }
     expect(() =>
       decode(Schema.Struct({ required: Schema.String }), {

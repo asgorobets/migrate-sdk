@@ -282,24 +282,36 @@ Commercetools does not persist object fields with `null` values inside Custom
 Object values. The adapter handles this at its storage boundary; domain schemas
 keep their required and nullable fields.
 
-For existing records, a failed decode triggers schema-guided reconstruction of
-missing required fields whose codecs accept `null`, including nested objects,
-arrays, records and union members. Optional absence and configured decoding
-defaults are preserved. The reconstructed value must still pass the unchanged
-record codec, including refinements and transformations. Missing non-nullable
-fields and invalid existing values remain errors.
+All reads and writes use one private Effect codec per record schema. Older
+records without null metadata decode through a derived storage schema: required
+fields whose codecs accept null use `Schema.withDecodingDefaultKey` to supply
+missing null values. Nested fields, encoded property names, optional absence,
+existing defaults, refinements and transformations retain their contracts.
+The adapter does not decode, catch a failure, repair the value and retry.
 
-New writes also save an additive `nullFields` envelope property listing the key
-paths of explicit null-valued object fields. Reads restore those exact fields
-before schema decoding. This preserves arbitrary tracking records, destination
-journal changes and journal extensions, whose internal schemas are not available
-to the store. Index and state fields remain queryable in their existing locations,
-and `formatVersion` remains `1`. Null array elements retain their positions.
+New writes include a private `nullFields` envelope property, including an empty
+list when there are no nulls. The codec records null-valued object keys and
+omits them from the stored object. Null array entries use a non-null placeholder
+with their exact positions recorded in the same metadata. The provider receives
+no raw null values, so preservation does not depend on how deeply it omits nulls
+or how it treats array entries. Decoding restores the exact values and removes
+the metadata before applying the original record schema. This preserves optional
+nulls and arbitrary tracking records, destination journal changes and journal
+extensions without passing their user-supplied schemas into the store.
 
-Older arbitrary JSON payloads without this metadata cannot have unknown missing
-keys reconstructed: the store cannot distinguish an originally absent key from a
-removed null. Malformed paths and paths that would overwrite a non-null value are
-rejected. Decoding never writes back to Commercetools.
+Metadata presence selects the storage representation before domain decoding.
+Current records must satisfy the original domain schema after restoration;
+missing fields are not repaired by the older-record schema. Older representations
+are read-only, so all writes use the lossless codec. Existing null metadata remains
+readable. Index and state fields stay queryable in their existing locations, and
+`formatVersion` remains `1`. User schemas and the `MigrationStore` interface do
+not change.
+
+Older arbitrary JSON payloads without metadata cannot have unknown missing keys
+reconstructed: an absent key and a removed null are indistinguishable. Malformed
+metadata and attempts to overwrite existing non-null object values are rejected.
+Array restoration requires an existing placeholder or null at the recorded
+position. Decoding never writes back to Commercetools.
 
 ## Locking
 

@@ -426,6 +426,49 @@ describe("CommercetoolsMigrationStore", () => {
     }
   );
 
+  it.effect(
+    "round-trips an unchanged user tracking schema through provider storage",
+    () => {
+      const recording = makeRecordingCustomObjectApiRoot();
+      const UserTracking = Schema.Struct({
+        resourceId: Schema.String,
+        removedAt: Schema.NullOr(Schema.DateFromString),
+        optional: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        byKey: Schema.Record(Schema.String, Schema.NullOr(Schema.String)),
+      });
+      const value = {
+        resourceId: "product-123",
+        removedAt: null,
+        optional: null,
+        byKey: { arbitraryKey: null, nullFields: null, retained: "value" },
+      };
+      return Effect.gen(function* () {
+        const encoded = yield* Schema.encodeEffect(UserTracking)(value);
+        const store = yield* MigrationStore;
+        yield* store.upsertItemState({
+          definitionId,
+          lastRunId: toMigrationRunId("run-user-tracking-codec"),
+          sourceIdentity,
+          sourceVersion: toSourceVersion("v1"),
+          status: "migrated",
+          updatedAt: new Date("2026-10-23T00:00:00Z"),
+          trackingRecord: encoded,
+        });
+        const stored = yield* store.getItemState(
+          definitionId,
+          sourceIdentity.encoded
+        );
+        expect(stored).not.toBeNull();
+        expect(stored).not.toHaveProperty("nullFields");
+        expect(
+          yield* Schema.decodeUnknownEffect(UserTracking)(
+            stored?.trackingRecord
+          )
+        ).toEqual(value);
+      }).pipe(Effect.provide(makeStoreLayer(recording)));
+    }
+  );
+
   for (const state of [
     { definitionId, runId: "run-invalid", sourceCursor: 123 },
     { definitionId },
