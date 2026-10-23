@@ -11,6 +11,7 @@ import {
 } from "effect";
 import { Argument, CliError, Command, Flag } from "effect/cli";
 import type { SqlClient } from "effect/sql";
+import { formatMigrateError } from "../client/error-message.ts";
 import type { PipelineExecutionConcurrency } from "../domain/execution.ts";
 import {
   toMigrationDefinitionGroupId,
@@ -112,22 +113,7 @@ const renderStoredFailure = (failure: unknown): string => {
     );
   }
 
-  if (failure instanceof Error) {
-    return `${failure.name}: ${failure.message}`;
-  }
-
-  if (
-    typeof failure === "object" &&
-    failure !== null &&
-    "message" in failure &&
-    typeof failure.message === "string"
-  ) {
-    return "name" in failure && typeof failure.name === "string"
-      ? `${failure.name}: ${failure.message}`
-      : failure.message;
-  }
-
-  return String(failure ?? "Migration run failed");
+  return formatMigrateError(failure, { includeName: true });
 };
 
 const failConfigLoad = (

@@ -1,4 +1,5 @@
 import type { MigrationMessage } from "migrate-sdk";
+import { formatMigrateError } from "migrate-sdk/client/errors";
 import type { MigrateDashboardRow, MigrateTarget } from "migrate-sdk/protocol";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MigrationTuiRuntime } from "./runtime.ts";
@@ -150,7 +151,7 @@ export const useMigrationMessages = ({
             current.target !== undefined &&
             messageTargetKey(current.target) === key
           ) {
-            setError(cause instanceof Error ? cause.message : String(cause));
+            setError(formatMigrateError(cause));
           }
         }
       )

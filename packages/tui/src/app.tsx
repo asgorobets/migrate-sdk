@@ -8,6 +8,7 @@ import type {
   MigrationRunId,
   PipelineExecutionConcurrency,
 } from "migrate-sdk";
+import { formatMigrateError as errorMessage } from "migrate-sdk/client/errors";
 import type {
   MigrateAction,
   MigrateDashboardRow,
@@ -240,14 +241,6 @@ const migrationExecutionOptions = (
       ? {}
       : { rollback: { concurrency: settings.rollback } }),
   };
-};
-
-const errorMessage = (cause: unknown): string => {
-  if (cause instanceof Error) {
-    return cause.message;
-  }
-
-  return String(cause);
 };
 
 const targetLabel = (target: MigrateTarget): string =>
@@ -2643,11 +2636,12 @@ const MigrationTuiDashboardApp = ({
         style={{
           flexDirection: "column",
           flexShrink: 0,
-          height:
-            displayedActivity !== "" &&
-            (displayedError !== null || notice !== null)
-              ? 2
-              : 1,
+          height: "auto",
+          minHeight: 1,
+          maxHeight: Math.max(
+            1,
+            Math.min(6, Math.floor(dimensions.height / 3))
+          ),
         }}
       >
         {displayedActivity === "" ? null : (

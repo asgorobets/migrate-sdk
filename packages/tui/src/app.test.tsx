@@ -2,11 +2,12 @@ import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTestRenderer } from "@opentui/core/testing";
 import { createRoot } from "@opentui/react";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import {
   MigrationExecutable,
   type MigrationMessage,
   type MigrationRunId,
+  MigrationStoreError,
   toEncodedSourceIdentity,
   toMigrationDefinitionId,
   toMigrationDefinitionLockToken,
@@ -17,6 +18,7 @@ import {
   MigrateDashboardResumeToken,
   type MigrateDashboardRow,
   type MigrateDefinitionSourceItemTotal,
+  MigrateProtocolError,
   type MigrateRunStartResult,
   type MigrateSourceIdentityHistoryEntry,
   type MigrateStoreSchemaPlan,
@@ -1631,6 +1633,64 @@ describe("MigrationTuiApp", () => {
             setup
               .captureCharFrame()
               .includes(`Run ${runId} is no longer active · ${definitionId}`)
+          )
+        ).toBe(true);
+      } finally {
+        act(() => root.unmount());
+        setup.renderer.destroy();
+      }
+    }
+  );
+
+  itWithOpenTui(
+    "shows the field and reason for a remote decoding error",
+    async () => {
+      const baseRuntime = await makeInProcessMigrationTuiRuntime({
+        configPath: serverFixturePath("migrate.config.ts"),
+        cwd: new URL("..", import.meta.url).pathname,
+      });
+      const schemaError = Effect.runSync(
+        Schema.decodeUnknownEffect(
+          Schema.Struct({
+            state: Schema.Struct({
+              sourceCursor: Schema.NullOr(Schema.String),
+            }),
+          })
+        )({ state: {} }).pipe(Effect.flip)
+      );
+      const remoteFailure = Schema.decodeUnknownSync(MigrateProtocolError)(
+        Schema.encodeSync(MigrateProtocolError)(
+          new MigrationStoreError({
+            message:
+              "Unable to decode migration store record catalog__definition-completion__123",
+            cause: schemaError,
+          })
+        )
+      );
+      const runtime: MigrationTuiRuntime = {
+        ...baseRuntime,
+        observeDashboard: () => Promise.reject(remoteFailure),
+      };
+      const setup = await createTestRenderer({ height: 30, width: 120 });
+      const root = createRoot(setup.renderer);
+      act(() => root.render(<MigrationTuiApp runtime={runtime} />));
+      try {
+        expect(
+          await settle(setup.renderOnce, () => {
+            const frame = setup.captureCharFrame();
+            return (
+              frame.includes("Missing key") &&
+              frame.includes('["state"]["sourceCursor"]')
+            );
+          })
+        ).toBe(true);
+        expect(setup.captureCharFrame()).toContain(
+          "catalog__definition-completion__123"
+        );
+        act(() => setup.mockInput.pressKey("l"));
+        expect(
+          await settle(setup.renderOnce, () =>
+            setup.captureCharFrame().includes("Session activity")
           )
         ).toBe(true);
       } finally {

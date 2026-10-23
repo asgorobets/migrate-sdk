@@ -1,3 +1,4 @@
+import { formatMigrateError as errorMessage } from "migrate-sdk/client/errors";
 import type {
   MigrateActiveRun,
   MigrateDashboardResumeToken,
@@ -49,9 +50,6 @@ interface DashboardObservation {
   readonly statusError: string | null;
   readonly statusLoading: boolean;
 }
-
-const errorMessage = (cause: unknown): string =>
-  cause instanceof Error ? cause.message : String(cause);
 
 export const useDashboardObservation = ({
   clearSourceScanStatuses,

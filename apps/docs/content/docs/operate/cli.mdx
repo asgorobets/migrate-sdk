@@ -110,6 +110,16 @@ Ordinary status reads stored progress, completion, locks, and operation informat
 
 `messages` reads durable item messages and structured error details. `--json` returns a JSON array suitable for inspection or export. Both commands accept definition IDs, `--group`, `--all`, and `--with-dependencies`. An inventory scan is read-only and does not make a migration complete.
 
+Operation errors also show their underlying causes automatically. A store decoding failure includes the record identifier, schema reason, and failing field path, for example:
+
+```text
+MigrationStoreError: Unable to decode migration store record example
+Caused by: SchemaError: Missing key
+  at ["state"]["runId"]
+```
+
+These diagnostics are available without changing migration code or enabling tracing. They show error messages rather than stack traces or complete stored records.
+
 ## Roll back deliberately
 
 ```sh

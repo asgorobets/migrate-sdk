@@ -15,6 +15,7 @@ import {
   Stream,
 } from "effect";
 import type { Scope } from "effect/Scope";
+import { formatMigrateError as errorMessage } from "../client/error-message.ts";
 import {
   MigrationDefinitionId,
   type MigrationDefinitionRegistryId,
@@ -307,23 +308,6 @@ interface ExecutionRecord {
   runId?: MigrationRunId | undefined;
   stop?: Effect.Effect<MigrateServerExecutionStopResult, unknown> | undefined;
 }
-
-const errorMessage = (cause: unknown): string => {
-  if (cause instanceof Error) {
-    return cause.message;
-  }
-
-  if (
-    typeof cause === "object" &&
-    cause !== null &&
-    "message" in cause &&
-    typeof cause.message === "string"
-  ) {
-    return cause.message;
-  }
-
-  return String(cause);
-};
 
 const operationError = (
   cause: unknown,

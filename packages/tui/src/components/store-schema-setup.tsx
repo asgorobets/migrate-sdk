@@ -1,5 +1,6 @@
 import { RGBA } from "@opentui/core";
 import { useKeyboard, useTerminalDimensions } from "@opentui/react";
+import { formatMigrateError } from "migrate-sdk/client/errors";
 import type { MigrateDashboardRow } from "migrate-sdk/protocol";
 import { useEffect, useRef, useState } from "react";
 import type { MigrationTuiRuntime } from "../runtime.ts";
@@ -78,7 +79,7 @@ export const StoreSchemaSetup = ({
       if (!mounted.current) {
         return;
       }
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(formatMigrateError(cause));
       // A stale plan must be reviewed again before it can be applied.
       try {
         const updated = await runtime.getStoreSchema();

@@ -37,6 +37,12 @@
       "source": "./src/client/index.ts",
       "import": "./dist/client/index.js"
     },
+    "./client/errors": {
+      "types": "./dist/client/error-message.d.ts",
+      "bun": "./src/client/error-message.ts",
+      "source": "./src/client/error-message.ts",
+      "import": "./dist/client/error-message.js"
+    },
     "./client/http": {
       "types": "./dist/client/http.d.ts",
       "bun": "./src/client/http.ts",
