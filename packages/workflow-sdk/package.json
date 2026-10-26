@@ -1,7 +1,7 @@
 {
   "name": "@migrate-sdk/workflow-sdk",
   "license": "MIT",
-  "version": "0.17.3",
+  "version": "0.17.4",
   "type": "module",
   "sideEffects": [],
   "repository": {
