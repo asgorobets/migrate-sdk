@@ -665,7 +665,7 @@ test("definition locks reject an overlapping run without stopping its owner", as
 test("stops a selected server-owned run by migration run id", async () => {
   const runtime = await makeMigrationTuiRuntime({
     configPath: serverFixturePath("cancellation.config.ts"),
-    cwd: resolve("examples"),
+    cwd: fileURLToPath(serverFixtureUrl),
   });
   try {
     const operation = await runtime.prepare(

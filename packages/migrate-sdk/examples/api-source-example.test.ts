@@ -1,12 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
-import { formatApiSourceExampleResult } from "./api-source/format.ts";
-import { runApiSourceExampleWithInspection } from "./api-source/inspection.ts";
 import {
   makeScriptedJsonPlaceholderApiState,
   scriptedJsonPlaceholderApiLayer,
-} from "./api-source/json-placeholder-api-scripted.ts";
+} from "../test/fixtures/api-source/json-placeholder-api.ts";
+import { formatApiSourceExampleResult } from "./api-source/format.ts";
+import { runApiSourceExampleWithInspection } from "./api-source/inspection.ts";
 
 describe("api source example", () => {
   it.effect("runs a JSONPlaceholder-shaped list and detail source", () =>

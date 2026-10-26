@@ -36,25 +36,31 @@ describe("in-memory runtime example", () => {
   );
 
   it.effect(
-    "runs a nested article Source Payload Schema example with typed process fields",
+    "decodes a nested article and writes its mapped destination entry",
     () =>
       Effect.gen(function* () {
         const result = yield* runNestedArticleSchemaExample();
         const output = formatNestedArticleSchemaExampleResult(result);
 
         expect(result.summary.status).toBe("succeeded");
-        expect(result.commandFields).toEqual([
-          {
-            authorDisplayName: "Ada Lovelace",
-            locale: "en-US",
-            readingTimeMinutes: 7,
-            seoDescription: "A realistic source payload with nested fields",
-            seoTitle: "Schema-first migrations",
-            slug: "schema-first-migrations",
-            tagLabels: ["Effect", "Schemas"],
-            title: "Schema-first migrations",
-            views: 1280,
-          },
+        expect(result.entries).toEqual([
+          expect.objectContaining({
+            contentType: "article",
+            entryId: expect.any(String),
+            entryVersion: expect.any(String),
+            sourceIdentity: "article:schema-first:en-US",
+            fields: {
+              authorDisplayName: "Ada Lovelace",
+              locale: "en-US",
+              readingTimeMinutes: 7,
+              seoDescription: "A realistic source payload with nested fields",
+              seoTitle: "Schema-first migrations",
+              slug: "schema-first-migrations",
+              tagLabels: ["Effect", "Schemas"],
+              title: "Schema-first migrations",
+              views: 1280,
+            },
+          }),
         ]);
         expect(output).toContain("Nested Article Source Schema Example");
         expect(output).toContain("author: Ada Lovelace");

@@ -25,17 +25,12 @@ import {
   formatNestedArticleSchemaExampleResult,
   runNestedArticleSchemaExample,
 } from "./nested-article-schema.ts";
-import { runTelemetryExample } from "./telemetry.ts";
 
 const example = process.argv[2] ?? "in-memory";
 const shouldReset = process.argv.includes("--reset");
 const nodePlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
 
 const makeProgram = (): Effect.Effect<string, unknown, never> => {
-  if (example === "telemetry") {
-    return runTelemetryExample.pipe(Effect.map(formatMigrationRunSummary));
-  }
-
   if (example === "file-store") {
     return runFileStoreExample({ reset: shouldReset }).pipe(
       Effect.provide(nodePlatformLayer),

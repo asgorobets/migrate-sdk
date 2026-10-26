@@ -2,7 +2,7 @@ import { Cause, ConfigProvider, Effect, Schema, Tracer } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { describe, expect, it } from "vitest";
 import { completedInlineExecution } from "../examples/inline-execution.ts";
-import { runTelemetryExample } from "../examples/telemetry.ts";
+import { telemetryWorkload } from "../test/fixtures/telemetry-workload.ts";
 import { localTelemetryEnvironment } from "./client/node/local-telemetry.ts";
 import { skipItem } from "./domain/process-result.ts";
 import {
@@ -302,7 +302,7 @@ describe("migration telemetry", () => {
   it("flushes a completed run with related window, batch, and wait spans", () =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const { result, requests, spans } = yield* capture(runTelemetryExample);
+        const { result, requests, spans } = yield* capture(telemetryWorkload);
         expect(result.status).toBe("succeeded");
         expect(result.definitions[0]?.counts.migrated).toBe(48);
         expect(requests.length).toBeGreaterThan(0);
@@ -339,7 +339,7 @@ describe("migration telemetry", () => {
         for (const name of [
           "migration.source.read",
           "migration.batch.process",
-          "demo.destination.wait",
+          "test.destination.wait",
         ]) {
           const phases = spans.filter((span) => span.name === name);
           expect(phases).toHaveLength(6);

@@ -1,4 +1,4 @@
-import { Config, Effect, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
   MigrationDefinition,
   MigrationDefinitionRegistry,
@@ -7,22 +7,16 @@ import {
 } from "migrate-sdk";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
-import { completedInlineExecution } from "./inline-execution.ts";
+import { completedInlineExecution } from "../../examples/inline-execution.ts";
 
-/** A synthetic workload for comparing cursor windows and settlement concurrency. */
-export const runTelemetryExample = Effect.gen(function* () {
-  const batchSize = yield* Config.Int("MIGRATE_DEMO_BATCH_SIZE").pipe(
-    Config.withDefault(8)
-  );
-  const concurrency = yield* Config.Int("MIGRATE_DEMO_CONCURRENCY").pipe(
-    Config.withDefault(2)
-  );
+/** Synthetic destination waits for telemetry assertions. */
+export const telemetryWorkload = Effect.gen(function* () {
   const definition = MigrationDefinition.make({
-    id: "telemetry-demo",
+    id: "telemetry-test",
     source: InMemorySource.make({
-      batchSize,
+      batchSize: 8,
       identity: SourceIdentity.make({
-        id: "telemetry-demo@v1",
+        id: "telemetry-test@v1",
         schema: SourceIdentity.key("id", Schema.String),
       }),
       items: Array.from({ length: 48 }, (_, index) => ({
@@ -36,10 +30,10 @@ export const runTelemetryExample = Effect.gen(function* () {
     processBatch: (items) =>
       Effect.gen(function* () {
         yield* Effect.sleep("25 millis").pipe(
-          Effect.withSpan("demo.destination.submit")
+          Effect.withSpan("test.destination.submit")
         );
         yield* Effect.sleep("50 millis").pipe(
-          Effect.withSpan("demo.destination.wait", {
+          Effect.withSpan("test.destination.wait", {
             attributes: {
               "migration.wait.reason": "destination-poll-interval",
             },
@@ -48,7 +42,7 @@ export const runTelemetryExample = Effect.gen(function* () {
         return items.map((item) =>
           item.settle(
             Effect.sleep("10 millis").pipe(
-              Effect.withSpan("demo.destination.settle")
+              Effect.withSpan("test.destination.settle")
             )
           )
         );
@@ -60,7 +54,7 @@ export const runTelemetryExample = Effect.gen(function* () {
   return yield* completedInlineExecution(
     MigrationExecution.make({ registry }).run({
       all: true,
-      execution: { process: { concurrency } },
+      execution: { process: { concurrency: 2 } },
     })
   );
 });

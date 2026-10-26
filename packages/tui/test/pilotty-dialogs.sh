@@ -95,7 +95,7 @@ for mode in include force; do
   echo "PASS: ${mode} preview, Escape cancellation, and arrow/Enter with 20ms between keys"
 done
 
-spawn rollback "${PACKAGE_DIR}/examples/transitive-dependency.config.ts"
+spawn rollback "${PACKAGE_DIR}/test/fixtures/configs/transitive-dependency.config.ts"
 "${PILOTTY_BIN}" resize -s "${ACTIVE_SESSION}" 120 36 >/dev/null
 key "Down Down"
 wait_for "pages  NOT RUN"

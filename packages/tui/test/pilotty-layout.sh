@@ -537,7 +537,7 @@ ACTIVE_SESSION="${HIERARCHY_SESSION}"
   --cwd "${PACKAGE_DIR}" \
   env TMPDIR="${HIERARCHY_TMP}" \
   node bin/migrate-tui.js \
-  --config examples/transitive-dependency.config.ts >/dev/null
+  --config test/fixtures/configs/transitive-dependency.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${HIERARCHY_SESSION}" 120 36 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${HIERARCHY_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
@@ -556,7 +556,7 @@ ACTIVE_SESSION="${LARGE_HIERARCHY_SESSION}"
   --name "${LARGE_HIERARCHY_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env TMPDIR="${LARGE_HIERARCHY_TMP}" \
-  node bin/migrate-tui.js --config examples/large-rollback.config.ts >/dev/null
+  node bin/migrate-tui.js --config test/fixtures/configs/large-rollback.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${LARGE_HIERARCHY_SESSION}" 72 24 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LARGE_HIERARCHY_SESSION}" -t 30000 \
   "Status reloaded" >/dev/null
@@ -582,7 +582,7 @@ ACTIVE_SESSION="${LIMITED_SESSION}"
   --name "${LIMITED_SESSION}" \
   --cwd "${PACKAGE_DIR}" \
   env TMPDIR="${LIMITED_TMP}" \
-  node bin/migrate-tui.js --config examples/limited-run.config.ts >/dev/null
+  node bin/migrate-tui.js --config test/fixtures/configs/limited-run.config.ts >/dev/null
 "${PILOTTY_BIN}" resize -s "${LIMITED_SESSION}" 100 30 >/dev/null
 "${PILOTTY_BIN}" wait-for -s "${LIMITED_SESSION}" -t 30000 "Status reloaded" >/dev/null
 "${PILOTTY_BIN}" key -s "${LIMITED_SESSION}" e >/dev/null

@@ -301,7 +301,7 @@ try {
     )}\n`
   );
   await copyFile(
-    resolve(packageDirectory, "examples/packaging.config.ts"),
+    resolve(packageDirectory, "test/fixtures/configs/packaging.config.ts"),
     resolve(fixtureDirectory, "migrate.config.ts")
   );
 

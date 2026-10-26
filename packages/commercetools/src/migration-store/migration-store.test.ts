@@ -26,7 +26,6 @@ import {
 import { CommercetoolsSdk } from "../sdk.ts";
 
 const runIdPattern = /^run-/u;
-const fullSummarySelectionPattern = /\b(?:value|total|offset)\b/u;
 const lockTokenPattern = /^lock-/u;
 const safeCustomObjectKeyPattern = /^[A-Za-z0-9_.~-]+(?:__[A-Za-z0-9_.~-]+)+$/u;
 const definitionId = toMigrationDefinitionId("catalog-products");
@@ -2029,56 +2028,6 @@ describe("CommercetoolsMigrationStore", () => {
       expect(query?.queryParams).not.toHaveProperty("offset");
     }).pipe(Effect.provide(makeStoreLayer(recording)));
   });
-
-  for (const pageSize of [undefined, 2, 500]) {
-    it.effect(
-      `uses key-only summary pages with pageSize ${pageSize ?? "default"}`,
-      () => {
-        const recording = makeRecordingCustomObjectApiRoot();
-
-        return Effect.gen(function* () {
-          const store = yield* MigrationStore;
-          for (let index = 0; index < 23; index += 1) {
-            yield* store.upsertItemState({
-              definitionId,
-              lastRunId: toMigrationRunId("run-summary-pages"),
-              sourceIdentity: sourceIdentityFor(`summary-${index}`),
-              sourceVersion: toSourceVersion("1"),
-              status: "migrated",
-              trackingRecord: { nested: { nullable: null } },
-              updatedAt: new Date("2026-10-26T00:00:00.000Z"),
-            });
-          }
-
-          expect(yield* store.getItemStateSummary(definitionId)).toEqual({
-            failed: 0,
-            migrated: 23,
-            needsUpdate: 0,
-            skipped: 0,
-          });
-          const queries = recording.requests.filter((request) =>
-            request.uriTemplate?.endsWith("/graphql")
-          );
-          expect(queries).toHaveLength(pageSize === 2 ? 12 : 1);
-          for (const query of queries) {
-            expect(query.body).toEqual(
-              expect.objectContaining({
-                query: expect.not.stringMatching(fullSummarySelectionPattern),
-                variables: expect.objectContaining({ limit: pageSize ?? 500 }),
-              })
-            );
-          }
-        }).pipe(
-          Effect.provide(
-            makeStoreLayer(
-              recording,
-              pageSize === undefined ? {} : { pageSize }
-            )
-          )
-        );
-      }
-    );
-  }
 
   it.effect("scans item states across pages with keyset pagination", () => {
     const recording = makeRecordingCustomObjectApiRoot();

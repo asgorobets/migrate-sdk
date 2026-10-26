@@ -11,6 +11,10 @@ import {
   SourceIdentity,
 } from "migrate-sdk";
 import {
+  type InMemoryDestinationEntry,
+  InMemoryDestinationTesting,
+} from "migrate-sdk/destinations/in-memory/testing";
+import {
   type DocumentFetcherPlatform,
   DocumentFetchers,
   DocumentParsers,
@@ -91,11 +95,6 @@ type BusinessUnitEntryFields = typeof BusinessUnitEntryFields.Type;
 type ContactEntryFields = typeof ContactEntryFields.Type;
 type AddressEntryFields = typeof AddressEntryFields.Type;
 
-interface RecordedEntry<Fields> {
-  readonly fields: Fields;
-  readonly sourceIdentity: string;
-}
-
 const nodePlatformLayer = Layer.mergeAll(nodeFileSystemLayer, nodePathLayer);
 
 const defaultFilePath = () =>
@@ -135,19 +134,20 @@ const makeCompaniesDocumentFetcher = (options: {
     platform: options.platform ?? nodePlatformLayer,
   });
 
-interface MigrationOptions<Entry> {
+interface MigrationOptions {
   readonly filePath?: string | undefined;
   readonly platform?: DocumentFetcherPlatform | undefined;
-  readonly recordEntry?: (entry: Entry) => void;
   readonly store?: Layer.Layer<MigrationStore> | undefined;
 }
 
-export const makeBusinessUnitsMigration = (
-  options: MigrationOptions<RecordedEntry<BusinessUnitEntryFields>> = {}
-) => {
-  return MigrationDefinition.make({
+export const makeBusinessUnitsMigration = (options: MigrationOptions = {}) => {
+  const recording = InMemoryDestinationTesting.fixtureEntries({
+    contentType: "business-unit",
+    fields: BusinessUnitEntryFields,
+  });
+  const migration = MigrationDefinition.make({
     id: "companies-business-units",
-    process: (source) => {
+    process: Effect.fn("businessUnits.process")(function* (source) {
       const businessUnit = source.item.item;
       const billingAddress = businessUnit.addresses.find(
         (address) => address.type === "billing"
@@ -159,18 +159,15 @@ export const makeBusinessUnitsMigration = (
         (contact) => contact.isPrimary
       );
 
-      options.recordEntry?.({
-        fields: {
-          billingCity: billingAddress?.city ?? null,
-          key: businessUnit.key,
-          name: businessUnit.name,
-          primaryContactEmail: primaryContact?.email ?? null,
-          shippingCity: shippingAddress?.city ?? null,
-          status: businessUnit.status,
-        },
-        sourceIdentity: source.identity.encoded,
+      yield* recording.destination.entries.upsert({
+        billingCity: billingAddress?.city ?? null,
+        key: businessUnit.key,
+        name: businessUnit.name,
+        primaryContactEmail: primaryContact?.email ?? null,
+        shippingCity: shippingAddress?.city ?? null,
+        status: businessUnit.status,
       });
-    },
+    }),
     source: DocumentSource.make({
       fetcher: makeCompaniesDocumentFetcher(options),
       parser: companiesDocumentParser,
@@ -186,32 +183,33 @@ export const makeBusinessUnitsMigration = (
     }),
     store: options.store ?? InMemoryMigrationStore.layer(),
   });
+
+  return { migration, recording };
 };
 
-export const makeContactsMigration = (
-  options: MigrationOptions<RecordedEntry<ContactEntryFields>> = {}
-) => {
-  return MigrationDefinition.make({
+export const makeContactsMigration = (options: MigrationOptions = {}) => {
+  const recording = InMemoryDestinationTesting.fixtureEntries({
+    contentType: "contact",
+    fields: ContactEntryFields,
+  });
+  const migration = MigrationDefinition.make({
     id: "companies-contacts",
-    process: (source) => {
+    process: Effect.fn("contacts.process")(function* (source) {
       const businessUnit = source.item.parent;
       const contact = source.item.item;
 
-      options.recordEntry?.({
-        fields: {
-          businessUnitKey: businessUnit.key,
-          businessUnitName: businessUnit.name,
-          businessUnitStatus: businessUnit.status,
-          email: contact.email,
-          firstName: contact.firstName,
-          isPrimary: contact.isPrimary,
-          key: contact.key,
-          lastName: contact.lastName,
-          role: contact.role,
-        },
-        sourceIdentity: source.identity.encoded,
+      yield* recording.destination.entries.upsert({
+        businessUnitKey: businessUnit.key,
+        businessUnitName: businessUnit.name,
+        businessUnitStatus: businessUnit.status,
+        email: contact.email,
+        firstName: contact.firstName,
+        isPrimary: contact.isPrimary,
+        key: contact.key,
+        lastName: contact.lastName,
+        role: contact.role,
       });
-    },
+    }),
     source: DocumentSource.make({
       fetcher: makeCompaniesDocumentFetcher(options),
       parser: companiesDocumentParser,
@@ -228,33 +226,34 @@ export const makeContactsMigration = (
     }),
     store: options.store ?? InMemoryMigrationStore.layer(),
   });
+
+  return { migration, recording };
 };
 
-export const makeAddressesMigration = (
-  options: MigrationOptions<RecordedEntry<AddressEntryFields>> = {}
-) => {
-  return MigrationDefinition.make({
+export const makeAddressesMigration = (options: MigrationOptions = {}) => {
+  const recording = InMemoryDestinationTesting.fixtureEntries({
+    contentType: "address",
+    fields: AddressEntryFields,
+  });
+  const migration = MigrationDefinition.make({
     id: "companies-addresses",
-    process: (source) => {
+    process: Effect.fn("addresses.process")(function* (source) {
       const businessUnit = source.item.parent;
       const address = source.item.item;
 
-      options.recordEntry?.({
-        fields: {
-          businessUnitKey: businessUnit.key,
-          businessUnitName: businessUnit.name,
-          businessUnitStatus: businessUnit.status,
-          city: address.city,
-          country: address.country,
-          key: address.key,
-          postalCode: address.postalCode,
-          region: address.region,
-          street: address.street,
-          type: address.type,
-        },
-        sourceIdentity: source.identity.encoded,
+      yield* recording.destination.entries.upsert({
+        businessUnitKey: businessUnit.key,
+        businessUnitName: businessUnit.name,
+        businessUnitStatus: businessUnit.status,
+        city: address.city,
+        country: address.country,
+        key: address.key,
+        postalCode: address.postalCode,
+        region: address.region,
+        street: address.street,
+        type: address.type,
       });
-    },
+    }),
     source: DocumentSource.make({
       fetcher: makeCompaniesDocumentFetcher(options),
       parser: companiesDocumentParser,
@@ -271,12 +270,23 @@ export const makeAddressesMigration = (
     }),
     store: options.store ?? InMemoryMigrationStore.layer(),
   });
+
+  return { migration, recording };
 };
 
 export interface CompaniesDocumentSourceExampleResult {
-  readonly addressEntries: readonly RecordedEntry<AddressEntryFields>[];
-  readonly businessUnitEntries: readonly RecordedEntry<BusinessUnitEntryFields>[];
-  readonly contactEntries: readonly RecordedEntry<ContactEntryFields>[];
+  readonly addressEntries: readonly InMemoryDestinationEntry<
+    "address",
+    AddressEntryFields
+  >[];
+  readonly businessUnitEntries: readonly InMemoryDestinationEntry<
+    "business-unit",
+    BusinessUnitEntryFields
+  >[];
+  readonly contactEntries: readonly InMemoryDestinationEntry<
+    "contact",
+    ContactEntryFields
+  >[];
   readonly summary: MigrationRunSummary;
 }
 
@@ -287,43 +297,35 @@ export const runCompaniesDocumentSourceExample = Effect.fn(
   readonly platform?: DocumentFetcherPlatform;
 }) {
   const store = InMemoryMigrationStore.layer();
-  const addressEntries: RecordedEntry<AddressEntryFields>[] = [];
-  const businessUnitEntries: RecordedEntry<BusinessUnitEntryFields>[] = [];
-  const contactEntries: RecordedEntry<ContactEntryFields>[] = [];
   const businessUnits = makeBusinessUnitsMigration({
     filePath: options?.filePath,
     platform: options?.platform,
-    recordEntry: (entry) => {
-      businessUnitEntries.push(entry);
-    },
     store,
   });
   const contacts = makeContactsMigration({
     filePath: options?.filePath,
     platform: options?.platform,
-    recordEntry: (entry) => {
-      contactEntries.push(entry);
-    },
     store,
   });
   const addresses = makeAddressesMigration({
     filePath: options?.filePath,
     platform: options?.platform,
-    recordEntry: (entry) => {
-      addressEntries.push(entry);
-    },
     store,
   });
   const registry = MigrationDefinitionRegistry.make({
-    definitions: [businessUnits, contacts, addresses] as const,
+    definitions: [
+      businessUnits.migration,
+      contacts.migration,
+      addresses.migration,
+    ] as const,
   });
   const execution = MigrationExecution.make({ registry });
   const summary = yield* completedInlineExecution(execution.run({ all: true }));
 
   return {
-    addressEntries,
-    businessUnitEntries,
-    contactEntries,
+    addressEntries: [...addresses.recording.entries().values()],
+    businessUnitEntries: [...businessUnits.recording.entries().values()],
+    contactEntries: [...contacts.recording.entries().values()],
     summary,
   } satisfies CompaniesDocumentSourceExampleResult;
 });
