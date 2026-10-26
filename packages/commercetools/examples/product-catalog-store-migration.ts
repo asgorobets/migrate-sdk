@@ -288,11 +288,36 @@ export const runProductCatalogStoreMigrationExample: () => Effect.Effect<
       ),
     ],
   });
+  const storeLayer = CommercetoolsMigrationStore.layer({
+    ...catalogStoreOptions,
+  }).pipe(Layer.provide(sdk.layer));
+  // The offline example uses the store's existing decoder and counts its small
+  // fixture locally; it does not simulate the provider's GraphQL predicates.
+  const offlineStoreLayer = Layer.effect(
+    MigrationStore,
+    Effect.gen(function* () {
+      const store = yield* MigrationStore;
+      const getItemStateSummary: typeof store.getItemStateSummary = (
+        definitionId
+      ) =>
+        store.listItemStates(definitionId).pipe(
+          Effect.map((states) => ({
+            migrated: states.filter((state) => state.status === "migrated")
+              .length,
+            failed: states.filter((state) => state.status === "failed").length,
+            skipped: states.filter((state) => state.status === "skipped")
+              .length,
+            needsUpdate: states.filter(
+              (state) => state.status === "needs-update"
+            ).length,
+          }))
+        );
+      return { ...store, getItemStateSummary };
+    })
+  ).pipe(Layer.provide(storeLayer));
   const result = yield* runProductCatalogStoreMigration({
     sdkLayer: sdk.layer,
-    storeLayer: CommercetoolsMigrationStore.layer({
-      ...catalogStoreOptions,
-    }).pipe(Layer.provide(sdk.layer)),
+    storeLayer: offlineStoreLayer,
   });
   const sdkRequests = sdk.requests;
   const productRequests = sdkRequests.filter(isProductDraftRequest);
