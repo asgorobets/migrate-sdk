@@ -303,47 +303,61 @@ const quotedPredicateValue = (where: string, field: string): unknown => {
   return match?.[1] === undefined ? undefined : JSON.parse(match[1]);
 };
 
-const matchesSummaryPredicate = (
-  object: CustomObject,
+const makeSummaryPredicate = (
   container: unknown,
   where: string
-): boolean => {
-  const value = object.value;
-  if (
-    object.container !== container ||
-    !isRecord(value) ||
-    !("index" in value) ||
-    !isRecord(value.index) ||
-    !("definitionId" in value.index) ||
-    !("namespace" in value) ||
-    !("recordKind" in value) ||
-    value.namespace !== quotedPredicateValue(where, "namespace") ||
-    value.recordKind !== quotedPredicateValue(where, "recordKind") ||
-    value.index.definitionId !== quotedPredicateValue(where, "definitionId")
-  ) {
-    return false;
-  }
+): ((object: CustomObject) => boolean) => {
+  // Parse once per selection, rather than rebuilding regular expressions and
+  // decoding the same literals for every object in a large pagination fixture.
+  const namespace = quotedPredicateValue(where, "namespace");
+  const recordKind = quotedPredicateValue(where, "recordKind");
+  const definitionId = quotedPredicateValue(where, "definitionId");
+  const status = quotedPredicateValue(where, "status");
+  const invalidMetadata = where.includes("not (value(formatVersion");
+  const encodedAfter = afterKeyPattern.exec(where)?.[1];
+  const after =
+    encodedAfter === undefined ? undefined : JSON.parse(encodedAfter);
 
-  if (where.includes("not (value(formatVersion")) {
-    const status = "status" in value.index ? value.index.status : undefined;
-    return !(
-      "formatVersion" in value &&
-      value.formatVersion === 1 &&
-      typeof status === "string" &&
-      ["migrated", "skipped", "failed", "needs-update"].includes(status) &&
-      "state" in value &&
-      isRecord(value.state) &&
-      "status" in value.state &&
-      value.state.status === status
+  return (object) => {
+    const value = object.value;
+    if (
+      object.container !== container ||
+      !isRecord(value) ||
+      !("index" in value) ||
+      !isRecord(value.index) ||
+      !("definitionId" in value.index) ||
+      !("namespace" in value) ||
+      !("recordKind" in value) ||
+      value.namespace !== namespace ||
+      value.recordKind !== recordKind ||
+      value.index.definitionId !== definitionId
+    ) {
+      return false;
+    }
+
+    if (invalidMetadata) {
+      const indexedStatus =
+        "status" in value.index ? value.index.status : undefined;
+      return !(
+        "formatVersion" in value &&
+        value.formatVersion === 1 &&
+        typeof indexedStatus === "string" &&
+        ["migrated", "skipped", "failed", "needs-update"].includes(
+          indexedStatus
+        ) &&
+        "state" in value &&
+        isRecord(value.state) &&
+        "status" in value.state &&
+        value.state.status === indexedStatus
+      );
+    }
+
+    return (
+      "status" in value.index &&
+      value.index.status === status &&
+      (after === undefined || object.key > after)
     );
-  }
-
-  const after = afterKeyPattern.exec(where)?.[1];
-  return (
-    "status" in value.index &&
-    value.index.status === quotedPredicateValue(where, "status") &&
-    (after === undefined || object.key > JSON.parse(after))
-  );
+  };
 };
 
 // Model the summary's GraphQL field selection without returning value. This
@@ -375,7 +389,7 @@ const recordedSummaryResponse = (
       throw new Error(`Missing recorded predicate for ${alias}`);
     }
     const matches = [...customObjects.values()]
-      .filter((object) => matchesSummaryPredicate(object, container, where))
+      .filter(makeSummaryPredicate(container, where))
       .sort((left, right) => (left.key < right.key ? -1 : 1));
     if (alias === "invalid") {
       data[alias] = { exists: matches.length > 0 };
