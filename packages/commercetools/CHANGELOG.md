@@ -1,5 +1,11 @@
 # @migrate-sdk/commercetools
 
+## 0.17.4
+
+### Patch Changes
+
+- e5e0165: Bound memory use when summarizing migration item states with large tracking records or recovery journals. Status and run preparation now count validated item states in keyset pages of at most ten records and discard each page instead of retaining every full item state. Existing persisted records remain compatible and status counts remain exact.
+
 ## 0.17.3
 
 ### Patch Changes
