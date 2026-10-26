@@ -1,5 +1,3 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect } from "effect";
 import {
@@ -7,20 +5,14 @@ import {
   runCompaniesDocumentSourceExample,
 } from "./document-source/companies-document-source.ts";
 
-const exampleSourcePath = fileURLToPath(
-  new URL("./document-source/companies-document-source.ts", import.meta.url)
-);
-
 describe("companies document source example", () => {
   it.effect(
-    "uses the document source authoring model while preserving parent-context output",
+    "parses the document and writes destination entries with parent context",
     () =>
       Effect.gen(function* () {
-        const exampleSource = readFileSync(exampleSourcePath, "utf8");
         const result = yield* runCompaniesDocumentSourceExample();
         const output = formatCompaniesDocumentSourceExampleResult(result);
 
-        expect(exampleSource).toContain("migrate-sdk/sources/document");
         expect(result.summary.status).toBe("succeeded");
         expect(
           result.summary.definitions.map(

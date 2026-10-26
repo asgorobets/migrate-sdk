@@ -6,6 +6,10 @@ import {
   type MigrationRunSummary,
   SourceIdentity,
 } from "migrate-sdk";
+import {
+  type InMemoryDestinationEntry,
+  InMemoryDestinationTesting,
+} from "migrate-sdk/destinations/in-memory/testing";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { formatMigrationRunSummary } from "./in-memory-runtime.ts";
@@ -53,7 +57,7 @@ const ArticleEntryFields = Schema.Struct({
   authorDisplayName: Schema.String,
   locale: ArticleLocale,
   readingTimeMinutes: Schema.Finite,
-  seoDescription: Schema.optional(Schema.String),
+  seoDescription: Schema.NullOr(Schema.String),
   seoTitle: Schema.String,
   slug: Schema.String,
   tagLabels: Schema.Array(Schema.String),
@@ -64,7 +68,10 @@ const ArticleEntryFields = Schema.Struct({
 type ArticleEntryFields = typeof ArticleEntryFields.Type;
 
 export interface NestedArticleSchemaExampleResult {
-  readonly commandFields: readonly ArticleEntryFields[];
+  readonly entries: readonly InMemoryDestinationEntry<
+    "article",
+    ArticleEntryFields
+  >[];
   readonly summary: MigrationRunSummary;
 }
 
@@ -98,7 +105,10 @@ const sourceItems = [
 ] as const;
 
 export const makeNestedArticleSchemaMigration = () => {
-  const commandFields: ArticleEntryFields[] = [];
+  const recording = InMemoryDestinationTesting.fixtureEntries({
+    contentType: "article",
+    fields: ArticleEntryFields,
+  });
 
   const migration = MigrationDefinition.make({
     id: "nested-articles",
@@ -108,34 +118,30 @@ export const makeNestedArticleSchemaMigration = () => {
       sourceSchema: NestedArticle,
     }),
     store: InMemoryMigrationStore.layer(),
-    process: (source) => {
+    process: Effect.fn("nestedArticles.process")(function* (source) {
       const article = source.item;
-      const authorDisplayName = article.author.displayName;
-      const tagLabels = article.tags.map((tag) => tag.label);
-      const views = article.metrics.views;
-      const readingTimeMinutes = article.metrics.readingTimeMinutes;
 
-      commandFields.push({
-        authorDisplayName,
+      yield* recording.destination.entries.upsert({
+        authorDisplayName: article.author.displayName,
         locale: article.locale,
-        readingTimeMinutes,
-        seoDescription: article.seo.description,
+        readingTimeMinutes: article.metrics.readingTimeMinutes,
+        seoDescription: article.seo.description ?? null,
         seoTitle: article.seo.title,
         slug: article.slug,
-        tagLabels,
+        tagLabels: article.tags.map((tag) => tag.label),
         title: article.title,
-        views,
+        views: article.metrics.views,
       });
-    },
+    }),
   });
 
-  return { commandFields, migration };
+  return { migration, recording };
 };
 
 export const runNestedArticleSchemaExample = Effect.fn(
   "runNestedArticleSchemaExample"
 )(function* () {
-  const { commandFields, migration } = makeNestedArticleSchemaMigration();
+  const { migration, recording } = makeNestedArticleSchemaMigration();
   const registry = MigrationDefinitionRegistry.make({
     definitions: [migration] as const,
   });
@@ -143,7 +149,7 @@ export const runNestedArticleSchemaExample = Effect.fn(
   const summary = yield* completedInlineExecution(execution.run({ all: true }));
 
   return {
-    commandFields,
+    entries: [...recording.entries().values()],
     summary,
   } satisfies NestedArticleSchemaExampleResult;
 });
@@ -155,14 +161,15 @@ export const formatNestedArticleSchemaExampleResult = (
     "Nested Article Source Schema Example",
     formatMigrationRunSummary(result.summary),
     "",
-    "Decoded Destination Entry Fields",
-    ...result.commandFields.map((fields, index) =>
+    "Stored Destination Entries",
+    ...result.entries.map(({ entryId, fields }, index) =>
       [
         `article ${index + 1}: ${fields.title}`,
+        `entryId: ${entryId}`,
         `author: ${fields.authorDisplayName}`,
         `locale: ${fields.locale}`,
         `seoTitle: ${fields.seoTitle}`,
-        ...(fields.seoDescription === undefined
+        ...(fields.seoDescription === null
           ? []
           : [`seoDescription: ${fields.seoDescription}`]),
         `tags: ${fields.tagLabels.join(", ")}`,
