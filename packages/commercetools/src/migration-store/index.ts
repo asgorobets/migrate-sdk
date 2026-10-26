@@ -80,6 +80,9 @@ const customObjectIdentifierPattern = /^[-_~.a-zA-Z0-9]+$/u;
 const maxCustomObjectContainerLength = 256;
 const maxCustomObjectNamespaceLength = 64;
 const maxCustomObjectPageSize = 500;
+// Item states can contain large tracking records and recovery journals. A
+// summary must bound response size even when bulk listing uses larger pages.
+const maxItemStateSummaryPageSize = 10;
 
 const PersistedMigrationRunState = Schema.Struct({
   operation: Schema.optional(MigrationRunOperation),
@@ -1899,9 +1902,51 @@ const makeService = (
   const getItemStateSummary = Effect.fn(
     "CommercetoolsMigrationStore.getItemStateSummary"
   )(function* (definitionId: MigrationDefinitionId) {
-    const itemStates = yield* listItemStates(sdk, options, definitionId);
+    const summary = {
+      failed: 0,
+      migrated: 0,
+      needsUpdate: 0,
+      skipped: 0,
+    };
+    const limit = Math.min(options.pageSize, maxItemStateSummaryPageSize);
+    let lastKey: string | undefined;
 
-    return summarizeItemStates(itemStates);
+    while (true) {
+      const page = yield* queryItemStatePage(
+        sdk,
+        options,
+        definitionId,
+        itemStateListPredicate({
+          definitionId,
+          namespace: options.namespace,
+          ...(lastKey === undefined ? {} : { lastKey }),
+        }),
+        limit
+      ).pipe(
+        Effect.map(({ exhausted, lastKey: nextLastKey, states }) => ({
+          exhausted,
+          lastKey: nextLastKey,
+          summary: summarizeItemStates(states),
+        }))
+      );
+
+      summary.failed += page.summary.failed;
+      summary.migrated += page.summary.migrated;
+      summary.needsUpdate += page.summary.needsUpdate;
+      summary.skipped += page.summary.skipped;
+
+      if (
+        page.exhausted ||
+        page.lastKey === undefined ||
+        page.lastKey === lastKey
+      ) {
+        break;
+      }
+
+      lastKey = page.lastKey;
+    }
+
+    return summary;
   });
 
   const removeRolledBackItem = Effect.fn(

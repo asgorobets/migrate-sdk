@@ -354,7 +354,13 @@ const makeCustomObjectRecorderState = () => {
             customObject.container === container &&
             customObjectMatchesWhere(customObject, where, request.queryParams)
         )
-        .sort((left, right) => left.key.localeCompare(right.key))
+        .sort((left, right) => {
+          if (left.key === right.key) {
+            return 0;
+          }
+          // Match the key comparison used by the keyset query predicate.
+          return left.key < right.key ? -1 : 1;
+        })
         .slice(0, limit);
 
       return recordedResponse(recordedCustomObjectPage({ limit, results }));
