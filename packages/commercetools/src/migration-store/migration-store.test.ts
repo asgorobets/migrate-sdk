@@ -2029,6 +2029,54 @@ describe("CommercetoolsMigrationStore", () => {
     }).pipe(Effect.provide(makeStoreLayer(recording)));
   });
 
+  for (const pageSize of [undefined, 2, 500]) {
+    it.effect(
+      `bounds summary reads with pageSize ${pageSize ?? "default"}`,
+      () => {
+        const recording = makeRecordingCustomObjectApiRoot();
+
+        return Effect.gen(function* () {
+          const store = yield* MigrationStore;
+          for (let index = 0; index < 23; index += 1) {
+            yield* store.upsertItemState({
+              definitionId,
+              lastRunId: toMigrationRunId("run-summary-pages"),
+              sourceIdentity: sourceIdentityFor(`summary-${index}`),
+              sourceVersion: toSourceVersion("1"),
+              status: "migrated",
+              trackingRecord: { nested: { nullable: null } },
+              updatedAt: new Date("2026-10-26T00:00:00.000Z"),
+            });
+          }
+
+          expect(yield* store.getItemStateSummary(definitionId)).toEqual({
+            failed: 0,
+            migrated: 23,
+            needsUpdate: 0,
+            skipped: 0,
+          });
+          const queries = customObjectQueryRequests(recording.requests);
+          expect(queries.length).toBeGreaterThan(1);
+          for (const query of queries) {
+            expect(query.queryParams?.limit).toBeLessThanOrEqual(
+              pageSize ?? 10
+            );
+            expect(query.queryParams?.limit).toBeLessThanOrEqual(10);
+            expect(query.queryParams?.withTotal).toBe(false);
+            expect(query.queryParams).not.toHaveProperty("offset");
+          }
+        }).pipe(
+          Effect.provide(
+            makeStoreLayer(
+              recording,
+              pageSize === undefined ? {} : { pageSize }
+            )
+          )
+        );
+      }
+    );
+  }
+
   it.effect("scans item states across pages with keyset pagination", () => {
     const recording = makeRecordingCustomObjectApiRoot();
     const runId = toMigrationRunId("run-list-item-states-pages");
