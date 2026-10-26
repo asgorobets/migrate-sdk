@@ -21,6 +21,8 @@ const identity = SourceIdentity.make({
 });
 const hash = (value) => createHash("sha256").update(value).digest("base64url");
 const statuses = ["migrated", "skipped", "failed", "needs-update"];
+const fullSelectionPattern = /\b(?:value|total|offset)\b/u;
+const afterKeyPattern = /key > ("(?:\\.|[^"\\])*")/u;
 const items = Array.from({ length: 1200 }, (_, index) => {
   const sourceIdentity = SourceIdentity.fromKey(identity, String(index));
   return {
@@ -31,8 +33,36 @@ const items = Array.from({ length: 1200 }, (_, index) => {
 }).sort((left, right) => (left.key < right.key ? -1 : 1));
 
 let queries = 0;
+let valuesRead = 0;
 const apiRoot = new ApiRoot({
   executeRequest: (request) => {
+    if (request.method === "POST" && request.uriTemplate.endsWith("/graphql")) {
+      queries += 1;
+      const { query, variables } = request.body;
+      assert.doesNotMatch(query, fullSelectionPattern);
+      const data = {};
+      for (const match of query.matchAll(/(\w+):\s*customObjects\(/gu)) {
+        const field = match[1];
+        if (field === "invalid") {
+          data.invalid = { exists: false };
+          continue;
+        }
+        const status = field === "needsUpdate" ? "needs-update" : field;
+        const after = afterKeyPattern.exec(variables[`${field}Where`])?.[1];
+        const selected = items
+          .filter(
+            (item) =>
+              statuses[item.index % statuses.length] === status &&
+              (after === undefined || item.key > JSON.parse(after))
+          )
+          .slice(0, variables.limit);
+        data[field] = {
+          count: selected.length,
+          results: selected.map(({ key }) => ({ key })),
+        };
+      }
+      return Promise.resolve({ body: { data } });
+    }
     assert.equal(request.method, "GET");
     assert.equal(request.pathVariables.container, "migrate-sdk");
     const limit = Number(request.queryParams.limit);
@@ -47,6 +77,7 @@ const apiRoot = new ApiRoot({
         limit,
         offset: 0,
         results: selected.map(({ index, key, sourceIdentity }) => {
+          valuesRead += 1;
           const state = Schema.encodeSync(PersistedMigrationItemState)({
             definitionId,
             error: {
@@ -116,4 +147,5 @@ assert.deepEqual(summary, {
   needsUpdate: 300,
   skipped: 300,
 });
-console.info(JSON.stringify({ summary, queries }));
+assert.equal(valuesRead, 0);
+console.info(JSON.stringify({ summary, queries, valuesRead }));

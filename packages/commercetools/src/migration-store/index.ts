@@ -46,6 +46,7 @@ import {
 } from "../sdk.ts";
 
 import { customObjectCodec } from "./custom-object-value.ts";
+import { summarizeItemStates } from "./item-state-summary.ts";
 
 type EncodedSourceCursor = typeof EncodedSourceCursorSchema.Type;
 type EncodedSourceIdentity = typeof EncodedSourceIdentitySchema.Type;
@@ -80,9 +81,6 @@ const customObjectIdentifierPattern = /^[-_~.a-zA-Z0-9]+$/u;
 const maxCustomObjectContainerLength = 256;
 const maxCustomObjectNamespaceLength = 64;
 const maxCustomObjectPageSize = 500;
-// Item states can contain large tracking records and recovery journals. A
-// summary must bound response size even when bulk listing uses larger pages.
-const maxItemStateSummaryPageSize = 10;
 
 const PersistedMigrationRunState = Schema.Struct({
   operation: Schema.optional(MigrationRunOperation),
@@ -1365,43 +1363,6 @@ const listItemStates = (
     return itemStates;
   });
 
-const summarizeItemStates = (
-  itemStates: readonly MigrationItemState[]
-): {
-  readonly failed: number;
-  readonly migrated: number;
-  readonly needsUpdate: number;
-  readonly skipped: number;
-} => {
-  const summary = {
-    failed: 0,
-    migrated: 0,
-    needsUpdate: 0,
-    skipped: 0,
-  };
-
-  for (const itemState of itemStates) {
-    switch (itemState.status) {
-      case "failed":
-        summary.failed += 1;
-        break;
-      case "migrated":
-        summary.migrated += 1;
-        break;
-      case "needs-update":
-        summary.needsUpdate += 1;
-        break;
-      case "skipped":
-        summary.skipped += 1;
-        break;
-      default:
-        break;
-    }
-  }
-
-  return summary;
-};
-
 const maximumLatestRunProjectionWriteAttempts = 5;
 const maximumMigrationRunStateWriteAttempts = 5;
 
@@ -1901,53 +1862,9 @@ const makeService = (
 
   const getItemStateSummary = Effect.fn(
     "CommercetoolsMigrationStore.getItemStateSummary"
-  )(function* (definitionId: MigrationDefinitionId) {
-    const summary = {
-      failed: 0,
-      migrated: 0,
-      needsUpdate: 0,
-      skipped: 0,
-    };
-    const limit = Math.min(options.pageSize, maxItemStateSummaryPageSize);
-    let lastKey: string | undefined;
-
-    while (true) {
-      const page = yield* queryItemStatePage(
-        sdk,
-        options,
-        definitionId,
-        itemStateListPredicate({
-          definitionId,
-          namespace: options.namespace,
-          ...(lastKey === undefined ? {} : { lastKey }),
-        }),
-        limit
-      ).pipe(
-        Effect.map(({ exhausted, lastKey: nextLastKey, states }) => ({
-          exhausted,
-          lastKey: nextLastKey,
-          summary: summarizeItemStates(states),
-        }))
-      );
-
-      summary.failed += page.summary.failed;
-      summary.migrated += page.summary.migrated;
-      summary.needsUpdate += page.summary.needsUpdate;
-      summary.skipped += page.summary.skipped;
-
-      if (
-        page.exhausted ||
-        page.lastKey === undefined ||
-        page.lastKey === lastKey
-      ) {
-        break;
-      }
-
-      lastKey = page.lastKey;
-    }
-
-    return summary;
-  });
+  )((definitionId: MigrationDefinitionId) =>
+    summarizeItemStates(sdk, options, definitionId, formatVersion)
+  );
 
   const removeRolledBackItem = Effect.fn(
     "CommercetoolsMigrationStore.removeRolledBackItem"

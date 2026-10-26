@@ -38,11 +38,11 @@ export interface ScriptedCustomObjectRoutes {
 }
 
 interface RecordedCustomObjectResponse {
-  readonly body: CustomObject | CustomObjectPagedQueryResponse;
+  readonly body: unknown;
 }
 
 const recordedResponse = (
-  body: CustomObject | CustomObjectPagedQueryResponse
+  body: unknown
 ): Promise<RecordedCustomObjectResponse> =>
   Promise.resolve({
     body,
@@ -57,6 +57,7 @@ const isCustomObjectDraft = (
   isRecord(value) && "container" in value && "key" in value && "value" in value;
 
 type CustomObjectRecorderRequest = RecordedCustomObjectRequest;
+const afterKeyPattern = /key > ("(?:\\.|[^"\\])*")/u;
 
 const isCustomObjectRequest = (request: CustomObjectRecorderRequest): boolean =>
   request.uriTemplate?.includes("custom-objects") === true;
@@ -294,12 +295,113 @@ const recordRequest = (
     : { uriTemplate: request.uriTemplate }),
 });
 
+const quotedPredicateValue = (where: string, field: string): unknown => {
+  const match = new RegExp(
+    String.raw`${field} = ("(?:\\.|[^"\\])*")`,
+    "u"
+  ).exec(where);
+  return match?.[1] === undefined ? undefined : JSON.parse(match[1]);
+};
+
+const matchesSummaryPredicate = (
+  object: CustomObject,
+  container: unknown,
+  where: string
+): boolean => {
+  const value = object.value;
+  if (
+    object.container !== container ||
+    !isRecord(value) ||
+    !("index" in value) ||
+    !isRecord(value.index) ||
+    !("definitionId" in value.index) ||
+    !("namespace" in value) ||
+    !("recordKind" in value) ||
+    value.namespace !== quotedPredicateValue(where, "namespace") ||
+    value.recordKind !== quotedPredicateValue(where, "recordKind") ||
+    value.index.definitionId !== quotedPredicateValue(where, "definitionId")
+  ) {
+    return false;
+  }
+
+  if (where.includes("not (value(formatVersion")) {
+    const status = "status" in value.index ? value.index.status : undefined;
+    return !(
+      "formatVersion" in value &&
+      value.formatVersion === 1 &&
+      typeof status === "string" &&
+      ["migrated", "skipped", "failed", "needs-update"].includes(status) &&
+      "state" in value &&
+      isRecord(value.state) &&
+      "status" in value.state &&
+      value.state.status === status
+    );
+  }
+
+  const after = afterKeyPattern.exec(where)?.[1];
+  return (
+    "status" in value.index &&
+    value.index.status === quotedPredicateValue(where, "status") &&
+    (after === undefined || object.key > JSON.parse(after))
+  );
+};
+
+// Model the summary's GraphQL field selection without returning value. This
+// recorder deliberately supports only this key-only Custom Object query.
+const recordedSummaryResponse = (
+  request: CustomObjectRecorderRequest,
+  customObjects: ReadonlyMap<string, CustomObject>
+): Promise<RecordedCustomObjectResponse> => {
+  const body = request.body;
+  if (
+    !(isRecord(body) && "query" in body) ||
+    typeof body.query !== "string" ||
+    !("variables" in body) ||
+    !isRecord(body.variables)
+  ) {
+    throw new Error("Recorded summary requires a GraphQL query and variables");
+  }
+  const variables = body.variables;
+  const container = "container" in variables ? variables.container : undefined;
+  const limit = "limit" in variables ? Number(variables.limit) : 20;
+  const data: Record<string, unknown> = {};
+  for (const match of body.query.matchAll(/(\w+):\s*customObjects\(/gu)) {
+    const alias = match[1];
+    if (alias === undefined) {
+      continue;
+    }
+    const where = Reflect.get(variables, `${alias}Where`);
+    if (typeof where !== "string") {
+      throw new Error(`Missing recorded predicate for ${alias}`);
+    }
+    const matches = [...customObjects.values()]
+      .filter((object) => matchesSummaryPredicate(object, container, where))
+      .sort((left, right) => (left.key < right.key ? -1 : 1));
+    if (alias === "invalid") {
+      data[alias] = { exists: matches.length > 0 };
+    } else {
+      const page = matches.slice(0, limit);
+      data[alias] = {
+        count: page.length,
+        results: page.map(({ key }) => ({ key })),
+      };
+    }
+  }
+  return recordedResponse({ data });
+};
+
 const makeCustomObjectRecorderState = () => {
   const customObjects = new Map<string, CustomObject>();
 
   const executeCustomObjectRequest = (
     request: CustomObjectRecorderRequest
   ): Promise<RecordedCustomObjectResponse> => {
+    if (
+      request.method === "POST" &&
+      request.uriTemplate?.endsWith("/graphql")
+    ) {
+      return recordedSummaryResponse(request, customObjects);
+    }
     if (!isCustomObjectRequest(request)) {
       throw new Error(
         `Recording Custom Object API root only supports Custom Object requests: ${request.uriTemplate}`
@@ -432,6 +534,7 @@ const migrationStoreCustomObjectOperations = [
   "customObjects.getMigrationStoreRecord",
   "customObjects.queryMigrationStoreRecords",
   "customObjects.upsertMigrationStoreRecord",
+  "graphql.summarizeMigrationItemStates",
 ] as const;
 
 export const makeScriptedCustomObjectRoutes =
