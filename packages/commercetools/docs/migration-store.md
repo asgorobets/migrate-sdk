@@ -173,14 +173,29 @@ Defaults:
 - `namespace`: `"default"`
 - `pageSize`: `500`
 
-Item-state summaries use keyset pages of at most `10` records, or `pageSize`
-when configured lower. Each page is validated, counted, and discarded before
-continuing, so large tracking records and recovery journals do not accumulate
-in memory during status reads or run preparation. Counts come from the stored
-item states rather than the provider's estimated query total. This does not
-change the persisted format or the page size used by full item-state listing.
-The summary still reads and validates every full item state; this bounds peak
-memory rather than reducing total transfer size.
+Item-state summaries use one GraphQL request containing separate selections for
+`migrated`, `failed`, `skipped`, and `needs-update`. Commercetools filters the
+existing `value.index.status` on the server; each selection returns only the
+page count and object keys. The response never includes `value`, so status reads
+and run preparation do not download or decode tracking records or journals.
+
+Each selection uses `pageSize` and an independent keyset cursor. Subsequent
+requests include only statuses with more pages. Counts are accumulated from the
+returned records, not the provider's estimated or capped `total`. A metadata
+check in the first request rejects unsupported record formats, missing or
+unknown statuses, and disagreement between indexed and stored statuses. GraphQL
+errors and incomplete or non-advancing pages fail the summary rather than
+returning partial counts.
+
+This optimization uses the existing format-version-1 objects and needs no
+storage upgrade or backfill. It does not change the public `MigrationStore`
+interface. Summary reads validate count metadata rather than the full payload;
+`getItemState` and `listItemStates` still decode and validate full item states.
+Counts are eventually consistent across concurrent writes. A status change
+during a scan can temporarily count an item in two buckets or miss it; a new
+scan returns the settled counts once writes stop. Cursors use stable object
+keys rather than modification timestamps, which can change during traversal.
+Full item-state listing still collects full values.
 
 The implementation should validate `container` and `namespace` before building
 the layer. Commercetools Custom Object `container` and `key` values have a
@@ -415,6 +430,7 @@ getItemState          -> GET item object, decode value
 upsertItemState       -> POST item object
 removeRolledBackItem  -> GET item, invalidate completion and cursor, DELETE item by version
 listItemStates        -> query item records by namespace and definition id
+getItemStateSummary   -> GraphQL status-filtered key-only pages, accumulate counts
 observeItemState      -> GET item object, POST current state with inventory run id
 listOrphanItemStates  -> query item records not observed by the inventory run
 createRunId           -> local UUID

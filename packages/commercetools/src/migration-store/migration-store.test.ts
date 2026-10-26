@@ -26,6 +26,7 @@ import {
 import { CommercetoolsSdk } from "../sdk.ts";
 
 const runIdPattern = /^run-/u;
+const fullSummarySelectionPattern = /\b(?:value|total|offset)\b/u;
 const lockTokenPattern = /^lock-/u;
 const safeCustomObjectKeyPattern = /^[A-Za-z0-9_.~-]+(?:__[A-Za-z0-9_.~-]+)+$/u;
 const definitionId = toMigrationDefinitionId("catalog-products");
@@ -2031,7 +2032,7 @@ describe("CommercetoolsMigrationStore", () => {
 
   for (const pageSize of [undefined, 2, 500]) {
     it.effect(
-      `bounds summary reads with pageSize ${pageSize ?? "default"}`,
+      `uses key-only summary pages with pageSize ${pageSize ?? "default"}`,
       () => {
         const recording = makeRecordingCustomObjectApiRoot();
 
@@ -2055,15 +2056,17 @@ describe("CommercetoolsMigrationStore", () => {
             needsUpdate: 0,
             skipped: 0,
           });
-          const queries = customObjectQueryRequests(recording.requests);
-          expect(queries.length).toBeGreaterThan(1);
+          const queries = recording.requests.filter((request) =>
+            request.uriTemplate?.endsWith("/graphql")
+          );
+          expect(queries).toHaveLength(pageSize === 2 ? 12 : 1);
           for (const query of queries) {
-            expect(query.queryParams?.limit).toBeLessThanOrEqual(
-              pageSize ?? 10
+            expect(query.body).toEqual(
+              expect.objectContaining({
+                query: expect.not.stringMatching(fullSummarySelectionPattern),
+                variables: expect.objectContaining({ limit: pageSize ?? 500 }),
+              })
             );
-            expect(query.queryParams?.limit).toBeLessThanOrEqual(10);
-            expect(query.queryParams?.withTotal).toBe(false);
-            expect(query.queryParams).not.toHaveProperty("offset");
           }
         }).pipe(
           Effect.provide(

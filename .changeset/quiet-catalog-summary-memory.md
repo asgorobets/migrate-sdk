@@ -2,4 +2,6 @@
 "@migrate-sdk/commercetools": patch
 ---
 
-Bound memory use when summarizing migration item states with large tracking records or recovery journals. Status and run preparation now count validated item states in keyset pages of at most ten records and discard each page instead of retaining every full item state. Existing persisted records remain compatible and status counts remain exact.
+Optimize Commercetools item-state summaries with status-filtered GraphQL selections that return only keys and page counts. Status reads and run preparation no longer download or decode tracking records and recovery journals. Each status paginates independently without relying on capped query totals, and invalid status metadata or incomplete responses fail explicitly. Existing persisted records and the public store interface remain compatible; no storage upgrade is required.
+
+Summary counts are eventually consistent while item statuses change, and converge on the next scan once writes stop.
