@@ -3,4 +3,4 @@ if ("Bun" in globalThis) {
 }
 
 // biome-ignore lint/performance/noBarrelFile: This fixture adds a runtime guard to the shared package smoke config.
-export { default } from "../../examples/packaging.config.ts";
+export { default } from "./configs/packaging.config.ts";

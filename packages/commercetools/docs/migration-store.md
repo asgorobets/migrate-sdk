@@ -706,7 +706,8 @@ Risks:
 
 ## Example
 
-The package includes a credential-free product catalog example at
+The package includes a product catalog example that runs against a real
+Commercetools project at
 `packages/commercetools/examples/product-catalog-store-migration.ts`.
 
 It uses:
@@ -715,19 +716,10 @@ It uses:
 - `CommercetoolsDestination` for product creation inside `process`
 - `CommercetoolsMigrationStore` for Custom Object-backed cursors, item state,
   run state, and locks
-- the scripted Commercetools SDK and scripted Custom Object routes from the
-  package testing helpers, so the example can be typechecked and tested without
-  live credentials
+- the Commercetools SDK with credentials for the target project
 
-Run it with:
-
-```sh
-pnpm --filter @migrate-sdk/commercetools example:product-catalog-store
-```
-
-To run the same catalog migration against a real Commercetools project, provide
-credentials in your shell environment or in
-`packages/commercetools/examples/.env`, then run the live script:
+Provide credentials in your shell environment or in
+`packages/commercetools/examples/.env`, then run:
 
 ```sh
 CTP_PROJECT_KEY="your-project" \
@@ -736,10 +728,10 @@ CTP_CLIENT_SECRET="your-client-secret" \
 CTP_AUTH_URL="https://auth.<region>.commercetools.com" \
 CTP_API_URL="https://api.<region>.commercetools.com" \
 CTP_SCOPES="manage_project:your-project" \
-pnpm --filter @migrate-sdk/commercetools example:product-catalog-store:live
+pnpm --filter @migrate-sdk/commercetools example:product-catalog-store
 ```
 
-The live script writes real Custom Objects in container `migrate-sdk-examples`
+The example writes Custom Objects in container `migrate-sdk-examples`
 with namespace `product-catalog`, and it creates a real product with key
 `effectful-architecture`. The target project must already have a `book` product
 type with attributes matching the example schemas. Use a disposable project or

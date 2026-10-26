@@ -7,8 +7,8 @@ import {
 import {
   JsonPlaceholderApi,
   type JsonPlaceholderApiState,
-} from "./json-placeholder-api.ts";
-import { JsonPlaceholderPost } from "./schemas.ts";
+} from "../../../examples/api-source/json-placeholder-api.ts";
+import { JsonPlaceholderPost } from "../../../examples/api-source/schemas.ts";
 
 export interface ScriptedJsonPlaceholderApiState
   extends JsonPlaceholderApiState {

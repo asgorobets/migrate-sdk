@@ -32,7 +32,7 @@ import {
 } from "migrate-sdk/server";
 import { act, useState } from "react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { makeLimitedRunConfig } from "../examples/limited-run.config.ts";
+import { makeLimitedRunConfig } from "../test/fixtures/configs/limited-run.config.ts";
 import { MigrationTuiApp as MigrationTuiAppView } from "./app.tsx";
 import {
   Dialog,
@@ -5803,7 +5803,7 @@ describe("MigrationTuiApp", () => {
     "blocks confirmation during rollback plan refresh and ignores a cancelled refresh",
     async () => {
       const base = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/transitive-dependency.config.ts",
+        configPath: "test/fixtures/configs/transitive-dependency.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
       const pending =
@@ -5866,7 +5866,7 @@ describe("MigrationTuiApp", () => {
     "keeps rollback plan errors in the dialog and requires a successful retry before confirming",
     async () => {
       const base = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/transitive-dependency.config.ts",
+        configPath: "test/fixtures/configs/transitive-dependency.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
       let failed = false;
@@ -5933,7 +5933,7 @@ describe("MigrationTuiApp", () => {
     "defaults to recommended rollback scope and allows selected-only without force when dependents are empty",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/transitive-dependency.config.ts",
+        configPath: "test/fixtures/configs/transitive-dependency.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
       const prepare = vi.spyOn(runtime, "prepare");
@@ -6008,7 +6008,7 @@ describe("MigrationTuiApp", () => {
     "explains and confirms the complete rollback scope once in execution order",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/transitive-dependency.config.ts",
+        configPath: "test/fixtures/configs/transitive-dependency.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
       const start = vi.spyOn(runtime, "start");
@@ -6078,7 +6078,7 @@ describe("MigrationTuiApp", () => {
     "confirms an explicit selected-only override once with its consequences",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/transitive-dependency.config.ts",
+        configPath: "test/fixtures/configs/transitive-dependency.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
       const forward = await runtime.prepare({ kind: "all" }, "run");
@@ -6181,7 +6181,7 @@ describe("MigrationTuiApp", () => {
     "keeps rollback controls fixed while a large hierarchy scrolls",
     async () => {
       const runtime = await makeInProcessMigrationTuiRuntime({
-        configPath: "examples/large-rollback.config.ts",
+        configPath: "test/fixtures/configs/large-rollback.config.ts",
         cwd: new URL("..", import.meta.url).pathname,
       });
       const setup = await createTestRenderer({ height: 24, width: 72 });

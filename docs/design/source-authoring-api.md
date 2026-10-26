@@ -173,11 +173,13 @@ The runnable `examples/api-source/` example is split by audience:
 ```txt
 examples/api-source/
   json-placeholder-api.ts            # API service interface + live adapter
-  json-placeholder-api-scripted.ts   # deterministic adapter for tests
   json-placeholder-source.ts         # source factory
   migration.ts                       # migration author wiring
   format.ts                          # CLI-friendly output formatting
 ```
+
+The deterministic API adapter used by tests lives under
+`test/fixtures/api-source/json-placeholder-api.ts`.
 
 Migration authors should mostly see the migration wiring:
 

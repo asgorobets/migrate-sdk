@@ -202,32 +202,22 @@ example uses the current `otlp_http` name. See the official
 [Collector configuration guide](https://opentelemetry.io/docs/collector/configuration/)
 for available exporters and deployment configuration.
 
-## Run the local performance demo
+## Trace a runnable migration
 
-With your exporter environment configured and its receiver running, run from
-this repository:
+The [SQLite catalog example](../packages/migrate-sdk/examples/sqlite-catalog/README.md)
+reads CSV sources, writes destination rows, and persists migration state through
+the SQL store. Set it up from the repository root, then open the TUI with tracing:
 
 ```sh
-pnpm --filter migrate-sdk demo:telemetry
-MIGRATE_DEMO_BATCH_SIZE=16 MIGRATE_DEMO_CONCURRENCY=2 \
-  pnpm --filter migrate-sdk demo:telemetry
-MIGRATE_DEMO_BATCH_SIZE=16 MIGRATE_DEMO_CONCURRENCY=4 \
-  pnpm --filter migrate-sdk demo:telemetry
+pnpm --filter migrate-sdk demo:sqlite-catalog:setup -- --scale small
+MIGRATE_SQLITE_CATALOG_DELAY_MS=0 \
+  node packages/tui/bin/migrate-tui.js --otel \
+  --config packages/migrate-sdk/examples/sqlite-catalog/migrate.config.ts
 ```
 
-The demo uses 48 synthetic items and an in-memory store. Each source window
-simulates a 25 ms destination submission, a 50 ms polling wait, and 10 ms of
-settlement work per item. Defaults are eight items per window and concurrency
-two. Each invocation starts fresh; use the trace ID to distinguish runs because
-the in-memory store reuses `run-1`.
-
-Find the configured service name in your viewer. Compare `migration.run`
-duration, number of windows, time in `demo.destination.wait`, and overlap between
-`migration.item.settle` spans. Change one setting at a time. The artificial
-delays demonstrate how to read traces; they are not a provider benchmark.
-
-The demo also works through `pnpm exec turbo run demo:telemetry --filter=migrate-sdk`.
-Its task is uncached and passes through the OTEL and demo environment variables.
+Run the Catalog group and inspect `migration.run`, `migration.source.window`,
+`migration.source.read`, and `sqliteCatalog.books.process` in your trace viewer.
+These spans cover the source reads and SQL writes performed by the migration.
 
 ### Recommended local viewer: Motel
 
@@ -239,7 +229,7 @@ With Bun installed, start it in another terminal:
 bunx @kitlangton/motel
 ```
 
-Point the same exporter at its local receiver, then run the demo or your migration:
+Point the same exporter at its local receiver, then run the catalog example or your migration:
 
 ```sh
 export OTEL_TRACES_EXPORTER=otlp

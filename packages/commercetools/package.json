@@ -70,8 +70,6 @@
     "check-types": "tsc --noEmit -p tsconfig.check.json",
     "example:business-units:live": "pnpm run build && migrate run --config examples/migrate.config.ts business-unit-static-field",
     "example:product-catalog-store": "pnpm run build && tsx examples/product-catalog-store-migration.ts",
-    "example:product-catalog-store:live": "pnpm run build && tsx examples/product-catalog-store-migration.live.ts",
-    "example:products": "pnpm run build && tsx examples/product-destination.ts",
     "test": "vitest run",
     "test:product-import:live": "vitest run --config vitest.live.config.ts examples/product-import-batch-migration.live.test.ts",
     "test:watch": "vitest"

@@ -4,6 +4,7 @@ import {
   MigrationDefinitionRegistry,
   MigrationExecution,
 } from "migrate-sdk";
+import { InMemoryDestination } from "migrate-sdk/destinations/in-memory";
 import { InMemoryMigrationStore } from "migrate-sdk/stores/in-memory";
 import { completedInlineExecution } from "../inline-execution.ts";
 import { JsonPlaceholderPostSource } from "./json-placeholder-source.ts";
@@ -27,19 +28,24 @@ export interface ApiSourceExampleOptions {
 export const makeJsonPlaceholderPostsMigration = (
   options?: ApiSourceExampleOptions
 ) => {
+  const destination = InMemoryDestination.makeEntries({
+    contentType: "post",
+    fields: PostEntryFields,
+  });
   return MigrationDefinition.make({
     id: "jsonplaceholder-posts",
     source: options?.source ?? JsonPlaceholderPostSource.make(),
     store: InMemoryMigrationStore.layer(),
-    process: (source) => {
+    process: Effect.fn("jsonPlaceholderPosts.process")(function* (source) {
       const fields = {
         authorId: source.item.item.userId,
         body: source.item.item.body,
         title: source.item.item.title,
       };
 
+      yield* destination.entries.upsert(fields);
       options?.recordPostEntry?.(fields);
-    },
+    }),
   });
 };
 

@@ -214,9 +214,11 @@ The compiled client bundles its dependencies and resolves the local Node server
 from the migration project's SDK. Local TUI and SDK versions must match exactly;
 remote compatibility follows the Migrate Protocol version.
 
-For workspace development:
+For workspace development, set up the SQLite catalog and open it through the
+normal TUI launcher:
 
 ```sh
+pnpm --filter migrate-sdk demo:sqlite-catalog:setup -- --scale small
 pnpm --filter @migrate-sdk/tui demo
 ```
 

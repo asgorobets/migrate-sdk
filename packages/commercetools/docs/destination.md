@@ -127,11 +127,8 @@ const definition = MigrationDefinition.make({
 
 ## Examples
 
-`examples/product-catalog-store-migration.ts` is the scripted end-to-end proof:
-it uses `MigrationDefinition`, `process`, Commercetools product helpers,
+`examples/product-catalog-store-migration.ts` runs against a real Commercetools
+project. It uses `MigrationDefinition`, `process`, Commercetools product helpers,
 `Tracking.setRecord`, Destination Journal changes, and the Commercetools Custom
-Object Migration Store.
-
-`examples/product-catalog-store-migration.live.ts` is optional and requires live
-Commercetools credentials. Unit tests use scripted SDK routes and do not require
-live credentials.
+Object Migration Store. See the [migration store example](./migration-store.md#example)
+for credentials, project prerequisites, and the run command.

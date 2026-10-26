@@ -1,37 +1,26 @@
 import { fileURLToPath } from "node:url";
-import type { Product, ProductData } from "@commercetools/platform-sdk";
-import type { CommercetoolsSdkLayer } from "@migrate-sdk/commercetools";
+import { CommercetoolsSdk } from "@migrate-sdk/commercetools";
 import type { ProductDraftInput } from "@migrate-sdk/commercetools/destination";
 import { CommercetoolsDestination } from "@migrate-sdk/commercetools/destination";
 import { CommercetoolsMigrationStore } from "@migrate-sdk/commercetools/migration-store";
-import {
-  makeScriptedCommercetoolsSdk,
-  makeScriptedCustomObjectRoutes,
-  type ScriptedCommercetoolsSdkRequest,
-  scriptedCommercetoolsSdkRoute,
-} from "@migrate-sdk/commercetools/testing";
-import {
-  Console,
-  Effect,
-  type Layer as EffectLayer,
-  Layer,
-  Schema,
-} from "effect";
+import { Console, Effect, Schema } from "effect";
 import {
   MigrationDefinition,
   MigrationDefinitionRegistry,
   MigrationExecution,
-  type MigrationExecutionRunError,
   type MigrationItemState,
   type MigrationRunSummary,
   MigrationStore,
-  type MigrationStoreError,
   SourceIdentity,
   type SourceItemInput,
   Tracking,
   toMigrationDefinitionId,
 } from "migrate-sdk";
 import { InMemorySource } from "migrate-sdk/sources/in-memory";
+import {
+  loadLiveCommercetoolsConfig,
+  makeLiveApiRoot,
+} from "./live-commercetools.ts";
 
 const catalogDefinitionId = "products";
 export const catalogStoreOptions = {
@@ -96,92 +85,25 @@ const catalogProducts: readonly SourceItemInput<CatalogProductSource>[] = [
   },
 ];
 
-const isProductDraftRequest = (
-  request: ProductCatalogStoreMigrationSdkRequest
-): request is ProductCatalogStoreMigrationSdkRequest & {
-  readonly body: ProductDraftInput;
-} =>
-  request.body !== undefined &&
-  "productType" in request.body &&
-  "name" in request.body &&
-  "slug" in request.body;
-
-const isCustomObjectRequest = (
-  request: ProductCatalogStoreMigrationSdkRequest
-): boolean => request.uriTemplate?.includes("custom-objects") === true;
-
-const listProductItemStates = (
-  storeLayer: Layer.Layer<MigrationStore, MigrationStoreError>
-) =>
-  Effect.gen(function* () {
-    const store = yield* MigrationStore;
-
-    return yield* store.listItemStates(
-      toMigrationDefinitionId(catalogDefinitionId)
-    );
-  }).pipe(Effect.provide(storeLayer));
-
 export interface ProductCatalogStoreMigrationExampleResult {
-  readonly customObjectRequestCount: number;
   readonly itemStates: readonly MigrationItemState[];
-  readonly productDraft: ProductDraftInput | null;
-  readonly productRequestCount: number;
-  readonly sdkRequests: readonly ProductCatalogStoreMigrationSdkRequest[];
   readonly summary: MigrationRunSummary;
 }
 
-export type ProductCatalogStoreMigrationSdkRequest =
-  ScriptedCommercetoolsSdkRequest;
-
-export interface ProductCatalogStoreMigrationExampleOptions {
-  readonly sdkLayer: CommercetoolsSdkLayer;
-  readonly storeLayer: EffectLayer.Layer<MigrationStore, MigrationStoreError>;
-}
-
-const productResponse = (draft: ProductDraftInput): Product => {
-  const data: ProductData = {
-    attributes: draft.attributes ?? [],
-    categories: [],
-    masterVariant: {
-      ...(draft.masterVariant?.attributes === undefined
-        ? {}
-        : { attributes: draft.masterVariant.attributes }),
-      id: 1,
-      ...(draft.masterVariant?.sku === undefined
-        ? {}
-        : { sku: draft.masterVariant.sku }),
-    },
-    name: draft.name,
-    searchKeywords: {},
-    slug: draft.slug,
-    variants: [],
-  };
-
-  return {
-    createdAt: "2026-01-01T00:00:00.000Z",
-    id: "recording-product-id",
-    ...(draft.key === undefined ? {} : { key: draft.key }),
-    lastModifiedAt: "2026-01-01T00:00:00.000Z",
-    masterData: {
-      current: data,
-      hasStagedChanges: true,
-      published: false,
-      staged: data,
-    },
-    productType: {
-      id: draft.productType.id ?? draft.productType.key ?? "book",
-      typeId: "product-type",
-    },
-    version: 1,
-  };
-};
-
-export const runProductCatalogStoreMigration: (
-  options: ProductCatalogStoreMigrationExampleOptions
-) => Effect.Effect<
-  ProductCatalogStoreMigrationExampleResult,
-  MigrationStoreError | MigrationExecutionRunError
-> = Effect.fn("runProductCatalogStoreMigration")(function* (options) {
+export const runProductCatalogStoreMigration = Effect.fn(
+  "runProductCatalogStoreMigration"
+)(function* () {
+  const config = yield* loadLiveCommercetoolsConfig();
+  const apiRoot = makeLiveApiRoot(config);
+  const sdkLayer = CommercetoolsSdk.layerFromApiRoot({
+    apiRoot,
+    projectKey: config.projectKey,
+  });
+  const storeLayer = CommercetoolsMigrationStore.layerFromApiRoot({
+    apiRoot,
+    ...catalogStoreOptions,
+    projectKey: config.projectKey,
+  });
   const ct = CommercetoolsDestination.make({
     productTypes: {
       book: {
@@ -189,7 +111,7 @@ export const runProductCatalogStoreMigration: (
         productAttributes: CatalogProductAttributes,
       },
     },
-  }).provide(options.sdkLayer);
+  }).provide(sdkLayer);
 
   const products = MigrationDefinition.make({
     id: catalogDefinitionId,
@@ -198,7 +120,7 @@ export const runProductCatalogStoreMigration: (
       items: catalogProducts,
       sourceSchema: CatalogProductSource,
     }),
-    store: options.storeLayer,
+    store: storeLayer,
     tracking: CatalogProductTrackingRecord,
     process: Effect.fn("products.process")(function* (source) {
       const productAttributes = yield* ct.products
@@ -262,74 +184,14 @@ export const runProductCatalogStoreMigration: (
     );
   }
 
-  const itemStates = yield* listProductItemStates(options.storeLayer);
+  const itemStates = yield* Effect.flatMap(MigrationStore, (store) =>
+    store.listItemStates(toMigrationDefinitionId(catalogDefinitionId))
+  ).pipe(Effect.provide(storeLayer));
 
   return {
-    customObjectRequestCount: 0,
     itemStates,
-    productDraft: null,
-    productRequestCount: 0,
-    sdkRequests: [],
     summary,
   } satisfies ProductCatalogStoreMigrationExampleResult;
-});
-
-export const runProductCatalogStoreMigrationExample: () => Effect.Effect<
-  ProductCatalogStoreMigrationExampleResult,
-  MigrationStoreError | MigrationExecutionRunError
-> = Effect.fn("runProductCatalogStoreMigrationExample")(function* () {
-  const customObjects = makeScriptedCustomObjectRoutes();
-  const sdk = makeScriptedCommercetoolsSdk({
-    projectKey: "example-catalog-project",
-    routes: [
-      ...customObjects.routes,
-      scriptedCommercetoolsSdkRoute("products.create").replyWith((request) =>
-        productResponse(request.body as ProductDraftInput)
-      ),
-    ],
-  });
-  const storeLayer = CommercetoolsMigrationStore.layer({
-    ...catalogStoreOptions,
-  }).pipe(Layer.provide(sdk.layer));
-  // The offline example uses the store's existing decoder and counts its small
-  // fixture locally; it does not simulate the provider's GraphQL predicates.
-  const offlineStoreLayer = Layer.effect(
-    MigrationStore,
-    Effect.gen(function* () {
-      const store = yield* MigrationStore;
-      const getItemStateSummary: typeof store.getItemStateSummary = (
-        definitionId
-      ) =>
-        store.listItemStates(definitionId).pipe(
-          Effect.map((states) => ({
-            migrated: states.filter((state) => state.status === "migrated")
-              .length,
-            failed: states.filter((state) => state.status === "failed").length,
-            skipped: states.filter((state) => state.status === "skipped")
-              .length,
-            needsUpdate: states.filter(
-              (state) => state.status === "needs-update"
-            ).length,
-          }))
-        );
-      return { ...store, getItemStateSummary };
-    })
-  ).pipe(Layer.provide(storeLayer));
-  const result = yield* runProductCatalogStoreMigration({
-    sdkLayer: sdk.layer,
-    storeLayer: offlineStoreLayer,
-  });
-  const sdkRequests = sdk.requests;
-  const productRequests = sdkRequests.filter(isProductDraftRequest);
-  const customObjectRequests = sdkRequests.filter(isCustomObjectRequest);
-
-  return {
-    ...result,
-    customObjectRequestCount: customObjectRequests.length,
-    productDraft: productRequests[0]?.body ?? null,
-    productRequestCount: productRequests.length,
-    sdkRequests,
-  };
 });
 
 export const formatProductCatalogStoreMigrationExampleResult = (
@@ -339,16 +201,15 @@ export const formatProductCatalogStoreMigrationExampleResult = (
     "Commercetools Product Catalog Store Migration Example",
     `status: ${result.summary.status}`,
     `definitions: ${result.summary.definitions.length}`,
-    `products created: ${result.productRequestCount}`,
+    `products migrated: ${result.summary.definitions[0]?.counts.migrated ?? 0}`,
     `persisted item states: ${result.itemStates.length}`,
-    `custom object requests: ${result.customObjectRequestCount}`,
   ].join("\n");
 
 const isMain = process.argv[1] === fileURLToPath(import.meta.url);
 
 if (isMain) {
   Effect.runPromise(
-    runProductCatalogStoreMigrationExample().pipe(
+    runProductCatalogStoreMigration().pipe(
       Effect.map(formatProductCatalogStoreMigrationExampleResult),
       Effect.flatMap(Console.log)
     )
