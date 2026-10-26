@@ -53,6 +53,8 @@ const customerPeers = Object.fromEntries(
       })
   )
 );
+// Exercise automatic peer installation with the workspace-tested Workflow release.
+const overrides = { workflow: customerPeers.workflow };
 const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 
@@ -185,6 +187,8 @@ try {
             type: "module",
             packageManager,
             dependencies: { ...dependencies, ...scenario.peers },
+            overrides,
+            pnpm: { overrides },
           },
           null,
           2
