@@ -6,6 +6,7 @@ import type {
   CustomObjectPagedQueryResponse,
 } from "@commercetools/platform-sdk";
 import { ApiRoot as PlatformApiRoot } from "@commercetools/platform-sdk";
+import { Schema } from "effect";
 import {
   type ScriptedCommercetoolsSdkRequest,
   type ScriptedCommercetoolsSdkRoute,
@@ -295,69 +296,72 @@ const recordRequest = (
     : { uriTemplate: request.uriTemplate }),
 });
 
-const quotedPredicateValue = (where: string, field: string): unknown => {
+const SummaryRequest = Schema.Struct({
+  query: Schema.String,
+  variables: Schema.StructWithRest(
+    Schema.Struct({ container: Schema.String, limit: Schema.Int }),
+    [Schema.Record(Schema.String, Schema.Unknown)]
+  ),
+});
+const SummaryStatus = Schema.Literals([
+  "migrated",
+  "skipped",
+  "failed",
+  "needs-update",
+]);
+const SummaryMetadata = Schema.Struct({
+  formatVersion: Schema.Literal(1),
+  index: Schema.Struct({ status: SummaryStatus }),
+  state: Schema.Struct({ status: SummaryStatus }),
+}).check(
+  Schema.makeFilter(({ index, state }) => index.status === state.status)
+);
+
+const decodeSummaryRequest = Schema.decodeUnknownSync(SummaryRequest);
+const decodePredicateString = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.String)
+);
+const decodeString = Schema.decodeUnknownSync(Schema.String);
+const isValidSummaryMetadata = Schema.is(SummaryMetadata);
+
+const quotedPredicateValue = (where: string, field: string): string => {
   const match = new RegExp(
     String.raw`${field} = ("(?:\\.|[^"\\])*")`,
     "u"
   ).exec(where);
-  return match?.[1] === undefined ? undefined : JSON.parse(match[1]);
+  return decodePredicateString(match?.[1]);
 };
 
 const makeSummaryPredicate = (
-  container: unknown,
+  container: string,
   where: string
 ): ((object: CustomObject) => boolean) => {
-  // Parse once per selection, rather than rebuilding regular expressions and
-  // decoding the same literals for every object in a large pagination fixture.
-  const namespace = quotedPredicateValue(where, "namespace");
-  const recordKind = quotedPredicateValue(where, "recordKind");
-  const definitionId = quotedPredicateValue(where, "definitionId");
-  const status = quotedPredicateValue(where, "status");
   const invalidMetadata = where.includes("not (value(formatVersion");
+  const matchesValue = Schema.is(
+    Schema.Struct({
+      namespace: Schema.Literal(quotedPredicateValue(where, "namespace")),
+      recordKind: Schema.Literal(quotedPredicateValue(where, "recordKind")),
+      index: Schema.Struct({
+        definitionId: Schema.Literal(
+          quotedPredicateValue(where, "definitionId")
+        ),
+        ...(invalidMetadata
+          ? {}
+          : { status: Schema.Literal(quotedPredicateValue(where, "status")) }),
+      }),
+    })
+  );
   const encodedAfter = afterKeyPattern.exec(where)?.[1];
   const after =
-    encodedAfter === undefined ? undefined : JSON.parse(encodedAfter);
+    encodedAfter === undefined
+      ? undefined
+      : decodePredicateString(encodedAfter);
 
-  return (object) => {
-    const value = object.value;
-    if (
-      object.container !== container ||
-      !isRecord(value) ||
-      !("index" in value) ||
-      !isRecord(value.index) ||
-      !("definitionId" in value.index) ||
-      !("namespace" in value) ||
-      !("recordKind" in value) ||
-      value.namespace !== namespace ||
-      value.recordKind !== recordKind ||
-      value.index.definitionId !== definitionId
-    ) {
-      return false;
-    }
-
-    if (invalidMetadata) {
-      const indexedStatus =
-        "status" in value.index ? value.index.status : undefined;
-      return !(
-        "formatVersion" in value &&
-        value.formatVersion === 1 &&
-        typeof indexedStatus === "string" &&
-        ["migrated", "skipped", "failed", "needs-update"].includes(
-          indexedStatus
-        ) &&
-        "state" in value &&
-        isRecord(value.state) &&
-        "status" in value.state &&
-        value.state.status === indexedStatus
-      );
-    }
-
-    return (
-      "status" in value.index &&
-      value.index.status === status &&
-      (after === undefined || object.key > after)
-    );
-  };
+  return (object) =>
+    object.container === container &&
+    (after === undefined || object.key > after) &&
+    matchesValue(object.value) &&
+    !(invalidMetadata && isValidSummaryMetadata(object.value));
 };
 
 // Model the summary's GraphQL field selection without returning value. This
@@ -366,28 +370,15 @@ const recordedSummaryResponse = (
   request: CustomObjectRecorderRequest,
   customObjects: ReadonlyMap<string, CustomObject>
 ): Promise<RecordedCustomObjectResponse> => {
-  const body = request.body;
-  if (
-    !(isRecord(body) && "query" in body) ||
-    typeof body.query !== "string" ||
-    !("variables" in body) ||
-    !isRecord(body.variables)
-  ) {
-    throw new Error("Recorded summary requires a GraphQL query and variables");
-  }
-  const variables = body.variables;
-  const container = "container" in variables ? variables.container : undefined;
-  const limit = "limit" in variables ? Number(variables.limit) : 20;
+  const { query, variables } = decodeSummaryRequest(request.body);
+  const { container, limit } = variables;
   const data: Record<string, unknown> = {};
-  for (const match of body.query.matchAll(/(\w+):\s*customObjects\(/gu)) {
+  for (const match of query.matchAll(/(\w+):\s*customObjects\(/gu)) {
     const alias = match[1];
     if (alias === undefined) {
       continue;
     }
-    const where = Reflect.get(variables, `${alias}Where`);
-    if (typeof where !== "string") {
-      throw new Error(`Missing recorded predicate for ${alias}`);
-    }
+    const where = decodeString(variables[`${alias}Where`]);
     const matches = [...customObjects.values()]
       .filter(makeSummaryPredicate(container, where))
       .sort((left, right) => (left.key < right.key ? -1 : 1));
